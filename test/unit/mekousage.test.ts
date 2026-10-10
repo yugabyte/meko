@@ -165,7 +165,7 @@ describe('Meko calls in transcripts', () => {
     db.exec('ALTER TABLE sessions DROP COLUMN meko_agent_id; DROP TABLE project_events');
     db.exec('DROP TABLE meko_preloads; ALTER TABLE sessions DROP COLUMN first_turn_end_at');
     db.exec('ALTER TABLE sessions DROP COLUMN meko_datapack_id; ALTER TABLE sessions DROP COLUMN meko_datapack_name');
-    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 12}`);
+    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 13}`);
     db.close();
     db = openDb(path);
     expect(schemaVersion(db)).toBe(v);

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -16,11 +16,13 @@ import { findPr, isRepoName, issueText, prInfo, type PrInfo } from './github.js'
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
-import { launchedAgentId, sessionAgentId } from './meko.js';
+import { launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
+import { mekoLogPath, removeMekoLog } from './mekolog.js';
 import { designQuestionsLine, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
+import { expandBranchPrefix } from '../shared/branches.js';
 import {
   EDIT_TOOLS, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
 } from './claude.js';
@@ -489,8 +491,10 @@ export class SessionManager {
     // Pushes go where the PR's head is, when that isn't origin's branch of the same name.
     const push = attach && (from.remote !== 'origin' || from.branch !== wanted) ? from : null;
 
-    const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
-    const branch = wanted || `${settings.branchPrefix}${slug}`;
+    // A new branch's prefix names you (ak_<GitHub login>/ by default).
+    const prefix = wanted ? null : expandBranchPrefix(settings.branchPrefix, await this.core.ghLogin(repo));
+    const slug = await this.uniqueSlug(projectId, repo, prefix, review ? `review-pr-${review.info.number}` : slugify(name));
+    const branch = wanted || `${prefix}${slug}`;
     const id = `${projectId}--${slug}`;
     const now = Date.now();
     const pool = this.core.worktrees;
@@ -656,6 +660,7 @@ export class SessionManager {
     release();
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
+    removeMekoLog(this.core.paths.designs, id);
     run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
     this.core.changed();
     return new HttpError(400, message);
@@ -1802,6 +1807,40 @@ export class SessionManager {
     return img;
   }
 
+  // ---- the Meko call log (mekolog.ts) ----
+
+  /** The project's sessions that have a Meko call log, the latest written to first. */
+  mekoLogs(projectId: string): MekoLogInfo[] {
+    if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
+    const out: MekoLogInfo[] = [];
+    for (const r of sessionRows(this.db, projectId)) {
+      const s = r.desired === 'archived' ? null : this.core.mekoLog.stat(r.id);
+      if (s) out.push({ sessionId: r.id, name: r.name, ...s });
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean }): Promise<MekoCallPage> {
+    return this.core.mekoLog.page(this.row(id).id, q);
+  }
+
+  async mekoCall(id: string, offset: number, callId: string): Promise<MekoCallDetail> {
+    const d = await this.core.mekoLog.detail(this.row(id).id, offset, callId);
+    if (!d) throw new HttpError(404, 'That call is no longer in the session\'s Meko call log.');
+    return d;
+  }
+
+  /** The session's Meko call log file, for a download. */
+  mekoLogFile(id: string): string {
+    const file = mekoLogPath(this.core.paths.designs, this.row(id).id);
+    if (!existsSync(file)) throw new HttpError(404, 'This session has no Meko call log.');
+    return file;
+  }
+
+  clearMekoLog(id: string): void {
+    this.core.mekoLog.clear(this.row(id).id);
+  }
+
   async discardCheck(id: string): Promise<DiscardCheck> {
     const row = this.row(id);
     const p = projectRow(this.db, row.project_id);
@@ -1846,6 +1885,7 @@ export class SessionManager {
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
+      removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
@@ -1954,6 +1994,7 @@ export class SessionManager {
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
+      removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
     }
     removeStaged(this.core.paths.pastes, projectId);
@@ -1998,14 +2039,16 @@ export class SessionManager {
     if (!task || !this.sessionDatapacks(r.project_id).length) return;
     const pid = r.project_id;
     const cwd = sessionRepo(this.db, r) ?? r.worktree_path;
-    this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
-    const work = runRecall(r.name, task, {
-      issue: (n) => issueText(cwd, n),
-      search: async (q) => {
-        const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
-        if (s.searched && s.failed === s.searched) throw s.error;
-        return s.results;
-      },
+    const work = withMekoScope(r, () => {
+      this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
+      return runRecall(r.name, task, {
+        issue: (n) => issueText(cwd, n),
+        search: async (q) => {
+          const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
+          if (s.searched && s.failed === s.searched) throw s.error;
+          return s.results;
+        },
+      });
     });
     work.catch((e) => this.core.log.warn(`the Meko search at start failed for ${r.id}`, errMsg(e)));
     this.recall.start(r.id, work);
@@ -2047,7 +2090,8 @@ export class SessionManager {
     if (!dp || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);
-      await this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id));
+      await withMekoScope(r, () =>
+        this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id)));
     } catch (e) {
       this.core.log.warn(`renaming the Meko conversation for ${r.id} failed`, errMsg(e));
     }
@@ -2060,7 +2104,7 @@ export class SessionManager {
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
-    return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
+    return withMekoScope(r, () => this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title));
   }
 
   /**

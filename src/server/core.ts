@@ -6,6 +6,7 @@ import { hostname, userInfo } from 'node:os';
 import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
+import * as github from './github.js';
 import { mekoPluginKeys, TranscriptCapture } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
@@ -19,6 +20,7 @@ import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { MekoClient } from './meko.js';
+import { MekoCallLog } from './mekolog.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
@@ -28,7 +30,7 @@ import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
-import { openProjectDatapacks, projectRows, pruneSessionEvents, toProject } from './store.js';
+import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { SessionHost } from './hostclient.js';
@@ -76,6 +78,10 @@ const STAGED_SWEEP_MS = 60 * 60 * 1000;
 const HOOK_SOCKET_CHECK_MS = 10_000;
 /** How long stopping waits for transcript captures still running (systemd and launchd allow 15 s to stop). */
 const STOP_CAPTURE_MS = 5000;
+/** How long asking gh for its login may take (a session's start waits for it). */
+const GH_LOGIN_TIMEOUT_MS = 5000;
+/** After gh took too long to give its login, how long it isn't asked again (starts go on without it). */
+const GH_LOGIN_RETRY_MS = 60_000;
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -86,6 +92,8 @@ export class Core extends EventEmitter {
   readonly hostFull: string;
   readonly meko: MekoClient;
   readonly capture: TranscriptCapture;
+  /** Each session's Meko calls, with their content, when its project has Log Meko calls on. */
+  readonly mekoLog: MekoCallLog;
   readonly host: SessionHost;
   readonly services: () => ServiceManager | null;
   private legacyTmuxSocket: string | undefined;
@@ -128,6 +136,12 @@ export class Core extends EventEmitter {
   private stopped = false;
   /** A rebind of the hook socket in progress; stop() waits for it. */
   private hookCheck: Promise<void> | null = null;
+  /** The login gh is signed in as, once it has said (ghLogin). */
+  private ghUser: string | null = null;
+  /** The login lookup in flight, which every caller meanwhile waits on. */
+  private ghLookup: Promise<string | null> | null = null;
+  /** When gh last took too long to give its login (GH_LOGIN_RETRY_MS). */
+  private ghTimedOutAt = 0;
 
   constructor(o: CoreOptions) {
     super();
@@ -144,6 +158,18 @@ export class Core extends EventEmitter {
     // AgentK's own Meko calls, for the usage report (counts and sizes, never their content).
     this.meko.onCall = (r) => this.record('INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       r.at, r.tool, r.inputChars, r.resultChars, r.ok ? 1 : 0, r.ms, r.tag);
+    this.mekoLog = new MekoCallLog({
+      designs: this.paths.designs,
+      enabled: (s) => {
+        if (this.stopped) return false;
+        const r = sessionRow(this.db, s.id);
+        // Not a failed start's late calls landing in the log of the start that reused its id.
+        const p = r && r.created_at === s.createdAt && r.desired !== 'archived' ? projectRow(this.db, r.project_id) : undefined;
+        return !!p && parseSettings(p.settings_json).mekoLog;
+      },
+      log: this.log,
+    });
+    this.meko.onTrace = (t) => this.mekoLog.record(t);
     this.services = o.services ?? (() => servicesFor(o.paths.home));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
     this.legacyTmuxSocket = o.legacyTmuxSocket;
@@ -257,6 +283,35 @@ export class Core extends EventEmitter {
     void this.syncInvites();
   }
 
+  /**
+   * The login gh is signed in as, looked up once (from <cwd>), one lookup at a time. Null when gh
+   * can't say: asked again next time, or after GH_LOGIN_RETRY_MS when it took too long, so a gh
+   * that hangs (offline, GitHub slow) doesn't hold up every session start.
+   */
+  async ghLogin(cwd: string): Promise<string | null> {
+    if (this.ghUser) return this.ghUser;
+    if (Date.now() - this.ghTimedOutAt < GH_LOGIN_RETRY_MS) return null;
+    this.ghLookup ??= this.lookUpGhLogin(cwd).finally(() => {
+      this.ghLookup = null;
+    });
+    return this.ghLookup;
+  }
+
+  private async lookUpGhLogin(cwd: string): Promise<string | null> {
+    try {
+      const login = (await github.viewerLogin(cwd, GH_LOGIN_TIMEOUT_MS)) || null;
+      if (login) {
+        this.ghUser = login;
+        this.changed();
+      }
+    } catch (e) {
+      // execFile's timeout kills gh.
+      if ((e as { killed?: boolean }).killed) this.ghTimedOutAt = Date.now();
+      this.log.warn('looking up the GitHub login failed', errMsg(e));
+    }
+    return this.ghUser;
+  }
+
   state(): AppState {
     return {
       projects: (() => {
@@ -274,6 +329,7 @@ export class Core extends EventEmitter {
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
       username: getOwner(this.db)?.username ?? this.username,
+      ghLogin: this.ghUser,
       serverName: this.serverName(),
       serverHost: this.hostFull,
       limits: this.limits.current(),
@@ -313,6 +369,8 @@ export class Core extends EventEmitter {
     this.questions.preload();
     // Not awaited: startup doesn't wait on Meko.
     void this.claudeMeko.refresh();
+    // Not awaited: the New session dialog shows branch names with it once it's in.
+    void this.ghLogin(this.paths.home);
     this.addHostService();
     // A session host that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs the host) retries on every reconcile tick.

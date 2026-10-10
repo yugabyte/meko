@@ -500,10 +500,58 @@ export interface ProjectSettings {
   reviewer: ReviewerMode;
   /** GitHub login of the AgentK bot, matched with or without a `[bot]` suffix. */
   reviewerLogin: string;
+  /** New sessions' branches start with it; `{login}` in it is your GitHub login (expandBranchPrefix). */
   branchPrefix: string;
   mergeMethod: MergeMethod;
   /** Browser notifications for this project. */
   notify: boolean;
+  /**
+   * Keep each session's Meko calls (what AgentK sent and what came back) in meko-calls.jsonl in the
+   * session's folder, deleted with the session. Off by default.
+   */
+  mekoLog: boolean;
+}
+
+/** The Meko tools AgentK calls for a session: the Meko calls page's tool filter. */
+export const MEKO_LOG_TOOLS = [
+  'context_search', 'conversation_create', 'conversation_update', 'memory_add', 'memory_update', 'artifact_put',
+] as const;
+
+/** GET /api/projects/:id/meko-logs: a session of the project that has a Meko call log. */
+export interface MekoLogInfo {
+  sessionId: string;
+  name: string;
+  bytes: number;
+  updatedAt: number;
+}
+
+/** One call in a session's Meko call log, without what was sent and what came back. */
+export interface MekoCallSummary {
+  id: string;
+  /** Where its line starts in the file: the detail route's key, and `before` for the next page. */
+  offset: number;
+  at: number;
+  tool: string;
+  /** The learn step that made it, if any. */
+  learn: string | null;
+  ms: number;
+  ok: boolean;
+  attempts: number;
+  error: string | null;
+}
+
+/** GET /api/sessions/:id/meko-calls/:offset: one call, with what was sent and what came back. */
+export interface MekoCallDetail extends MekoCallSummary {
+  args: unknown;
+  /** The parsed reply, its text when it isn't JSON, or null when none came. */
+  result: unknown;
+}
+
+/** GET /api/sessions/:id/meko-calls: a page of a session's Meko calls, newest first. */
+export interface MekoCallPage {
+  calls: MekoCallSummary[];
+  /** Older calls match too: ask again with `before` set to the last call's offset. */
+  more: boolean;
 }
 
 export interface DatapackRef {
@@ -683,6 +731,8 @@ export interface AppState {
   update: UpdateStatus;
   version: string;
   username: string;
+  /** The login gh is signed in as, or null until it has said (gh missing or signed out): `{login}` in a branch prefix. */
+  ghLogin: string | null;
   /** The name shown next to the user name: `[server] name` from config.toml, else the machine's short host name. */
   serverName: string;
   /** The machine's full host name as the OS reports it, for the tooltip when it differs from `serverName`. */
@@ -1394,9 +1444,9 @@ export interface CreateSessionRequest {
   /** A main git repo to work in instead of the project's (one of the scanned repos). */
   repoPath?: string;
   /**
-   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`. An
-   * existing branch (local, or only on origin) is picked up as it is, unless a running session
-   * uses it or another checkout has it.
+   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`, with
+   * `{login}` in the prefix filled in. An existing branch (local, or only on origin) is picked up
+   * as it is, unless a running session uses it or another checkout has it.
    */
   branch?: string;
   /**
@@ -1568,6 +1618,7 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
+// GET    /api/projects/:id/meko-logs           → MekoLogInfo[]   (the project's sessions with a Meko call log, newest first)
 // GET    /api/projects/:id/pr-reviewers        → PrReviewers[]   (the open PRs of the project's running sessions)
 // GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
 //        project's datapacks, in any repo; with `pr` (a number, #number, owner/name#number or PR link) that one PR,
@@ -1620,6 +1671,11 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
+// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&failed=1 → MekoCallPage   (the session's Meko call log, newest
+//        first, read backwards from the byte offset `before`; limit 1 to 200, default 50; an empty page when it has none)
+// GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
+// GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
+// DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;

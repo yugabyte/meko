@@ -77,7 +77,8 @@ your phone can connect.
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its
   sessions, settings and usage.
-  New sessions start from the base branch after it's fast-forwarded to `origin`. Under
+  New sessions start from the base branch after it's fast-forwarded to `origin`, on a branch
+  named `ak_<your GitHub login>/<task>` (the prefix is a project setting). Under
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
   requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on
@@ -172,6 +173,11 @@ your phone can connect.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
+- **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
+  keeps every Meko call it makes for each session (recall at start, design uploads, the learn step,
+  the "Shipped in…" memory) with what it sent and what came back, in a file in the session's
+  folder that's deleted with the session. **View calls** opens them, a session at a time, with
+  filters for the tool and failed calls.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home

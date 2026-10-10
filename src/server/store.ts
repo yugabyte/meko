@@ -7,6 +7,7 @@ import type {
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
+import { DEFAULT_BRANCH_PREFIX } from '../shared/branches.js';
 
 /**
  * What new task sessions store in `sessions.kind` (see StoredKind): a name a release or page from
@@ -18,9 +19,10 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
   reviewer: 'agentk-people',
   reviewerLogin: 'yb-agentk-dev',
-  branchPrefix: 'ak/',
+  branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
+  mekoLog: false,
 };
 
 export interface ProjectRow {

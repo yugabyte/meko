@@ -229,6 +229,27 @@ describe('config and db', () => {
     expect(() => add('api-tools')).not.toThrow();
   });
 
+  it('moves projects on the old ak/ branch prefix to ak_{login}/, and keeps one someone set', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    const project = (id: string, settings: string) =>
+      run(db, `INSERT INTO projects(id, name, repo_path, default_branch, settings_json, created_at) VALUES (?, ?, ?, 'main', ?, 0)`, id, id, `/code/${id}`, settings);
+    project('old', JSON.stringify({ branchPrefix: 'ak/', notify: false }));
+    project('set', JSON.stringify({ branchPrefix: 'hari/' }));
+    project('none', '{}');
+    db.exec(`PRAGMA user_version = ${version - 1}`);
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    const settings = (id: string) => JSON.parse(all<{ s: string }>(db, 'SELECT settings_json AS s FROM projects WHERE id = ?', id)[0].s);
+    expect(settings('old')).toEqual({ branchPrefix: 'ak_{login}/', notify: false });
+    expect(settings('set')).toEqual({ branchPrefix: 'hari/' });
+    expect(settings('none')).toEqual({});
+    expect(parseSettings('{}').branchPrefix).toBe('ak_{login}/');
+    db.close();
+  });
+
   it("keeps a schema 27 database's learn steps, and lets Discard record its own", () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
@@ -242,7 +263,7 @@ describe('config and db', () => {
       CREATE TABLE meko_learns AS SELECT * FROM meko_learns_new WHERE 0;
       INSERT INTO meko_learns SELECT * FROM meko_learns_new; DROP TABLE meko_learns_new`);
     dropV28(db);
-    db.exec(`PRAGMA user_version = ${version - 1}`);
+    db.exec(`PRAGMA user_version = ${version - 2}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -272,7 +293,7 @@ describe('config and db', () => {
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 11}`);
+    db.exec(`PRAGMA user_version = ${version - 12}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -301,7 +322,7 @@ describe('config and db', () => {
     dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 9}`);
+    db.exec(`PRAGMA user_version = ${version - 10}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);

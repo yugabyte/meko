@@ -287,7 +287,9 @@ describe('sessions on an existing branch or an open PR (real session host + git,
     git(author, 'push', '-q', upstream, 'main');
     const n = await env.core.sessions.create(p.id, { name: 'Fresh', prompt: 'hi', kind: 'task', start: 'code' });
     await idle(n.id);
-    expect(event(n.id, 'created')).toMatch(/^Started on ak\/fresh from main \(fast-forwarded main to origin\/main\)/);
+    expect(event(n.id, 'created')).toMatch(/^Started on ak_me\/fresh from main \(fast-forwarded main to origin\/main\)/);
+    // The new branch names gh's login, which the New session dialog gets too.
+    expect(env.core.state().ghLogin).toBe('me');
 
     push('feature/slow', 'slow.ts');
     gh.byBranch.set('feature/slow', { number: 8, url: 'https://github.com/acme/demo/pull/8', state: 'OPEN', createdAt: '2026-01-01T00:00:00Z', baseRefName: 'release' });
