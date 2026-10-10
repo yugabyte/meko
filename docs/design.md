@@ -1462,7 +1462,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > datapack, or the project's conversation when the project only has shared datapacks
 > (`launchConversation()` in `sessions.ts`, waiting up to 5 seconds), and the system prompt names
 > it (`mekoConversationLine()` in `prompts.ts`). When Meko doesn't answer in time, the line says how
-> to create that same conversation with `conversation_create` instead.
+> to create that same conversation with `conversation_create` instead, and launches in the next
+> minute don't wait at all, so a restart that recovers many sessions one by one isn't held up 5
+> seconds each.
 
 > **PRs point back at Meko.** When the project has a dedicated datapack and Meko is on, Open PR
 > appends to the PR prompt (after any repo or owner override) an instruction to end the PR

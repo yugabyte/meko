@@ -189,6 +189,22 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(system(1)).toContain(`call conversation_create once with session_id "${u.claudeSessionId}"`);
   });
 
+  it("starts Claude without waiting on Meko again for a while once Meko kept a launch waiting", async () => {
+    const p = await newProject();
+    env.meko.ensureConversation = () => new Promise<string>(() => undefined); // never answers
+    const t0 = Date.now();
+    const a = await env.core.sessions.create(p.id, { name: 'First', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => argvLog(env).length, (n) => n >= 1, 15000, 'first launch');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(4500); // waited the 5 s
+    const t1 = Date.now();
+    const b = await env.core.sessions.create(p.id, { name: 'Second', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => argvLog(env).length, (n) => n >= 2, 15000, 'second launch');
+    expect(Date.now() - t1).toBeLessThan(4000); // didn't wait again
+    const system = (n: number) => { const x = argvLog(env)[n].args; return x[x.indexOf('--append-system-prompt') + 1]; };
+    expect(system(0)).toContain(`call conversation_create once with session_id "${a.claudeSessionId}"`);
+    expect(system(1)).toContain(`call conversation_create once with session_id "${b.claudeSessionId}"`);
+  });
+
   it('renames a session, and its Meko conversation, but keeps its branch, worktree, pane and Meko agent id', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Old name', prompt: 'hi', kind: 'quick' });

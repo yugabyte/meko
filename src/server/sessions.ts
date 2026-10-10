@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoConversationLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -118,6 +118,8 @@ const TRANSCRIPT_ACTIVE_MS = 15_000;
 const FINAL_CAPTURE_MS = 15000;
 /** How long a launch waits for the session's Meko conversation (its id goes in the system prompt) before Claude starts anyway. */
 const NAME_CONVERSATION_MS = 5000;
+/** After a launch gave up waiting on Meko for that, how long later launches don't wait (recovery launches one at a time). */
+const SLOW_CONVERSATION_MS = 60_000;
 /** How many failed starts are kept for Try again. */
 const MAX_FAILED_STARTS = 20;
 /** How long stopping a session waits for it to finish starting. */
@@ -199,6 +201,8 @@ export class SessionManager {
   private busy = new Set<string>();
   private diffs = new Map<string, { added: number; removed: number } | null>();
   private mergeInfo = new Map<string, MergeInfo>();
+  /** Until when launches don't wait for their Meko conversation (see launchConversation). */
+  private conversationSlowUntil = 0;
   /** Sessions showing Claude's plan-approval dialog. */
   readonly planPending = new Set<string>();
   /** Sessions being launched right now; reconcile leaves them alone. */
@@ -995,9 +999,9 @@ export class SessionManager {
 
   /**
    * Starts (or restarts) Claude in the session's pane in the session host. Callers mark the session as
-   * creating or launching for the whole start (see `starting()`).
+   * creating or launching for the whole start (see `starting()`). `conversation`: the session's
+   * Meko conversation id under way (a new session names it early).
    */
-  /** `conversation`: the session's Meko conversation id under way (a new session names it early). */
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
     const repo = sessionRepo(this.db, row);
@@ -2067,11 +2071,17 @@ export class SessionManager {
    */
   private async launchConversation(r: SessionRow, pending?: Promise<string | null>): Promise<string | null> {
     if (!this.core.mekoStatus.configured || !this.sessionDatapacks(r.project_id).length) return null;
+    // Meko just kept a launch waiting: don't hold up the next ones (a restart recovering many sessions).
+    if (Date.now() < this.conversationSlowUntil) return null;
     const dp = dedicatedDatapack(this.db, r.project_id);
     const conv = dp ? (pending ?? this.conversationId(r, dp)) : this.core.projects.ensureConversation(r.project_id, NAME_CONVERSATION_MS);
     let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<null>((res) => (timer = setTimeout(() => {
+      this.conversationSlowUntil = Date.now() + SLOW_CONVERSATION_MS;
+      res(null);
+    }, NAME_CONVERSATION_MS)));
     try {
-      return await Promise.race([conv, new Promise<null>((res) => (timer = setTimeout(() => res(null), NAME_CONVERSATION_MS)))]);
+      return await Promise.race([conv, late]);
     } catch (e) {
       this.core.log.warn(`the Meko conversation for ${r.id} isn't there; its prompt says how to make it`, errMsg(e));
       return null;
