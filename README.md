@@ -60,6 +60,11 @@ If your home directory is shared with other hosts (over NFS, say), AgentK Local 
 host you installed it on: logging in to another host doesn't start a second server on the same
 `~/.agent-k-local`. To run it on another host too, give that host its own home with `AK_HOME`.
 
+If your home is under `/net` (the automounter's `/net/<host>/...`), Claude Code 2.1.292 and later
+asks before every file it reads or edits there, even in auto mode. When the home is this host's
+own folder, AgentK Local starts Claude in it without the `/net/<host>` prefix (with `HOME` to
+match), so sessions don't stop for that. In plain Claude Code, open your repos by that path too.
+
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
 Code keeps its login in your Keychain, so AgentK Local runs while you're logged in. For a Mac mini
 that stays on, turn on automatic login and stop it sleeping (System Settings > Energy). With the

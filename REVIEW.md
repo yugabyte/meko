@@ -99,8 +99,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       design's questions (from Claude's `questions.json` or its `design_questions` tool) and the
       questions Claude asks (`AskUserQuestion`, previews included) render as plain text, never
       HTML, and are size-capped and normalized on the server.
-- [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
-      (no answer means allow) so a slow or restarting server never blocks Claude.
+- [ ] The Design-stage guard denies edits inside the worktree and main checkout, by its stored
+      path and by the spelling Claude is given (`claudePath()`), and fails open (no answer means
+      allow) so a slow or restarting server never blocks Claude.
+- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, allow rules, file paths in
+      prompts) goes through `claudePath()`, so a home under `/net` doesn't make Claude Code ask
+      before every file; what AgentK stores keeps its own spelling.
 
 ## 3. Lifecycle and GitHub
 

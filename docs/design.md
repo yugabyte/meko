@@ -102,6 +102,22 @@ and exits. On the server's side, only "nothing listening on the socket" means no
 a garbled answer skips that reconcile tick instead, and starts of a host never run two at once. It
 writes `run/host.json` (pid, version, app directory, protocol) when it starts.
 
+**Homes under /net.** Claude Code (2.1.292 and later) asks before every read or edit of a path
+under `/net`, the automounter's `-hosts` map, even in auto mode, and no permission rule,
+`--add-dir` or setting lifts that. A home there (`/net/<host>/data/you`) would stop a session on
+every file in its worktree, its design file, its pasted images and its own `~/.claude`. When the
+machine is that host, the same folder is mounted locally without the prefix (`/data/you`), so
+everything AgentK hands Claude goes through `claudePath()` (`src/server/paths.ts`), which drops
+the prefix when the two are the same folder (the same device and inode of the export root; only
+this machine's own `/net/<host>` is checked, by host name, since a stat into another host's
+mount can hang while that host is down):
+the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, the allow rules in
+the hooks settings file, and the design file, questions file and image paths in prompts. What
+AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
+so the Design guard checks an edit against both, and a session's transcript is looked up under
+both (a session started before keeps its transcript: a resume from the local spelling finds it).
+The project's main checkout keeps its path, and paths on other hosts stay under `/net`.
+
 **Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
 viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
