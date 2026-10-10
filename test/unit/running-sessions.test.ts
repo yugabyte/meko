@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { ProjectWithSessions, Session, SessionStatus } from '../../src/shared/types.js';
 import { StatusDot } from '../../src/web/components/common.js';
-import { aggregateDot, dotState, runningSessions, type DotState } from '../../src/web/util.js';
+import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, runningSessions, type DotState } from '../../src/web/util.js';
 
 const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false) => ({ id: status, status, desired, learning }) as Session;
 
@@ -40,9 +40,9 @@ describe('dotState', () => {
     expect(aggregateDot(project(session('idle', 'running', true), session('needs_input')))).toBe('needs_input');
   });
 
-  it('draws a learning dot with its own class and says so', () => {
+  it('gives a learning dot the long tooltip and keeps its label short', () => {
     const html = renderToStaticMarkup(createElement(StatusDot, { status: 'learning' }));
-    expect(html).toContain('class="dot learning"');
-    expect(html).toContain('aria-label="learning"');
+    expect(html).toContain(`title="${LEARNING_TITLE}"`);
+    expect(html).toContain(`aria-label="${STATUS_TEXT.learning}"`);
   });
 });

@@ -135,7 +135,7 @@ export const STATUS_TEXT: Record<DotState, string> = {
 };
 
 /** A learning dot's tooltip. */
-export const LEARNING_TITLE = 'learning: saving what it learned to Meko';
+export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
 
 /** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {
