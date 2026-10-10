@@ -36,6 +36,70 @@ export function mekoDesignName(slug: string, ext: 'md' | 'html', version: number
   return `design-${slug}${version > 1 ? `-v${version}` : ''}.${ext}`;
 }
 
+/** The SHA-256 of some text's UTF-8 bytes, in hex: what Meko names an artifact by. */
+export function sha256Hex(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** A design in a PR: its first version's Meko name (which never changes) and the latest version's hash. */
+export interface PrDesignRef {
+  name: string;
+  sha256: string;
+}
+
+const DESIGN_LINE = /^\s*meko_design:(design-[A-Za-z0-9._-]+\.(?:md|html));([0-9a-f]{64})\s*$/i;
+const ANY_DESIGN_LINE = /^\s*meko_design:/i;
+
+/**
+ * The line that names a session's design in its PR's description: `meko_design:<name>;<sha256>`,
+ * the name being the first version's (design-<slug>.md, or .html for an Artifact), so it stays the
+ * same while the hash moves to each new version. Meko fetches an artifact only by its hash.
+ */
+export function designLine(ref: PrDesignRef): string {
+  return `meko_design:${ref.name};${ref.sha256}`;
+}
+
+/** The design a PR description's `meko_design:` line names, or null when it has none (or a bad one). */
+export function parseDesignLine(body: string): PrDesignRef | null {
+  for (const line of body.split('\n')) {
+    const m = DESIGN_LINE.exec(line);
+    if (m) return { name: m[1], sha256: m[2].toLowerCase() };
+  }
+  return null;
+}
+
+/** True for any of a PR description's `meko_design:` lines, a bad one too. */
+export function isDesignLine(line: string): boolean {
+  return ANY_DESIGN_LINE.test(line);
+}
+
+/**
+ * A PR description with its `meko_design:` line set to `line`: the first such line replaced (any
+ * more dropped), or, without one, the line added after the Meko datapack line (`isDatapackLine`),
+ * or at the end. Everything else stays as it was, line endings included.
+ */
+export function withDesignLine(body: string, line: string, isDatapackLine: (l: string) => boolean): string {
+  const lines = body.split('\n');
+  const cr = (l: string) => (l.endsWith('\r') ? '\r' : '');
+  let replaced = false;
+  const out: string[] = [];
+  for (const l of lines) {
+    if (!isDesignLine(l)) out.push(l);
+    else if (!replaced) {
+      out.push(line + cr(l));
+      replaced = true;
+    }
+  }
+  if (replaced) return out.join('\n');
+  const dp = lines.findIndex((l) => isDatapackLine(l.replace(/\r$/, '')));
+  if (dp >= 0) {
+    lines.splice(dp + 1, 0, line + cr(lines[dp]));
+    return lines.join('\n');
+  }
+  const trimmed = body.replace(/\s+$/, '');
+  return trimmed ? `${trimmed}\n\n${line}` : line;
+}
+
 /** True for an Artifact tool call that publishes a page (not a read, list, asset upload…). */
 export function isArtifactPublish(input: Record<string, unknown>): boolean {
   const action = input.action;

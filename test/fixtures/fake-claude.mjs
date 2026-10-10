@@ -274,6 +274,20 @@ async function turn(text) {
       tool_response: 'Published https://claude.ai/code/artifact/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b (private).',
     });
   }
+  // After the approval: the design gets its questions and decisions (DESIGN_QA, a markdown design),
+  // the design's own Artifact is republished with them (REPUBLISH_DESIGN), or another page is
+  // published (PUBLISH_REPORT).
+  if (text.includes('DESIGN_QA')) appendFileSync(process.env.AK_DESIGN_FILE, '\n## Questions and decisions\n\n- Where do designs live? The datapack.\n');
+  if (text.includes('REPUBLISH_DESIGN') || text.includes('PUBLISH_REPORT')) {
+    const report = text.includes('PUBLISH_REPORT');
+    const page = join(dir, `${report ? 'report' : 'design'}-${sessionId}.html`);
+    writeFileSync(page, report ? '<h1>Benchmarks</h1>' : '<!doctype html><html><body><h1>Design</h1><h2>Questions and decisions</h2></body></html>');
+    hook('PostToolUse', {
+      tool_name: 'Artifact',
+      tool_input: { file_path: page, icon: 'doc' },
+      tool_response: `Published https://claude.ai/code/artifact/${report ? '9a8b7c6d-0000-4000-8000-000000000001' : '0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'} (private).`,
+    });
+  }
   if (text.includes('STATUSLINE')) {
     // Like Claude Code: runs the status line command with the session's JSON, plan limits included.
     const input = JSON.stringify({

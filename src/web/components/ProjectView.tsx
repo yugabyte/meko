@@ -27,6 +27,30 @@ import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
 
+/** Where this browser keeps the Review a PR sessions whose PR's design it has opened by itself. */
+const REVIEW_DESIGNS_KEY = 'ak-review-designs-shown';
+
+/**
+ * True the first time for each Review a PR session (its design then opens by itself), false after:
+ * kept in this browser, the last 200 sessions.
+ */
+function firstReviewDesign(id: string): boolean {
+  let ids: string[] = [];
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(REVIEW_DESIGNS_KEY) ?? '[]');
+    if (Array.isArray(v)) ids = v.filter((x): x is string => typeof x === 'string');
+  } catch {
+    /* unreadable: start a new list */
+  }
+  if (ids.includes(id)) return false;
+  try {
+    localStorage.setItem(REVIEW_DESIGNS_KEY, JSON.stringify([...ids, id].slice(-200)));
+  } catch {
+    /* storage off: it opens again next time */
+  }
+  return true;
+}
+
 const REVIEW_TEXT: Record<Session['reviewState'], string> = {
   none: 'no PR',
   waiting: 'waiting for review',
@@ -101,6 +125,11 @@ export function ProjectView({
   useEffect(() => {
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
+  // A review whose PR has a design opens it once, the first time the session shows with it.
+  const reviewDesign = session?.stage === 'reviewing-pr' && session.hasDesign ? session.id : null;
+  useEffect(() => {
+    if (reviewDesign && firstReviewDesign(reviewDesign)) setPanel('design');
+  }, [reviewDesign]);
 
   // One session action at a time, so a double tap can't send two merges or resumes.
   const [acting, setActing] = useState(false);

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,7 +59,9 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
     addMemory: rec('addMemory', undefined),
     updateMemory: rec('updateMemory', undefined),
     similar: rec('similar', []),
-    putArtifact: rec('putArtifact', undefined),
+    // Meko keeps a file under its content's SHA-256, which artifact_put returns.
+    putArtifact: rec('putArtifact', (_name: unknown, content: unknown) => createHash('sha256').update(String(content), 'utf8').digest('hex')),
+    getArtifact: rec('getArtifact', null),
     ensureConversation: rec('ensureConversation', 'conv-1'),
     retitleConversation: rec('retitleConversation', undefined),
     ...overrides,

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,9 @@ const gh = vi.hoisted(() => ({
   /** Thrown instead of answering (a timed-out gh is `killed`). */
   viewerError: null as null | Error,
   stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
+  /** The PR descriptions AgentK wrote, and the error the next write fails with. */
+  bodies: [] as string[],
+  bodyError: null as null | Error,
 }));
 
 vi.mock('../../src/server/github.js', async (orig) => {
@@ -48,6 +52,12 @@ vi.mock('../../src/server/github.js', async (orig) => {
     prStats: async () => {
       if (!gh.stats || gh.stats instanceof Error) throw gh.stats ?? new Error('no PR stats');
       return gh.stats;
+    },
+    prBody: async () => gh.status!.body,
+    setPrBody: async (_w: string, _n: number, body: string) => {
+      if (gh.bodyError) throw gh.bodyError;
+      gh.bodies.push(body);
+      gh.status = { ...gh.status!, body };
     },
   };
 });
@@ -87,6 +97,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.viewerDelay = 0;
     gh.viewerError = null;
     gh.stats = null;
+    gh.bodies = [];
+    gh.bodyError = null;
     env = await makeEnv();
   });
   afterEach(async () => {
@@ -755,6 +767,90 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await expect(opening).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
     expect(env.core.sessions.row(s.id).stage).toBe('code');
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("names the design's latest version in the PR, and keeps the PR's line on it as the design changes", async () => {
+    const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+    const dp = '0f1e2d3c-2222-4333-8444-555566667777';
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: dp, name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Designed', prompt: 'do it', kind: 'quick' });
+    await idle(s.id, 'first turn');
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# One' });
+    await waitFor(() => env.core.lifecycle.prDesignRef(env.core.sessions.row(s.id)), (r) => !!r, 5000, 'design sent');
+    // The PR prompt names it: the first version's name, the latest version's hash.
+    const submit = vi.spyOn(env.core.host, 'submit');
+    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+    gh.status = status({ body: `Summary of the change.\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_conversation_id:conv-1` });
+    await env.core.sessions.action(s.id, 'open-pr');
+    const text = String(submit.mock.calls.find((c) => String(c[1]).startsWith('Open a pull request'))?.[1]);
+    expect(text.endsWith(`\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_design:design-designed.md;${sha('# One')}\nmeko_conversation_id:conv-1`)).toBe(true);
+    expect(text).toContain('AgentK Local moves its hash to each new version of the design itself');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review', 10000, 'review stage');
+    await idle(s.id, 'PR turn');
+
+    // Claude's description left the line out: a poll puts it back, after the datapack line.
+    await poll(s.id);
+    await waitFor(() => gh.bodies.length, (n) => n === 1, 5000, 'line added');
+    expect(gh.bodies[0]).toBe(`Summary of the change.\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_design:design-designed.md;${sha('# One')}\nmeko_conversation_id:conv-1`);
+    expect(lastEvent(s.id, 'design')).toBe('Pointed PR #7 at the latest version of the design in Meko');
+
+    // A new version, the Q&A added while addressing a review, moves the hash and nothing else.
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# One\n\n## Questions and decisions' });
+    await waitFor(() => gh.bodies.length, (n) => n === 2, 5000, 'line moved');
+    expect(gh.bodies[1]).toBe(gh.bodies[0].replace(sha('# One'), sha('# One\n\n## Questions and decisions')));
+    expect(env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0])).toEqual(['design-designed.md', 'design-designed-v2.md']);
+    // A poll that finds the line current writes nothing.
+    await poll(s.id);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(gh.bodies).toHaveLength(2);
+
+    // A write GitHub refuses is only logged, and the next version's write goes through.
+    gh.bodyError = new Error('gh: HTTP 403');
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# Three' });
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').length, (n) => n === 3, 5000, 'v3 sent');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(gh.bodies).toHaveLength(2);
+    gh.bodyError = null;
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# Four' });
+    await waitFor(() => gh.bodies.length, (n) => n === 3, 5000, 'line moved again');
+    expect(gh.bodies[2]).toContain(`meko_design:design-designed.md;${sha('# Four')}`);
+  });
+
+  it("keeps a design Claude changes after the approval: a new version for the PR, without asking for an approval again", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kept', prompt: 'DESIGN_MD it' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
+    await env.core.sessions.action(s.id, 'approve-design');
+    // The approval asks for the questions and decisions in the design before any code, and to keep it current.
+    const file = join(env.core.paths.designs, s.id, 'design.md');
+    await waitFor(() => transcript(s.id), (t) => t.includes('add a \\"Questions and decisions\\" section'), 10000, 'approval prompt');
+    expect(transcript(s.id)).toContain(`section to the design (edit ${file})`);
+    expect(transcript(s.id)).toContain('If a new question comes up or the design changes while you work, update the design in the same turn');
+    await idle(s.id, 'approval turn');
+    await env.core.sessions.submit(s.id, 'DESIGN_QA');
+    await idle(s.id, 'Q&A turn');
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-kept-v2.md'), 5000, 'v2 sent');
+    expect(dbGet<{ markdown: string }>(env.core.db, 'SELECT markdown FROM designs WHERE session_id = ?', s.id)?.markdown).toContain('## Questions and decisions');
+    expect(lastEvent(s.id, 'design')).toBe('Design updated');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', status: 'idle' });
+    // A page published while coding isn't the design; a republish of the design's own Artifact would be.
+    await env.core.sessions.submit(s.id, 'PUBLISH_REPORT');
+    await idle(s.id, 'report turn');
+    expect(dbGet<{ html: string | null }>(env.core.db, 'SELECT html FROM designs WHERE session_id = ?', s.id)?.html).toBeNull();
+  });
+
+  it("takes a republish of the design's own Artifact while coding as a new version", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Page', prompt: 'DESIGN_ARTIFACT please' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
+    await env.core.sessions.action(s.id, 'approve-design');
+    await waitFor(() => transcript(s.id), (t) => t.includes('republish the same Artifact (https://claude.ai/code/artifact/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b) from the same file'), 10000, 'approval prompt');
+    await idle(s.id, 'approval turn');
+    await env.core.sessions.submit(s.id, 'REPUBLISH_DESIGN');
+    await idle(s.id, 'republish turn');
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-page-v2.html'), 5000, 'v2 sent');
+    expect(dbGet<{ html: string }>(env.core.db, 'SELECT html FROM designs WHERE session_id = ?', s.id)?.html).toContain('Questions and decisions');
+    expect(env.core.sessions.get(s.id).status).toBe('idle');
   });
 
   it('adds no Meko lines to the PR prompt for a project without a datapack', async () => {

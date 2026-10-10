@@ -38,7 +38,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
   const review = kindOf(session.kind) === 'review-pr';
   const steps = STARTUP_STEPS.filter(
     (s) => !(s.step === 'worktree' && st?.resumed) && !(s.step === 'prompt' && st && !st.hasPrompt),
-  ).map((s) => (review && s.step === 'worktree' ? { ...s, label: 'Fetching the PR and preparing the worktree' } : s));
+  ).map((s) => (review && s.step === 'worktree' ? { ...s, label: 'Fetching the PR and its design, and preparing the worktree' } : s));
   const current: StartupStep = st?.step ?? 'loading';
   const currentIdx = steps.findIndex((s) => s.step === current);
   const now = Date.now();

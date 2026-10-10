@@ -24,6 +24,7 @@ import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError } from './mekoapi.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
+import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
@@ -453,7 +454,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const q = core.questions.get(row);
     return {
       markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null,
-      questions: q.questions, questionsSource: q.source,
+      questions: q.questions, questionsSource: q.source, fromPr: prDesignSource(core, row.id)?.ref.name ?? null,
     };
   });
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/design/answers', async (req, reply) => {

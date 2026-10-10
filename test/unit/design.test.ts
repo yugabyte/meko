@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_DESIGN_HTML, artifactUrlIn, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from '../../src/server/design.js';
+import {
+  MAX_DESIGN_HTML, artifactUrlIn, designLine, isArtifactPublish, isDesignLine, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
+  withDesignLine,
+} from '../../src/server/design.js';
+import { mekoDatapackLineId } from '../../src/server/prompts.js';
 import { DESIGN_FRAME_CSP, MERMAID_VERSION, designFrameDoc, mermaidLoader } from '../../src/web/design-frame.js';
 import { DIAGRAM_FAILED, ERROR_CHARS, mermaidLook } from '../../src/web/mermaid.js';
 
@@ -51,6 +55,39 @@ describe('design capture', () => {
     expect(readDesignFile(join(dir, 'design.md'))).toBeNull();
     writeFileSync(join(dir, 'design.md'), '# D\n');
     expect(readDesignFile(join(dir, 'design.md'))).toBe('# D\n');
+  });
+});
+
+describe('designs in PRs', () => {
+  const hash = sha256Hex('# Design');
+  const line = designLine({ name: 'design-widget.md', sha256: hash });
+  const isDp = (l: string) => mekoDatapackLineId(l) !== null;
+
+  it("names the design by its first version's name and the latest version's hash", () => {
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(line).toBe(`meko_design:design-widget.md;${hash}`);
+    expect(parseDesignLine(`Adds it.\n\nmeko://dp-1\n  ${line}  \nmeko_conversation_id:c1`)).toEqual({ name: 'design-widget.md', sha256: hash });
+    expect(parseDesignLine(`meko_design:design-widget.html;${hash.toUpperCase()}\r`)).toEqual({ name: 'design-widget.html', sha256: hash });
+    // A line that isn't a design's name and a hash names nothing.
+    expect(parseDesignLine('meko_design:design-widget.md')).toBeNull();
+    expect(parseDesignLine(`meko_design:notes.txt;${hash}`)).toBeNull();
+    expect(parseDesignLine(`meko_design:design-widget.md;${hash.slice(1)}`)).toBeNull();
+    expect(parseDesignLine('Adds it.')).toBeNull();
+    expect(isDesignLine('meko_design:anything')).toBe(true);
+    expect(isDesignLine('see meko_design: below')).toBe(false);
+  });
+
+  it("sets the PR's design line, leaving the rest of the description as it was", () => {
+    const old = `meko_design:design-widget.md;${'0'.repeat(64)}`;
+    // Replaced where it is, any second one dropped.
+    expect(withDesignLine(`Adds it.\n\nmeko://0f1e2d3c-1111\n${old}\nmeko_conversation_id:c1\n${old}`, line, isDp))
+      .toBe(`Adds it.\n\nmeko://0f1e2d3c-1111\n${line}\nmeko_conversation_id:c1`);
+    // Missing: after the datapack line, keeping a CRLF body's line endings.
+    expect(withDesignLine('Adds it.\r\n\r\nmeko://0f1e2d3c-1111;team/x\r\nmeko_conversation_id:c1', line, isDp))
+      .toBe(`Adds it.\r\n\r\nmeko://0f1e2d3c-1111;team/x\r\n${line}\r\nmeko_conversation_id:c1`);
+    // No Meko lines at all: at the end.
+    expect(withDesignLine('Adds it.\n', line, isDp)).toBe(`Adds it.\n\n${line}`);
+    expect(withDesignLine('', line, isDp)).toBe(line);
   });
 });
 

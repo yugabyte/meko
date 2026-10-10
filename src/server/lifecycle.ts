@@ -4,14 +4,18 @@ import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { designAnswers, type CheckedAnswers } from './answers.js';
-import { artifactUrlIn, checkToolQuestions, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
+import {
+  artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
+  withDesignLine, type PrDesignRef,
+} from './design.js';
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
-import { mekoPrFooter } from './prompts.js';
+import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
+import { mekoDatapackLineId, mekoPrFooter } from './prompts.js';
 import { HttpError } from './projects.js';
 import { INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
@@ -43,6 +47,17 @@ const MAX_CONFLICT_FIXES = 3;
 const CI_START_MS = 2 * 60 * 1000;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
+/** How long a PR poll waits before trying again to update a design line it couldn't. */
+const DESIGN_LINE_RETRY_MS = 10 * 60 * 1000;
+/** How long a Review a PR poll waits before trying again to fetch a PR design it couldn't. */
+const PR_DESIGN_RETRY_MS = 10 * 60 * 1000;
+/** The stages after a design's approval, where a change to it is saved as a new version and named in the PR. */
+const LATER_DESIGN_STAGES: readonly Stage[] = ['code', 'pr', 'review', 'merge'];
+
+/** True when a PR's design line names `ref`. */
+function sameRef(a: PrDesignRef | null, ref: PrDesignRef): boolean {
+  return !!a && a.name === ref.name && a.sha256 === ref.sha256;
+}
 
 /** What mergeInfo learns from looking at the branch and the worktree (see there). */
 interface MergeChecks {
@@ -157,6 +172,10 @@ export class Lifecycle {
   private chains = new Map<string, Promise<void>>();
   /** Per session, the tail of its design sends to Meko. */
   private designSends = new Map<string, Promise<void>>();
+  /** Per task, when updating its PR's design line last failed. */
+  private designLineFailedAt = new Map<string, number>();
+  /** Per review, the PR design it last failed to fetch (its hash) and when. */
+  private prDesignFailed = new Map<string, { sha256: string; at: number }>();
   /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
   private ciFailSince = new Map<string, { head: string; at: number }>();
   /** Per session, the PR head at the last look and when it was first seen there (CI_START_MS). */
@@ -223,38 +242,120 @@ export class Lifecycle {
   private async sendDesignNow(id: string): Promise<void> {
     const row = sessionRow(this.db, id);
     const dp = row && sessionDatapack(this.db, row);
-    // No datapack, or Meko is off: the design stays here until it can be sent.
-    if (!row || !dp || !this.core.mekoStatus.configured) return;
+    // No datapack, or Meko is off: the design stays here until it can be sent. A review's design
+    // is its PR's, already in Meko.
+    if (!row || !dp || !this.core.mekoStatus.configured || row.kind === 'review-pr') return;
     const d = get<{ markdown: string; html: string | null; md_version: number; md_sent: number; html_version: number; html_sent: number }>(
       this.db, 'SELECT markdown, html, md_version, md_sent, html_version, html_sent FROM designs WHERE session_id = ?', id);
     if (!d) return;
     const parts: { name: string; text: string; type: string; sent: string; version: number }[] = [];
     if (!d.md_sent && d.markdown) {
       parts.push({ name: mekoDesignName(row.slug, 'md', d.md_version + 1), text: d.markdown, type: 'text/markdown',
-        sent: 'UPDATE designs SET md_version = ?, md_sent = (markdown = ?) WHERE session_id = ?', version: d.md_version + 1 });
+        sent: 'UPDATE designs SET md_version = ?, md_hash = ?, md_sent = (markdown = ?) WHERE session_id = ?', version: d.md_version + 1 });
     }
     if (!d.html_sent && d.html !== null) {
       parts.push({ name: mekoDesignName(row.slug, 'html', d.html_version + 1), text: d.html, type: 'text/html',
-        sent: 'UPDATE designs SET html_version = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
+        sent: 'UPDATE designs SET html_version = ?, html_hash = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
     }
     if (!parts.length) return;
     const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
-      // The version is used; it's the current design only if nothing changed while it was sent.
-      run(this.db, p.sent, p.version, p.text, id);
+      const hash = await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
+      // The version is used, and is the one the PR names; it's the current design only if nothing
+      // changed while it was sent.
+      run(this.db, p.sent, p.version, hash, p.text, id);
     }));
+    await this.syncPrDesign(id);
   }
 
-  /** After an Artifact tool call during Design: keeps the published page and its link as the design. */
-  async captureArtifact(id: string, p: HookPayload): Promise<void> {
+  /**
+   * The design a task's PR names (see designLine): its first version's Meko name and the hash of
+   * the latest version sent, the Artifact's page for an Artifact design. Null without a design, or
+   * before a version reached Meko. A version sent before hashes were kept is named by the hash of
+   * the design as it is, when that's the one sent.
+   */
+  prDesignRef(row: SessionRow): PrDesignRef | null {
+    if (row.kind === 'review-pr') return null;
+    const d = get<{ markdown: string; html: string | null; md_version: number; md_sent: number; md_hash: string | null; html_version: number; html_sent: number; html_hash: string | null }>(
+      this.db, 'SELECT markdown, html, md_version, md_sent, md_hash, html_version, html_sent, html_hash FROM designs WHERE session_id = ?', row.id);
+    if (!d) return null;
+    const [ext, text, version, sent, hash] = d.html !== null
+      ? ['html', d.html, d.html_version, d.html_sent, d.html_hash] as const
+      : ['md', d.markdown, d.md_version, d.md_sent, d.md_hash] as const;
+    const sha256 = hash ?? (version > 0 && sent && text ? sha256Hex(text) : null);
+    return sha256 ? { name: mekoDesignName(row.slug, ext, 1), sha256 } : null;
+  }
+
+  /**
+   * Points the task's PR at the latest version of its design: rewrites the `meko_design:` line of
+   * the PR's description (adding it after the Meko datapack line when it's missing) and nothing
+   * else. `body` is the description as just polled, read from GitHub when not given. A failure is
+   * logged and tried again at a poll after DESIGN_LINE_RETRY_MS. Never throws.
+   */
+  private async syncPrDesign(id: string, body?: string): Promise<void> {
+    const row = sessionRow(this.db, id);
+    if (!row?.pr_number || row.kind === 'review-pr' || !LATER_DESIGN_STAGES.includes(row.stage)) return;
+    const ref = this.prDesignRef(row);
+    if (!ref) return;
+    if (body !== undefined && sameRef(parseDesignLine(body), ref)) return;
+    if (Date.now() - (this.designLineFailedAt.get(id) ?? 0) < DESIGN_LINE_RETRY_MS && body !== undefined) return;
+    const repo = prRepoOf(row.pr_url);
+    const cwd = this.ghCwd(row);
+    try {
+      const cur = await github.prBody(cwd, row.pr_number, repo);
+      if (sameRef(parseDesignLine(cur), ref)) return;
+      await github.setPrBody(cwd, row.pr_number, withDesignLine(cur, designLine(ref), (l) => mekoDatapackLineId(l) !== null), repo);
+      this.designLineFailedAt.delete(id);
+      this.sessions.event(id, 'design', `Pointed PR #${row.pr_number} at the latest version of the design in Meko`);
+    } catch (e) {
+      this.designLineFailedAt.set(id, Date.now());
+      this.warn(id, `Updating the design's line in PR #${row.pr_number}`, e);
+    }
+  }
+
+  /**
+   * After an Artifact tool call: keeps the published page and its link as the design. During
+   * Design any publish counts; later (`sameOnly`), only a republish of the design's own Artifact,
+   * so a page Claude publishes while coding isn't taken for the design.
+   */
+  async captureArtifact(id: string, p: HookPayload, sameOnly = false): Promise<void> {
     const input = p.tool_input ?? {};
     if (!isArtifactPublish(input)) return;
     const url = artifactUrlIn(JSON.stringify(p.tool_response ?? ''));
+    if (sameOnly) {
+      const d = get<{ artifact_url: string | null }>(this.db, 'SELECT artifact_url FROM designs WHERE session_id = ?', id);
+      if (!url || !d?.artifact_url || d.artifact_url !== url) return;
+    }
     const html = readArtifactHtml(input.file_path, p.cwd);
     if (!url && html === null) return;
+    if (sameOnly) {
+      const prev = get<{ html: string | null }>(this.db, 'SELECT html FROM designs WHERE session_id = ?', id);
+      if (html === null || prev?.html === html) return;
+      await this.saveDesign(id, { html });
+      this.sessions.event(id, 'design', 'Design updated');
+      return;
+    }
     await this.saveDesign(id, { ...(url ? { artifactUrl: url } : {}), ...(html !== null ? { html } : {}) });
     this.designChanged.add(id);
+  }
+
+  /**
+   * At the end of a turn after the design was approved (Code, PR & Review, Merge & Close): picks up
+   * a change to the markdown design file, which saves a new version to Meko and points the PR at
+   * it. Nothing waits for the user: it's only noted in the activity log.
+   */
+  async collectLaterDesign(row: SessionRow): Promise<void> {
+    if (row.kind === 'review-pr' || row.plan_mode || !LATER_DESIGN_STAGES.includes(row.stage)) return;
+    const prev = get<{ markdown: string; html: string | null }>(this.db, 'SELECT markdown, html FROM designs WHERE session_id = ?', row.id);
+    if (!prev) return;
+    // An Artifact design is kept by its republishes (captureArtifact); the file is a markdown design's.
+    const md = prev.html === null ? readDesignFile(this.sessions.designFile(row)) : null;
+    if (md !== null && md !== prev.markdown) {
+      await this.saveDesign(row.id, { markdown: md });
+      this.sessions.event(row.id, 'design', 'Design updated');
+      return;
+    }
+    void this.sendDesign(row.id); // anything an earlier send couldn't deliver
   }
 
   /**
@@ -816,7 +917,8 @@ export class Lifecycle {
       }, PR_CONVERSATION_TIMEOUT_MS);
     });
     const conv = await Promise.race([lookup, late]).finally(() => clearTimeout(timer));
-    return mekoPrFooter(mekoHost(this.core.config), dp, conv);
+    const design = this.prDesignRef(row);
+    return mekoPrFooter(mekoHost(this.core.config), dp, conv, design && designLine(design));
   }
 
   /**
@@ -1031,6 +1133,8 @@ export class Lifecycle {
     const turnAtStart = this.inTurn(before);
     const st = await github.prStatus(this.ghCwd(before), before.pr_number, prRepoOf(before.pr_url));
     if (st.headRefOid && this.headSeen.get(id)?.head !== st.headRefOid) this.headSeen.set(id, { head: st.headRefOid, at: Date.now() });
+    // The PR names the latest version of the design, even after Claude rewrote the description.
+    if (st.state === 'OPEN') void this.syncPrDesign(id, st.body ?? '');
     const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(sessionRepo(this.db, before) ?? p.repo_path, before.branch, st));
     // Merge & Close ends in an archive, which would keep a dirty worktree on the branch.
     const uncommitted = this.sessions.ownsWorktree(before) ? await uncommittedCount(before.worktree_path) : 0;
@@ -1392,6 +1496,7 @@ export class Lifecycle {
     const cwd = this.ghCwd(before);
     const st = await github.prWatch(cwd, before.pr_repo, before.pr_number);
     const me = await this.viewerLogin(cwd);
+    await this.refreshPrDesign(before, st.body ?? '');
     // Read the row again: Update to latest runs in the same serial queue, but an archive or Close
     // review doesn't, and may have ended the session during the calls above.
     const row = sessionRow(this.db, id);
@@ -1432,6 +1537,31 @@ export class Lifecycle {
     this.sessions.update(id, fields);
     await this.deliverNext(id).catch((e) => this.warn(id, 'Sending a queued prompt', e));
     this.core.changed();
+  }
+
+  /**
+   * A Review a PR session's copy of its PR's design, fetched again when the PR's `meko_design:`
+   * line names a version it doesn't have (the author changed the design, or Meko couldn't be
+   * reached at the start). A version that couldn't be fetched is tried again after
+   * PR_DESIGN_RETRY_MS. Claude hears of it with the next Update to latest.
+   */
+  private async refreshPrDesign(row: SessionRow, body: string): Promise<void> {
+    const ref = parseDesignLine(body);
+    if (!ref || prDesignSource(this.core, row.id)?.ref.sha256 === ref.sha256) return;
+    const failed = this.prDesignFailed.get(row.id);
+    if (failed?.sha256 === ref.sha256 && Date.now() - failed.at < PR_DESIGN_RETRY_MS) return;
+    const had = !!prDesignSource(this.core, row.id);
+    const d = await fetchPrDesign(this.core, row, body).catch((e: unknown) => {
+      this.core.log.warn(`fetching PR #${row.pr_number}'s design failed for ${row.id}`, errMsg(e));
+      return null;
+    });
+    if (!d) {
+      this.prDesignFailed.set(row.id, { sha256: ref.sha256, at: Date.now() });
+      return;
+    }
+    this.prDesignFailed.delete(row.id);
+    savePrDesign(this.core, row, d);
+    this.sessions.event(row.id, 'design', had ? `PR #${row.pr_number}'s design changed: the Design panel shows the new version` : `Loaded PR #${row.pr_number}'s design (${ref.name}) from Meko`);
   }
 
   /** gh's login, looked up once; null (and asked again next time) when gh can't say. */
@@ -1484,10 +1614,15 @@ export class Lifecycle {
       await moveReviewBranch(cur.worktree_path, sha);
       this.sessions.update(cur.id, { review_sha: sha, pr_head_sha: sha, pr_new_commits: 0 });
       this.sessions.event(cur.id, 'pr-update', `Updated to PR #${n} at ${sha.slice(0, 7)}`, { sha });
+      // Claude is told of a design that changed since it last read it.
+      const design = prDesignSource(this.core, cur.id);
+      const designChanged = !!design && design.told !== design.ref.sha256;
+      if (design && designChanged) markPrDesignTold(this.core, cur.id, design.ref.sha256);
       this.enqueue(cur.id, 'review-pr-update', {
         oldSha: old,
         sha,
         count: count === null ? 'its history was rewritten, a force-push' : `${count === 1 ? '1 new commit' : `${count} new commits`}`,
+        ...(designChanged ? { designChanged: '1' } : {}),
       });
       await this.deliverNext(cur.id);
       void this.sessions.refreshDiff(cur.id).catch(() => undefined);
