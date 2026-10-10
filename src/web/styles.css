@@ -3560,12 +3560,28 @@ div[id^='dak-mermaid-'] .label {
 .sheet:focus {
   outline: none;
 }
+/* The grab bar centred, the × at the right, near the corner; the row takes the ×'s height. */
+.sheet-hd {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 40px;
+  margin: -4px -8px -4px;
+}
 .sheet-grab {
   width: 36px;
   height: 4px;
   border-radius: 4px;
   background: var(--rule);
-  align-self: center;
+}
+.sheet-x {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 40px;
+  min-height: 40px;
+  font-size: 20px;
 }
 .sheet-items {
   display: flex;
