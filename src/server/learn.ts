@@ -226,10 +226,11 @@ interface Job {
 export class Learner {
   private jobs = new Map<string, Job>();
   /**
-   * By session, the facts its learn steps through the mod covered, for the next step's prompt. Kept
-   * in memory only: after a restart the next step lists them again, and the duplicate check skips them.
+   * By session, the facts its learn steps through the mod covered in the datapack they wrote to, for
+   * the next step's prompt. Kept in memory only: after a restart the next step lists them again, and
+   * the duplicate check skips them.
    */
-  private coveredFacts = new Map<string, string[]>();
+  private coveredFacts = new Map<string, { datapack: string; facts: string[] }>();
   /** How long a step through the mod may take (tests shorten it). */
   timeoutMs = LEARN_TIMEOUT_MS;
 
@@ -249,14 +250,24 @@ export class Learner {
     return get<{ path: LearnPath }>(this.db, 'SELECT path FROM meko_learns WHERE session_id = ? ORDER BY started_at DESC LIMIT 1', sessionId)?.path ?? null;
   }
 
-  /** What the session's earlier learn steps through the mod saved, corrected or found already saved, oldest first. */
-  private covered(sessionId: string): string[] {
-    return this.coveredFacts.get(sessionId) ?? [];
+  /**
+   * What the session's earlier learn steps through the mod saved, corrected or found already saved
+   * in `datapack`, oldest first. None after the session moved to another datapack: those facts aren't in it.
+   */
+  private covered(sessionId: string, datapack: string): string[] {
+    const c = this.coveredFacts.get(sessionId);
+    return c?.datapack === datapack ? c.facts : [];
   }
 
-  /** Notes a fact this step saved, corrected or found already saved, for the session's next learn step (the latest COVERED_MAX). */
+  /** Notes the text a step wrote (or found already saved) for the session's next learn step (the latest COVERED_MAX). */
   private cover(job: Job, text: string): void {
-    this.coveredFacts.set(job.sessionId, [...this.covered(job.sessionId), text].slice(-COVERED_MAX));
+    const facts = this.covered(job.sessionId, job.datapack.id).filter((t) => t !== text);
+    this.coveredFacts.set(job.sessionId, { datapack: job.datapack.id, facts: [...facts, text].slice(-COVERED_MAX) });
+  }
+
+  /** The session was archived or its project deleted: its covered facts go. */
+  forget(sessionId: string): void {
+    this.coveredFacts.delete(sessionId);
   }
 
   /** True while the session has a learn step running. */
@@ -296,7 +307,7 @@ export class Learner {
       this.startMod(row, trigger, dp);
       return 'mod';
     }
-    await this.startTurn(row, trigger);
+    await this.startTurn(row, trigger, dp);
     return 'turn';
   }
 
@@ -375,7 +386,7 @@ export class Learner {
     }, this.timeoutMs);
     timer.unref?.();
     this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], saves: 0, updates: 0, skips: 0, timer });
-    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id)) });
+    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id)) });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
   }
 
@@ -451,19 +462,21 @@ export class Learner {
           const d = decided.get(i + 1) ?? { action: 'add', id: null, text: null };
           const target = d.action === 'update' ? (job.similar[i] ?? []).find((m) => m.id === d.id) : undefined;
           try {
+            // What Meko now holds for the fact: a correction's own text, else the fact's.
+            let written = memoryText(f);
             if (d.action === 'skip') {
               job.skips++;
             } else if (target) {
-              const text = d.text && !machineSpecific(d.text, local) ? d.text : memoryText(f);
-              await this.core.meko.updateMemory(target.id, text, job.datapack.id, target.agentId, conv);
+              written = d.text && !machineSpecific(d.text, local) ? d.text : written;
+              await this.core.meko.updateMemory(target.id, written, job.datapack.id, target.agentId, conv);
               job.updates++;
             } else {
-              await this.core.meko.addMemory(memoryText(f), job.datapack.id, agent, conv, {
+              await this.core.meko.addMemory(written, job.datapack.id, agent, conv, {
                 source: 'agent-k-local', kind: 'learned', fact: f.kind, component: f.component || null, session: row.id, learn: job.id,
               });
               job.saves++;
             }
-            this.cover(job, memoryText(f));
+            this.cover(job, written);
           } catch (e) {
             this.core.log.warn(`saving a learned fact for ${row.id} failed`, errMsg(e));
           }
@@ -522,12 +535,12 @@ export class Learner {
 
   // ---- as a typed turn (no mod) ----
 
-  private async startTurn(row: SessionRow, trigger: LearnTrigger): Promise<void> {
+  private async startTurn(row: SessionRow, trigger: LearnTrigger, dp: DatapackRef): Promise<void> {
     const id = randomUUID();
     this.insert(row.id, id, trigger, 'turn', null);
     try {
       // Claude sees its own earlier saves in the transcript, but not what a step through the mod saved.
-      await this.core.sessions.submit(row.id, this.core.sessions.prompt(row, 'learn') + coveredText(this.covered(row.id)));
+      await this.core.sessions.submit(row.id, this.core.sessions.prompt(row, 'learn') + coveredText(this.covered(row.id, dp.id)));
     } catch (e) {
       run(this.db, 'DELETE FROM meko_learns WHERE id = ?', id);
       throw e;

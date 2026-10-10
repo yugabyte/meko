@@ -1851,12 +1851,14 @@ clears `discarding`.
 
 **Only what's new.** Each step looks back over the whole session, but asks only for what earlier
 saves didn't cover. The prompt says to leave out what Claude saved itself (its `memory_add` calls are
-in the transcript), and after the first step through the mod it lists the facts earlier steps saved,
-corrected or found already in Meko (noted as each fact is handled; the latest 60, each cut to 400
-characters: `coveredText()`), since a fork leaves nothing in the transcript. The list is kept in
-the server's memory only: after a restart the next step lists everything again and the duplicate
-check skips what's known. A fact whose write failed isn't listed, so the next step finds it again.
-A typed step gets the same list. The duplicate check still runs on what comes back.
+in the transcript), and after the first step through the mod it lists what earlier steps wrote
+(a correction by its corrected text) or found already in Meko (noted as each fact is handled; the
+latest 60, each cut to 400 characters: `coveredText()`), since a fork leaves nothing in the
+transcript. The list belongs to the datapack the steps wrote to: a session relaunched on another
+dedicated datapack starts afresh. It's kept in the server's memory only, until the session is
+archived: after a restart the next step lists everything again and the duplicate check skips
+what's known. A fact whose write failed isn't listed, so the next step finds it again. A typed step
+gets the same list. The duplicate check still runs on what comes back.
 
 **Through the mod** (its link live, protocol 2):
 
