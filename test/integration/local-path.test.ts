@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,9 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
       symlinkSync(from, join(links, name));
       views.push({ from, to: join(links, name) });
     }
+    // Claude Code's folder trust lives here; with no file, AgentK records none.
+    mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+    writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), JSON.stringify({ projects: {} }));
     await env.core.start();
   });
   afterEach(async () => {
@@ -53,6 +56,10 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     expect(launcher).toContain(`cd '${local(row.worktree_path)}' || exit 1`);
     expect(launcher).toContain(`'--add-dir' '${local(join(env.core.paths.designs, s.id))}'`);
     expect(launcher).toContain(`export HOME='${local(homedir())}'`);
+
+    // Started there, the worktree isn't tied back to its repo's trust, so it's trusted itself.
+    const trusted = JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), 'utf8')).projects;
+    expect(trusted[local(row.worktree_path)]).toMatchObject({ hasTrustDialogAccepted: true });
 
     // The design file and pasted images, as Claude is told them.
     expect(env.core.sessions.designFile(row)).toBe(local(join(env.core.paths.designs, s.id, 'design.md')));

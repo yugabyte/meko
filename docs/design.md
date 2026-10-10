@@ -114,8 +114,12 @@ mount can hang while that host is down):
 the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, the allow rules in
 the hooks settings file, and the design file, questions file and image paths in prompts. What
 AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
-so the Design guard checks an edit against both, and a session's transcript is looked up under
-both (a session started before keeps its transcript: a resume from the local spelling finds it).
+so the Design guard checks an edit against both, the learn step leaves out a fact that names
+either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
+`src/database.ts`), and a session's transcript is looked up under both (a session started before
+keeps its transcript: a resume from the local spelling finds it). Started by the local spelling,
+a worktree isn't tied back to its repo for folder trust (its `.git` file names the stored
+spelling), so AgentK also trusts that exact folder in `~/.claude.json` before launching.
 The project's main checkout keeps its path, and paths on other hosts stay under `/net`.
 
 **Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just

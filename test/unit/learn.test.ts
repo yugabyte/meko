@@ -42,6 +42,14 @@ describe('the learn step', () => {
     expect(machineSpecific('a/b', ['', '/'])).toBe(false);
   });
 
+  it('matches a path only whole, so a short local spelling of the home leaves longer names alone', () => {
+    const paths = ['/data', '/data/ak/worktrees/repo.1a2b3c4d/wt-1'];
+    expect(machineSpecific('Facts quote /data/ak/worktrees/repo.1a2b3c4d/wt-1/src as the root.', paths)).toBe(true);
+    expect(machineSpecific('The home is /data, mounted locally.', paths)).toBe(true);
+    expect(machineSpecific('`/data/notes.md` is mine', paths)).toBe(true);
+    expect(machineSpecific('src/shared/types.ts and src/database.ts hold it; /data-sets and app/data/x too.', paths)).toBe(false);
+  });
+
   it("reads a kind named like an object's own property as how it works", () => {
     const facts = parseFacts(JSON.stringify({ facts: ['constructor', 'toString', '__proto__', 'hasOwnProperty'].map((kind) => ({ kind, text: 'x' })) }));
     expect(facts?.map((f) => f.kind)).toEqual(['how-it-works', 'how-it-works', 'how-it-works', 'how-it-works']);

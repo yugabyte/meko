@@ -1019,6 +1019,10 @@ export class SessionManager {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
     const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
+    // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
+    // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
+    const cwd = claudePath(row.worktree_path);
+    if (cwd !== row.worktree_path) await this.trustRepo(cwd, true);
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
@@ -1062,12 +1066,13 @@ export class SessionManager {
   /**
    * Makes sure Claude Code trusts the repo. Other Claude processes rewrite
    * ~/.claude.json with their own copy when they start, which can drop a
-   * fresh entry, so a new entry is checked again after a moment.
+   * fresh entry, so a new entry is checked again after a moment. `exact`: only an entry for
+   * `repo` itself counts, not one for a parent.
    */
-  async trustRepo(repo: string): Promise<void> {
+  async trustRepo(repo: string, exact = false): Promise<void> {
     try {
       for (let i = 0; i < 3; i++) {
-        if (ensureWorkspaceTrust(repo) !== 'added') return;
+        if (ensureWorkspaceTrust(repo, exact) !== 'added') return;
         await sleep(400);
       }
     } catch (e) {

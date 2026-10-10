@@ -40,6 +40,10 @@ describe('claudePath', () => {
     const { stat: stat2 } = fakeStat({ '/net/box.example.com/data': [7, 100], '/data': [7, 100] });
     expect(claudePath('/net/box.example.com/data/x', stat2, new Map(), 'Box')).toBe('/data/x');
     expect(claudePath('/net/box/data/x', fakeStat({ '/net/box/data': [7, 1], '/data': [7, 1] }).stat, new Map(), 'box.example.com')).toBe('/data/x');
+    // Two full names must match whole: box.other.org is another machine.
+    const { stat: stat3, calls: calls3 } = fakeStat({ '/net/box.other.org/data': [7, 100], '/data': [7, 100] });
+    expect(claudePath('/net/box.other.org/data/x', stat3, new Map(), 'box.example.com')).toBe('/net/box.other.org/data/x');
+    expect(calls3).toEqual([]);
   });
 
   it('leaves paths outside /net, and the bare map and host folders, alone without a stat', () => {

@@ -6,6 +6,7 @@ import type { ModReply } from './hooks.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, mekoTag, withMekoScope, type SimilarMemory } from './meko.js';
 import { LEARN_AGENT } from './mekousage.js';
+import { claudePath } from './paths.js';
 import { HttpError } from './projects.js';
 import { SAVING_RULE } from './prompts.js';
 import type { DatapackRef } from '../shared/types.js';
@@ -91,9 +92,22 @@ export function parseFacts(text: string): Fact[] | null {
 /**
  * Text that names this machine is left out, whatever the model thought: the home folder, AgentK's
  * own folders, the worktree, the repo. The datapack is shared by a team, so it never helps anyone else.
+ * A path counts only whole: a short one (a home's local spelling can be just `/data`) doesn't
+ * match inside a longer name such as `src/database.ts`.
  */
 export function machineSpecific(text: string, paths: string[]): boolean {
-  return paths.some((p) => p.length > 1 && text.includes(p));
+  return paths.some((p) => p.length > 1 && namesPath(text, p));
+}
+
+const PATH_CHAR = /[\w.~-]/;
+
+function namesPath(text: string, p: string): boolean {
+  for (let i = text.indexOf(p); i >= 0; i = text.indexOf(p, i + 1)) {
+    const before = text[i - 1];
+    const after = text[i + p.length];
+    if ((before === undefined || !PATH_CHAR.test(before)) && (after === undefined || !PATH_CHAR.test(after))) return true;
+  }
+  return false;
 }
 
 /** The text saved for a fact: its kind and component first, as the saving rule asks for. */
@@ -348,9 +362,10 @@ export class Learner {
     return { status: 204 };
   }
 
-  /** The local paths a fact must not name. */
+  /** The local paths a fact must not name, by their stored spelling and the one Claude was given (claudePath). */
   private localPaths(row: SessionRow): string[] {
-    return [homedir(), this.core.paths.home, row.worktree_path, sessionRepo(this.db, row) ?? ''].filter(Boolean);
+    const stored = [homedir(), this.core.paths.home, row.worktree_path, sessionRepo(this.db, row) ?? ''].filter(Boolean);
+    return [...new Set(stored.flatMap((p) => [p, claudePath(p)]))];
   }
 
   private facts(row: SessionRow, job: Job, body: Record<string, unknown>): void {

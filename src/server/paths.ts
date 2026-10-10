@@ -129,10 +129,16 @@ export function claudePath(p: string, stat: StatIds = statSync, cache = NET_ALIA
   return p;
 }
 
-/** Whether `/net/<name>` names the machine called `self` (either may be fully qualified). */
+/**
+ * Whether `/net/<name>` names the machine called `self`: the same name, or the same first label
+ * when one of them is a short name (`box` and `box.example.com`). Two full names must match whole.
+ */
 function sameHost(name: string, self: string): boolean {
-  const short = (h: string) => h.toLowerCase().split('.')[0];
-  return !!self && short(name) === short(self);
+  const a = name.toLowerCase();
+  const b = self.toLowerCase();
+  if (!a || !b) return false;
+  if (a.includes('.') && b.includes('.')) return a === b;
+  return a.split('.')[0] === b.split('.')[0];
 }
 
 function sameFolder(a: string, b: string, stat: StatIds): boolean {

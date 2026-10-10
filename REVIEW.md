@@ -198,7 +198,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       start, closing the project). Writing it never fails the call.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
-      worktree, repo path); the typed path relies on the saving rule in its prompt. It
+      worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
+      on the saving rule in its prompt. It
       never holds Merge & Close or Discard past its timeout on the mod path (writes included), and
       a Discard waiting for it always ends (step done, failed, interrupted, or Discard now; a
       restart finishes it), and **Don't save learnings** skips it entirely; it never holds a
