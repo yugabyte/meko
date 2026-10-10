@@ -238,7 +238,8 @@ describe('config and db', () => {
     project('old', JSON.stringify({ branchPrefix: 'ak/', notify: false }));
     project('set', JSON.stringify({ branchPrefix: 'hari/' }));
     project('none', '{}');
-    db.exec(`PRAGMA user_version = ${version - 1}`);
+    dropV30(db);
+    db.exec(`PRAGMA user_version = ${version - 2}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -262,8 +263,9 @@ describe('config and db', () => {
     db.exec(`ALTER TABLE meko_learns RENAME TO meko_learns_new;
       CREATE TABLE meko_learns AS SELECT * FROM meko_learns_new WHERE 0;
       INSERT INTO meko_learns SELECT * FROM meko_learns_new; DROP TABLE meko_learns_new`);
+    dropV30(db);
     dropV28(db);
-    db.exec(`PRAGMA user_version = ${version - 2}`);
+    db.exec(`PRAGMA user_version = ${version - 3}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -282,6 +284,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -293,7 +296,7 @@ describe('config and db', () => {
     dropV20(db);
     dropV19(db);
     dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 12}`);
+    db.exec(`PRAGMA user_version = ${version - 13}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -313,6 +316,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -322,7 +326,7 @@ describe('config and db', () => {
     dropV22(db);
     dropV21(db);
     dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 10}`);
+    db.exec(`PRAGMA user_version = ${version - 11}`);
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -347,6 +351,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -390,6 +395,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -438,6 +444,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -469,6 +476,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -505,6 +513,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -543,6 +552,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -576,6 +586,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -613,6 +624,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
+    dropV30(db);
     dropV28(db);
     dropV27(db);
     dropV26(db);
@@ -654,6 +666,11 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 30 (a queued Open PR's instructions), for tests that rewind the schema. */
+function dropV30(db: ReturnType<typeof openDb>) {
+  db.exec('ALTER TABLE sessions DROP COLUMN queued_instructions');
+}
 
 /** Undoes migration 28 (Discard waits for the learn step; skipping it at Merge & Close), for tests that rewind the schema. */
 function dropV28(db: ReturnType<typeof openDb>) {

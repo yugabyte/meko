@@ -177,6 +177,10 @@ code,
   font-size: 12px;
   color: var(--muted);
 }
+/* Instructions for AgentK past their limit (InstructionsField). */
+.hint .over {
+  color: var(--bad);
+}
 .error-text {
   color: var(--bad);
   font-size: 13px;
@@ -412,6 +416,15 @@ textarea.input {
   padding: 0 12px;
   font-size: 12px;
   color: var(--muted);
+}
+/* Beside the Open PR gate: open it with instructions for AgentK. Keeps its size in the phone's gate rows. */
+.gate-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.gate-group > .btn.gate-note {
+  flex: 0 0 auto;
 }
 /* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
 .move-stages {
@@ -4010,6 +4023,24 @@ div[id^='dak-mermaid-'] .label {
   /* Swipes scroll the terminal (terminals.ts), not the page. */
   .term-host {
     touch-action: none;
+  }
+}
+/* The + notes button beside Open PR: its caption shows where there's no hover to show its tooltip
+   (and in the phone's ⋯ sheet, where it sits beside Open PR); a finger-sized box on touch. */
+.gate-note-text {
+  display: none;
+}
+@media (max-width: 760px), (hover: none) {
+  .gate-note-text {
+    display: inline;
+    margin-left: 3px;
+  }
+}
+@media (pointer: coarse) {
+  .btn.small.gate-note {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
   }
 }
 @media (hover: none) {

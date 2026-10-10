@@ -112,6 +112,8 @@ export interface SessionRow {
   start_images: string | null;
   /** A gate pressed before it could go (Session.queued). */
   queued_gate: QueuedGate | null;
+  /** The user's instructions for a queued Open PR, sent after its prompt; cleared with queued_gate. */
+  queued_instructions: string | null;
   /** Discard was asked for and waits for the learn step (Session.discarding). */
   discarding: number;
   /** The user asked Merge & Close to skip the learn step. */
@@ -259,6 +261,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     mergeBlockers: rt.mergeBlockers,
     mergeQueueable: rt.mergeQueueable,
     queued: r.queued_gate,
+    queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
     busy: rt.busy,
     skippedStages: skippedStages(db, r),
     hasDesign: !!design,

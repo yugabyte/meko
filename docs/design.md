@@ -1073,6 +1073,7 @@ CREATE TABLE sessions (
                                    --   heads in a row did (both cleared once the PR merges cleanly)
   queued_gate TEXT,                -- a gate pressed before it could go: 'open-pr' (at the turn's end) | 'merge' (once
                                    --   nothing blocks it); NULL: none
+  queued_instructions TEXT,        -- the user's instructions for a queued Open PR (OpenPrRequest); cleared with queued_gate
   skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
   discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
@@ -1270,7 +1271,7 @@ stateDiagram-v2
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `attached`,
+  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `instructions`, `attached`,
   `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
   Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
   `learn`) are added to a repo's own prompt too. This lets a team
@@ -1311,7 +1312,13 @@ sent, withdrawn or dropped.
   startup, a failed restart) or is relaunched, on a move and on archive. A Cancel, a move or an exit
   while the prompt is being prepared (the PR prompt waits on GitHub and Meko first) still stops it. With
   Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
-  AgentK's mod.
+  AgentK's mod. Instructions given with it (see [Instructions with a move or Open PR](#instructions-with-a-move-or-open-pr))
+  wait with it in `sessions.queued_instructions` (`Session.queuedInstructions`), cleared whenever the
+  queued gate is. The **+** notes button stays beside the queued pill and opens the dialog on them:
+  saving replaces them, and an emptied box removes them (a request with `instructions` replaces them,
+  blank ones included; one without, like the plain gate's, keeps them). An Open PR pressed after the
+  turn ended but before the queued one went goes at once, with them unless it gives its own. If the
+  queued PR prompt can't be typed, the activity log keeps them, so they can be given again.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
   AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
   being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
@@ -1416,7 +1423,7 @@ Between turns you can move a task to another stage from the **Move to another st
 desktop it opens from any other stage in the stage bar (each is a button: *Move back to Code*), and
 from Explore's **Move on…** gate, which starts at Design; otherwise it starts at the next step
 (`defaultTarget`). On a phone it's in the ⋯ sheet, and the command palette has it too.
-`POST /api/sessions/:id/move` (`MoveSessionRequest`: stage, and optionally prompt and task) runs
+`POST /api/sessions/:id/move` (`MoveSessionRequest`: stage, and optionally task and instructions) runs
 `Lifecycle.move`, in the same per-session queue as the PR polls and merges. A `kind` sent by a page
 from before start stages is ignored. The rules are in `src/shared/stages.ts`, shared with the dialog:
 
@@ -1429,9 +1436,11 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   is waiting on you (a design waiting for approval aside) or has exited.
 - **Prompts.** A move to Explore, Design or Code can send that stage's prompt (`explore`, `design`,
   `code`), after the `moved` line saying which stage the session is in now, since the running
-  Claude's system prompt still has the old workflow line (the next launch gets the new one). It's sent by default
+  Claude's system prompt still has the old workflow line (the next launch gets the new one). It's sent
   for Design, and for Code from Explore or Design; not when going back to Code from PR & Review, or to
-  Explore. A session with no task yet (one started at Explore without a first prompt) is asked for
+  Explore (`promptByDefault`). The dialog doesn't offer a choice: what the user wants on a move back goes
+  in its optional instructions (see below). The request's `prompt` flag is still honored, for pages
+  from before. A session with no task yet (one started at Explore without a first prompt) is asked for
   one, which becomes its task. If the prompt can't be typed, the move stays and the error says so.
 - **Side effects.** Entering Design clears `plan_mode`, so the edit guard is on and the design is
   written as markdown or an Artifact; an earlier design is kept, and can be approved again or
@@ -1448,6 +1457,30 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   where it was if the prompt can't be typed. The PR stage never takes the PR the
   session had before if it's been merged or closed since: it waits for the new one. Moving back to
   Code also gets a session out of a PR stage whose turn ended without a PR.
+
+### Instructions with a move or Open PR
+
+The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
+("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
+stays one click; the **+** notes button beside it (and *Open PR … with instructions* in the command
+palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is captioned
+*Instructions* where there's no hover (a phone, a touch screen), and is 40 px square under a coarse
+pointer. Approve design takes none
+of its own: the design's **Other feedback** already goes with the approval. Merge & Close prompts
+Claude for nothing, so it takes none either.
+
+- **The prompt.** They go last, in the `instructions` prompt (`{{instructions}}`, overridable in
+  `.agent-k/stages/instructions.md`), which tells Claude to follow them where they conflict with
+  what's above: after the stage's prompt, and after the PR prompt's push line and Meko footer.
+- **With no stage prompt** (a move back, or to PR & Review when AgentK picks up the branch's open PR)
+  they go with the `moved` line alone. For a PR picked up, the session moves first and stays busy
+  until the instructions' turn ends, as with the PR prompt, so review prompts waiting for it go after
+  that turn; if they can't be typed, the session stays in PR & Review and the 502 says so.
+- **Checks.** At most `INSTRUCTIONS_MAX` (10,000) characters once trimmed (400 past it, or for
+  anything but text); blank is none. A move with instructions needs Claude to take a prompt, as a
+  stage prompt does (409 while it waits on you, or has exited, before anything moves). The dialogs
+  say the same before they send.
+- A queued Open PR keeps them (see [Queued gates](#queued-gates)).
 
 Moves are logged as stage entries with `moved_by = 'you'`. Sessions from before start stages may
 still have `kind` events ("Changed type to Quick Code") in their history; no new ones are logged.

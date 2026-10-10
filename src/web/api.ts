@@ -20,6 +20,7 @@ import type {
   MekoDatapack,
   MekoLogInfo,
   MoveSessionRequest,
+  OpenPrRequest,
   NewComment,
   PastedImage,
   Project,
@@ -166,6 +167,8 @@ export const api = {
   /** merge and discard take a CloseSessionRequest (skip the learn step). */
   sessionAction: (id: string, action: SessionAction, b?: CloseSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`, b),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
+  /** Open PR with the user's instructions (the plain gate uses sessionAction). */
+  openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */

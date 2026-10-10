@@ -18,7 +18,7 @@ import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
 import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -52,6 +52,7 @@ export function ProjectView({
   meko,
   onNewSession,
   onMove,
+  onOpenPr,
   onRename,
   onMenu,
   onError,
@@ -64,6 +65,8 @@ export function ProjectView({
   onNewSession: () => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMove: (preset?: MovePreset) => void;
+  /** Opens the Open PR with instructions dialog for the session on screen. */
+  onOpenPr: () => void;
   /** Opens the Rename session dialog. */
   onRename: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
@@ -260,6 +263,7 @@ export function ProjectView({
           onAct={act}
           learnTo={mergeLearnTo}
           onMove={onMove}
+          onOpenPr={onOpenPr}
           onShare={canShare ? () => setSharing(true) : undefined}
           acting={acting}
           actions={
@@ -368,6 +372,10 @@ export function ProjectView({
                 setSheet(false);
                 onMove(preset);
               }}
+              onOpenPr={() => {
+                setSheet(false);
+                onOpenPr();
+              }}
               onShare={
                 canShare
                   ? () => {
@@ -427,9 +435,44 @@ function newCommitsText(n: number | null): string {
 }
 
 /** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
-function queuedGate(session: Session, blocked: boolean, onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>, title: string): ReactNode {
+/**
+ * The + notes button beside Open PR: opens the Open PR with instructions dialog, or, with an Open
+ * PR queued, the instructions it goes with. Captioned where there's no hover (styles.css).
+ */
+function InstructionsButton({ queued, disabled, title, onClick }: { queued: boolean; disabled: boolean; title: string; onClick: () => void }) {
+  return (
+    <button
+      className="btn small gate-note"
+      disabled={disabled}
+      title={title}
+      aria-label={queued ? "The queued Open PR's instructions" : 'Open PR with instructions'}
+      onClick={onClick}
+    >
+      +<NotesIcon />
+      <span className="gate-note-text" aria-hidden="true">
+        Instructions
+      </span>
+    </button>
+  );
+}
+
+function queuedGate(
+  session: Session,
+  blocked: boolean,
+  onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>,
+  title: string,
+  onInstructions?: () => void,
+): ReactNode {
   return (
     <span className="gate-group">
+      {onInstructions && (
+        <InstructionsButton
+          queued
+          disabled={blocked}
+          title={session.queuedInstructions ? 'Change the instructions the queued Open PR goes with' : 'Give the queued Open PR instructions for AgentK'}
+          onClick={onInstructions}
+        />
+      )}
       <span className="gate-pill" title={title}>
         {queuedText(session)}
       </span>
@@ -445,6 +488,7 @@ function StageBar({
   project,
   onAct,
   onMove,
+  onOpenPr,
   onShare,
   learnTo = null,
   acting = false,
@@ -457,6 +501,8 @@ function StageBar({
   /** The datapack Merge & Close saves what the session learned to first; null when it has none (or Meko is off). */
   learnTo?: string | null;
   onMove: (preset?: MovePreset) => void;
+  /** Opens the Open PR with instructions dialog. */
+  onOpenPr: () => void;
   /** Opens the Share dialog at the PR's reviewers; absent when the project can't be shared from here. */
   onShare?: () => void;
   /** A session action is in flight. */
@@ -538,15 +584,18 @@ function StageBar({
     }
     case 'code': {
       if (session.queued === 'open-pr') {
-        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends');
+        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
         break;
       }
       const pr = openPrGate(session);
       reason = pr.reason;
       gate = (
-        <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
-          {pr.label}
-        </button>
+        <span className="gate-group">
+          <InstructionsButton queued={false} disabled={blocked || !!reason} title={reason ?? 'Open PR with instructions for AgentK'} onClick={onOpenPr} />
+          <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
+            {pr.label}
+          </button>
+        </span>
       );
       break;
     }
