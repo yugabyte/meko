@@ -8,7 +8,7 @@ import { Busy, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** A panel that slides up from the bottom of the screen. Tapping outside it or Escape closes it. */
+/** A panel that slides up from the bottom of the screen. Its ×, tapping outside it or Escape closes it. */
 export function Sheet({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -22,14 +22,20 @@ export function Sheet({ label, onClose, children }: { label: string; onClose: ()
       trapTab(e, ref.current);
     };
     window.addEventListener('keydown', onKey, true);
-    // Focus the sheet itself, not its first button: that can be a gate, and Enter would pass it.
+    // Focus the sheet itself, not a button: Enter would close it on the ×, or pass the gate that can
+    // be the first row after it.
     ref.current?.focus({ preventScroll: true });
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
   return (
     <div className="sheet-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="sheet" role="dialog" aria-modal="true" aria-label={label} ref={ref} tabIndex={-1}>
-        <span className="sheet-grab" aria-hidden="true" />
+        <div className="sheet-hd">
+          <span className="sheet-grab" aria-hidden="true" />
+          <button className="icon-btn sheet-x" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
         {children}
       </div>
     </div>
