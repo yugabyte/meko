@@ -482,7 +482,8 @@ numbered from 0 and joined by lines (dotted from Explore, which is optional), th
 a PR. They sit in one row on a desktop and one column on a phone, with a line under them saying what
 the selected one is for. The Name and First prompt fields show an example of work that suits it
 (`START_EXAMPLES`): a question for Explore, a feature with choices to make for Design, a one-line
-fix for Code:
+fix for Code. The name heads the task Claude gets (`taskWithName()` in `prompts.ts`: the name, then
+the first prompt, unless the prompt already starts with it), so the prompt needn't repeat it:
 
 | Start | For | First prompt |
 |---|---|---|
@@ -812,10 +813,10 @@ the ones that got there (`sessions.start_images`). One gone by then (swept, or t
 start) is left out, and the session's activity log says to paste it into the terminal. The first
 prompt reaches Claude on its command line, where a path isn't taken as an attached image, so
 every prompt that names the task (a review's notes) adds the paths with a line asking Claude to
-open each with its Read tool: the first prompt, a move from Explore, a relaunch without resume.
+open each with its Read tool: the first prompt, a move that gives the session its task, a relaunch without resume.
 The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
 prompt. The images aren't the task: at Explore, images with no text are a first prompt, but the
-session still has no task (`Session.hasTask`), so moving it on asks for one. AgentK's Meko search
+session still has no task (`Session.hasTask`), so moving it on offers to take one. AgentK's Meko search
 at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
@@ -1439,14 +1440,23 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 - **Refused (409)** while AgentK is mid-turn or a gate action is in flight, during a merge, and for a
   session that still designs in plan mode. A move that sends a prompt is also refused while Claude
   is waiting on you (a design waiting for approval aside) or has exited.
-- **Prompts.** A move to Explore, Design or Code can send that stage's prompt (`explore`, `design`,
-  `code`), after the `moved` line saying which stage the session is in now, since the running
-  Claude's system prompt still has the old workflow line (the next launch gets the new one). It's sent
-  for Design, and for Code from Explore or Design; not when going back to Code from PR & Review, or to
-  Explore (`promptByDefault`). The dialog doesn't offer a choice: what the user wants on a move back goes
-  in its optional instructions (see below). The request's `prompt` flag is still honored, for pages
-  from before. A session with no task yet (one started at Explore without a first prompt) is asked for
-  one, which becomes its task. If the prompt can't be typed, the move stays and the error says so.
+- **Prompts.** A move to Design or Code can send a prompt for that stage, after the `moved` line
+  saying which stage the session is in now, since the running Claude's system prompt still has the
+  old workflow line (the next launch gets the new one). It's sent for Design, and for Code from
+  Explore or Design; not when going back to Code from PR & Review, or to Explore (`promptByDefault`).
+  It isn't the stage's start prompt, which names the task: a session's conversation often moves on
+  from its first prompt (an exploration that found the real problem elsewhere), so the move sends
+  `move-design` or `move-code` (`movePrompt()` in `prompts.ts`), which have AgentK design or implement
+  what the session has discussed, found or done so far, where the conversation ended up, and ask
+  when that isn't clear. `move-design` revises the session's design if it has one and designs from
+  code already on the branch, and gets the design questions line as `design` does. A repo's
+  override of `design` or `code` doesn't change them; override `move-design` and `move-code` too.
+  The dialog's line on what the move does says so. The dialog doesn't offer a choice: what the user
+  wants on a move back goes in its optional instructions (see below). The request's `prompt` flag is
+  still honored, for pages from before (a move to Explore sends `explore`). A session with no task
+  yet (one started at Explore without a first prompt) is offered an optional Task field: a task given
+  becomes the session's, and the stage's start prompt goes with it; left empty, the move prompt goes
+  as for any other session. If the prompt can't be typed, the move stays and the error says so.
 - **Side effects.** Entering Design clears `plan_mode`, so the edit guard is on and the design is
   written as markdown or an Artifact; an earlier design is kept, and can be approved again or
   revised. Leaving Design by hand clears *Design ready* and saves the design to Meko as an approval
@@ -1515,7 +1525,8 @@ knows to pass the right `datapack_id` when it searches them, and says when to se
 reading code for a new task, a review or a CI fix. Claude Code hides MCP tools until ToolSearch
 loads them, so it names the query that does (`+meko context_search`, which matches the Meko server
 under its own name or a plugin's). The first prompt of each task (`explore`, `design`,
-`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search.
+`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search;
+the move prompts (`move-design`, `move-code`) ask for one only if the work has moved on to something not searched yet.
 A Review a PR session's prompts (`review-pr`, `review-pr-comments`) and system prompt also ask for a
 search before every answer about why the code is the way it is (`mekoQuestionLine()`,
 `mekoQuestionSystemLine()`). These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so

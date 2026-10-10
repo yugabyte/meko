@@ -19,7 +19,7 @@ import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
 import { mekoLogPath, removeMekoLog } from './mekolog.js';
-import { designQuestionsLine, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, taskWithName, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -872,7 +872,7 @@ export class SessionManager {
       : {};
     const text = render(loadPrompt(this.db, name, row.worktree_path), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
-      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(row.initial_prompt ?? '', startImages(row)),
+      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
       base: row.base_branch,
       pr: row.pr_number,
@@ -886,7 +886,7 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 

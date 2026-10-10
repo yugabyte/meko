@@ -55,8 +55,10 @@ describe('stage moves', () => {
   });
 
   it('says what a move does', () => {
-    expect(moveEffect({ stage: 'code', prNumber: null }, 'design')).toBe('AgentK blocks edits to the repo until you approve a design.');
-    expect(moveEffect({ stage: 'design', prNumber: null }, 'code')).toBe('Skips design approval.');
+    expect(moveEffect({ stage: 'code', prNumber: null }, 'design')).toBe(
+      'AgentK designs what this session has worked out so far, and blocks edits to the repo until you approve a design.');
+    expect(moveEffect({ stage: 'design', prNumber: null }, 'code')).toBe('Skips design approval. AgentK implements what this session has worked out so far.');
+    expect(moveEffect({ stage: 'explore', prNumber: null }, 'code')).toBe('AgentK implements what this session has worked out so far.');
     expect(moveEffect({ stage: 'review', prNumber: 12 }, 'code')).toBe(
       'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to PR & Review.');
     expect(moveEffect({ stage: 'code', prNumber: null }, 'explore')).toBe('AgentK runs no design, PR or merge while the session is in Explore.');

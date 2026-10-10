@@ -1,15 +1,19 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { get, type Db } from './db.js';
+import type { MoveTarget } from '../shared/types.js';
 
 /**
  * Instructions sent to Claude at each lifecycle step. A repo can override any
  * of them with .agent-k/stages/<name>.md; the owner can override them in the
- * stage_prompts table. Placeholders: {{task}}, {{branch}}, {{base}}, {{pr}},
+ * stage_prompts table. Placeholders: {{task}} (a task's name, then its first prompt: taskWithName), {{branch}}, {{base}}, {{pr}},
  * {{prUrl}}, {{repo}}, {{reviewer}}, {{designFile}}, {{questionsFile}}; `comments` also gets {{count}} and
  * {{comments}}, `design-answers` gets {{count}} and {{answers}} (`approved-answers` only {{answers}}, and goes before
  * `approved`), `review-people` gets {{reviewers}} (the logins whose reviews started it), `ci` gets {{sha}} and {{checks}}, `conflicts` gets {{sha}}, and `moved` gets {{stage}}, {{workflow}} and
  * {{kind}} (always "Task", kept for overrides written when sessions had types). `moved` goes before the new stage's prompt when the user moves a session by hand.
+ * A move into Design or Code sends `move-design` or `move-code`, not the stage's start prompt: they carry on from the
+ * conversation and never restate {{task}}, which the session may have moved on from (a move that gives the session its
+ * first task sends the start prompt, with that task). A repo's override of `design` or `code` doesn't change them.
  * `instructions` gets {{instructions}}, the user's own text given with a move or Open PR; it goes last, after the
  * stage's prompt (and the PR prompt's footer), or after `moved` alone when the move sends no stage prompt.
  * `attached` goes before the first prompt of a task started on an existing branch or a PR, and gets {{attachedPr}} (", which
@@ -22,7 +26,19 @@ import { get, type Db } from './db.js';
  */
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'conflicts' | 'ci' | 'continue' | 'continue-review' | 'comments'
-  | 'moved' | 'instructions' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-comments' | 'learn';
+  | 'moved' | 'move-design' | 'move-code' | 'instructions' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-comments' | 'learn';
+
+/** How to design, after the task: shared by `design` and `move-design`. */
+const DESIGN_STEPS = `Read the relevant code, then design the change: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change anything in the repo yet: no file edits, commits, or commands that modify files. AgentK Local blocks edits in the repo until the user approves the design.
+
+Put the design in exactly one place:
+- If the design is complex (several components, a data flow, UI, or a state machine) and you have the Artifact tool, publish it as an Artifact, with diagrams where they help. Don't also write a markdown copy. In a Mermaid block in an Artifact's HTML, don't put \`<\` directly before a letter, \`/\`, \`!\` or \`?\` (such as \`<session>\` or \`List<T>\`): the browser reads it as an HTML tag before Mermaid sees the block, and the diagram breaks. Write \`{session}\` or "session id" instead. Arrows such as \`->>\`, \`-->\` and \`<-->\` are fine.
+- Otherwise, write it as markdown to {{designFile}}; \`\`\`mermaid blocks render as diagrams there.
+
+Then stop and say the design is ready. The user reviews and approves it in AgentK Local. If they send feedback, revise the same Artifact (republish the same file) or the same markdown file.`;
+
+/** The repo's conventions and checks, for the prompts that start coding. */
+const CODE_STEPS = "Follow the repo's conventions (AGENTS.md, contributing docs), add or update tests, and run the repo's tests and checks before you finish. Don't open a pull request yet.";
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
   explore: `You are in the Explore stage of an AgentK Local task.
@@ -37,13 +53,7 @@ Finish with a short summary of what you found and what you'd recommend next.`,
 
 Task: {{task}}
 
-Read the relevant code, then design the change: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change anything in the repo yet: no file edits, commits, or commands that modify files. AgentK Local blocks edits in the repo until the user approves the design.
-
-Put the design in exactly one place:
-- If the design is complex (several components, a data flow, UI, or a state machine) and you have the Artifact tool, publish it as an Artifact, with diagrams where they help. Don't also write a markdown copy. In a Mermaid block in an Artifact's HTML, don't put \`<\` directly before a letter, \`/\`, \`!\` or \`?\` (such as \`<session>\` or \`List<T>\`): the browser reads it as an HTML tag before Mermaid sees the block, and the diagram breaks. Write \`{session}\` or "session id" instead. Arrows such as \`->>\`, \`-->\` and \`<-->\` are fine.
-- Otherwise, write it as markdown to {{designFile}}; \`\`\`mermaid blocks render as diagrams there.
-
-Then stop and say the design is ready. The user reviews and approves it in AgentK Local. If they send feedback, revise the same Artifact (republish the same file) or the same markdown file.`,
+${DESIGN_STEPS}`,
 
   // For sessions created before designs moved out of plan mode.
   'design-plan': `You are in the Design stage of an AgentK Local task.
@@ -62,18 +72,18 @@ Revise the design to match: update the same Artifact (republish the same file) o
 
 {{answers}}`,
 
-  approved: `The design is approved. Implement it on the current branch ({{branch}}). Follow the repo's conventions (CLAUDE.md, contributing docs), add or update tests, and run the repo's tests and checks before you finish. Don't open a pull request yet.`,
+  approved: `The design is approved. Implement it on the current branch ({{branch}}). ${CODE_STEPS}`,
 
   code: `Task: {{task}}
 
-Implement this on the current branch ({{branch}}). Follow the repo's conventions (CLAUDE.md, contributing docs), add or update tests, and run the repo's tests and checks before you finish. Don't open a pull request yet.`,
+Implement this on the current branch ({{branch}}). ${CODE_STEPS}`,
 
   attached: `This session continues existing work: you're on the branch {{branch}}{{attachedPr}}, which already has commits. Before you start, read what's there: the commits beyond {{base}} (\`git log --oneline {{base}}..HEAD\`){{attachedPrRead}}. Build on that work; don't start over or rewrite its history.{{attachedPush}}`,
 
   pr: `Open a pull request for this work.
 
 1. Review the full diff against {{base}}. Make sure the repo's tests and checks pass.
-2. Commit using this repo's commit conventions (see CLAUDE.md and any commit skill) on branch {{branch}}.
+2. Commit using this repo's commit conventions (see AGENTS.md and any commit skill) on branch {{branch}}.
 3. Push the branch to origin. If the branch has no open PR yet, run \`gh pr create --base {{base}}\` with a title that follows the repo's commit conventions (if the repo squash-merges, the title becomes the commit subject) and a description that summarizes the design and the change; if it already has one (\`gh pr view\`), update that PR's title and description instead of opening another.
 
 Finish by printing the PR URL.`,
@@ -123,6 +133,14 @@ Don't comment \`/agentk review\`. Requesting another round is the user's decisio
 
   moved: `AgentK Local moved this session to the {{stage}} stage. {{workflow}}`,
 
+  'move-design': `Design what this session is working toward now: the change discussed, found or built in this conversation so far, as it stands. If the conversation moved on from the task the session started with, design where it ended up, not the original task. If code for it is already on the branch, design from what's there, and if this session already has a design, revise that one rather than starting another. If it isn't clear what to design, ask the user first.
+
+${DESIGN_STEPS}`,
+
+  'move-code': `Implement what this session has worked out so far: the change discussed, found or designed in this conversation, as it stands now. If the conversation moved on from the task the session started with, implement where it ended up, not the original task. If it isn't clear what to implement, ask the user before changing code.
+
+Work on the current branch ({{branch}}). ${CODE_STEPS}`,
+
   instructions: `The user added these instructions for this step in AgentK Local. Follow them; where they conflict with the instructions above, follow the user's.
 
 {{instructions}}`,
@@ -156,6 +174,16 @@ When the user asks, help with exactly that: explain code, trace a path, check a 
 Then reply with one line per memory you saved or corrected, or "Nothing new to save."`,
 };
 
+/**
+ * The prompt a move into this stage sends after the `moved` line, when it sends one and doesn't give
+ * the session its first task. Explore's start prompt goes only to a page from before that asks for it.
+ */
+export function movePrompt(stage: Exclude<MoveTarget, 'review'>): PromptName {
+  if (stage === 'design') return 'move-design';
+  if (stage === 'code') return 'move-code';
+  return 'explore';
+}
+
 /** The tool AgentK's mod gives Claude for the design's questions (`mcp__<plugin>__<name>`; src/mod/agentk). */
 export const DESIGN_QUESTIONS_TOOL = 'mcp__agentk__design_questions';
 
@@ -167,6 +195,18 @@ export const DESIGN_QUESTIONS_TOOL = 'mcp__agentk__design_questions';
  */
 export function designQuestionsLine(questionsFile: string): string {
   return `Also give the user the design's open questions, as {"questions": [{"id": "short-stable-id", "question": "…", "context": "why it matters (optional)", "options": [{"label": "…", "detail": "…"}], "recommended": 0, "status": "open", "decision": null}]}: pass that list to the ${DESIGN_QUESTIONS_TOOL} tool if you have it (load it with ToolSearch, query "select:${DESIGN_QUESTIONS_TOOL}", if it's deferred; it checks them, shows them to the user at once and saves them to ${questionsFile}), or else write that JSON to ${questionsFile}. AgentK Local lists them beside the design, and the user answers them there. Give options when there are real alternatives, with "recommended" as the index of the one you recommend. When you revise the design, keep each question's id, and mark a settled question "resolved" with its "decision". Give an empty list when there are none. The file is outside the repo, so writing it is allowed.`;
+}
+
+/**
+ * A task as Claude gets it: the session's name, as its title, then the first prompt, so the user
+ * needn't say the same thing in both. The name is left out when the prompt starts with it, and is
+ * the task when there's no prompt.
+ */
+export function taskWithName(name: string, prompt: string): string {
+  const n = name.trim();
+  const t = prompt.trim();
+  if (!n || t.toLowerCase().startsWith(n.toLowerCase())) return t;
+  return t ? `${n}\n\n${t}` : n;
 }
 
 /**
@@ -247,6 +287,9 @@ export function mekoRecallLine(name: PromptName): string {
     case 'design-plan':
     case 'code':
       return 'Before reading code, search Meko for earlier designs, decisions and gotchas about this task. If AgentK already listed what Meko knows, search only for what that doesn\'t cover.';
+    case 'move-design':
+    case 'move-code':
+      return 'If the work has moved on to something you haven\'t searched Meko for in this session, search Meko for earlier designs, decisions and gotchas about it before reading code.';
     case 'review':
     case 'review-people':
     case 'ci':

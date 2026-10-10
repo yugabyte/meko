@@ -582,7 +582,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const system = args[args.indexOf('--append-system-prompt') + 1];
     expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
     expect(system).toContain("It's in Explore now");
-    expect(args.at(-1)).toMatch(/Explore stage of an AgentK Local task[\s\S]*Task: why is it slow/);
+    // The name heads the task, so the first prompt needn't repeat it.
+    expect(args.at(-1)).toMatch(/Explore stage of an AgentK Local task[\s\S]*Task: Look around\n\nwhy is it slow/);
 
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409 });
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409 });
@@ -685,23 +686,22 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // Kept apart from the task, and added to it in Claude's prompts.
     expect(env.core.sessions.row(s.id).initial_prompt).toBe('It overflows on phones');
     const prompt = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args.at(-1);
-    expect(prompt).toContain(`Task: It overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`);
+    expect(prompt).toContain(`Task: Fix the footer\n\nIt overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`);
 
-    // At Explore, images alone are a first prompt, but not a task: moving on asks for one.
+    // At Explore, images alone are a first prompt, but not a task: moving on offers to take one.
     const c = env.core.sessions.stageImage(p.id, png).id;
     const e = await env.core.sessions.create(p.id, { name: 'Look at this', start: 'explore', images: [c] });
     expect(e.hasTask).toBe(false);
     expect(env.core.sessions.row(e.id).initial_prompt).toBeNull();
     await waitFor(() => argvLog(env), (l) => l.length > 1, 10000, 'second launch');
-    expect(argvLog(env)[1].args.at(-1)).toContain(`Task: Images the user attached (open each with the Read tool to see it):\n- ${join(pastes, e.id, c)}`);
+    expect(argvLog(env)[1].args.at(-1)).toContain(`Task: Look at this\n\nImages the user attached (open each with the Read tool to see it):\n- ${join(pastes, e.id, c)}`);
     await waitFor(() => env.core.sessions.get(e.id).status, (st) => st === 'idle', 10000, 'Explore turn');
-    await expect(env.core.sessions.move(e.id, { stage: 'design' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
     const moved = await env.core.sessions.move(e.id, { stage: 'design', task: 'Make the footer wrap' });
     expect(moved.hasTask).toBe(true);
     await waitFor(() => transcriptText(moved.claudeSessionId), (t) => t.includes('You are in the Design stage'), 10000, 'Design prompt');
-    // The typed task, with the images still going with it.
+    // The typed task, in the Design stage's start prompt, with the images still going with it.
     const designPrompt = transcriptText(moved.claudeSessionId).split('\n').find((l) => l.includes('You are in the Design stage'))!;
-    expect(designPrompt).toContain('Task: Make the footer wrap');
+    expect(designPrompt).toContain('Make the footer wrap');
     expect(designPrompt).toContain(join(pastes, e.id, c));
 
     // An image gone before it could be moved (swept, or taken by another start) is left out, and the activity log says so.
