@@ -16,10 +16,10 @@ import { findPr, isRepoName, issueText, prInfo, type PrInfo } from './github.js'
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
-import { launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
+import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
 import { mekoLogPath, removeMekoLog } from './mekolog.js';
 import { designQuestionsLine, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
-import { HttpError } from './projects.js';
+import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
@@ -120,7 +120,7 @@ const TRANSCRIPT_ACTIVE_MS = 15_000;
 const FINAL_CAPTURE_MS = 15000;
 /** How long a launch waits for the session's Meko conversation (its id goes in the system prompt) before Claude starts anyway. */
 const NAME_CONVERSATION_MS = 5000;
-/** After a launch gave up waiting on Meko for that, how long later launches don't wait (recovery launches one at a time). */
+/** After a launch gave up waiting on Meko for that, how long resumed and recovered launches don't wait (recovery launches one at a time). */
 const SLOW_CONVERSATION_MS = 60_000;
 /** How many failed starts are kept for Try again. */
 const MAX_FAILED_STARTS = 20;
@@ -945,7 +945,11 @@ export class SessionManager {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
     if (dps.length) {
-      lines.push(mekoConversationLine(conversationId, { claudeSessionId: row.claude_session_id, agentId: launchedAgentId(row), datapackId: dedicated?.id ?? null }));
+      // The same conversation launchConversation looks up: the session's, else the project's.
+      const make = dedicated
+        ? { sessionId: row.claude_session_id, agentId: launchedAgentId(row), datapackId: dedicated.id }
+        : { sessionId: projectConversationKey(row.project_id), agentId: AGENTK_AGENT_ID, datapackId: null };
+      lines.push(mekoConversationLine(conversationId, make));
       lines.push(mekoRecallSystemLine());
     }
     if (dedicated) lines.push(mekoSaveSystemLine(row.id));
@@ -2115,8 +2119,10 @@ export class SessionManager {
    */
   private async launchConversation(r: SessionRow, pending?: Promise<string | null>): Promise<string | null> {
     if (!this.core.mekoStatus.configured || !this.sessionDatapacks(r.project_id).length) return null;
-    // Meko just kept a launch waiting: don't hold up the next ones (a restart recovering many sessions).
-    if (Date.now() < this.conversationSlowUntil) return null;
+    // Meko just kept a launch waiting: don't hold up the next resumes and recoveries (a restart
+    // recovering many sessions). A new session still waits: its conversation has to be created, and
+    // titled, before the Meko plugin's SessionStart hook creates it under a generic title.
+    if (!pending && Date.now() < this.conversationSlowUntil) return null;
     const dp = dedicatedDatapack(this.db, r.project_id);
     const conv = dp ? (pending ?? this.conversationId(r, dp)) : this.core.projects.ensureConversation(r.project_id, NAME_CONVERSATION_MS);
     let timer: NodeJS.Timeout | undefined;

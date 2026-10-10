@@ -578,7 +578,7 @@ export class ProjectService {
     let p = this.creatingConversation.get(id);
     if (!p) {
       const dp = dedicatedDatapack(this.db, id);
-      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, `agent-k-local-project-${id}`, `AgentK Local: ${r.name}`, timeoutMs)
+      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, projectConversationKey(id), `AgentK Local: ${r.name}`, timeoutMs)
         .then((conv) => {
           run(this.db, 'UPDATE projects SET meko_conversation_id = ? WHERE id = ?', conv, id);
           return conv;
@@ -624,6 +624,11 @@ export class ProjectService {
     writeFileSync(tmp, JSON.stringify({ datapack_id: dp.id, datapack_name: dp.name, selected_at: new Date().toISOString() }, null, 2));
     renameSync(tmp, file);
   }
+}
+
+/** The `session_id` a project's own Meko conversation is created under (Projects.ensureConversation). */
+export function projectConversationKey(projectId: string): string {
+  return `agent-k-local-project-${projectId}`;
 }
 
 /** The most recently closed project whose dedicated datapack this is, if any (what create opens again). */

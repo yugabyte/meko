@@ -346,7 +346,9 @@ export class Core extends EventEmitter {
     // With transcript capture off, sessions run without the Meko plugin: its own hooks would still
     // send transcripts when a session compacts or ends. Its MCP server is configured apart from it,
     // so Meko's tools stay, and the system prompt gives the conversation_id its SessionStart did.
-    writeHookFiles(this.paths, { disabledPlugins: this.capture.enabled ? [] : mekoPluginKeys() });
+    // The setting, not whether the plugin's script was found: a plugin installed after AgentK
+    // starts runs in sessions once capture is on.
+    writeHookFiles(this.paths, { disabledPlugins: this.cfg.meko.captureTranscripts ? [] : mekoPluginKeys() });
     try {
       if (!writeModFiles(this.paths)) this.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
     } catch (e) {

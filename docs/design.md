@@ -1505,12 +1505,15 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > **The system prompt gives the conversation_id.** Meko's tools require a `conversation_id`, which
 > only the plugin's SessionStart context gave before. Every launch now creates (or finds) the
 > session's conversation, keyed by its Claude session id like the plugin's, in the dedicated
-> datapack, or the project's conversation when the project only has shared datapacks
-> (`launchConversation()` in `sessions.ts`, waiting up to 5 seconds), and the system prompt names
-> it (`mekoConversationLine()` in `prompts.ts`). When Meko doesn't answer in time, the line says how
-> to create that same conversation with `conversation_create` instead, and launches in the next
-> minute don't wait at all, so a restart that recovers many sessions one by one isn't held up 5
-> seconds each.
+> datapack, or the project's conversation (`agent-k-local-project-<id>`, owned by `agent-k-local`)
+> when the project only has shared datapacks (`launchConversation()` in `sessions.ts`, waiting up
+> to 5 seconds), and the system prompt names it (`mekoConversationLine()` in `prompts.ts`). When
+> Meko doesn't answer in time, the line gives the `conversation_create` arguments that make that
+> same conversation instead (for the project's conversation, with no datapack, which Meko takes
+> only when the account has a default one, as for AgentK's own create). Resumed and recovered
+> launches in the next minute then don't wait at all, so a restart that recovers many sessions one
+> by one isn't held up 5 seconds each. A new session still waits: its conversation has to be
+> created, and titled, before the Meko plugin's SessionStart hook creates it under a generic title.
 
 > **PRs point back at Meko.** When the project has a dedicated datapack and Meko is on, Open PR
 > appends to the PR prompt (after any repo or owner override) an instruction to end the PR

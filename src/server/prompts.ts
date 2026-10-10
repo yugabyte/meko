@@ -191,12 +191,13 @@ export function mekoRecallSystemLine(): string {
 /**
  * The conversation_id Meko's tools require. The Meko plugin's SessionStart context gives one, but
  * sessions run without the plugin while transcript capture is off, so AgentK always gives its own:
- * the session's conversation, or (Meko didn't answer in time) how to make that same conversation.
+ * the conversation it made for the session, or (Meko didn't answer in time) the conversation_create
+ * arguments that make that same conversation (`make`: its key, owner and datapack).
  */
-export function mekoConversationLine(conversationId: string | null, make: { claudeSessionId: string; agentId: string; datapackId: string | null }): string {
+export function mekoConversationLine(conversationId: string | null, make: { sessionId: string; agentId: string; datapackId: string | null }): string {
   if (conversationId) return `Meko conversation_id for this session: "${conversationId}". Pass it on every Meko call that takes one.`;
   const dp = make.datapackId ? `, datapack_id "${make.datapackId}"` : '';
-  return `Meko calls need a conversation_id: call conversation_create once with session_id "${make.claudeSessionId}", agent_id "${make.agentId}"${dp}, and pass the id it returns on every Meko call that takes one.`;
+  return `Meko calls need a conversation_id: call conversation_create once with session_id "${make.sessionId}", agent_id "${make.agentId}"${dp}, and pass the id it returns on every Meko call that takes one.`;
 }
 
 /**
