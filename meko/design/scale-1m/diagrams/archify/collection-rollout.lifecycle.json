@@ -12,7 +12,7 @@
   "lanes": [
     {
       "id": "main",
-      "label": "Rollout (meko#1591 deploy notes)"
+      "label": "Rollout, Meko up"
     },
     {
       "id": "roll",
@@ -20,7 +20,7 @@
     },
     {
       "id": "terminal",
-      "label": "Later release"
+      "label": "After the rollback window"
     }
   ],
   "states": [
@@ -35,23 +35,23 @@
       "tag": "floor 6"
     },
     {
-      "id": "released",
+      "id": "mirroring",
       "type": "active",
-      "label": "Libraries out",
-      "sublabel": "mem0 2.0.14.5 + MCP",
+      "label": "Mirroring",
+      "sublabel": "--mirror-on",
       "lane": "main",
       "col": 1,
-      "step": "02"
+      "step": "02",
+      "tag": "both ways"
     },
     {
-      "id": "backfilled",
+      "id": "copied",
       "type": "active",
-      "label": "Backfilled",
-      "sublabel": "backfill_memories.py",
+      "label": "Copied",
+      "sublabel": "copy, sync, diff = 0",
       "lane": "main",
       "col": 2,
-      "step": "03",
-      "tag": "idempotent"
+      "step": "03"
     },
     {
       "id": "compacted",
@@ -66,34 +66,34 @@
       "id": "switched",
       "type": "success",
       "label": "Switched",
-      "sublabel": "collectionName, both",
+      "sublabel": "helm upgrade",
       "lane": "main",
       "col": 4,
       "step": "05"
     },
     {
-      "id": "catchup",
-      "type": "active",
-      "label": "Catch-up copy",
-      "sublabel": "--since roll start",
-      "lane": "roll",
-      "col": 2,
-      "width": 130
-    },
-    {
-      "id": "split",
+      "id": "rolledback",
       "type": "failure",
-      "label": "One side only",
-      "sublabel": "api misses writes",
+      "label": "Rolled back",
+      "sublabel": "config change",
       "lane": "roll",
       "col": 1,
       "width": 112
     },
     {
-      "id": "contract",
+      "id": "mixed",
+      "type": "active",
+      "label": "Mixed pods",
+      "sublabel": "writes reach both",
+      "lane": "roll",
+      "col": 2,
+      "width": 130
+    },
+    {
+      "id": "mirroroff",
       "type": "neutral",
-      "label": "Contract",
-      "sublabel": "stop writing, drop old",
+      "label": "Mirror off",
+      "sublabel": "then drop old table",
       "lane": "terminal",
       "col": 2
     }
@@ -101,14 +101,14 @@
   "transitions": [
     {
       "from": "migrated",
-      "to": "released"
+      "to": "mirroring"
     },
     {
-      "from": "released",
-      "to": "backfilled"
+      "from": "mirroring",
+      "to": "copied"
     },
     {
-      "from": "backfilled",
+      "from": "copied",
       "to": "compacted"
     },
     {
@@ -117,32 +117,24 @@
       "variant": "emphasis"
     },
     {
-      "from": "compacted",
-      "to": "split",
-      "route": "straight",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "variant": "security"
-    },
-    {
-      "from": "split",
-      "to": "catchup",
-      "variant": "emphasis",
-      "route": "straight",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
       "from": "switched",
-      "to": "catchup",
+      "to": "mixed",
       "route": "straight",
       "fromSide": "bottom",
       "toSide": "top",
       "variant": "dashed"
     },
     {
-      "from": "catchup",
-      "to": "contract",
+      "from": "mixed",
+      "to": "rolledback",
+      "variant": "security",
+      "route": "straight",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "from": "mixed",
+      "to": "mirroroff",
       "route": "straight",
       "fromSide": "bottom",
       "toSide": "top",
@@ -154,25 +146,25 @@
       "dot": "cyan",
       "title": "Expand only",
       "items": [
-        "Old pods keep the old table until step 05",
+        "Nothing reads the new tables until step 05",
         "Raises the data-plane downgrade floor to 6"
       ]
     },
     {
       "dot": "amber",
-      "title": "One setting, two services",
+      "title": "The mirror",
       "items": [
-        "Chart memory.collectionName feeds both",
-        "MEM0_COLLECTION_NAME must match"
+        "Triggers copy each write to the other table",
+        "About 2-3 ms more per memory write",
+        "Old row locked first: no cross-table deadlock"
       ]
     },
     {
       "dot": "rose",
       "title": "Recovery",
       "items": [
-        "One side only: switch the other, then catch up",
-        "Point both back at meko_mem0_collection",
-        "Copy back memories written in between"
+        "While mirroring: roll back with a config change",
+        "After --mirror-off: sync --reverse first"
       ]
     }
   ]

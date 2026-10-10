@@ -1,43 +1,67 @@
 # Move memories to `meko_mem0_memories`
 
-Moves a deployment's mem0 memories from `meko_mem0_collection` to the
-datapack-partitioned `meko_mem0_memories` that data migration 000006 creates.
-`memory_search` then reads one partition instead of 128.
+Moves a deployment's mem0 memories from `meko_mem0_collection` to
+`meko_mem0_memories`, the table data migration 000006 creates. The new table is
+partitioned by datapack alone, so `memory_search` reads one partition instead
+of 128. Meko stays up throughout.
 
-Only api-server and meko-mcp-server write these tables, and both pick the table
-from one chart value, `memory.collectionName`. They must never write different
-tables at the same time: a delete, edit or promotion would land in only one.
-So the cutover stops both, syncs, and starts both on the new table.
+Only api-server and meko-mcp-server write these tables, and the chart value
+`memory.collectionName` picks the table for both. During the switch, some pods
+write each table. So before the switch, `sync.py` installs triggers on both
+tables: each insert, edit or delete on one is applied to the other in the same
+transaction. The two tables stay identical, and switching or rolling back is a
+config change.
 
-The pause lasts about as long as stopping and starting the two Deployments plus
-the sync. On the 3-node scale-test universe the sync compared about 1,000 rows
-a second per stream. At 8 streams that's about 2 minutes for 214k memories and
-279k entity rows, the production size in October 2026.
+## Cost
+
+While the triggers are on, each memory write also writes the other table. On
+the 3-node scale-test universe, that added about 2-3ms to each single-row write,
+through either table. Reads and searches are unaffected. Keep the triggers on
+only as long as you want to be able to roll back, then remove them (step 5).
+
+During the switch, many writes to the same memory through both tables at once
+can still fail: 42 of 4,366 writes (about 1%) failed with `could not serialize`
+when 16 writers hammered one row through both tables. That needs one memory
+written many times a second from old and new pods during the rollout.
 
 ## Before you start
 
 - Migration 000006 is applied (any api-server release that ships it).
 - meko-mcp-server runs meko-mem0 2.0.14.5 or later.
-- Python 3 with psycopg 3, and a DSN for the data database that can reach it
-  from where you run the script:
+- Python 3 with psycopg 3, and a DSN for the data database:
 
   ```bash
   pip install "psycopg[binary]"
-  export DSN='postgresql://<user>:<password>@<host>:5433/yugabyte'
+  export DSN='postgresql://<user>:<password>@<host>:5433/<database>'
   ```
 
-## 1. Copy while Meko is up
+## 1. Start mirroring
+
+```bash
+python sync.py --mirror-on
+```
+
+From here on, every write to either table lands in both.
+
+## 2. Copy what was there before
 
 ```bash
 python sync.py --copy --parallel 8
+python sync.py --sync --parallel 8
+python sync.py --diff --parallel 8
 ```
+
+`--copy` copies the old rows the new table lacks. `--sync` fixes the few rows a
+write changed while `--copy` was reading them. `--diff` counts rows that differ
+and exits 1 if any do. If it does, repeat `--sync` and `--diff` until `--diff`
+reports none.
 
 Then compact both new tables: a freshly copied vector index answered about 15x
 slower (270 ms against 17 ms) until it was compacted.
 
 ```bash
 M=<master addresses, host:7100,...>
-DB=<the data database, the one in DSN>
+DB=<the database in DSN>
 for t in meko_mem0_memories meko_mem0_memories_entities; do
   for i in $(seq -f '%03g' 0 127); do
     yb-admin --master_addresses "$M" compact_table "ysql.$DB" "${t}_$i" 600
@@ -45,64 +69,77 @@ for t in meko_mem0_memories meko_mem0_memories_entities; do
 done
 ```
 
-Rows written after the copy are picked up by the sync in step 2.
-
-## 2. Cut over
-
-1. Stop both writers. Meko is down from here until step 3 finishes.
-
-   ```bash
-   kubectl -n <api-server ns> scale deploy/meko-api-server --replicas=0
-   kubectl -n <mcp ns> scale deploy/meko-mcp-server --replicas=0
-   kubectl -n <api-server ns> wait --for=delete pod -l app=meko-api-server --timeout=5m
-   kubectl -n <mcp ns> wait --for=delete pod -l app=meko-mcp-server --timeout=5m
-   ```
-
-   The two can share a namespace; the chart lets each component set its own.
-
-2. Make the new tables match the old ones, then check the counts:
-
-   ```bash
-   python sync.py --sync --parallel 8
-   python sync.py --verify
-   ```
-
-   `--verify` exits non-zero on a count mismatch. Don't continue past one.
-
-3. Point both services at the new table. `helm upgrade` also restores their
-   replica counts from the chart values:
-
-   ```bash
-   helm upgrade <release> <chart> --reuse-values \
-     --set memory.collectionName=meko_mem0_memories
-   ```
-
-   Add the search options (`memory.exactSearchMaxRows`, `memory.hnswEfSearch`)
-   in the same upgrade if you use them.
-
-4. Check that `memory_search` returns memories for a known datapack.
-
-Leave `meko_mem0_collection` in place until you're past the point of rolling
-back. Dropping it is a later release.
-
-## Roll back
-
-The same pause, in the other direction: stop both Deployments, then
+## 3. Switch
 
 ```bash
-python sync.py --sync --reverse --parallel 8
-python sync.py --verify
+helm upgrade <release> <chart> --reuse-values \
+  --set memory.collectionName=meko_mem0_memories
+```
+
+Add the search options (`memory.exactSearchMaxRows`, `memory.hnswEfSearch`) in
+the same upgrade if you use them. Then check that `memory_search` returns
+memories for a known datapack.
+
+## 4. Roll back, if needed
+
+While the triggers are on, the old table is current, so rolling back is the
+same upgrade with the old name:
+
+```bash
 helm upgrade <release> <chart> --reuse-values --set memory.collectionName=""
 ```
 
-`--reverse` copies every change made on the new table back to the old one, so
-nothing written after the cutover is lost.
+After step 5 the old table no longer gets writes. To roll back then, bring it
+up to date first, then switch:
 
-## How the sync works
+```bash
+python sync.py --sync --reverse --parallel 8
+python sync.py --diff --reverse --parallel 8
+```
 
-For each source partition, the sync looks up every row in the destination by
-primary key, and inserts it or overwrites it if it's missing or differs in any
-column. Then, for each destination partition, it deletes rows the source no
-longer has. A rerun with nothing changed writes nothing. It never uses a plain
-join: on the scale test the planner hashed the other table whole, spilled past
-`temp_file_limit` and failed.
+Writes made between the sync and the switch would land only in the new table,
+so either turn mirroring back on first (`--mirror-on`, then the sync) or roll
+back with writes stopped.
+
+## 5. Stop mirroring
+
+Once you're past the point of rolling back:
+
+```bash
+python sync.py --mirror-off
+```
+
+The old table then stops getting writes. Drop it in a later release.
+
+## How it was tested
+
+On the scale-test universe (YugabyteDB 2026.1, 3 nodes, RF3). The scratch
+tables had the production layout and keys, with 4 hash partitions instead of
+128, and were seeded from real partitions. `--mirror-on` created the triggers
+on the partitioned parents, the database copied them to every partition, and
+the writers wrote through the parents. 8 writers inserted, edited, promoted and
+deleted about 100 times a second:
+
+- `--copy`, `--sync` and `--diff` ran under that load; `--diff` found 0
+  differences.
+- Half the writers then wrote each table for 2 minutes, as during a rolling
+  switch, then all wrote the new table. `--diff` still found 0, the counts
+  matched, and no write failed. That held in two runs: 40,000 and 20,000
+  starting memories.
+- Same-row contention: 16 writers on one or two rows through both tables. With
+  both triggers running after the write, 2-3% of writes failed with `deadlock
+  detected`. With the new table's trigger running first, none deadlocked; on
+  one row, about 1% failed with `could not serialize`.
+- `--sync` removed exactly the 300 rows planted only in the new table while
+  13,170 writes hit both tables, and `--diff` then found 0.
+- Entity-table writes on either side reached the other. Writes kept working
+  after either table was dropped with the triggers in place, and
+  `--mirror-off` left no trigger or function behind.
+
+## How the comparison works
+
+`--sync` and `--diff` look up every source row in the destination by primary
+key, one partition at a time, and every destination row in the source. They
+never use a plain join: on the scale test the planner hashed the other table
+whole, spilled past `temp_file_limit` and failed. The script's own writes set
+`meko.mem0_mirror = off`, so the triggers don't copy them back.

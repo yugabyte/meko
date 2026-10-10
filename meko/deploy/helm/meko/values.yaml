@@ -740,8 +740,8 @@ memory:
   # Table in the datapacks schema. meko-mcp-server writes it and the api-server
   # reads it, so this one value feeds MEM0_COLLECTION_NAME to both: switching
   # only one of them leaves the api-server missing new memories. Empty keeps
-  # meko_mem0_collection. Switch to meko_mem0_memories only with the cutover in
-  # scripts/migrate-mem0-collection/README.md, which stops both writers first.
+  # meko_mem0_collection. Switch to meko_mem0_memories only after steps 1-2 of
+  # scripts/migrate-mem0-collection/README.md, which keep both tables in sync.
   collectionName: ""
   # meko-mcp-server only. Empty leaves the variable unset: off, or the server
   # default. Rendered only when set because an older meko-mem0 rejects the

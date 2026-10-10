@@ -94,32 +94,39 @@ written after MCP switches.
 
 ![Collection rollout](diagrams/img/collection-rollout.png)
 
+Meko stays up throughout. The steps and commands are in
+[`meko/scripts/migrate-mem0-collection/README.md`](../../scripts/migrate-mem0-collection/README.md).
+
 1. **Migrate.** 000006 creates empty tables and the KB index. Nothing reads them
    yet. It took 86 s on the 1M universe, most of it building the KB index.
 2. **Release the libraries:** meko-mem0 2.0.14.5 and a meko-mcp-server that uses it.
-3. **Backfill** `meko_mem0_memories` from `meko_mem0_collection` with
-   `meko/test/scale/backfill_memories.py`. It copies one source partition at a
-   time with `ON CONFLICT DO NOTHING`, so a rerun copies only what is missing.
-4. **Compact** the new tables before any reads move to them. A freshly backfilled
+3. **Mirror:** `sync.py --mirror-on` installs triggers that apply each insert,
+   update and delete on either table to the other in the same transaction.
+4. **Copy:** `--copy`, then `--sync` for rows a write changed mid-copy, then
+   `--diff`. Repeat `--sync` and `--diff` until `--diff` reports none.
+5. **Compact** the new tables before any reads move to them. A freshly copied
    index answered in 270 ms p50, against 17 ms once compacted.
-5. **Switch:** set `memory.collectionName=meko_mem0_memories` and the search
-   options, and roll the api-server and meko-mcp-server together.
-6. **Catch up:** rerun the backfill with `--since` the start of the roll, for
-   memories that old MCP pods wrote to the old table. It copies inserts only; a
-   row updated in the old table after it was copied is not copied again.
-7. **Later release:** stop writing the old table, then drop it.
+6. **Switch:** set `memory.collectionName=meko_mem0_memories` and the search
+   options. During the rolling upgrade, writes from old and new pods reach both
+   tables, so neither service misses a memory.
+7. **Stop mirroring** with `--mirror-off` once rollback is no longer needed.
+8. **Later release:** drop the old table.
 
-If only one of the two services switches, the api-server and MCP read different
-tables. Switch the other and run the catch-up.
+While mirroring, each memory write cost about 2-3 ms more on the scale-test
+universe, and reads were unaffected. The old table's trigger runs after the
+write and the new table's before it, so a write through either table locks the
+old row first: with both after, two writes to one memory through different
+tables deadlocked.
 
 ## 4. Upgrade safety
 
 - **Expand only.** Old pods keep reading and writing `meko_mem0_collection`
-  until step 5. The new tables are unused until then.
+  until step 6. The new tables are unused until then.
 - **Downgrade floor.** 000006 raises the data-plane floor to 6. A build without
   it cannot start against a database that has run it.
-- **Rollback of step 5:** point both services back at `meko_mem0_collection` and
-  copy back the memories written in between. Nothing automates that copy yet.
+- **Rollback of step 6:** while the triggers are on, the old table is current,
+  so set `memory.collectionName` back. After `--mirror-off`, run
+  `sync.py --sync --reverse` first.
 
 ## 5. Open questions
 
