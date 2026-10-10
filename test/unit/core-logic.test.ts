@@ -14,7 +14,7 @@ import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor } from '../../src/server/github.js';
-import { EXTRACT_PROMPT } from '../../src/server/learn.js';
+import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
@@ -598,7 +598,7 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'review', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-people', 'review-pr']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
@@ -621,7 +621,7 @@ describe('Meko recall in prompts', () => {
 
   it('states the saving rule in full in both ways of the learn step, for sessions launched before it', () => {
     expect(mekoSaveSystemLine('s-1')).toContain(SAVING_RULE);
-    expect(EXTRACT_PROMPT).toContain(SAVING_RULE);
+    expect(extractPrompt([])).toContain(SAVING_RULE);
     const line = mekoLearnLine('learn', 's-1');
     expect(line).toMatch(/^What to save: /);
     expect(line).toContain(SAVING_RULE);

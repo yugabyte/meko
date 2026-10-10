@@ -127,7 +127,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       kind reads it through `kindOf()` (comparing with `review-pr` directly is fine).
 - [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
-      out of Merge & Close or while AgentK is mid-turn.
+      out of Merge & Close or while AgentK is mid-turn. A move's prompt carries on from the conversation
+      (`move-design`, `move-code`): it doesn't restate the session's first prompt, which the work may have moved on from. The
+      exceptions name a task on purpose: a move that gives a session without one its task sends the stage's start prompt, and
+      an older page's `prompt: true` on a move to Explore sends `explore`.
 - [ ] Prompts (stage, review, review-comment and design-answer prompts) are only typed into a session when Claude is
       idle (or showing a design waiting for approval), never into a permission or question prompt; otherwise they're queued (the review prompt
       in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead

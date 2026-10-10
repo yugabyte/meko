@@ -1506,7 +1506,11 @@ export interface MoveSessionRequest {
    * picks up the branch's open PR, or sends the PR prompt when there's work to push.
    */
   prompt?: boolean;
-  /** The task, for a session that has none yet (one started at Explore without a first prompt). */
+  /**
+   * The task, for a session that has none yet (one started at Explore without a first prompt); the
+   * stage's start prompt then goes with it. Optional: without it, the move's prompt has AgentK carry
+   * on from the conversation, as it does for a session that has a task.
+   */
   task?: string;
   /**
    * The user's instructions for the new stage (at most INSTRUCTIONS_MAX characters; blank is

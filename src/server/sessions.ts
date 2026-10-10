@@ -21,7 +21,7 @@ import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from 
 import { mekoLogPath, removeMekoLog } from './mekolog.js';
 import {
   DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
-  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, withAttachedImages, type PromptName,
+  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
@@ -892,7 +892,7 @@ export class SessionManager {
       : {};
     const text = render(loadPrompt(this.db, name, row.worktree_path), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
-      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(row.initial_prompt ?? '', startImages(row)),
+      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
       base: row.base_branch,
       pr: row.pr_number,
@@ -906,7 +906,7 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...this.designLines(row, name, extra), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...this.designLines(row, name, extra), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
@@ -1777,7 +1777,8 @@ export class SessionManager {
     if (req.name !== undefined) {
       const name = sessionName(req.name);
       if (name !== r.name) {
-        this.update(id, { name });
+        // A task that was its name (no first prompt) follows it, or Claude would get both names.
+        this.update(id, r.initial_prompt === r.name && kindOf(r.kind) === 'task' ? { name, initial_prompt: name } : { name });
         this.event(id, 'renamed', `Renamed from "${r.name}" to "${name}"`);
         void this.retitleConversation(this.row(id));
       }
@@ -1947,6 +1948,7 @@ export class SessionManager {
       removePastes(this.core.paths.pastes, row.id);
       removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
+      this.core.learn.forget(row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
@@ -2056,6 +2058,7 @@ export class SessionManager {
       removePastes(this.core.paths.pastes, row.id);
       removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
+      this.core.learn.forget(row.id);
     }
     removeStaged(this.core.paths.pastes, projectId);
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.

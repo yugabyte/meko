@@ -16,7 +16,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { STATUS_TEXT, approveLabel, cx, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, approveLabel, cx, dotState, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
@@ -235,12 +235,13 @@ export function ProjectView({
           onDoubleClick={mobile ? undefined : () => onRename(s.id)}
           title={[
             s.name,
-            STATUS_TEXT[s.status] + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
+            (dotState(s) === 'learning' ? LEARNING_TITLE : STATUS_TEXT[s.status]) +
+              (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
             STAGE_LABELS[s.stage],
             `${formatTokens(totalTokens(s.usage))} tokens`,
           ].join(' · ') + (mobile ? '' : '\nDouble-click to rename')}
         >
-          <StatusDot status={s.status} />
+          <StatusDot status={dotState(s)} />
           <span className="tab-name">{s.name}</span>
           <span className="stchip">{STAGE_LABELS[s.stage]}</span>
         </button>
@@ -463,10 +464,9 @@ function newCommitsText(n: number | null): string {
   return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
-/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
 /**
  * The + notes button beside Open PR: opens the Open PR with instructions dialog, or, with an Open
- * PR queued, the instructions it goes with. Captioned where there's no hover (styles.css).
+ * PR queued, the instructions it goes with.
  */
 function InstructionsButton({ queued, disabled, title, onClick }: { queued: boolean; disabled: boolean; title: string; onClick: () => void }) {
   return (
@@ -478,13 +478,11 @@ function InstructionsButton({ queued, disabled, title, onClick }: { queued: bool
       onClick={onClick}
     >
       +<NotesIcon />
-      <span className="gate-note-text" aria-hidden="true">
-        Instructions
-      </span>
     </button>
   );
 }
 
+/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
 function queuedGate(
   session: Session,
   blocked: boolean,

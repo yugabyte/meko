@@ -347,6 +347,11 @@ Session states, shown with a dot in the rail and on each tab:
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
+- **Learning:** AgentK is saving what the session learned to Meko (the
+  [learn step](#the-learn-step), `Session.learning`). The dot becomes a ring of dots turning around
+  Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
+  status idle; without the mod it's a working turn), never over needs you, exited or starting
+  (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
 
 **Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
@@ -356,7 +361,9 @@ empty, longer than 100 characters or hold control characters. The project's acti
 rename, the session's Meko conversation is retitled in the background (`conversation_update`, in
 the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
 keeps the old title), and Claude reads the new name in its system prompt
-the next time it's launched. Claude Code's own name for the conversation (`--name`, given at the
+the next time it's launched, and at the head of the task in any later prompt that names it. A task
+that was its name (started at Design or Code with no first prompt) takes the new name too, so the
+task never carries both. Claude Code's own name for the conversation (`--name`, given at the
 first launch) stays. An archived session can't be renamed.
 
 ### Open project
@@ -477,7 +484,8 @@ numbered from 0 and joined by lines (dotted from Explore, which is optional), th
 a PR. They sit in one row on a desktop and one column on a phone, with a line under them saying what
 the selected one is for. The Name and First prompt fields show an example of work that suits it
 (`START_EXAMPLES`): a question for Explore, a feature with choices to make for Design, a one-line
-fix for Code:
+fix for Code. The name heads the task Claude gets (`taskWithName()` in `prompts.ts`: the name, then
+the first prompt, unless the prompt already starts with it), so the prompt needn't repeat it:
 
 | Start | For | First prompt |
 |---|---|---|
@@ -807,10 +815,10 @@ the ones that got there (`sessions.start_images`). One gone by then (swept, or t
 start) is left out, and the session's activity log says to paste it into the terminal. The first
 prompt reaches Claude on its command line, where a path isn't taken as an attached image, so
 every prompt that names the task (a review's notes) adds the paths with a line asking Claude to
-open each with its Read tool: the first prompt, a move from Explore, a relaunch without resume.
+open each with its Read tool: the first prompt, a move that gives the session its task, a relaunch without resume.
 The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
 prompt. The images aren't the task: at Explore, images with no text are a first prompt, but the
-session still has no task (`Session.hasTask`), so moving it on asks for one. AgentK's Meko search
+session still has no task (`Session.hasTask`), so moving it on offers to take one. AgentK's Meko search
 at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
@@ -1273,7 +1281,7 @@ stateDiagram-v2
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `instructions`, `attached`,
+  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
   `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
   Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
   `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
@@ -1449,10 +1457,11 @@ session can't be moved to another stage, and no session can be moved into one.
 A task's design doesn't stop at the approval: it's what the PR's reviewers read.
 
 - **Its questions go into it.** The approval asks Claude to add a *Questions and decisions*
-  section to the design before writing any code (`designQaLine()`, added in code after the user's
-  answers): each question from the questions file, the user's answer and what was decided.
-- **It's kept current.** The approval and the prompts that change code later (`comments`,
-  `review`, `review-people`, `ci`, `conflicts`; `DESIGN_UPKEEP_PROMPTS`) carry a line
+  section to the design before writing any code (`designQaLine()`, added in code after the
+  approval prompt): each question from the questions file, the user's answer and what was decided.
+- **It's kept current.** The approval, a move to Code by hand (`move-code`) and the prompts that
+  change code later (`comments`, `review`, `review-people`, `ci`, `conflicts`;
+  `DESIGN_UPKEEP_PROMPTS`) carry a line
   (`designUpkeepLine()`) asking Claude to update the design in the same turn when a new question
   comes up or the design changes, adding the question and its decision to that section. The line
   names where: the markdown design file, or the design's Artifact to republish from the same file.
@@ -1491,14 +1500,23 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 - **Refused (409)** while AgentK is mid-turn or a gate action is in flight, during a merge, and for a
   session that still designs in plan mode. A move that sends a prompt is also refused while Claude
   is waiting on you (a design waiting for approval aside) or has exited.
-- **Prompts.** A move to Explore, Design or Code can send that stage's prompt (`explore`, `design`,
-  `code`), after the `moved` line saying which stage the session is in now, since the running
-  Claude's system prompt still has the old workflow line (the next launch gets the new one). It's sent
-  for Design, and for Code from Explore or Design; not when going back to Code from PR & Review, or to
-  Explore (`promptByDefault`). The dialog doesn't offer a choice: what the user wants on a move back goes
-  in its optional instructions (see below). The request's `prompt` flag is still honored, for pages
-  from before. A session with no task yet (one started at Explore without a first prompt) is asked for
-  one, which becomes its task. If the prompt can't be typed, the move stays and the error says so.
+- **Prompts.** A move to Design or Code can send a prompt for that stage, after the `moved` line
+  saying which stage the session is in now, since the running Claude's system prompt still has the
+  old workflow line (the next launch gets the new one). It's sent for Design, and for Code from
+  Explore or Design; not when going back to Code from PR & Review, or to Explore (`promptByDefault`).
+  It isn't the stage's start prompt, which names the task: a session's conversation often moves on
+  from its first prompt (an exploration that found the real problem elsewhere), so the move sends
+  `move-design` or `move-code` (`movePrompt()` in `prompts.ts`), which have AgentK design or implement
+  what the session has discussed, found or done so far, where the conversation ended up, and ask
+  when that isn't clear. `move-design` revises the session's design if it has one and designs from
+  code already on the branch, and gets the design questions line as `design` does. A repo's
+  override of `design` or `code` doesn't change them; override `move-design` and `move-code` too.
+  The dialog's line on what the move does says so (or, with a task typed, that AgentK works on that task). The dialog doesn't offer a choice: what the user
+  wants on a move back goes in its optional instructions (see below). The request's `prompt` flag is
+  still honored, for pages from before (a move to Explore sends `explore`). A session with no task
+  yet (one started at Explore without a first prompt) is offered an optional Task field: a task given
+  becomes the session's, and the stage's start prompt goes with it; left empty, the move prompt goes
+  as for any other session. If the prompt can't be typed, the move stays and the error says so.
 - **Side effects.** Entering Design clears `plan_mode`, so the edit guard is on and the design is
   written as markdown or an Artifact; an earlier design is kept, and can be approved again or
   revised. Leaving Design by hand clears *Design ready* and saves the design to Meko as an approval
@@ -1520,9 +1538,8 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
 ("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
 stays one click; the **+** notes button beside it (and *Open PR … with instructions* in the command
-palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is captioned
-*Instructions* where there's no hover (a phone, a touch screen), and is 40 px square under a coarse
-pointer. Approve design takes none
+palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is just the
+**+** and the notes icon, with no caption, and is 40 px square under a coarse pointer. Approve design takes none
 of its own: the design's **Other feedback** already goes with the approval. Merge & Close prompts
 Claude for nothing, so it takes none either.
 
@@ -1568,7 +1585,8 @@ knows to pass the right `datapack_id` when it searches them, and says when to se
 reading code for a new task, a review or a CI fix. Claude Code hides MCP tools until ToolSearch
 loads them, so it names the query that does (`+meko context_search`, which matches the Meko server
 under its own name or a plugin's). The first prompt of each task (`explore`, `design`,
-`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search.
+`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search;
+the move prompts (`move-design`, `move-code`) ask for one only if the work has moved on to something not searched yet.
 A Review a PR session's prompts (`review-pr`, `review-pr-comments`) and system prompt also ask for a
 search before every answer about why the code is the way it is (`mekoQuestionLine()`,
 `mekoQuestionSystemLine()`). These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so
@@ -1860,7 +1878,7 @@ datapack, which the team working on the project shares.
 
 **The saving rule.** Every session whose project has a dedicated datapack gets it in its system
 prompt (`mekoSaveSystemLine()` in `prompts.ts`), so it holds for saves Claude makes on its own
-too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `EXTRACT_PROMPT` and
+too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `extractPrompt()` and
 the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line,
 and so does the Explore prompt, which ends by saving under it. Only the mod path also filters what
 is written (local paths); on the typed path, and for Claude's own saves, the rule is all there is. Save what a teammate on this product would want and couldn't easily get from the code, the
@@ -1878,9 +1896,9 @@ the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn*
 Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
 that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
 Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
-(`Session.learning`): a Save learnings step still running when the PR merges, or when Discard is
-asked for, holds the close like one of its own, and a step that ended done since the session got
-to Merge & Close stands for it.
+(`Session.learning`, which turns the session's dot into the learning ring): a Save learnings step
+still running when the PR merges, or when Discard is asked for, holds the close like one of its
+own, and a step that ended done since the session got to Merge & Close stands for it.
 
 **Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
 checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
@@ -1903,12 +1921,23 @@ restart that cut the step short finishes the discard in `recover()`, unless the 
 turn in a Claude still running: that turn goes on, and its end discards the session. Archive
 clears `discarding`.
 
+**Only what's new.** Each step looks back over the whole session, but asks only for what earlier
+saves didn't cover. The prompt says to leave out what Claude saved itself (its `memory_add` calls are
+in the transcript), and after the first step through the mod it lists what earlier steps wrote
+(a correction by its corrected text) or found already in Meko (noted as each fact is handled; the
+latest 60, each cut to 400 characters: `coveredText()`), since a fork leaves nothing in the
+transcript. The list belongs to the datapack the steps wrote to: a session relaunched on another
+dedicated datapack starts afresh. It's kept in the server's memory only, until the session is
+archived: after a restart the next step lists everything again and the duplicate check skips
+what's known. A fact whose write failed isn't listed, so the next step finds it again. A typed step
+gets the same list. The duplicate check still runs on what comes back.
+
 **Through the mod** (its link live, protocol 2):
 
 1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll.
 2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
    served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
-   as JSON (`EXTRACT_PROMPT`), and posts the reply, the model and the usage to `/mod/learn`, which
+   as JSON (`extractPrompt()`), and posts the reply, the model and the usage to `/mod/learn`, which
    answers at once.
 3. The server parses the facts (the first JSON object in the reply), drops any that name the home
    folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3

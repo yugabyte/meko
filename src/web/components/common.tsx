@@ -1,16 +1,18 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
-import type { SessionStatus, StartStage } from '../../shared/types';
-import { STATUS_TEXT, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
+import type { StartStage } from '../../shared/types';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
-export function StatusDot({ status, title }: { status: SessionStatus; title?: string }) {
+/** A session's status dot; `learning` is a dotted ring turning around Meko's m (`dotState()`). */
+export function StatusDot({ status, title }: { status: DotState; title?: string }) {
   const cls =
     status === 'needs_input'
       ? 'needs'
       : status === 'archived'
           ? 'idle'
           : status;
-  return <i className={cx('dot', cls)} title={title ?? STATUS_TEXT[status]} aria-label={STATUS_TEXT[status]} />;
+  const text = status === 'learning' ? LEARNING_TITLE : STATUS_TEXT[status];
+  return <i className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
