@@ -775,7 +775,7 @@ still pastes into the box), and the image key at the end of the key bar's ▾ ro
 hold.
 
 Images can go with a session's first prompt too: paste them into the New session dialog's First
-prompt field (a review's Notes), drop them on it, or pick them with **Add image**. There's no
+prompt field (a review's Notes), drop them on it, or pick them with the image button under it. There's no
 session yet, so each one uploads to the project as it's added (`POST /api/projects/:id/images`,
 the same checks), is saved owner-only under `~/.agent-k-local/pastes/.new/<project>/`, and the
 dialog holds the id the server gave it (the file's name), with the same strip of thumbnails.

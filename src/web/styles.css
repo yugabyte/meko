@@ -3894,13 +3894,17 @@ div[id^='dak-mermaid-'] .label {
   color: var(--muted);
   white-space: nowrap;
 }
-/* The New session dialog's images for the first prompt: Add image, then the held ones. */
+/* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 10px;
   min-width: 0;
+}
+#ns-add-image {
+  padding: 3px 5px;
+  justify-content: center;
 }
 .ns-images .held-images {
   flex: 1 1 auto;
@@ -3912,6 +3916,10 @@ div[id^='dak-mermaid-'] .label {
 @media (pointer: coarse) {
   .ns-images .btn.small {
     min-height: 40px;
+  }
+  #ns-add-image {
+    min-width: 40px;
+    padding: 6px;
   }
 }
 

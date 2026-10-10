@@ -393,13 +393,19 @@ export function NewSessionDialog({
             }}
           />
           <div className="ns-images">
-            <button type="button" id="ns-add-image" className="btn small" onClick={() => imagePicker.current?.click()}>
+            <button
+              type="button"
+              id="ns-add-image"
+              className="btn small"
+              aria-label="Add image"
+              title="Add image"
+              onClick={() => imagePicker.current?.click()}
+            >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <circle cx="9" cy="10" r="1.6" />
                 <path d="M21 16l-5-5-9 9" />
               </svg>
-              Add image
             </button>
             <HeldImages held={held} hint={review ? 'sent with your notes' : 'sent with the first prompt'} />
             {lostImages > 0 && (
