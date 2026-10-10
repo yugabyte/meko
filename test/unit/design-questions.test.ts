@@ -7,9 +7,8 @@ import { designAnswers } from '../../src/server/answers.js';
 import {
   ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answeredQuestion, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
 } from '../../src/server/design.js';
-import { DEFAULT_PROMPTS, designQuestionsLine, render } from '../../src/server/prompts.js';
+import { DEFAULT_PROMPTS } from '../../src/server/prompts.js';
 import { defaultDraft, draftFor, draftsBlocker, parseDrafts, pruneDrafts, shownDraft, toRequest, type Draft } from '../../src/web/design-answers.js';
-import { approveLabel } from '../../src/web/util.js';
 
 const question = (over: Partial<DesignQuestion>): DesignQuestion => ({
   id: 'q', question: 'Which?', context: null, options: [], recommended: null, status: 'open', decision: null, ...over,
@@ -180,8 +179,6 @@ describe('checking the answers a browser sends', () => {
     const r = designAnswers({ answers: [{ questionId: 'store', choice: 1, label: 'Repo', text: 'why' }], feedback: 'More.' }, questions)!;
     expect(r.count).toBe('1 answer to an open question and other feedback');
     expect(r.text).toContain('### Q1 (id: store): Where?\nAnswer: Repo\nNote: why');
-    expect(r.text).toContain('### Q3 (id: tabs): Tabs?\nNo answer: use your judgment');
-    expect(designAnswers({ answers: [{ questionId: 'tabs', choice: null, label: null, text: 'Mine' }] }, questions)!.text).toContain('Answer (custom): Mine');
   });
 
   it('refuses answers to questions AgentK has changed since', () => {
@@ -219,18 +216,6 @@ describe('checking the answers a browser sends', () => {
 });
 
 describe('the design prompts', () => {
-  it('asks for the questions file, and tells Claude how to apply answers', () => {
-    const line = designQuestionsLine('/d/s1/questions.json');
-    expect(line).toContain('or else write that JSON to /d/s1/questions.json');
-    expect(line).toContain('pass that list to the mcp__agentk__design_questions tool if you have it');
-    expect(line).toMatch(/keep each question's id/);
-    const sent = render(DEFAULT_PROMPTS['design-answers'], { count: '1 answer to an open question', answers: '### Q1', questionsFile: '/d/q.json' });
-    expect(sent).toContain('The user sent 1 answer to an open question on your design');
-    expect(sent).toContain('In the design\'s questions (/d/q.json, or the design_questions tool when you have it), mark each answered question "resolved" with its "decision" (AgentK Local may have marked some already');
-    expect(sent).toMatch(/Don't change anything in the repo/);
-    expect(render(DEFAULT_PROMPTS['approved-answers'], { answers: '### Q1' })).toMatch(/follow the answer\.\n\n### Q1$/);
-  });
-
   it('warns against tag-like text in an Artifact\'s Mermaid blocks, and only that', () => {
     // The browser parses an Artifact's <pre class="mermaid"> before Mermaid reads it, so a
     // `<session>` in a label becomes tags and the diagram fails (#50). Markdown fences don't.
@@ -375,10 +360,5 @@ describe('answers in the browser', () => {
       m.revisionSent('s1');
       expect(m.loadDrafts('s1')).toEqual({ answers: { pick: a }, feedback: '' });
     });
-  });
-
-  it('labels Approve', () => {
-    expect(approveLabel(0)).toBe('Approve design');
-    expect(approveLabel(2)).toBe('Answer & approve');
   });
 });

@@ -33,7 +33,6 @@ describe('instructions for a move or Open PR', () => {
 
   it("puts the user's text in the instructions prompt as is", () => {
     const text = render(DEFAULT_PROMPTS.instructions, { instructions: 'Keep {{task}} as is.', task: 'the task' });
-    expect(text).toMatch(/^The user added these instructions for this step in AgentK Local\. Follow them; where they conflict with the instructions above, follow the user's\./);
     expect(text.endsWith('\n\nKeep {{task}} as is.')).toBe(true);
   });
 

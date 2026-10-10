@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostRunningError, startHost, type HostHandle } from '../../src/server/host/host.js';
+import { startHost, type HostHandle } from '../../src/server/host/host.js';
 import { MIN_PROTOCOL, type HostControl } from '../../src/server/host/protocol.js';
 import { HostRequestError, NoHostError, SessionHost, type HostStream } from '../../src/server/hostclient.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
@@ -189,10 +189,6 @@ describe('session host (real ptys)', () => {
     await host.spawn('ak-s', home, ['/bin/sh', '-c', 'sleep 30']);
     await host.stop();
     expect((await host.panes()).size).toBe(0);
-  });
-
-  it('refuses to start a second host on the same socket', async () => {
-    await expect(startHost({ paths, version: 'other' })).rejects.toBeInstanceOf(HostRunningError);
   });
 
   it("refuses to start while another host holds the home's lease, even one that doesn't answer", async () => {

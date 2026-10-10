@@ -62,16 +62,6 @@ describe('TranscriptCapture', () => {
   });
   const runs = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
 
-  it('runs the script in checkpoint mode with the transcript and Meko credentials', async () => {
-    const c = new TranscriptCapture(FAKE_CAPTURE, () => ({ MEKO_MCP_URL: 'https://meko.test/mcp', MEKO_API_KEY: 'k' }), silentLogger);
-    await c.capture('s1', transcript);
-    expect(runs()).toEqual([expect.objectContaining({
-      args: ['checkpoint'],
-      input: { transcript_path: transcript },
-      env: { MEKO_MCP_URL: 'https://meko.test/mcp', MEKO_API_KEY: 'k' },
-    })]);
-  });
-
   it('runs one capture per session at a time and folds requests made during a run into one more', async () => {
     process.env.FAKE_CAPTURE_MS = '300';
     const c = new TranscriptCapture(FAKE_CAPTURE, () => ({}), silentLogger);

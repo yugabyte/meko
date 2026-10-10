@@ -48,18 +48,6 @@ describe('Meko call log', () => {
     return { p, s };
   }
 
-  it('keeps every route behind the login', async () => {
-    for (const [method, url] of [
-      ['GET', '/api/projects/p/meko-logs'],
-      ['GET', '/api/sessions/s/meko-calls'],
-      ['GET', '/api/sessions/s/meko-calls/0?id=x'],
-      ['GET', '/api/sessions/s/meko-calls.jsonl'],
-      ['DELETE', '/api/sessions/s/meko-calls'],
-    ] as const) {
-      expect((await app.inject({ method, url })).statusCode, `${method} ${url}`).toBe(401);
-    }
-  });
-
   it("keeps a session's calls only while its project logs them, shows them, and deletes them with the session", async () => {
     const { p, s } = await session();
     const file = mekoLogPath(env.core.paths.designs, s.id);

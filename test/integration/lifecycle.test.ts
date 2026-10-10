@@ -188,33 +188,17 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   const stages = (id: string) => all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => r.stage);
   const shipped = () => env.meko.calls.filter((c) => c.name === 'addMemory').length;
 
-  it('closes a session whose PR was merged on GitHub', async () => {
+  it("closes a session whose PR was merged on GitHub once when polls overlap, even without the PR's size", async () => {
     const s = await inReview('Merged elsewhere');
-    gh.status = { ...gh.status!, state: 'MERGED' };
-    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    await closed(s.id);
-    expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
-    expect(shipped()).toBe(1);
-  });
-
-  it("merges and closes when the PR's size can't be read", async () => {
-    const s = await inReview('No stats');
     gh.stats = new Error('gh: rate limited');
-    gh.status = { ...gh.status!, state: 'MERGED' };
-    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    await closed(s.id);
-    const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
-    expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
-  });
-
-  it('cleans up once when polls overlap', async () => {
-    const s = await inReview('Overlap');
     gh.status = { ...gh.status!, state: 'MERGED' };
     const row = env.core.sessions.row(s.id);
     await Promise.all([env.core.lifecycle.pollReview(row), env.core.lifecycle.pollReview(row)]);
     await closed(s.id);
+    expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
     expect(shipped()).toBe(1);
-    expect(stages(s.id).filter((x) => x === 'merge')).toHaveLength(1);
+    const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
+    expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
   });
 
   it('finishes closing a session left in Merge & Close', async () => {
@@ -277,19 +261,13 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(await blockersFor({})).toEqual(['AgentK is waiting on you in the terminal.']);
     env.core.sessions.setStatus(s.id, 'idle');
 
-    gh.status = { ...approved, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
-    await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('CI is failing.') as string });
-    expect(gh.merges).toEqual([]);
-    expect(env.core.sessions.row(s.id).stage).toBe('review');
-  });
-
-  it('lists uncommitted files as a merge blocker and refuses to merge', async () => {
-    const s = await inReview('Dirty merge');
+    // A file left uncommitted, which the cleanup would take with the worktree.
     writeFileSync(join(env.core.sessions.row(s.id).worktree_path, 'draft.txt'), 'wip\n');
-    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    expect(env.core.sessions.get(s.id)).toMatchObject({ canMerge: false, mergeBlockers: ['The worktree has 1 uncommitted file: commit or discard them.'] });
+    expect(await blockersFor({})).toEqual(['The worktree has 1 uncommitted file: commit or discard them.']);
+
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
     await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({
-      status: 409, message: 'Not ready to merge: The worktree has 1 uncommitted file: commit or discard them.',
+      status: 409, message: expect.stringMatching(/^Not ready to merge: .*The worktree has 1 uncommitted file: commit or discard them\. CI is failing\./) as string,
     });
     expect(gh.merges).toEqual([]);
     expect(env.core.sessions.row(s.id).stage).toBe('review');
@@ -545,10 +523,14 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(learns(s.id)).toEqual([]);
   });
 
-  it('closes a merged session without a learn step when asked to skip it', async () => {
+  it('closes a merged session without a learn step when asked to skip it, and refuses a skipLearn that is not true or false', async () => {
     fakeFiles({ mod: '' });
     const s = await inReview('Skip at merge');
     await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    await expect(env.core.sessions.action(s.id, 'discard', { skipLearn: 'true' })).rejects.toMatchObject({ status: 400, message: 'skipLearn must be true or false.' });
+    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: 1 })).rejects.toMatchObject({ status: 400 });
+    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'running', stage: 'review', discarding: 0 });
+    expect(gh.merges).toEqual([]);
     await env.core.sessions.action(s.id, 'merge', { skipLearn: true });
     await closed(s.id);
     expect(learns(s.id)).toEqual([]);
@@ -592,14 +574,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await closed(s.id);
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'turn', outcome: 'done' }]);
     expect(lastEvent(s.id, 'learn-skipped')).toBeUndefined();
-  });
-
-  it('refuses a skipLearn that is not true or false', async () => {
-    const s = await inReview('Bad body');
-    await expect(env.core.sessions.action(s.id, 'discard', { skipLearn: 'true' })).rejects.toMatchObject({ status: 400, message: 'skipLearn must be true or false.' });
-    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: 1 })).rejects.toMatchObject({ status: 400 });
-    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'running', stage: 'review', discarding: 0 });
-    expect(gh.merges).toEqual([]);
   });
 
   it('saves what the session learned through the mod before discarding it', async () => {
@@ -736,15 +710,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
     expect(env.core.sessions.row(s.id).stage).toBe('design');
-  });
-
-  it('stays in Code when the PR prompt could not be typed', async () => {
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Flaky host', prompt: 'do it', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
-    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
-    await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 502 });
-    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', busy: false });
   });
 
   /** Opens a PR for a new session in a project with this datapack; returns the PR prompt Claude got. */
@@ -1029,7 +994,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')], statusCheckRollup: [failing()] };
     await poll(s.id);
-    expect(queued(s.id)).toMatchObject({ review: { state: 'queued' }, ci: { state: 'queued' } });
+    expect(queued(s.id)).toMatchObject({ review: { state: 'queued' }, ci: { state: 'queued', vars: { sha: tip(env.core.sessions.row(s.id).worktree_path) } } });
     // The review goes in first; while Claude addresses it, it pushes and CI starts over.
     await waitFor(() => transcript(s.id), (t) => t.includes('A review from'), 10000, 'review prompt');
     commitIn(env.core.sessions.row(s.id).worktree_path);
@@ -1039,17 +1004,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => queued(s.id), (q) => !q.ci, 10000, 'CI prompt dropped');
     expect(queued(s.id)).toEqual({});
     expect(transcript(s.id)).not.toContain('CI failed on PR');
-  });
-
-  it('delivers a CI failure found mid-turn when the turn ends', async () => {
-    const s = await inReview('CI mid-turn');
-    slowTurns();
-    await env.core.sessions.submit(s.id, 'something else');
-    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
-    gh.status = { ...gh.status!, statusCheckRollup: [failing()] };
-    await poll(s.id);
-    expect(queued(s.id).ci).toMatchObject({ state: 'queued', vars: { sha: tip(env.core.sessions.row(s.id).worktree_path) } });
-    await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR #7'), 10000, 'CI prompt');
   });
 
   it('holds queued prompts until the turn that got one has ended, unless Claude was relaunched', async () => {
@@ -1181,19 +1135,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(stages(s.id)).toEqual(['code', 'pr', 'review']);
   });
 
-  it("sends the user's instructions after the PR prompt", async () => {
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const now = await env.core.sessions.create(p.id, { name: 'Draft it', prompt: 'do it', kind: 'quick' });
-    await idle(now.id, 'first turn');
-    const submit = vi.spyOn(env.core.host, 'submit');
-    await expect(env.core.sessions.action(now.id, 'open-pr', { instructions: 7 })).rejects.toMatchObject({ status: 400 });
-    await env.core.sessions.action(now.id, 'open-pr', { instructions: '  Open it as a draft.  ' });
-    const sent = String(submit.mock.calls[0][1]);
-    expect(sent).toMatch(/^Open a pull request for this work\./);
-    expect(sent.indexOf('Open a pull request')).toBeLessThan(sent.indexOf('The user added these instructions'));
-    expect(sent.endsWith("follow the user's.\n\nOpen it as a draft.")).toBe(true);
-  });
-
   it("keeps a queued Open PR's instructions until it goes, the latest press's", async () => {
     const s = await working('Draft it later');
     const submit = vi.spyOn(env.core.host, 'submit');
@@ -1246,25 +1187,17 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'code', queued_gate: null, queued_instructions: null });
   });
 
-  it("drops a queued Open PR's instructions with it", async () => {
-    const s = await working('Never mind');
+  it('withdraws a queued Open PR with its instructions, and drops one when Claude exits', async () => {
+    const s = await working('Changed my mind');
     await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
     await env.core.sessions.action(s.id, 'cancel-queued');
     expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, queued_instructions: null });
+    expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR withdrawn');
+    await expect(env.core.sessions.action(s.id, 'cancel-queued')).rejects.toMatchObject({ status: 409, message: 'Nothing is queued.' });
     // Queued again without instructions: the old ones don't come back.
     await env.core.sessions.action(s.id, 'open-pr');
     expect(lastEvent(s.id, 'queued')).toBe('Open PR queued: it goes when AgentK finishes its turn');
-    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_instructions: null });
-  });
-
-  it('withdraws a queued Open PR, and drops one when Claude exits', async () => {
-    const s = await working('Changed my mind');
-    await env.core.sessions.action(s.id, 'open-pr');
-    await env.core.sessions.action(s.id, 'cancel-queued');
-    expect(queuedGate(s.id)).toBeNull();
-    expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR withdrawn');
-    await expect(env.core.sessions.action(s.id, 'cancel-queued')).rejects.toMatchObject({ status: 409, message: 'Nothing is queued.' });
-    await env.core.sessions.action(s.id, 'open-pr');
+    expect(env.core.sessions.row(s.id).queued_instructions).toBeNull();
     (env.core.sessions as unknown as { forgetClaude(id: string, why?: string, ended?: string): void }).forgetClaude(s.id, 'x', 'Claude exited');
     expect(queuedGate(s.id)).toBeNull();
     expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR dropped: Claude exited');

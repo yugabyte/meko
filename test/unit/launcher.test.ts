@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, st
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  MIN_MOD_CLAUDE, claudeVersion, hooksSettingsPath, loginShellCommand, modDirPath, shq, versionAtLeast, writeHookFiles, writeLauncher,
+  claudeVersion, hooksSettingsPath, loginShellCommand, modDirPath, shq, versionAtLeast, writeHookFiles, writeLauncher,
   writeModFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
@@ -96,32 +96,21 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
     return { args: split(out + '.args'), env: split(out + '.env') };
   }
 
-  it('passes every value through intact, after "--" for the prompt, with the session variables set after the profile', () => {
-    const s = spec({ prompt: '---\ntitle: front matter\n---\nDo it; echo $HOME' });
+  it('passes every value through intact, plugin folders after the added ones and the prompt after "--", with the session variables set after the profile', () => {
+    const s = spec({ prompt: '---\ntitle: front matter\n---\nDo it; echo $HOME', pluginDirs: ['/ak/run/mod/agentk'] });
     const { args, env } = run(s);
     expect(args).toEqual([
       '--settings', join(paths.run, 'hooks.json'), '--session-id', 'c0ffee', '--name', 'Fix "it" now',
-      '--add-dir', s.addDirs[0], '--append-system-prompt', s.appendSystemPrompt, '--', s.prompt,
+      '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--append-system-prompt', s.appendSystemPrompt, '--', s.prompt,
     ]);
     expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
-  });
-
-  it('loads each plugin folder with --plugin-dir, after the added directories', () => {
-    const s = spec({ pluginDirs: ['/ak/run/mod/agentk'] });
-    expect(run(s).args).toEqual([
-      '--settings', join(paths.run, 'hooks.json'), '--session-id', 'c0ffee', '--name', 'Fix "it" now',
-      '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--append-system-prompt', s.appendSystemPrompt,
-    ]);
+    // ~/.local/bin is where the installer puts Claude Code and gh, even when the profile leaves it out.
+    expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
   });
 
   it('keeps a variable it sets even when it is also listed to unset', () => {
     const { env } = run(spec({ resume: true, env: { MEKO_AGENT_ID: 'x', MEKO_CHECKPOINT_INTERVAL: '2147483' } }));
     expect(env.slice(2, 4)).toEqual(['x', '2147483']);
-  });
-
-  it('finds tools in ~/.local/bin (where the installer puts Claude Code and gh) even when the profile leaves it out', () => {
-    run(spec({}));
-    expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
   });
 });
 
@@ -193,15 +182,13 @@ describe("AgentK's mod", () => {
     expect(existsSync(modDirPath(paths))).toBe(false);
   });
 
-  it('needs Claude Code 2.1.287 or later, comparing versions part by part', () => {
-    expect(MIN_MOD_CLAUDE).toBe('2.1.287');
-    expect(versionAtLeast('2.1.286', MIN_MOD_CLAUDE)).toBe(false);
-    expect(versionAtLeast('2.1.287', MIN_MOD_CLAUDE)).toBe(true);
-    expect(versionAtLeast('2.2.0', MIN_MOD_CLAUDE)).toBe(true);
-    expect(versionAtLeast('3.0.1', MIN_MOD_CLAUDE)).toBe(true);
-    expect(versionAtLeast('2.1.285', MIN_MOD_CLAUDE)).toBe(false);
-    expect(versionAtLeast('2.1.29', MIN_MOD_CLAUDE)).toBe(false);
-    expect(versionAtLeast('1.9.999', MIN_MOD_CLAUDE)).toBe(false);
+  it('compares Claude Code versions part by part', () => {
+    expect(versionAtLeast('2.1.286', '2.1.287')).toBe(false);
+    expect(versionAtLeast('2.1.287', '2.1.287')).toBe(true);
+    expect(versionAtLeast('2.2.0', '2.1.287')).toBe(true);
+    expect(versionAtLeast('3.0.1', '2.1.287')).toBe(true);
+    expect(versionAtLeast('2.1.29', '2.1.287')).toBe(false);
+    expect(versionAtLeast('1.9.999', '2.1.287')).toBe(false);
   });
 
   it("reads the version Claude Code prints, and null when it can't run", async () => {

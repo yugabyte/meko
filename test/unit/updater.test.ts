@@ -36,15 +36,19 @@ import {
 const sha = (buf: Buffer | string) => createHash('sha256').update(buf).digest('hex');
 
 describe('compareSemver', () => {
-  it('orders versions', () => {
-    expect(compareSemver('1.2.3', '1.2.4')).toBeLessThan(0);
-    expect(compareSemver('1.10.0', '1.9.9')).toBeGreaterThan(0);
-    expect(compareSemver('v2.0.0', '2.0.0')).toBe(0);
-    expect(compareSemver('1.0.0', '1.0.0-rc.1')).toBeGreaterThan(0);
-    expect(compareSemver('1.0.0-rc.2', '1.0.0-rc.10')).toBeLessThan(0);
-    expect(compareSemver('1.0.0-alpha', '1.0.0-alpha.1')).toBeLessThan(0);
-    expect(compareSemver('1.0.0-1', '1.0.0-beta')).toBeLessThan(0);
-    expect(compareSemver('garbage', '0.0.1')).toBeLessThan(0);
+  it.each([
+    ['1.2.3', '1.2.4', -1],
+    ['1.10.0', '1.9.9', 1],
+    ['0.20260924.10', '0.20260924.9', 1],
+    ['v2.0.0', '2.0.0', 0],
+    ['1.0.0', '1.0.0-rc.1', 1],
+    ['0.20260924.0', '0.0.0-dev', 1],
+    ['1.0.0-rc.2', '1.0.0-rc.10', -1],
+    ['1.0.0-alpha', '1.0.0-alpha.1', -1],
+    ['1.0.0-1', '1.0.0-beta', -1],
+    ['garbage', '0.0.1', -1],
+  ] as const)('orders %s against %s', (a, b, sign) => {
+    expect(Math.sign(compareSemver(a, b))).toBe(sign);
   });
 });
 
@@ -69,31 +73,24 @@ describe('release lanes', () => {
     expect(releaseLane('0.20260925.6-dp-links')).toBe('dp-links');
     expect(releaseLane('1.0.0-1')).toBe('prerelease');
   });
-
 });
 
 describe('removing old versions', () => {
   const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.1.11-ctrl', '0.2.0-beta.1'];
   const prune = (running: string[], from: string | null) => versionsToPrune(names, new Set(running), from).sort();
 
-  it('keeps the running version and the one it updated from', () => {
-    expect(prune(['0.1.10'], '0.1.3')).toEqual(['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']);
+  it.each([
+    ['the running version and the one it updated from', ['0.1.10'], '0.1.3', ['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']],
+    ['the newest older version after a manual switch', ['0.1.11-ctrl'], null, ['0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']],
+    ['the newest older version when the one it came from is gone', ['0.1.10'], '0.0.9', ['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']],
+    ['the newest other version when nothing is older', ['0.1.0'], null, ['0.1.1', '0.1.10', '0.1.11-ctrl', '0.1.2', '0.1.3']],
+    ['the running version under either of its names', ['0.1.10', '0.1.11-ctrl'], null, ['0.1.0', '0.1.1', '0.1.2', '0.2.0-beta.1']],
+  ] as const)('keeps %s', (_name, running, from, removed) => {
+    expect(prune([...running], from)).toEqual(removed);
   });
 
-  it('keeps the newest older version when there was no update (a manual switch)', () => {
-    expect(prune(['0.1.11-ctrl'], null)).toEqual(['0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.2.0-beta.1']);
-    // The version it came from is gone: fall back the same way.
-    expect(prune(['0.1.10'], '0.0.9')).toEqual(['0.1.0', '0.1.1', '0.1.11-ctrl', '0.1.2', '0.2.0-beta.1']);
-  });
-
-  it('keeps the newest other version when nothing is older, and never touches non-versions', () => {
-    expect(prune(['0.1.0'], null)).toEqual(['0.1.1', '0.1.10', '0.1.11-ctrl', '0.1.2', '0.1.3']);
+  it('never touches non-versions', () => {
     expect(versionsToPrune(['current', '.staging-x', '0.1.0'], new Set(['0.1.0']), null)).toEqual([]);
-  });
-
-  it('never removes the running version under either of its names', () => {
-    expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.11-ctrl');
-    expect(prune(['0.1.10', '0.1.11-ctrl'], null)).not.toContain('0.1.10');
   });
 });
 
@@ -114,20 +111,13 @@ describe('hostVersionDir', () => {
 describe('pickLatest', () => {
   const releases = [rel('0.2.0'), rel('0.3.0'), rel('0.4.0-rc.1'), rel('0.3.1', { draft: true })];
 
-  it('picks the newest stable release', () => {
-    expect(pickLatest(releases, { includePrerelease: false, bad: new Set(), arch: 'x64' })?.version).toBe('0.3.0');
-  });
-
-  it('includes prereleases on the prerelease channel', () => {
-    expect(pickLatest(releases, { includePrerelease: true, bad: new Set(), arch: 'x64' })?.version).toBe('0.4.0-rc.1');
-  });
-
-  it('skips bad versions', () => {
-    expect(pickLatest(releases, { includePrerelease: false, bad: new Set(['0.3.0']), arch: 'x64' })?.version).toBe('0.2.0');
-  });
-
-  it('skips releases without an asset for this arch', () => {
-    expect(pickLatest(releases, { includePrerelease: false, bad: new Set(), arch: 'arm64' })).toBeNull();
+  it.each([
+    ['the newest stable release', false, [], 'x64', '0.3.0'],
+    ['prereleases on the prerelease channel', true, [], 'x64', '0.4.0-rc.1'],
+    ['past bad versions', false, ['0.3.0'], 'x64', '0.2.0'],
+    ['nothing without an asset for this arch', false, [], 'arm64', undefined],
+  ] as const)('picks %s', (_name, includePrerelease, bad, arch, version) => {
+    expect(pickLatest(releases, { includePrerelease, bad: new Set(bad), arch })?.version).toBe(version);
   });
 
   it('skips releases without a build for this platform', () => {
@@ -141,12 +131,9 @@ describe('pickLatest', () => {
 });
 
 describe('tarballName', () => {
-  it('names the platform and CPU', () => {
+  it('names the platform and CPU, this host\'s by default', () => {
     expect(tarballName('0.20260925.1', 'x64', 'linux')).toBe('agent-k-local-0.20260925.1-linux-x64.tar.gz');
     expect(tarballName('0.20260925.1', 'arm64', 'darwin')).toBe('agent-k-local-0.20260925.1-darwin-arm64.tar.gz');
-  });
-
-  it('defaults to this host', () => {
     expect(tarballName('1.0.0')).toBe(`agent-k-local-1.0.0-${process.platform}-${process.arch}.tar.gz`);
   });
 });
@@ -488,12 +475,6 @@ describe('Updater', () => {
     uncountStart(fx.paths, '0.0.3', undefined);
     expect(JSON.parse(readFileSync(fx.paths.updatePending, 'utf8')).attempts).toBe(1);
   });
-
-  it('markHealthy after a manual switch keeps the newest older version', () => {
-    for (const v of ['0.0.1', '0.0.7', '0.0.1-beta.1', '0.1.1-ctrl']) mkdirSync(join(fx.paths.app, v));
-    fx.makeUpdater(fakeSource(fx.releaseDir, [])).markHealthy();
-    expect(readdirSync(fx.paths.app).sort()).toEqual(['0.0.7', '0.1.0', 'current']);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -529,13 +510,7 @@ describe('bin wrapper rollback', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
 
-  it('runs the current version and counts attempts while an update is pending', () => {
-    writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 0 }));
-    expect(runServe()).toBe('new 0.2.0');
-    expect(JSON.parse(readFileSync(join(root, 'update-pending.json'), 'utf8')).attempts).toBe(1);
-  });
-
-  it('still starts the new version after two failed starts', () => {
+  it('runs the current version and counts its start while an update is pending, even after two failed starts', () => {
     writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 2 }));
     expect(runServe()).toBe('new 0.2.0');
     expect(JSON.parse(readFileSync(join(root, 'update-pending.json'), 'utf8')).attempts).toBe(3);

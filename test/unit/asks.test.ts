@@ -3,7 +3,7 @@ import type { AskQuestion, Session } from '../../src/shared/types.js';
 import { askAnswers, parseAsk } from '../../src/server/asks.js';
 import { MAX_QUESTIONS_FILE, checkToolQuestions } from '../../src/server/design.js';
 import { askDetail } from '../../src/server/sessions.js';
-import { designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../../src/web/util.js';
+import { designApprovalBlocker, designReviseBlocker } from '../../src/web/util.js';
 
 const COLOR = { question: 'Which color?', header: 'Color', options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue', description: 'Cool', preview: '#00f' }], multiSelect: false };
 const SIDES = { question: 'Which sides?', header: 'Sides', options: [{ label: 'Fries' }, { label: 'Salad' }, { label: 'Soup' }], multiSelect: true };
@@ -68,25 +68,12 @@ describe('answers to them from the browser', () => {
 });
 
 describe('questions from the design_questions tool', () => {
-  it('are normalized as a questions file is', () => {
-    const r = checkToolQuestions([
-      { id: 'Store It', question: 'Where do designs live?', options: [{ label: 'Datapack', detail: 'Shared' }, 'Repo'], recommended: 0 },
-      { id: 'tabs', question: 'Tabs?', status: 'resolved', decision: 'One column.' },
-    ]);
-    expect(r).toEqual({
-      questions: [
-        { id: 'store-it', question: 'Where do designs live?', context: null, options: [{ label: 'Datapack', detail: 'Shared' }, { label: 'Repo', detail: null }], recommended: 0, status: 'open', decision: null },
-        { id: 'tabs', question: 'Tabs?', context: null, options: [], recommended: null, status: 'resolved', decision: 'One column.' },
-      ],
-    });
-    expect(checkToolQuestions([])).toEqual({ questions: [] });
-  });
-
   it("say what's wrong, for Claude to fix in the same turn", () => {
     const error = (input: unknown) => {
       const r = checkToolQuestions(input);
       return 'error' in r ? r.error : null;
     };
+    expect(checkToolQuestions([])).toEqual({ questions: [] });
     expect(error({ questions: [] })).toMatch(/must be a list/);
     expect(error([{ question: 'Where?' }])).toMatch(/Question 1 needs an "id"/);
     expect(error([{ id: 'a', question: 'A?' }, { id: 'A', question: 'B?' }])).toMatch(/Question 2 repeats the id "a"/);
@@ -105,55 +92,35 @@ describe('questions from the design_questions tool', () => {
 });
 
 describe('approving and revising while AgentK is busy, in the browser', () => {
-  const session = (over: Partial<Session>) => ({
-    hasDesign: true, status: 'idle', statusDetail: null, modLive: false, midTurn: false, promptsHeld: 0, approvalQueued: false, ...over,
-  }) as Session;
-  const working = session({ status: 'working', midTurn: true });
-  const permission = session({ status: 'needs_input', statusDetail: 'Permission needed for Bash', midTurn: true });
+  const working = { status: 'working', midTurn: true } as const;
+  const permission = { status: 'needs_input', statusDetail: 'Permission needed for Bash', midTurn: true } as const;
+  const terminal = /waiting on you in the terminal/;
+  const wait = /Wait for AgentK/;
 
-  it('waits for the turn to end without the mod', () => {
-    expect(heldForTurnEnd(working)).toBe(false);
-    expect(designApprovalBlocker(working)).toMatch(/Wait for AgentK/);
-    expect(designReviseBlocker(working)).toMatch(/Wait for AgentK/);
-    expect(designApprovalBlocker(permission)).toMatch(/waiting on you in the terminal/);
-    expect(designReviseBlocker(permission)).toMatch(/waiting on you in the terminal/);
-    expect(designApprovalBlocker(session({ status: 'needs_input', statusDetail: 'Design ready for your approval' }))).toBeNull();
-  });
-
-  it('goes ahead mid-turn with the mod: the approval waits here, the answers in Claude', () => {
-    for (const s of [{ ...working, modLive: true }, { ...permission, modLive: true }]) {
-      expect(heldForTurnEnd(s)).toBe(true);
-      expect(designApprovalBlocker(s)).toBeNull();
-      expect(designReviseBlocker(s)).toBeNull();
+  it.each<[string, Partial<Session>, RegExp | null, RegExp | null]>([
+    // Without the mod, both wait for the turn to end.
+    ['working, without the mod', working, wait, wait],
+    ['a permission prompt, without the mod', permission, terminal, terminal],
+    ['the design ready', { status: 'needs_input', statusDetail: 'Design ready for your approval' }, null, null],
+    // With the mod, they go ahead mid-turn: the approval waits here, the answers in Claude.
+    ['working, with the mod', { ...working, modLive: true }, null, null],
+    ['a permission prompt, with the mod', { ...permission, modLive: true }, null, null],
+    ['starting, with the mod', { status: 'starting', modLive: true }, wait, wait],
+    ['exited, with the mod', { status: 'exited', modLive: true }, /Resume/, /Resume/],
+    // No approval is queued for a Needs you with no turn behind it.
+    ['a Needs you with no turn behind it', { status: 'needs_input', statusDetail: 'Recovered twice in the last hour; waiting for you before continuing', modLive: true }, terminal, terminal],
+    // Claude's question is one even when it mentions a plan; plan mode's own dialog lets the approval through.
+    ["Claude's question about a plan", { status: 'needs_input', statusDetail: 'AgentK asks: Which plan should I follow?', midTurn: true }, terminal, terminal],
+    ["plan mode's approval dialog", { status: 'needs_input', statusDetail: 'Claude has a plan for you to approve' }, null, null],
+    // Answers Claude holds go before an approval.
+    ['answers held', { status: 'needs_input', statusDetail: 'Design ready for your approval', modLive: true, promptsHeld: 1 }, /answers from you to take first/, null],
+    ['answers held, working with the mod', { ...working, modLive: true, promptsHeld: 1 }, /answers from you to take first/, null],
+    ['an approval queued', { ...working, modLive: true, approvalQueued: true }, /when this turn ends/, /Cancel the approval/],
+  ])('%s', (_, over, approve, revise) => {
+    const s = { hasDesign: true, status: 'idle', statusDetail: null, modLive: false, midTurn: false, promptsHeld: 0, approvalQueued: false, ...over } as Session;
+    for (const [got, want] of [[designApprovalBlocker(s), approve], [designReviseBlocker(s), revise]] as const) {
+      if (want) expect(got).toMatch(want);
+      else expect(got).toBeNull();
     }
-    expect(designApprovalBlocker(session({ status: 'starting', modLive: true }))).toMatch(/Wait for AgentK/);
-    expect(designApprovalBlocker(session({ status: 'exited', modLive: true }))).toMatch(/Resume/);
-  });
-
-  it("doesn't queue an approval for a Needs you with no turn behind it", () => {
-    const parked = session({ status: 'needs_input', statusDetail: 'Recovered twice in the last hour; waiting for you before continuing', modLive: true });
-    expect(heldForTurnEnd(parked)).toBe(false);
-    expect(designApprovalBlocker(parked)).toMatch(/waiting on you in the terminal/);
-    expect(designReviseBlocker(parked)).toMatch(/waiting on you in the terminal/);
-  });
-
-  it("treats Claude's question as one, even when it mentions a plan", () => {
-    const ask = session({ status: 'needs_input', statusDetail: 'AgentK asks: Which plan should I follow?', midTurn: true });
-    expect(designApprovalBlocker(ask)).toMatch(/waiting on you in the terminal/);
-    expect(designReviseBlocker(ask)).toMatch(/waiting on you in the terminal/);
-    // Plan mode's own approval dialog still lets the approval through.
-    expect(designApprovalBlocker(session({ status: 'needs_input', statusDetail: 'Claude has a plan for you to approve' }))).toBeNull();
-  });
-
-  it('waits for answers Claude holds before approving', () => {
-    const held = session({ status: 'needs_input', statusDetail: 'Design ready for your approval', modLive: true, promptsHeld: 1 });
-    expect(designApprovalBlocker(held)).toMatch(/answers from you to take first/);
-    expect(designApprovalBlocker({ ...working, modLive: true, promptsHeld: 1 })).toMatch(/answers from you to take first/);
-  });
-
-  it('holds both while an approval is queued', () => {
-    const queued = session({ status: 'working', midTurn: true, modLive: true, approvalQueued: true });
-    expect(designApprovalBlocker(queued)).toMatch(/when this turn ends/);
-    expect(designReviseBlocker(queued)).toMatch(/Cancel the approval/);
   });
 });

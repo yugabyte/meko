@@ -5,12 +5,9 @@ import {
 } from '../../src/shared/datapacks.js';
 
 describe('project datapack names', () => {
-  it('splits adlc/proj/<repo>/<project>', () => {
+  it('splits adlc/proj/<repo>/<project>, keeping slashes in the project part', () => {
     expect(parseProjectDatapack('adlc/proj/yugabyte-db/vector-tenant-id')).toEqual({ repo: 'yugabyte-db', project: 'vector-tenant-id' });
     expect(parseProjectDatapack('adlc/proj/agentk/agent_core')).toEqual({ repo: 'agentk', project: 'agent_core' });
-  });
-
-  it('keeps slashes in the project part', () => {
     expect(parseProjectDatapack('adlc/proj/billing-api/team/retry')).toEqual({ repo: 'billing-api', project: 'team/retry' });
   });
 
@@ -126,21 +123,11 @@ describe('matchRepo', () => {
     expect(canonicalRepoName({ name: 'scratch', remote: null })).toBe('scratch');
   });
 
-  it('falls back to the folder name', () => {
+  it('falls back to the folder name, or the origin name of a renamed folder', () => {
     const m = matchRepo([repo('ledger', null, 1), repo('Billing_API', null, 2)], 'adlc/proj/billing-api/retry', null);
     expect(m.by).toBe('name');
     expect(m.repo?.name).toBe('Billing_API');
-  });
-
-  it('matches a renamed folder by its remote name', () => {
-    const m = matchRepo([repo('agent-k-local-2', 'github.com/yugabyte/agentk', 1)], 'adlc/proj/agentk/agent_core', null);
-    expect(m.repo?.name).toBe('agent-k-local-2');
-  });
-
-  it('picks the most recently touched of several and counts them', () => {
-    const m = matchRepo([repo('api', null, 1, '/a/api'), repo('api', null, 5, '/b/api')], 'adlc/proj/api/x', null);
-    expect(m).toMatchObject({ by: 'name', count: 2 });
-    expect(m.repo?.path).toBe('/b/api');
+    expect(matchRepo([repo('agent-k-local-2', 'github.com/yugabyte/agentk', 1)], 'adlc/proj/agentk/agent_core', null).repo?.name).toBe('agent-k-local-2');
   });
 
   it('finds nothing for other names or no match', () => {

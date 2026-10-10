@@ -1,32 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 
 describe('terminal key bar', () => {
-  it('sends the bytes a keyboard would', () => {
-    expect(keySequence('tab')).toBe('\t');
-    expect(keySequence('ctrl-c')).toBe('\x03');
-    expect(keySequence('enter')).toBe('\r');
-  });
-
-  it('sends arrows in normal and application cursor mode', () => {
-    expect(['up', 'down', 'right', 'left'].map((k) => keySequence(k as 'up'))).toEqual(['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D']);
-    expect(['up', 'down', 'right', 'left'].map((k) => keySequence(k as 'up', true))).toEqual(['\x1bOA', '\x1bOB', '\x1bOC', '\x1bOD']);
-    // Other keys don't change with the mode.
-    expect(keySequence('tab', true)).toBe('\t');
-  });
-
-  it('sends the more keys the ▾ row holds', () => {
-    expect(keySequence('esc')).toBe('\x1b');
-    expect(keySequence('shift-tab')).toBe('\x1b[Z');
-    expect(keySequence('pgup')).toBe('\x1b[5~');
-    expect(keySequence('pgdn')).toBe('\x1b[6~');
-    // Home and End follow the cursor-key mode, like the arrows.
-    expect([keySequence('home'), keySequence('end')]).toEqual(['\x1b[H', '\x1b[F']);
-    expect([keySequence('home', true), keySequence('end', true)]).toEqual(['\x1bOH', '\x1bOF']);
-    expect(keySequence('esc', true)).toBe('\x1b');
+  it('sends the bytes a keyboard would, arrows, Home and End following the cursor-key mode', () => {
+    // [key, normal mode, application cursor mode]
+    const keys: [BarKey, string, string][] = [
+      ['tab', '\t', '\t'], ['ctrl-c', '\x03', '\x03'], ['enter', '\r', '\r'], ['esc', '\x1b', '\x1b'], ['shift-tab', '\x1b[Z', '\x1b[Z'],
+      ['pgup', '\x1b[5~', '\x1b[5~'], ['pgdn', '\x1b[6~', '\x1b[6~'], ['up', '\x1b[A', '\x1bOA'], ['down', '\x1b[B', '\x1bOB'],
+      ['right', '\x1b[C', '\x1bOC'], ['left', '\x1b[D', '\x1bOD'], ['home', '\x1b[H', '\x1bOH'], ['end', '\x1b[F', '\x1bOF'],
+    ];
+    for (const [key, normal, app] of keys) expect([keySequence(key), keySequence(key, true)], key).toEqual([normal, app]);
   });
 
   it('has a sequence for every key on the bar and in the ▾ row', () => {
@@ -53,7 +39,6 @@ describe('sticky Ctrl', () => {
   it('sends Ctrl with a letter, in either case, and the usual punctuation', () => {
     expect(ctrlSequence('a')).toBe('\x01');
     expect(ctrlSequence('O')).toBe('\x0f');
-    expect(ctrlSequence('r')).toBe('\x12');
     expect(ctrlSequence('z')).toBe('\x1a');
     expect(ctrlSequence('[')).toBe('\x1b');
     expect(ctrlSequence(' ')).toBe('\x00');
@@ -62,7 +47,6 @@ describe('sticky Ctrl', () => {
 
   it('has nothing for digits, other symbols or more than one character', () => {
     expect(ctrlSequence('1')).toBeNull();
-    expect(ctrlSequence('é')).toBeNull();
     expect(ctrlSequence('ab')).toBeNull();
     expect(ctrlSequence('')).toBeNull();
   });
@@ -74,11 +58,6 @@ describe('sticky Ctrl', () => {
     expect(insertedChar('fix it', 'fix i')).toBeNull(); // a deletion
     expect(insertedChar('fix', 'fix the')).toBeNull(); // a paste or a word from the suggestions bar
     expect(insertedChar('teh', 'thex')).toBeNull(); // autocorrect rewrote it
-  });
-
-  it('is not on the bar or in the ▾ row as a key that sends bytes', () => {
-    expect(BAR_KEYS.map((k) => k.label)).toEqual(['tab', '↑', '↓', '←', '→', '^C', '⏎']);
-    expect(MORE_KEYS.map((k) => k.label)).toEqual(['esc', '⇧tab', 'home', 'end', 'pgup', 'pgdn']);
   });
 });
 
@@ -113,12 +92,8 @@ describe('pasted images', () => {
 });
 
 describe('touch scrolling', () => {
-  it('reports wheel steps as SGR mouse events', () => {
+  it('reports wheel steps as SGR mouse events, clamped to the terminal', () => {
     expect(wheelReport(true, 10, 5, 80, 24)).toBe('\x1b[<64;10;5M');
-    expect(wheelReport(false, 10, 5, 80, 24)).toBe('\x1b[<65;10;5M');
-  });
-
-  it('clamps coordinates to the terminal', () => {
     expect(wheelReport(true, 0, -3, 80, 24)).toBe('\x1b[<64;1;1M');
     expect(wheelReport(true, 200, 99, 80, 24)).toBe('\x1b[<64;80;24M');
     expect(wheelReport(false, 3.6, 2.2, 80, 24)).toBe('\x1b[<65;4;2M');

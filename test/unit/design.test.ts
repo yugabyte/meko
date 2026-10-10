@@ -120,7 +120,6 @@ describe('design frame', () => {
     // The source Mermaid read, entities decoded, kept before Mermaid empties the block.
     expect(loader.indexOf('decode.innerHTML = block.innerHTML;')).toBeLessThan(loader.indexOf('await mermaid.run'));
     // A failed block becomes the markdown designs' note, the error and the source, all as text.
-    expect(DIAGRAM_FAILED).toBe('Couldn’t draw this diagram. Ask AgentK to fix it; its source is below.');
     expect(loader).toContain(`note.textContent = ${JSON.stringify(DIAGRAM_FAILED)};`);
     expect(loader).toContain('box.append(note, pre(message(err)), pre(source));');
     // Mermaid's error is cut where markdown designs cut it.

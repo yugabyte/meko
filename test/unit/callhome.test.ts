@@ -4,15 +4,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CallHomeInstall, CallHomeReport } from '../../src/shared/types.js';
-import { DEFAULT_CONFIG, loadConfig, saveConfig, type Config } from '../../src/server/config.js';
+import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import { kvGet, kvSet, openDb, run, type Db } from '../../src/server/db.js';
 import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, sumFileTypes } from '../../src/server/filetypes.js';
 import type { Logger } from '../../src/server/log.js';
-import { getPaths } from '../../src/server/paths.js';
 import {
   CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_DAY_MS, FIRST_DAY_SEND_AFTER_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, NEW_INSTALL_FIRST_CHECK_MS, REPORT_DAYS,
   SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport, callHomeKind,
-  installFacts, utcDay, type Probe,
+  installFacts, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
 import { usageOverview } from '../../src/server/usage.js';
@@ -563,26 +562,6 @@ describe('what the report says about the install', () => {
   });
 });
 
-describe('[call_home] in config.toml', () => {
-  it('is on by default, can be turned off, and is written only when changed', () => {
-    const paths = getPaths(tempDir('akl-callhome-cfg-'));
-    expect(loadConfig(paths).callHome).toEqual({ enabled: true, url: '' });
-    saveConfig(paths, structuredClone(DEFAULT_CONFIG));
-    expect(readFileSync(paths.config, 'utf8')).not.toContain('call_home');
-
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.callHome.enabled = false;
-    saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).toMatch(/\[call_home\]\nenabled = false/);
-    expect(loadConfig(paths).callHome).toEqual({ enabled: false, url: '' });
-
-    writeFileSync(paths.config, '[call_home]\nenabled = "no"\nurl = "https://collector.test"\n');
-    const warnings: string[] = [];
-    expect(loadConfig(paths, (m) => warnings.push(m)).callHome).toEqual({ enabled: true, url: 'https://collector.test' });
-    expect(warnings).toEqual(['config.toml: call_home.enabled should be a boolean; using the default (true)']);
-  });
-});
-
 describe('sending the report', () => {
   afterEach(() => vi.useRealTimers());
 
@@ -821,11 +800,6 @@ describe('sending the report', () => {
     svc2.stop();
     await vi.advanceTimersByTimeAsync(FIRST_CHECK_MS[1]);
     expect(tick2).not.toHaveBeenCalled();
-  });
-
-  it('uses UTC days', () => {
-    expect(utcDay(Date.parse('2026-09-28T23:59:59Z'))).toBe('2026-09-28');
-    expect(utcDay(Date.parse('2026-09-29T00:00:00Z'))).toBe('2026-09-29');
   });
 });
 

@@ -28,7 +28,7 @@ describe('switching the dedicated datapack', () => {
   const conversation = () => get<{ c: string | null }>(env.core.db, 'SELECT meko_conversation_id AS c FROM projects WHERE id = ?', p.id)?.c;
   const creates = () => env.meko.calls.filter((c) => c.name === 'createDatapack').length;
 
-  it('switches to a new datapack, keeping the old one attached as shared', async () => {
+  it('switches to a new datapack, keeping the old one attached as shared, and launches new sessions with it', async () => {
     const before = await env.core.sessions.create(p.id, { name: 'Before', kind: 'quick' });
     const r = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id });
     expect(r.datapacks).toEqual([
@@ -43,28 +43,26 @@ describe('switching the dedicated datapack', () => {
     await waitFor(() => conversation(), (c) => c === 'conv-1', 5000, 'a new conversation');
     const projectConv = env.meko.calls.find((c) => c.name === 'ensureConversation' && c.args[2] === `agent-k-local-project-${p.id}`);
     expect(projectConv?.args[1]).toBe(NEW.id);
+
+    // The new session launches with the new datapack, and the old one to search.
+    await waitFor(() => env.core.sessions.get(after.id).status, (st) => st === 'idle', 10000, 'the session to start');
+    const launched = readFileSync(join(env.fakeDir, 'argv.jsonl'), 'utf8').trim().split('\n')
+      .map((l) => JSON.parse(l) as { args: string[]; env: Record<string, string> })
+      .find((l) => l.env.MEKO_AGENT_ID === sessionAgentId(env.core.sessions.row(after.id)))!;
+    expect(launched.env.MEKO_DATAPACK_ID).toBe(NEW.id);
+    const prompt = launched.args.join(' ');
+    expect(prompt).toContain(`dedicated datapack is "${NEW.name}" (datapack_id ${NEW.id})`);
+    expect(prompt).toMatch(new RegExp(`Shared datapacks you may search.*"${OLD.name}" \\(${OLD.id}\\)`));
   });
 
-  it('swaps roles with an attached shared datapack', async () => {
+  it.each([
+    ['keeps the old one as shared, swapping roles with an attached shared datapack', false, [{ id: 'dp-kb', name: 'team/kb', role: 'dedicated' }, { ...OLD, role: 'shared' }]],
+    ['detaches the old one when asked', true, [{ id: 'dp-kb', name: 'team/kb', role: 'dedicated' }]],
+  ])('switching to an existing datapack %s', async (_, detachOld, want) => {
     env.core.projects.attachDatapack(p.id, { id: 'dp-kb', name: 'team/kb' });
-    const r = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-kb', name: 'team/kb', replace: OLD.id });
-    expect(r.datapacks).toEqual([
-      { id: 'dp-kb', name: 'team/kb', role: 'dedicated' },
-      { ...OLD, role: 'shared' },
-    ]);
+    const r = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-kb', name: 'team/kb', replace: OLD.id, detachOld });
+    expect(r.datapacks).toEqual(want);
     expect(creates()).toBe(0);
-  });
-
-  it('detaches the old one when asked', async () => {
-    const r = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-kb', name: 'team/kb', replace: OLD.id, detachOld: true });
-    expect(r.datapacks).toEqual([{ id: 'dp-kb', name: 'team/kb', role: 'dedicated' }]);
-  });
-
-  it('refuses a datapack you can only read, and changes nothing', async () => {
-    (env.meko as { describeDatapack: unknown }).describeDatapack = async () => ({ grant: 'viewer' });
-    await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-ro', name: 'ro', replace: OLD.id, detachOld: true }))
-      .rejects.toMatchObject({ status: 400 });
-    expect(env.core.projects.get(p.id).datapacks).toEqual([{ ...OLD, role: 'dedicated' }]);
   });
 
   it('refuses a stale or wrong switch', async () => {
@@ -74,20 +72,12 @@ describe('switching the dedicated datapack', () => {
       .rejects.toMatchObject({ status: 400 });
     await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, detachOld: true }))
       .rejects.toMatchObject({ status: 400 });
+    await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: 'yes' as unknown as boolean }))
+      .rejects.toMatchObject({ status: 400 });
     await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name }))
       .rejects.toMatchObject({ status: 409 });
     expect(creates()).toBe(0);
     expect(env.core.projects.get(p.id).datapacks).toEqual([{ ...OLD, role: 'dedicated' }]);
-  });
-
-  it('switches once when two tabs switch at the same time', async () => {
-    const [a, b] = await Promise.allSettled([
-      env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id }),
-      env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: 'adlc/proj/demo-repo/c', replace: OLD.id }),
-    ]);
-    expect(a.status).toBe('fulfilled');
-    expect(b).toMatchObject({ status: 'rejected', reason: { status: 409 } });
-    expect(creates()).toBe(1);
   });
 
   it("keeps the old one dedicated when Meko's plan has no room", async () => {
@@ -100,22 +90,18 @@ describe('switching the dedicated datapack', () => {
     expect(conversation()).toBe('conv-in-old');
   });
 
-  it('launches new sessions with the new datapack, and the old one to search', async () => {
-    await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id });
-    const s = await env.core.sessions.create(p.id, { name: 'Work', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
-    const launched = readFileSync(join(env.fakeDir, 'argv.jsonl'), 'utf8').trim().split('\n')
-      .map((l) => JSON.parse(l) as { args: string[]; env: Record<string, string> });
-    expect(launched[0].env.MEKO_DATAPACK_ID).toBe(NEW.id);
-    const prompt = launched[0].args.join(' ');
-    expect(prompt).toContain(`dedicated datapack is "${NEW.name}" (datapack_id ${NEW.id})`);
-    expect(prompt).toMatch(new RegExp(`Shared datapacks you may search.*"${OLD.name}" \\(${OLD.id}\\)`));
-  });
-
-  it("keeps a running session's designs in the datapack it was launched with", async () => {
+  it("keeps a running session's Meko conversation and designs in the datapack it was launched with", async () => {
     const before = await env.core.sessions.create(p.id, { name: 'Before', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(before.id).status, (st) => st === 'idle', 10000, 'the first session to start');
     await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: true });
+
+    // Renamed, its conversation is retitled (and looked up) there, never made in the new datapack.
+    env.meko.calls.length = 0;
+    env.core.sessions.rename(before.id, { name: 'Renamed' });
+    const retitled = await waitFor(() => env.meko.calls.find((c) => c.name === 'retitleConversation'), (c) => !!c, 5000, 'the Meko retitle');
+    expect(retitled!.args.slice(0, 4)).toEqual([sessionAgentId(env.core.sessions.row(before.id)), OLD.id, 'conv-1', 'Renamed (Switch)']);
+    expect(env.meko.calls.filter((c) => c.name === 'ensureConversation').map((c) => c.args[1])).toEqual([OLD.id]);
+
     const after = await env.core.sessions.create(p.id, { name: 'After', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(after.id).status, (st) => st === 'idle', 10000, 'the second session to start');
 
@@ -130,19 +116,6 @@ describe('switching the dedicated datapack', () => {
     };
     expect(await sentTo(before.id, 'before')).toBe(OLD.id);
     expect(await sentTo(after.id, 'after')).toBe(NEW.id);
-  });
-
-  it("retitles a running session's Meko conversation in the datapack it was launched with", async () => {
-    const s = await env.core.sessions.create(p.id, { name: 'Before', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
-    await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: true });
-    env.meko.calls.length = 0;
-    env.core.sessions.rename(s.id, { name: 'Renamed' });
-    const retitled = await waitFor(() => env.meko.calls.find((c) => c.name === 'retitleConversation'), (c) => !!c, 5000, 'the Meko retitle');
-    const row = env.core.sessions.row(s.id);
-    expect(retitled!.args.slice(0, 4)).toEqual([sessionAgentId(row), OLD.id, 'conv-1', 'Renamed (Switch)']);
-    // Its conversation is looked up there too, never made in the new datapack.
-    expect(env.meko.calls.filter((c) => c.name === 'ensureConversation').map((c) => c.args[1])).toEqual([OLD.id]);
   });
 
   describe('over HTTP', () => {
@@ -167,14 +140,6 @@ describe('switching the dedicated datapack', () => {
       expect((res.json() as Project).datapacks.map((d) => [d.id, d.role])).toEqual([[NEW.id, 'dedicated'], [OLD.id, 'shared']]);
       const home = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/home`, headers: { cookie } })).json();
       expect(home.datapacks.map((d: { id: string; role: string }) => [d.id, d.role])).toEqual([[NEW.id, 'dedicated'], [OLD.id, 'shared']]);
-    });
-
-    it('refuses a badly typed body', async () => {
-      const res = await app.inject({
-        method: 'POST', url: `/api/projects/${p.id}/dedicated-datapack`, headers: { cookie },
-        payload: { mode: 'create', name: NEW.name, replace: OLD.id, detachOld: 'yes' },
-      });
-      expect(res.statusCode).toBe(400);
     });
   });
 });

@@ -24,13 +24,12 @@ function page(o: { active?: FieldLike; textareas?: FieldLike[]; dialog?: boolean
 }
 
 describe('the version that served the page', () => {
-  it('comes from the meta tag the server stamps', () => {
-    expect(pageVersion(page({ version: '0.20260928.1' }))).toBe('0.20260928.1');
-  });
-
-  it('is unknown without one, or with an empty one', () => {
-    expect(pageVersion(page())).toBeNull();
-    expect(pageVersion(page({ version: '' }))).toBeNull();
+  it.each([
+    { meta: 'the meta tag the server stamps', version: '0.20260928.1', is: '0.20260928.1' },
+    { meta: 'no meta tag', version: undefined, is: null },
+    { meta: 'an empty meta tag', version: '', is: null },
+  ])('is $is with $meta', ({ version, is }) => {
+    expect(pageVersion(page({ version }))).toBe(is);
   });
 });
 
@@ -44,18 +43,17 @@ describe('whether the user is busy', () => {
     expect(isBusy(page({ dialog: true }))).toBe(true);
   });
 
-  it('is while a text field has focus', () => {
-    expect(isBusy(page({ active: field('INPUT') }))).toBe(true);
-    expect(isBusy(page({ active: field('INPUT', { type: 'search' }) }))).toBe(true);
-    expect(isBusy(page({ active: field('textarea') }))).toBe(true);
-    expect(isBusy(page({ active: field('SELECT') }))).toBe(true);
-    expect(isBusy(page({ active: field('DIV', { isContentEditable: true }) }))).toBe(true);
-  });
-
-  it('is not for a focused button, checkbox or link', () => {
-    expect(isBusy(page({ active: field('BUTTON') }))).toBe(false);
-    expect(isBusy(page({ active: field('INPUT', { type: 'checkbox' }) }))).toBe(false);
-    expect(isBusy(page({ active: field('A') }))).toBe(false);
+  it.each([
+    { focused: 'a text input', el: field('INPUT'), busy: true },
+    { focused: 'a search input', el: field('INPUT', { type: 'search' }), busy: true },
+    { focused: 'a textarea', el: field('textarea'), busy: true },
+    { focused: 'a select', el: field('SELECT'), busy: true },
+    { focused: 'a contenteditable', el: field('DIV', { isContentEditable: true }), busy: true },
+    { focused: 'a button', el: field('BUTTON'), busy: false },
+    { focused: 'a checkbox', el: field('INPUT', { type: 'checkbox' }), busy: false },
+    { focused: 'a link', el: field('A'), busy: false },
+  ])('is $busy with $focused focused', ({ el, busy }) => {
+    expect(isBusy(page({ active: el }))).toBe(busy);
   });
 
   it('is while a textarea holds unsent text, focused or not', () => {
@@ -74,22 +72,16 @@ describe('what to do about the server version', () => {
   const plan = (o: Partial<Parameters<typeof planReload>[0]> = {}) =>
     planReload({ loaded: '0.20260927.1', server: '0.20260928.1', busy: false, reloadedFor: null, ...o });
 
-  it('does nothing while the server runs the page’s version', () => {
-    expect(plan({ server: '0.20260927.1' })).toBe('current');
-    expect(plan({ server: '0.20260927.1', busy: true, reloadedFor: '0.20260927.1' })).toBe('current');
-  });
-
-  it('reloads for any other version, older ones (a rollback) included', () => {
-    expect(plan()).toBe('reload');
-    expect(plan({ server: '0.20260926.3' })).toBe('reload');
-  });
-
-  it('waits while the user is busy', () => {
-    expect(plan({ busy: true })).toBe('wait');
-  });
-
-  it('reloads only once for a version, so a mismatch a reload cannot fix does not loop', () => {
-    expect(plan({ reloadedFor: '0.20260928.1' })).toBe('wait');
-    expect(plan({ reloadedFor: '0.20260926.3' })).toBe('reload');
+  it.each([
+    { when: 'the server runs the page’s version', o: { server: '0.20260927.1' }, is: 'current' },
+    { when: 'the server runs the page’s version, busy or not', o: { server: '0.20260927.1', busy: true, reloadedFor: '0.20260927.1' }, is: 'current' },
+    { when: 'the server runs a newer version', o: {}, is: 'reload' },
+    { when: 'the server runs an older version (a rollback)', o: { server: '0.20260926.3' }, is: 'reload' },
+    { when: 'the user is busy', o: { busy: true }, is: 'wait' },
+    // Only once for a version, so a mismatch a reload cannot fix does not loop.
+    { when: 'it already reloaded for this version', o: { reloadedFor: '0.20260928.1' }, is: 'wait' },
+    { when: 'it reloaded for another version', o: { reloadedFor: '0.20260926.3' }, is: 'reload' },
+  ])('is $is when $when', ({ o, is }) => {
+    expect(plan(o)).toBe(is);
   });
 });
