@@ -989,7 +989,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
 # web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
-# capture_transcripts = false  # stop sending session transcripts to Meko conversations; on by default
+# capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
 [claude]
 # command = "claude"         # how Claude Code is run
@@ -1484,18 +1484,36 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > file may be the user's own pin (one AgentK used to overwrite). The hooks read the pin when a session starts and keep it in the
 > session's watermark, so after a switch a running session's capture stays in the old datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
 
-> **Transcript capture can be turned off.** `[meko] capture_transcripts` in `config.toml`
-> defaults to `true`; set it to `false` to stop sending transcripts, for example while Meko can't
-> take the load (a restart applies a change). While it's off, the server doesn't run the plugin's
-> `capture.js checkpoint` after each turn, at startup or when a session stops, and doesn't create a named conversation per session. (With it on, a
-> server that is stopping waits up to 5 seconds for captures still running.) Sessions
-> also get `MEKO_CHECKPOINT_INTERVAL=2147483`, so the plugin's checkpoint timer, which its
-> SessionStart hook starts for a resumed session, never fires in practice: that's the longest
-> interval Node's `setInterval` honours, and a larger one would fire every millisecond. With
-> capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`. The
-> plugin's own SessionStart, PreCompact and SessionEnd hooks still run, so a running session shows
-> up in Meko's conversations only once it compacts or ends. The shipped summary
-> written at Merge & Close is a single memory, not a transcript, and is still sent.
+> **Transcript capture is off by default.** Meko's capture script extracts a skill Claude loads
+> as a user requirement and cuts the turn that loaded it short (MEKO-710, fixed in
+> yugabyte/meko-mcp-server#360, not yet released), which fills datapacks with skill text. So
+> `[meko] capture_transcripts` in `config.toml` defaults to `false`; set it to `true` to send
+> transcripts again (a restart applies a change). While it's off, the server doesn't run the
+> plugin's `capture.js checkpoint` after each turn, at startup or when a session stops, and the
+> `--settings` file sessions launch with turns the Meko plugin off (`enabledPlugins` set to
+> `false` for each `meko-agent-skills@…` key in Claude Code's plugin registry, and for
+> `meko-agent-skills@meko-agent-skills`), so its SessionStart, PreCompact and SessionEnd hooks and
+> its checkpoint timer don't run either. A session launched before the change keeps the plugin
+> until it's launched again. Sessions also get `MEKO_CHECKPOINT_INTERVAL=2147483`, the longest
+> interval Node's `setInterval` honours (a larger one would fire every millisecond), for a plugin
+> that still runs; with capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`.
+> The plugin's MCP server is configured apart from it (`~/.claude.json`), so Meko's tools stay.
+> (With capture on, a server that is stopping waits up to 5 seconds for captures still running.)
+> The shipped summary written at Merge & Close and the learn step's facts are memories, not
+> transcripts, and are still sent.
+
+> **The system prompt gives the conversation_id.** Meko's tools require a `conversation_id`, which
+> only the plugin's SessionStart context gave before. Every launch now creates (or finds) the
+> session's conversation, keyed by its Claude session id like the plugin's, in the dedicated
+> datapack, or the project's conversation (`agent-k-local-project-<id>`, owned by `agent-k-local`)
+> when the project only has shared datapacks (`launchConversation()` in `sessions.ts`, waiting up
+> to 5 seconds), and the system prompt names it (`mekoConversationLine()` in `prompts.ts`). When
+> Meko doesn't answer in time, the line gives the `conversation_create` arguments that make that
+> same conversation instead (for the project's conversation, with no datapack, which Meko takes
+> only when the account has a default one, as for AgentK's own create). Resumed and recovered
+> launches in the next minute then don't wait at all, so a restart that recovers many sessions one
+> by one isn't held up 5 seconds each. A new session still waits: its conversation has to be
+> created, and titled, before the Meko plugin's SessionStart hook creates it under a generic title.
 
 > **PRs point back at Meko.** When the project has a dedicated datapack and Meko is on, Open PR
 > appends to the PR prompt (after any repo or owner override) an instruction to end the PR

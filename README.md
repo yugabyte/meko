@@ -86,8 +86,9 @@ your phone can connect.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
-  shared ones. Designs, session transcripts and a summary of each merged PR are saved there, so
-  the whole team, and its agents, start from the same context. **Switch** on the project's home
+  shared ones. Designs, what each session learned and a summary of each merged PR are saved there,
+  so the whole team, and its agents, start from the same context. (Session transcripts are kept
+  out for now; `[meko] capture_transcripts = true` in `config.toml` sends them.) **Switch** on the project's home
   moves the project to another dedicated datapack; the old one stays attached to search, or is
   detached. When a session starts, AgentK searches the project's datapacks for its task (and the
   GitHub issues it names) and gives Claude what Meko already knows, and the prompts ask Claude to

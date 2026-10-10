@@ -12,23 +12,39 @@ export function mekoCaptureDir(): string {
   return process.env.MEKO_WATERMARK_DIR || join(homedir(), '.claude', 'meko-capture');
 }
 
-/** Install paths of the meko-agent-skills plugin from Claude Code's plugin registry. */
-export function mekoPluginInstalls(claudeDir: string = claudeUserDir()): string[] | null {
+/** The meko-agent-skills entries of Claude Code's plugin registry, by plugin key; null without a registry. */
+function mekoRegistryEntries(claudeDir: string): [string, unknown][] | null {
   try {
     const j = JSON.parse(readFileSync(join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf8'));
     const plugins = (j && typeof j.plugins === 'object' ? j.plugins : j) as Record<string, unknown> | null;
-    const out: string[] = [];
-    for (const [k, v] of Object.entries(plugins ?? {})) {
-      if (!k.startsWith(MEKO_PLUGIN_PREFIX)) continue;
-      for (const e of Array.isArray(v) ? v : [v]) {
-        const p = (e as { installPath?: unknown } | null)?.installPath;
-        if (typeof p === 'string' && p) out.push(p);
-      }
-    }
-    return out;
+    return Object.entries(plugins ?? {}).filter(([k]) => k.startsWith(MEKO_PLUGIN_PREFIX));
   } catch {
     return null; // no plugin registry
   }
+}
+
+/**
+ * The Meko plugin's keys (`<plugin>@<marketplace>`) for `enabledPlugins`: those in Claude Code's
+ * plugin registry, and the key the Meko installer uses, in case it's installed after AgentK starts.
+ */
+export function mekoPluginKeys(claudeDir: string = claudeUserDir()): string[] {
+  const keys = new Set((mekoRegistryEntries(claudeDir) ?? []).map(([k]) => k));
+  keys.add(`${MEKO_PLUGIN_PREFIX}meko-agent-skills`);
+  return [...keys];
+}
+
+/** Install paths of the meko-agent-skills plugin from Claude Code's plugin registry. */
+export function mekoPluginInstalls(claudeDir: string = claudeUserDir()): string[] | null {
+  const entries = mekoRegistryEntries(claudeDir);
+  if (!entries) return null;
+  const out: string[] = [];
+  for (const [, v] of entries) {
+    for (const e of Array.isArray(v) ? v : [v]) {
+      const p = (e as { installPath?: unknown } | null)?.installPath;
+      if (typeof p === 'string' && p) out.push(p);
+    }
+  }
+  return out;
 }
 
 /** The Meko plugin's transcript capture script, or null when the plugin isn't installed. */

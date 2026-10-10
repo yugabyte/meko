@@ -189,6 +189,18 @@ export function mekoRecallSystemLine(): string {
 }
 
 /**
+ * The conversation_id Meko's tools require. The Meko plugin's SessionStart context gives one, but
+ * sessions run without the plugin while transcript capture is off, so AgentK always gives its own:
+ * the conversation it made for the session, or (Meko didn't answer in time) the conversation_create
+ * arguments that make that same conversation (`make`: its key, owner and datapack).
+ */
+export function mekoConversationLine(conversationId: string | null, make: { sessionId: string; agentId: string; datapackId: string | null }): string {
+  if (conversationId) return `Meko conversation_id for this session: "${conversationId}". Pass it on every Meko call that takes one.`;
+  const dp = make.datapackId ? `, datapack_id "${make.datapackId}"` : '';
+  return `Meko calls need a conversation_id: call conversation_create once with session_id "${make.sessionId}", agent_id "${make.agentId}"${dp}, and pass the id it returns on every Meko call that takes one.`;
+}
+
+/**
  * What a session saves to its project's dedicated datapack, which the team working on the project
  * shares: knowledge about the product and repo, never about this machine or one person. The system
  * prompt's saving rule and both ways of the learn step (learn.ts) state it in full, since a session

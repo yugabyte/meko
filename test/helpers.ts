@@ -202,6 +202,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   cfg.repos.cloneInto = join(home, 'code');
   cfg.claude.command = FAKE_CLAUDE;
   cfg.meko.apiKey = 'test-key';
+  cfg.meko.captureTranscripts = opts.capture !== false;
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();

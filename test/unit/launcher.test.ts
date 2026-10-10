@@ -18,6 +18,15 @@ describe('the hooks settings file', () => {
     // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
     expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`]);
   });
+
+  it('turns off the plugins it is given, and leaves plugins alone otherwise', () => {
+    const paths = getPaths(join(tempDir('akl-hooks-'), 'ak'));
+    writeHookFiles(paths);
+    expect(JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).enabledPlugins).toBeUndefined();
+    writeHookFiles(paths, { disabledPlugins: ['meko-agent-skills@meko-agent-skills', 'meko-agent-skills@fork'] });
+    expect(JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).enabledPlugins)
+      .toEqual({ 'meko-agent-skills@meko-agent-skills': false, 'meko-agent-skills@fork': false });
+  });
 });
 
 describe('loginShellCommand', () => {
