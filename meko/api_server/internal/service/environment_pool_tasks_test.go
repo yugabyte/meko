@@ -37,14 +37,22 @@ func clusterObserved(pool, name, ampUUID string) string {
 }
 
 // expectPoolEnv registers the per-environment reads TasksByStoragePool does before it
-// lists tasks: the environment row and its (empty) desired set.
-func expectPoolEnv(mock sqlmock.Sqlmock, uuid, id, region, resourcesJSON string) {
+// lists tasks: the environment row, its (empty) desired set, and the clusters
+// remembered under pool -- the ones the observed inventory has since dropped.
+func expectPoolEnv(mock sqlmock.Sqlmock, uuid, id, region, pool, resourcesJSON string, remembered ...string) {
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments e WHERE e\.uuid = \$1`).
 		WithArgs(uuid).
 		WillReturnRows(poolEnvRow(uuid, id, region, resourcesJSON))
 	mock.ExpectQuery(`FROM meko_system\.environment_desired_resources`).
 		WithArgs(uuid).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "name", "spec", "generation"}))
+	rows := sqlmock.NewRows([]string{"cluster_id"})
+	for _, c := range remembered {
+		rows.AddRow(c)
+	}
+	mock.ExpectQuery(`FROM meko_system\.environment_cluster_pools`).
+		WithArgs(uuid, pool).
+		WillReturnRows(rows)
 }
 
 // TestTasksByStoragePool_MergesAcrossEnvsNewestFirst: two environments' pool-scoped
@@ -73,7 +81,7 @@ func TestTasksByStoragePool_MergesAcrossEnvsNewestFirst(t *testing.T) {
 			AddRow(envWest, "us-west-2"))
 
 	// East: cluster caEast, two tasks (A newest t3, B oldest t1).
-	expectPoolEnv(mock, envEast, "amp-east", "us-east-1", "["+clusterObserved(pool, "c1", caEast)+"]")
+	expectPoolEnv(mock, envEast, "amp-east", "us-east-1", pool, "["+clusterObserved(pool, "c1", caEast)+"]")
 	mock.ExpectQuery(`SELECT count\(\*\) FROM meko_system\.environment_tasks`).
 		WithArgs(envEast, pq.Array([]string{caEast})).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
@@ -84,7 +92,7 @@ func TestTasksByStoragePool_MergesAcrossEnvsNewestFirst(t *testing.T) {
 			AddRow("task-B", "create_cluster", "succeeded", caEast, nil, nil, "", nil, t1, t1, t1))
 
 	// West: cluster caWest, one task (C middle t2).
-	expectPoolEnv(mock, envWest, "amp-west", "us-west-2", "["+clusterObserved(pool, "c2", caWest)+"]")
+	expectPoolEnv(mock, envWest, "amp-west", "us-west-2", pool, "["+clusterObserved(pool, "c2", caWest)+"]")
 	mock.ExpectQuery(`SELECT count\(\*\) FROM meko_system\.environment_tasks`).
 		WithArgs(envWest, pq.Array([]string{caWest})).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -143,7 +151,7 @@ func TestTasksByStoragePool_ScopesToPoolClustersOnly(t *testing.T) {
 
 	// The one shared env observes BOTH pools' clusters.
 	resources := "[" + clusterObserved(poolA, "c1", caA) + "," + clusterObserved(poolB, "c9", caB) + "]"
-	expectPoolEnv(mock, env, "amp-shared", "us-east-1", resources)
+	expectPoolEnv(mock, env, "amp-shared", "us-east-1", poolA, resources)
 	// Only poolA's cluster UUID may be bound -- caB must never appear.
 	mock.ExpectQuery(`SELECT count\(\*\) FROM meko_system\.environment_tasks`).
 		WithArgs(env, pq.Array([]string{caA})).
@@ -182,7 +190,7 @@ func TestTasksByStoragePool_EmptyObservedContributesNothing(t *testing.T) {
 			AddRow(env, "us-east-1"))
 	// No cluster observed under the pool. No ListTasks expectation is registered, so a
 	// query against the task table here is an unexpected call and fails the test.
-	expectPoolEnv(mock, env, "amp-empty", "us-east-1", "[]")
+	expectPoolEnv(mock, env, "amp-empty", "us-east-1", pool, "[]")
 
 	got, err := svc.TasksByStoragePool(pool, repository.EnvironmentTaskListOpts{Limit: 25})
 	if err != nil {
@@ -213,7 +221,7 @@ func TestTasksByStoragePool_CallerClusterIDOutsidePoolYieldsNothing(t *testing.T
 		WithArgs(pool).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "region"}).
 			AddRow(env, "us-east-1"))
-	expectPoolEnv(mock, env, "amp-shared", "us-east-1", "["+clusterObserved(pool, "c1", caPool)+"]")
+	expectPoolEnv(mock, env, "amp-shared", "us-east-1", pool, "["+clusterObserved(pool, "c1", caPool)+"]")
 	// caOther is not in the pool's observed set, so the env is skipped: no ListTasks.
 
 	got, err := svc.TasksByStoragePool(pool, repository.EnvironmentTaskListOpts{Limit: 25, ClusterID: caOther})
@@ -267,5 +275,82 @@ func TestTasksByStoragePool_NoRepoAndMissingNameGuards(t *testing.T) {
 	}
 	if got.Items == nil {
 		t.Error("Items is nil with no repo; it must serialize as []")
+	}
+}
+
+// TestTasksByStoragePool_DeletedClusterStillListed is CLOUDGA-37425: once the agent
+// collects a deleted cluster it leaves the observed inventory, and its tasks -- the
+// delete_cluster task among them -- must still be listed, through the pairing
+// remembered for the pool. A cluster_id filter naming it must be accepted too.
+func TestTasksByStoragePool_DeletedClusterStillListed(t *testing.T) {
+	svc, mock, done := newEnvSvc(t)
+	defer done()
+
+	const (
+		pool   = "aaaaaaaa-1111-2222-3333-444444444444"
+		env    = "11111111-1111-1111-1111-111111111111"
+		caGone = "66666666-6666-6666-6666-666666666666"
+	)
+	now := time.Now().UTC()
+
+	mock.ExpectQuery(`FROM meko_system\.environment_aeon_account_mapping`).
+		WithArgs(pool).
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "region"}).
+			AddRow(env, "us-east-1"))
+	expectPoolEnv(mock, env, "amp-shared", "us-east-1", pool, "[]", caGone)
+	mock.ExpectQuery(`SELECT count\(\*\) FROM meko_system\.environment_tasks`).
+		WithArgs(env, "delete_cluster", caGone, pq.Array([]string{caGone})).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`FROM meko_system\.environment_tasks`).
+		WithArgs(env, "delete_cluster", caGone, pq.Array([]string{caGone}), tasksMaxMerge, 0).
+		WillReturnRows(sqlmock.NewRows(poolTaskCols).
+			AddRow("task-D", "delete_cluster", "succeeded", caGone, nil, nil, "", nil, now, now, now))
+
+	got, err := svc.TasksByStoragePool(pool, repository.EnvironmentTaskListOpts{
+		Limit: 25, Kind: "delete_cluster", ClusterID: caGone,
+	})
+	if err != nil {
+		t.Fatalf("TasksByStoragePool: %v", err)
+	}
+	if len(got.Items) != 1 || got.Items[0].TaskID != "task-D" {
+		t.Fatalf("items = %+v, want the deleted cluster's delete_cluster task", got.Items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestApplyStatus_RemembersClusterPools: every cluster in a reported inventory is
+// paired with the pool its path starts with, so the pairing outlives the cluster.
+// Non-cluster kinds and a cluster without a UUID are not paired.
+func TestApplyStatus_RemembersClusterPools(t *testing.T) {
+	svc, mock, done := newEnvSvc(t)
+	defer done()
+
+	const (
+		poolA = "aaaaaaaa-1111-2222-3333-444444444444"
+		poolB = "bbbbbbbb-1111-2222-3333-444444444444"
+		caA   = "33333333-3333-3333-3333-333333333333"
+		caB   = "55555555-5555-5555-5555-555555555555"
+	)
+	expectHeartbeat(mock)
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_cluster_pools`).
+		WithArgs(envUUID, pq.Array([]string{caA, caB}), pq.Array([]string{poolA, poolB}), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	res, err := svc.ApplyStatus(envUUID, StatusReport{
+		EnvironmentState: "READY",
+		Resources: []ResourceStatus{
+			{Kind: "storage-pool", ID: "storage-pool/" + poolA, Attrs: map[string]string{"id": caB}},
+			{Kind: "cluster", ID: "cluster/" + poolA + "/c1", Attrs: map[string]string{"id": caA}},
+			{Kind: "cluster", ID: "cluster/" + poolB + "/c9", Attrs: map[string]string{"id": caB}},
+			{Kind: "cluster", ID: "cluster/" + poolB + "/pending"},
+		},
+	})
+	if err != nil || !res.Found {
+		t.Fatalf("ApplyStatus = %+v, %v", res, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("the inventory's clusters were not remembered: %v", err)
 	}
 }

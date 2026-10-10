@@ -650,6 +650,14 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 	}
 	res := StatusResult{Found: true, TasksRecorded: true}
 
+	// Best-effort, like the tasks below: a pairing that failed to write is retried on
+	// the next heartbeat for as long as the cluster is still reported.
+	if r.Resources != nil {
+		if err := s.recordClusterPools(envUUID, r.Resources); err != nil {
+			slog.Warn("record amp cluster pools for environment", "env_uuid", envUUID, "error", err)
+		}
+	}
+
 	// Tasks are a delta, so unlike Resources above an empty set is not a report of
 	// "no tasks" -- it is the quiet tick, which is most of them. Only a non-empty
 	// delta writes.
@@ -666,6 +674,29 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 		}
 	}
 	return res, nil
+}
+
+// recordClusterPools remembers the storage pool of every cluster in an observed
+// inventory, so TasksByStoragePool can still scope a cluster's tasks after the agent
+// has collected it.
+func (s *EnvironmentService) recordClusterPools(envUUID string, resources []ResourceStatus) error {
+	if s.taskRepo == nil {
+		return nil
+	}
+	var ids, pools []string
+	for _, o := range resources {
+		id := o.Attrs["id"]
+		if o.Kind != "cluster" || uuid.Validate(id) != nil {
+			continue
+		}
+		pool := storagePoolFromName(resourcePath(o.Kind, o.ID))
+		if pool == "" {
+			continue
+		}
+		ids = append(ids, id)
+		pools = append(pools, pool)
+	}
+	return s.taskRepo.RecordClusterPools(envUUID, ids, pools)
 }
 
 // recordTasks upserts a relayed task delta and prunes what has aged out.
@@ -699,6 +730,10 @@ func (s *EnvironmentService) recordTasks(envUUID string, tasks []TaskStatus) err
 			slog.Warn("prune aged amp tasks", "error", err)
 		} else if n > 0 {
 			slog.Info("pruned aged amp tasks", "rows", n, "retention", repository.TaskRetention)
+		}
+		// After the tasks, so a pairing whose last task just aged out goes with it.
+		if _, err := s.taskRepo.PruneClusterPools(repository.TaskRetention); err != nil {
+			slog.Warn("prune amp cluster pools", "error", err)
 		}
 	}
 	return nil
@@ -768,12 +803,13 @@ type PoolTaskListResult struct {
 // LIST); it never assigns, so a pool nothing is mapped to returns an empty page.
 //
 // Scoping is the load-bearing part. environment_tasks has no pool column -- a task is
-// keyed by cluster_id (an amp UUID). The only bridge from a pool to that UUID is the
-// agent-reported observed inventory: a cluster entry under the pool carries its amp
-// UUID in attrs["id"]. So per environment we resolve the pool's cluster UUIDs from
-// observed inventory and filter the task log to them. When that set is EMPTY the
-// environment contributes NOTHING -- never the unfiltered (shared) log. That
-// leak-safety invariant must not regress.
+// keyed by cluster_id (an amp UUID). The bridge from a pool to that UUID is the
+// agent-reported observed inventory, where a cluster entry under the pool carries its
+// amp UUID in attrs["id"]. The live inventory forgets a deleted cluster, so the set is
+// that plus every pairing recordClusterPools remembered -- without it a deleted
+// cluster's tasks, its delete_cluster task included, vanish (CLOUDGA-37425). When the
+// set is EMPTY the environment contributes NOTHING -- never the unfiltered (shared)
+// log. That leak-safety invariant must not regress.
 //
 // opts.Limit/Offset address the MERGED list; each environment is fetched whole (capped
 // at tasksMaxMerge) because a global page cannot be a per-env SQL OFFSET.
@@ -803,8 +839,8 @@ func (s *EnvironmentService) TasksByStoragePool(
 		if e == nil {
 			continue // raced with a delete; skip rather than fail the whole response
 		}
-		// The pool's own cluster UUIDs, resolved from observed inventory (the only
-		// pool -> cluster_id bridge). Reuses the exact filter the resources LIST uses.
+		// The pool's own cluster UUIDs: the observed inventory (the same filter the
+		// resources LIST uses) plus the clusters it has since dropped.
 		_, observed, err := s.listResourcesForEnv(e, "cluster", pool, true)
 		if err != nil {
 			return out, err
@@ -812,6 +848,15 @@ func (s *EnvironmentService) TasksByStoragePool(
 		clusterIDs := make([]string, 0, len(observed))
 		for _, o := range observed {
 			if id := o.Attrs["id"]; id != "" {
+				clusterIDs = append(clusterIDs, id)
+			}
+		}
+		remembered, err := s.taskRepo.ClusterIDsForPool(e.UUID, pool)
+		if err != nil {
+			return out, err
+		}
+		for _, id := range remembered {
+			if !slices.Contains(clusterIDs, id) {
 				clusterIDs = append(clusterIDs, id)
 			}
 		}

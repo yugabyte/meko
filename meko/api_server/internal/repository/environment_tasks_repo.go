@@ -49,7 +49,7 @@ type EnvironmentTaskListOpts struct {
 	ClusterID string
 	// ClusterIDs is an OR set of amp cluster UUIDs; empty is unfiltered. It is how the
 	// pool-scoped tasks API restricts a shared environment's log to just the clusters
-	// a storage pool owns -- the caller resolves that set from observed inventory.
+	// a storage pool owns, past and present.
 	ClusterIDs []string
 }
 
@@ -208,6 +208,84 @@ func (r *EnvironmentTaskRepo) PruneTerminal(olderThan time.Duration) (int64, err
 		pq.Array(models.TerminalTaskStatuses), time.Now().UTC().Add(-olderThan))
 	if err != nil {
 		return 0, fmt.Errorf("prune environment tasks: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil // the delete happened; the count is not worth an error
+	}
+	return n, nil
+}
+
+// clusterPoolRefresh is how stale a live cluster's observed_at may get before a
+// heartbeat rewrites it. It has to stay well under TaskRetention: PruneClusterPools
+// treats observed_at as "last reported", and a live cluster's pairing must never look
+// old enough to prune.
+const clusterPoolRefresh = 24 * time.Hour
+
+// RecordClusterPools remembers which storage pool each of an environment's clusters
+// belongs to, keyed by amp cluster UUID (meko_system.environment_cluster_pools).
+// clusterIDs and pools are parallel. It only ever adds or corrects a pairing: a
+// cluster missing from this report is not removed, because outliving the inventory is
+// the reason the table exists.
+//
+// One statement for the whole set, since this runs on every 10s heartbeat; an
+// unchanged pairing is rewritten only once per clusterPoolRefresh.
+func (r *EnvironmentTaskRepo) RecordClusterPools(envUUID string, clusterIDs, pools []string) error {
+	if len(clusterIDs) == 0 {
+		return nil
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO meko_system.environment_cluster_pools (env_uuid, cluster_id, storage_pool)
+		SELECT $1, u.cluster_id, u.storage_pool
+		  FROM unnest($2::uuid[], $3::text[]) AS u(cluster_id, storage_pool)
+		ON CONFLICT (env_uuid, cluster_id) DO UPDATE
+		  SET storage_pool = EXCLUDED.storage_pool, observed_at = NOW()
+		  WHERE meko_system.environment_cluster_pools.storage_pool <> EXCLUDED.storage_pool
+		     OR meko_system.environment_cluster_pools.observed_at < $4`,
+		envUUID, pq.Array(clusterIDs), pq.Array(pools), time.Now().UTC().Add(-clusterPoolRefresh))
+	if err != nil {
+		return fmt.Errorf("record cluster pools: %w", err)
+	}
+	return nil
+}
+
+// ClusterIDsForPool returns the amp UUIDs of every cluster ever reported under a
+// storage pool in one environment, including ones since deleted.
+func (r *EnvironmentTaskRepo) ClusterIDsForPool(envUUID, pool string) ([]string, error) {
+	rows, err := r.db.Query(
+		`SELECT cluster_id FROM meko_system.environment_cluster_pools
+		 WHERE env_uuid = $1 AND storage_pool = $2`, envUUID, pool)
+	if err != nil {
+		return nil, fmt.Errorf("list pool clusters: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan pool cluster: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pool clusters: %w", err)
+	}
+	return ids, nil
+}
+
+// PruneClusterPools deletes pairings no task refers to any more whose cluster has not
+// been reported for olderThan. A live cluster's observed_at is never older than
+// clusterPoolRefresh, so its pairing is kept even once its tasks have aged out -- the
+// agent may relay its delete_cluster task only after the inventory has dropped it.
+func (r *EnvironmentTaskRepo) PruneClusterPools(olderThan time.Duration) (int64, error) {
+	res, err := r.db.Exec(
+		`DELETE FROM meko_system.environment_cluster_pools p
+		 WHERE p.observed_at < $1
+		   AND NOT EXISTS (SELECT 1 FROM meko_system.environment_tasks t
+		                   WHERE t.env_uuid = p.env_uuid AND t.cluster_id = p.cluster_id)`,
+		time.Now().UTC().Add(-olderThan))
+	if err != nil {
+		return 0, fmt.Errorf("prune cluster pools: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {

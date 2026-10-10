@@ -1,12 +1,14 @@
 package repository
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/models"
 )
@@ -310,4 +312,41 @@ func upsertStatementFor(t *testing.T) string {
 		t.Fatal("the query matcher recorded no statement")
 	}
 	return captured
+}
+
+// cutoffNear matches a bound time within a minute of want.
+type cutoffNear struct{ want time.Time }
+
+func (c cutoffNear) Match(v driver.Value) bool {
+	got, ok := v.(time.Time)
+	return ok && got.Sub(c.want).Abs() < time.Minute
+}
+
+// TestRecordClusterPoolsRefreshesALivePairing pins the second arm of the upsert's
+// WHERE. PruneClusterPools reads observed_at as "last reported"; written only on a pool
+// change it would be the first sighting, so a cluster older than TaskRetention whose
+// tasks aged out would lose its pairing while still alive (CLOUDGA-37425 again).
+func TestRecordClusterPoolsRefreshesALivePairing(t *testing.T) {
+	r, mock, done := newEnvTaskDB(t)
+	defer done()
+
+	const env = "11111111-1111-1111-1111-111111111111"
+	ids := []string{"33333333-3333-3333-3333-333333333333"}
+	pools := []string{"poolA"}
+	mock.ExpectExec(regexp.QuoteMeta(
+		`WHERE meko_system.environment_cluster_pools.storage_pool <> EXCLUDED.storage_pool
+		     OR meko_system.environment_cluster_pools.observed_at < $4`)).
+		WithArgs(env, pq.Array(ids), pq.Array(pools),
+			cutoffNear{time.Now().UTC().Add(-clusterPoolRefresh)}).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := r.RecordClusterPools(env, ids, pools); err != nil {
+		t.Fatalf("RecordClusterPools: %v", err)
+	}
+	if clusterPoolRefresh >= TaskRetention {
+		t.Errorf("clusterPoolRefresh %v must be well under TaskRetention %v", clusterPoolRefresh, TaskRetention)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
 }

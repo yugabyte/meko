@@ -244,6 +244,13 @@ Two properties are load-bearing:
   upsert is guarded on `task_updated_at` so a re-sent or reordered report cannot walk a
   terminal task back to `running`.
 
+A task carries only its amp `cluster_id`, so the storage-pool listing scopes the log
+through the cluster→pool pairings in `meko_system.environment_cluster_pools`, recorded
+from each heartbeat's inventory and kept after the cluster leaves it. The inventory
+alone forgets a cluster as soon as the agent collects it, and with it every task of that
+cluster, its `delete_cluster` included. An environment where a pool has no paired
+cluster contributes nothing, never its unfiltered log.
+
 This does not soften "state is observed, not narrated": YCP invents no tasks and drives
 no state machine of its own, it relays what the controller recorded.
 

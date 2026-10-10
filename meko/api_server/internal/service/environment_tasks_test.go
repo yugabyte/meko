@@ -91,6 +91,8 @@ func TestApplyStatus_RecordsTaskDelta(t *testing.T) {
 	mock.ExpectCommit()
 	mock.ExpectExec(`DELETE FROM meko_system\.environment_tasks`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`DELETE FROM meko_system\.environment_cluster_pools`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	report := StatusReport{
 		EnvironmentState: "DEGRADED",

@@ -372,6 +372,8 @@ func TestTasksByRegion_FlatMergedEnvelope(t *testing.T) {
 		WillReturnRows(ampResourceRow(resources))
 	mock.ExpectQuery(`FROM meko_system\.environment_desired_resources`).WithArgs(envUUID).
 		WillReturnRows(desiredRows())
+	mock.ExpectQuery(`FROM meko_system\.environment_cluster_pools`).WithArgs(envUUID, poolUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}))
 	mock.ExpectQuery(`SELECT count\(\*\) FROM meko_system\.environment_tasks`).
 		WithArgs(envUUID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
