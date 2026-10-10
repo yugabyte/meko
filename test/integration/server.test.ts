@@ -262,6 +262,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const renamed = await rename({ name: 'Renamed' });
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json()).toMatchObject({ name: 'Renamed', branch: 'ak/api-session' });
+    // Started without a first prompt, its task was its name, and it follows the new one.
+    expect(env.core.sessions.row(s.json().id).initial_prompt).toBe('Renamed');
 
     // Review comments: create, edit and delete drafts.
     const url = `/api/sessions/${s.json().id}/comments`;

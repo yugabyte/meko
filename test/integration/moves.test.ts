@@ -80,20 +80,30 @@ describe('moves: moving a task session between stages', () => {
     return () => spy.mock.calls.map((c) => String(c[1]));
   };
 
-  it('moves on from Explore to Code, saving the task and sending the Code prompt', async () => {
-    const s = await session({ start: 'explore' });
-    await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
+  it('moves on from Explore to Code, carrying on from the conversation, or with the task given to a session without one', async () => {
+    const s = await session({ start: 'explore', prompt: 'look around' });
     const sent = typed();
-    const moved = await move(s.id, { stage: 'code', task: 'Add retries' });
+    const moved = await move(s.id, { stage: 'code' });
     expect(moved).toMatchObject({ kind: 'plan', stage: 'code', hasTask: true, skippedStages: ['design'] });
-    expect(row(s.id).initial_prompt).toBe('Add retries');
     expect(stages(s.id)).toEqual([{ stage: 'explore', moved_by: 'you' }, { stage: 'code', moved_by: 'you' }]);
     expect(events(s.id, 'kind')).toEqual([]);
     const text = sent()[0];
     expect(text).toMatch(/^AgentK Local moved this session to the Code stage\. Stages: Explore → Design → Code → PR & Review → Merge & Close/);
     expect(text).not.toContain("It's in Explore now");
-    expect(text).toContain('Task: Add retries');
+    // Not the first prompt again: the conversation may have moved on from it.
+    expect(text).toContain('Implement what this session has worked out so far');
+    expect(text).not.toContain('Task:');
     expect(text).toContain("Don't open a pull request yet.");
+
+    // A session without a task: one given with the move becomes its task, in the Code stage's start prompt.
+    const t = await session({ start: 'explore', name: 'Retries' });
+    await move(t.id, { stage: 'code', task: 'Add retries' });
+    expect(row(t.id).initial_prompt).toBe('Add retries');
+    expect(sent().at(-1)).toContain('Task: Retries\n\nAdd retries');
+    // Without one, it moves all the same.
+    const u = await session({ start: 'explore', name: 'Nothing yet' });
+    expect(await move(u.id, { stage: 'code' })).toMatchObject({ stage: 'code', hasTask: false });
+    expect(sent().at(-1)).toContain('Implement what this session has worked out so far');
   });
 
   it('opens a PR from Explore in one move, then picks the PR up with one PR & Review line', async () => {
@@ -212,7 +222,9 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'design' });
     expect(row(s.id)).toMatchObject({ stage: 'design', plan_mode: 0 });
     expect(sent()[0]).toMatch(/^AgentK Local moved this session to the Design stage\./);
-    expect(sent()[0]).toContain('You are in the Design stage of an AgentK Local task.');
+    expect(sent()[0]).toContain('Design what this session is working toward now');
+    expect(sent()[0]).toContain("Also give the user the design's open questions");
+    expect(sent()[0]).not.toContain('Task: DESIGN_MD it');
     const wt = row(s.id).worktree_path;
     const decision = env.core.sessions.guard(row(s.id).hook_token, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(wt, 'x.ts') }, cwd: wt });
     expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
@@ -229,7 +241,8 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'code' });
     expect(row(s.id).stage).toBe('code');
     expect(events(s.id, 'design')).toContain('Design approval skipped');
-    expect(sent()[0]).toContain('Implement this on the current branch');
+    expect(sent()[0]).toContain('Implement what this session has worked out so far');
+    expect(sent()[0]).not.toContain('Task: DESIGN_MD it');
     expect(sent()[0]).not.toContain('The design is approved');
 
     const t = await session({ prompt: 'DESIGN_MD it', name: 'Too small to design' });
@@ -257,7 +270,8 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'design', instructions: ' Design only the server side. ' });
     const text = sent()[0];
     expect(text).toMatch(/^AgentK Local moved this session to the Design stage\./);
-    expect(text.indexOf('You are in the Design stage')).toBeLessThan(text.indexOf('The user added these instructions'));
+    expect(text.indexOf('Design what this session is working toward now')).toBeLessThan(text.indexOf('The user added these instructions'));
+    expect(text).not.toContain('Task: Fix the thing');
     expect(text.endsWith('\n\nDesign only the server side.')).toBe(true);
 
     // Back from Code to Explore sends no stage prompt: only the moved line and the instructions.

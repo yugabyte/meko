@@ -63,12 +63,18 @@ export function promptByDefault(from: Stage, to: MoveTarget): boolean {
   return to === 'code' && (from === 'explore' || from === 'design');
 }
 
-/** What a move changes, in plain words, for the move dialog. */
-export function moveEffect(from: { stage: Stage; prNumber: number | null }, to: MoveTarget): string {
+/**
+ * What a move changes, in plain words, for the move dialog. `task`: the user typed a task for a
+ * session without one, which the stage's prompt then names; otherwise the move's prompt carries on
+ * from the conversation, not the session's first prompt.
+ */
+export function moveEffect(from: { stage: Stage; prNumber: number | null }, to: MoveTarget, task = false): string {
   const out: string[] = [];
-  if (to === 'design') out.push('AgentK blocks edits to the repo until you approve a design.');
-  else if (to === 'code' && from.stage === 'design') out.push('Skips design approval.');
-  else if (to === 'review') out.push("AgentK picks up the branch's open PR, or commits, pushes and opens one.");
+  const work = task ? 'the task you typed' : 'what this session has worked out so far';
+  if (to === 'design') out.push(`AgentK designs ${work}, and blocks edits to the repo until you approve a design.`);
+  else if (to === 'code' && promptByDefault(from.stage, to)) {
+    out.push(`${from.stage === 'design' ? 'Skips design approval. ' : ''}AgentK implements ${work}.`);
+  } else if (to === 'review') out.push("AgentK picks up the branch's open PR, or commits, pushes and opens one.");
   else if (to === 'explore') out.push('AgentK runs no design, PR or merge while the session is in Explore.');
   else out.push('The session keeps its worktree, branch and conversation.');
   if (from.prNumber && (from.stage === 'pr' || from.stage === 'review')) {

@@ -11,7 +11,7 @@ import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
-import { mekoPrFooter } from './prompts.js';
+import { mekoPrFooter, movePrompt } from './prompts.js';
 import { HttpError } from './projects.js';
 import { INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
@@ -656,8 +656,9 @@ export class Lifecycle {
   }
 
   /**
-   * `instructions`: the user's, sent after the stage's prompt, or after the `moved` line alone
-   * when the move sends no stage prompt; '' for none.
+   * `task`: the session's first task, for one that has none ('' leaves it without). `instructions`:
+   * the user's, sent after the stage's prompt, or after the `moved` line alone when the move sends
+   * no stage prompt; '' for none.
    */
   private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string, instructions: string): Promise<void> {
     const cur = this.sessions.row(id);
@@ -674,17 +675,17 @@ export class Lifecycle {
     // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes.
     const dropQueued = () => this.dropQueued(id, `the session moved to ${STAGE_LABELS[stage]}`);
     if (instructions) this.checkPromptable(cur);
-    if (stage === 'review' && movesStep(cur.stage, stage)) {
+    // A move within PR & Review was refused above (moveError).
+    if (stage === 'review') {
       dropQueued();
       return this.moveToReview(this.sessions.row(id), instructions);
     }
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
-    if (send) {
-      this.checkPromptable(cur);
-      if (!cur.initial_prompt && !task) throw new HttpError(400, 'Give AgentK the task for this session.');
-    }
-    if (task && !cur.initial_prompt) this.sessions.update(id, { initial_prompt: task });
+    if (send) this.checkPromptable(cur);
+    // A task given with the move is the session's first (the dialog offers it only to one without).
+    const newTask = !!task && !cur.initial_prompt;
+    if (newTask) this.sessions.update(id, { initial_prompt: task });
     // Designs are written as markdown or an Artifact now; plan mode is only for older sessions.
     if (stage === 'design') this.sessions.update(id, { plan_mode: 0 });
     if (movesStep(cur.stage, stage)) {
@@ -697,7 +698,9 @@ export class Lifecycle {
     }
     if (!send && !instructions) return;
     const row = this.sessions.row(id);
-    const body = send ? this.sessions.prompt(row, this.sessions.firstPrompt(row)) : '';
+    // The stage's start prompt names the task; that's right only for one just given. Otherwise AgentK
+    // carries on from the conversation, which may have moved on from the first prompt.
+    const body = send ? this.sessions.prompt(row, newTask ? this.sessions.firstPrompt(row) : movePrompt(stage)) : '';
     try {
       await this.sessions.submit(id, [this.movedLine(row), body, this.instructionsPrompt(row, instructions)].filter(Boolean).join('\n\n'));
     } catch (e) {

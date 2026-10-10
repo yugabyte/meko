@@ -20,14 +20,14 @@ export interface MovePreset {
 /** Moves a session to another stage. The rules are in src/shared/stages.ts, shared with the server. */
 export function MoveSessionDialog({ session, preset, onClose }: { session: Session; preset?: MovePreset; onClose: () => void }) {
   const [stage, setStage] = useState<MoveTarget>(preset?.stage ?? defaultTarget(session.stage));
-  const [task, setTask] = useState(session.name);
+  const [task, setTask] = useState('');
   const [instructions, setInstructions] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // The new stage's prompt goes when the move's default says so; instructions go whenever they're given.
   const send = promptByDefault(session.stage, stage);
-  const needsTask = send && !session.hasTask;
+  const asksTask = send && !session.hasTask;
   const types = send || !!instructions.trim();
   const midTurn = session.status === 'working' || session.status === 'starting' || session.busy;
   const blocker =
@@ -35,7 +35,6 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
     moveError(session, stage) ??
     (midTurn ? 'Wait for AgentK to finish its turn.' : null) ??
     (types ? promptBlocker(session) : null) ??
-    (needsTask && !task.trim() ? 'Give AgentK the task.' : null) ??
     instructionsBlocker(instructions);
 
   const move = async () => {
@@ -45,7 +44,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
     try {
       await api.moveSession(session.id, {
         stage,
-        ...(needsTask ? { task: task.trim() } : {}),
+        ...(asksTask && task.trim() ? { task: task.trim() } : {}),
         ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
       });
       onClose();
@@ -98,8 +97,8 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
             ))}
           </div>
         </div>
-        {needsTask && (
-          <Field label="Task" hint="This session has no task yet. AgentK works on this from now on.">
+        {asksTask && (
+          <Field label="Task (optional)" hint="This session has no task yet. AgentK works on this from now on; left empty, it carries on from the conversation.">
             <textarea id="mv-task" className="input" rows={3} value={task} onChange={(e) => setTask(e.target.value)} />
           </Field>
         )}
@@ -110,7 +109,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
           hint={instructionsHint(stage, send)}
           placeholder={stage === 'review' ? 'e.g. Open it as a draft.' : 'e.g. Keep the public API as it is.'}
         />
-        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage)}</p>
+        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage, asksTask && !!task.trim())}</p>
         <ErrorText error={error} />
       </form>
     </Dialog>
