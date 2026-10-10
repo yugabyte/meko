@@ -309,7 +309,7 @@ type ResourceStatus struct {
 	// convenience view),
 	// a branch's fork_lsn, parent_branch_id
 	// (pairs with a branch's id to rebuild the fork tree), is_default, and an
-	// endpoint's role, address, tailnet_address, cpu, memory,
+	// endpoint's role, address, tailnet_address, documentdb_address, cpu, memory,
 	// connectivity_mode and connectivity_allowed_cidrs. A branch also reports its
 	// pg_settings and write_token_settings, an endpoint its pg_settings,
 	// pageserver_settings, safekeeper_settings and extended_config. Empty when the
@@ -342,6 +342,20 @@ type ResourceStatus struct {
 	// cluster_ip; only when it is present does a missing cidr key mean "no load
 	// balancer to restrict". Reading absence as the default would silently drop
 	// the warning for the internet-exposed case this encoding exists to surface.
+	//
+	// An endpoint also reports how a client verifies its certificate, from the
+	// controller's GET …/ca: tls_ca_required ("true"/"false"), tls_ca_crt (the
+	// issuing CA's PEM, only when required) and documentdb_verifiable
+	// ("true"/"false", only beside documentdb_address). All three are ABSENT when
+	// the agent could not read them, predates them, or drives a controller that
+	// predates GET …/ca, which means unknown — never "not required" — so a
+	// consumer must fall back to an unverified connection string with a warning,
+	// as amp_ui does. documentdb_address WITHOUT documentdb_verifiable is not
+	// unknown: either a controller from before the field, whose gateway always
+	// self-signed, or a read still pending. Treat it as false, never derive the
+	// gateway's trust from tls_ca_required, which describes Postgres's
+	// certificate. The verify name is the host of address. A held answer can be
+	// up to 15 minutes old.
 	//
 	// The controller singleton reports its own: its running version, the image_tag
 	// its pod template carries, and target_version. The tag is the one compared

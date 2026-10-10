@@ -118,6 +118,8 @@ type Backend struct {
 	// guarded by mu, so a tick whose read came back without one repeats it (see
 	// endpointHealth).
 	lastHealth map[reconcile.ResourceKey]heldHealth
+	// lastCA is each endpoint's last CA answer, guarded by mu (see endpointCA).
+	lastCA map[reconcile.ResourceKey]heldCA
 	// now is the clock endpointHealth ages verdicts by; nil means time.Now.
 	now func() time.Time
 }
@@ -349,12 +351,16 @@ func attrPutAppliedGen(m map[string]string, echoed *int64) map[string]string {
 // again, and for nlb_internal — whose LB address is itself private on GKE/AKS — the
 // mode is then only a reason to go and check the Service (controller_runbook.md,
 // "Endpoint stuck on the in-cluster address after an nlb_* create").
-func endpointAttrs(ep ampclient.Endpoint) map[string]string {
+func endpointAttrs(ep ampclient.Endpoint, ca *ampclient.EndpointCaBundle) map[string]string {
 	var m map[string]string
 	m = attrPut(m, "id", ep.Id.String())
 	m = attrPut(m, "role", string(ep.Role))
 	m = attrPut(m, "address", ep.Address)
 	m = attrPut(m, "tailnet_address", ep.TailnetAddress)
+	if ep.DocumentdbAddress != nil {
+		m = attrPut(m, "documentdb_address", *ep.DocumentdbAddress)
+	}
+	m = attrPutCA(m, ca)
 	mode := connectivityMode(ep.Connectivity)
 	m = attrPut(m, "connectivity_mode", string(mode))
 	if mode == ampclient.NlbInternal || mode == ampclient.NlbExternal {
@@ -541,7 +547,7 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 						Ready:       ready,
 						State:       state,
 						Detail:      detail,
-						Attrs:       endpointAttrs(ep),
+						Attrs:       endpointAttrs(ep, b.endpointCA(ctx, epKey, p.Id, cl.Id, ep)),
 					})
 				}
 			}
@@ -559,6 +565,11 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 	for k := range b.lastHealth {
 		if _, ok := idx.endpoint[k.Name]; !ok {
 			delete(b.lastHealth, k)
+		}
+	}
+	for k := range b.lastCA {
+		if _, ok := idx.endpoint[k.Name]; !ok {
+			delete(b.lastCA, k)
 		}
 	}
 	b.mu.Unlock()

@@ -72,6 +72,13 @@ type genServer struct {
 	// the two are indistinguishable on the wire, deliberately.
 	endpointSettings string
 	branchSettings   string
+	// endpointDocumentdb is the endpoint row's documentdb_address; empty renders
+	// none. caStatus / caBody script GET …/endpoints/{id}/ca, defaulting to 200
+	// and a bundle that needs no CA; caGets counts those reads.
+	endpointDocumentdb string
+	caStatus           int
+	caBody             string
+	caGets             int
 	// settingsStatus overrides the status code the two settings PATCHes return;
 	// settingsError is the body sent with a non-2xx.
 	settingsStatus int
@@ -187,6 +194,17 @@ func (g *genServer) start(t *testing.T) *Backend {
 				body["error_code"] = g.taskErrorCode
 			}
 			_ = json.NewEncoder(w).Encode(body)
+		case strings.HasSuffix(p, "/ca"):
+			g.caGets++
+			status, body := g.caStatus, g.caBody
+			if status == 0 {
+				status = http.StatusOK
+			}
+			if body == "" {
+				body = `{"required":false,"verify_name":"ep.host"}`
+			}
+			w.WriteHeader(status)
+			io.WriteString(w, body)
 		case strings.HasSuffix(p, "/connectivity"):
 			var req ampclient.UpdateEndpointConnectivityRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -234,6 +252,9 @@ func (g *genServer) start(t *testing.T) *Backend {
 			conn := ""
 			if g.endpointConnectivity != "" {
 				conn = `,"connectivity":` + g.endpointConnectivity
+			}
+			if g.endpointDocumentdb != "" {
+				conn += `,"documentdb_address":"` + g.endpointDocumentdb + `"`
 			}
 			io.WriteString(w, `{"endpoints":[{"id":"`+genEndpointID+`","name":"rw","branch_id":"`+genBranchID+
 				`","cluster_id":"`+genClusterID+`","role":"read_write","address":"ep.host:5433",`+

@@ -147,8 +147,9 @@ containment path in `ResourceStatus.ID`); a cluster's/branch's `pg_version`; a
 branch's `extensions` (opted in per branch — seeded at create, inherited on fork;
 the default branch's set is also mirrored on the cluster); a branch's `fork_lsn`,
 `parent_branch_id`,
-`is_default`; and an endpoint's `role`, `address`, `tailnet_address`, `cpu`,
-`memory`, `connectivity_mode` and `connectivity_allowed_cidrs`. A branch also
+`is_default`; and an endpoint's `role`, `address`, `tailnet_address`,
+`documentdb_address`, `cpu`, `memory`, `connectivity_mode` and
+`connectivity_allowed_cidrs`. A branch also
 reports its `pg_settings` and `write_token_settings`, an endpoint its
 `pg_settings`, `pageserver_settings`, `safekeeper_settings` and
 `extended_config` — see [below](#settings-are-reported-whole). A branch and an
@@ -178,6 +179,20 @@ A branch's `id`
 pairs with a fork's `parent_branch_id` so a console can rebuild the fork tree
 (the containment tree is already derivable from `ID`/`Parent`). The controller
 exposes no live/head LSN, so the only LSN reported is the branch fork point.
+
+An endpoint also relays `GET …/ca` as `tls_ca_required`, `tls_ca_crt` (the issuing
+CA only, when required) and `documentdb_verifiable` (only beside
+`documentdb_address`), from which a console builds the DocumentDB and `verify-full`
+connection strings as `amp_ui/src/lib/endpointTls.ts` does. The control plane cannot
+fetch these on demand, so the agent pushes them. A read costs the controller two
+Kubernetes GETs, so the agent re-reads every five minutes, at once when `address` or
+`documentdb_address` changes, and holds the last answer through failed reads for up
+to 15 minutes. Absent means unknown here too: with none of the three present
+(including against a controller that predates `/ca`), a console hands out an
+unverified string with a warning, never "no CA required". `documentdb_address`
+without `documentdb_verifiable` means the gateway self-signs — a controller from
+before that field always did — so the gateway is unverified whatever
+`tls_ca_required` says.
 
 ## Endpoint readiness
 

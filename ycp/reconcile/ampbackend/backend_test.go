@@ -123,6 +123,8 @@ func TestListReportsResourceAttrs(t *testing.T) {
 		p := r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.HasSuffix(p, "/ca"):
+			io.WriteString(w, `{"required":false,"verify_name":"ep.host"}`)
 		case strings.HasSuffix(p, "/endpoints"):
 			io.WriteString(w, `{"endpoints":[{"id":"`+endpointID+`","name":"rw","branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","role":"read_write","address":"ep.host:5433","tailnet_address":"ep.tail:5433","resources":{"cpu":"2","memory":"4Gi"},"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/branches"):
