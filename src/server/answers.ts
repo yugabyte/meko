@@ -196,6 +196,8 @@ export class DesignQuestionStore {
   }
 
   private read(row: SessionRow, skipFile = false): Entry {
+    // A Review a PR session's design is its PR's, whose questions and decisions are in the doc.
+    if (row.kind === 'review-pr') return entry([], null);
     const d = get<{ markdown: string }>(this.core.db, 'SELECT markdown FROM designs WHERE session_id = ?', row.id);
     if (!d) return entry([], null);
     const fromFile = skipFile ? null : readDesignQuestions(this.core.sessions.questionsFile(row));

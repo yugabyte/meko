@@ -118,7 +118,8 @@ your phone can connect.
   (in every repo its sessions work in) with their emails, to share with in one click.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
   of a project shared with you, checks one out on a branch a plain `git push` refuses, and has AgentK sum
-  it up for you, using the author's design and decisions from Meko. Then AgentK waits and helps with
+  it up for you, with the author's design (named in the PR, fetched from Meko, with its questions and
+  decisions) open beside the terminal and the decisions behind it from Meko. Then AgentK waits and helps with
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
@@ -169,7 +170,9 @@ your phone can connect.
   markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
-  takes you to them first. You approve the design, opening the PR, and Merge & Close, which merges the PR and
+  takes you to them first. Once it's approved, AgentK writes the answers into the design and keeps it current
+  while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
+  You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
   and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and

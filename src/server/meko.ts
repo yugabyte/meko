@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
@@ -445,15 +446,49 @@ export class MekoClient {
     }, 60000);
   }
 
-  async putArtifact(filename: string, content: string, contentType: string, datapackId: string, agentId: string, conversationId: string): Promise<void> {
-    await this.call('artifact_put', {
+  /**
+   * Saves a file to a datapack and returns the hash Meko keeps it under, the only key artifact_get
+   * takes: the reply's content_hash, or the file's SHA-256 (which that is) when the reply has none.
+   */
+  async putArtifact(filename: string, content: string, contentType: string, datapackId: string, agentId: string, conversationId: string): Promise<string> {
+    const r = (await this.call('artifact_put', {
       filename,
       content_base64: Buffer.from(content, 'utf8').toString('base64'),
       content_type: contentType,
       datapack_id: datapackId,
       agent_id: agentId,
       conversation_id: conversationId,
-    }, 60000);
+    }, 60000)) as Json | null;
+    const hash = typeof r?.content_hash === 'string' ? r.content_hash.trim().toLowerCase() : '';
+    return /^[0-9a-f]{64}$/.test(hash) ? hash : createHash('sha256').update(content, 'utf8').digest('hex');
+  }
+
+  /**
+   * A file saved with artifact_put, by its hash, as text: inline in the reply for a small one, or
+   * from the local file Meko's client writes a large one to. Null when Meko doesn't have it (or it
+   * expired) or it's larger than `maxBytes`; throws when Meko can't be asked.
+   */
+  async getArtifact(hash: string, datapackId: string, agentId: string, conversationId: string, maxBytes: number, timeoutMs = 30000): Promise<string | null> {
+    let r: Json | null;
+    try {
+      r = (await this.call('artifact_get', { content_hash: hash, datapack_id: datapackId, agent_id: agentId, conversation_id: conversationId }, timeoutMs)) as Json | null;
+    } catch (e) {
+      if (e instanceof MekoError && /not[_ ]found|expired/i.test(e.message)) return null;
+      throw e;
+    }
+    if (typeof r?.content_base64 === 'string') {
+      const bytes = Buffer.from(r.content_base64, 'base64');
+      return bytes.length <= maxBytes ? bytes.toString('utf8') : null;
+    }
+    if (typeof r?.local_path === 'string') {
+      try {
+        const st = statSync(r.local_path);
+        return st.isFile() && st.size <= maxBytes ? readFileSync(r.local_path, 'utf8') : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 }
 

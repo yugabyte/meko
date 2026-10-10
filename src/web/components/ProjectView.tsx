@@ -27,6 +27,30 @@ import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
 
+/** Where this browser keeps the Review a PR sessions whose PR's design it has opened by itself. */
+const REVIEW_DESIGNS_KEY = 'ak-review-designs-shown';
+
+/**
+ * True the first time for each Review a PR session (its design then opens by itself), false after:
+ * kept in this browser, the last 200 sessions.
+ */
+function firstReviewDesign(id: string): boolean {
+  let ids: string[] = [];
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(REVIEW_DESIGNS_KEY) ?? '[]');
+    if (Array.isArray(v)) ids = v.filter((x): x is string => typeof x === 'string');
+  } catch {
+    /* unreadable: start a new list */
+  }
+  if (ids.includes(id)) return false;
+  try {
+    localStorage.setItem(REVIEW_DESIGNS_KEY, JSON.stringify([...ids, id].slice(-200)));
+  } catch {
+    /* storage off: it opens again next time */
+  }
+  return true;
+}
+
 const REVIEW_TEXT: Record<Session['reviewState'], string> = {
   none: 'no PR',
   waiting: 'waiting for review',
@@ -101,6 +125,11 @@ export function ProjectView({
   useEffect(() => {
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
+  // A review whose PR has a design opens it once, the first time the session shows with it.
+  const reviewDesign = session?.stage === 'reviewing-pr' && session.hasDesign ? session.id : null;
+  useEffect(() => {
+    if (reviewDesign && firstReviewDesign(reviewDesign)) setPanel('design');
+  }, [reviewDesign]);
 
   // One session action at a time, so a double tap can't send two merges or resumes.
   const [acting, setActing] = useState(false);
@@ -138,7 +167,7 @@ export function ProjectView({
   const gateReady = !!session && (!!session.asking || (!session.busy && (
     (session.stage === 'design' && session.hasDesign)
     || (session.stage === 'review' && session.canMerge)
-    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)))));
+    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.configured;
   // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
@@ -665,6 +694,8 @@ function StageBar({
       const rv = session.reviewingPr;
       const gone = !!rv && rv.prState !== 'OPEN';
       const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
+      // A version of the PR's design AgentK hasn't read: Update to latest has it read, commits or not.
+      const designUnread = !!rv && !gone && rv.designUnread;
       reason = midTurn
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
@@ -674,21 +705,21 @@ function StageBar({
             : null;
       gate = (
         <span className="gate-group">
-          <span className={cx('pr-pill', moved && 'moved', gone && 'gone')}>
-            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : 'up to date'}
+          <span className={cx('pr-pill', (moved || designUnread) && 'moved', gone && 'gone')}>
+            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : designUnread ? 'design updated' : 'up to date'}
           </span>
-          {moved && (
+          {(moved || designUnread) && (
             <button
               className="gate"
               disabled={blocked || !!reason}
-              title={reason ?? "Check out the PR's latest commits; AgentK sums up what changed"}
+              title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
               onClick={() => onAct('update-pr')}
             >
               Update to latest
             </button>
           )}
           <ConfirmButton
-            className={moved ? 'btn small' : 'gate'}
+            className={moved || designUnread ? 'btn small' : 'gate'}
             label="Close review"
             confirmLabel="Close review"
             prompt="The session is archived and its review branch deleted."

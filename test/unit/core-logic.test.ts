@@ -199,8 +199,8 @@ describe('config and db', () => {
     project('old', JSON.stringify({ branchPrefix: 'ak/', notify: false }));
     project('set', JSON.stringify({ branchPrefix: 'hari/' }));
     project('none', '{}');
-    dropV30(db);
-    db.exec(`PRAGMA user_version = ${version - 2}`);
+    undoMigrations(db, 30);
+    db.exec('PRAGMA user_version = 28');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -225,7 +225,7 @@ describe('config and db', () => {
       CREATE TABLE meko_learns AS SELECT * FROM meko_learns_new WHERE 0;
       INSERT INTO meko_learns SELECT * FROM meko_learns_new; DROP TABLE meko_learns_new`);
     undoMigrations(db, 28);
-    db.exec(`PRAGMA user_version = ${version - 3}`);
+    db.exec('PRAGMA user_version = 27');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -245,7 +245,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
     undoMigrations(db, 18);
-    db.exec(`PRAGMA user_version = ${version - 13}`);
+    db.exec('PRAGMA user_version = 17');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -266,7 +266,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
     undoMigrations(db, 20);
-    db.exec(`PRAGMA user_version = ${version - 11}`);
+    db.exec('PRAGMA user_version = 19');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -481,6 +481,11 @@ describe('config and db', () => {
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
+/** Undoes migration 31 (designs in PRs: the hashes sent to Meko, and a review's copy of its PR's design). */
+function dropV31(db: ReturnType<typeof openDb>) {
+  for (const c of ['md_hash', 'html_hash', 'source', 'source_told']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
+}
+
 /** Undoes migration 30 (a queued Open PR's instructions), for tests that rewind the schema. */
 function dropV30(db: ReturnType<typeof openDb>) {
   db.exec('ALTER TABLE sessions DROP COLUMN queued_instructions');
@@ -578,10 +583,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 30 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 31 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30];
-  for (let v = 30; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31];
+  for (let v = 31; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -659,6 +664,8 @@ describe('Meko recall in prompts', () => {
 
   it("isn't in the default prompts, which reach sessions with Meko off too", () => {
     for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toMatch(/search Meko/);
+    // Nor are the design's lines (designQaLine and the others), which only sessions with a design get.
+    for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toContain('Questions and decisions');
   });
 
   it("names the datapack after its id in the PR's Meko line, on one line", () => {

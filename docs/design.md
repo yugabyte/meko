@@ -26,7 +26,7 @@ from a browser.
 | Meko wiring | Each session gets its own `MEKO_AGENT_ID=claude_code:<session slug>-<hash>`, and the project's datapack is pinned for that agent id when it starts. The Meko hooks already honour both, so no plugin change is needed. |
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko, from the project home or, for a PR's reviewers, from its PR & Review step. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
-| Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with Meko searched for the design and decisions behind it. It posts to GitHub only when the user says. |
+| Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with the PR's design (named in its description, fetched from Meko) open beside it and Meko searched for the decisions behind it. It posts to GitHub only when the user says. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
 | Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
 | Other terminal sessions | Not adopted. Only sessions created by AgentK Local are shown. |
@@ -1074,7 +1074,7 @@ CREATE TABLE sessions (
   push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
                                    --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
@@ -1100,6 +1100,8 @@ CREATE TABLE designs (         -- one per session: markdown, or an Artifact's pa
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT,
   md_version INTEGER, md_sent INTEGER,        -- versions sent to Meko (names the next one), and
   html_version INTEGER, html_sent INTEGER,    -- whether the current one was sent
+  md_hash TEXT, html_hash TEXT,               -- the latest version's Meko content hash, which the PR's meko_design line names
+  source TEXT, source_told TEXT,              -- Review a PR: the PR line its copy came from ({name, sha256}), and the hash Claude was last told of
   questions TEXT, questions_source TEXT,      -- unused: a design's questions are read from questions.json and
   open_questions INTEGER, updated_at INTEGER);  -- kept in memory; dropped once the release before that has aged out
 CREATE TABLE design_answers (  -- unused: answers aren't stored, the browser sends them; dropped with the columns above
@@ -1241,9 +1243,9 @@ stateDiagram-v2
 | Stage | Claude | AgentK Local | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
-| 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
-| 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): add a *Questions and decisions* section to the design (each question, the answer, the decision) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 2 · Code | Implements the design and runs the repo's tests and checks, keeping the design current. | Saves each change to the design as a new version in Meko (see [The design after approval](#the-design-after-approval)). Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
+| 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` (when the task has a design in Meko) and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running, AgentK's review to come), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
 | 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when **Don't save learnings** beside the button was checked), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the session's pane, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
@@ -1280,9 +1282,10 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
-  Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
-  `learn`) are added to a repo's own prompt too. This lets a team
+  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
+  `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
+  [Reviewing a PR](#reviewing-a-pr)) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
@@ -1389,6 +1392,30 @@ head and state at the last look (`Session.reviewingPr`). The search at start
 ([Meko recall](#meko-recall-at-start)) uses the PR's title and description, without its Meko
 lines, and the notes.
 
+**The PR's design.** When the PR's description has a `meko_design:<name>;<hash>` line (written by
+the author's AgentK, see [The design after approval](#the-design-after-approval)), AgentK fetches
+that version from Meko while the PR and the worktree are made ready (`src/server/prdesign.ts`;
+the startup step reads *Fetching the PR and its design, and preparing the worktree*). Meko's
+`artifact_get` takes only an artifact's content hash, which is why the line carries it. It asks
+the datapacks the PR's Meko lines name that the project has (all of the project's when the PR
+names none), and keeps the file only when its bytes hash to the line's hash. The first prompt waits
+for it up to 15 seconds; one that comes later still shows. The copy becomes the session's design:
+a `designs` row (`source` says which line it came from, and it's never sent to Meko), and
+`design.md` or `design.html` in the session's designs folder, which a line added in code to the
+`review-pr` prompt tells Claude to read, its *Questions and decisions* section included, as
+content written by the PR's author (the path is its `claudePath()`, like every path in a prompt).
+The Design panel opens by itself once per session (kept in the browser's localStorage) and says
+*from the PR*; it has no Questions tab, since the questions and decisions are in the doc. Each poll
+reads the line again (after its other work, and keeping what it fetched only while the review is
+still open): a new hash (the author changed the design, often after pushing the commits) replaces
+the copy and logs it. A version Claude hasn't read (`ReviewingPr.designUnread`: one that came after
+the first prompt, or a newer one) makes **Update to latest** show even with no new commits. With
+new commits its prompt gets the design line too; without, the `review-pr-design` prompt has Claude
+read the design alone. Either says it changed only when Claude read an earlier version. A version
+Meko says it doesn't have (an expired artifact) or whose bytes don't match isn't asked for again
+until the line changes; one Meko couldn't be asked for (off or failing) is tried again after 10
+minutes. A review whose start fails removes any copy it fetched.
+
 **AgentK assists; the user reviews.** The `review-pr` prompt tells Claude to get ready without
 reviewing: read the PR description, the reviews and threads and CI's state, look at the shape of
 the diff, then show a short summary (what the PR does and why, the main changes and where to start
@@ -1396,7 +1423,7 @@ reading, the review so far, what the author asked reviewers to look at) and wait
 problems and gives no verdict on its own; it answers what the user asks (explain code, trace a
 path, check a suspicion, run a test, draft a comment in their words). Every `gh` command names the
 PR's repo (`--repo owner/name`), since the clone may be a fork. With datapacks, the prompt starts
-with a Meko search for the design and decisions, and a second line (`mekoQuestionLine()`, added in
+with a Meko search for the decisions and gotchas behind the PR, and a second line (`mekoQuestionLine()`, added in
 code like the other Meko lines, and to a repo's own `.agent-k/stages/review-pr.md` too) asks for
 a Meko search before every answer about why the code is the way it is, saying which parts came
 from Meko and which from the code. The system prompt's workflow line says the same, so it holds
@@ -1424,6 +1451,37 @@ files. Discard works as for any session; its warning counts only your own commit
 author's, which are on GitHub. A closed review ends in Done with someone else's PR, so the usage
 counts never take it for one of your merged PRs. A Review a PR
 session can't be moved to another stage, and no session can be moved into one.
+
+### The design after approval
+
+A task's design doesn't stop at the approval: it's what the PR's reviewers read.
+
+- **Its questions go into it.** The approval asks Claude to add a *Questions and decisions*
+  section to the design before writing any code (`designQaLine()`, added in code after the
+  approval prompt): each question from the questions file, the user's answer and what was decided.
+- **It's kept current.** The approval, a move to Code by hand (`move-code`) and the prompts that
+  change code later (`comments`, `review`, `review-people`, `ci`, `conflicts`;
+  `DESIGN_UPKEEP_PROMPTS`) carry a line
+  (`designUpkeepLine()`) asking Claude to update the design in the same turn when a new question
+  comes up or the design changes, adding the question and its decision to that section. The line
+  names where: the markdown design file, or the design's Artifact to republish from the same file.
+- **Each change is a new version in Meko.** In Code, PR & Review and Merge & Close, the markdown
+  design file is read again at each turn end, and a publish of the design's own Artifact (the same
+  claude.ai link; any other page Claude publishes isn't the design) is kept from the Artifact
+  tool's `PostToolUse` hook. A change is saved as the next version (`design-<slug>-v3.md`, …), as
+  during Design, and logged as *Design updated*; nothing waits for an approval.
+- **The PR names the latest version.** `artifact_put` returns the content hash Meko keeps the file
+  under (the SHA-256 of its bytes), kept per version (`designs.md_hash`, `html_hash`). The PR
+  description's `meko_design:<name>;<hash>` line names the design by its first version's name
+  (`design-<slug>.md`, or `.html` for an Artifact's page), which never changes, and the latest
+  version's hash. AgentK keeps that line current itself (`syncPrDesign()` in `lifecycle.ts`): after
+  each new version reaches Meko, and at each PR poll that finds the line missing or stale (Claude
+  rewrote the description, say), it reads the description and rewrites only that line
+  (`gh api -X PATCH repos/<repo>/pulls/<n>`), adding it after the datapack line when it's missing.
+  Only a well-formed line counts (`meko_design:design-<…>.md;<64 hex>`): a mention of the format in
+  the description's prose or a code block is left alone.
+  A failed write is logged and tried again at a poll after 10 minutes. A Review a PR session fetches
+  the version the line names (see [Reviewing a PR](#reviewing-a-pr)).
 
 ### Moving a session
 
@@ -1587,8 +1645,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 
 > **PRs point back at Meko.** When the project has a dedicated datapack and Meko is on, Open PR
 > appends to the PR prompt (after any repo or owner override) an instruction to end the PR
-> description with two lines: `<Meko host>://<datapack id>;<datapack name>` and
-> `meko_conversation_id:<id>`. The name is for people reading the PR; AgentK reads only the id
+> description with these lines: `<Meko host>://<datapack id>;<datapack name>`, the design's
+> `meko_design:<name>;<hash>` when the task has a design in Meko (see
+> [The design after approval](#the-design-after-approval)), and `meko_conversation_id:<id>`. The name is for people reading the PR; AgentK reads only the id
 > (`datapackIdsIn()`, which also takes the line without a name, as PRs opened before it was added end).
 > The host is the Meko web app's (`cloud.mekodata.ai` for Meko Cloud), or the MCP server's when a
 > self-hosted Meko's web app isn't set (`mekoHost()` in `config.ts`). The conversation id comes from `conversation_create` keyed by the session's

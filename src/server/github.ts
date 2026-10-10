@@ -405,21 +405,36 @@ export interface PrWatch {
   /** The PR's commits, oldest first (GitHub lists up to 250). */
   commits: string[];
   reviews: PrReview[];
+  /** The PR's description (its `meko_design:` line names the design). */
+  body: string;
 }
 
 export async function prWatch(cwd: string, repo: string, number: number): Promise<PrWatch> {
-  const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--repo', repo, '--json', 'state,headRefOid,commits,reviews')) as {
+  const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), '--repo', repo, '--json', 'state,headRefOid,commits,reviews,body')) as {
     state: PrWatch['state'];
     headRefOid: string;
     commits?: { oid?: string }[] | null;
     reviews?: PrReview[] | null;
+    body?: string | null;
   };
   return {
     state: r.state,
     headRefOid: r.headRefOid,
     commits: (r.commits ?? []).map((c) => c.oid ?? '').filter(Boolean),
     reviews: r.reviews ?? [],
+    body: r.body ?? '',
   };
+}
+
+/** A PR's description, as it is on GitHub now. */
+export async function prBody(cwd: string, number: number, repo?: string | null): Promise<string> {
+  const r = JSON.parse(await gh(cwd, 'pr', 'view', String(number), ...repoArg(repo), '--json', 'body')) as { body?: string | null };
+  return r.body ?? '';
+}
+
+/** Replaces a PR's description (`-f` sends it as text, so a leading @ is never read as a file). */
+export async function setPrBody(cwd: string, number: number, body: string, repo?: string | null): Promise<void> {
+  await gh(cwd, 'api', '-X', 'PATCH', `repos/${repo || '{owner}/{repo}'}/pulls/${number}`, '-f', `body=${body}`, '--silent');
 }
 
 /** The login `gh` is signed in as (with a time limit; 0: none). */

@@ -477,6 +477,16 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN queued_instructions TEXT;
   `,
+  // 31: designs in PRs. md_hash/html_hash: the content hash of the latest version sent to Meko,
+  // which the PR's `meko_design:` line names (NULL: none sent since this). source: for a Review a
+  // PR session's copy of its PR's design, the PR line it came from as JSON {name, sha256}, and
+  // source_told the sha256 Claude was last pointed at. Both NULL for a task's own design.
+  `
+  ALTER TABLE designs ADD COLUMN md_hash TEXT;
+  ALTER TABLE designs ADD COLUMN html_hash TEXT;
+  ALTER TABLE designs ADD COLUMN source TEXT;
+  ALTER TABLE designs ADD COLUMN source_told TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

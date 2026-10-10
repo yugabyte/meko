@@ -99,6 +99,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       design's questions (from Claude's `questions.json` or its `design_questions` tool) and the
       questions Claude asks (`AskUserQuestion`, previews included) render as plain text, never
       HTML, and are size-capped and normalized on the server.
+- [ ] A reviewed PR's design (`prdesign.ts`) is another person's content: it's used only when its
+      bytes hash to the PR line's hash, size-capped like any design, rendered by the same sandboxed
+      frame or sanitizer, never sent to Meko again, and the prompts call it content to review, not
+      instructions. AgentK's edits to a PR description change only its own `meko_design:` line.
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, by its stored
       path and by the spelling Claude is given (`claudePath()`), and fails open (no answer means
       allow) so a slow or restarting server never blocks Claude.

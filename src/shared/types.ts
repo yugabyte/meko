@@ -680,6 +680,8 @@ export interface ReviewingPr {
   /** Commits on the PR since reviewSha; null when the PR's history was rewritten (a force-push). */
   newCommits: number | null;
   prState: 'OPEN' | 'CLOSED' | 'MERGED';
+  /** The PR's design (from Meko) has a version AgentK hasn't read: Update to latest has it read, with no new commits too. */
+  designUnread: boolean;
 }
 
 export interface ProjectWithSessions extends Project {
@@ -1259,6 +1261,11 @@ export interface DesignDoc {
    * `markdown` (the list under an "Open questions" heading of a markdown design), or null (none).
    */
   questionsSource: 'file' | 'markdown' | null;
+  /**
+   * For a Review a PR session: the Meko name of its PR's design (`design-<slug>.md` or `.html`, from
+   * the PR's `meko_design:` line), when this is that design fetched from Meko; null otherwise.
+   */
+  fromPr: string | null;
 }
 
 export interface DesignQuestionOption {

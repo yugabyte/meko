@@ -116,7 +116,11 @@ export function DesignPanel({
     <>
       <div className={cx('design-hd', tabs && 'has-tabs')}>
         <b>{page ? `Design · ${session.name}` : 'Design'}</b>
-        {doc?.updatedAt && <span className="muted small design-updated">updated {relativeTime(doc.updatedAt)}</span>}
+        {doc?.updatedAt && (
+          <span className="muted small design-updated" title={doc.fromPr ? `${doc.fromPr}, as the PR names it in Meko` : undefined}>
+            {doc.fromPr ? `from the PR · fetched ${relativeTime(doc.updatedAt)}` : `updated ${relativeTime(doc.updatedAt)}`}
+          </span>
+        )}
         {tabs && (
           <div className="seg design-tabs" role="tablist" aria-label="Design and its questions">
             <button role="tab" aria-selected={tab === 'design'} className={cx(tab === 'design' && 'on')} onClick={() => setTab('design')}>

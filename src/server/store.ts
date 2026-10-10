@@ -234,7 +234,7 @@ export interface SessionRuntime {
 }
 
 export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
-  const design = get<{ updated_at: number }>(db, 'SELECT updated_at FROM designs WHERE session_id = ?', r.id);
+  const design = get<{ updated_at: number; source: string | null; source_told: string | null }>(db, 'SELECT updated_at, source, source_told FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
     projectId: r.project_id,
@@ -269,7 +269,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     diffStat: rt.diffStat,
     comments: commentCounts(db, r.id),
     designQuestions: { open: openQuestions },
-    reviewingPr: reviewingPr(r),
+    reviewingPr: reviewingPr(r, design ?? null),
     usage: rt.usage,
     contextPercent: rt.contextPercent,
     modLive: rt.modLive,
@@ -287,9 +287,18 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
   };
 }
 
-/** A Review a PR session's PR, or null for other kinds (and a row missing the PR, never expected). */
-function reviewingPr(r: SessionRow): ReviewingPr | null {
+/**
+ * A Review a PR session's PR, or null for other kinds (and a row missing the PR, never expected).
+ * `design` is its copy of the PR's design: unread while Claude hasn't been pointed at that version.
+ */
+function reviewingPr(r: SessionRow, design: { source: string | null; source_told: string | null } | null): ReviewingPr | null {
   if (r.kind !== 'review-pr' || !r.pr_repo || !r.review_sha) return null;
+  let unread = false;
+  try {
+    unread = !!design?.source && (JSON.parse(design.source) as { sha256?: unknown }).sha256 !== design.source_told;
+  } catch {
+    /* a source that isn't JSON: nothing to read */
+  }
   return {
     repo: r.pr_repo,
     title: r.pr_title ?? '',
@@ -298,6 +307,7 @@ function reviewingPr(r: SessionRow): ReviewingPr | null {
     headSha: r.pr_head_sha ?? r.review_sha,
     newCommits: r.pr_new_commits,
     prState: r.pr_state ?? 'OPEN',
+    designUnread: unread,
   };
 }
 

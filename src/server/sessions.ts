@@ -19,7 +19,11 @@ import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
 import { mekoLogPath, removeMekoLog } from './mekolog.js';
-import { designQuestionsLine, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, taskWithName, withAttachedImages, type PromptName } from './prompts.js';
+import {
+  DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
+  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
+} from './prompts.js';
+import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -542,6 +546,15 @@ export class SessionManager {
     return { session: this.get(id), done };
   }
 
+  /**
+   * Fetches the design a reviewed PR's description names and keeps it as the review's design (see
+   * LifecycleManager.refreshPrDesign, which the review's polls use too). Never throws: a review
+   * without its PR's design starts as before.
+   */
+  private async loadPrDesign(row: SessionRow, body: string): Promise<void> {
+    await this.core.lifecycle.refreshPrDesign(row.id, body).catch((e: unknown) => this.core.log.warn(`fetching the PR's design failed for ${row.id}`, errMsg(e)));
+  }
+
   /** The slow part of `begin`: the PR head for a review, the worktree, then Claude. */
   private async finishCreate(id: string, c: {
     request: CreateSessionRequest; repo: string; worktree: string; reused: boolean; branch: string; base: string;
@@ -555,6 +568,8 @@ export class SessionManager {
     this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), c.notes].filter(Boolean).join('\n') : task);
     // Started now; launch() waits for it before Claude starts, and gives Claude its id.
     const naming = this.nameConversation(this.row(id));
+    // The PR's design, fetched from Meko while the PR and the worktree are made ready.
+    const design = review ? this.loadPrDesign(this.row(id), review.info.body) : null;
     let sha: string | undefined;
     if (review) {
       try {
@@ -583,8 +598,12 @@ export class SessionManager {
       waiting = false;
     }
 
+    // The first prompt says where the PR's design is, if it came in time; one that comes later is still shown.
+    if (design) await within(design, PR_DESIGN_TIMEOUT_MS);
     const row = this.row(id);
     const first = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
+    const told = review && first ? prDesignSource(this.core, id) : null;
+    if (told) markPrDesignTold(this.core, id, told.ref.sha256);
     // A session on an existing branch is told so first, so it builds on the work there.
     const prompt = first && row.branch_reused && row.kind !== 'review-pr' ? `${this.prompt(row, 'attached', this.attachedVars(row))}\n\n${first}` : first;
     this.setStartup(id, 'launch');
@@ -663,6 +682,7 @@ export class SessionManager {
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
     removeMekoLog(this.core.paths.designs, id);
+    if (row?.kind === 'review-pr') removePrDesignFiles(this.core, id);
     run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
     this.core.changed();
     return new HttpError(400, message);
@@ -886,8 +906,28 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...this.designLines(row, name, extra), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
+  }
+
+  /**
+   * A prompt's lines about the design, added in code so a repo's own prompts get them too: for a
+   * task with a design, the approval asks for its questions and decisions in it before coding, and
+   * the prompts that change code later ask to keep it current; for a review, where AgentK put the
+   * PR's design (in its first prompt, and in the summary after Update to latest when it changed).
+   */
+  private designLines(row: SessionRow, name: PromptName, extra: Record<string, string | number | null>): string[] {
+    if (row.kind === 'review-pr') {
+      // Update to latest's prompts say it when Claude hasn't read this version ('new': any version).
+      const news = name === 'review-pr' ? 'first' : (name === 'review-pr-update' || name === 'review-pr-design') ? extra.design : null;
+      const src = news ? prDesignSource(this.core, row.id) : null;
+      return src ? [reviewDesignLine(src.ref.name, claudePath(prDesignFile(this.core, row, src.ref.name)), news === 'changed')] : [];
+    }
+    if (row.plan_mode || !DESIGN_UPKEEP_PROMPTS.includes(name)) return [];
+    const d = get<{ artifact_url: string | null; html: string | null }>(this.db, 'SELECT artifact_url, html FROM designs WHERE session_id = ?', row.id);
+    if (!d) return [];
+    const where = designWhere(d.html !== null ? d.artifact_url : null, this.designFile(row));
+    return name === 'approved' ? [designQaLine(where, this.questionsFile(row)), designUpkeepLine(where)] : [designUpkeepLine(where)];
   }
 
   /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */
@@ -1364,7 +1404,8 @@ export class SessionManager {
           const resp = JSON.stringify(p.tool_response ?? '').toLowerCase();
           if (row.stage === 'design' && !/reject|denied|keep planning/.test(resp)) this.core.lifecycle.designApproved(id, 'you');
         }
-        if (p.tool_name === 'Artifact' && row.stage === 'design' && !row.plan_mode) await this.core.lifecycle.captureArtifact(id, p);
+        // During Design any publish is the design; later only a republish of the design's own Artifact.
+        if (p.tool_name === 'Artifact' && !row.plan_mode && row.kind !== 'review-pr') await this.core.lifecycle.captureArtifact(id, p, row.stage !== 'design');
         if (row.status !== 'working') this.setStatus(id, 'working');
         // Keep usage live during long turns without reading the transcript on every tool call.
         if (Date.now() - (this.usageReadAt.get(id) ?? 0) > 10_000) this.ingestUsage(id);
@@ -1401,6 +1442,8 @@ export class SessionManager {
         // A Design turn that wrote or republished the design (or changed its questions) leaves it
         // waiting for approval, unless the user approved it during the turn and it didn't change.
         const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));
+        // After the approval, a design Claude kept current is saved as a new version too.
+        if (row.stage !== 'design') await this.core.lifecycle.collectLaterDesign(this.row(id));
         const queued = await this.core.lifecycle.takeQueuedApproval(id, changed);
         if (queued === 'sent' || queued === 'failed') {
           /* the approval went (the session is in Code), or the design waits for it again */
