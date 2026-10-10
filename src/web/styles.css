@@ -559,9 +559,47 @@ textarea.input {
 .dot.recovered {
   background: var(--accent);
 }
+/* AgentK is saving what the session learned to Meko: a ring of ten dots turning around Meko's m.
+   Drawn at 14px but 10px in the layout, so a tab keeps its width when learning starts or stops.
+   Both layers are the accent through a mask, so they follow the theme. */
+.dot.learning {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin: -2px;
+  border-radius: 0;
+  --learning-ring: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Ccircle cx='7.00' cy='1.00' r='0.95'/%3E%3Ccircle cx='3.47' cy='2.15' r='0.95'/%3E%3Ccircle cx='1.29' cy='5.15' r='0.95'/%3E%3Ccircle cx='1.29' cy='8.85' r='0.95'/%3E%3Ccircle cx='3.47' cy='11.85' r='0.95'/%3E%3Ccircle cx='7.00' cy='13.00' r='0.95'/%3E%3Ccircle cx='10.53' cy='11.85' r='0.95'/%3E%3Ccircle cx='12.71' cy='8.85' r='0.95'/%3E%3Ccircle cx='12.71' cy='5.15' r='0.95'/%3E%3Ccircle cx='10.53' cy='2.15' r='0.95'/%3E%3C/svg%3E");
+}
+.dot.learning::before,
+.dot.learning::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+}
+.dot.learning::before {
+  -webkit-mask: var(--learning-ring) center / contain no-repeat;
+  mask: var(--learning-ring) center / contain no-repeat;
+}
+.dot.learning::after {
+  -webkit-mask: url('/meko-m.png') center / 7px 7px no-repeat;
+  mask: url('/meko-m.png') center / 7px 7px no-repeat;
+}
+/* The selected tab is the terminal's near-black in both themes: the light theme's accent is lost on it. */
+.tab.sel .dot.learning {
+  --accent: #86a4ff;
+}
 @media (prefers-reduced-motion: no-preference) {
   .dot.working {
     animation: pulse 1.8s ease-in-out infinite;
+  }
+  .dot.learning::before {
+    animation: learning-spin 1.6s linear infinite;
+  }
+  @keyframes learning-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   @keyframes pulse {
     50% {

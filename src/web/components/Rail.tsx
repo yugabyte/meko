@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { LimitWindow, PlanLimits, ProjectWithSessions } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import type { ThemePref } from '../theme';
-import { aggregateStatus, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
+import { aggregateDot, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
 import { StatusDot } from './common';
 
 export function Rail({
@@ -112,7 +112,7 @@ export function Rail({
               }}
               title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
             >
-              {count > 0 ? <StatusDot status={aggregateStatus(p)} /> : <i className="dot idle" />}
+              {count > 0 ? <StatusDot status={aggregateDot(p)} /> : <i className="dot idle" />}
               <span className="proj-text">
                 <span className="proj-name">{p.name}</span>
                 <span className="proj-repo">{repoFolder(p.repoPath)}</span>
