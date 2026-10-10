@@ -23,7 +23,7 @@ import {
   DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, withAttachedImages, type PromptName,
 } from './prompts.js';
-import { PR_DESIGN_TIMEOUT_MS, fetchPrDesign, markPrDesignTold, prDesignFile, prDesignSource, savePrDesign } from './prdesign.js';
+import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -547,18 +547,12 @@ export class SessionManager {
   }
 
   /**
-   * Fetches the design a reviewed PR's description names and keeps it as the review's design.
-   * Never throws: a review without its PR's design starts as before.
+   * Fetches the design a reviewed PR's description names and keeps it as the review's design (see
+   * LifecycleManager.refreshPrDesign, which the review's polls use too). Never throws: a review
+   * without its PR's design starts as before.
    */
   private async loadPrDesign(row: SessionRow, body: string): Promise<void> {
-    try {
-      const d = await fetchPrDesign(this.core, row, body);
-      if (!d || !sessionRow(this.db, row.id)) return;
-      savePrDesign(this.core, row, d);
-      this.event(row.id, 'design', `Loaded PR #${row.pr_number}'s design (${d.ref.name}) from Meko`);
-    } catch (e) {
-      this.core.log.warn(`fetching the PR's design failed for ${row.id}`, errMsg(e));
-    }
+    await this.core.lifecycle.refreshPrDesign(row.id, body).catch((e: unknown) => this.core.log.warn(`fetching the PR's design failed for ${row.id}`, errMsg(e)));
   }
 
   /** The slow part of `begin`: the PR head for a review, the worktree, then Claude. */
@@ -688,6 +682,7 @@ export class SessionManager {
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
     removeMekoLog(this.core.paths.designs, id);
+    if (row?.kind === 'review-pr') removePrDesignFiles(this.core, id);
     run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
     this.core.changed();
     return new HttpError(400, message);
@@ -923,8 +918,10 @@ export class SessionManager {
    */
   private designLines(row: SessionRow, name: PromptName, extra: Record<string, string | number | null>): string[] {
     if (row.kind === 'review-pr') {
-      const src = name === 'review-pr' || (name === 'review-pr-update' && extra.designChanged) ? prDesignSource(this.core, row.id) : null;
-      return src ? [reviewDesignLine(src.ref.name, prDesignFile(this.core, row, src.ref.name), name === 'review-pr-update')] : [];
+      // Update to latest's prompts say it when Claude hasn't read this version ('new': any version).
+      const news = name === 'review-pr' ? 'first' : (name === 'review-pr-update' || name === 'review-pr-design') ? extra.design : null;
+      const src = news ? prDesignSource(this.core, row.id) : null;
+      return src ? [reviewDesignLine(src.ref.name, claudePath(prDesignFile(this.core, row, src.ref.name)), news === 'changed')] : [];
     }
     if (row.plan_mode || !DESIGN_UPKEEP_PROMPTS.includes(name)) return [];
     const d = get<{ artifact_url: string | null; html: string | null }>(this.db, 'SELECT artifact_url, html FROM designs WHERE session_id = ?', row.id);

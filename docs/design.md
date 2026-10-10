@@ -1066,7 +1066,7 @@ CREATE TABLE sessions (
   push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
                                    --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
@@ -1274,9 +1274,10 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `instructions`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
-  Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
-  `learn`) are added to a repo's own prompt too. This lets a team
+  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
+  `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
+  [Reviewing a PR](#reviewing-a-pr)) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
@@ -1394,12 +1395,18 @@ for it up to 15 seconds; one that comes later still shows. The copy becomes the 
 a `designs` row (`source` says which line it came from, and it's never sent to Meko), and
 `design.md` or `design.html` in the session's designs folder, which a line added in code to the
 `review-pr` prompt tells Claude to read, its *Questions and decisions* section included, as
-content written by the PR's author. The Design panel opens by itself once per session (kept in the
-browser's localStorage) and says *from the PR*; it has no Questions tab, since the questions and
-decisions are in the doc. Each poll reads the line again: a new hash (the author changed the
-design) replaces the copy and logs it, and the next Update to latest tells Claude to re-read it.
-A version that couldn't be fetched (Meko off or failing, an expired artifact, a hash that doesn't
-match) leaves the review without it, or with the copy it has, and is tried again after 10 minutes.
+content written by the PR's author (the path is its `claudePath()`, like every path in a prompt).
+The Design panel opens by itself once per session (kept in the browser's localStorage) and says
+*from the PR*; it has no Questions tab, since the questions and decisions are in the doc. Each poll
+reads the line again (after its other work, and keeping what it fetched only while the review is
+still open): a new hash (the author changed the design, often after pushing the commits) replaces
+the copy and logs it. A version Claude hasn't read (`ReviewingPr.designUnread`: one that came after
+the first prompt, or a newer one) makes **Update to latest** show even with no new commits. With
+new commits its prompt gets the design line too; without, the `review-pr-design` prompt has Claude
+read the design alone. Either says it changed only when Claude read an earlier version. A version
+Meko says it doesn't have (an expired artifact) or whose bytes don't match isn't asked for again
+until the line changes; one Meko couldn't be asked for (off or failing) is tried again after 10
+minutes. A review whose start fails removes any copy it fetched.
 
 **AgentK assists; the user reviews.** The `review-pr` prompt tells Claude to get ready without
 reviewing: read the PR description, the reviews and threads and CI's state, look at the shape of
@@ -1462,6 +1469,8 @@ A task's design doesn't stop at the approval: it's what the PR's reviewers read.
   each new version reaches Meko, and at each PR poll that finds the line missing or stale (Claude
   rewrote the description, say), it reads the description and rewrites only that line
   (`gh api -X PATCH repos/<repo>/pulls/<n>`), adding it after the datapack line when it's missing.
+  Only a well-formed line counts (`meko_design:design-<…>.md;<64 hex>`): a mention of the format in
+  the description's prose or a code block is left alone.
   A failed write is logged and tried again at a poll after 10 minutes. A Review a PR session fetches
   the version the line names (see [Reviewing a PR](#reviewing-a-pr)).
 

@@ -167,7 +167,7 @@ export function ProjectView({
   const gateReady = !!session && (!!session.asking || (!session.busy && (
     (session.stage === 'design' && session.hasDesign)
     || (session.stage === 'review' && session.canMerge)
-    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha)))));
+    || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.configured;
   // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
@@ -696,6 +696,8 @@ function StageBar({
       const rv = session.reviewingPr;
       const gone = !!rv && rv.prState !== 'OPEN';
       const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
+      // A version of the PR's design AgentK hasn't read: Update to latest has it read, commits or not.
+      const designUnread = !!rv && !gone && rv.designUnread;
       reason = midTurn
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
@@ -705,21 +707,21 @@ function StageBar({
             : null;
       gate = (
         <span className="gate-group">
-          <span className={cx('pr-pill', moved && 'moved', gone && 'gone')}>
-            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : 'up to date'}
+          <span className={cx('pr-pill', (moved || designUnread) && 'moved', gone && 'gone')}>
+            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : designUnread ? 'design updated' : 'up to date'}
           </span>
-          {moved && (
+          {(moved || designUnread) && (
             <button
               className="gate"
               disabled={blocked || !!reason}
-              title={reason ?? "Check out the PR's latest commits; AgentK sums up what changed"}
+              title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
               onClick={() => onAct('update-pr')}
             >
               Update to latest
             </button>
           )}
           <ConfirmButton
-            className={moved ? 'btn small' : 'gate'}
+            className={moved || designUnread ? 'btn small' : 'gate'}
             label="Close review"
             confirmLabel="Close review"
             prompt="The session is archived and its review branch deleted."

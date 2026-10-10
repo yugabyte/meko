@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
@@ -39,7 +39,7 @@ export function prDesignSource(core: Core, sessionId: string): { ref: PrDesignRe
   }
 }
 
-/** Where Claude reads a review session's copy of its PR's design. */
+/** Where a review session's copy of its PR's design is kept (as stored: Claude is told its claudePath). */
 export function prDesignFile(core: Core, row: SessionRow, name: string): string {
   return join(core.paths.designs, row.id, name.endsWith('.html') ? 'design.html' : 'design.md');
 }
@@ -47,8 +47,10 @@ export function prDesignFile(core: Core, row: SessionRow, name: string): string 
 /**
  * Fetches the design a PR's description names from Meko: from the datapacks its Meko lines name
  * that the review's project has (or, when it names none, from each of the project's), checked
- * against the hash. Null when the PR names no design, Meko is off, or no datapack has that version
- * (an expired one too); a Meko failure is logged and gives null.
+ * against the hash. Null when the PR names no design, Meko is off, or Meko answered and no datapack
+ * has that version (an expired one too, or one whose bytes don't match): asking again won't find
+ * it. Throws when Meko couldn't be asked (its conversation, or every datapack's fetch, failed),
+ * which may pass.
  */
 export async function fetchPrDesign(core: Core, row: SessionRow, body: string): Promise<FetchedPrDesign | null> {
   const ref = parseDesignLine(body);
@@ -61,14 +63,18 @@ export async function fetchPrDesign(core: Core, row: SessionRow, body: string): 
   const max = ext === 'html' ? MAX_DESIGN_HTML : MAX_DESIGN_MARKDOWN;
   return withMekoScope(row, async () => {
     const conv = await core.projects.ensureConversation(row.project_id, PR_DESIGN_TIMEOUT_MS);
+    let failed: unknown = null;
+    let answered = false;
     for (const dp of tries) {
       let text: string | null;
       try {
         text = await core.meko.getArtifact(ref.sha256, dp.id, launchedAgentId(row), conv, max, PR_DESIGN_TIMEOUT_MS);
       } catch (e) {
         core.log.warn(`fetching PR #${row.pr_number}'s design ${ref.name} from ${dp.name} failed for ${row.id}`, errMsg(e));
+        failed = e;
         continue;
       }
+      answered = true;
       if (text === null) continue;
       if (sha256Hex(text) !== ref.sha256) {
         core.log.warn(`PR #${row.pr_number}'s design ${ref.name} from ${dp.name} doesn't match its hash; not used`);
@@ -76,6 +82,7 @@ export async function fetchPrDesign(core: Core, row: SessionRow, body: string): 
       }
       return { ref, ext, text };
     }
+    if (!answered && failed) throw failed;
     return null;
   });
 }
@@ -101,4 +108,12 @@ export function savePrDesign(core: Core, row: SessionRow, d: FetchedPrDesign): v
 /** Notes that Claude has been pointed at this version of the PR's design. */
 export function markPrDesignTold(core: Core, sessionId: string, sha256: string): void {
   run(core.db, 'UPDATE designs SET source_told = ? WHERE session_id = ?', sha256, sessionId);
+}
+
+/**
+ * Removes the copy of a PR's design a review that failed to start may have fetched before it
+ * failed: the session is gone, and the copy is another person's content.
+ */
+export function removePrDesignFiles(core: Core, sessionId: string): void {
+  for (const f of ['design.md', 'design.html']) rmSync(join(core.paths.designs, sessionId, f), { force: true });
 }

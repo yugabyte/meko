@@ -73,8 +73,10 @@ describe('designs in PRs', () => {
     expect(parseDesignLine(`meko_design:notes.txt;${hash}`)).toBeNull();
     expect(parseDesignLine(`meko_design:design-widget.md;${hash.slice(1)}`)).toBeNull();
     expect(parseDesignLine('Adds it.')).toBeNull();
-    expect(isDesignLine('meko_design:anything')).toBe(true);
-    expect(isDesignLine('see meko_design: below')).toBe(false);
+    expect(isDesignLine(line)).toBe(true);
+    // A mention of the format isn't AgentK's line.
+    expect(isDesignLine("      meko_design:<first version's name>;<latest version's hash>, and")).toBe(false);
+    expect(isDesignLine('meko_design:anything')).toBe(false);
   });
 
   it("sets the PR's design line, leaving the rest of the description as it was", () => {
@@ -85,6 +87,9 @@ describe('designs in PRs', () => {
     // Missing: after the datapack line, keeping a CRLF body's line endings.
     expect(withDesignLine('Adds it.\r\n\r\nmeko://0f1e2d3c-1111;team/x\r\nmeko_conversation_id:c1', line, isDp))
       .toBe(`Adds it.\r\n\r\nmeko://0f1e2d3c-1111;team/x\r\n${line}\r\nmeko_conversation_id:c1`);
+    // A mention of the format in the description is left alone.
+    const doc = "The PR names it:\n\n    meko_design:<name>;<hash>\n\nmeko://0f1e2d3c-1111";
+    expect(withDesignLine(doc, line, isDp)).toBe(`${doc}\n${line}`);
     // No Meko lines at all: at the end.
     expect(withDesignLine('Adds it.\n', line, isDp)).toBe(`Adds it.\n\n${line}`);
     expect(withDesignLine('', line, isDp)).toBe(line);

@@ -48,7 +48,6 @@ export interface PrDesignRef {
 }
 
 const DESIGN_LINE = /^\s*meko_design:(design-[A-Za-z0-9._-]+\.(?:md|html));([0-9a-f]{64})\s*$/i;
-const ANY_DESIGN_LINE = /^\s*meko_design:/i;
 
 /**
  * The line that names a session's design in its PR's description: `meko_design:<name>;<sha256>`,
@@ -68,15 +67,18 @@ export function parseDesignLine(body: string): PrDesignRef | null {
   return null;
 }
 
-/** True for any of a PR description's `meko_design:` lines, a bad one too. */
+/**
+ * True for a well-formed `meko_design:<name>;<hash>` line, the only kind AgentK writes: a mention
+ * of the format in prose or a code block (`meko_design:<name>;…`) isn't one.
+ */
 export function isDesignLine(line: string): boolean {
-  return ANY_DESIGN_LINE.test(line);
+  return DESIGN_LINE.test(line);
 }
 
 /**
- * A PR description with its `meko_design:` line set to `line`: the first such line replaced (any
- * more dropped), or, without one, the line added after the Meko datapack line (`isDatapackLine`),
- * or at the end. Everything else stays as it was, line endings included.
+ * A PR description with its `meko_design:` line set to `line`: the first well-formed one replaced
+ * (any more dropped), or, without one, the line added after the Meko datapack line
+ * (`isDatapackLine`), or at the end. Everything else stays as it was, line endings included.
  */
 export function withDesignLine(body: string, line: string, isDatapackLine: (l: string) => boolean): string {
   const lines = body.split('\n');

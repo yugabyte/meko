@@ -680,6 +680,8 @@ export interface ReviewingPr {
   /** Commits on the PR since reviewSha; null when the PR's history was rewritten (a force-push). */
   newCommits: number | null;
   prState: 'OPEN' | 'CLOSED' | 'MERGED';
+  /** The PR's design (from Meko) has a version AgentK hasn't read: Update to latest has it read, with no new commits too. */
+  designUnread: boolean;
 }
 
 export interface ProjectWithSessions extends Project {

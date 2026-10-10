@@ -82,8 +82,8 @@ export const DESIGN_READY = 'Design ready for your approval';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'conflicts', 'ci'] as const;
-/** The one prompt queued in a Review a PR session: the summary after Update to latest. */
-const REVIEWING_ORDER = ['review-pr-update'] as const;
+/** The prompts queued in a Review a PR session: the summary after Update to latest, or the PR's new design alone. */
+const REVIEWING_ORDER = ['review-pr-update', 'review-pr-design'] as const;
 type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
 
 /** The prompts that may go out in a stage, in order: none outside Review and Reviewing PR. */
@@ -175,7 +175,7 @@ export class Lifecycle {
   /** Per task, when updating its PR's design line last failed. */
   private designLineFailedAt = new Map<string, number>();
   /** Per review, the PR design it last failed to fetch (its hash) and when. */
-  private prDesignFailed = new Map<string, { sha256: string; at: number }>();
+  private prDesignFailed = new Map<string, { sha256: string; at: number; missing: boolean }>();
   /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
   private ciFailSince = new Map<string, { head: string; at: number }>();
   /** Per session, the PR head at the last look and when it was first seen there (CI_START_MS). */
@@ -966,10 +966,11 @@ export class Lifecycle {
       await this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
     } else if (row.stage === 'reviewing-pr') {
       await this.serial(id, async () => {
-        // The turn that got the update summary is over.
+        // The turn that got the update summary (or the PR's new design) is over.
         const q = this.queue(id);
-        if (q['review-pr-update']?.state === 'sent') {
-          delete q['review-pr-update'];
+        const sent = REVIEWING_ORDER.filter((n) => q[n]?.state === 'sent');
+        if (sent.length) {
+          sent.forEach((n) => delete q[n]);
           this.setQueue(id, q);
         }
         await this.doPollReviewedPr(id);
@@ -1496,7 +1497,6 @@ export class Lifecycle {
     const cwd = this.ghCwd(before);
     const st = await github.prWatch(cwd, before.pr_repo, before.pr_number);
     const me = await this.viewerLogin(cwd);
-    await this.refreshPrDesign(before, st.body ?? '');
     // Read the row again: Update to latest runs in the same serial queue, but an archive or Close
     // review doesn't, and may have ended the session during the calls above.
     const row = sessionRow(this.db, id);
@@ -1535,33 +1535,57 @@ export class Lifecycle {
     }
     fields.seen_review_ids = JSON.stringify([...seen]);
     this.sessions.update(id, fields);
+    // Last, as it's the slowest: it checks the session is still open before keeping what it fetched.
+    await this.refreshPrDesign(id, st.body ?? '');
     await this.deliverNext(id).catch((e) => this.warn(id, 'Sending a queued prompt', e));
     this.core.changed();
   }
 
   /**
-   * A Review a PR session's copy of its PR's design, fetched again when the PR's `meko_design:`
-   * line names a version it doesn't have (the author changed the design, or Meko couldn't be
-   * reached at the start). A version that couldn't be fetched is tried again after
-   * PR_DESIGN_RETRY_MS. Claude hears of it with the next Update to latest.
+   * A Review a PR session's copy of its PR's design: fetched when the review starts, and again by
+   * its polls when the PR's `meko_design:` line names a version it doesn't have (the author changed
+   * the design, or Meko couldn't be reached before). A version Meko said it doesn't have isn't asked for again until the line
+   * changes; one Meko couldn't be asked for is tried again after PR_DESIGN_RETRY_MS. What's fetched
+   * is kept only while the review is still open. Claude hears of it when the user presses Update to
+   * latest (offered for a design Claude hasn't read, without new commits too).
    */
-  private async refreshPrDesign(row: SessionRow, body: string): Promise<void> {
+  async refreshPrDesign(id: string, body: string): Promise<void> {
     const ref = parseDesignLine(body);
-    if (!ref || prDesignSource(this.core, row.id)?.ref.sha256 === ref.sha256) return;
-    const failed = this.prDesignFailed.get(row.id);
-    if (failed?.sha256 === ref.sha256 && Date.now() - failed.at < PR_DESIGN_RETRY_MS) return;
-    const had = !!prDesignSource(this.core, row.id);
-    const d = await fetchPrDesign(this.core, row, body).catch((e: unknown) => {
-      this.core.log.warn(`fetching PR #${row.pr_number}'s design failed for ${row.id}`, errMsg(e));
-      return null;
-    });
-    if (!d) {
-      this.prDesignFailed.set(row.id, { sha256: ref.sha256, at: Date.now() });
+    if (!ref || prDesignSource(this.core, id)?.ref.sha256 === ref.sha256) return;
+    const failed = this.prDesignFailed.get(id);
+    if (failed?.sha256 === ref.sha256 && (failed.missing || Date.now() - failed.at < PR_DESIGN_RETRY_MS)) return;
+    const before = sessionRow(this.db, id);
+    if (!before) return;
+    const had = !!prDesignSource(this.core, id);
+    let d: Awaited<ReturnType<typeof fetchPrDesign>>;
+    try {
+      d = await fetchPrDesign(this.core, before, body);
+    } catch (e) {
+      this.core.log.warn(`fetching PR #${before.pr_number}'s design failed for ${id}`, errMsg(e));
+      this.prDesignFailed.set(id, { sha256: ref.sha256, at: Date.now(), missing: false });
       return;
     }
-    this.prDesignFailed.delete(row.id);
+    if (!d) {
+      this.prDesignFailed.set(id, { sha256: ref.sha256, at: Date.now(), missing: true });
+      return;
+    }
+    this.prDesignFailed.delete(id);
+    const row = sessionRow(this.db, id);
+    if (!row || row.stage !== 'reviewing-pr' || row.desired !== 'running') return;
     savePrDesign(this.core, row, d);
-    this.sessions.event(row.id, 'design', had ? `PR #${row.pr_number}'s design changed: the Design panel shows the new version` : `Loaded PR #${row.pr_number}'s design (${ref.name}) from Meko`);
+    this.sessions.event(id, 'design', had ? `PR #${row.pr_number}'s design changed: the Design panel shows the new version` : `Loaded PR #${row.pr_number}'s design (${ref.name}) from Meko`);
+  }
+
+  /**
+   * How Claude is to hear of the review's PR design with the next Update to latest: 'new' when it
+   * hasn't read any version (the design came after its first prompt), 'changed' when it read an
+   * earlier one, null when it has read this one (or there's none). Marks it read.
+   */
+  private takePrDesignNews(id: string): 'new' | 'changed' | null {
+    const design = prDesignSource(this.core, id);
+    if (!design || design.told === design.ref.sha256) return null;
+    markPrDesignTold(this.core, id, design.ref.sha256);
+    return design.told === null ? 'new' : 'changed';
   }
 
   /** gh's login, looked up once; null (and asked again next time) when gh can't say. */
@@ -1608,21 +1632,25 @@ export class Lifecycle {
       }
       if (sha === old) {
         this.sessions.update(cur.id, { pr_head_sha: sha, pr_new_commits: 0 });
+        // No new commits, but a design AgentK hasn't read: it reads that alone.
+        const news = this.takePrDesignNews(cur.id);
+        if (news) {
+          this.enqueue(cur.id, 'review-pr-design', { design: news });
+          await this.deliverNext(cur.id);
+        }
         return;
       }
       const count = await commitsBetween(repo, old, sha);
       await moveReviewBranch(cur.worktree_path, sha);
       this.sessions.update(cur.id, { review_sha: sha, pr_head_sha: sha, pr_new_commits: 0 });
       this.sessions.event(cur.id, 'pr-update', `Updated to PR #${n} at ${sha.slice(0, 7)}`, { sha });
-      // Claude is told of a design that changed since it last read it.
-      const design = prDesignSource(this.core, cur.id);
-      const designChanged = !!design && design.told !== design.ref.sha256;
-      if (design && designChanged) markPrDesignTold(this.core, cur.id, design.ref.sha256);
+      // Claude is told of a design it hasn't read (this version, or any).
+      const news = this.takePrDesignNews(cur.id);
       this.enqueue(cur.id, 'review-pr-update', {
         oldSha: old,
         sha,
         count: count === null ? 'its history was rewritten, a force-push' : `${count === 1 ? '1 new commit' : `${count} new commits`}`,
-        ...(designChanged ? { designChanged: '1' } : {}),
+        ...(news ? { design: news } : {}),
       });
       await this.deliverNext(cur.id);
       void this.sessions.refreshDiff(cur.id).catch(() => undefined);
