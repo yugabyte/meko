@@ -20,9 +20,11 @@ describe('instructions for a move or Open PR', () => {
     );
   });
 
-  it("reads an open-pr body, which is optional", () => {
-    expect(openPrInstructions(undefined)).toBe('');
-    expect(openPrInstructions({})).toBe('');
+  it('reads an open-pr body, which is optional: no instructions (null) differ from blank ones', () => {
+    expect(openPrInstructions(undefined)).toBeNull();
+    expect(openPrInstructions({})).toBeNull();
+    expect(openPrInstructions({ instructions: null })).toBeNull();
+    expect(openPrInstructions({ instructions: '  ' })).toBe('');
     expect(openPrInstructions({ instructions: ' draft ' })).toBe('draft');
     expect(() => openPrInstructions('draft')).toThrow(expect.objectContaining({ status: 400 }));
     expect(() => openPrInstructions([])).toThrow(expect.objectContaining({ status: 400 }));

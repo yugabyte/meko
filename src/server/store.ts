@@ -261,6 +261,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     mergeBlockers: rt.mergeBlockers,
     mergeQueueable: rt.mergeQueueable,
     queued: r.queued_gate,
+    queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
     busy: rt.busy,
     skippedStages: skippedStages(db, r),
     hasDesign: !!design,

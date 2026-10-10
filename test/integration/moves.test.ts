@@ -304,6 +304,16 @@ describe('moves: moving a task session between stages', () => {
     expect(picked[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
     expect(picked[0]).not.toContain('Open a pull request');
     expect(picked[0].endsWith('\n\nAddress the open threads first.')).toBe(true);
+    await idle(t.id, 'instructions turn');
+
+    // The PR is picked up first: if the instructions can't be typed, the session stays in PR & Review.
+    await move(t.id, { stage: 'code' });
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    await expect(move(t.id, { stage: 'review', instructions: 'Address the open threads first.' })).rejects.toMatchObject({
+      status: 502,
+      message: /^Moved to PR & Review, but couldn't send your instructions to Claude: no pane\./,
+    });
+    expect(get(t.id)).toMatchObject({ stage: 'review', prNumber: 7, busy: false });
   });
 
   it('gets a PR stage out of waiting when the turn ended without a PR', async () => {

@@ -6,16 +6,19 @@ import { Busy, Dialog, ErrorText, InstructionsField } from './common';
 
 /**
  * Open PR with instructions for AgentK, sent after the PR prompt (`OpenPrRequest`). Mid-turn it
- * queues, as the gate does, and the instructions wait with it; pressed while one is queued, they
- * replace its instructions.
+ * queues, as the gate does, and the instructions wait with it. With an Open PR queued already, it
+ * opens on the instructions it goes with (`Session.queuedInstructions`), and saving replaces them:
+ * an emptied box removes them.
  */
 export function OpenPrDialog({ session, onClose }: { session: Session; onClose: () => void }) {
-  const [instructions, setInstructions] = useState('');
+  const [instructions, setInstructions] = useState(session.queuedInstructions ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const pr = openPrGate(session);
-  const queues = pr.label !== 'Open PR';
+  // The PR prompt goes when the turn ends; between turns, a queued Open PR goes now, with this text.
+  const waits = pr.label !== 'Open PR';
+  const queued = session.queued === 'open-pr' && waits;
   const blocker =
     (session.stage !== 'code' ? 'Open PR is only available in the Code stage.' : null) ??
     (session.busy ? 'Wait for AgentK to finish.' : null) ??
@@ -27,7 +30,8 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
     setError(null);
     setBusy(true);
     try {
-      await api.openPr(session.id, instructions.trim() ? { instructions: instructions.trim() } : {});
+      // Always sent, blank too: for a queued Open PR, blank removes its instructions.
+      await api.openPr(session.id, { instructions: instructions.trim() });
       onClose();
     } catch (e) {
       setError(errorMessage(e));
@@ -38,7 +42,7 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
 
   return (
     <Dialog
-      title="Open PR with instructions"
+      title={queued ? 'Instructions for the queued Open PR' : 'Open PR with instructions'}
       onClose={onClose}
       footer={
         <>
@@ -46,7 +50,7 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
             Cancel
           </button>
           <button className="btn primary" disabled={!!blocker || busy} title={blocker ?? pr.title} onClick={() => void open()}>
-            {busy ? <Busy label="Opening" /> : pr.label}
+            {busy ? <Busy label={queued ? 'Saving' : 'Opening'} /> : queued ? 'Save instructions' : pr.label}
           </button>
         </>
       }
@@ -64,9 +68,9 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
           onChange={setInstructions}
           autoFocus
           hint={
-            session.queued === 'open-pr'
-              ? 'An Open PR is already queued: these replace any instructions it has.'
-              : queues
+            queued
+              ? 'They go after the PR prompt when AgentK finishes its turn. Empty the box to send none.'
+              : waits
                 ? 'AgentK is mid-turn: the PR prompt and these go when the turn ends.'
                 : 'Sent after the PR prompt, which commits, pushes and opens (or updates) the pull request.'
           }

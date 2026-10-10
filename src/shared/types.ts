@@ -612,6 +612,8 @@ export interface Session {
   mergeQueueable: boolean;
   /** A gate pressed early, waiting to go (kept in state.db across restarts); null when none. */
   queued: QueuedGate | null;
+  /** The user's instructions for a queued Open PR (OpenPrRequest); null when it has none, or none is queued. */
+  queuedInstructions: string | null;
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   /**
@@ -1667,7 +1669,8 @@ export type TermServerMessage =
 //        cancel-approval withdraws it: 409 when none is queued. open-pr while AgentK is mid-turn or Claude is starting is
 //        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it;
 //        it takes an optional OpenPrRequest (400 for instructions that aren't text or are too long), whose instructions
-//        go after the PR prompt and are kept with a queued one (a later press with instructions replaces them).
+//        go after the PR prompt and are kept with a queued one (Session.queuedInstructions). Pressed again while one is
+//        queued, a request with instructions replaces them (blank ones remove them); one without keeps them.
 //        merge while the only blockers clear by themselves (Session.mergeQueueable) is queued and goes at the first poll
 //        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
@@ -1678,8 +1681,8 @@ export type TermServerMessage =
 //        when the step ends; asked again with skipLearn, it discards now)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
-//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when the move
-//        was made but its prompt couldn't be sent)
+//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when its prompt
+//        couldn't be sent: the move stays made, except a PR prompt's, which goes back to where it was)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
 //        and resolves the questions answered with their answers in questions.json, unless the questions come from a

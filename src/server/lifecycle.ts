@@ -104,11 +104,15 @@ export function checkInstructions(v: unknown): string {
   return text;
 }
 
-/** The instructions in an open-pr action's body (OpenPrRequest), or '' when it has none. */
-export function openPrInstructions(body: unknown): string {
-  if (body === undefined || body === null) return '';
+/**
+ * The instructions in an open-pr action's body (OpenPrRequest): '' for blank ones, null when the
+ * request gives none (the plain gate's press), which leaves a queued Open PR's alone.
+ */
+export function openPrInstructions(body: unknown): string | null {
+  if (body === undefined || body === null) return null;
   if (typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'The Open PR request must be {instructions}.');
-  return checkInstructions((body as Record<string, unknown>).instructions);
+  const v = (body as Record<string, unknown>).instructions;
+  return v === undefined || v === null ? null : checkInstructions(v);
 }
 
 /**
@@ -522,22 +526,25 @@ export class Lifecycle {
 
   /**
    * Sends the PR prompt, or, while AgentK is mid-turn (or Claude is starting), queues it for the
-   * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go.
+   * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go. Pressed
+   * again with instructions (blank ones included) while one is queued, they replace its own.
    */
   async openPr(row: SessionRow, body?: unknown): Promise<void> {
-    const instructions = openPrInstructions(body);
+    const given = openPrInstructions(body);
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
       if (row.queued_gate !== 'open-pr') {
-        const text = instructions ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
-        this.queueGate(row.id, 'open-pr', text, instructions);
-      } else if (instructions) {
-        // Pressed again with instructions: they replace the ones queued.
-        this.sessions.update(row.id, { queued_instructions: instructions });
-        this.sessions.event(row.id, 'queued', "Your instructions for the queued Open PR changed");
+        const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
+        this.queueGate(row.id, 'open-pr', text, given ?? '');
+      } else if (given !== null && given !== (row.queued_instructions ?? '')) {
+        this.sessions.update(row.id, { queued_instructions: given || null });
+        this.sessions.event(row.id, 'queued', given ? 'Your instructions for the queued Open PR changed' : 'Your instructions for the queued Open PR were removed');
       }
       return;
     }
+    // Pressed between a turn's end and the queued Open PR going: it goes now, with the queued
+    // instructions unless this press gives its own. Read before the check, which clears them.
+    const instructions = given ?? (row.queued_gate === 'open-pr' ? row.queued_instructions ?? '' : '');
     const check = this.prCheck(row.id, false);
     check(row);
     await this.sendPr(row, check, { instructions });
@@ -573,6 +580,8 @@ export class Lifecycle {
         return;
       }
       if ((row.status !== 'idle' && row.status !== 'recovered') || this.sessions.runtime(id).busy || this.sessions.promptsHeld(id) > 0) return;
+      // Cleared with the gate before the prompt is typed: if it can't be, the activity log keeps them.
+      const instructions = row.queued_instructions;
       try {
         await this.sendPr(row, this.prCheck(id, true));
         this.sessions.event(id, 'queued', 'Queued Open PR sent');
@@ -583,25 +592,27 @@ export class Lifecycle {
         // Still queued: Claude took another prompt meanwhile, and the PR goes after that turn.
         if (cur?.queued_gate === 'open-pr') return;
         this.warn(id, 'Sending the queued Open PR', e);
-        this.sessions.event(id, 'queued', `Queued Open PR not sent: ${errMsg(e)}`);
-        this.sessions.notifyUser(id, 'Open PR not sent', `The queued PR prompt couldn't be sent (${errMsg(e)}). Press Open PR again.`);
+        this.sessions.event(id, 'queued', `Queued Open PR not sent: ${errMsg(e)}${instructions ? `\nYour instructions with it:\n${instructions}` : ''}`);
+        this.sessions.notifyUser(id, 'Open PR not sent', `The queued PR prompt couldn't be sent (${errMsg(e)}). Press Open PR again${instructions ? '; your instructions are in the activity log' : ''}.`);
       }
     });
   }
 
   /**
    * Types the PR prompt (with a moved session's `moved` line first, `lead`, and the user's
-   * `instructions` last, else those kept with a queued Open PR): the session goes to the PR stage,
-   * and back to where it was if the prompt can't be typed. `check` runs again after waiting on
-   * GitHub and Meko, which gave Claude and the user time to move on.
+   * `instructions` last): the session goes to the PR stage, and back to where it was if the prompt
+   * can't be typed. `check` runs again after waiting on GitHub and Meko, which gave Claude and the
+   * user time to move on. Without `instructions` (a queued Open PR, from takeQueuedPr), those kept
+   * with the queued gate go.
    */
   private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string } = {}): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
     const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
     const cur = this.sessions.row(row.id);
-    // Read before the check, which clears a queued Open PR with its instructions.
-    const instructions = opts.instructions || (cur.queued_gate === 'open-pr' ? cur.queued_instructions : null) || '';
+    // Read before the check, which clears a queued Open PR with its instructions; the latest, if a
+    // press replaced them while this waited.
+    const instructions = opts.instructions ?? (cur.queued_gate === 'open-pr' ? cur.queued_instructions ?? '' : '');
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', 'you');
@@ -698,7 +709,7 @@ export class Lifecycle {
   /**
    * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
    * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does. The
-   * user's `instructions` go after the PR prompt, or with the `moved` line before a PR is picked up.
+   * user's `instructions` go after the PR prompt, or with the `moved` line once a PR is picked up.
    */
   private async moveToReview(row: SessionRow, instructions: string): Promise<void> {
     const cwd = this.ghCwd(row);
@@ -725,17 +736,24 @@ export class Lifecycle {
       }, { lead: cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'), instructions });
       return;
     }
-    if (instructions) {
-      // Typed before the PR is picked up, so the review prompts that may be waiting go after this turn.
-      this.checkPromptable(cur);
-      try {
-        await this.sessions.submit(row.id, `${this.movedLine(cur, 'review')}\n\n${this.instructionsPrompt(cur, instructions)}`);
-      } catch (e) {
-        throw new HttpError(502, `Couldn't send your instructions to Claude: ${errMsg(e)}. The session stays in ${STAGE_LABELS[cur.stage]}; try again.`);
-      }
-    }
+    if (instructions) this.checkPromptable(cur);
     if (cur.stage === 'design') this.leaveDesign(row.id, false);
-    await this.adoptPr(row.id, pr, 'you');
+    // As sendPr does, the stage moves first and the session is busy until the turn ends: review
+    // prompts waiting for the session go after the instructions' turn, not before or during it.
+    if (instructions) this.sessions.setBusy(row.id, true);
+    try {
+      await this.adoptPr(row.id, pr, 'you');
+    } catch (e) {
+      if (instructions) this.sessions.setBusy(row.id, false);
+      throw e;
+    }
+    if (!instructions) return;
+    try {
+      await this.sessions.submit(row.id, `${this.movedLine(this.sessions.row(row.id))}\n\n${this.instructionsPrompt(cur, instructions)}`);
+    } catch (e) {
+      this.sessions.setBusy(row.id, false);
+      throw new HttpError(502, `Moved to PR & Review, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+    }
   }
 
   /** The `instructions` prompt with the user's text, or '' when they gave none. */

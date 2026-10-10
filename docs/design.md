@@ -1293,8 +1293,12 @@ sent, withdrawn or dropped.
   while the prompt is being prepared (the PR prompt waits on GitHub and Meko first) still stops it. With
   Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
   AgentK's mod. Instructions given with it (see [Instructions with a move or Open PR](#instructions-with-a-move-or-open-pr))
-  wait with it in `sessions.queued_instructions`; a later press with instructions replaces them, one
-  without keeps them, and they're cleared whenever the queued gate is.
+  wait with it in `sessions.queued_instructions` (`Session.queuedInstructions`), cleared whenever the
+  queued gate is. The **+** notes button stays beside the queued pill and opens the dialog on them:
+  saving replaces them, and an emptied box removes them (a request with `instructions` replaces them,
+  blank ones included; one without, like the plain gate's, keeps them). An Open PR pressed after the
+  turn ended but before the queued one went goes at once, with them unless it gives its own. If the
+  queued PR prompt can't be typed, the activity log keeps them, so they can be given again.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
   AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
   being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
@@ -1439,7 +1443,9 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
 ("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
 stays one click; the **+** notes button beside it (and *Open PR … with instructions* in the command
-palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). Approve design takes none
+palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is captioned
+*Instructions* where there's no hover (a phone, a touch screen), and is 40 px square under a coarse
+pointer. Approve design takes none
 of its own: the design's **Other feedback** already goes with the approval. Merge & Close prompts
 Claude for nothing, so it takes none either.
 
@@ -1447,9 +1453,9 @@ Claude for nothing, so it takes none either.
   `.agent-k/stages/instructions.md`), which tells Claude to follow them where they conflict with
   what's above: after the stage's prompt, and after the PR prompt's push line and Meko footer.
 - **With no stage prompt** (a move back, or to PR & Review when AgentK picks up the branch's open PR)
-  they go with the `moved` line alone. For a PR picked up, they're typed before it's adopted, so
-  review prompts waiting for the session go after that turn; if they can't be typed, the session
-  doesn't move.
+  they go with the `moved` line alone. For a PR picked up, the session moves first and stays busy
+  until the instructions' turn ends, as with the PR prompt, so review prompts waiting for it go after
+  that turn; if they can't be typed, the session stays in PR & Review and the 502 says so.
 - **Checks.** At most `INSTRUCTIONS_MAX` (10,000) characters once trimmed (400 past it, or for
   anything but text); blank is none. A move with instructions needs Claude to take a prompt, as a
   stage prompt does (409 while it waits on you, or has exited, before anything moves). The dialogs

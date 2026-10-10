@@ -69,10 +69,12 @@ export function CommandPalette({
         run: onMoveSession,
       });
     }
-    if (currentSession?.stage === 'code' && !currentSession.queued) {
+    if (currentSession?.stage === 'code') {
       out.push({
         id: 'open-pr',
-        label: ['Open PR for ', { session: currentSession.name }, ' with instructions'],
+        label: currentSession.queued === 'open-pr'
+          ? ['Instructions for the queued Open PR of ', { session: currentSession.name }]
+          : ['Open PR for ', { session: currentSession.name }, ' with instructions'],
         hint: 'Action',
         keywords: 'open pr pull request instructions notes draft',
         run: onOpenPr,

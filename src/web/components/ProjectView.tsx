@@ -435,9 +435,44 @@ function newCommitsText(n: number | null): string {
 }
 
 /** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
-function queuedGate(session: Session, blocked: boolean, onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>, title: string): ReactNode {
+/**
+ * The + notes button beside Open PR: opens the Open PR with instructions dialog, or, with an Open
+ * PR queued, the instructions it goes with. Captioned where there's no hover (styles.css).
+ */
+function InstructionsButton({ queued, disabled, title, onClick }: { queued: boolean; disabled: boolean; title: string; onClick: () => void }) {
+  return (
+    <button
+      className="btn small gate-note"
+      disabled={disabled}
+      title={title}
+      aria-label={queued ? "The queued Open PR's instructions" : 'Open PR with instructions'}
+      onClick={onClick}
+    >
+      +<NotesIcon />
+      <span className="gate-note-text" aria-hidden="true">
+        Instructions
+      </span>
+    </button>
+  );
+}
+
+function queuedGate(
+  session: Session,
+  blocked: boolean,
+  onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>,
+  title: string,
+  onInstructions?: () => void,
+): ReactNode {
   return (
     <span className="gate-group">
+      {onInstructions && (
+        <InstructionsButton
+          queued
+          disabled={blocked}
+          title={session.queuedInstructions ? 'Change the instructions the queued Open PR goes with' : 'Give the queued Open PR instructions for AgentK'}
+          onClick={onInstructions}
+        />
+      )}
       <span className="gate-pill" title={title}>
         {queuedText(session)}
       </span>
@@ -549,22 +584,14 @@ function StageBar({
     }
     case 'code': {
       if (session.queued === 'open-pr') {
-        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends');
+        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
         break;
       }
       const pr = openPrGate(session);
       reason = pr.reason;
       gate = (
         <span className="gate-group">
-          <button
-            className="btn small gate-note"
-            disabled={blocked || !!reason}
-            title={reason ?? 'Open PR with instructions for AgentK'}
-            aria-label="Open PR with instructions"
-            onClick={onOpenPr}
-          >
-            +<NotesIcon />
-          </button>
+          <InstructionsButton queued={false} disabled={blocked || !!reason} title={reason ?? 'Open PR with instructions for AgentK'} onClick={onOpenPr} />
           <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
             {pr.label}
           </button>
