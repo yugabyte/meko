@@ -679,14 +679,15 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
       .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/no longer on the host/) });
     expect(existsSync(join(stagedDir(pastes, p.id), a))).toBe(true);
 
-    const s = await env.core.sessions.create(p.id, { name: 'Fix the footer', prompt: 'It overflows on phones', start: 'code', images: [a, b] });
+    const s = await env.core.sessions.create(p.id, { name: 'Fix the footer', prompt: 'fix the footer: it overflows on phones', start: 'code', images: [a, b] });
     const paths = [a, b].map((i) => join(pastes, s.id, i));
     for (const path of paths) expect(readFileSync(path)).toEqual(png);
     expect(existsSync(join(stagedDir(pastes, p.id), a))).toBe(false);
     // Kept apart from the task, and added to it in Claude's prompts.
-    expect(env.core.sessions.row(s.id).initial_prompt).toBe('It overflows on phones');
+    expect(env.core.sessions.row(s.id).initial_prompt).toBe('fix the footer: it overflows on phones');
     const prompt = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args.at(-1);
-    expect(prompt).toContain(`Task: Fix the footer\n\nIt overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`);
+    // A prompt that starts with the name (in any case) isn't given it again.
+    expect(prompt).toContain(`Task: fix the footer: it overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`);
 
     // At Explore, images alone are a first prompt, but not a task: moving on offers to take one.
     const c = env.core.sessions.stageImage(p.id, png).id;

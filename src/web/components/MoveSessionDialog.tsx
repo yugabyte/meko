@@ -109,7 +109,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
           hint={instructionsHint(stage, send)}
           placeholder={stage === 'review' ? 'e.g. Open it as a draft.' : 'e.g. Keep the public API as it is.'}
         />
-        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage)}</p>
+        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage, asksTask && !!task.trim())}</p>
         <ErrorText error={error} />
       </form>
     </Dialog>

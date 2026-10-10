@@ -1734,7 +1734,8 @@ export class SessionManager {
     if (req.name !== undefined) {
       const name = sessionName(req.name);
       if (name !== r.name) {
-        this.update(id, { name });
+        // A task that was its name (no first prompt) follows it, or Claude would get both names.
+        this.update(id, r.initial_prompt === r.name && kindOf(r.kind) === 'task' ? { name, initial_prompt: name } : { name });
         this.event(id, 'renamed', `Renamed from "${r.name}" to "${name}"`);
         void this.retitleConversation(this.row(id));
       }

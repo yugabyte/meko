@@ -361,7 +361,9 @@ empty, longer than 100 characters or hold control characters. The project's acti
 rename, the session's Meko conversation is retitled in the background (`conversation_update`, in
 the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
 keeps the old title), and Claude reads the new name in its system prompt
-the next time it's launched. Claude Code's own name for the conversation (`--name`, given at the
+the next time it's launched, and at the head of the task in any later prompt that names it. A task
+that was its name (started at Design or Code with no first prompt) takes the new name too, so the
+task never carries both. Claude Code's own name for the conversation (`--name`, given at the
 first launch) stays. An archived session can't be renamed.
 
 ### Open project
@@ -1277,7 +1279,7 @@ stateDiagram-v2
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `instructions`, `attached`,
+  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
   `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
   Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
   `learn`) are added to a repo's own prompt too. This lets a team
@@ -1451,7 +1453,7 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   when that isn't clear. `move-design` revises the session's design if it has one and designs from
   code already on the branch, and gets the design questions line as `design` does. A repo's
   override of `design` or `code` doesn't change them; override `move-design` and `move-code` too.
-  The dialog's line on what the move does says so. The dialog doesn't offer a choice: what the user
+  The dialog's line on what the move does says so (or, with a task typed, that AgentK works on that task). The dialog doesn't offer a choice: what the user
   wants on a move back goes in its optional instructions (see below). The request's `prompt` flag is
   still honored, for pages from before (a move to Explore sends `explore`). A session with no task
   yet (one started at Explore without a first prompt) is offered an optional Task field: a task given
