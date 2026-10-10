@@ -1904,6 +1904,7 @@ export class SessionManager {
       removePastes(this.core.paths.pastes, row.id);
       removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
+      this.core.learn.forget(row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
@@ -2013,6 +2014,7 @@ export class SessionManager {
       removePastes(this.core.paths.pastes, row.id);
       removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
+      this.core.learn.forget(row.id);
     }
     removeStaged(this.core.paths.pastes, projectId);
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
