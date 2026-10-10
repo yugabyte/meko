@@ -6,7 +6,7 @@ import { hostname, userInfo } from 'node:os';
 import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
-import { TranscriptCapture } from './capture.js';
+import { mekoPluginKeys, TranscriptCapture } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
 import { PrReviewService } from './prreview.js';
@@ -287,7 +287,10 @@ export class Core extends EventEmitter {
   async start(): Promise<void> {
     this.stopped = false;
     this.tmuxMoved = false;
-    writeHookFiles(this.paths);
+    // With transcript capture off, sessions run without the Meko plugin: its own hooks would still
+    // send transcripts when a session compacts or ends. Its MCP server is configured apart from it,
+    // so Meko's tools stay, and the system prompt gives the conversation_id its SessionStart did.
+    writeHookFiles(this.paths, { disabledPlugins: this.capture.enabled ? [] : mekoPluginKeys() });
     try {
       if (!writeModFiles(this.paths)) this.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
     } catch (e) {

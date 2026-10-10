@@ -179,8 +179,11 @@ export function hooksSettingsPath(paths: Paths): string {
   return join(paths.run, 'hooks.json');
 }
 
-/** Writes the hook script and the --settings file every session is launched with. */
-export function writeHookFiles(paths: Paths): void {
+/**
+ * Writes the hook script and the --settings file every session is launched with. `disabledPlugins`
+ * (plugin keys) are turned off in sessions whatever the user's own settings say.
+ */
+export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] } = {}): void {
   mkdirSync(paths.run, { recursive: true });
   const script = hookScriptPath(paths);
   writeFileSync(script, HOOK_SCRIPT);
@@ -231,6 +234,7 @@ export function writeHookFiles(paths: Paths): void {
       Stop: all,
       SessionEnd: all,
     },
+    ...(opts.disabledPlugins?.length ? { enabledPlugins: Object.fromEntries(opts.disabledPlugins.map((k) => [k, false])) } : {}),
   };
   writeFileSync(hooksSettingsPath(paths), JSON.stringify(settings, null, 2));
 }

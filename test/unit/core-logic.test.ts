@@ -90,14 +90,14 @@ describe('config and db', () => {
     expect(back.server.port).toBe(7777);
   });
 
-  it('keeps Meko transcript capture on unless config.toml turns it off', () => {
-    expect(DEFAULT_CONFIG.meko.captureTranscripts).toBe(true);
+  it('keeps Meko transcript capture off unless config.toml turns it on', () => {
+    expect(DEFAULT_CONFIG.meko.captureTranscripts).toBe(false);
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.captureTranscripts = false;
+    cfg.meko.captureTranscripts = true;
     saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = false');
-    expect(loadConfig(paths).meko.captureTranscripts).toBe(false);
+    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = true');
+    expect(loadConfig(paths).meko.captureTranscripts).toBe(true);
   });
 
   it('has AgentK resolve merge conflicts unless config.toml turns it off', () => {

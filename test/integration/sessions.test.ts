@@ -183,6 +183,10 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
 
     const u = await env.core.sessions.create(p.id, { name: 'Unnamed', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(u.id).status, (st) => st === 'idle', 10000, 'first turn without Meko');
+    // Its system prompt gives the conversation_id, or how to make it when Meko didn't answer.
+    const system = (n: number) => { const a = argvLog(env)[n].args; return a[a.indexOf('--append-system-prompt') + 1]; };
+    expect(system(0)).toContain('Meko conversation_id for this session: "conv-1".');
+    expect(system(1)).toContain(`call conversation_create once with session_id "${u.claudeSessionId}"`);
   });
 
   it('renames a session, and its Meko conversation, but keeps its branch, worktree, pane and Meko agent id', async () => {
@@ -1243,7 +1247,7 @@ describe('with Meko transcript capture off', () => {
     await env.cleanup();
   });
 
-  it('sends no transcripts and keeps the Meko plugin timer from sending any', async () => {
+  it('sends no transcripts, runs sessions without the Meko plugin, and gives Claude a conversation_id itself', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
     const s = await env.core.sessions.create(p.id, { name: 'Quiet', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
@@ -1251,8 +1255,14 @@ describe('with Meko transcript capture off', () => {
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
     await env.core.sessions.action(s.id, 'archive');
     expect(captureLog(env)).toEqual([]);
-    expect(env.meko.calls.filter((c) => c.name === 'ensureConversation' && c.args[2] === s.claudeSessionId)).toEqual([]);
     // 2147483 s is the longest interval Node's setInterval honours; the plugin's timer never fires.
     expect(argvLog(env)[0].env.MEKO_CHECKPOINT_INTERVAL).toBe('2147483');
+    // The Meko plugin is off in sessions, so its own hooks send nothing at compaction or the end either.
+    const settings = JSON.parse(readFileSync(join(env.core.paths.run, 'hooks.json'), 'utf8'));
+    expect(settings.enabledPlugins['meko-agent-skills@meko-agent-skills']).toBe(false);
+    // Its SessionStart gave Claude the conversation_id Meko's tools require; the system prompt does now.
+    expect(env.meko.calls.filter((c) => c.name === 'ensureConversation' && c.args[2] === s.claudeSessionId)).toHaveLength(1);
+    const argv = argvLog(env)[0].args;
+    expect(argv[argv.indexOf('--append-system-prompt') + 1]).toContain('Meko conversation_id for this session: "conv-1".');
   });
 });

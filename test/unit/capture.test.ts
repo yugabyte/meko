@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TranscriptCapture, findMekoCaptureScript, mekoPluginInstalls } from '../../src/server/capture.js';
+import { TranscriptCapture, findMekoCaptureScript, mekoPluginInstalls, mekoPluginKeys } from '../../src/server/capture.js';
 import { silentLogger } from '../../src/server/log.js';
 import { FAKE_CAPTURE } from '../helpers.js';
 
@@ -33,6 +33,15 @@ describe('findMekoCaptureScript', () => {
     expect(findMekoCaptureScript(dir)).toBeNull();
     registry(dir, {});
     expect(findMekoCaptureScript(dir)).toBeNull();
+  });
+});
+
+describe('mekoPluginKeys', () => {
+  it("names the Meko plugin's keys in the registry, and the installer's key even without one", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akl-capture-'));
+    expect(mekoPluginKeys(dir)).toEqual(['meko-agent-skills@meko-agent-skills']);
+    registry(dir, { 'other@x': [], 'meko-agent-skills@team-fork': [], 'meko-agent-skills@meko-agent-skills': [] });
+    expect(mekoPluginKeys(dir).sort()).toEqual(['meko-agent-skills@meko-agent-skills', 'meko-agent-skills@team-fork']);
   });
 });
 

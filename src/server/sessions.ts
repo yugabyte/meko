@@ -17,7 +17,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
+import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoConversationLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
 import { HttpError } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
@@ -116,7 +116,7 @@ export const MISSED_START_MS = 20_000;
 const TRANSCRIPT_ACTIVE_MS = 15_000;
 /** How long stopping a session waits for its last turns to reach Meko. */
 const FINAL_CAPTURE_MS = 15000;
-/** How long a new session waits for its Meko conversation to be created before Claude starts anyway. */
+/** How long a launch waits for the session's Meko conversation (its id goes in the system prompt) before Claude starts anyway. */
 const NAME_CONVERSATION_MS = 5000;
 /** How many failed starts are kept for Try again. */
 const MAX_FAILED_STARTS = 20;
@@ -543,6 +543,7 @@ export class SessionManager {
     // A review searches on the PR: its title and description (where the author's design is
     // summed up), and the user's notes.
     this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), c.notes].filter(Boolean).join('\n') : task);
+    // Started now; launch() waits for it before Claude starts, and gives Claude its id.
     const naming = this.nameConversation(this.row(id));
     let sha: string | undefined;
     if (review) {
@@ -577,9 +578,8 @@ export class SessionManager {
     // A session on an existing branch is told so first, so it builds on the work there.
     const prompt = first && row.branch_reused && row.kind !== 'review-pr' ? `${this.prompt(row, 'attached', this.attachedVars(row))}\n\n${first}` : first;
     this.setStartup(id, 'launch');
-    await within(naming, NAME_CONVERSATION_MS);
     try {
-      await this.launch(row, { resume: false, prompt });
+      await this.launch(row, { resume: false, prompt, conversation: naming });
     } catch (e) {
       this.startup.delete(id);
       if (e instanceof HttpError && e.status === 409) throw e;
@@ -918,7 +918,7 @@ export class SessionManager {
   }
 
 
-  private systemPrompt(row: SessionRow): string {
+  private systemPrompt(row: SessionRow, conversationId: string | null): string {
     const p = projectRow(this.db, row.project_id);
     const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
@@ -935,7 +935,10 @@ export class SessionManager {
     if (shared.length) {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
-    if (dps.length) lines.push(mekoRecallSystemLine());
+    if (dps.length) {
+      lines.push(mekoConversationLine(conversationId, { claudeSessionId: row.claude_session_id, agentId: launchedAgentId(row), datapackId: dedicated?.id ?? null }));
+      lines.push(mekoRecallSystemLine());
+    }
     if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
     return lines.join('\n');
@@ -994,7 +997,8 @@ export class SessionManager {
    * Starts (or restarts) Claude in the session's pane in the session host. Callers mark the session as
    * creating or launching for the whole start (see `starting()`).
    */
-  async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null }): Promise<void> {
+  /** `conversation`: the session's Meko conversation id under way (a new session names it early). */
+  async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
     const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
@@ -1004,6 +1008,7 @@ export class SessionManager {
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
     const mod = await this.modDir();
+    const conversation = await this.launchConversation(row, opts.conversation);
     const script = writeLauncher(this.core.paths, {
       sessionId: row.id,
       worktree: row.worktree_path,
@@ -1014,7 +1019,7 @@ export class SessionManager {
       planMode: row.stage === 'design' && !!row.plan_mode,
       addDirs: [designDir],
       pluginDirs: mod ? [mod] : [],
-      appendSystemPrompt: this.systemPrompt(row),
+      appendSystemPrompt: this.systemPrompt(row, conversation),
       prompt: opts.prompt,
       env: this.env(row, !!mod),
       unsetEnv: SESSION_ENV_UNSET,
@@ -2015,15 +2020,17 @@ export class SessionManager {
    * conversation_create and ignores later creates and conversation_update, so
    * this has to come before the plugin's SessionStart hook, which titles every
    * conversation "Claude Code session (auto-captured)". Both key it by the
-   * Claude session id, so the hook's create lands on this conversation. Never throws.
+   * Claude session id, so the hook's create lands on this conversation. Its id, for the system
+   * prompt; null without a dedicated datapack or when Meko fails. Never throws.
    */
-  private async nameConversation(r: SessionRow): Promise<void> {
+  private async nameConversation(r: SessionRow): Promise<string | null> {
     const dp = dedicatedDatapack(this.db, r.project_id);
-    if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
+    if (!dp || !this.core.mekoStatus.configured) return null;
     try {
-      await this.conversationId(r, dp);
+      return await this.conversationId(r, dp);
     } catch (e) {
       this.core.log.warn(`naming the Meko conversation for ${r.id} failed`, errMsg(e));
+      return null;
     }
   }
 
@@ -2033,7 +2040,7 @@ export class SessionManager {
    */
   private async retitleConversation(r: SessionRow): Promise<void> {
     const dp = sessionDatapack(this.db, r);
-    if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
+    if (!dp || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);
       await this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id));
@@ -2050,6 +2057,27 @@ export class SessionManager {
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
     return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
+  }
+
+  /**
+   * The conversation_id for the system prompt of a Claude about to start: the session's
+   * conversation in its project's dedicated datapack, else the project's own (sessions of a project
+   * with only shared datapacks); null when Meko is off, fails or takes too long, and the prompt
+   * then says how to make it.
+   */
+  private async launchConversation(r: SessionRow, pending?: Promise<string | null>): Promise<string | null> {
+    if (!this.core.mekoStatus.configured || !this.sessionDatapacks(r.project_id).length) return null;
+    const dp = dedicatedDatapack(this.db, r.project_id);
+    const conv = dp ? (pending ?? this.conversationId(r, dp)) : this.core.projects.ensureConversation(r.project_id, NAME_CONVERSATION_MS);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([conv, new Promise<null>((res) => (timer = setTimeout(() => res(null), NAME_CONVERSATION_MS)))]);
+    } catch (e) {
+      this.core.log.warn(`the Meko conversation for ${r.id} isn't there; its prompt says how to make it`, errMsg(e));
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ---- token usage ----

@@ -15,7 +15,8 @@ export interface Config {
   repos: { roots: string[]; depth: number; cloneInto: string };
   update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
   /**
-   * captureTranscripts: send session transcripts to Meko conversations (false turns that off, e.g. to spare an overloaded Meko).
+   * captureTranscripts: send session transcripts to Meko conversations. Off by default until Meko's capture stops
+   * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
    * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
    * enabled: false turns Meko off even when a key is set (here, in the environment or in Claude
    * Code's settings); AgentK then works without datapacks.
@@ -53,7 +54,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: true },
+  meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
   claude: { command: 'claude', mod: true },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
