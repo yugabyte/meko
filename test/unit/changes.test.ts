@@ -91,20 +91,4 @@ describe('changes parsing', () => {
     expect(newFilePatch('a\nb\n')).toBe('@@ -0,0 +1,2 @@\n+a\n+b');
     expect(newFilePatch('')).toBe('');
   });
-
-  it('turns a patch into numbered display lines', () => {
-    const lines = parsePatch('diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -3,3 +3,3 @@ fn\n keep\n-old\n+new\n--dashes\n\\ No newline at end of file');
-    expect(lines.map((l) => [l.kind, l.old, l.new, l.text])).toEqual([
-      ['hunk', null, null, '@@ -3,3 +3,3 @@ fn'],
-      ['ctx', 3, 3, 'keep'],
-      ['del', 4, null, 'old'],
-      ['add', null, 4, 'new'],
-      ['del', 5, null, '-dashes'],
-      ['note', null, null, 'No newline at end of file'],
-    ]);
-    expect(parsePatch('diff --git a/m b/m\nold mode 100644\nnew mode 100755')).toEqual([
-      { kind: 'meta', text: 'old mode 100644', old: null, new: null },
-      { kind: 'meta', text: 'new mode 100755', old: null, new: null },
-    ]);
-  });
 });

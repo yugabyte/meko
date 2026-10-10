@@ -57,21 +57,13 @@ describe('repos with no commits yet (real session host + git, fake claude)', () 
     expect(commits(dir)).toBe('Initial commit');
   });
 
-  it('makes an empty folder typed under Other folder a repo', async () => {
-    const dir = join(env.home, 'elsewhere', 'empty');
-    mkdirSync(dir, { recursive: true });
-    const p = await openFolder(dir);
-    expect(p.repoPath).toBe(dir);
-    expect(commits(dir)).toBe('Initial commit');
-    expect(readdirSync(dir)).toEqual(['.git']);
-  });
-
-  it('makes one repo when two opens of the same empty folder run at once', async () => {
+  it('makes an empty folder typed under Other folder a repo, once when two opens of it run at once', async () => {
     const dir = join(env.home, 'elsewhere', 'empty');
     mkdirSync(dir, { recursive: true });
     const [a, b] = await Promise.all([openFolder(dir, 'One'), openFolder(dir, 'Two')]);
     expect([a.repoPath, b.repoPath]).toEqual([dir, dir]);
     expect(commits(dir)).toBe('Initial commit');
+    expect(readdirSync(dir)).toEqual(['.git']);
   });
 
   it('writes nothing to the folder when the open is refused for a taken name', async () => {

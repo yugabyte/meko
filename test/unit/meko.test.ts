@@ -200,24 +200,9 @@ describe('Meko client', () => {
     await client.addMemory('z', 'd1', 'agent', 'conv');
   });
 
-  it('traces a read sent again after a transport failure as two attempts, and a failure with no reply', async () => {
+  it('never sends a write twice after it may have reached Meko, but retries reads, tracing that as two attempts with no reply', async () => {
     const traces: MekoTrace[] = [];
     client.onTrace = (t) => traces.push(t);
-    meko.drop.add('context_search');
-    await expect(client.search('q', { id: 'd1', name: 'dp' }, 'agent', 'conv')).rejects.toThrow();
-    expect(traces).toEqual([expect.objectContaining({ tool: 'context_search', ok: false, attempts: 2, text: null, error: expect.any(String) })]);
-  });
-
-  it('uses the service conversation when Meko creates one', async () => {
-    meko.tools.conversation_create = () => ({ id: 'conv-1' });
-    meko.tools.datapack_list = () => [];
-    await client.listDatapacks();
-    await client.listDatapacks();
-    expect(meko.calls.filter((c) => c.name === 'conversation_create')).toHaveLength(1);
-    expect(meko.calls.filter((c) => c.name === 'datapack_list').map((c) => c.args.conversation_id)).toEqual(['conv-1', 'conv-1']);
-  });
-
-  it('never sends a write twice after it may have reached Meko, but retries reads', async () => {
     meko.drop.add('memory_add');
     await expect(client.addMemory('x', 'd1', 'agent', 'conv')).rejects.toThrow();
     expect(meko.calls.filter((c) => c.name === 'memory_add')).toHaveLength(1);
@@ -225,6 +210,10 @@ describe('Meko client', () => {
     meko.drop.add('context_search');
     await expect(client.search('q', { id: 'd1', name: 'dp' }, 'agent', 'conv')).rejects.toThrow();
     expect(meko.calls.filter((c) => c.name === 'context_search')).toHaveLength(2);
+    expect(traces).toEqual([
+      expect.objectContaining({ tool: 'memory_add', ok: false, attempts: 1 }),
+      expect.objectContaining({ tool: 'context_search', ok: false, attempts: 2, text: null, error: expect.any(String) }),
+    ]);
   });
 
   it('drops a connection opened with the old URL when it is reset while connecting', async () => {

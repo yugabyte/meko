@@ -241,6 +241,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 6. Tests, docs, release
 
 - [ ] `npm run typecheck`, `npm run lint` and `npm test` pass; new behavior has a test.
+- [ ] **No redundant or needless tests.** A test earns its place by catching a bug no other test
+      would. Flag (minor) a test that repeats a case another test already covers (the same path
+      reached through another entry point, or the same assertion with different values), one
+      that checks a library, the language, a type or a constant rather than our code, one that
+      asserts internals (call counts, private state) where the result a caller sees would do, and
+      one that only restates copy or a config value. Cases of one rule go in one table-driven test
+      (`it.each`), and a fix extends the nearest existing test rather than adding a new one or a
+      new file. Name which tests to drop or merge. Doc-only, comment-only and pure-refactor
+      changes need no new tests.
 - [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.md`,
       `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not

@@ -303,12 +303,7 @@ describe("Meko's setup package", () => {
     expect(existsSync(out)).toBe(false);
   });
 
-  it('passes on the setup exit code', async () => {
-    const { pkg, fetchImpl } = fakePackage('process.exit(2);');
-    expect(await runMekoSetup(pkg, { url: 'u', apiKey: 'k', fetchImpl })).toBe(2);
-  });
-
-  it('hands its output to log line by line when asked (the server has no terminal)', async () => {
+  it('hands its output to log line by line when asked (the server has no terminal), and passes on the exit code', async () => {
     const { pkg, fetchImpl } = fakePackage("process.stdout.write('one\\ntwo'); process.stderr.write('oops\\n'); process.exit(3);");
     const lines: string[] = [];
     expect(await runMekoSetup(pkg, { url: 'u', apiKey: 'k', fetchImpl, log: (l) => lines.push(l) })).toBe(3);

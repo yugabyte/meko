@@ -1,40 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  defaultTarget, kindOf, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps, stepOf,
+  defaultTarget, kindOf, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps,
 } from '../../src/shared/stages.js';
-import { KIND_STAGES, START_EXAMPLES, START_HINTS, START_STAGES, STAGE_LABELS, type MoveTarget, type Stage } from '../../src/shared/types.js';
+import type { MoveTarget, Stage } from '../../src/shared/types.js';
 
 describe('stage moves', () => {
-  it('shows the PR stage as part of PR & Review', () => {
-    expect(stepOf('pr')).toBe('review');
-    expect(stepOf('code')).toBe('code');
-    expect(STAGE_LABELS.pr).toBe('PR & Review');
-    expect(STAGE_LABELS.review).toBe('PR & Review');
-  });
-
-  it('runs every task on one pipeline, started at Explore, Design or Code', () => {
-    expect(KIND_STAGES.task).toEqual(['explore', 'design', 'code', 'review', 'merge']);
-    expect(START_STAGES).toEqual(['explore', 'design', 'code']);
-    for (const s of [...START_STAGES, 'review-pr'] as const) expect(START_HINTS[s]).toBeTruthy();
-  });
-
-  it('gives every start its own example name and first prompt', () => {
-    const starts = [...START_STAGES, 'review-pr'] as const;
-    for (const s of starts) {
-      expect(START_EXAMPLES[s].name).toBeTruthy();
-      expect(START_EXAMPLES[s].prompt).toMatch(/^e\.g\. /);
-    }
-    expect(new Set(starts.map((s) => START_EXAMPLES[s].name)).size).toBe(starts.length);
-    expect(new Set(starts.map((s) => START_EXAMPLES[s].prompt)).size).toBe(starts.length);
-    // Design's example is a feature with choices to make, not a quick fix (that's Code's).
-    expect(START_EXAMPLES.design.name).not.toMatch(/^fix\b/);
-  });
-
-  it('moves a task to any stage but Merge & Close', () => {
-    expect(moveTargets('task')).toEqual(['explore', 'design', 'code', 'review']);
-  });
-
-  it('reads the stored kind, old type names included, as task or review-pr', () => {
+  it('moves a task, old type names included, to any stage but Merge & Close', () => {
     for (const k of ['explore', 'plan', 'quick', 'task'] as const) {
       expect(kindOf(k)).toBe('task');
       expect(moveTargets(k)).toEqual(['explore', 'design', 'code', 'review']);
@@ -93,9 +64,6 @@ describe('stage moves', () => {
   });
 
   it('keeps a Review a PR session in its one stage', () => {
-    expect(KIND_STAGES['review-pr']).toEqual(['reviewing-pr']);
-    expect(STAGE_LABELS['reviewing-pr']).toBe('Reviewing PR');
-    expect(stepOf('reviewing-pr')).toBe('reviewing-pr');
     expect(moveTargets('review-pr')).toEqual([]);
     expect(moveBlockedIn('reviewing-pr')).toBe("A Review a PR session can't be moved to another stage.");
     expect(moveError({ kind: 'review-pr', stage: 'reviewing-pr' }, 'code')).toBe("A Review a PR session can't be moved to another stage.");

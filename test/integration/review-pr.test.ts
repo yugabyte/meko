@@ -238,9 +238,6 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     const b = await env.core.sessions.create(p.id, { name: 'b', kind: 'review-pr', repoPath: other, pr: { repo: 'acme/other', number: 7 } });
     expect(env.core.sessions.get(b.id)).toMatchObject({ branch: 'ak_me/review-pr-7-2', repoPath: other, reviewingPr: { repo: 'acme/other' } });
     expect(git(env.core.sessions.get(b.id).worktreePath, 'rev-parse', 'HEAD')).toBe(git(otherAuthor, 'rev-parse', 'HEAD'));
-    // A repo that isn't a clone of the PR's repo is refused.
-    await expect(env.core.sessions.create(p.id, { name: 'c', kind: 'review-pr', repoPath: other, pr: { repo: 'acme/demo', number: 7 } }))
-      .rejects.toMatchObject({ status: 400, message: expect.stringMatching(/other isn't a clone of acme\/demo/) });
     // Discard ends a review too, and takes the PR's head ref with it.
     await env.core.sessions.action(a.id, 'discard', { skipLearn: true });
     expect(() => git(fork, 'rev-parse', '--verify', '--quiet', 'refs/agentk/pr/7')).toThrow();
@@ -385,7 +382,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     gh.people.set('acme/api#4', { title: 'API change', author: 'me', users: ['alice', 'bob'], teams: [] });
     gh.people.set('acme/demo#21', { title: 'Demo change', author: 'me', users: ['alice', 'me', 'carol'], teams: ['acme/platform'] });
     gh.profiles.set('alice', { name: 'Alice', email: 'alice@example.com' });
-    env.core.prReview.rememberEmail('carol', 'carol@example.com');
+    env.core.prReview.rememberEmail('Carol', 'carol@example.com'); // whatever the login's case
     env.core.prReview.rememberEmail('bad login!', 'x@example.com'); // ignored
     const r = await env.core.prReview.reviewers(p.id);
     expect(r.map((x) => [x.repo, x.number, x.title])).toEqual([['acme/demo', 21, 'Demo change'], ['acme/api', 4, 'API change']]);

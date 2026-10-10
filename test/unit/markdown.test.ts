@@ -28,11 +28,6 @@ describe('markdown designs', () => {
     expect(html).toBe(marked.parse(md, { async: false }));
   });
 
-  it('renders a design without diagrams as before', () => {
-    const md = '# Design\n\n- [x] done\n- [ ] todo\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n[link](https://example.com) <b>raw</b>\n';
-    expect(renderMarkdown(md)).toEqual({ html: marked.parse(md, { async: false }), diagrams: [] });
-  });
-
   it('keeps diagram source text out of the HTML, even when it looks like HTML', () => {
     const { html, diagrams } = renderMarkdown('```mermaid\ngraph TD\n  a["<img src=x onerror=alert(1)>"]\n```\n');
     expect(html).not.toContain('<img');

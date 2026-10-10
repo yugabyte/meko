@@ -51,10 +51,8 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
     const row = env.core.sessions.row(s.id);
 
-    // The launcher: the worktree, the design folder and HOME in the local spelling.
+    // HOME in the local spelling (launcher-local-path.test runs a launcher for the worktree and flags).
     const launcher = readFileSync(join(env.core.paths.run, `${s.id}.sh`), 'utf8');
-    expect(launcher).toContain(`cd '${local(row.worktree_path)}' || exit 1`);
-    expect(launcher).toContain(`'--add-dir' '${local(join(env.core.paths.designs, s.id))}'`);
     expect(launcher).toContain(`export HOME='${local(homedir())}'`);
 
     // Started there, the worktree isn't tied back to its repo's trust, so it's trusted itself.

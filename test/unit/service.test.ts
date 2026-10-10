@@ -69,18 +69,13 @@ describe('service templates', () => {
     expect(out.server).not.toContain('AbandonProcessGroup');
   });
 
-  it('renders the systemd units: the session host, and the server that wants it', () => {
+  it('renders the systemd units: the session host, and the server that wants it, run only on this host and not restarted when busy', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
     const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
     expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local host\n');
     expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local serve');
     expect(out.server).toContain('Wants=agent-k-local-host.service\n');
     expect(out.server).not.toContain('tmux');
-  });
-
-  it('runs the systemd units only on the host they were installed on, and never restarts a refused server', () => {
-    const svc = new SystemdServices(() => ok, {}, '/home/me');
-    const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
     // A home shared over NFS: every other host that mounts it would start its own server on it.
     for (const text of Object.values(out)) {
       expect(text).not.toContain('@');
@@ -257,21 +252,14 @@ describe('LaunchdServices', () => {
 
   const agents = () => join(home, 'Library', 'LaunchAgents');
 
-  it('keeps its property lists in ~/Library/LaunchAgents', () => {
-    const { svc } = make();
-    expect(svc.file('server')).toBe(join(agents(), 'com.yugabyte.agent-k-local.plist'));
-    expect(svc.file('host')).toBe(join(agents(), 'com.yugabyte.agent-k-local.host.plist'));
-  });
-
-  it('loads both jobs on a fresh install, the host first', () => {
+  it('loads both jobs from ~/Library/LaunchAgents on a fresh install, the host first', () => {
     const { svc, calls, loaded } = make();
+    expect(svc.state('host')).toEqual({ running: false, text: 'not loaded' });
     svc.install(files);
-    expect(calls).toEqual([
-      `bootstrap gui/501 ${svc.file('host')}`,
-      `bootstrap gui/501 ${svc.file('server')}`,
-    ]);
+    const host = join(agents(), 'com.yugabyte.agent-k-local.host.plist');
+    expect(calls).toEqual([`bootstrap gui/501 ${host}`, `bootstrap gui/501 ${join(agents(), 'com.yugabyte.agent-k-local.plist')}`]);
     expect([...loaded]).toEqual(['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local']);
-    expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
+    expect(readFileSync(host, 'utf8')).toBe(files.host);
     expect(svc.state('server')).toEqual({ running: true, text: 'running' });
   });
 
@@ -346,10 +334,6 @@ describe('LaunchdServices', () => {
     expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('host')}`]);
   });
 
-  it('reports an unloaded job', () => {
-    expect(make().svc.state('host')).toEqual({ running: false, text: 'not loaded' });
-  });
-
   it('removes both jobs and their files', () => {
     const { svc, calls, loaded } = make();
     svc.install(files);
@@ -359,9 +343,5 @@ describe('LaunchdServices', () => {
     expect(loaded.size).toBe(0);
     expect(existsSync(svc.file('server'))).toBe(false);
     expect(existsSync(svc.file('host'))).toBe(false);
-  });
-
-  it('says the services start at login', () => {
-    expect(make().svc.bootCheck()).toMatchObject({ ok: true, label: 'Starts', detail: 'when you log in to this Mac' });
   });
 });

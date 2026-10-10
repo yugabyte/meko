@@ -325,7 +325,7 @@ describe('moves: moving a task session between stages', () => {
     expect(row(s.id).stage).toBe('code');
   });
 
-  it('refuses moves that make no sense, and while AgentK or the session is busy', async () => {
+  it('refuses moves that make no sense, and while AgentK or the session is busy or archived', async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
     await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Nothing to change: this session is already in Code.' });
     await expect(move(s.id, { stage: 'merge' } as unknown as MoveSessionRequest)).rejects.toMatchObject({ status: 400 });
@@ -347,6 +347,8 @@ describe('moves: moving a task session between stages', () => {
     const legacy = await session({ prompt: 'plan it', name: 'Old style' });
     env.core.sessions.update(legacy.id, { plan_mode: 1 });
     await expect(move(legacy.id, { stage: 'code' })).rejects.toMatchObject({ status: 409, message: /plan mode/ });
+    await env.core.sessions.action(legacy.id, 'archive');
+    await expect(move(legacy.id, { stage: 'code', task: 'x' })).rejects.toMatchObject({ status: 409, message: 'This session is archived.' });
   });
 
   it("keeps a move whose prompt couldn't be typed, but rolls back a PR prompt that couldn't", async () => {
@@ -359,11 +361,5 @@ describe('moves: moving a task session between stages', () => {
     vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(move(t.id, { stage: 'review' })).rejects.toMatchObject({ status: 502 });
     expect(get(t.id)).toMatchObject({ stage: 'explore', busy: false });
-  });
-
-  it('refuses to move an archived session', async () => {
-    const s = await session({ start: 'explore' });
-    await env.core.sessions.action(s.id, 'archive');
-    await expect(move(s.id, { stage: 'code', task: 'x' })).rejects.toMatchObject({ status: 409, message: 'This session is archived.' });
   });
 });

@@ -100,7 +100,8 @@ describe('Open project on a new repo', () => {
 
   it('refuses names that are not one plain folder name, creating nothing', async () => {
     const before = readdirSync(code).sort();
-    for (const n of ['../x', 'a/b', '-x', '.', '..', '.git', ' ', 'a b', 'x'.repeat(101)]) {
+    // One name per rule (test/unit/new-repo-name.test.ts has the rest).
+    for (const n of ['../x', '..', ' ', 'x'.repeat(101)]) {
       await expect(open(n), n).rejects.toMatchObject({ status: 400 });
     }
     expect(readdirSync(code).sort()).toEqual(before);

@@ -59,9 +59,8 @@ describe('matching excerpt lines', () => {
     expect(sameLine(long, 'z'.repeat(4000))).toBe(false);
   });
 
-  it('anchors a comment whose stored last line was cut short', () => {
+  it('finds a comment whose stored lines were cut short after its line moved', () => {
     const lines = parsePatch(['@@ -1,1 +1,2 @@', ' a', `+${long}`].join('\n'));
-    expect(anchorComment(lines, { side: 'new', endLine: 2, excerpt: long.slice(-4000) })).toBe(2);
     expect(anchorComment(lines, { side: 'new', endLine: 9, excerpt: `a\n${long.slice(0, 4000)}` })).toBe(2);
   });
 });

@@ -154,9 +154,12 @@ npm run dev                                     # API on 127.0.0.1:7777, Vite on
   **AgentK**; **Claude** is only for the Claude Code process and its terminal (starting, exits,
   Resume, typing into it). Prompts sent to Claude still address Claude.
 - The server is the source of truth; the UI renders `AppState` pushed over `/ws/events`.
-- Tests: new behavior gets a test. Integration tests use a real session host and git; GitHub is mocked with
-  `vi.mock('../../src/server/github.js')`. Tests must never touch the real `~/.claude.json` or Meko
-  (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
+- Tests: new behavior gets a test, and only one: before adding a test, look for one that already
+  covers the path and extend it (cases of one rule go in one `it.each` table). Don't test
+  libraries, constants or copy, and don't assert internals where the visible result would do;
+  REVIEW.md §6 flags redundant tests. Integration tests use a real session host and git; GitHub
+  is mocked with `vi.mock('../../src/server/github.js')`. Tests must never touch the real
+  `~/.claude.json` or Meko (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
   `CLAUDE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits and PR titles: `<type>[(<component>)][!]: <summary>` with one of nine types, checked by

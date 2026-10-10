@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { commitsAfter } from '../../src/server/lifecycle.js';
-import { datapackIdsIn, localClone, reviewerEmailKey } from '../../src/server/prreview.js';
+import { datapackIdsIn, localClone } from '../../src/server/prreview.js';
 
 const repo = (name: string, remote: string | null, upstream: string | null = null, lastTouchedAt = 0) =>
   ({ name, path: `/code/${name}`, remote, upstream, lastTouchedAt });
@@ -32,9 +32,5 @@ describe('PR descriptions and new commits', () => {
     expect(commitsAfter(['a', 'b', 'c'], 'c')).toBe(0);
     expect(commitsAfter(['x', 'y'], 'a')).toBeNull();
     expect(commitsAfter([], null)).toBeNull();
-  });
-
-  it('remembers emails by GitHub login, whatever its case', () => {
-    expect(reviewerEmailKey('Bob-1')).toBe('reviewer-email:bob-1');
   });
 });

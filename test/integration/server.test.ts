@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import type { Config } from '../../src/server/config.js';
 import { buildServer, stampVersion } from '../../src/server/server.js';
 import { shortHost } from '../../src/server/core.js';
 import { issueSetupToken, totpCode } from '../../src/server/auth.js';
@@ -95,26 +96,19 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(next.statusCode).toBe(204);
   });
 
-  it('takes a valid setup link while sign-in is rate limited, so a locked-out owner gets back in', async () => {
+  it('rate limits failed logins, but takes a valid setup link meanwhile, so a locked-out owner gets back in', async () => {
     await setup();
     for (let i = 0; i < 5; i++) {
       await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'wrong' } });
     }
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery' } });
+    expect(login.statusCode).toBe(429);
     const reset = (token: string) => app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'a brand new passphrase' } });
     const token = issueSetupToken(env.core.db);
     // A wrong token is still refused by the limit, and doesn't use up the real one.
     expect((await reset('not-the-token')).statusCode).toBe(429);
     expect((await reset(token)).statusCode).toBe(204);
     expect((await reset(token)).statusCode).toBe(429);
-  });
-
-  it('rate limits failed logins', async () => {
-    await setup();
-    for (let i = 0; i < 5; i++) {
-      await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'wrong' } });
-    }
-    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'me', password: 'correct horse battery' } });
-    expect(res.statusCode).toBe(429);
   });
 
   it('enforces TOTP once enrolled', async () => {
@@ -137,9 +131,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(replay.statusCode).toBe(401);
   });
 
-  it('returns one project, behind the login, and 404 once it is closed', async () => {
+  it('returns one project, and 404 once it is closed', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'One', datapack: { mode: 'none' } });
-    expect((await app.inject({ url: `/api/projects/${p.id}` })).statusCode).toBe(401);
     const cookie = await setup();
     const res = await app.inject({ url: `/api/projects/${p.id}`, headers: { cookie } });
     expect(res.statusCode).toBe(200);
@@ -172,52 +165,28 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect((await state()).serverName).toBe(shortHost(hostname()));
   });
 
-  it('turns usage stats off and on from Settings', async () => {
+  it.each([
+    ['usage stats', 'callHomeEnabled', (c: Config) => c.callHome.enabled, '[call_home]\nenabled = false', 'call_home'],
+    ['resolving merge conflicts', 'resolveConflicts', (c: Config) => c.pr.resolveConflicts, '[pr]\nresolve_conflicts = false', 'resolve_conflicts'],
+  ] as const)('turns %s off and on from Settings', async (_name, key, live, written, tomlKey) => {
     const cookie = await setup();
-    const put = (callHomeEnabled: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { callHomeEnabled } });
-    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().callHomeEnabled).toBe(true);
+    const settings = async () => (await app.inject({ url: '/api/settings', headers: { cookie } })).json()[key];
+    const put = (value: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { [key]: value } });
+    expect(await settings()).toBe(true);
 
     const off = await put(false);
     expect(off.statusCode).toBe(200);
-    expect(off.json().callHomeEnabled).toBe(false);
-    expect(env.core.config.callHome.enabled).toBe(false);
-    expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[call_home\]\nenabled = false/);
-    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().callHomeEnabled).toBe(false);
+    expect(off.json()[key]).toBe(false);
+    expect(live(env.core.config)).toBe(false);
+    expect(readFileSync(env.core.paths.config, 'utf8')).toContain(written);
+    expect(await settings()).toBe(false);
 
     const bad = await put('no');
     expect(bad.statusCode).toBe(400);
-    expect(bad.json().error).toBe('callHomeEnabled must be true or false.');
+    expect(bad.json().error).toBe(`${key} must be true or false.`);
 
-    expect((await put(true)).json().callHomeEnabled).toBe(true);
-    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain('call_home');
-  });
-
-  it('turns resolving merge conflicts off and on from Settings', async () => {
-    const cookie = await setup();
-    const put = (resolveConflicts: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { resolveConflicts } });
-    expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().resolveConflicts).toBe(true);
-
-    const off = await put(false);
-    expect(off.statusCode).toBe(200);
-    expect(off.json().resolveConflicts).toBe(false);
-    expect(env.core.config.pr.resolveConflicts).toBe(false);
-    expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[pr\]\nresolve_conflicts = false/);
-
-    const bad = await put('no');
-    expect(bad.statusCode).toBe(400);
-    expect(bad.json().error).toBe('resolveConflicts must be true or false.');
-
-    expect((await put(true)).json().resolveConflicts).toBe(true);
-    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain('resolve_conflicts');
-  });
-
-  it('refuses cross-origin writes', async () => {
-    const cookie = await setup();
-    const res = await app.inject({
-      method: 'POST', url: '/api/projects', headers: { cookie, origin: 'https://evil.example', host: 'devbox:7777' },
-      payload: {},
-    });
-    expect(res.statusCode).toBe(403);
+    expect((await put(true)).json()[key]).toBe(true);
+    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain(tomlKey);
   });
 
   it('creates a project and a session through the API', async () => {
@@ -272,7 +241,6 @@ describe('HTTP API: auth, origin checks, projects', () => {
     await waitFor(() => env.core.state().failedStarts, (f) => f.length === 1, 10000, 'the failed start');
     expect((await app.inject({ url: '/api/state', headers: { cookie } })).json().failedStarts).toMatchObject([{ id: failing.json().id, name: 'No base' }]);
     const dismiss = `/api/failed-starts/${encodeURIComponent(failing.json().id)}`;
-    expect((await app.inject({ method: 'DELETE', url: dismiss })).statusCode).toBe(401);
     expect((await app.inject({ method: 'DELETE', url: dismiss, headers: { cookie } })).statusCode).toBe(204);
     expect(env.core.state().failedStarts).toEqual([]);
     const home = (await app.inject({ url: `/api/projects/${pid}/home`, headers: { cookie } })).json();
@@ -283,12 +251,10 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const changes = await app.inject({ url: `/api/sessions/${s.json().id}/changes`, headers: { cookie } });
     expect(changes.statusCode).toBe(200);
     expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0 });
-    expect((await app.inject({ url: `/api/sessions/${s.json().id}/changes` })).statusCode).toBe(401);
 
-    // Renaming: behind login and the origin check, the body checked.
+    // Renaming: behind the origin check, the body checked.
     const rename = (payload: unknown, headers: Record<string, string> = { cookie }) =>
       app.inject({ method: 'PATCH', url: `/api/sessions/${s.json().id}`, headers, payload: payload as object });
-    expect((await rename({ name: 'Renamed' }, {})).statusCode).toBe(401);
     expect((await rename({ name: 'Renamed' }, { cookie, origin: 'https://evil.example' })).statusCode).toBe(403);
     expect((await rename({ name: ['x'] })).statusCode).toBe(400);
     expect((await rename({ name: '' })).json().error).toBe('Give the session a name.');
@@ -297,11 +263,9 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json()).toMatchObject({ name: 'Renamed', branch: 'ak/api-session' });
 
-    // Review comments: create, edit and delete drafts; everything behind login.
+    // Review comments: create, edit and delete drafts.
     const url = `/api/sessions/${s.json().id}/comments`;
     const draft = { path: 'a.ts', side: 'new', line: 1, endLine: 1, excerpt: 'x', body: 'Why?' };
-    expect((await app.inject({ method: 'POST', url, payload: draft })).statusCode).toBe(401);
-    expect((await app.inject({ url })).statusCode).toBe(401);
     const bad = await app.inject({ method: 'POST', url, headers: { cookie }, payload: { ...draft, body: ' ' } });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toMatch(/Write something/);
@@ -319,13 +283,12 @@ describe('HTTP API: auth, origin checks, projects', () => {
     const nothing = await app.inject({ method: 'POST', url: `${url}/send`, headers: { cookie } });
     expect(nothing.statusCode).toBe(409);
 
-    // Answers to the design: behind login, and only in Design (this session started at Code). They
+    // Answers to the design: only in Design (this session started at Code). They
     // aren't stored, so there's nothing to list, change or delete.
     const design = await app.inject({ url: `/api/sessions/${s.json().id}/design`, headers: { cookie } });
     expect(design.json()).toMatchObject({ markdown: null, questions: [], questionsSource: null });
     const answers = `/api/sessions/${s.json().id}/design/answers`;
     const feedback = { answers: [], feedback: 'Hi' };
-    expect((await app.inject({ method: 'POST', url: answers, payload: feedback })).statusCode).toBe(401);
     const early = await app.inject({ method: 'POST', url: answers, headers: { cookie }, payload: feedback });
     expect(early.statusCode).toBe(409);
     expect(early.json().error).toMatch(/only be sent while the session is in Design/);
@@ -336,11 +299,10 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(approve.statusCode).toBe(409);
     expect(approve.json().error).toMatch(/past the Design stage/);
 
-    // Image previews: behind login, images only, served so the browser never runs them.
+    // Image previews: images only, served so the browser never runs them.
     const sid = s.json().id;
-    const img = (q: string, withCookie = true) => app.inject({ url: `/api/sessions/${sid}/changes/image?${q}`, headers: withCookie ? { cookie } : {} });
+    const img = (q: string) => app.inject({ url: `/api/sessions/${sid}/changes/image?${q}`, headers: { cookie } });
     writeFileSync(join(s.json().worktreePath, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
-    expect((await img('path=pic.png&side=new', false)).statusCode).toBe(401);
     expect((await img('path=pic.png&side=sideways')).statusCode).toBe(400);
     expect((await img('path=README.md&side=new')).statusCode).toBe(400);
     expect((await img('path=pic.png&side=old')).statusCode).toBe(404);
@@ -351,11 +313,10 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(pic.headers['x-content-type-options']).toBe('nosniff');
     expect(pic.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
 
-    // Pasted images: behind login and the origin check, images only, saved for Claude to read by path.
+    // Pasted images: behind the origin check, images only, saved for Claude to read by path.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
     const paste = (payload: Buffer | string | object, headers: Record<string, string> = {}) =>
       app.inject({ method: 'POST', url: `/api/sessions/${sid}/images`, headers: { cookie, 'content-type': 'image/png', ...headers }, payload });
-    expect((await paste(png, { cookie: '' })).statusCode).toBe(401);
     expect((await paste(png, { origin: 'https://evil.example' })).statusCode).toBe(403);
     expect((await paste('just text', { 'content-type': 'text/plain' })).statusCode).toBe(415);
     expect((await paste({ path: '/etc/passwd' }, { 'content-type': 'application/json' })).statusCode).toBe(415);
@@ -377,10 +338,9 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(existsSync(join(env.core.paths.pastes, sid))).toBe(false);
     expect((await paste(png)).statusCode).toBe(409);
 
-    // Images added in the New session dialog: behind login and the origin check, staged under the project.
+    // Images added in the New session dialog: behind the origin check, staged under the project.
     const stage = (payload: Buffer | string, headers: Record<string, string> = {}, project = pid) =>
       app.inject({ method: 'POST', url: `/api/projects/${project}/images`, headers: { cookie, 'content-type': 'image/png', ...headers }, payload });
-    expect((await stage(png, { cookie: '' })).statusCode).toBe(401);
     expect((await stage(png, { origin: 'https://evil.example' })).statusCode).toBe(403);
     expect((await stage('just text', { 'content-type': 'text/plain' })).statusCode).toBe(415);
     expect((await stage(Buffer.from('<svg/>'), { 'content-type': 'image/svg+xml' })).statusCode).toBe(415);
@@ -424,12 +384,8 @@ describe('web app: manifest and icons for the installed app', () => {
   /** Width and height from a PNG's IHDR chunk. */
   const pngSize = (b: Buffer) => ({ png: b.subarray(1, 4).toString() === 'PNG', w: b.readUInt32BE(16), h: b.readUInt32BE(20) });
 
-  it('links the manifest from index.html', async () => {
-    const res = await app.inject({ url: '/' });
-    expect(res.body).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
-  });
-
-  it('serves the manifest and its square icons without sign-in', async () => {
+  it('links the manifest from index.html, and serves it and its square icons without sign-in', async () => {
+    expect((await app.inject({ url: '/' })).body).toContain('<link rel="manifest" href="/manifest.webmanifest" />');
     const res = await app.inject({ url: '/manifest.webmanifest' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^application\/manifest\+json/);
@@ -448,7 +404,6 @@ describe('web app: manifest and icons for the installed app', () => {
       expect(img.statusCode, url).toBe(200);
       expect(pngSize(img.rawPayload), url).toEqual({ png: true, w: size, h: size });
     }
-    expect((await app.inject({ url: '/api/state' })).statusCode).toBe(401);
   });
 
   it('serves the service worker as a script at the root, so its scope is the whole app', async () => {

@@ -75,21 +75,12 @@ describe('new sessions start from an up-to-date base (real git)', () => {
     expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
   });
 
-  it('never overwrites local edits in the main checkout', async () => {
-    const up = pushUpstream('README.md', '# changed upstream\n');
-    writeFileSync(join(repo, 'README.md'), '# my edit\n');
-    const r = await addWorktree(repo, wt(), 'ak/x', 'main');
-    expect(r).toMatchObject({ kind: 'skipped', reason: expect.stringMatching(/couldn't fast-forward it in/) });
-    expect(readFileSync(join(repo, 'README.md'), 'utf8')).toBe('# my edit\n');
-    expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
-  });
-
-  it('never stashes local edits, even with merge.autoStash on', async () => {
+  it('never overwrites or stashes local edits in the main checkout, even with merge.autoStash on', async () => {
     const up = pushUpstream('README.md', '# changed upstream\n');
     git(repo, 'config', 'merge.autoStash', 'true');
     writeFileSync(join(repo, 'README.md'), '# my edit\n');
     const r = await addWorktree(repo, wt(), 'ak/x', 'main');
-    expect(r).toMatchObject({ kind: 'skipped' });
+    expect(r).toMatchObject({ kind: 'skipped', reason: expect.stringMatching(/couldn't fast-forward it in/) });
     expect(readFileSync(join(repo, 'README.md'), 'utf8')).toBe('# my edit\n');
     expect(git(repo, 'stash', 'list')).toBe('');
     expect(git(wt(), 'rev-parse', 'HEAD')).toBe(up);
@@ -199,6 +190,7 @@ describe('changes vs. the base (real git)', () => {
   afterEach(() => rmSync(home, { recursive: true, force: true }));
 
   it('lists committed, uncommitted and untracked changes with a patch each', async () => {
+    expect(await changes(wt, 'main')).toMatchObject({ files: [], added: 0, removed: 0 }); // a fresh branch
     // Committed on the branch: modify, add, delete, rename.
     writeFileSync(join(wt, 'README.md'), '# test\nmore\n');
     writeFileSync(join(wt, 'added.txt'), 'a\nb\n');
@@ -292,10 +284,6 @@ describe('changes vs. the base (real git)', () => {
     const by = Object.fromEntries(c.files.map((f) => [f.path, f]));
     expect(by['big.log']).toMatchObject({ kind: 'untracked', added: 0, patch: null });
     expect(by['small.txt']).toMatchObject({ kind: 'untracked', added: 2, patch: '@@ -0,0 +1,2 @@\n+a\n+b' });
-  });
-
-  it('is empty on a fresh branch', async () => {
-    expect(await changes(wt, 'main')).toMatchObject({ files: [], added: 0, removed: 0 });
   });
 });
 

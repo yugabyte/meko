@@ -55,26 +55,19 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     return env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
   }
 
-  it('lists repos and creates a project with a dedicated datapack, pinned only once a session starts', async () => {
-    const repos = await env.core.projects.repos();
-    expect(repos.repos.map((r) => r.name)).toEqual(['demo-repo']);
-    const p = await newProject();
-    expect(p.id).toBe('demo-repo');
-    expect(p.datapacks).toEqual([{ id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }]);
-    expect(pinFiles()).toEqual([]);
-    expect((await env.core.projects.repos()).repos[0].projects).toEqual([{ id: 'demo-repo', name: 'Demo' }]);
-  });
-
-  it('lets several projects share a repo, each with its own datapack, sessions and worktrees', async () => {
+  it('creates projects with a dedicated datapack each, pinned only once a session starts, several sharing a repo with sessions and worktrees of their own', async () => {
     const first = await newProject();
+    expect(first.id).toBe('demo-repo');
+    expect(first.datapacks).toEqual([{ id: 'dp-agent-k-local-test-demo', name: 'agent-k-local/test/demo', role: 'dedicated' }]);
     const second = await env.core.projects.create({
       repoPath: env.repo, name: 'Release tooling', datapack: { mode: 'create', name: 'agent-k-local/test/release' },
     });
     expect(second.id).toBe('demo-repo-release-tooling');
     expect(second.repoPath).toBe(first.repoPath);
     expect(second.datapacks).toEqual([{ id: 'dp-agent-k-local-test-release', name: 'agent-k-local/test/release', role: 'dedicated' }]);
+    expect(pinFiles()).toEqual([]);
     const repos = (await env.core.projects.repos()).repos;
-    expect(repos).toHaveLength(1);
+    expect(repos.map((r) => r.name)).toEqual(['demo-repo']);
     expect(repos[0].projects).toEqual([{ id: 'demo-repo', name: 'Demo' }, { id: 'demo-repo-release-tooling', name: 'Release tooling' }]);
 
     // Names only have to differ within a repo.
@@ -132,8 +125,11 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: AgentK's mod is on (the fake reports a Claude Code new enough).
     expect(first.env).toEqual({ MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
 
-    await env.core.sessions.submit(s.id, 'second turn');
+    // A terminal read line by line caps a line (1,024 bytes on macOS, 4,096 on Linux); Claude's TUI,
+    // like the fake, reads it raw, so a typed prompt arrives whole however long its line is.
+    await env.core.sessions.submit(s.id, `${'x'.repeat(5000)} LONG_END`);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
+    expect(readFileSync(env.core.sessions.row(s.id).transcript_path!, 'utf8')).toContain(`${'x'.repeat(5000)} LONG_END`);
 
     // Token usage is read from the transcript on each Stop (duplicated lines count once).
     const usage = await waitFor(() => env.core.sessions.get(s.id).usage, (u) => u.messages === 2, 10000, 'usage');
@@ -317,7 +313,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     }, (st) => st === 'exited', 10000, 'exited');
     await env.core.sessions.action(s.id, 'resume');
     await waitFor(() => sessionStarts(env).length, (n) => n === 2, 10000, 'the resume');
-    expect(sessionStarts(env)[1]).toMatchObject({ source: 'resume', context: '' });
+    expect(sessionStarts(env)[1]).toMatchObject({ sessionId: s.claudeSessionId, source: 'resume', context: '' });
   });
 
   it('searches every datapack at start, skips one whose search fails, and records a search that failed everywhere', async () => {
@@ -427,16 +423,26 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' })).toContain('ak/keep-me');
   });
 
-  it('discards a session with uncommitted and unpushed work', async () => {
+  it('shows a session\'s changes, and discards it with uncommitted and unpushed work', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Throw away', prompt: 'hi', kind: 'quick' });
+    // The demo repo has no origin, so the base is used as is.
+    const created = get<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'created'", s.id);
+    expect(created?.text).toBe('Started on ak/throw-away from main');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const g = (...a: string[]) => execFileSync('git', a, { cwd: s.worktreePath, stdio: 'ignore' });
     writeFileSync(join(s.worktreePath, 'done.txt'), 'committed\n');
     g('add', 'done.txt');
     g('commit', '-q', '-m', 'local only');
-    writeFileSync(join(s.worktreePath, 'draft.txt'), 'wip\n');
+    writeFileSync(join(s.worktreePath, 'draft.txt'), 'one\ntwo\n');
 
+    const c = await env.core.sessions.changes(s.id);
+    expect(c.files).toMatchObject([
+      { path: 'done.txt', kind: 'added', added: 1, uncommitted: false },
+      { path: 'draft.txt', kind: 'untracked', added: 2, uncommitted: true },
+    ]);
+    await env.core.sessions.refreshDiff(s.id);
+    expect(env.core.sessions.get(s.id).diffStat).toEqual({ added: 3, removed: 0 });
     expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: true, uncommittedFiles: 1, unpushedCommits: 1 });
 
     await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
@@ -451,21 +457,6 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const last = get<{ kind: string }>(env.core.db, 'SELECT kind FROM session_events WHERE session_id = ? ORDER BY id DESC LIMIT 1', s.id);
     expect(last?.kind).toBe('discarded');
     await expect(env.core.sessions.action(s.id, 'discard')).rejects.toThrow(/archived/);
-  });
-
-  it('shows a session\'s changes until its worktree is gone', async () => {
-    const p = await newProject();
-    const s = await env.core.sessions.create(p.id, { name: 'Show changes', prompt: 'hi', kind: 'quick' });
-    // The demo repo has no origin, so the base is used as is.
-    const created = get<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'created'", s.id);
-    expect(created?.text).toBe('Started on ak/show-changes from main');
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
-    writeFileSync(join(s.worktreePath, 'notes.txt'), 'one\ntwo\n');
-    const c = await env.core.sessions.changes(s.id);
-    expect(c.files).toMatchObject([{ path: 'notes.txt', kind: 'untracked', added: 2, uncommitted: true }]);
-    await env.core.sessions.refreshDiff(s.id);
-    expect(env.core.sessions.get(s.id).diffStat).toEqual({ added: 2, removed: 0 });
-    await env.core.sessions.action(s.id, 'discard', { skipLearn: true });
     await expect(env.core.sessions.changes(s.id)).rejects.toThrow(/worktree is gone/);
   });
 
@@ -581,13 +572,6 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(designsSent('retry')).toEqual([['design-retry.md', '# One']]);
   });
 
-  it('refuses to approve a design that does not exist yet', async () => {
-    const p = await newProject();
-    const s = await env.core.sessions.create(p.id, { name: 'No design', prompt: 'just think' });
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
-    await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toThrow(/hasn't written a design/);
-  });
-
   it('runs a task started at Explore with no design, PR or merge gates until it moves on', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', start: 'explore' });
@@ -639,7 +623,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await expect(env.core.sessions.create(p.id, { name: 'Odd', start: 'review' as never })).rejects.toMatchObject({ status: 400 });
   });
 
-  it('uses the name as the first prompt of a task started without one, but not of one started at Explore', async () => {
+  it('uses the name as the first prompt of a task started without one, but not of one started at Explore, and has no design to approve yet', async () => {
     const p = await newProject();
     const quick = await env.core.sessions.create(p.id, { name: 'Fix the typo', prompt: '  ', start: 'code' });
     await waitFor(() => argvLog(env), (l) => l.length === 1, 10000, 'quick launch');
@@ -647,6 +631,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const plan = await env.core.sessions.create(p.id, { name: 'Add retries' });
     await waitFor(() => argvLog(env), (l) => l.length === 2, 10000, 'plan launch');
     expect(argvLog(env)[1].args.at(-1)).toMatch(/Task: Add retries/);
+    await expect(env.core.sessions.action(plan.id, 'approve-design')).rejects.toThrow(/hasn't written a design/);
     const explore = await env.core.sessions.create(p.id, { name: 'Why slow', start: 'explore' });
     await waitFor(() => argvLog(env), (l) => l.length === 3, 10000, 'explore launch');
     expect(argvLog(env)[2].args).not.toContain('--'); // a prompt always follows "--"
@@ -655,7 +640,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await expect(env.core.sessions.create(p.id, { name: 'Typed', prompt: 123 as never })).rejects.toMatchObject({ status: 400 });
   });
 
-  it('reports startup steps while a session starts', async () => {
+  it('answers with the session still starting, before its worktree is made, and reports its startup steps', async () => {
     const p = await newProject();
     const steps: string[] = [];
     const onChange = () => {
@@ -663,16 +648,6 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
       if (s?.startup && steps.at(-1) !== s.startup.step) steps.push(s.startup.step);
     };
     env.core.on('change', onChange);
-    const s = await env.core.sessions.create(p.id, { name: 'Startup steps', prompt: 'hi', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
-    env.core.off('change', onChange);
-    expect(steps.slice(0, 3)).toEqual(['worktree', 'launch', 'loading']);
-    expect(steps).toContain('prompt');
-    expect(env.core.sessions.get(s.id).startup).toBeNull();
-  });
-
-  it('answers with the session still starting, before its worktree is made', async () => {
-    const p = await newProject();
     const { session, done } = await env.core.sessions.begin(p.id, { name: 'Big repo', prompt: 'hi', kind: 'quick' });
     expect(session).toMatchObject({ status: 'starting', startup: { step: 'worktree', hasPrompt: true } });
     expect(existsSync(session.worktreePath)).toBe(false);
@@ -682,6 +657,11 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const made = await done;
     expect(existsSync(made.worktreePath)).toBe(true);
     expect(made.startup?.step).toBe('loading');
+    await waitFor(() => env.core.sessions.get(session.id).status, (st) => st === 'idle', 10000, 'first turn');
+    env.core.off('change', onChange);
+    expect(steps.slice(0, 3)).toEqual(['worktree', 'launch', 'loading']);
+    expect(steps).toContain('prompt');
+    expect(env.core.sessions.get(session.id).startup).toBeNull();
   });
 
   it('starts a task with the images added in the New session dialog, moved into its folder for Claude to read', async () => {
@@ -854,22 +834,6 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     } finally {
       await new Promise<void>((r) => other.close(() => r()));
     }
-  });
-
-  it('marks exited sessions and resumes them with --resume', async () => {
-    const p = await newProject();
-    const s = await env.core.sessions.create(p.id, { name: 'Exit test', prompt: 'hi', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
-    await env.core.host.submit(s.paneName, 'exit');
-    await waitFor(async () => {
-      await env.core.sessions.reconcile();
-      return env.core.sessions.get(s.id).status;
-    }, (st) => st === 'exited', 10000, 'exited');
-    const before = argvLog(env).length;
-    await env.core.sessions.action(s.id, 'resume');
-    await waitFor(() => argvLog(env).length, (n) => n > before, 10000, 'resume launch');
-    const last = argvLog(env).at(-1)!;
-    expect(last.args).toEqual(expect.arrayContaining(['--resume', s.claudeSessionId]));
   });
 
   it('recovers after the session host dies: auto-continues mid-turn sessions, with a 15 minute guard', async () => {
@@ -1248,25 +1212,7 @@ describe('pushes straight to the base branch', () => {
     await env.cleanup();
   });
 
-  it('finds a push in the transcript and counts its commits with git', async () => {
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Direct', prompt: 'do it', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
-    const git = (...a: string[]) => execFileSync('git', a, { cwd: env.repo, encoding: 'utf8' }).trim();
-    const from = git('rev-parse', '--short', 'HEAD');
-    git('commit', '--allow-empty', '-q', '-m', 'one');
-    git('commit', '--allow-empty', '-q', '-m', 'two');
-    const to = git('rev-parse', '--short', 'HEAD');
-    const result = { stdout: '', stderr: `To https://github.com/acme/demo.git\n   ${from}..${to}  HEAD -> main\n`, interrupted: false };
-    writeFileSync(join(env.fakeDir, `${s.claudeSessionId}.jsonl`), JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), toolUseResult: result }) + '\n', { flag: 'a' });
-    env.core.sessions.ingestUsage(s.id);
-    const row = await waitFor(
-      () => get<{ commits: number | null }>(env.core.db, 'SELECT commits FROM pushes WHERE session_id = ?', s.id),
-      (r) => r?.commits != null, 10000, 'commit count');
-    expect(row?.commits).toBe(2);
-  });
-
-  it('records what a push changed per file type, never the paths', async () => {
+  it('finds a push in the transcript, counts its commits with git, and records what it changed per file type, never the paths', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
     const s = await env.core.sessions.create(p.id, { name: 'Direct', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');

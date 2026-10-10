@@ -73,12 +73,14 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     const approve = (b?: unknown) => env.core.sessions.action(id, 'approve-design', b);
     const working = () => waitFor(() => get(id).status, (st) => st === 'working', 10000, 'a turn');
 
-    // Answers sent while AgentK works go now, and Claude takes them when the turn ends.
+    // Answers sent while AgentK works go now, and Claude takes them when the turn ends; while they
+    // wait in Claude, an approval is refused.
     slow(1500);
     await env.core.sessions.submit(id, 'think about it');
     await working();
     await revise({ answers: [], feedback: 'Now?' });
     expect(get(id).status).toBe('working');
+    await expect(approve()).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/revised the design/) });
     await waitFor(() => transcript(id), (t) => t.includes('Now?'), 15000, 'the answers to run');
     await waitFor(() => get(id).status, (st) => st !== 'working', 10000, 'between turns');
 
@@ -113,16 +115,6 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     const sent = await waitFor(() => transcript(id), (t) => t.includes('The design is approved'), 10000, 'the approval prompt');
     expect(sent).toContain('Answer: Datapack');
   }, 60_000);
-
-  it('refuses an approval mid-turn while answers sent during the turn wait in Claude', async () => {
-    const id = await start({}, { prompt: 'DESIGN_MD it' });
-    await waitFor(() => get(id), (x) => x.hasDesign && x.status === 'needs_input', 10000, 'the design');
-    slow(1500);
-    await env.core.sessions.submit(id, 'think about it');
-    await waitFor(() => get(id).status, (st) => st === 'working', 10000, 'a turn');
-    await env.core.lifecycle.reviseDesign(row(id), { answers: [], feedback: 'Shorter.' });
-    await expect(env.core.sessions.action(id, 'approve-design')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/revised the design/) });
-  });
 
   it('forgets answers another plugin refused, and queues no approval without a turn running', async () => {
     const id = await start({}, { prompt: 'DESIGN_MD it' });

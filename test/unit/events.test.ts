@@ -192,17 +192,6 @@ describe('the events connection', () => {
     t.conn.stop();
   });
 
-  it('starts over when a quiet socket turns out to be closing', () => {
-    const t = setup();
-    t.last().accept();
-    t.last().readyState = 2;
-    vi.advanceTimersByTime(QUIET_MS);
-    expect(t.sockets[0]!.closed).toBe(true);
-    vi.advanceTimersByTime(1000);
-    expect(t.sockets).toHaveLength(2);
-    t.conn.stop();
-  });
-
   it('stops retrying when the login is gone', async () => {
     const t = setup({ checkLogin: () => Promise.resolve(false) });
     t.last().accept();
