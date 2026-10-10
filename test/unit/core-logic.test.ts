@@ -955,6 +955,10 @@ describe('Claude folder trust', () => {
     expect(cfg.other).toBe(1);
     expect(isTrusted('/data/ak/worktrees/p/s', cfg)).toBe(true);
     expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('already');
+    // Exact: a trusted parent doesn't count (Claude asks about a worktree it can't tie to its repo).
+    expect(isTrusted('/data/ak/worktrees/p/s', cfg, true)).toBe(false);
+    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('added');
+    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('already');
   });
 });
 

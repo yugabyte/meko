@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { realpathSync, statSync } from 'node:fs';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /** Root of all agent-k-local state. Override with AK_HOME (tests, dev). */
@@ -94,6 +94,60 @@ export function repoKey(repo: string): string {
     return realpathSync(repo);
   } catch {
     return repo;
+  }
+}
+
+type StatIds = (p: string) => { dev: number; ino: number };
+
+const NET_ALIASES = new Map<string, string | null>();
+
+/**
+ * The path Claude should be given for `p`: without the automounter's `/net/<host>` prefix when
+ * this machine has that folder at the same path without it (the same device and inode, as when
+ * `/net/<this host>/data` mounts the local `/data`), else `p` itself. Claude Code (2.1.292 and
+ * later) asks before every read or edit under `/net`, even in auto mode, and no permission rule
+ * lifts that, so a home under `/net` would stop sessions on every file. The export root is the
+ * shortest prefix that matches, so the rest of `p` needn't exist yet. Each prefix is checked once
+ * per process; a stat that fails means no alias. Only this machine's own `/net/<host>` is looked
+ * at (by host name): a stat into another host's mount can hang while its server is down.
+ */
+export function claudePath(p: string, stat: StatIds = statSync, cache = NET_ALIASES, self = hostname()): string {
+  const m = /^\/net\/([^/]+)(?=\/)/.exec(p);
+  if (!m || !sameHost(m[1], self)) return p;
+  const host = m[0];
+  const parts = p.slice(host.length).split('/').filter(Boolean);
+  for (let i = 1; i <= parts.length; i++) {
+    const local = `/${parts.slice(0, i).join('/')}`;
+    const net = host + local;
+    let alias = cache.get(net);
+    if (alias === undefined) {
+      alias = sameFolder(net, local, stat) ? local : null;
+      cache.set(net, alias);
+    }
+    if (alias !== null) return alias + p.slice(net.length);
+  }
+  return p;
+}
+
+/**
+ * Whether `/net/<name>` names the machine called `self`: the same name, or the same first label
+ * when one of them is a short name (`box` and `box.example.com`). Two full names must match whole.
+ */
+function sameHost(name: string, self: string): boolean {
+  const a = name.toLowerCase();
+  const b = self.toLowerCase();
+  if (!a || !b) return false;
+  if (a.includes('.') && b.includes('.')) return a === b;
+  return a.split('.')[0] === b.split('.')[0];
+}
+
+function sameFolder(a: string, b: string, stat: StatIds): boolean {
+  try {
+    const x = stat(a);
+    const y = stat(b);
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false;
   }
 }
 

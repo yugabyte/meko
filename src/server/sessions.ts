@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
@@ -36,6 +37,7 @@ import {
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
+import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
 const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
@@ -148,12 +150,12 @@ const LINK_PR_MS = 5000;
  * The "created" event: where the branch started, and what happened to the local base. For an
  * existing branch, <sync> is what happened to it: fast-forwarded to its remote's copy, or not.
  */
-/** The paths of the images added in the New session dialog that reached the session. */
+/** The paths of the images added in the New session dialog that reached the session, as Claude reads them. */
 export function startImages(row: SessionRow): string[] {
   if (!row.start_images) return [];
   try {
     const paths: unknown = JSON.parse(row.start_images);
-    return Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [];
+    return Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string').map((p) => claudePath(p)) : [];
   } catch {
     return [];
   }
@@ -329,11 +331,11 @@ export class SessionManager {
     return r;
   }
 
-  /** Saves an image pasted into the session's terminal, for the browser to paste its path. */
+  /** Saves an image pasted into the session's terminal, for the browser to paste its path (as Claude reads it). */
   pasteImage(id: string, data: unknown): PastedImage {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-    return { path: savePastedImage(this.core.paths.pastes, row.id, data) };
+    return { path: claudePath(savePastedImage(this.core.paths.pastes, row.id, data)) };
   }
 
   /** Saves an image added in the New session dialog, until a session is created with it. */
@@ -825,14 +827,14 @@ export class SessionManager {
     };
   }
 
-  /** Where Claude writes a markdown design during the Design stage (outside the repo). */
+  /** Where Claude writes a markdown design during the Design stage (outside the repo), as Claude is told it. */
   designFile(row: SessionRow): string {
-    return join(this.core.paths.designs, row.id, 'design.md');
+    return claudePath(join(this.core.paths.designs, row.id, 'design.md'));
   }
 
   /** Where Claude lists the design's open questions, beside the markdown design. */
   questionsFile(row: SessionRow): string {
-    return join(this.core.paths.designs, row.id, 'questions.json');
+    return claudePath(join(this.core.paths.designs, row.id, 'questions.json'));
   }
 
   /**
@@ -913,6 +915,8 @@ export class SessionManager {
       ...(this.core.capture.enabled ? {} : { MEKO_CHECKPOINT_INTERVAL: String(MAX_TIMER_SECS) }),
       // Plugins' hooks modules are early access in Claude Code, off unless this says otherwise.
       ...(mod ? { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } : {}),
+      // A home under /net: Claude reaches ~/.claude (memory, skills, plugins) by its local spelling.
+      ...(claudePath(homedir()) !== homedir() ? { HOME: claudePath(homedir()) } : {}),
     };
   }
 
@@ -1015,6 +1019,10 @@ export class SessionManager {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
     const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
+    // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
+    // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
+    const cwd = claudePath(row.worktree_path);
+    if (cwd !== row.worktree_path) await this.trustRepo(cwd, true);
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
@@ -1047,7 +1055,7 @@ export class SessionManager {
     this.forgetClaude(row.id);
     this.contextFill.delete(row.id);
     try {
-      await this.core.host.spawn(row.tmux_name, row.worktree_path, ['/bin/sh', script]);
+      await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script]);
     } catch (e) {
       this.awaitingStart.delete(row.id);
       throw e;
@@ -1058,12 +1066,13 @@ export class SessionManager {
   /**
    * Makes sure Claude Code trusts the repo. Other Claude processes rewrite
    * ~/.claude.json with their own copy when they start, which can drop a
-   * fresh entry, so a new entry is checked again after a moment.
+   * fresh entry, so a new entry is checked again after a moment. `exact`: only an entry for
+   * `repo` itself counts, not one for a parent.
    */
-  async trustRepo(repo: string): Promise<void> {
+  async trustRepo(repo: string, exact = false): Promise<void> {
     try {
       for (let i = 0; i < 3; i++) {
-        if (ensureWorkspaceTrust(repo) !== 'added') return;
+        if (ensureWorkspaceTrust(repo, exact) !== 'added') return;
         await sleep(400);
       }
     } catch (e) {
@@ -1120,7 +1129,8 @@ export class SessionManager {
     if (typeof raw !== 'string' || !raw) return null;
     const file = resolve(p.cwd || row.worktree_path, raw);
     const repo = sessionRepo(this.db, row);
-    const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d)]);
+    // Claude reaches the worktree by its local spelling (claudePath), which realpath doesn't give.
+    const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
     if (!roots.some((d) => file === d || file.startsWith(d + sep))) return null;
     return {
       hookSpecificOutput: {
