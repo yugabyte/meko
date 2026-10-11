@@ -163,7 +163,7 @@ your phone can connect.
   Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml` and restart
   the server (the file is read at startup): AgentK then types its prompts into the terminal, running
   sessions included, though those keep the mod loaded until they're relaunched
-  ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early
+  ([details](docs/design/mod.md)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
   When the host's Claude Code is too old for the mod, a banner says so and can update it.
 - **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
@@ -206,13 +206,13 @@ your phone can connect.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
-  (details in [docs/design.md](docs/design.md#usage-stats)).
+  (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
 - **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback
   if a new version won't start.
 
-Design: [`docs/design.md`](docs/design.md).
+Design: [`docs/design.md`](docs/design.md), an index with one file per area under `docs/design/`.
 
 ## Commands
 
