@@ -538,11 +538,14 @@ textarea.input {
   display: inline-block;
   flex: none;
 }
+/* Working and needs-you dots blink their --halo (blink.ts). */
 .dot.working {
+  --halo: color-mix(in srgb, var(--ok) 22%, transparent);
   background: var(--ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+  box-shadow: 0 0 0 3px var(--halo);
 }
 .dot.needs {
+  --halo: color-mix(in srgb, var(--warn) 22%, transparent);
   background: var(--warn);
   border-radius: 2px;
   transform: rotate(45deg);
@@ -589,21 +592,20 @@ textarea.input {
 .tab.sel .dot.learning {
   --accent: #86a4ff;
 }
+/* Its halos too: brighter, so the light theme's blink still shows. */
+.tab.sel .dot.working {
+  --halo: color-mix(in srgb, #5cc592 30%, transparent);
+}
+.tab.sel .dot.needs {
+  --halo: color-mix(in srgb, #e9a64a 30%, transparent);
+}
 @media (prefers-reduced-motion: no-preference) {
-  .dot.working {
-    animation: pulse 1.8s ease-in-out infinite;
-  }
   .dot.learning::before {
     animation: learning-spin 1.6s linear infinite;
   }
   @keyframes learning-spin {
     to {
       transform: rotate(360deg);
-    }
-  }
-  @keyframes pulse {
-    50% {
-      box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 8%, transparent);
     }
   }
 }
