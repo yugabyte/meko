@@ -169,9 +169,11 @@ describe('session host (real ptys)', () => {
     slow.stream.pause();
     const fast = await viewer(host, 'ak-yes', { cols: 80, rows: 24 });
     streams.push(fast.stream);
-    // The other viewer keeps getting output while the slow one is stalled.
+    // The other viewer keeps getting output while the slow one is stalled. Everything it got was
+    // written to the slow one too, less what the socket's kernel buffers took (a few hundred KB on
+    // Linux): well past the host's 1 MB, the slow one is surely skipped by now.
     const seen = fast.out.length;
-    await waitFor(() => fast.out.length, (n) => n > seen + 1024 * 1024, 10000, 'output keeps flowing');
+    await waitFor(() => fast.out.length, (n) => n > seen + 3 * 1024 * 1024, 10000, 'output keeps flowing');
     const before = slow.out.length;
     slow.stream.resume();
     // It catches up from a fresh screen copy, not from everything it missed.
