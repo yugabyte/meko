@@ -77,11 +77,12 @@ export function Rail({
 
   return (
     <nav className={cx('rail', open && 'open')} aria-label="Projects" inert={mobile && !open}>
-      {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing. */}
-      <button className="rail-search" onClick={onPalette} aria-label="Search and commands" aria-haspopup="dialog">
+      {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing.
+          It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
+      <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
         <img src="/logo.png" alt="" width={16} height={16} />
         <span className="rail-search-text">Search AgentK Local</span>
-        {!touch && <kbd>{mod}K</kbd>}
+        {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
       </button>
       <div className="rail-list">
         {projects.map((p, i) => {

@@ -2176,7 +2176,7 @@ div[id^='dak-mermaid-'] .label {
 
 /* palette */
 /* At the top left with the rail's padding, so the palette opens over the rail's search bar. The
-   phone section's .overlay.top comes later and puts it across the top instead. */
+   phone section's .overlay.top comes later and puts it across the top, centred, instead. */
 .overlay.pal-overlay {
   justify-content: flex-start;
   padding: 12px 8px;
@@ -4394,8 +4394,10 @@ div[id^='dak-mermaid-'] .label {
   html.kb-open .dialog-body:last-child {
     padding-bottom: 14px;
   }
+  /* Centred, undoing .pal-overlay's left: the palette is narrower than a wide phone layout. */
   .overlay.top {
     align-items: flex-start;
+    justify-content: center;
     padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 0;
   }
   .dialog,
