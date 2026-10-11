@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { LinkPlan } from '../../src/shared/types.js';
-import { filterItems, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import type { AskAgentkAction, LinkPlan, ProjectWithSessions } from '../../src/shared/types.js';
+import { askEntries, filterItems, goesAtOnce, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -70,5 +70,35 @@ describe('a pasted GitHub link', () => {
     ]],
   ])('%s', (_, plan, want) => {
     expect(rows(plan)).toEqual(want);
+  });
+});
+
+describe("AgentK's proposed actions", () => {
+  const projects = [{ id: 'p1', name: 'agent-k-local', sessions: [{ id: 's1', name: 'Dark mode', stage: 'code' }] }] as unknown as ProjectWithSessions[];
+  const rows = (a: AskAgentkAction) => askEntries([a], projects).map((e) => [labelText(e.label), e.hint, !!e.edit]);
+
+  it.each<[AskAgentkAction, (string | boolean)[][]]>([
+    [{ type: 'start', projectId: 'p1', start: 'design', name: 'Usage dark mode', prompt: '\nAdd dark mode to the Usage page.\nKeep the chart colors.' }, [
+      ['Start Usage dark mode in agent-k-local at Design', 'Add dark mode to the Usage page.', false],
+      ['Edit Usage dark mode in New session…', 'Change it before it starts', true],
+    ]],
+    [{ type: 'start', projectId: 'p1', start: 'code', name: 'Fix the login', prompt: 'Fix the login.' }, [
+      ['Start Fix the login in agent-k-local at Code', 'Action', false],
+      ['Edit Fix the login in New session…', 'Change it before it starts', true],
+    ]],
+    [{ type: 'go', view: 'session', projectId: 'p1', sessionId: 's1' }, [['Go to Dark mode', 'agent-k-local · Code', false]]],
+    [{ type: 'openPr', sessionId: 's1', instructions: 'x'.repeat(100) }, [['Open PR for Dark mode', `${'x'.repeat(79)}…`, false]]],
+    [{ type: 'move', sessionId: 'gone', stage: 'code', instructions: '' }, [['Move a session to Code', 'Action', false]]],
+  ])('names %j', (a, want) => {
+    expect(rows(a)).toEqual(want);
+  });
+
+  it('goes at once only when going somewhere is the whole answer', () => {
+    const usage: AskAgentkAction = { type: 'go', view: 'usage' };
+    const move: AskAgentkAction = { type: 'move', sessionId: 's1', stage: 'code', instructions: '' };
+    expect(goesAtOnce([usage])).toBe(usage);
+    expect(goesAtOnce([usage, usage])).toBeNull();
+    expect(goesAtOnce([move])).toBeNull();
+    expect(goesAtOnce([])).toBeNull();
   });
 });

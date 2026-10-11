@@ -3,6 +3,7 @@ import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
 import { claudeConfigPath, ensureWorkspaceTrust } from './trust.js';
 import { hostname, userInfo } from 'node:os';
+import { join } from 'node:path';
 import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
@@ -10,6 +11,7 @@ import * as github from './github.js';
 import { mekoPluginKeys, TranscriptCapture } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
+import { AskAgentk } from './askagentk.js';
 import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
@@ -116,6 +118,7 @@ export class Core extends EventEmitter {
   readonly questions: DesignQuestionStore;
   readonly prReview: PrReviewService;
   readonly githubLinks: GithubLinkService;
+  readonly askAgentk: AskAgentk;
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
   readonly mekoTools: MekoTools;
@@ -192,6 +195,12 @@ export class Core extends EventEmitter {
     this.questions = new DesignQuestionStore(this);
     this.prReview = new PrReviewService(this);
     this.githubLinks = new GithubLinkService(this);
+    this.askAgentk = new AskAgentk({
+      config: () => this.cfg,
+      cwd: join(this.paths.run, 'ask'),
+      projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
+      record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
+    });
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
     this.claudeMeko = new MekoClaudeWatch({
@@ -214,13 +223,13 @@ export class Core extends EventEmitter {
     this.invites = new InviteService(this, o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey })));
   }
 
-  /** A usage row that may come after stop() closed the database: dropped then. */
+  /** A usage row (Meko, Ask AgentK) that may come after stop() closed the database: dropped then. */
   private record(sql: string, ...args: (string | number | null)[]): void {
     if (this.stopped) return;
     try {
       run(this.db, sql, ...args);
     } catch (e) {
-      this.log.warn('recording Meko usage failed', errMsg(e));
+      this.log.warn('recording usage failed', errMsg(e));
     }
   }
 
@@ -339,6 +348,7 @@ export class Core extends EventEmitter {
       invites: this.invites.pending(),
       failedStarts: this.sessions.failedStarts(),
       claudeCode: this.claudeCode.status(),
+      askAgentk: this.cfg.askAgentk.enabled,
       sessionHost: { version: this.host.hello?.version ?? null, outdated: !!this.host.hello?.outdated },
     };
   }

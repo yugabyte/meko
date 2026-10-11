@@ -1,5 +1,7 @@
 import type {
   AppState,
+  AskAgentkRequest,
+  AskAgentkResult,
   AskAnswerRequest,
   AttachDatapackRequest,
   AuthStatus,
@@ -72,7 +74,7 @@ export function setUnauthorizedHandler(fn: (() => void) | null) {
 
 /** `raw` sends those bytes as the body, with their content type, instead of `body` as JSON. */
 async function request<T>(
-  method: string, path: string, body?: unknown, opts: { quiet401?: boolean; raw?: { data: Blob; type: string } } = {},
+  method: string, path: string, body?: unknown, opts: { quiet401?: boolean; raw?: { data: Blob; type: string }; signal?: AbortSignal } = {},
 ): Promise<T> {
   let res: Response;
   try {
@@ -81,8 +83,11 @@ async function request<T>(
       credentials: 'same-origin',
       headers: opts.raw ? { 'Content-Type': opts.raw.type } : body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: opts.raw ? opts.raw.data : body !== undefined ? JSON.stringify(body) : undefined,
+      signal: opts.signal,
     });
-  } catch {
+  } catch (e) {
+    // Cancelled by the caller: theirs to ignore, not a server that's down.
+    if (opts.signal?.aborted) throw e;
     throw new ApiError(0, 'Can’t reach the AgentK Local server. Check that it is running.');
   }
   if (res.status === 204) return undefined as T;
@@ -160,6 +165,7 @@ export const api = {
   /** What a pasted GitHub PR or issue (a link or owner/name#N) would start, and where. */
   githubLink: (ref: string) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}`),
   startFromLink: (b: StartFromLinkRequest) => post<StartFromLinkResult>('/api/github-link/start', b),
+  askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
   usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>

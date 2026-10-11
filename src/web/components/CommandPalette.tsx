@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
-import { STAGE_LABELS, type LinkPlan, type ProjectWithSessions, type Session, type StartFromLinkResult } from '../../shared/types';
+import {
+  STAGE_LABELS, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type LinkPlan, type ProjectWithSessions, type Session,
+  type StartFromLinkResult,
+} from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
-import { filterItems, linkEntries, type LabelPart } from '../palette';
+import { useMedia } from '../hooks/useMedia';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, goesAtOnce, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
-import { STATUS_TEXT, cx, dotState, liveSessions, type DotState } from '../util';
+import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -20,6 +24,8 @@ interface Item {
   keepOpen?: boolean;
   /** Shown instead of the label while it runs. */
   busy?: string;
+  /** Its label wraps rather than being cut (AgentK's actions, read before they run). */
+  wrap?: boolean;
   dot?: DotState;
   /** Where in the blink signal the dot is: its session's id. */
   phase?: string;
@@ -27,6 +33,13 @@ interface Item {
 
 /** How long typing pauses before a pasted link is looked up. */
 const LINK_LOOKUP_MS = 250;
+/** How long each of the placeholder's hints shows. */
+const HINT_MS = 3500;
+
+/** One exchange with AgentK while the palette is open: what was asked, and its answer. */
+interface Exchange extends AskAgentkResult {
+  text: string;
+}
 
 export function CommandPalette({
   projects,
@@ -40,6 +53,8 @@ export function CommandPalette({
   onRenameSession,
   onSettings,
   onStarted,
+  askAgentk,
+  onEditSession,
 }: {
   projects: ProjectWithSessions[];
   currentProjectId: string | null;
@@ -55,8 +70,12 @@ export function CommandPalette({
   /** Opens the Rename session dialog for the session on screen. */
   onRenameSession: () => void;
   onSettings: () => void;
-  /** A session started from a pasted link (in a project it may just have opened). */
+  /** A session started from a pasted link (in a project it may just have opened), or one AgentK proposed. */
   onStarted: (r: StartFromLinkResult) => void;
+  /** `[ask_agentk] enabled`: offer Ask AgentK. */
+  askAgentk: boolean;
+  /** Opens New session filled in with a task AgentK proposed. */
+  onEditSession: (projectId: string, initial: CreateSessionRequest) => void;
 }) {
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
@@ -100,6 +119,128 @@ export function CommandPalette({
   }, [refKey, stale]);
   const looked = stale ? undefined : cached;
   const plan = looked && 'plan' in looked ? looked.plan : null;
+
+  // Ask AgentK: the exchange so far (forgotten when the palette closes), the ask Claude is answering, and one that failed.
+  const [chat, setChat] = useState<Exchange[]>([]);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [askError, setAskError] = useState<{ text: string; message: string } | null>(null);
+  const askAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => askAbort.current?.abort(), []);
+  const chatRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight });
+  }, [chat, asking, askError]);
+
+  // The placeholder rotates through what the palette takes, on every screen, unless motion is reduced.
+  const still = useMedia('(prefers-reduced-motion: reduce)');
+  const [hint, setHint] = useState(0);
+  useEffect(() => {
+    if (still) return;
+    const t = window.setInterval(() => setHint((h) => (h + 1) % PALETTE_HINTS.length), HINT_MS);
+    return () => window.clearInterval(t);
+  }, [still]);
+  const placeholder = chat.length ? 'Reply to AgentK, or type a command…' : still ? PALETTE_HINT_STILL : PALETTE_HINTS[hint];
+
+  const go = (a: Extract<AskAgentkAction, { type: 'go' }>) => {
+    if (a.view === 'session') navigate({ view: 'project', projectId: a.projectId, sessionId: a.sessionId });
+    else if (a.view === 'home') navigate({ view: 'home', projectId: a.projectId });
+    else if (a.view === 'usage') navigate({ view: 'usage' });
+    else onSettings();
+  };
+
+  const ask = async (raw: string) => {
+    const text = raw.trim();
+    if (!text || askAbort.current) return;
+    const ac = new AbortController();
+    askAbort.current = ac;
+    setAsking(text);
+    setAskError(null);
+    setStartError(null);
+    setQ('');
+    try {
+      const r = await api.askAgentk(
+        { text, history: chat.map((x) => ({ text: x.text, reply: x.reply })), projectId: currentProjectId, sessionId: currentSession?.id ?? null },
+        ac.signal,
+      );
+      if (ac.signal.aborted || !mounted.current) return;
+      // An answer that only goes somewhere goes there; anything that changes something waits to be picked.
+      const only = goesAtOnce(r.actions);
+      if (only) {
+        onClose();
+        go(only);
+        return;
+      }
+      setChat((c) => [...c, { text, ...r }]);
+    } catch (e) {
+      if (!ac.signal.aborted && mounted.current) setAskError({ text, message: errorMessage(e) });
+    } finally {
+      if (askAbort.current === ac) {
+        askAbort.current = null;
+        if (mounted.current) setAsking(null);
+      }
+    }
+  };
+  /** Esc while AgentK thinks: the ask stops, and its text comes back to change. */
+  const cancelAsk = () => {
+    askAbort.current?.abort();
+    askAbort.current = null;
+    if (asking) setQ(asking);
+    setAsking(null);
+  };
+
+  const last = chat.at(-1);
+  const answerItems = useMemo<Item[]>(() => {
+    if (!last) return [];
+    const run = async (id: string, work: () => Promise<void>) => {
+      setStarting(id);
+      setStartError(null);
+      try {
+        await work();
+      } catch (e) {
+        if (mounted.current) setStartError(errorMessage(e));
+      } finally {
+        if (mounted.current) setStarting(null);
+      }
+    };
+    const busyLabel: Record<AskAgentkAction['type'], string> = { start: 'Starting', link: '', go: '', move: 'Moving', openPr: 'Opening the PR' };
+    return askEntries(last.actions, projects).map((e): Item => {
+      const a = e.action;
+      const item: Item = { id: e.id, label: e.label, hint: e.hint, keywords: '', busy: starting === e.id ? busyLabel[a.type] : undefined, wrap: true };
+      if (e.edit && a.type === 'start') return { ...item, run: () => onEditSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start }) };
+      switch (a.type) {
+        case 'go':
+          return { ...item, run: () => go(a) };
+        // The link's own items follow, as for a pasted link.
+        case 'link':
+          return { ...item, keepOpen: true, run: () => setQ(a.ref) };
+        case 'start':
+          return {
+            ...item, keepOpen: true,
+            run: () => void (!starting && run(e.id, async () => {
+              const session = await api.createSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start });
+              const project = projects.find((p) => p.id === a.projectId);
+              if (!mounted.current || !project) return;
+              onClose();
+              onStarted({ project, session });
+            })),
+          };
+        case 'move':
+        case 'openPr':
+          return {
+            ...item, keepOpen: true,
+            run: () => void (!starting && run(e.id, async () => {
+              const instructions = a.instructions || undefined;
+              const s = a.type === 'move' ? await api.moveSession(a.sessionId, { stage: a.stage, instructions }) : await api.openPr(a.sessionId, { instructions });
+              if (!mounted.current) return;
+              onClose();
+              navigate({ view: 'project', projectId: s.projectId, sessionId: s.id });
+            })),
+          };
+      }
+    });
+    // go() only reads onSettings, which the deps have.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [last, projects, starting, onClose, onStarted, onEditSession, onSettings]);
 
   const linkItems = useMemo<Item[]>(() => {
     if (!refKey) return [];
@@ -225,9 +366,21 @@ export function CommandPalette({
     return out;
   }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSettings]);
 
-  const shown = useMemo(() => [...linkItems, ...filterItems(items, q)], [linkItems, items, q]);
+  const typed = q.trim();
+  const shown = useMemo<Item[]>(() => {
+    if (asking) return [];
+    // Before typing again, the last answer's actions.
+    if (!typed && last) return answerItems;
+    // Last: alone, and so picked by Enter, when nothing matches (a sentence never does). Not for a pasted link.
+    const askItem: Item[] = askAgentk && typed && !refKey
+      ? [{ id: 'ask', label: [`Ask AgentK: “${typed}”`], hint: `${isMac() ? '⌘' : 'Ctrl'}+Enter`, keywords: '', run: () => void ask(typed), keepOpen: true }]
+      : [];
+    return [...linkItems, ...filterItems(items, q), ...askItem];
+    // ask() reads the chat and screen, which change no more often than the deps here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkItems, items, q, typed, refKey, asking, last, answerItems, askAgentk]);
 
-  useEffect(() => setIdx(0), [q, plan]);
+  useEffect(() => setIdx(0), [q, plan, last]);
   useEffect(() => {
     listRef.current?.querySelector('.pal-item.sel')?.scrollIntoView({ block: 'nearest' });
   }, [idx]);
@@ -244,7 +397,7 @@ export function CommandPalette({
       <div
         className="palette"
         role="dialog"
-        aria-label="Command palette"
+        aria-label="Ask AgentK"
         ref={paletteRef}
         onKeyDown={(e) => trapTab(e.nativeEvent, paletteRef.current)}
       >
@@ -253,7 +406,8 @@ export function CommandPalette({
           <input
             id="palette-input"
             className="pal-input"
-            placeholder="Jump to a session, type a command, or paste a GitHub link…"
+            aria-label="Ask AgentK, run a command, or paste a GitHub link"
+            placeholder={placeholder}
             value={q}
             autoFocus
             onChange={(e) => setQ(e.target.value)}
@@ -264,25 +418,61 @@ export function CommandPalette({
               } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 setIdx((i) => Math.max(0, i - 1));
+              } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                if (askAgentk) void ask(q);
               } else if (e.key === 'Enter') {
                 e.preventDefault();
                 choose(shown[idx]);
               } else if (e.key === 'Escape') {
                 e.preventDefault();
-                onClose();
+                if (asking) cancelAsk();
+                else onClose();
               }
             }}
           />
         </div>
-        <div className="pal-list" ref={listRef} role="listbox">
-          {shown.length === 0 && <p className="muted pad">Nothing matches.</p>}
+        {(chat.length > 0 || asking || askError) && (
+          <div className="pal-chat" ref={chatRef} aria-live="polite">
+            {chat.map((x, i) => (
+              <div key={i} className="pal-turn">
+                <p className="pal-you">You: {x.text}</p>
+                <p className="pal-reply">{x.reply}</p>
+                {x.notes.map((n, j) => (
+                  <p key={j} className="pal-note">{n}</p>
+                ))}
+              </div>
+            ))}
+            {asking && (
+              <div className="pal-turn">
+                <p className="pal-you">You: {asking}</p>
+                {/* A tap's way to Esc: the ask stops, its text comes back, and the exchange stays. */}
+                <div className="pal-reply muted">
+                  <Busy label="AgentK is thinking" />
+                  <button className="btn small" onClick={cancelAsk}>Cancel</button>
+                </div>
+              </div>
+            )}
+            {askError && (
+              <div className="pal-turn">
+                <p className="pal-you">You: {askError.text}</p>
+                <div className="pal-reply">
+                  <ErrorText error={askError.message} />
+                  <button className="btn small" onClick={() => void ask(askError.text)}>Try again</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="pal-list" ref={listRef} role="listbox" hidden={!!asking}>
+          {shown.length === 0 && !asking && !last && <p className="muted pad">Nothing matches.</p>}
           {shown.map((it, i) => (
             <button
               key={it.id}
               role="option"
               aria-selected={i === idx}
               aria-disabled={!it.run || undefined}
-              className={cx('pal-item', i === idx && 'sel', !it.run && 'inert')}
+              className={cx('pal-item', i === idx && 'sel', !it.run && 'inert', it.wrap && 'wrap')}
               onMouseEnter={() => setIdx(i)}
               onClick={() => choose(it)}
             >
