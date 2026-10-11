@@ -6,8 +6,8 @@ import {
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
-import { useMedia } from '../hooks/useMedia';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, goesAtOnce, linkEntries, type LabelPart } from '../palette';
+import { useMedia, useTouch } from '../hooks/useMedia';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
@@ -81,6 +81,7 @@ export function CommandPalette({
   const [idx, setIdx] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // A pasted GitHub PR or issue: looked up once typing pauses, and kept while the palette is open.
   const ref = useMemo(() => parseGithubRef(q), [q]);
@@ -130,6 +131,13 @@ export function CommandPalette({
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight });
   }, [chat, asking, askError]);
+  // An ask started with a click took focus to a button that's gone by the answer; Enter picks from
+  // the input, so focus goes back there. Not on a touch screen, where it would raise the keyboard.
+  const touch = useTouch();
+  useEffect(() => {
+    if (asking || touch) return;
+    if (!paletteRef.current?.contains(document.activeElement)) inputRef.current?.focus();
+  }, [asking, touch]);
 
   // The placeholder rotates through what the palette takes, on every screen, unless motion is reduced.
   const still = useMedia('(prefers-reduced-motion: reduce)');
@@ -163,13 +171,7 @@ export function CommandPalette({
         ac.signal,
       );
       if (ac.signal.aborted || !mounted.current) return;
-      // An answer that only goes somewhere goes there; anything that changes something waits to be picked.
-      const only = goesAtOnce(r.actions);
-      if (only) {
-        onClose();
-        go(only);
-        return;
-      }
+      // Every action waits to be picked, a lone go too: the reply is the answer, and it stays on screen.
       setChat((c) => [...c, { text, ...r }]);
     } catch (e) {
       if (!ac.signal.aborted && mounted.current) setAskError({ text, message: errorMessage(e) });
@@ -405,6 +407,7 @@ export function CommandPalette({
           <img src="/logo.png" alt="" width={18} height={18} />
           <input
             id="palette-input"
+            ref={inputRef}
             className="pal-input"
             aria-label="Ask AgentK, run a command, or paste a GitHub link"
             placeholder={placeholder}

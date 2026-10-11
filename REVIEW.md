@@ -110,8 +110,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       allow) so a slow or restarting server never blocks Claude.
 - [ ] Ask AgentK (`askagentk.ts`) only proposes: its `claude -p` keeps `--tools ""`,
       `--strict-mcp-config` and hooks off, the answer's actions are checked against the state
-      (`checkActions()`), and the browser runs one only when the user picks it (a lone `go` aside),
-      through the route the UI already uses. Names, branches and PR titles in its context stay
+      (`checkActions()`), and the browser runs one only when the user picks it (a lone `go`
+      too), through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
