@@ -594,7 +594,7 @@ export interface Session {
   /** As stored (see StoredKind); `kindOf(session.kind)` is `task` or `review-pr`. */
   kind: StoredKind;
   stage: Stage;
-  /** The session has a task (its first prompt, or its name); one started at Explore without a first prompt has none. */
+  /** The session has a task (its first prompt, or its name); only one started at Explore without a first prompt before the name became its task has none. */
   hasTask: boolean;
   prNumber: number | null;
   prUrl: string | null;
@@ -1629,9 +1629,9 @@ export interface MoveSessionRequest {
    */
   prompt?: boolean;
   /**
-   * The task, for a session that has none yet (one started at Explore without a first prompt); the
-   * stage's start prompt then goes with it. Optional: without it, the move's prompt has AgentK carry
-   * on from the conversation, as it does for a session that has a task.
+   * The task, for a session that has none yet (one started at Explore without a first prompt, before
+   * the name became the task); the stage's start prompt then goes with it. Optional: without it, the
+   * move's prompt has AgentK carry on from the conversation, as it does for a session that has a task.
    */
   task?: string;
   /**

@@ -452,11 +452,11 @@ export class SessionManager {
     if (!name) throw new HttpError(400, 'Give the session a name.');
     const notes = review ? (req.prompt ?? '').trim() : '';
     const stage: Stage = review ? 'reviewing-pr' : start;
-    // A task with no first prompt works on its name, unless it starts at Explore, where it waits
-    // for you. A review's task is the PR (the user's notes are kept apart, for its prompt).
+    // A task with no first prompt works on its name, at any start. A review's task is the PR (the
+    // user's notes are kept apart, for its prompt).
     const task = review
       ? `Review PR #${review.info.number} of ${review.repo}: ${review.info.title}`
-      : (req.prompt ?? '').trim() || (stage === 'explore' ? '' : name);
+      : (req.prompt ?? '').trim() || name;
     // A repo with no commits yet (one opened before AgentK gave it a first commit) gets one now.
     if (!review) {
       try {
@@ -860,7 +860,7 @@ export class SessionManager {
 
   /**
    * Whether the session starts with a prompt: it has a task, or images from the New session dialog
-   * (at Explore, images alone are a first prompt; the session still has no task to move on with).
+   * (a session started at Explore before its name became the task may have images and no task).
    */
   hasFirstPrompt(row: SessionRow): boolean {
     return !!row.initial_prompt || startImages(row).length > 0;

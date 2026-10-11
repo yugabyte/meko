@@ -69,7 +69,7 @@ rename, the session's Meko conversation is retitled in the background (`conversa
 the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
 keeps the old title), and Claude reads the new name in its system prompt
 the next time it's launched, and at the head of the task in any later prompt that names it. A task
-that was its name (started at Design or Code with no first prompt) takes the new name too, so the
+that was its name (started with no first prompt) takes the new name too, so the
 task never carries both. Claude Code's own name for the conversation (`--name`, given at the
 first launch) stays. An archived session can't be renamed.
 
@@ -200,9 +200,8 @@ prompt reaches Claude on its command line, where a path isn't taken as an attach
 every prompt that names the task (a review's notes) adds the paths with a line asking Claude to
 open each with its Read tool: the first prompt, a move that gives the session its task, a relaunch without resume.
 The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
-prompt. The images aren't the task: at Explore, images with no text are a first prompt, but the
-session still has no task (`Session.hasTask`), so moving it on offers to take one. AgentK's Meko search
-at start uses the task's text alone. Staged images no session started with
+prompt. The images aren't the task: with no text, the name is the task, as for any session started
+with no first prompt. AgentK's Meko search at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that
