@@ -1,0 +1,109 @@
+# Architecture
+
+Part of the [AgentK Local design](../design.md).
+
+There are three long-lived pieces on the host: the web server, the session host that owns every
+Claude process, and the state directory at `~/.agent-k-local`. The server is stateless enough to
+be killed at any time. The session host and the on-disk state are what carry your work.
+
+```mermaid
+flowchart LR
+  subgraph Mac["Your laptop"]
+    B["Browser or installed web app"]
+  end
+  subgraph Host["Devserver (headless) or your Mac"]
+    S["AgentK Local server<br/>HTTPS :7777"]
+    H["hook.sock<br/>unix socket"]
+    T["session host<br/>own service (systemd or launchd)"]
+    C1["claude in worktree A"]
+    C2["claude in worktree B"]
+    ST[("~/.agent-k-local<br/>state, certs, app versions")]
+    U["updater"]
+  end
+  M["Meko MCP"]
+  GH["GitHub Releases"]
+  B -- "HTTPS + WebSocket, cookie auth" --> S
+  S -- "host.sock: requests, attach streams" --> T
+  T -- "pty" --> C1
+  T -- "pty" --> C2
+  C1 -- "Claude hooks" --> H
+  C2 -- "Claude hooks" --> H
+  H --> S
+  S --- ST
+  S -- "datapack list and create" --> M
+  C1 -- "capture into MEKO_DATAPACK_ID" --> M
+  U -- "poll, download, verify" --> GH
+```
+
+**Terminal path.** When you open a tab, the browser opens a WebSocket, and the server attaches
+it to the session's pane in the session host over `host.sock`. The host sends the screen as it is
+now first (a full reset, then the screen, its scrollback and the terminal modes, from a headless
+xterm it keeps for every pane), then the output as it comes. Closing the tab ends only that
+attach, and Claude keeps running. The host interprets no keys: everything typed, Ctrl+B included,
+reaches Claude Code.
+
+**The session host** (`src/server/host/`) runs each session's launcher in a pty with node-pty
+(`TERM=xterm-256color`, `COLORTERM=truecolor`), and keeps a pane whose process exited, with its
+exit status, until it is started again or ended. It answers the program's terminal queries
+(device attributes, cursor position, colors) itself from its headless xterm, so Claude gets one
+answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
+real terminal's with `agent-k-local attach`). Sessions don't inherit this install's `AK_HOME`,
+`AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
+as live only once its program has started. It listens only on
+`host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
+one JSON request per connection: `hello`, `list`, `spawn` (never over a live pane), `kill`,
+`write`, `paste` (a bracketed paste when Claude turned that on, then Enter after 300 ms; pastes to
+one pane go one at a time), `capture` (the visible screen as text), `stop`, and `attach`, which
+turns the connection into frames both ways (`src/server/host/protocol.ts`). One host runs per home:
+it holds the home's host lease, `host.lock`, for as long as it runs (beaten every 10 seconds, as
+`server.lock` is for the server), so a second host refuses to start (exit 75) even when the first is
+only slow to answer; one that lost its lease (it stalled for longer than 45 seconds) ends its panes
+and exits. On the server's side, only "nothing listening on the socket" means no host: a timeout or
+a garbled answer skips that reconcile tick instead, and starts of a host never run two at once. It
+writes `run/host.json` (pid, version, app directory, protocol) when it starts.
+
+**Homes under /net.** Claude Code (2.1.292 and later) asks before every read or edit of a path
+under `/net`, the automounter's `-hosts` map, even in auto mode, and no permission rule,
+`--add-dir` or setting lifts that. A home there (`/net/<host>/data/you`) would stop a session on
+every file in its worktree, its design file, its pasted images and its own `~/.claude`. When the
+machine is that host, the same folder is mounted locally without the prefix (`/data/you`), so
+everything AgentK hands Claude goes through `claudePath()` (`src/server/paths.ts`), which drops
+the prefix when the two are the same folder (the same device and inode of the export root; only
+this machine's own `/net/<host>` is checked, by host name, since a stat into another host's
+mount can hang while that host is down):
+the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `AK_HOOK_SOCK`
+(Claude Code refuses a mod's `$.http.fetch` to a socket under `/net`, "a network location is not
+reached from here", so the mod would never reach AgentK), the allow rules in the hooks settings
+file, and the design file, questions file and image paths in prompts. What
+AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
+so the Design guard checks an edit against both, the learn step leaves out a fact that names
+either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
+`src/database.ts`), and a session's transcript is looked up under both (a session started before
+keeps its transcript: a resume from the local spelling finds it). Started by the local spelling,
+a worktree isn't tied back to its repo for folder trust (its `.git` file names the stored
+spelling), so AgentK also trusts that exact folder in `~/.claude.json` before launching.
+The project's main checkout keeps its path, and paths on other hosts stay under `/net`.
+
+**Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just
+attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
+viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
+used themselves. When the active viewer leaves, the one used most recently before it takes over.
+
+**From a terminal.** `agent-k-local attach <name>` shows a session's terminal in the one you run it
+in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no
+name it lists them). `Ctrl+\` detaches, and Claude keeps running.
+
+**Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file.
+The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
+which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or
+`/resume` inside Claude) switches conversations, `SessionStart` carries the new session id, and
+Resume and recovery continue that conversation. `SessionStart` has a second hook, `context.sh`,
+which asks the socket's `/context` route for context to start with and prints it for Claude Code
+(what AgentK's Meko search found: see [Meko recall at start](recall-and-learn.md#meko-recall-at-start)). Like the
+edit guard, it prints nothing when the server can't be reached, and its curl gives up after 4 seconds.
+
+The hook forwarder gives up quietly when the socket isn't there, so the server makes sure it is.
+It binds the socket under a temporary name and renames it into place, removes it when it stops
+only if the file is still its own, and every 10 seconds binds it again if the file was removed or
+replaced (see [One server per home](recovery.md#one-server-per-home)).

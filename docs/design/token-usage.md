@@ -1,0 +1,164 @@
+# Token usage
+
+Part of the [AgentK Local design](../design.md).
+
+Claude Code writes every model response to the session transcript with its token counts. The
+server reads new lines from each session's transcript, and from any subagent transcripts under
+`<session>/subagents/`, after every turn (on the `Stop` hook), when a session ends or is archived,
+and once a minute. It remembers the byte offset it reached, so each line is read once.
+
+One response spans several transcript lines with the same message id, so usage is stored once per
+message: `usage_messages(session_id, message_id, agent, model, at, input, output, cache_read,
+cache_write, cache_write_1h)`. Totals per session, project, model and day are sums over that table, and archived
+sessions keep counting toward their project. `cache_write_1h` is the 1-hour share of the cache
+writes (the transcript's `cache_creation.ephemeral_1h_input_tokens`; without that split, every write
+counts as 1-hour, which is what Claude Code uses).
+
+**Cost.** Tokens are priced at Anthropic's API list prices (`src/shared/pricing.ts`: input, output
+and cache read per model, with cache writes at 1.25× input for the 5-minute cache and 2× for the
+1-hour one), from per-model sums. It's shown as **Est. cost**, what the tokens would cost on the
+API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
+A model with no known price adds tokens but no cost; the cost then reads `≥ $…` (**Est. cost,
+partial**), and the tooltip says how many responses were left out. Model ids match with a date
+(`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).
+
+**Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
+(`mcp__meko__<tool>`, or a plugin's `mcp__plugin_…_meko__<tool>`) and their results, in the main
+transcript and subagents: `meko_calls(session_id, tool_use_id, agent, tool, kind, at, outcome,
+results, input_chars, result_chars, model, context_tokens)`. A **lookup** searches or fetches
+(`memory_search`, `knowledgebase_search`, `context_search`, `memory_get_all`, `memory_get_by_id`,
+`conversation_get`, `artifact_get`); a **save** writes (`memory_add`, `memory_update`,
+`memory_promote`, `artifact_put`, `conversation_add_message`); anything else (datapacks,
+conversations) is counted as a call only. A result can come in a later read than its call, so a call
+waits with no outcome until its `tool_result` is read. Meko wraps its JSON in `{"result": "…"}`; a
+lookup **found something** when its items (`results`, `memories`, context_search's buckets, or a
+single record; a plain-text reply unless it says nothing was found) aren't empty, and it failed on a
+tool error or a reply with a non-empty `error`. A result too large to show, which Claude Code saved to
+a file, counts as found at the size of its notice, since only the notice entered the context (reading
+the file is Claude's own tool call); a call moved to the background found nothing. `model` and `context_tokens` (input, cache read and write)
+come from the response that made the call. Sizes are characters ÷ 4. Apart from AgentK's own
+search at start (`meko_preloads`, see [Meko recall at start](recall-and-learn.md#meko-recall-at-start)), the Meko
+plugin's hooks inject no recalled memory today, so the transcript is the rest of the record of what
+Meko gave a session. The migration that added the table cleared the read offsets again, so older
+sessions got their calls and 1-hour writes.
+
+**Meko in the first turn.** The same pass keeps when each session's first turn ended:
+`sessions.first_turn_end_at`, set once from the main transcript (subagents don't count). It's the
+first of: a response with `stop_reason: "end_turn"`, an API error Claude Code wrote in the model's
+place (model `<synthetic>`), or, once there has been a response, anything the user sent (a prompt,
+a command, "[Request interrupted by user]"; meta lines, compaction summaries and tool results
+don't count). So an interrupted or failed first turn ends there, not at a later turn's end. After
+a `/clear`, a transcript read again from the start is only the current conversation's. Among
+sessions whose first turn has ended, in projects with datapacks (the others had no Meko to
+search), AgentK adds up about how many tokens Meko brought into that turn (characters ÷ 4, like
+the tokens found): from lookups by Claude or a subagent that found something at or before that
+time (`searchedTokens`), and from the search at start when it was handed over (the seed, `seedTokens`).
+It also counts the sessions the search at start ran in at all (`startSearches`, whatever it
+found), since older sessions predate it and a session started with no task skips it. They're `mekoFirstTurn` on the project and overview
+usage, beside `meko`. The migration that added the column cleared the read offsets once more, so
+sessions from before AgentK searched at start give the numbers to compare with.
+
+**What Meko saved (an estimate).** Nobody sees the run where Meko wasn't there, so savings come
+from a fixed formula (`src/server/mekosavings.ts`), not a comparison. Only searches that found
+something count (`memory_search`, `knowledgebase_search`, `context_search`), plus each **seed**:
+what AgentK's search at session start passed to Claude (`meko_preloads` with outcome `found`). A
+seed is credited like a search made by the session's first main-agent response: *C* is that
+response's context less the seed (a search's context doesn't hold its result yet), *k* counts the
+responses after it, and its price is that response's model. A seed waits for that first response,
+and it counts only in the savings, not in the lookups or tokens found. Without Meko, Claude
+would have found the same thing by exploring: several tool calls, each re-reading the whole context
+and adding file contents. The constants come from this host's transcripts (2026-09-29):
+
+| Constant | Value | From |
+|---|---:|---|
+| `EXPLORE_CALLS` | 3 | Calls one search stands in for (a search of the code and two reads); sessions make a median of 14 exploring calls before their first edit |
+| `EXPLORE_RESULT_TOKENS` | 2,000 | Tokens each adds: median Read ≈ 5,800, median Bash ≈ 150, so one read and two shell calls ≈ 6,000 |
+| `CALL_OUTPUT_TOKENS` | 240 | Median output of a response that makes a tool call |
+| `CARRY_TURNS` | 10 | Later responses counted as re-reading the extra content (the median is 211, but compaction cuts the context) |
+
+For a search with a result of *R* tokens at a context of *C* tokens, followed by *k* =
+min(10, later responses in the same conversation or subagent), with *X* = 3 × 2,000:
+
+```
+re-reads  (3 − 1) × C       cache-read price
+output    (3 − 1) × 240     output price
+content   X − R             1-hour cache-write price (2× input)
+carry     (X − R) × k       cache-read price
+```
+
+The saving is the sum, in tokens and in USD at the calling model's price. A search (or seed) on a
+model with no known price counts in the tokens but not the dollars, and the tile says how many
+searches and seeds were left out.
+An index on `usage_messages(session_id, agent, at)` keeps counting *k* cheap. A result over 6,000
+tokens makes the content and carry terms negative, and they're kept. Session, project and overall
+figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10
+later responses, one search saves about 483k tokens, almost all of them cache reads, so the dollar
+figure is much smaller than the token count. The estimate can't show that Meko didn't help, which is
+why it's labelled **Est.** A comparison of sessions with and without Meko finds was tried and
+dropped: too few sessions to compare, no chance deciding which sessions used Meko, and nothing to
+compare with once every session does.
+
+**What shipped.** A merged PR is the session's `merged` event, or a Done session with a PR (Merge &
+Close only ends in Done after a merge), counted once per session. A push
+straight to the base branch is found in the same transcript pass: a Bash tool result that is a
+push (git push's `To <remote>` line, or Claude Code's `gitOperation.push` marker, which also covers
+output cut short with `| tail`) with a fast-forward `old..new  src -> <base>` ref update is stored
+in `pushes(session_id, range, ref, at, commits, file_types)`, and `git rev-list --count old..new` in the
+project's repo fills in `commits` (`-1` when git can't tell; the push still counts), and
+`git diff --numstat -z old new` fills in `file_types`, what it changed per file extension, for the
+[usage stats](usage-stats.md) (NULL when git can't tell, and for pushes found before it was added). Fetch and pull
+output (`main -> origin/main`, under `From`), forced updates and new refs don't match. The
+migration that added the table cleared the read offsets, so every transcript was read once more
+(usage rows are upserts) and older pushes were found; transcripts of archived sessions are read at
+startup, one session per tick.
+
+**Plan limits.** On Pro and Max plans, Claude Code passes the account's 5-hour and weekly usage
+(`rate_limits.five_hour` / `seven_day`: percent used and reset time) to its status line command.
+Sessions are launched with AgentK Local's own status line (`run/statusline.sh`, set in the
+`--settings` file). It sends inputs that carry limits to the server over the hook socket, in the
+background, and then runs the user's own status line command with the same input, so the terminal
+looks unchanged. That command is found at launch (local project settings, then project, then user
+settings) and passed as `AK_USER_STATUSLINE`; sessions launched before this existed use the
+user-level command saved in `run/user-statusline`; its `padding` and `refreshInterval` are copied.
+If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--inner-cmd`, or
+`MEKO_INNER_STATUSLINE`) runs: Meko's "Meko: <datapack>" suffix would repeat what the session
+screen already shows, since sessions always use the project's datapack.
+AgentK's mod reports the same windows after each turn (`session.measure`), whatever the status line does.
+All sessions share one account, so reports are merged per window: a window that has reset is
+ignored, a later window replaces an earlier one, the higher use wins within a window, and a report
+missing a window keeps the last one, so an idle session re-running its status line with an old
+reading changes nothing. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,
+turning amber at 80% and red at 95%. A window disappears once its reset time passes. The numbers
+only move when a session gets a reply, so the rail says when they were last reported.
+
+- **Where it shows.** The session footer and tab tooltip show the session's total and output
+  tokens. The rail tooltip shows the project total. The project home has a **Token usage**
+  section: headline numbers with **Est. cost**, a 14-day chart with a table view, the Meko section,
+  and breakdowns by session (with a **Meko** column, found / lookups, when any session called Meko)
+  and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
+  cost, merged PRs and commits pushed straight to a base branch, a 14-day chart, the Meko section
+  for every project, and breakdowns by project (current ones first, then deleted ones, which keep
+  their sessions and usage; each row shows its repo folder and when it was last active, and has
+  **Cost**, **Meko** and **Est. saved** columns, which a phone leaves out) and by model. Every
+  column header sorts its table; tapping it again reverses the order.
+- **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
+  light theme, white in the dark) and tiles for lookups, lookups that found something, saves,
+  **1st-turn tokens** (the tokens Meko brought into first turns, `≈ 15.3k`, with the split on one
+  more line, `Seeded ≈ 3.3k · Searched ≈ 12k`, or `Seeded none yet` before AgentK's search at
+  start has run in any of them; a dash before any first turn has ended; the
+  tooltip says how many sessions the search at start ran in; `firstTurnText` in
+  `src/web/util.ts`), tokens found, and **Est. saved** in USD and tokens (searches and seeds), green for a saving
+  (a negative estimate is in the normal text color, and a dash means no search has found
+  anything and no session was seeded), then two tiles for the [learn step](recall-and-learn.md#the-learn-step)
+  (`MekoLearning`, from `meko_learns` and the steps' own `usage_messages` rows; `learningText` in
+  `src/web/util.ts`): **Learned**, the memories it saved, with `2 corrected · 3 steps` on the line
+  under it and a tooltip that adds the facts found already known, the steps that didn't finish and
+  the Merge & Close sessions it was skipped in; and **Learning cost**, the steps' model calls in USD
+  with their tokens under it (tokens alone when no model had a price). Both are a dash before any
+  step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
+  (and, on the project home, the project has a datapack).
+- **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
+  output. Cache reads dominate long sessions, so the headline total is shown next to output. The
+  cost is an estimate at API list prices, not a bill.
+- **In Meko.** When a task is cleaned up, its token totals are included in the "shipped" summary
+  written to the project's dedicated datapack.

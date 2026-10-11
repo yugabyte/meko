@@ -265,8 +265,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`it.each`), and a fix extends the nearest existing test rather than adding a new one or a
       new file. Name which tests to drop or merge. Doc-only, comment-only and pure-refactor
       changes need no new tests.
-- [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.md`,
-      `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
+- [ ] **Docs are updated in the same change** (see the table in AGENTS.md): the part of
+      `docs/design/` that covers the change (and the contents table in `docs/design.md` for a new
+      part), `README.md`, `CONTRIBUTING.md`, `AGENTS.md` (the root one, `src/server/AGENTS.md` or
+      `src/web/AGENTS.md`), `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes `scripts/check-title.sh`, and its type

@@ -1,0 +1,82 @@
+# Project home
+
+Part of the [AgentK Local design](../design.md).
+
+![The project home page with datapacks, recent activity, token usage and settings](../screenshots/project-home.png)
+
+Recent activity shows the project's last 50 events, newest first, and scrolls inside its box so it
+never pushes the rest of the page down.
+
+**Share** sits in the project's header: it shares the whole project, through its dedicated
+datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with
+no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL on
+the Meko tab (the tab warns about it too). With Meko
+off it asks for a Meko API key first (**Add a Meko API key**), and for a project without a
+dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
+maintainer. See [Sharing a project](sharing.md).
+
+A project without a dedicated datapack says so in its Datapacks box, with **Add a dedicated
+datapack** (a new one, or one of yours; `POST /api/projects/:id/dedicated-datapack`), or **Add a
+Meko API key** while Meko is off. A shared datapack already attached can become the dedicated one.
+New sessions use it, each pinning it for its own agent id. Search is hidden for a project with no
+datapacks.
+
+The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
+**Switch the dedicated datapack**, to make a new datapack or one of yours the dedicated one; attached
+shared datapacks are listed first, and a new one's default name gets `-2` (or the next free number)
+when the usual name is taken. The old datapack stays attached as shared, so its memories can still
+be searched, unless **Detach *old* from this project** is checked. Nothing is deleted in Meko. The
+dialog warns how many of the project's sessions are running (starting, working, needs you, idle,
+recovered): they keep the datapack they were launched with, and so keep writing to the old one until
+they're restarted. That covers Claude's own Meko calls (its prompt names the old one), capture (the
+Meko hook keeps the datapack in the session's watermark once the session has started) and AgentK's
+writes for the session: designs, the PR's Meko lines and what shipped go to the datapack recorded on
+the session at launch (`sessions.meko_datapack_id`), under the session's own Meko conversation there
+(AgentK's writes for a session always go under its own conversation). New and resumed sessions get the new one
+(a resumed session's Meko conversation is keyed by datapack, so its earlier turns stay in the old
+one). The request names the datapack it replaces
+(`replace`), so a switch made meanwhile in another tab is refused (409) rather than undone; the old
+row is demoted or detached in the same transaction as the new one is added, the project's
+server-side Meko conversation (used for search) is made again in the new datapack. Pins are per session, so a running
+session's stays on the old datapack and the next one to start pins the new one.
+
+**Log Meko calls** (Project settings, off by default; shown while Meko is on, or while it's on for
+the project so it can be turned off) keeps, for each of the project's sessions, every Meko call
+AgentK makes for it, with what it sent and what came back, in
+`~/.agent-k-local/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
+(the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
+conversation (created and renamed), design uploads, the learn step's searches and writes, and the
+"Shipped in…" memory: the call sites wrap their work in `withMekoScope(session)`, an
+AsyncLocalStorage that `MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). The
+scope names the session's id and when that start of it was made: Try again reuses a failed start's
+id, and a call the failed start still had in flight is dropped rather than logged as the new
+start's. Calls
+that belong to no session (the project home's search and Datapacks box, sharing, the invite sync,
+Settings → Meko's checks) and Claude's own Meko calls (already in its transcript) aren't kept, nor
+are transcript capture runs (their failures go to `server.log`). Each line holds the tool, its
+args and its reply (parsed, or its text), the error, how long it took, the tries (2 when it was
+sent again after a transport failure: a read, or a write that surely never reached Meko) and the
+learn step that made it. The summary's keys come first, before `args`. Nothing is cut and the
+file has no cap: it's deleted when the session is archived, when its start fails and when the
+project is closed. A line a crash cut short is skipped when the file is read, and the next line
+written starts on a line of its own. The API key
+is never in it: it's only ever in a header. The file is the owner's alone (`0600`).
+
+**View calls**, beside the setting, opens the **Meko calls** page (`/p/<project>/meko`, or
+`/p/<project>/meko/<session>` from the session's ⋯ sheet or the command palette, both offered while
+the setting is on). It shows one session at a time (the one written to last unless one is named),
+newest first, 50 at a time with **Load older**, filtered by tool or **Failed only**. The server reads
+the file backwards from the end in 64 KB chunks, asynchronously so it never holds up other requests
+(`GET /api/sessions/:id/meko-calls?before=`, the byte offset the page stopped at), parsing only each
+line's summary. An unfiltered page reads only as far back as its own calls; a filter that matches
+few calls may read the whole file. A call opens to **Sent** and **Got
+back** by the offset its line starts at, checked against its id. **Copy call**, **Download** (the
+file) and **Clear** (deletes it) are there too. With the setting off, the page says so and offers
+**Turn on**.
+
+When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
+picked up from GitHub), a dialog offers **Close project** (as on the project home; the repo and
+datapacks stay), **New session** or **Keep it open**. It asks only on the project's session view,
+with no other dialog open, and in a visible page, so a background tab stays quiet; loading or
+switching to a project that has no sessions doesn't ask. It closes by itself when the project is
+closed or gets an open session elsewhere.
