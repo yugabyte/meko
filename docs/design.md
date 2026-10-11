@@ -153,7 +153,10 @@ AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` w
 (`SessionManager.endTurn`): the session is idle again, the activity log says *You interrupted the
 turn*, and what waited for the turn's end goes at once (review comments, a queued Open PR or
 approval, review prompts). It isn't a turn Claude died in, so it's never continued by itself
-(`interrupted` stays 0). Without the mod, the session shows as working until the next turn ends.
+(`interrupted` stays 0). It didn't do what it was sent for either: in PR & Review a review, CI or
+conflicts prompt the turn got stays sent, and the findings stay *addressing* (so a queued merge
+waits), until the next turn ends; a Review a PR session's update summary stays sent the same way.
+Without the mod, the session shows as working until the next turn ends.
 
 ### AgentK's mod in Claude
 
@@ -256,7 +259,8 @@ on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2
 leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
 call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
 mod says it has its answer (`/mod/ask/done`), when the mod stops asking for 10 seconds (the call
-was interrupted, or Claude died), at the turn's end (`Stop`), and on a reset; and since the mod
+was interrupted, or Claude died), at the turn's end (`Stop`, or an interrupted turn's
+`/mod/turn`), and on a reset; and since the mod
 sends the questions with every ask, a server restart brings the ask back with the next one. Only
 choice questions (1 to 4, each with options) are offered: a question of another kind (Claude
 Code's `text` and `number` questions) is left to the terminal. Text is capped for the browser (the
@@ -384,7 +388,8 @@ motion the dots are still.
 session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
 `tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
 memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
-when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too) and on a reset
+when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too, or an
+interrupted turn's `/mod/turn`) and on a reset
 (a relaunch or `SessionEnd`), in case an end never got through.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
@@ -2144,7 +2149,8 @@ session moments later, so run `/agentk_learn` during the session to look at one.
 
 Claude Code writes every model response to the session transcript with its token counts. The
 server reads new lines from each session's transcript, and from any subagent transcripts under
-`<session>/subagents/`, after every turn (on the `Stop` hook), when a session ends or is archived,
+`<session>/subagents/`, after every turn (on the `Stop` hook, or an interrupted turn's
+`/mod/turn`), when a session ends or is archived,
 and once a minute. It remembers the byte offset it reached, so each line is read once.
 
 One response spans several transcript lines with the same message id, so usage is stored once per

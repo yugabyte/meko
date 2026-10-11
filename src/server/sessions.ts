@@ -1398,7 +1398,7 @@ export class SessionManager {
     }
     this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
-    await this.core.lifecycle.onTurnEnd(id);
+    await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
   }
 
   async onHook(token: string, p: HookPayload): Promise<void> {
