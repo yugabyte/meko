@@ -10,6 +10,7 @@ import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  LinkPlan, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -367,6 +368,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.prReview.reviewable(req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
   app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/task-prs', async (req): Promise<TaskPrs> =>
     taskPrs(core, req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
+  app.get<{ Querystring: { ref?: string } }>('/api/github-link', async (req): Promise<LinkPlan> => core.githubLinks.plan(req.query.ref));
+  app.post<{ Body: StartFromLinkRequest }>('/api/github-link/start', async (req): Promise<StartFromLinkResult> =>
+    core.githubLinks.start(req.body && typeof req.body === 'object' ? req.body : ({} as StartFromLinkRequest)));
   app.get('/api/usage', async () => usageOverview(core.db));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 

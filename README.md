@@ -122,6 +122,10 @@ your phone can connect.
   decisions) open beside the terminal and the decisions behind it from Meko. Then AgentK waits and helps with
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
+- **Paste a GitHub link to start:** paste a PR or issue link into Search and commands (`⌘K`). A PR
+  gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
+  to Code), in the project it belongs to: the one whose datapack its description names, or one on
+  its repo. If there's none, AgentK opens a project for it and clones the repo if needed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
