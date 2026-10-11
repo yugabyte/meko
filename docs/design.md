@@ -862,7 +862,8 @@ the stage bar with its gate button (Approve design, Open PR, Merge & Close) and 
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
 tap outside it, or Escape. Dialogs open as bottom sheets, with tabs in a
-header (Settings) on their own row under the title and its ×. The app, the
+header (Settings) on their own row under the title and its × (focus still goes from the tabs to the
+×, as on a desktop). The app, the
 overlay behind a dialog or sheet, and the sign-in and setup screens are pinned to the visible
 viewport (its height and, where iOS pans the page for a focused field, its offset), so the on-screen
 keyboard shrinks them instead of covering the prompt or a dialog's fields. The sign-in screens
