@@ -762,11 +762,13 @@ terminal**, which hides it for that start in this page.
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
-PR or issue pasted, start a session on it: see [Starting from a GitHub link](#starting-from-a-github-link)); session names show
-in the accent colour and project names in bold, so they don't read as commands. On Linux and
-Windows these use Ctrl, so the terminal
-doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
-it has focus. To copy from the terminal, drag across the text and press `Ctrl+C` (`⌘C`), which
+PR or issue pasted, start a session on it: see [Starting from a GitHub link](#starting-from-a-github-link)).
+The search bar at the top of the rail (the AgentK logo, "Search AgentK Local" and the shortcut)
+opens it too; either way it opens over that bar, at the top left. In the palette, session names show
+in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
+these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
+through to the terminal whenever it has focus. To copy from the terminal, drag across the text and
+press `Ctrl+C` (`⌘C`), which
 copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
@@ -848,9 +850,9 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 ### On a phone
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
-app bar (the Back gesture closes it, and it holds **Search and commands** in place of `⌘K`). The
-app bar also holds the session tabs, between the drawer button and ⋯, so the session name isn't
-repeated above them (each tab shows its status and stage). The session header,
+app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
+top of the screen, in place of `⌘K`). The app bar also holds the session tabs, between the drawer
+button and ⋯, so the session name isn't repeated above them (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a

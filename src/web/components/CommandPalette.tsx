@@ -236,7 +236,8 @@ export function CommandPalette({
   };
 
   return (
-    <div className="overlay top" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    // On desktop it opens over the rail's search bar (`pal-overlay`); on a phone, across the top.
+    <div className="overlay top pal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className="palette"
         role="dialog"
@@ -244,29 +245,32 @@ export function CommandPalette({
         ref={paletteRef}
         onKeyDown={(e) => trapTab(e.nativeEvent, paletteRef.current)}
       >
-        <input
-          id="palette-input"
-          className="pal-input"
-          placeholder="Jump to a session, type a command, or paste a GitHub link…"
-          value={q}
-          autoFocus
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setIdx((i) => Math.min(shown.length - 1, i + 1));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setIdx((i) => Math.max(0, i - 1));
-            } else if (e.key === 'Enter') {
-              e.preventDefault();
-              choose(shown[idx]);
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              onClose();
-            }
-          }}
-        />
+        <div className="pal-row">
+          <img src="/logo.png" alt="" width={18} height={18} />
+          <input
+            id="palette-input"
+            className="pal-input"
+            placeholder="Jump to a session, type a command, or paste a GitHub link…"
+            value={q}
+            autoFocus
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setIdx((i) => Math.min(shown.length - 1, i + 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setIdx((i) => Math.max(0, i - 1));
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                choose(shown[idx]);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                onClose();
+              }
+            }}
+          />
+        </div>
         <div className="pal-list" ref={listRef} role="listbox">
           {shown.length === 0 && <p className="muted pad">Nothing matches.</p>}
           {shown.map((it, i) => (
