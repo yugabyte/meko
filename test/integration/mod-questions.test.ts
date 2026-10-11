@@ -100,7 +100,8 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await env.core.sessions.submit(id, 'DESIGN_TOOL now');
     await waitFor(() => get(id), (x) => x.designQuestions.open === 1, 10000, "the tool's questions");
     expect(get(id).status).toBe('working');
-    const calls = jsonl<{ status: number; body: { error?: string; text?: string } }>(env, 'mod-tool.jsonl');
+    // The fake logs each call once its answer is back, which can be after the store shows it.
+    const calls = await waitFor(() => jsonl<{ status: number; body: { error?: string; text?: string } }>(env, 'mod-tool.jsonl'), (c) => c.length === 2, 10000, "the tool's answers");
     expect(calls[0]).toMatchObject({ status: 400, body: { error: expect.stringMatching(/Question 1 needs an "id"/) } });
     expect(calls[1]).toMatchObject({ status: 200, body: { text: expect.stringMatching(/^Saved 1 question \(1 open\)/) } });
     expect(JSON.parse(readFileSync(env.core.sessions.questionsFile(row(id)), 'utf8')).questions[0]).toMatchObject({ id: 'store', recommended: 0 });
