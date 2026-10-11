@@ -1487,6 +1487,9 @@ textarea.input {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* The questions scroll on their own; this only scrolls when the panel is too short for the
+     header and footer (a phone with the keyboard up), so the footer's buttons stay reachable. */
+  overflow-y: auto;
 }
 .dq-scroll {
   flex: 1;
@@ -1511,6 +1514,10 @@ textarea.input {
   min-width: 0;
   font-size: 12px;
   color: var(--muted);
+}
+/* With nothing to say it only pushes the buttons right, keeping them on one row on a phone. */
+.dq-foot-note:empty {
+  flex-basis: 0;
 }
 .dq-list {
   list-style: none;

@@ -113,9 +113,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`checkActions()`), and the browser runs one only when the user picks it (a lone `go` aside),
       through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
-- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, allow rules, file paths in
-      prompts) goes through `claudePath()`, so a home under `/net` doesn't make Claude Code ask
-      before every file; what AgentK stores keeps its own spelling.
+- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
+      file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
+      Claude Code ask before every file or refuse the mod's socket; what AgentK stores keeps its
+      own spelling.
 
 ## 3. Lifecycle and GitHub
 

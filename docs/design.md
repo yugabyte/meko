@@ -111,8 +111,10 @@ everything AgentK hands Claude goes through `claudePath()` (`src/server/paths.ts
 the prefix when the two are the same folder (the same device and inode of the export root; only
 this machine's own `/net/<host>` is checked, by host name, since a stat into another host's
 mount can hang while that host is down):
-the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, the allow rules in
-the hooks settings file, and the design file, questions file and image paths in prompts. What
+the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `AK_HOOK_SOCK`
+(Claude Code refuses a mod's `$.http.fetch` to a socket under `/net`, "a network location is not
+reached from here", so the mod would never reach AgentK), the allow rules in the hooks settings
+file, and the design file, questions file and image paths in prompts. What
 AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
 so the Design guard checks an edit against both, the learn step leaves out a fact that names
 either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
@@ -357,9 +359,11 @@ Session states, shown with a dot in the rail and on each tab:
   and its halo blinks on (*Meko in the dot*, below).
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
-dot with the Web Animations API from the start of the page's timeline, so dots with the same
-signal blink together and a dot shown again picks up where the signal is. With reduced motion
-the dots are still.
+dot with the Web Animations API, pinned to the page's timeline. Each dot starts at its own point
+in the signal, a whole number of units set by a hash of its session's id (the project's for the
+rail's dot, `blinkOffsetMs()`), so different sessions blink out of step, a session's tab and
+palette dots blink together, and a dot shown again picks up where its signal is. With reduced
+motion the dots are still.
 
 **Meko in the dot.** While Claude runs a Meko tool call, `Session.mekoCall` is true and a working
 session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
@@ -717,7 +721,10 @@ recommendation, keeping the text.
 
 With open questions, **Approve design** reads **Answer & approve**: the gate, the panel header and
 the ⋯ sheet take you to the questions, and the approval goes from their footer, **Approve with
-answers**. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
+answers** (the header leaves its button out while the questions are on screen, or can't be shown
+because the design couldn't be read). On a panel too
+short for the questions and their footer (a phone with the keyboard up), the view scrolls, so the
+footer stays reachable. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
 recommendation (its own judgment when it has none). **Send for revision** sends them as the `design-answers` prompt instead, and AgentK
 revises the design. Without AgentK's mod it only works

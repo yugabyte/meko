@@ -27,6 +27,8 @@ interface Item {
   /** Its label wraps rather than being cut (AgentK's actions, read before they run). */
   wrap?: boolean;
   dot?: DotState;
+  /** Where in the blink signal the dot is: its session's id. */
+  phase?: string;
 }
 
 /** How long typing pauses before a pasted link is looked up. */
@@ -335,6 +337,7 @@ export function CommandPalette({
           hint: `${p.name} · ${STAGE_LABELS[s.stage]} · ${STATUS_TEXT[dotState(s)]}`,
           keywords: `${p.name} ${s.name} ${s.branch}`,
           dot: dotState(s),
+          phase: s.id,
           run: () => navigate({ view: 'project', projectId: p.id, sessionId: s.id }),
         });
       }
@@ -473,7 +476,7 @@ export function CommandPalette({
               onMouseEnter={() => setIdx(i)}
               onClick={() => choose(it)}
             >
-              {it.dot ? <StatusDot status={it.dot} /> : <span className="pal-icon">›</span>}
+              {it.dot ? <StatusDot status={it.dot} phase={it.phase} /> : <span className="pal-icon">›</span>}
               <span className="pal-label">
                 {it.busy ? <Busy label={it.busy} /> : it.label.map((part, j) =>
                   typeof part === 'string' ? (

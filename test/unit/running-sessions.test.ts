@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { ProjectWithSessions, Session, SessionStatus } from '../../src/shared/types.js';
+import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkOffsetMs, totalUnits } from '../../src/web/blink.js';
 import { StatusDot } from '../../src/web/components/common.js';
 import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, runningSessions, type DotState } from '../../src/web/util.js';
 
@@ -51,5 +52,16 @@ describe('dotState', () => {
     const html = renderToStaticMarkup(createElement(StatusDot, { status: 'learning' }));
     expect(html).toContain(`title="${LEARNING_TITLE}"`);
     expect(html).toContain(`aria-label="${STATUS_TEXT.learning}"`);
+  });
+
+  it.each([['working', WORKING_RUNS], ['needs you', KNOCK_RUNS]])('blinks each session at its own point in the %s signal', (_, runs) => {
+    const ids = Array.from({ length: 12 }, (_, i) => `session-${i}`);
+    const offsets = ids.map((id) => blinkOffsetMs(id, runs));
+    expect(ids.map((id) => blinkOffsetMs(id, runs))).toEqual(offsets);
+    expect(new Set(offsets).size).toBeGreaterThan(8);
+    for (const ms of offsets) {
+      expect(ms % BLINK_UNIT_MS).toBe(0);
+      expect(ms).toBeLessThan(totalUnits(runs) * BLINK_UNIT_MS);
+    }
   });
 });

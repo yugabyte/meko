@@ -945,7 +945,8 @@ export class SessionManager {
       AK_USER_STATUSLINE: userStatusLine(row.worktree_path, statusLineScriptPath(this.core.paths))?.command ?? '',
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
-      AK_HOOK_SOCK: this.core.paths.hookSock,
+      // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
+      AK_HOOK_SOCK: claudePath(this.core.paths.hookSock),
       AK_DESIGN_FILE: this.designFile(row),
       MEKO_AGENT_ID: launchedAgentId(row),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',

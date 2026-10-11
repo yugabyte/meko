@@ -115,7 +115,7 @@ export function Rail({
               }}
               title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
             >
-              {count > 0 ? <StatusDot status={aggregateDot(p)} /> : <i className="dot idle" />}
+              {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
               <span className="proj-text">
                 <span className="proj-name">{p.name}</span>
                 <span className="proj-repo">{repoFolder(p.repoPath)}</span>
