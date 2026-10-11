@@ -23,9 +23,12 @@ describe('in-progress labels', () => {
     expect(found).toEqual([]);
   });
 
-  it.each([1, 2, 3])('press key %i for each of its notes in the tune, without moving the text', (key) => {
-    // The tune is played from typing.ts (Dots skips it with reduced motion), never from the CSS.
+  it('play their tune from typing.ts, never from the CSS', () => {
+    // Dots skips the tune with reduced motion; a CSS animation would run regardless.
     expect(STYLES.slice(STYLES.indexOf('.dots {'), STYLES.indexOf('.dot.starting {'))).not.toMatch(/animation/);
+  });
+
+  it.each([1, 2, 3])('press key %i for each of its notes in the tune, without moving the text', (key) => {
     const frames = typingKeyframes(TUNE, key);
     // Only transform and box-shadow move, so the label's width never changes.
     expect(new Set(frames.flatMap((f) => Object.keys(f)))).toEqual(new Set(['offset', 'transform', 'boxShadow']));
