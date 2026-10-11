@@ -3451,7 +3451,7 @@ div[id^='dak-mermaid-'] .label {
   white-space: nowrap;
   margin-left: 0.3em;
 }
-.dots > .key {
+.dots > .dots-key {
   --edge: max(1px, 0.12em);
   display: inline-block;
   width: 0.42em;
@@ -3461,21 +3461,24 @@ div[id^='dak-mermaid-'] .label {
   background: currentColor;
   box-shadow: 0 var(--edge) 0 color-mix(in srgb, currentColor 55%, transparent);
 }
-.dots > .key:last-child {
+.dots > .dots-key:last-child {
   margin-right: 0;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .dots > .key {
+  .dots > .dots-key {
     animation: key-press 1.2s ease-in-out infinite;
   }
-  .dots > .key:nth-child(3) {
+  .dots > .dots-key:nth-child(3) {
     animation-delay: 0.26s;
   }
-  .dots > .key:nth-child(2) {
+  .dots > .dots-key:nth-child(2) {
     animation-delay: 0.52s;
   }
   @keyframes key-press {
-    0%, 22%, 100% { transform: none; }
+    0%, 22%, 100% {
+      transform: none;
+      box-shadow: 0 var(--edge) 0 color-mix(in srgb, currentColor 55%, transparent);
+    }
     8%, 12% {
       transform: translateY(var(--edge));
       box-shadow: 0 0 0 color-mix(in srgb, currentColor 55%, transparent);

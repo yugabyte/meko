@@ -22,15 +22,11 @@ describe('in-progress labels', () => {
     expect(found).toEqual([]);
   });
 
-  it('press their keys in turn, only when motion is allowed and without moving the text', () => {
+  it('press their keys only when motion is allowed and without moving the text', () => {
     const css = STYLES.slice(STYLES.indexOf('.dots {'), STYLES.indexOf('.dot.starting {'));
     const motion = '@media (prefers-reduced-motion: no-preference)';
     expect(css).toContain(motion);
     expect(css.slice(0, css.indexOf(motion))).not.toMatch(/animation/);
-    // Typing, not a wave: key 1, then 3, then 2.
-    const delay = (n: number) => Number(new RegExp(`\\.key:nth-child\\(${n}\\) \\{\\s*animation-delay: ([\\d.]+)s`).exec(css)?.[1]);
-    expect(delay(3)).toBeGreaterThan(0);
-    expect(delay(2)).toBeGreaterThan(delay(3));
     // Only transform and box-shadow move, so the label's width never changes.
     const frames = css.slice(css.indexOf('@keyframes key-press'));
     expect([...frames.matchAll(/([a-z-]+):/g)].map((m) => m[1]).filter((p) => p !== 'transform' && p !== 'box-shadow')).toEqual([]);

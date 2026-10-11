@@ -230,9 +230,9 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 export function Dots() {
   return (
     <span className="dots" aria-hidden="true">
-      <span className="key" />
-      <span className="key" />
-      <span className="key" />
+      <span className="dots-key" />
+      <span className="dots-key" />
+      <span className="dots-key" />
     </span>
   );
 }
