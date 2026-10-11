@@ -15,7 +15,7 @@ import { Busy } from './common';
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
  * questions to answer. Shown as a resizable side panel next to the terminal (the questions on
  * their own tab), or the whole page in its own tab (`page`, the questions beside the design on a
- * wide screen). With open questions, Approve shows them (and is left out while they show), and the
+ * wide screen). With open questions, Approve shows them (and is left out while they show or can't), and the
  * approval goes from there with the answers; `onApprove` approves a design with none.
  */
 export function DesignPanel({
@@ -66,7 +66,7 @@ export function DesignPanel({
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
   // The Questions tab's count takes in what Claude is asking right now, shown at its top.
   const waiting = open + (session.asking ? 1 : 0);
-  const questionsShown = split || (tabs && tab === 'questions');
+  const questions = !hasQuestions ? 'none' : split || tab === 'questions' ? 'shown' : 'hidden';
   const toQuestions = () => {
     setTab('questions');
     qcol.current?.scrollIntoView({ block: 'nearest' });
@@ -134,7 +134,7 @@ export function DesignPanel({
           </div>
         )}
         <span className="sp" />
-        {headerApproves(session, questionsShown) && (
+        {headerApproves(session, questions) && (
           <button
             className="btn small primary"
             // With open questions it only shows them; the approval waits for the answers.

@@ -55,14 +55,17 @@ describe('queuedText', () => {
 });
 
 describe('headerApproves', () => {
-  const design = (open: number, over: Partial<Session> = {}) => session({ stage: 'design', hasDesign: true, designQuestions: { open }, ...over });
+  const design = (open: number, over: Partial<Session> = {}) =>
+    session({ stage: 'design', desired: 'running', hasDesign: true, designQuestions: { open }, ...over });
   it.each([
-    ['approves a design with no open questions', design(0), true, true],
-    ['takes the user to the open questions', design(2), false, true],
-    ['leaves it to the footer while the open questions show', design(2), true, false],
-    ['shows nothing before there is a design', design(0, { hasDesign: false }), false, false],
-    ['shows nothing past Design', design(0, { stage: 'code' }), false, false],
-  ])('%s', (_, s, questionsShown, shown) => {
-    expect(headerApproves(s, questionsShown)).toBe(shown);
+    ['approves a design with no open questions', design(0), 'none', true],
+    ['takes the user to the open questions', design(2), 'hidden', true],
+    ['leaves it to the footer while the open questions show', design(2), 'shown', false],
+    ['leaves it out while the open questions can’t be shown', design(2), 'none', false],
+    ['shows nothing before there is a design', design(0, { hasDesign: false }), 'hidden', false],
+    ['shows nothing past Design', design(0, { stage: 'code' }), 'hidden', false],
+    ['shows nothing for an archived session', design(0, { desired: 'archived' }), 'hidden', false],
+  ] as const)('%s', (_, s, questions, shown) => {
+    expect(headerApproves(s, questions)).toBe(shown);
   });
 });
