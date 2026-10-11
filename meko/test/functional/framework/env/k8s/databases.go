@@ -19,6 +19,7 @@ import (
 
 const (
 	magePreview   = "ysql_yb_enable_mage"
+	readCommitted = "yb_enable_read_committed_isolation"
 	stackDBName   = "db"
 	reapTimeout   = 30 * time.Minute
 	stackDBMemory = 4.0
@@ -139,6 +140,12 @@ func forMeko(s universe.Spec, image string) universe.Spec {
 	if _, ok := s.MasterGflags["tablet_replicas_per_gib_limit"]; !ok {
 		s.MasterGflags["tablet_replicas_per_gib_limit"] = "0"
 	}
+	// yugabyted turns read committed on and YBA leaves it off. Off, mage's
+	// create_vlabel segfaults in data migration 000001 and the stack never comes
+	// up; functional/mage_graph_ddl keeps that failure in sight.
+	if _, ok := s.TServerGflags[readCommitted]; !ok {
+		s.TServerGflags[readCommitted] = "true"
+	}
 	return s
 }
 
@@ -199,22 +206,46 @@ func (p *Provider) prepareBacking(ctx context.Context, spec core.EnvSpec, shared
 		}
 		return nil, nil, fmt.Errorf("the %s database: %w", s.Provider, err)
 	}
-	return b, stackBacking(u), nil
+	return b, stackBacking(ctx, u), nil
 }
 
 // stackBacking is the universe as the stack's pods reach it.
-func stackBacking(u universe.Universe) *mekostack.Backing {
+func stackBacking(ctx context.Context, u universe.Universe) *mekostack.Backing {
 	host, port := u.ClusterAddr()
 	c := u.Spec().Primary()
 	place := map[string]int{}
 	for z, n := range c.Placement {
 		place[universe.ZoneName(z)] += n
 	}
+	// A one-zone spec names a placeholder, and YBA puts it in its provider's zone.
+	if len(place) == 1 {
+		if z := onlyZone(ctx, u); z != "" {
+			place = map[string]int{z: c.Tservers()}
+		}
+	}
 	return &mekostack.Backing{
 		Mode: string(u.Provider()), Describe: fmt.Sprintf("%s database %s at %s:%d", u.Provider(), u.Name(), host, port),
 		Host: host, Port: port, User: "yugabyte", SSLMode: "disable", Namespace: u.Namespace(),
 		Replication: c.RF, Tservers: c.Tservers(), Placement: place,
 	}
+}
+
+func onlyZone(ctx context.Context, u universe.Universe) string {
+	nodes, err := u.Nodes(ctx)
+	if err != nil {
+		return ""
+	}
+	zone := ""
+	for _, n := range nodes {
+		if !n.Tserver || n.Cluster != universe.Primary {
+			continue
+		}
+		if n.Zone == "" || (zone != "" && n.Zone != zone) {
+			return ""
+		}
+		zone = n.Zone
+	}
+	return zone
 }
 
 // teardownBacking collects the database's logs, removes it, and takes its entry

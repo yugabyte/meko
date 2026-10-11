@@ -92,7 +92,7 @@ func Manifest(spec Spec, bin mockpod.Binary) (string, error) {
 			"replicas": 1,
 			"selector": map[string]any{"matchLabels": map[string]string{"app": spec.Name}},
 			"template": map[string]any{
-				"metadata": map[string]any{"labels": podLabels},
+				"metadata": map[string]any{"labels": podLabels, "annotations": mockpod.PodAnnotations()},
 				"spec": map[string]any{
 					"containers": []any{map[string]any{
 						"name":    "llmmock",

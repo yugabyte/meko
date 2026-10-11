@@ -27,6 +27,10 @@ func TestPreviousRelease(t *testing.T) {
 	if _, err := r.Previous(context.Background(), "0.260929.0"); err == nil {
 		t.Errorf("no older release should be an error")
 	}
+	got, err = r.Previous(context.Background(), ReleaseVersion("custom-2884d06e1"))
+	if err != nil || got != "0.261002.0" {
+		t.Fatalf("Previous of a custom build = %q, %v, want the newest release 0.261002.0", got, err)
+	}
 }
 
 // The chart comes out of the release tag itself, not the working tree, and the

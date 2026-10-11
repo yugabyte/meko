@@ -368,3 +368,41 @@ func TestMCPReplicasOverrideTheValuesFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestHashPartitionsReachTheMigrateValues(t *testing.T) {
+	dp, _ := NewDataPlaneSecrets(nil)
+	m := MinIO{AccessKey: "ak", SecretKey: "sk", APIEndpoint: "http://minio:9000", WorkerEndpoint: "http://10.0.0.1:9000"}
+	for n, want := range map[int]any{0: nil, 8: "8"} {
+		cfg := testConfig(t)
+		cfg.HashPartitions = n
+		v, err := cfg.Values(dp, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		migrate, _ := v["apiServer"].(map[string]any)["migrate"].(map[string]any)
+		if got := migrate["hashPartitions"]; got != want {
+			t.Errorf("HashPartitions %d: apiServer.migrate.hashPartitions = %v, want %v", n, got, want)
+		}
+	}
+}
+
+func TestDeployGuardsDeploymentAndStatefulSetPodsFromScaleDown(t *testing.T) {
+	cl := cognitoCluster(quayManifestWithAliases)
+	a, _, _ := cognitoApp(t, cl)
+	if err := a.Deploy(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	guarded := map[string]bool{}
+	for _, c := range cl.calls {
+		if strings.Contains(c.stdin, "kind: PodDisruptionBudget") && strings.Contains(c.stdin, "maxUnavailable: 0") {
+			for _, key := range []string{"pod-template-hash", "controller-revision-hash"} {
+				if strings.Contains(c.stdin, "key: "+key) {
+					guarded[key] = true
+				}
+			}
+		}
+	}
+	if !guarded["pod-template-hash"] || !guarded["controller-revision-hash"] {
+		t.Errorf("zero budgets applied for %v, want Deployment (pod-template-hash) and StatefulSet (controller-revision-hash) pods", guarded)
+	}
+}

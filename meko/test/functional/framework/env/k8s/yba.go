@@ -37,9 +37,7 @@ type ybaCreator struct {
 }
 
 func (c ybaCreator) Create(ctx context.Context, spec universe.Spec) (universe.Universe, error) {
-	p := *c.prov
-	p.RunTag = c.tag
-	u, err := p.Create(ctx, spec)
+	u, err := c.prov.WithRunTag(c.tag).Create(ctx, spec)
 	if u == nil {
 		return nil, err
 	}
@@ -124,7 +122,11 @@ func (p *Provider) ybaProvider(ctx context.Context) (*ybauniverse.Provider, erro
 		_ = d.Teardown(context.Background())
 		return nil, err
 	}
-	version := c.GetString("db.version", c.GetString("versions.yugabytedb", ""))
+	// db.version is declared empty, so GetString's fallback never fires for it.
+	version := c.GetString("db.version", "")
+	if version == "" {
+		version = c.GetString("versions.yugabytedb", "")
+	}
 	r.deployer = d
 	r.prov = &ybauniverse.Provider{
 		Client: cl, K8sProvider: ks, Version: version, Logf: p.logf,

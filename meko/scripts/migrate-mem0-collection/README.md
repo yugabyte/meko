@@ -63,8 +63,8 @@ slower (270 ms against 17 ms) until it was compacted.
 M=<master addresses, host:7100,...>
 DB=<the database in DSN>
 for t in meko_mem0_memories meko_mem0_memories_entities; do
-  for i in $(seq -f '%03g' 0 127); do
-    yb-admin --master_addresses "$M" compact_table "ysql.$DB" "${t}_$i" 600
+  for p in $(psql "$DSN" -Atc "SELECT inhrelid::regclass FROM pg_inherits WHERE inhparent = 'datapacks.$t'::regclass"); do
+    yb-admin --master_addresses "$M" compact_table "ysql.$DB" "${p#datapacks.}" 600
   done
 done
 ```

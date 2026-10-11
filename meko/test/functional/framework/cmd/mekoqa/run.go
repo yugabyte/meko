@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -428,6 +430,8 @@ func prepareSharedStack(ctx context.Context, tests []core.Test, provider core.En
 	return fresh, "environment prepare failed: " + err.Error(), nil
 }
 
+var imagePullFailure = regexp.MustCompile(`ImagePullBackOff|ErrImagePull|InvalidImageName`)
+
 func anyOnSharedStack(tests []core.Test) bool {
 	for _, t := range tests {
 		if !t.Env.OffSharedStack() {
@@ -448,6 +452,7 @@ func allOnSharedStack(tests []core.Test) bool {
 
 func prepareProvider(ctx context.Context, provider core.EnvProvider, cfg *core.Config, rebuild func() (core.EnvProvider, error)) (core.EnvProvider, error) {
 	retries := core.ResolveEnvRetries(cfg)
+	rebuilt := false
 	for attempt := 1; ; attempt++ {
 		prep, ok := provider.(interface{ Prepare(context.Context) error })
 		if !ok {
@@ -457,14 +462,30 @@ func prepareProvider(ctx context.Context, provider core.EnvProvider, cfg *core.C
 		if err == nil {
 			return provider, nil
 		}
-		if closer, ok := provider.(interface{ Close() error }); ok {
-			_ = closer.Close()
-		}
 		// Only the error's first line: a stack's failure report follows it, and a
 		// FailedScheduling event the autoscaler long since resolved would make any
 		// failure look retryable.
 		head, _, _ := strings.Cut(err.Error(), "\n")
 		reason, retryable := core.SchedulingReason(head)
+		// Before giving up or rebuilding the whole provider, any failure but a bad
+		// image gets one more stack on a fresh namespace and database on the same
+		// provider: a run's YBA takes 15 minutes to stand up again.
+		if rb, ok := provider.(core.SharedInfraRebuilder); ok && !rebuilt && !imagePullFailure.MatchString(err.Error()) && ctx.Err() == nil {
+			rebuilt = true
+			log.Printf("RETRY environment prepare: %q; rebuilding the stack once on a fresh namespace and database", head)
+			rerr := rb.RebuildSharedInfra(ctx)
+			if rerr == nil {
+				return provider, nil
+			}
+			if !errors.Is(rerr, core.ErrNoSharedInfraRebuild) {
+				err = rerr
+				head, _, _ = strings.Cut(err.Error(), "\n")
+				reason, retryable = core.SchedulingReason(head)
+			}
+		}
+		if closer, ok := provider.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 		if !retryable || attempt > retries {
 			return provider, err
 		}

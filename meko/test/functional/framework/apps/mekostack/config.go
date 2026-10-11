@@ -69,6 +69,9 @@ type Config struct {
 	APIReplicas int
 	// MCPReplicas, when set, overrides the values files' meko-mcp-server count.
 	MCPReplicas int
+	// HashPartitions, when set, is the partition count of each hash-partitioned
+	// data table the stack's migrations create. 0 keeps the chart's 128.
+	HashPartitions int
 	// APIConfig is extra api-server env, KEY=VALUE, for runtime feature flags the
 	// presets leave off.
 	APIConfig []string
@@ -118,16 +121,17 @@ func FromConfig(get Getter) (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		ChartPath:     chart,
-		Release:       get.GetString("env.mekostack.release", ""),
-		ValuesFiles:   get.GetStringSlice("env.mekostack.values_files", nil),
-		ImageVersion:  get.GetString("env.mekostack.image_version", ""),
-		ImageTags:     map[string]string{},
-		DatabaseImage: get.GetString("env.mekostack.images.database", ""),
-		APIReplicas:   get.GetInt("env.mekostack.api_replicas", 0),
-		MCPReplicas:   get.GetInt("env.mekostack.mcp_replicas", 0),
-		APIConfig:     get.GetStringSlice("env.mekostack.api_config", nil),
-		Auth:          AuthMode(get.GetString("env.mekostack.auth", string(AuthNone))),
+		ChartPath:      chart,
+		Release:        get.GetString("env.mekostack.release", ""),
+		ValuesFiles:    get.GetStringSlice("env.mekostack.values_files", nil),
+		ImageVersion:   get.GetString("env.mekostack.image_version", ""),
+		ImageTags:      map[string]string{},
+		DatabaseImage:  get.GetString("env.mekostack.images.database", ""),
+		APIReplicas:    get.GetInt("env.mekostack.api_replicas", 0),
+		MCPReplicas:    get.GetInt("env.mekostack.mcp_replicas", 0),
+		APIConfig:      get.GetStringSlice("env.mekostack.api_config", nil),
+		HashPartitions: get.GetInt("env.mekostack.hash_partitions", 0),
+		Auth:           AuthMode(get.GetString("env.mekostack.auth", string(AuthCognitoMock))),
 		CognitoMock: cognitomock.Spec{
 			Region:   get.GetString("env.mekostack.cognito_mock.region", ""),
 			PoolID:   get.GetString("env.mekostack.cognito_mock.pool_id", ""),
@@ -204,6 +208,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.APIReplicas < 1 {
 		errs = append(errs, fmt.Errorf("env.mekostack.api_replicas = %d, want at least 1", cfg.APIReplicas))
+	}
+	if cfg.HashPartitions < 0 || cfg.HashPartitions > 1000 {
+		errs = append(errs, fmt.Errorf("env.mekostack.hash_partitions = %d, want 0 to 1000", cfg.HashPartitions))
 	}
 	if cfg.MCPReplicas < 0 {
 		errs = append(errs, fmt.Errorf("env.mekostack.mcp_replicas = %d, want 0 or more", cfg.MCPReplicas))

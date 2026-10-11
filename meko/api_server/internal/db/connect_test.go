@@ -225,3 +225,75 @@ func TestBackfillRuleDetectors(t *testing.T) {
 		})
 	}
 }
+
+// newDataDriver takes a *sql.Conn, so the SET and the migrations share a session
+// by type. This pins the order: the SET runs before anything the driver does.
+func TestDataMigratorSetsHashPartitionsFirst(t *testing.T) {
+	conn, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	mock.ExpectExec("SET meko.hash_partitions = 8").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT CURRENT_DATABASE\(\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"current_database"}).AddRow("meko"))
+	mock.ExpectQuery(`SELECT CURRENT_SCHEMA\(\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"current_schema"}).AddRow("public"))
+	mock.ExpectExec("SELECT pg_advisory_lock").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("FROM information_schema.tables").
+		WithArgs("public", "schema_migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectExec("SELECT pg_advisory_unlock").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	m, err := getDataMigrator(conn, 8)
+	if err != nil {
+		t.Fatalf("getDataMigrator: %v", err)
+	}
+	if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
+		t.Errorf("close: source=%v database=%v", srcErr, dbErr)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRunMigrationsRejectsHashPartitionsOutOfRange(t *testing.T) {
+	for _, n := range []int{0, -1, maxHashPartitions + 1} {
+		if _, err := RunMigrations(nil, nil, MigrationScope{Data: true}, n); err == nil {
+			t.Errorf("hash partitions %d: want an error", n)
+		}
+	}
+}
+
+// A partition loop with a literal MODULUS ignores --hash-partitions and builds
+// the default count on every install.
+func TestDataPartitionLoopsReadHashPartitions(t *testing.T) {
+	entries, err := dataMigrationsFS.ReadDir("migrations/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	literal := regexp.MustCompile(`(?i)MODULUS\s+\d`)
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".up.sql") {
+			continue
+		}
+		body, err := dataMigrationsFS.ReadFile(path.Join("migrations/data", e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sql := string(body)
+		if !strings.Contains(sql, "PARTITION OF") {
+			continue
+		}
+		if literal.MatchString(sql) {
+			t.Errorf("%s: partition loop has a literal MODULUS", e.Name())
+		}
+		if !strings.Contains(sql, "current_setting('"+hashPartitionsSetting+"', true)") {
+			t.Errorf("%s: partition loop does not read %s", e.Name(), hashPartitionsSetting)
+		}
+	}
+}

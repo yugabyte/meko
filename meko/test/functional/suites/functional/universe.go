@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/meko/meko/test/functional/framework/apps/minio"
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
 	"github.com/yugabyte/meko/meko/test/functional/framework/universe"
 	"github.com/yugabyte/meko/meko/test/functional/suites/internal/stacktest"
@@ -13,6 +14,16 @@ import (
 
 func env() core.EnvSpec {
 	return core.EnvSpec{Sharing: core.Shared, Shape: core.SingleStack}
+}
+
+// stackS3 is the stack's MinIO, where a universe's backups go.
+func stackS3(t *core.T) universe.S3 {
+	e := stacktest.ClusterEnv(t)
+	return universe.S3{
+		Endpoint: fmt.Sprintf("http://minio.%s.svc.cluster.local:%d", e.Namespace(), minio.Port),
+		Bucket:   t.Options.GetString("env.mekostack.s3.bucket", "mekoqa"), Prefix: "universe-" + t.ResourceSuffix(),
+		AccessKey: minio.AccessKey, SecretKey: minio.SecretKey, Region: t.Options.GetString("env.mekostack.s3.region", "us-east-1"),
+	}
 }
 
 func clusterOnly() core.EnvSpec {

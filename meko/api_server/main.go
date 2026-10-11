@@ -367,6 +367,18 @@ func run() error {
 		envOrDefault("MEM0_COLLECTION_NAME", memtable.Default),
 		"mem0 memory collection in the datapacks schema. Must match meko-mcp-server's MEM0_COLLECTION_NAME, "+
 			"which writes it: set meko_mem0_memories on both once data migration 000006 is backfilled")
+	defaultHashPartitions := db.DefaultHashPartitions
+	if v := os.Getenv("MEKO_HASH_PARTITIONS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("MEKO_HASH_PARTITIONS=%q is not an integer", v)
+		}
+		defaultHashPartitions = n
+	}
+	hashPartitions := flag.Int("hash-partitions", defaultHashPartitions,
+		"Partition count of each hash-partitioned data table. Read only when a migration creates the table, "+
+			"so an existing table keeps its count. Below the default suits small installs: fewer tables to create, "+
+			"and a larger HNSW index per partition")
 
 	flag.Parse()
 
@@ -487,7 +499,7 @@ func run() error {
 		case *controlPlaneMode:
 			migrationScope = db.ControlPlaneMigrations
 		}
-		details, err := db.RunMigrations(systemConn, dataConn, migrationScope)
+		details, err := db.RunMigrations(systemConn, dataConn, migrationScope, *hashPartitions)
 		if err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}

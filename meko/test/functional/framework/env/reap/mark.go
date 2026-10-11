@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/exec/k8s"
@@ -33,11 +34,44 @@ func MarkKept(ctx context.Context, p *Plan, until time.Time) error {
 		if n.Namespace == "" {
 			continue
 		}
-		if err := markNamespace(ctx, n, labels, annotations); err != nil {
-			errs = append(errs, fmt.Errorf("mark %s kept: %w", n.Namespace, err))
+		targets := []NSReap{n}
+		if n.Kind == KindDiscover {
+			names, err := discoverNamespaces(ctx, n)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("find the namespaces of %s: %w", n.Namespace, err))
+				continue
+			}
+			targets = targets[:0]
+			for _, name := range names {
+				t := n
+				t.Namespace = name
+				targets = append(targets, t)
+			}
+		}
+		for _, t := range targets {
+			if err := markNamespace(ctx, t, labels, annotations); err != nil {
+				errs = append(errs, fmt.Errorf("mark %s kept: %w", t.Namespace, err))
+			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// discoverNamespaces is the seam unit tests replace. A discover entry names a
+// universe, and YBA puts it in a namespace that contains the name.
+var discoverNamespaces = func(ctx context.Context, n NSReap) ([]string, error) {
+	kube := k8s.New(k8s.Config{Context: n.KubeContext}).WithRunner(k8s.KubeconfigRunner(n.Kubeconfig))
+	out, err := kube.GetSelector(ctx, "namespaces", "", "{.items[*].metadata.name}")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, ns := range strings.Fields(out) {
+		if strings.Contains(ns, n.Namespace) {
+			names = append(names, ns)
+		}
+	}
+	return names, nil
 }
 
 // markNamespace is the seam unit tests replace.

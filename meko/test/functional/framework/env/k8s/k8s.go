@@ -208,6 +208,8 @@ type Provider struct {
 
 	mu           sync.Mutex
 	shared       *stack
+	sharedGen    int                      // bumped by every rebuild of the run's stack, names its namespace
+	rebuilt      chan struct{}            // closed when the rebuild in flight ends, nil when none is
 	live         map[string]struct{}      // namespaces of every stack this provider stands up
 	extra        map[string][]reap.NSReap // what else each stack namespace needs reaped, its backing
 	onPlanChange func()
@@ -308,9 +310,17 @@ func (p *Provider) Prepare(ctx context.Context) error {
 	var bk *backing
 	var sb *mekostack.Backing
 	if !attach {
+		p.mu.Lock()
+		gen := p.sharedGen
+		p.mu.Unlock()
 		ns = SharedNamespace(p.cfg.RunID)
+		tag := p.cfg.RunID
+		if gen > 0 {
+			ns = fmt.Sprintf("%s-r%d", ns, gen)
+			tag = fmt.Sprintf("%s-r%d", tag, gen)
+		}
 		var err error
-		if bk, sb, err = p.prepareBacking(ctx, core.EnvSpec{}, true, p.cfg.RunID, ns, p.cfg.Stack.DatabaseImage); err != nil {
+		if bk, sb, err = p.prepareBacking(ctx, core.EnvSpec{}, true, tag, ns, p.cfg.Stack.DatabaseImage); err != nil {
 			return err
 		}
 	}
@@ -342,6 +352,81 @@ func (p *Provider) Prepare(ctx context.Context) error {
 	return nil
 }
 
+// RebuildSharedInfra replaces the run's stack with a new one in a fresh namespace
+// on a fresh database, so the tests after one that broke it, or after a failed
+// bring-up, still run.
+func (p *Provider) RebuildSharedInfra(ctx context.Context) error {
+	if p.Attaching() {
+		return core.ErrNoSharedInfraRebuild
+	}
+	done := make(chan struct{})
+	p.mu.Lock()
+	old := p.shared
+	p.shared = nil
+	p.sharedGen++
+	p.rebuilt = done
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		p.rebuilt = nil
+		p.mu.Unlock()
+		close(done)
+	}()
+	if old != nil {
+		old.app.Close()
+		if err := p.teardown(old.app, old.app.Namespace(), old.backing); err != nil {
+			p.log("k8s: tearing down the broken stack: %v", err)
+		}
+	}
+	return p.Prepare(ctx)
+}
+
+// sharedStack is the run's stack, waiting out a rebuild in flight: a worker
+// freed mid-rebuild would otherwise fail its test for want of a stack.
+func (p *Provider) sharedStack(ctx context.Context) (*stack, error) {
+	p.mu.Lock()
+	st, wait := p.shared, p.rebuilt
+	p.mu.Unlock()
+	if st == nil && wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("k8s: waiting for the run's stack to be rebuilt: %w", ctx.Err())
+		}
+		p.mu.Lock()
+		st = p.shared
+		p.mu.Unlock()
+	}
+	if st == nil {
+		return nil, errors.New("k8s: the run's stack was not prepared")
+	}
+	return st, nil
+}
+
+// SharedInfraHealthy waits, within ctx, for the run's stack to answer its API.
+func (p *Provider) SharedInfraHealthy(ctx context.Context) error {
+	p.mu.Lock()
+	st := p.shared
+	p.mu.Unlock()
+	if st == nil {
+		return errors.New("k8s: the run's stack is gone")
+	}
+	var last error
+	for {
+		pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		last = st.app.ProbeAPI(pctx)
+		cancel()
+		if last == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the stack in %s does not serve: %w", st.app.Namespace(), last)
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 // teardown deletes a stack on its own deadline, which a cancelled run context
 // does not shorten, then its backing.
 func (p *Provider) teardown(app Stack, ns string, b *backing) error {
@@ -368,11 +453,9 @@ func (p *Provider) teardown(app Stack, ns string, b *backing) error {
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
 	switch spec.Shape {
 	case core.SingleStack:
-		p.mu.Lock()
-		st := p.shared
-		p.mu.Unlock()
-		if st == nil {
-			return nil, errors.New("k8s: the run's stack was not prepared")
+		st, err := p.sharedStack(ctx)
+		if err != nil {
+			return nil, err
 		}
 		return p.newEnv(ctx, st.app, false), nil
 	case core.DedicatedStack:
@@ -518,7 +601,12 @@ func (p *Provider) StandingEnv() (*core.StandingEnv, bool) {
 	}
 	st.app.Close()
 	ns := st.app.Namespace()
-	plan, _ := p.planFor([]string{ns}).JSON()
+	kept := p.planFor([]string{ns})
+	// The kept stack's universe needs the run's YBA, so the YBA is kept with it.
+	p.mu.Lock()
+	kept.Namespaces = append(kept.Namespaces, p.extra[ybaPlanKey]...)
+	p.mu.Unlock()
+	plan, _ := kept.JSON()
 	return &core.StandingEnv{
 		Name:     ns,
 		Shape:    core.SingleStack.String(),

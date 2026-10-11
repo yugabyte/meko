@@ -103,6 +103,10 @@ spec:
             {{- end }}
           env:
             {{- include "meko.apiServer.env" $ | nindent 12 }}
+            {{- with $c.migrate.hashPartitions }}
+            - name: MEKO_HASH_PARTITIONS
+              value: {{ . | quote }}
+            {{- end }}
           resources:
             {{- toYaml $c.migrate.resources | nindent 12 }}
       {{- end }}

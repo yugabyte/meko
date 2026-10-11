@@ -62,7 +62,7 @@ timeouts:
   # provision: 10m
   # Provision deadline for a Shape: DedicatedStack test, whose provision stands
   # up a whole stack (and its own backing) before the cluster.
-  provision_dedicated: 45m
+  provision_dedicated: 60m
   # EnvProvider.Teardown deadline (runs even after a body timeout, own budget).
   teardown: 5m
   # Environment.Collect deadline (best-effort, before teardown).
@@ -159,6 +159,10 @@ env:
     api_replicas: 3
     # meko-mcp-server replicas, 0 keeps the values files' count (1 in values-dev.yaml).
     mcp_replicas: 0
+    # Partition count of each hash-partitioned data table, 0 keeps the chart's 128.
+    # 128 takes the api-server's migrations about 20 minutes on a fresh stack, 8 about
+    # two. An api-server image without --hash-partitions ignores it.
+    hash_partitions: 8
     # Extra api-server env, KEY=VALUE, for runtime feature flags the chart presets
     # leave off. Projects and conversation search ship in the UI, so the stack
     # runs them.
@@ -176,11 +180,11 @@ env:
     # to OpenAI or Bedrock and needs no key. "off" leaves them on the real
     # providers.
     llm: "mock"
-    # Who the api-server believes. none is the BYOC default: no identity provider,
-    # every request runs as one dev account and a Bearer header is ignored.
-    # cognito_mock runs the api-server's Cognito path against a mock pool deployed
-    # beside it, which gives a test several accounts and makes PAT scopes real.
-    auth: "none"
+    # Who the api-server believes. cognito_mock runs the api-server's Cognito path
+    # against a mock pool deployed beside it, which gives a test several accounts and
+    # makes PAT scopes real. none is the BYOC default: no identity provider, every
+    # request runs as one dev account, and the tests that need accounts skip.
+    auth: "cognito_mock"
     # auth=cognito_mock: the mock pool.
     cognito_mock:
       # Region of the pool. The api-server dials cognito-idp.<region>.amazonaws.com
@@ -231,15 +235,17 @@ env:
       # for. Empty signs them for the in-cluster MinIO address.
       public_endpoint: ""
     timeouts:
-      # helm upgrade --wait: every pod Ready, the bundled database included.
-      provision: 20m
+      # helm upgrade --wait: every pod Ready, the bundled database included. The
+      # api-server's migrations alone take 19-23 min on a fresh RF3 yugabyted
+      # since data migration 000006 (2 tables x 128 hash partitions).
+      provision: 40m
       # After helm: init containers, health and the schema request.
       ready: 10m
       # Each Deployment's rollout after the S3 settings are applied.
       rollout: 10m
       # The whole bring-up of a run-scoped stack, which a test's provision timeout
       # does not bound. Covers provision, ready and the rollouts with margin.
-      deploy: 45m
+      deploy: 60m
     # How the coordinator reaches the api-server and mcp-server. tailnet dials the
     # cluster-internal address and falls back to a kubectl port-forward when it does
     # not answer. port_forward forwards straight away.

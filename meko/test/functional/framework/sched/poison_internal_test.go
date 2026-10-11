@@ -75,3 +75,43 @@ func TestPoisonSkipsProbeOnCancelledRun(t *testing.T) {
 		t.Fatalf("a cancelled run must not poison: %s", res.ErrorSummary)
 	}
 }
+
+type rebuildProvider struct {
+	probeProvider
+	rebuildErr error
+	rebuilds   int
+}
+
+func (p *rebuildProvider) RebuildSharedInfra(context.Context) error {
+	p.rebuilds++
+	return p.rebuildErr
+}
+
+// A stack that stays down after a fault is rebuilt, and the run goes on.
+func TestUnrecoveredFaultRebuildsTheStack(t *testing.T) {
+	p := &rebuildProvider{probeProvider: probeProvider{err: fmt.Errorf("api not serving")}}
+	s := &scheduler{infraGateArmed: true}
+	s.opts.Provider, s.opts.Seed = p, core.NewRunSeed(1, true)
+
+	s.noteInfraOutcome(context.Background(), faultingTest("chaos"), &core.Result{Status: core.StatusFailed})
+
+	if p.rebuilds != 1 || s.sharedGen.Load() != 1 {
+		t.Fatalf("rebuilds = %d, generation = %d, want 1 and 1", p.rebuilds, s.sharedGen.Load())
+	}
+	if res := s.failIfInfraPoisoned(core.Test{Name: "after"}); res != nil {
+		t.Fatalf("a rebuilt stack must not poison the run: %s", res.ErrorSummary)
+	}
+}
+
+func TestFailedRebuildPoisonsWithBothErrors(t *testing.T) {
+	p := &rebuildProvider{probeProvider: probeProvider{err: fmt.Errorf("api not serving")}, rebuildErr: fmt.Errorf("migrations wedged")}
+	s := &scheduler{infraGateArmed: true}
+	s.opts.Provider, s.opts.Seed = p, core.NewRunSeed(1, true)
+
+	s.noteInfraOutcome(context.Background(), faultingTest("chaos"), &core.Result{Status: core.StatusFailed})
+
+	res := s.failIfInfraPoisoned(core.Test{Name: "after"})
+	if res == nil || !strings.Contains(res.ErrorSummary, "api not serving") || !strings.Contains(res.ErrorSummary, "migrations wedged") {
+		t.Fatalf("want a poison naming the outage and the failed rebuild, got %v", res)
+	}
+}

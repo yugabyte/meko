@@ -8,12 +8,14 @@ one HNSW scan per partition and merges 128 results: 1.6 s per query at 6k
 datapacks and 43 s at 100k on a 3-node RF3 universe (MEKO-784).
 
 Partitioned on meko_datapack_id alone, (datapack, user) prunes to one partition
-whether or not the agent is given. Partitions stay, and stay at 128, because
+whether or not the agent is given. Partitions stay, 128 by default, because
 they bound each HNSW index: a filtered vector search walks its index until it
 finds enough of the tenant's rows, so its cost grows with the index. The same
 data unpartitioned took 29-103 s per index search at 100k datapacks; one
 partition in 128 took 16 ms. A small datapack is searched exactly by primary-key
-prefix instead (2.2 ms, recall 1.00 at 100k).
+prefix instead (2.2 ms, recall 1.00 at 100k). --hash-partitions lowers the
+count only for installs whose data stays small, since every partition's index
+grows by the same factor.
 
 Expand only: nothing reads or writes these tables until meko-mcp-server is
 pointed at them (MEM0_COLLECTION_NAME), and meko_mem0_collection is untouched.
@@ -35,13 +37,17 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_memories (
 ) PARTITION BY HASH (meko_datapack_id);
 
 DO $$
+DECLARE
+    -- Set by the api-server's migrator from --hash-partitions.
+    n int := COALESCE(NULLIF(current_setting('meko.hash_partitions', true), '')::int, 128);
 BEGIN
-    FOR i IN 0..127 LOOP
+    FOR i IN 0..n - 1 LOOP
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_memories_%s
              PARTITION OF datapacks.meko_mem0_memories
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+             FOR VALUES WITH (MODULUS %s, REMAINDER %s)',
             LPAD(i::text, 3, '0'),
+            n,
             i
         );
     END LOOP;
@@ -71,13 +77,17 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_memories_entities (
 ) PARTITION BY HASH (meko_datapack_id);
 
 DO $$
+DECLARE
+    -- Set by the api-server's migrator from --hash-partitions.
+    n int := COALESCE(NULLIF(current_setting('meko.hash_partitions', true), '')::int, 128);
 BEGIN
-    FOR i IN 0..127 LOOP
+    FOR i IN 0..n - 1 LOOP
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_memories_entities_%s
              PARTITION OF datapacks.meko_mem0_memories_entities
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+             FOR VALUES WITH (MODULUS %s, REMAINDER %s)',
             LPAD(i::text, 3, '0'),
+            n,
             i
         );
     END LOOP;

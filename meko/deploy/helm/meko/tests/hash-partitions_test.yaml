@@ -1,0 +1,40 @@
+# apiServer.migrate.hashPartitions reaches only the migrate init container, and
+# only when set: an older api-server image never sees the variable.
+suite: hash partitions
+templates:
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+tests:
+  - it: renders MEKO_HASH_PARTITIONS on the migrate container only
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.migrate.enabled: true
+      apiServer.migrate.hashPartitions: "8"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: migrate
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content: { name: MEKO_HASH_PARTITIONS, value: "8" }
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: MEKO_HASH_PARTITIONS, value: "8" }
+
+  - it: renders nothing by default
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      apiServer.migrate.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers[0].env
+          content: { name: MEKO_HASH_PARTITIONS }
+          any: true

@@ -71,7 +71,7 @@ func TestFromConfigDefaultsAndPaths(t *testing.T) {
 	if want := filepath.Join(out, "abcdef1234", "diagnostics"); kc.Stack.DiagDir != want {
 		t.Errorf("DiagDir = %q, want %q", kc.Stack.DiagDir, want)
 	}
-	if kc.Stack.APIReplicas != 3 || !kc.Stack.RagWorkers || kc.DeployTimeout.Minutes() != 45 {
+	if kc.Stack.APIReplicas != 3 || !kc.Stack.RagWorkers || kc.DeployTimeout.Minutes() != 60 {
 		t.Errorf("stack defaults = %+v, deploy %s", kc.Stack, kc.DeployTimeout)
 	}
 	never := load(t, "report.out_dir="+out, "report.collect_diagnostics=never")

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
@@ -160,8 +162,13 @@ type scheduler struct {
 	infraGate      sync.RWMutex
 	infraGateArmed bool
 
+	// sharedGen counts rebuilds of the shared stack. A worker whose environment
+	// is from an older generation provisions again before its next test.
+	sharedGen atomic.Int64
+
 	// poison: a faulting test left the shared stack unserving past its recovery
-	// budget; later tests fail fast with the culprit's name.
+	// budget and it could not be rebuilt; later tests fail fast with the
+	// culprit's name.
 	poisonMu  sync.Mutex
 	poisonBy  string
 	poisonErr error
@@ -289,9 +296,10 @@ func (s *scheduler) acquireClusterSlots(ctx context.Context, test core.Test) fun
 	return release
 }
 
-// noteInfraOutcome, still under the write gate, poisons the run when a failed
-// faulting test's shared stack does not serve within the recovery budget; a
-// passed result needs no probe, verifySharedInfra was its final step.
+// noteInfraOutcome, still under the write gate, rebuilds the shared stack when a
+// failed faulting test left it unserving past the recovery budget, and poisons
+// the run only when that rebuild fails. A passed result needs no probe,
+// verifySharedInfra was its final step.
 func (s *scheduler) noteInfraOutcome(ctx context.Context, test core.Test, res *core.Result) {
 	if !s.infraGateArmed || !test.Env.FaultsShared() || ctx.Err() != nil {
 		return
@@ -303,11 +311,26 @@ func (s *scheduler) noteInfraOutcome(ctx context.Context, test core.Test, res *c
 	if !ok {
 		return
 	}
-	if err := hc.SharedInfraHealthy(context.Background()); err != nil {
-		s.poisonMu.Lock()
-		s.poisonBy, s.poisonErr = test.Name, err
-		s.poisonMu.Unlock()
+	pctx, cancel := context.WithTimeout(context.Background(), core.ResolveSharedInfraProbeTimeout(s.opts.Config))
+	err := hc.SharedInfraHealthy(pctx)
+	cancel()
+	if err == nil || errors.Is(err, core.ErrNoSharedInfraProbe) {
+		return
 	}
+	if rb, ok := s.opts.Provider.(core.SharedInfraRebuilder); ok {
+		log.Printf("sched: the shared stack does not serve after %s (%v), rebuilding it for the remaining tests", test.Name, err)
+		rerr := rb.RebuildSharedInfra(ctx)
+		if rerr == nil {
+			s.sharedGen.Add(1)
+			return
+		}
+		if !errors.Is(rerr, core.ErrNoSharedInfraRebuild) {
+			err = fmt.Errorf("%w; rebuilding it failed: %v", err, rerr)
+		}
+	}
+	s.poisonMu.Lock()
+	s.poisonBy, s.poisonErr = test.Name, err
+	s.poisonMu.Unlock()
 }
 
 func (s *scheduler) failIfInfraPoisoned(test core.Test) *core.Result {
@@ -376,17 +399,46 @@ func (s *scheduler) runShared(ctx context.Context, idxs []int) {
 	wg.Wait()
 }
 
+type workerEnv struct {
+	mu  sync.Mutex
+	env core.Environment
+	gen int64
+}
+
+// current is w's environment, provisioned again when the shared stack was
+// rebuilt since. The caller holds the read side of the infra gate.
+func (s *scheduler) current(ctx context.Context, w *workerEnv, envN int, spec core.EnvSpec) (core.Environment, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	gen := s.sharedGen.Load()
+	if w.gen == gen {
+		return w.env, nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, s.provisionTimeout())
+	env, err := s.opts.Provider.Provision(pctx, spec, s.opts.Seed.Fork(fmt.Sprintf("shared-env-%d-r%d", envN, gen)))
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	tctx, tcancel := context.WithTimeout(context.Background(), s.teardownTimeout())
+	_ = s.opts.Provider.Teardown(tctx, w.env)
+	tcancel()
+	w.env, w.gen = env, gen
+	return env, nil
+}
+
 func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan int) {
 	var (
 		lease    *Lease
 		env      core.Environment
 		provErr  error
 		provided bool
+		w        = &workerEnv{}
 	)
 	defer func() {
-		if env != nil {
+		if w.env != nil {
 			tctx, tcancel := context.WithTimeout(context.Background(), s.teardownTimeout())
-			_ = s.opts.Provider.Teardown(tctx, env)
+			_ = s.opts.Provider.Teardown(tctx, w.env)
 			tcancel()
 		}
 		if lease != nil {
@@ -404,8 +456,10 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 		if !provided {
 			provided = true
 			start := time.Now()
+			gen := s.sharedGen.Load()
 			lease, env, provErr = s.provisionShared(ctx, envN, s.tests[i].Env)
 			runOpts.ProvisionDuration = time.Since(start)
+			w.env, w.gen = env, gen
 		}
 		if env == nil {
 			var shape *core.UnsupportedShapeError
@@ -433,16 +487,20 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 				s.results[idx] = res
 				return
 			}
-			// The shared env is not re-provisioned, but a body's env failure retries.
-			onEnv := func(c context.Context, t core.Test, o core.RunOptions) *core.Result {
-				return core.RunOneOnEnv(c, t, env, o)
-			}
-			if !s.acquireSlot(ctx) {
-				s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], runOpts, onEnv)
+			cur, err := s.current(ctx, w, envN, s.tests[idx].Env)
+			if err != nil {
+				s.results[idx] = core.ReportResult(s.tests[idx], s.opts.RunOptions, core.StatusEnvFailed, "the rebuilt shared environment: "+err.Error())
 				return
 			}
-			defer s.releaseSlot()
+			// A body's env failure retries on the same stack.
+			onEnv := func(c context.Context, t core.Test, o core.RunOptions) *core.Result {
+				return core.RunOneOnEnv(c, t, cur, o)
+			}
+			if s.acquireSlot(ctx) {
+				defer s.releaseSlot()
+			}
 			s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], runOpts, onEnv)
+			s.noteInfraOutcome(ctx, s.tests[idx], s.results[idx])
 		}(i)
 	}
 	batch.Wait()

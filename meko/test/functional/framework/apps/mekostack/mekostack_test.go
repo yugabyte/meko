@@ -136,6 +136,7 @@ func TestValidateRefusesNonQuayAndBadInput(t *testing.T) {
 		"no quay credential":     func(c *Config) { c.QuayToken = "" },
 		"no api replicas":        func(c *Config) { c.APIReplicas = 0 },
 		"negative mcp replicas":  func(c *Config) { c.MCPReplicas = -1 },
+		"too many partitions":    func(c *Config) { c.HashPartitions = 1001 },
 		"an unknown reach":       func(c *Config) { c.Reach = "carrier-pigeon" },
 		"a chart that is absent": func(c *Config) { c.ChartPath = filepath.Join(c.ChartPath, "nope") },
 	}

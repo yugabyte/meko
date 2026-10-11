@@ -998,7 +998,7 @@ func TestMekostackDefaults(t *testing.T) {
 	if ms.APIReplicas != 3 || !ms.RagWorkers || ms.OpenAIKey == "" || ms.S3Bucket == "" || ms.S3Region == "" {
 		t.Errorf("replicas/rag/openai/s3 = %d %v %q %q %q", ms.APIReplicas, ms.RagWorkers, ms.OpenAIKey, ms.S3Bucket, ms.S3Region)
 	}
-	if ms.ProvisionTimeout != 20*time.Minute || ms.ReadyTimeout <= 0 || ms.RolloutTimeout <= 0 {
+	if ms.ProvisionTimeout != 40*time.Minute || ms.ReadyTimeout <= 0 || ms.RolloutTimeout <= 0 {
 		t.Errorf("timeouts provision/ready/rollout = %s/%s/%s", ms.ProvisionTimeout, ms.ReadyTimeout, ms.RolloutTimeout)
 	}
 	if got := cfg.GetDuration("env.mekostack.timeouts.deploy", 0); got < ms.ProvisionTimeout+ms.ReadyTimeout {
@@ -1007,8 +1007,11 @@ func TestMekostackDefaults(t *testing.T) {
 	if ms.Reach != mekostack.ReachTailnet || ms.TTL != 12*time.Hour {
 		t.Errorf("reach/ttl = %s/%s", ms.Reach, ms.TTL)
 	}
-	if ms.Auth != mekostack.AuthNone {
-		t.Errorf("env.mekostack.auth = %q, want %q", ms.Auth, mekostack.AuthNone)
+	if ms.HashPartitions != 8 {
+		t.Errorf("env.mekostack.hash_partitions = %d, want 8", ms.HashPartitions)
+	}
+	if ms.Auth != mekostack.AuthCognitoMock {
+		t.Errorf("env.mekostack.auth = %q, want %q", ms.Auth, mekostack.AuthCognitoMock)
 	}
 	if ms.CognitoMock.Region == "" || ms.CognitoMock.TokenTTL != 24*time.Hour {
 		t.Errorf("env.mekostack.cognito_mock = %+v, want a region and a day of token life", ms.CognitoMock)

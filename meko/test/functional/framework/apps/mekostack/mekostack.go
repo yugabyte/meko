@@ -483,23 +483,37 @@ func (a *App) namespaceLabels(ctx context.Context, name string) (labels map[stri
 	return ns.Metadata.Labels, true, nil
 }
 
-// noScaleDownPDB keeps the cluster autoscaler from draining a node that runs a
+// noScaleDownPDBs keep the cluster autoscaler from draining a node that runs a
 // pod of the stack. Scale-down evicts through the eviction API, which a budget
 // of zero refuses, while a test's own pod kills and a rolling upgrade delete
-// pods directly and are unaffected. Without it, amp-dev scaled nodes down
+// pods directly and are unaffected. Without them, amp-dev scaled nodes down
 // under running tests and every MCP and gateway call in flight failed.
-const noScaleDownPDB = `apiVersion: policy/v1
+//
+// One selects Deployment pods and one StatefulSet pods, the bundled database
+// included. A bare pod (mekoqa-ysql, minio) counts as healthy but not as
+// expected, so `selector: {}` left two evictions allowed. The autoscaler never
+// moves a bare pod anyway.
+var noScaleDownPDBs = []string{pdbOnLabel("mekoqa-no-scale-down", "pod-template-hash"), pdbOnLabel("mekoqa-no-scale-down-sts", "controller-revision-hash")}
+
+func pdbOnLabel(name, key string) string {
+	return fmt.Sprintf(`apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: mekoqa-no-scale-down
+  name: %s
 spec:
   maxUnavailable: 0
-  selector: {}
-`
+  selector:
+    matchExpressions:
+    - key: %s
+      operator: Exists
+`, name, key)
+}
 
 func (a *App) ensureNoScaleDown(ctx context.Context) error {
-	if err := a.kube.Apply(ctx, noScaleDownPDB); err != nil {
-		return fmt.Errorf("apply the scale-down guard: %w", err)
+	for _, pdb := range noScaleDownPDBs {
+		if err := a.kube.Apply(ctx, pdb); err != nil {
+			return fmt.Errorf("apply the scale-down guard: %w", err)
+		}
 	}
 	return nil
 }

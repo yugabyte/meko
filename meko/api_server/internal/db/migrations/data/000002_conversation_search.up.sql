@@ -26,15 +26,19 @@ CREATE TABLE IF NOT EXISTS datapacks.conversation_history_search (
     PRIMARY KEY ((tenant_id, id) HASH)
 ) PARTITION BY HASH (tenant_id);
 
--- 128 hash partitions on tenant_id, same layout as knowledge_bases.
+-- meko.hash_partitions hash partitions on tenant_id (default 128), same layout as knowledge_bases.
 DO $$
+DECLARE
+    -- Set by the api-server's migrator from --hash-partitions.
+    n int := COALESCE(NULLIF(current_setting('meko.hash_partitions', true), '')::int, 128);
 BEGIN
-    FOR i IN 0..127 LOOP
+    FOR i IN 0..n - 1 LOOP
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS datapacks.conversation_history_search_%s
              PARTITION OF datapacks.conversation_history_search
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+             FOR VALUES WITH (MODULUS %s, REMAINDER %s)',
             LPAD(i::text, 3, '0'),
+            n,
             i
         );
     END LOOP;

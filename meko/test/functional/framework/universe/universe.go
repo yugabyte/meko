@@ -95,6 +95,12 @@ type XCluster interface {
 	TeardownXCluster(ctx context.Context, target Universe) error
 }
 
+// XClusterBootstrap is a source whose xCluster setup copies its databases to
+// the target through a backup, kept in the given store.
+type XClusterBootstrap interface {
+	BootstrapXClusterVia(store S3)
+}
+
 // ReadReplicas adds and removes a read replica cluster.
 type ReadReplicas interface {
 	AddReadReplica(ctx context.Context, c ClusterSpec) error

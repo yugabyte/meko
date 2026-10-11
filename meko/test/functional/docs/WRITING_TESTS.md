@@ -172,12 +172,10 @@ errors.
 
 ### Accounts and Cognito
 
-Run the stack with `-o env.mekostack.auth=cognito_mock` and call `stacktest.Accounts(t, n)`.
+Call `stacktest.Accounts(t, n)`. The stack runs the Cognito mock by default.
 Each account has its own row in the stack's database, is lifted off the free tier, and is
 named after the test. `account.PAT("read")` mints a scoped PAT and the cleanup function
-`Accounts` returned revokes it. Tests that need accounts skip on `auth=none`, so a run without
-the Cognito mock silently skips `access_matrix`, `auth_login_flow` and `datapack_sharing`.
-Check the skip count.
+`Accounts` returned revokes it. Tests that need accounts skip on `auth=none`.
 
 The product has no token refresh route and no route that removes an accepted member of a
 datapack, so do not write tests for either.

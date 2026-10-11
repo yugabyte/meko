@@ -74,7 +74,7 @@ The suites:
 
 | Suite | Tag | Tests | Stack |
 |---|---|---|---|
-| `functional` | `regression` | REST, MCP, auth, sharing, PATs, KB ingest, chat, database topology, Langfuse outage, upgrade from the previous release, universe backup and restore, read replica, xCluster | shared |
+| `functional` | `regression` | REST, MCP, auth, sharing, PATs, KB ingest, chat, database topology, Langfuse outage, upgrade from the previous release, universe backup and restore, read replica, xCluster, mage graph DDL | shared |
 | `stress` | `stress` | datapack and MCP soaks, churn with api-server pod kills | dedicated each |
 | `perf` | `perf` | REST and MCP latency ladders | dedicated each |
 

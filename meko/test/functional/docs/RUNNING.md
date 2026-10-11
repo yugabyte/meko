@@ -77,7 +77,6 @@ go run ./framework/cmd/mekoqa run \
   --kube-context gke_yugabyte_us-west1_amp-dev \
   --image-version 0.261002.1-b5c44e042 \
   -o secrets.quay=env:MEKOQA_QUAY \
-  -o env.mekostack.auth=cognito_mock \
   --out-dir ./mekoqa-out --html ./mekoqa-out/report.html \
   --portal ""
 ```
@@ -162,8 +161,8 @@ The portal's Config page holds defaults every launch inherits when it names none
 | `default_options` | `-o` overrides merged under every launch's own options |
 
 ```bash
-yb meko settings set --default-option env.mekostack.auth=cognito_mock --yes
-yb meko settings set --unset-default-option env.mekostack.auth --yes
+yb meko settings set --default-option db.provider=yba --yes
+yb meko settings set --unset-default-option db.provider --yes
 ```
 
 Changing a default changes every later launch for everyone, so do it deliberately. The
@@ -188,7 +187,7 @@ lists the live parameters. The ones you will use:
 | `API_SERVER_VERSION`, `MCP_SERVER_VERSION`, `UI_VERSION`, `INFERENCE_GATEWAY_VERSION`, `RAG_AGENT_VERSION`, `LANGFUSE_VERSION` | empty | per-component tags |
 | `DATABASE_IMAGE` | empty | full Quay reference of the database image |
 | `MCP_REF`, `LANGFUSE_REF`, `YBDB_REF` | empty | refs of components `meko-build` pulls in by ref |
-| `OPTIONS` | empty | a JSON object of `-o` overrides, `{"env.mekostack.auth": "cognito_mock"}` |
+| `OPTIONS` | empty | a JSON object of `-o` overrides, `{"db.provider": "yba"}` |
 | `K8S_CLUSTER_NAME`, `K8S_CLOUD`, `K8S_REGION`, `K8S_PROJECT` | `amp-dev`, `gke`, `us-west1`, `yugabyte` | the cluster to run on. `meko_dev_eks` runs on EKS |
 | `KEEP_ENV`, `KEEP_ENV_ON_FAILURE` | false | keep the stack, see below |
 | `REPORT` | empty | portal report bucket |
@@ -222,7 +221,7 @@ Settings you will reach for:
 
 | Key | Effect |
 |---|---|
-| `env.mekostack.auth` | `none` (default) or `cognito_mock` |
+| `env.mekostack.auth` | `cognito_mock` (default) or `none` |
 | `env.mekostack.image_version`, `env.mekostack.images.<component>.tag`, `env.mekostack.images.database` | image tags |
 | `env.stack` | `dedicated` or `shared`, moves every stack test between the two shapes |
 | `db.provider`, `db.rf`, `db.nodes`, `db.cpu`, `db.memory_gib` | the database under the stack |
@@ -234,11 +233,9 @@ Settings you will reach for:
 
 ### Cognito mock
 
-`-o env.mekostack.auth=cognito_mock` runs the api-server's Cognito path against a mock
-pool. Without it the api-server runs every request as one account. `functional/access_matrix`,
-`functional/auth_login_flow` and `functional/datapack_sharing` need accounts and skip without it.
-A regression run with `auth=none` reports three skips, which is easy to miss. Pass the
-option, or set it as a portal `default_option`.
+`env.mekostack.auth=cognito_mock`, the default, runs the api-server's Cognito path against
+a mock pool. `-o env.mekostack.auth=none` runs every request as one account, and every test
+that needs accounts skips.
 
 ### Image versions
 

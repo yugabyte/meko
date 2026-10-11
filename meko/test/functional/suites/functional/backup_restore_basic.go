@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yugabyte/meko/meko/test/functional/framework/apps/minio"
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
 	"github.com/yugabyte/meko/meko/test/functional/framework/universe"
-	"github.com/yugabyte/meko/meko/test/functional/suites/internal/stacktest"
 )
 
 func init() {
@@ -21,18 +19,13 @@ func init() {
 }
 
 func backupRestoreBasic(t *core.T) error {
-	e := stacktest.ClusterEnv(t)
 	var b universe.Backups
 	src, dst, err := pair(t, func(src universe.Universe) { b = need[universe.Backups](t, src) })
 	if err != nil {
 		return finish(t, err)
 	}
 	r := need[universe.Backups](t, dst)
-	s3 := universe.S3{
-		Endpoint: fmt.Sprintf("http://minio.%s.svc.cluster.local:%d", e.Namespace(), minio.Port),
-		Bucket:   t.Options.GetString("env.mekostack.s3.bucket", "mekoqa"), Prefix: "universe-" + t.ResourceSuffix(),
-		AccessKey: minio.AccessKey, SecretKey: minio.SecretKey, Region: t.Options.GetString("env.mekostack.s3.region", "us-east-1"),
-	}
+	s3 := stackS3(t)
 
 	if err := step(t, "seed_source", func(h *core.StepHandle) error {
 		if _, err := src.SQL(t, "", "", "CREATE DATABASE app"); err != nil {

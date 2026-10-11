@@ -18,8 +18,8 @@ func TestEveryFunctionalTestIsInTheRegressionSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 30 || len(tagged) != len(all) {
-		t.Fatalf("%d functional tests, %d tagged regression, want 30 and 30", len(all), len(tagged))
+	if len(all) != 31 || len(tagged) != len(all) {
+		t.Fatalf("%d functional tests, %d tagged regression, want 31 and 31", len(all), len(tagged))
 	}
 }
 

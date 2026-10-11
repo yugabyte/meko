@@ -312,6 +312,12 @@ apiServer:
     # ... TABLETS), while this one is portable SQL and runs on plain Postgres. It
     # is also idempotent over a YugabyteDB that already applied system/000008.
     scope: all
+    # Partition count of each hash-partitioned data table (MEKO_HASH_PARTITIONS),
+    # for every table a pending migration creates. A table that already exists
+    # keeps its count. Empty keeps 128, which bounds each partition's HNSW index:
+    # with fewer, vector search slows down as the data grows. Lower it only where
+    # the data stays small, such as a test stack.
+    hashPartitions: ""
     resources:
       requests: { cpu: 500m, memory: 512Mi }
       limits: { cpu: "1", memory: 1Gi }

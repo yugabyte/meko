@@ -17,6 +17,8 @@ const (
 	chartInRepo      = "meko/deploy/helm/meko"
 	// meko-build tags release images <version>-<first 9 chars of the sha>.
 	imageShaLen = 9
+	// ReleaseVersion of a meko-build custom image tag, custom-<sha>.
+	customBuild = "custom"
 )
 
 // GitRunner runs git with args in dir and returns its stdout.
@@ -47,14 +49,16 @@ func ReleaseVersion(imageTag string) string {
 	return v
 }
 
-// Previous returns the newest release on origin older than version.
+// Previous returns the newest release on origin older than version. A custom
+// build (custom-<sha>) is built off a branch, so every release counts as older.
 func (r *Releases) Previous(ctx context.Context, version string) (string, error) {
 	out, err := r.Git(ctx, r.RepoDir, "ls-remote", "--tags", "origin", "refs/tags/"+releaseTagPrefix+"*")
 	if err != nil {
 		return "", err
 	}
 	want, ok := parseVersion(version)
-	if !ok {
+	custom := version == customBuild
+	if !ok && !custom {
 		return "", fmt.Errorf("%q is not a release version", version)
 	}
 	var older []string
@@ -64,7 +68,7 @@ func (r *Releases) Previous(ctx context.Context, version string) (string, error)
 			continue
 		}
 		v := strings.TrimPrefix(f[1], "refs/tags/"+releaseTagPrefix)
-		if pv, ok := parseVersion(v); ok && lessVersion(pv, want) {
+		if pv, ok := parseVersion(v); ok && (custom || lessVersion(pv, want)) {
 			older = append(older, v)
 		}
 	}

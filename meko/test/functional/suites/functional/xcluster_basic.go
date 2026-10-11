@@ -11,8 +11,8 @@ import (
 func init() {
 	core.Register(core.Test{
 		Name: "functional/xcluster_basic", Suite: "functional", Category: core.Functional, Tags: tags("universe"), OwningTeam: core.TeamPlatform, Unguarded: true,
-		Env: clusterOnly(), Timeout: 40 * time.Minute,
-		Description: "Two universes, xCluster replication of one database from the first to the second, a table created and a row written on the source, and the row read on the target.",
+		Env: env(), Timeout: 40 * time.Minute,
+		Description: "Two universes, xCluster replication of one database from the first to the second, a table created and a row written on the source, and the row read on the target. A provider that bootstraps the target from a backup keeps it in the stack's MinIO.",
 		Params:      []string{"db"},
 		Run:         xclusterBasic,
 	})
@@ -24,9 +24,17 @@ func xclusterBasic(t *core.T) error {
 	if err != nil {
 		return finish(t, err)
 	}
+	if b, ok := x.(universe.XClusterBootstrap); ok {
+		b.BootstrapXClusterVia(stackS3(t))
+	}
 
 	if err := step(t, "source_database", func(*core.StepHandle) error {
-		_, err := src.SQL(t, "", "", "CREATE DATABASE app")
+		if _, err := src.SQL(t, "", "", "CREATE DATABASE app"); err != nil {
+			return err
+		}
+		// YBA finds a database to replicate through its tables. kv, the table
+		// read on the target, is created after setup so DDL replication is tested.
+		_, err := src.SQL(t, "", "app", "CREATE TABLE seed(k int primary key)")
 		return err
 	}); err != nil {
 		return err

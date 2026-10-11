@@ -130,11 +130,15 @@ Capacity has two layers:
   with `EnvSpec.ClusterSlots` waits for its slots before its timeout starts.
 
 A test that faults the shared stack (`FaultsSharedInfra`) runs alone on it. `SharedLock`
-serializes tests that need one stack-wide resource. If a faulting test leaves the shared stack
-unserving past its recovery window, the run's remaining shared tests report `env_failed`
-instead of failing on a dead stack. A bring-up that fails for a scheduling reason (unschedulable pod,
-insufficient CPU or memory, readiness timeout) is retried `sched.env_retries` times after
-`sched.env_retry_backoff`.
+serializes tests that need one stack-wide resource. If a faulting test fails and leaves the
+shared stack unserving past `timeouts.shared_infra_probe`, the stack is rebuilt in
+`mekoqa-st-<run>-r<n>` on a new database and the remaining shared tests run there. Only a
+failed rebuild makes them report `env_failed`, naming the test that broke it.
+
+A bring-up that fails for any reason but a bad image is first rebuilt once the same way, on the
+same provider, so a run's YBA is not stood up again. A scheduling failure (unschedulable pod,
+insufficient CPU or memory, readiness timeout) is then retried `sched.env_retries` times after
+`sched.env_retry_backoff` on a rebuilt provider.
 
 ## The stack
 
@@ -217,7 +221,7 @@ With no identity provider the api-server runs every request as one dev account a
 the Bearer header. That is the BYOC default and `env.mekostack.auth=none`. It cannot test
 sharing, grants or PAT scopes.
 
-`env.mekostack.auth=cognito_mock` runs the api-server's real Cognito path against a mock user
+`env.mekostack.auth=cognito_mock`, the default, runs the api-server's real Cognito path against a mock user
 pool in the namespace, with no product change. The api-server reaches Cognito at two
 hardcoded `https://cognito-idp.<region>.amazonaws.com` addresses (the AWS SDK and a JWKS
 fetch), so the stack:

@@ -181,6 +181,19 @@ def delete_partition(dsn, schema, dst_part, src):
     return f"delete {dst_part}: {n} rows"
 
 
+def partitions(dsn, schema, table):
+    """The table's own partitions: the old and new tables can have different counts."""
+    with connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
+            "WHERE i.inhparent = %s::regclass ORDER BY c.relname",
+            (f"{schema}.{table}",),
+        ).fetchall()
+    if not rows:
+        sys.exit(f"{schema}.{table} has no partitions")
+    return [r[0] for r in rows]
+
+
 def count_changed(dsn, schema, src_part, dst):
     with connect(dsn) as conn:
         return conn.execute(f"SELECT count(*) {_changed_rows(schema, src_part, dst)}").fetchone()[0]
@@ -231,7 +244,6 @@ def main() -> None:
     ap.add_argument("--schema", default="datapacks")
     ap.add_argument("--old", default="meko_mem0_collection")
     ap.add_argument("--new", default="meko_mem0_memories")
-    ap.add_argument("--partitions", type=int, default=128, help="partitions per table")
     a = ap.parse_args()
     if not a.dsn:
         sys.exit("set --dsn or DSN")
@@ -242,7 +254,6 @@ def main() -> None:
         return
 
     pairs = [(n, o) for o, n in tables] if a.reverse else tables
-    parts = range(a.partitions)
     t0 = time.time()
 
     if a.diff:
@@ -250,14 +261,17 @@ def main() -> None:
         for s, d in pairs:
             changed = sum(
                 run(
-                    [(count_changed, a.dsn, a.schema, f"{s}_{i:03d}", d) for i in parts],
+                    [
+                        (count_changed, a.dsn, a.schema, p, d)
+                        for p in partitions(a.dsn, a.schema, s)
+                    ],
                     a.parallel,
                     quiet=True,
                 )
             )
             gone = sum(
                 run(
-                    [(count_gone, a.dsn, a.schema, f"{d}_{i:03d}", s) for i in parts],
+                    [(count_gone, a.dsn, a.schema, p, s) for p in partitions(a.dsn, a.schema, d)],
                     a.parallel,
                     quiet=True,
                 )
@@ -268,11 +282,13 @@ def main() -> None:
         sys.exit(1 if total else 0)
 
     for s, d in pairs:
+        src_parts = partitions(a.dsn, a.schema, s)
         if a.copy:
-            run([(copy_partition, a.dsn, a.schema, f"{s}_{i:03d}", d) for i in parts], a.parallel)
+            run([(copy_partition, a.dsn, a.schema, p, d) for p in src_parts], a.parallel)
         else:
-            run([(upsert_partition, a.dsn, a.schema, f"{s}_{i:03d}", d) for i in parts], a.parallel)
-            run([(delete_partition, a.dsn, a.schema, f"{d}_{i:03d}", s) for i in parts], a.parallel)
+            run([(upsert_partition, a.dsn, a.schema, p, d) for p in src_parts], a.parallel)
+            dst_parts = partitions(a.dsn, a.schema, d)
+            run([(delete_partition, a.dsn, a.schema, p, s) for p in dst_parts], a.parallel)
     print(f"done in {time.time() - t0:.0f}s", flush=True)
 
 

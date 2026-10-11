@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
@@ -123,11 +124,24 @@ var AllMigrations = MigrationScope{System: true, Data: true}
 // needs, and nothing that requires YugabyteDB.
 var ControlPlaneMigrations = MigrationScope{ControlPlane: true}
 
-func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope) ([]string, error) {
+// DefaultHashPartitions is the partition count of every hash-partitioned data
+// table. A data migration reads the count only when it creates a table, so an
+// existing table keeps the count it was created with.
+const DefaultHashPartitions = 128
+
+// Partition names are LPAD(i, 3), which truncates a fourth digit.
+const maxHashPartitions = 1000
+
+const hashPartitionsSetting = "meko.hash_partitions"
+
+func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope, hashPartitions int) ([]string, error) {
 	var details []string
 
 	if scope.Data {
-		dataM, err := getMigrator(dataDB, DBPurposeData, dataMigrationsFS, "migrations/data")
+		if hashPartitions < 1 || hashPartitions > maxHashPartitions {
+			return nil, fmt.Errorf("hash partitions must be between 1 and %d, got %d", maxHashPartitions, hashPartitions)
+		}
+		dataM, err := getDataMigrator(dataDB, hashPartitions)
 		if err != nil {
 			slog.Error("failed to get migrator", "purpose", DBPurposeData, "error", err)
 			return nil, err
@@ -193,6 +207,42 @@ func getMigrator(conn *sql.DB, purpose DBPurpose, fs embed.FS, rootFs string) (*
 		return nil, fmt.Errorf("failed to initialize %s migrator: %w", purpose, err)
 	}
 	return m, nil
+}
+
+func getDataMigrator(db *sql.DB, hashPartitions int) (*migrate.Migrate, error) {
+	src, err := iofs.New(dataMigrationsFS, "migrations/data")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embedded %s data: %w", DBPurposeData, err)
+	}
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open %s migration session: %w", DBPurposeData, err)
+	}
+	driver, err := newDataDriver(ctx, conn, hashPartitions)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	m, err := migrate.NewWithInstance("iofs", src, "yugabyte", driver)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize %s migrator: %w", DBPurposeData, err)
+	}
+	return m, nil
+}
+
+// golang-migrate applies every migration on the one session it is given, so a
+// session setting reaches all of them. Taking a *sql.Conn rather than the pool is
+// what keeps the SET and the migrations on that one session.
+func newDataDriver(ctx context.Context, conn *sql.Conn, hashPartitions int) (database.Driver, error) {
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET %s = %d", hashPartitionsSetting, hashPartitions)); err != nil {
+		return nil, fmt.Errorf("failed to set %s: %w", hashPartitionsSetting, err)
+	}
+	driver, err := postgres.WithConnection(ctx, conn, getPostgresConfig(DBPurposeData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to %s migration driver: %w", DBPurposeData, err)
+	}
+	return driver, nil
 }
 
 func getPostgresConfig(purpose DBPurpose) *postgres.Config {

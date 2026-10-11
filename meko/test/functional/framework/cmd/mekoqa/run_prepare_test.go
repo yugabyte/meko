@@ -151,3 +151,42 @@ func TestPrepareSharedStackSkippedWithNoTestOnIt(t *testing.T) {
 		t.Errorf("prepared %d times (%v), want no shared stack", p.prepare, err)
 	}
 }
+
+type rebuildingPrepProvider struct {
+	preparingProvider
+	rebuilds int
+}
+
+func (p *rebuildingPrepProvider) RebuildSharedInfra(ctx context.Context) error {
+	p.rebuilds++
+	p.err = nil
+	return p.Prepare(ctx)
+}
+
+// A stack that came up broken gets one fresh stack on the same provider, so a
+// run's YBA is not stood up again.
+func TestPrepareProviderRebuildsTheStackOnceForAProductFailure(t *testing.T) {
+	p := &rebuildingPrepProvider{preparingProvider: preparingProvider{Provider: &fake.Provider{},
+		err: errors.New("api-server migrations wedged on a dirty version")}}
+	got, err := prepareProvider(context.Background(), p, zeroBackoff(t), func() (core.EnvProvider, error) {
+		t.Fatal("the provider must not be rebuilt")
+		return nil, nil
+	})
+	if err != nil || got != core.EnvProvider(p) {
+		t.Fatalf("prepare = %v, %T, want success on the same provider", err, got)
+	}
+	if p.rebuilds != 1 || p.closed != 0 {
+		t.Errorf("stack rebuilds = %d, closes = %d, want 1 and 0", p.rebuilds, p.closed)
+	}
+}
+
+func TestPrepareProviderDoesNotRebuildForABadImage(t *testing.T) {
+	p := &rebuildingPrepProvider{preparingProvider: preparingProvider{Provider: &fake.Provider{},
+		err: errors.New("deployment never became Available: ImagePullBackOff meko-api-server:custom-nope")}}
+	if _, err := prepareProvider(context.Background(), p, zeroBackoff(t), func() (core.EnvProvider, error) { return p, nil }); err == nil {
+		t.Fatal("prepare must fail")
+	}
+	if p.rebuilds != 0 {
+		t.Errorf("stack rebuilds = %d, want 0", p.rebuilds)
+	}
+}

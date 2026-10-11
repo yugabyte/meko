@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -162,6 +163,10 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 	}
 	if cfg.Backing != nil && !cfg.Backing.bundled() {
 		cfg.Backing.valuesFor(v, cfg.dbPassword(s), cfg.RagWorkers)
+	}
+	if cfg.HashPartitions > 0 {
+		migrate := v["apiServer"].(map[string]any)["migrate"].(map[string]any)
+		migrate["hashPartitions"] = strconv.Itoa(cfg.HashPartitions)
 	}
 	if cfg.MCPReplicas > 0 {
 		v["mekoMcpServer"].(map[string]any)["replicas"] = cfg.MCPReplicas

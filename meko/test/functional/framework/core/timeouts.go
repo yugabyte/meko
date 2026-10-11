@@ -20,7 +20,7 @@ const (
 	DefaultProvisionTimeout = 30 * time.Minute
 	// DefaultDedicatedProvisionTimeout covers a YBA install, an RF=3 universe
 	// and a stack: about 16 minutes on itest-dev when nothing is queued.
-	DefaultDedicatedProvisionTimeout = 45 * time.Minute
+	DefaultDedicatedProvisionTimeout = 60 * time.Minute
 
 	// ProvisionPerExtraNode extends the provision budget per store node beyond
 	// the first when the stack database is not the chart's: pods start in parallel, but a cold

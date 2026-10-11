@@ -469,6 +469,11 @@ The api-server DB migration runs as an **initContainer** on the Deployment
 (`apiServer.migrate.enabled`, scope via `apiServer.migrate.scope`): it blocks the
 main container until migrations succeed and works under `helm --wait` / Argo CD.
 Disable it (`--set apiServer.migrate.enabled=false`) if the DB isn't reachable yet.
+`apiServer.migrate.hashPartitions` sets the partition count of each hash-partitioned
+data table that a pending migration creates (default 128). A table that already
+exists keeps its count. The 128 bounds each partition's HNSW index, so lower it only
+where the data stays small, such as a test stack: with fewer partitions, vector
+search slows down as the data grows.
 
 Deploy a subset with the `<comp>.enabled` toggles, e.g.
 `--set langfuse.enabled=false`.

@@ -18,8 +18,9 @@ type marked struct {
 
 func withFakeMarker(t *testing.T, fail string) *[]marked {
 	t.Helper()
-	orig := markNamespace
-	t.Cleanup(func() { markNamespace = orig })
+	orig, origDiscover := markNamespace, discoverNamespaces
+	t.Cleanup(func() { markNamespace, discoverNamespaces = orig, origDiscover })
+	discoverNamespaces = func(_ context.Context, n NSReap) ([]string, error) { return []string{n.Namespace}, nil }
 	var got []marked
 	markNamespace = func(_ context.Context, n NSReap, labels, annotations map[string]string) error {
 		got = append(got, marked{ns: n.Namespace, labels: labels, annotations: annotations})
@@ -103,5 +104,21 @@ func TestMarkKeptOnNothingIsNoOp(t *testing.T) {
 	}
 	if len(*got) != 0 {
 		t.Errorf("marked %d namespaces for an empty plan, want 0", len(*got))
+	}
+}
+
+// A discover entry names a universe, not a namespace. YBA creates the namespace,
+// and a kept stack whose universe namespace went unmarked lost its database.
+func TestMarkKeptMarksTheNamespacesADiscoverEntryNames(t *testing.T) {
+	got := withFakeMarker(t, "")
+	discoverNamespaces = func(_ context.Context, n NSReap) ([]string, error) {
+		return []string{"yb-dev-" + n.Namespace}, nil
+	}
+	p := &Plan{Namespaces: []NSReap{{Kind: KindDiscover, Namespace: "db-run1"}}}
+	if err := MarkKept(context.Background(), p, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) != 1 || (*got)[0].ns != "yb-dev-db-run1" {
+		t.Errorf("marked %+v, want yb-dev-db-run1", *got)
 	}
 }

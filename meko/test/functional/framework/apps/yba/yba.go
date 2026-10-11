@@ -186,6 +186,7 @@ func (u Universe) IsReady() bool {
 // defaults to 5433 when absent.
 type NodeDetails struct {
 	NodeName          string    `json:"nodeName"`
+	PlacementUUID     string    `json:"placementUuid"`
 	CloudInfo         CloudInfo `json:"cloudInfo"`
 	State             string    `json:"state"`
 	IsTserver         bool      `json:"isTserver"`
@@ -204,6 +205,8 @@ type CloudInfo struct {
 // Cluster is a universe cluster: its userIntent (software version) and the
 // placement YBA settled on.
 type Cluster struct {
+	UUID          string        `json:"uuid"`
+	ClusterType   string        `json:"clusterType"`
 	UserIntent    UserIntent    `json:"userIntent"`
 	PlacementInfo PlacementInfo `json:"placementInfo"`
 }

@@ -43,15 +43,19 @@ CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases (
     PRIMARY KEY  ((tenant_id, id) HASH)
 ) PARTITION BY HASH (tenant_id);
 
--- 128 partitions on datapack_id
+-- meko.hash_partitions partitions on datapack_id (default 128)
 DO $$
+DECLARE
+    -- Set by the api-server's migrator from --hash-partitions.
+    n int := COALESCE(NULLIF(current_setting('meko.hash_partitions', true), '')::int, 128);
 BEGIN
-    FOR i IN 0..127 LOOP
+    FOR i IN 0..n - 1 LOOP
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS datapacks.knowledge_bases_%s 
              PARTITION OF datapacks.knowledge_bases 
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+             FOR VALUES WITH (MODULUS %s, REMAINDER %s)',
             LPAD(i::text, 3, '0'),
+            n,
             i
         );
     END LOOP;
@@ -103,15 +107,19 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
 2. id - should be a secondary index on meko_mem0_collection
 */
 
--- create 128 partitions on datapack_id e.g.
+-- create meko.hash_partitions partitions on datapack_id (default 128)
 DO $$
+DECLARE
+    -- Set by the api-server's migrator from --hash-partitions.
+    n int := COALESCE(NULLIF(current_setting('meko.hash_partitions', true), '')::int, 128);
 BEGIN
-    FOR i IN 0..127 LOOP
+    FOR i IN 0..n - 1 LOOP
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection_%s 
              PARTITION OF datapacks.meko_mem0_collection 
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+             FOR VALUES WITH (MODULUS %s, REMAINDER %s)',
             LPAD(i::text, 3, '0'),
+            n,
             i
         );
     END LOOP;

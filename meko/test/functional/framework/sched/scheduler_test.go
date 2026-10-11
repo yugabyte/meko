@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -544,5 +545,73 @@ func TestSchedulerLeavesUnlockedTestsConcurrent(t *testing.T) {
 	})
 	if peak < 2 {
 		t.Errorf("peak concurrency without a lock key = %d, want 2", peak)
+	}
+}
+
+type rebuildingProvider struct {
+	sharedInfraProvider
+	mu      sync.Mutex
+	healthy bool
+}
+
+type genEnv struct {
+	core.Environment
+	rebuilt bool
+}
+
+func (p *rebuildingProvider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
+	env, err := p.sharedInfraProvider.Provision(ctx, spec, seed)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return &genEnv{Environment: env, rebuilt: p.healthy}, nil
+}
+
+func (p *rebuildingProvider) Teardown(ctx context.Context, env core.Environment) error {
+	return p.sharedInfraProvider.Teardown(ctx, env.(*genEnv).Environment)
+}
+
+func (p *rebuildingProvider) SharedInfraHealthy(context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.healthy {
+		return nil
+	}
+	return fmt.Errorf("api not serving")
+}
+
+func (p *rebuildingProvider) RebuildSharedInfra(context.Context) error {
+	p.mu.Lock()
+	p.healthy = true
+	p.mu.Unlock()
+	return nil
+}
+
+// A shared test that breaks the shared stack costs only itself: the stack is
+// rebuilt and the tests after it run on a newly provisioned environment.
+func TestSchedulerRebuildsASharedStackAFaultLeftDown(t *testing.T) {
+	var chaosDone atomic.Bool
+	chaos := sharedTest("chaos", func(*core.T) error {
+		chaosDone.Store(true)
+		return fmt.Errorf("boom")
+	})
+	chaos.Env.FaultsSharedInfra = true
+	after := sharedTest("after", func(tt *core.T) error {
+		if chaosDone.Load() && !tt.Env.(*genEnv).rebuilt {
+			return fmt.Errorf("ran on the broken stack's environment")
+		}
+		return nil
+	})
+	for _, perEnv := range []int{1, 4} {
+		chaosDone.Store(false)
+		_, results := sched.Run(context.Background(), []core.Test{chaos, after}, sched.Options{
+			Capacity: 4, PerEnvParallelism: perEnv,
+			RunOptions: core.RunOptions{Parallel: 1, Seed: core.NewRunSeed(1, true), Provider: &rebuildingProvider{}},
+		})
+		if results[1].Status != core.StatusPassed {
+			t.Fatalf("perEnv %d: the test after the fault = %s (%s), want passed", perEnv, results[1].Status, results[1].ErrorSummary)
+		}
 	}
 }

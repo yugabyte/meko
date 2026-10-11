@@ -37,13 +37,17 @@ CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection_entities (
                 ) PARTITION BY HASH (meko_datapack_id, meko_user_id, meko_agent_id);
 
 DO $$
+DECLARE
+    -- Set by the api-server's migrator from --hash-partitions.
+    n int := COALESCE(NULLIF(current_setting('meko.hash_partitions', true), '')::int, 128);
 BEGIN
-    FOR i IN 0..127 LOOP
+    FOR i IN 0..n - 1 LOOP
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection_entities_%s
              PARTITION OF datapacks.meko_mem0_collection_entities
-             FOR VALUES WITH (MODULUS 128, REMAINDER %s)',
+             FOR VALUES WITH (MODULUS %s, REMAINDER %s)',
             LPAD(i::text, 3, '0'),
+            n,
             i
         );
     END LOOP;

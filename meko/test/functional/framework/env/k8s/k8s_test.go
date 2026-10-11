@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/cognitomock"
@@ -412,5 +413,50 @@ func TestValidateRefusesABuildWithNoQuayCredential(t *testing.T) {
 	p, _ := newProvider(t, Config{Stack: mekostack.Config{ImageVersion: "1"}})
 	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "Quay credential") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestASingleStackProvisionWaitsOutARebuild(t *testing.T) {
+	p, f := newProvider(t, Config{})
+	ctx := context.Background()
+	if err := p.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	building, release := make(chan struct{}), make(chan struct{})
+	f.deploy = func(ns string) error {
+		if ns == "mekoqa-st-run42-r1" {
+			close(building)
+			<-release
+		}
+		return nil
+	}
+	rebuilt := make(chan error, 1)
+	go func() { rebuilt <- p.RebuildSharedInfra(ctx) }()
+	<-building
+
+	type result struct {
+		env core.Environment
+		err error
+	}
+	got := make(chan result, 1)
+	go func() {
+		e, err := p.Provision(ctx, core.EnvSpec{Shape: core.SingleStack}, nil)
+		got <- result{e, err}
+	}()
+	select {
+	case r := <-got:
+		t.Fatalf("Provision returned mid-rebuild: %v", r.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-rebuilt; err != nil {
+		t.Fatal(err)
+	}
+	r := <-got
+	if r.err != nil {
+		t.Fatalf("Provision after the rebuild: %v", r.err)
+	}
+	if ns := r.env.(*Env).namespace; ns != "mekoqa-st-run42-r1" {
+		t.Errorf("Provision got the stack in %q, want the rebuilt mekoqa-st-run42-r1", ns)
 	}
 }

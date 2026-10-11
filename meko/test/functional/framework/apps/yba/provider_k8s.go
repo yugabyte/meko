@@ -2,8 +2,10 @@ package yba
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // Kubernetes provider + universe support. This mirrors the AWS path (provider.go
@@ -361,5 +363,19 @@ func (c *Client) EnsureK8sProvider(ctx context.Context, spec K8sProviderSpec) (s
 		}
 	}
 	c.log("yba: creating kubernetes provider %q (registry %s)", spec.Name, spec.ImageRegistry)
-	return c.AddK8sProvider(ctx, spec)
+	id, err := c.AddK8sProvider(ctx, spec)
+	if err == nil || !strings.Contains(err.Error(), "unique_name_per_cloud") {
+		return id, err
+	}
+	// Another run on the same YBA created it between the list and the create.
+	providers, lerr := c.GetProviders(ctx)
+	if lerr != nil {
+		return "", errors.Join(err, fmt.Errorf("re-list providers: %w", lerr))
+	}
+	for _, p := range providers {
+		if p.Name == spec.Name {
+			return p.UUID, nil
+		}
+	}
+	return "", err
 }

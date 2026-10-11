@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/yba"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/meko/meko/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/meko/meko/test/functional/framework/kubemeta"
 	"github.com/yugabyte/meko/meko/test/functional/framework/universe"
 )
 
@@ -35,7 +37,54 @@ type Provider struct {
 	RunTag  string
 	Logf    func(string, ...any)
 
-	providerUUID string
+	reg *registration
+}
+
+type registration struct {
+	mu   sync.Mutex
+	uuid string
+}
+
+var regInit sync.Mutex
+
+func (p *Provider) registration() *registration {
+	regInit.Lock()
+	defer regInit.Unlock()
+	if p.reg == nil {
+		p.reg = &registration{}
+	}
+	return p.reg
+}
+
+// WithRunTag is p for one test's universes. The copies share one provider
+// registration, since YBA refuses a second provider of the same name.
+func (p *Provider) WithRunTag(tag string) *Provider {
+	p.registration()
+	c := *p
+	c.RunTag = tag
+	return &c
+}
+
+func (p *Provider) ensureProvider(ctx context.Context) error {
+	r := p.registration()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.uuid != "" {
+		return nil
+	}
+	id, err := p.Client.EnsureK8sProvider(ctx, p.K8sProvider)
+	if err != nil {
+		return fmt.Errorf("register the kubernetes provider: %w", err)
+	}
+	r.uuid = id
+	return nil
+}
+
+func (p *Provider) providerUUID() string {
+	r := p.registration()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.uuid
 }
 
 func (p *Provider) log(f string, a ...any) {
@@ -66,7 +115,7 @@ func (p *Provider) BuildSpec(s universe.Spec) (yba.UniverseSpec, error) {
 	us := yba.UniverseSpec{
 		NamePrefix:        s.Name,
 		RunTag:            p.RunTag,
-		ProviderUUID:      p.providerUUID,
+		ProviderUUID:      p.providerUUID(),
 		ProviderCode:      "kubernetes",
 		Region:            region,
 		NumNodes:          c.Tservers(),
@@ -112,12 +161,8 @@ func (p *Provider) Create(ctx context.Context, spec universe.Spec) (*Universe, e
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	if p.providerUUID == "" {
-		id, err := p.Client.EnsureK8sProvider(ctx, p.K8sProvider)
-		if err != nil {
-			return nil, fmt.Errorf("register the kubernetes provider: %w", err)
-		}
-		p.providerUUID = id
+	if err := p.ensureProvider(ctx); err != nil {
+		return nil, err
 	}
 	us, err := p.BuildSpec(spec)
 	if err != nil {
@@ -125,10 +170,10 @@ func (p *Provider) Create(ctx context.Context, spec universe.Spec) (*Universe, e
 	}
 	if len(us.Placement) == 0 {
 		codes := []string{us.Region}
-		if us.RegionUUIDs, err = p.Client.RegionUUIDsForCodes(ctx, p.providerUUID, codes...); err != nil {
+		if us.RegionUUIDs, err = p.Client.RegionUUIDsForCodes(ctx, p.providerUUID(), codes...); err != nil {
 			return nil, err
 		}
-	} else if us.Placement, err = p.Client.ResolvePlacement(ctx, p.providerUUID, us.Placement); err != nil {
+	} else if us.Placement, err = p.Client.ResolvePlacement(ctx, p.providerUUID(), us.Placement); err != nil {
 		return nil, err
 	} else {
 		for _, r := range us.Placement {
@@ -149,7 +194,29 @@ func (p *Provider) Create(ctx context.Context, spec universe.Spec) (*Universe, e
 	if err := p.Client.WaitUniverseReady(ctx, u.id, createTimeout); err != nil {
 		return u, err
 	}
-	return u, u.refresh(ctx)
+	if err := u.refresh(ctx); err != nil {
+		return u, err
+	}
+	u.claimNamespace(ctx)
+	return u, nil
+}
+
+// claimNamespace labels the namespace YBA created for the universe as the
+// run's, so the janitor reaps it once the run's YBA is gone. Without the labels
+// a kept or killed run's universe ran on with nothing left to delete it.
+func (u *Universe) claimNamespace(ctx context.Context) {
+	if u.p.Kube == nil || u.ns == "" || !strings.Contains(u.ns, u.spec.Name) {
+		return
+	}
+	labels := kubemeta.TestLabels(map[string]string{
+		kubemeta.ManagedByLabel: kubemeta.ManagedByValue,
+		kubemeta.RunLabel:       kubemeta.LabelValue(u.p.RunTag),
+	})
+	for k, v := range labels {
+		if err := u.p.Kube.LabelNamespace(ctx, u.ns, k, v); err != nil && u.p.Logf != nil {
+			u.p.Logf("ybauniverse: label %s %s=%s: %v", u.ns, k, v, err)
+		}
+	}
 }
 
 // Universe is a universe YBA runs.
@@ -162,6 +229,10 @@ type Universe struct {
 	svcHost string
 	svcPort int
 	version string
+
+	xcMu    sync.Mutex
+	xcStore *universe.S3
+	drs     map[string]string
 }
 
 var (
@@ -216,9 +287,17 @@ func (u *Universe) Nodes(ctx context.Context) ([]universe.Node, error) {
 		return nil, err
 	}
 	var out []universe.Node
+	replica := map[string]bool{}
+	for _, c := range yu.UniverseDetails.Clusters {
+		replica[c.UUID] = c.ClusterType == "ASYNC"
+	}
 	for _, n := range yu.UniverseDetails.NodeDetailsSet {
+		cluster := universe.Primary
+		if replica[n.PlacementUUID] {
+			cluster = universe.ReadReplica
+		}
 		out = append(out, universe.Node{
-			Name: strings.Split(n.CloudInfo.PrivateIP, ".")[0], Cluster: universe.Primary, Tserver: n.IsTserver, Ready: strings.EqualFold(n.State, "Live"),
+			Name: strings.Split(n.CloudInfo.PrivateIP, ".")[0], Cluster: cluster, Zone: n.CloudInfo.Zone, Tserver: n.IsTserver, Ready: strings.EqualFold(n.State, "Live"),
 		})
 	}
 	return out, nil

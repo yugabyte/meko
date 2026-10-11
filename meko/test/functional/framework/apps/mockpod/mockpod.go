@@ -223,6 +223,12 @@ func Command(args ...string) []string {
 	return append([]string{"sh", "-c", wait, "sh", BinPath}, args...)
 }
 
+// PodAnnotations keeps the cluster autoscaler from moving a mock: the binary is
+// copied into the pod once, so a rescheduled pod waits for it forever.
+func PodAnnotations() map[string]any {
+	return map[string]any{"cluster-autoscaler.kubernetes.io/safe-to-evict": "false"}
+}
+
 func Volume() map[string]any {
 	return map[string]any{"name": VolName, "emptyDir": map[string]any{}}
 }

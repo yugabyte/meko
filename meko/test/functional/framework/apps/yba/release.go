@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
@@ -325,11 +326,17 @@ func HelmChartURL(version string) string {
 	return fmt.Sprintf("https://releases.yugabyte.com/%s/helm/yugabyte-%s.tgz", version, strings.Join(parts, "."))
 }
 
+// A run creates universes concurrently, and YBA refuses a second create of the
+// same release (unique version_tag), so the check and the create are one step.
+var ensureReleaseK8sMu sync.Mutex
+
 // Idempotent, like EnsureRelease.
 func (c *Client) EnsureReleaseK8s(ctx context.Context, version string) error {
 	if version == "" {
 		return fmt.Errorf("ensure k8s release: empty version")
 	}
+	ensureReleaseK8sMu.Lock()
+	defer ensureReleaseK8sMu.Unlock()
 	releases, err := c.GetReleases(ctx)
 	if err != nil {
 		return err

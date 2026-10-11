@@ -72,6 +72,15 @@ type SharedInfraHealthChecker interface {
 	SharedInfraHealthy(ctx context.Context) error
 }
 
+// SharedInfraRebuilder replaces a shared stack that no longer serves, so the
+// tests after the one that broke it run on a fresh one.
+type SharedInfraRebuilder interface {
+	RebuildSharedInfra(ctx context.Context) error
+}
+
+// ErrNoSharedInfraRebuild reports that this provider cannot replace its shared stack.
+var ErrNoSharedInfraRebuild = errors.New("provider cannot rebuild its shared stack")
+
 // ErrNoSharedInfraProbe reports that this provider has no health probe.
 var ErrNoSharedInfraProbe = errors.New("provider has no shared-infra health probe")
 
