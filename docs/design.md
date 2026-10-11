@@ -148,6 +148,16 @@ It binds the socket under a temporary name and renames it into place, removes it
 only if the file is still its own, and every 10 seconds binds it again if the file was removed or
 replaced (see [One server per home](#one-server-per-home)).
 
+**Interrupted turns.** Claude Code fires no `Stop` hook for a turn you interrupt (Ctrl+C or Esc), so
+AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` would
+(`SessionManager.endTurn`): the session is idle again, the activity log says *You interrupted the
+turn*, and what waited for the turn's end goes at once (review comments, a queued Open PR or
+approval, review prompts). It isn't a turn Claude died in, so it's never continued by itself
+(`interrupted` stays 0). It didn't do what it was sent for either: in PR & Review a review, CI or
+conflicts prompt the turn got stays sent, and the findings stay *addressing* (so a queued merge
+waits), until the next turn ends; a Review a PR session's update summary stays sent the same way.
+Without the mod, the session shows as working until the next turn ends.
+
 ### AgentK's mod in Claude
 
 Claude Code runs *mods*: plugins of TypeScript function hooks that run inside the Claude process
@@ -205,6 +215,7 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | `/mod/learn` | A [learn step](#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
 | `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
 | `/mod/meko` | From a `tool.call` hook on every tool that goes straight on unless the tool is Meko's (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too, checked in the hook: the oldest Claude Code the mod runs in may not take a RegExp matcher): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too (the hook's `.catch` replays what `next(e)` settled to, so a failed call never runs twice). `id` is the call's `tool_use_id`; answered 204, and an `end` that comes after a reset is dropped without bringing the link back. See *Meko in the dot* under [The app](#the-app). |
+| `/mod/turn` | From a `turn.complete` hook: `{ turnId, reason: "aborted" }` for a main-loop turn you interrupted (`isAborted`, checked on Claude Code 2.1.287, 2.1.290 and 2.1.296), which fires no `Stop` hook; every other turn goes straight on. Awaited before `next(e)`, so it reaches the server before the engine goes idle and runs a prompt it holds. Answered 204; the server ends the turn (see *Interrupted turns* under the status path) when one is running, and ignores it otherwise. |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
@@ -248,7 +259,8 @@ on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2
 leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
 call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
 mod says it has its answer (`/mod/ask/done`), when the mod stops asking for 10 seconds (the call
-was interrupted, or Claude died), at the turn's end (`Stop`), and on a reset; and since the mod
+was interrupted, or Claude died), at the turn's end (`Stop`, or an interrupted turn's
+`/mod/turn`), and on a reset; and since the mod
 sends the questions with every ask, a server restart brings the ask back with the next one. Only
 choice questions (1 to 4, each with options) are offered: a question of another kind (Claude
 Code's `text` and `number` questions) is left to the terminal. Text is capped for the browser (the
@@ -276,13 +288,14 @@ within 10,000 characters) and hands them to the mod: the labels comma-joined, th
 dialog gives them. A 409 means AgentK has moved on: the terminal answered first, or the turn ended.
 
 **Answers and approvals mid-turn.** Mid-turn means a turn is running (`Session.midTurn`): from its
-`UserPromptSubmit` to its `Stop` (or Claude's end), while AgentK works or Claude waits on a
-permission prompt or a question during it. A Needs you with no turn behind it (a parked recovery,
-a prompt another plugin refused) isn't, and nor is a design waiting for approval; after a server
-restart only a session showing as working counts. While the mod is live, the design's **Send for
-revision** works mid-turn: the answers go through the mod at once and Claude holds them until the
-turn ends, so the server keeps nothing. A prompt sent mid-turn leaves the session's status alone (a
-permission prompt still shows as Needs you). Which prompts Claude still holds comes from the mod
+`UserPromptSubmit` to its `Stop` (or its interruption, or Claude's end), while AgentK works or
+Claude waits on a permission prompt or a question during it. A Needs you with no turn behind it (a
+parked recovery, a prompt another plugin refused) isn't, and nor is a design waiting for
+approval; after a server restart only a session showing as working counts. While the mod is live,
+the design's **Send for revision** works mid-turn: the answers go through the mod at once and
+Claude holds them until the turn ends, so the server keeps nothing. A prompt sent mid-turn leaves
+the session's status alone (a permission prompt still shows as Needs you). Which prompts Claude
+still holds comes from the mod
 (`held` on each poll, and `/mod/held`), so one another plugin refused, or one still held after a
 server restart, counts right; a mod too old to report it (until it reloads) has one taken off at
 each `UserPromptSubmit`. They're in `Session.promptsHeld`. While Claude holds any, the *Design
@@ -375,7 +388,8 @@ motion the dots are still.
 session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
 `tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
 memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
-when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too) and on a reset
+when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too, or an
+interrupted turn's `/mod/turn`) and on a reset
 (a relaunch or `SessionEnd`), in case an end never got through.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
@@ -1366,7 +1380,8 @@ sent, withdrawn or dropped.
 
 - **Open PR after this turn.** In Code, while AgentK is mid-turn (working, or a question or
   permission prompt during a turn) or Claude is starting, Open PR queues the PR prompt instead of
-  being refused. It goes when the turn ends (at the `Stop`, before review comments), or at the next
+  being refused. It goes when the turn ends (at the `Stop`, or when you interrupt the turn, before
+  review comments), or at the next
   poll when Claude is back at its prompt (a turn that ended while the server was down), exactly as a
   press between turns would send it. It waits another turn while Claude holds prompts you sent
   mid-turn, and is dropped when Claude exits (however that's found: its `SessionEnd`, a dead pane at
@@ -2140,7 +2155,8 @@ session moments later, so run `/agentk_learn` during the session to look at one.
 
 Claude Code writes every model response to the session transcript with its token counts. The
 server reads new lines from each session's transcript, and from any subagent transcripts under
-`<session>/subagents/`, after every turn (on the `Stop` hook), when a session ends or is archived,
+`<session>/subagents/`, after every turn (on the `Stop` hook, or an interrupted turn's
+`/mod/turn`), when a session ends or is archived,
 and once a minute. It remembers the byte offset it reached, so each line is read once.
 
 One response spans several transcript lines with the same message id, so usage is stored once per

@@ -936,8 +936,13 @@ export class Lifecycle {
     this.sessions.event(row.id, 'base', `Base set to ${base}, the base of PR #${pr!.number}`);
   }
 
-  /** Called on every Stop hook: a Claude turn just finished. */
-  async onTurnEnd(id: string): Promise<void> {
+  /**
+   * Called at every turn's end: its Stop hook, or the mod reporting a turn you interrupted
+   * (`interrupted`). An interrupted turn didn't do what it was sent for: the review, CI or
+   * conflicts prompt it got stays sent (the next turn to end counts as the one that took it) and
+   * the findings stay being addressed, so a queued merge doesn't go on findings nobody addressed.
+   */
+  async onTurnEnd(id: string, interrupted = false): Promise<void> {
     const row = sessionRow(this.db, id);
     if (!row) return;
     this.sessions.setBusy(id, false);
@@ -953,8 +958,10 @@ export class Lifecycle {
       await this.serial(id, async () => {
         // The turn that got a prompt is over. Only that turn addresses a review: one still queued isn't.
         const q = this.queue(id);
-        for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
-        this.setQueue(id, q);
+        if (!interrupted) {
+          for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
+          this.setQueue(id, q);
+        }
         const reviewQueued = !!(q.review || q['review-people']);
         if (!reviewQueued && this.sessions.row(id).review_state === 'addressing') {
           this.sessions.update(id, { review_state: 'addressed' });
@@ -969,9 +976,9 @@ export class Lifecycle {
       await this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
     } else if (row.stage === 'reviewing-pr') {
       await this.serial(id, async () => {
-        // The turn that got the update summary (or the PR's new design) is over.
+        // The turn that got the update summary (or the PR's new design) is over, unless interrupted.
         const q = this.queue(id);
-        const sent = REVIEWING_ORDER.filter((n) => q[n]?.state === 'sent');
+        const sent = interrupted ? [] : REVIEWING_ORDER.filter((n) => q[n]?.state === 'sent');
         if (sent.length) {
           sent.forEach((n) => delete q[n]);
           this.setQueue(id, q);
