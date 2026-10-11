@@ -192,9 +192,13 @@ export function checkActions(raw: unknown, projects: AskProject[]): { actions: A
       case 'go': {
         const view = str(r.view);
         if (view === 'usage' || view === 'settings') actions.push({ type: 'go', view });
-        else if (view === 'home' && project(str(r.projectId))) actions.push({ type: 'go', view, projectId: str(r.projectId) });
-        else if (session) actions.push({ type: 'go', view: 'session', projectId: session.projectId, sessionId: session.id });
-        else notes.push(view === 'home' ? 'Left out a project that isn\'t open.' : 'Left out a session that isn\'t running.');
+        else if (view === 'home') {
+          if (project(str(r.projectId))) actions.push({ type: 'go', view, projectId: str(r.projectId) });
+          else notes.push('Left out a project that isn\'t open.');
+        } else if (view === 'session') {
+          if (session) actions.push({ type: 'go', view, projectId: session.projectId, sessionId: session.id });
+          else notes.push('Left out a session that isn\'t running.');
+        } else notes.push('Left out a place AgentK can\'t open.');
         break;
       }
       case 'move': {

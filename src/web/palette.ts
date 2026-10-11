@@ -83,7 +83,7 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
 /** The palette input's placeholder, one at a time, so it shows everything the palette takes. */
 export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Jump to a session…', 'Paste a GitHub PR or issue link…'];
 /** The placeholder with reduced motion, which doesn't rotate. */
-export const PALETTE_HINT_STILL = 'Ask AgentK, type a command, or paste a GitHub link…';
+export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session or paste a GitHub link…';
 
 /** A palette item for an action AgentK proposed; `edit` opens New session with the task instead of starting it. */
 export interface AskEntry {

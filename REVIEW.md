@@ -9,8 +9,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 1. Sessions and recovery
 
-- [ ] Nothing makes the session host or Claude a child of the server process or its service (systemd
-      unit or launchd job). Code that manages the services goes through `src/server/service.ts`.
+- [ ] Nothing makes the session host or a session's Claude a child of the server process or its
+      service (systemd unit or launchd job). One-shot `claude` commands that end with their request
+      (`--version`, `update`, Ask AgentK's `claude -p`) are the server's own. Code that manages the
+      services goes through `src/server/service.ts`.
 - [ ] Server restarts and updates leave running sessions untouched.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).

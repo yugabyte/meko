@@ -588,7 +588,7 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 31 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 32 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
   const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32];
   for (let v = 32; v >= oldest; v--) undo[v - 12](db);

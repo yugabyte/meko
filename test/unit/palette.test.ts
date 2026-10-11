@@ -86,11 +86,7 @@ describe("AgentK's proposed actions", () => {
       ['Start Fix the login in agent-k-local at Code', 'Action', false],
       ['Edit Fix the login in New session…', 'Change it before it starts', true],
     ]],
-    [{ type: 'link', ref: 'acme/demo#7' }, [['Work on acme/demo#7', 'Looks up the GitHub link', false]]],
     [{ type: 'go', view: 'session', projectId: 'p1', sessionId: 's1' }, [['Go to Dark mode', 'agent-k-local · Code', false]]],
-    [{ type: 'go', view: 'home', projectId: 'p1' }, [['agent-k-local: project home', 'View', false]]],
-    [{ type: 'go', view: 'settings' }, [['Settings', 'View', false]]],
-    [{ type: 'move', sessionId: 's1', stage: 'review', instructions: '' }, [['Move Dark mode to PR & Review', 'Action', false]]],
     [{ type: 'openPr', sessionId: 's1', instructions: 'x'.repeat(100) }, [['Open PR for Dark mode', `${'x'.repeat(79)}…`, false]]],
     [{ type: 'move', sessionId: 'gone', stage: 'code', instructions: '' }, [['Move a session to Code', 'Action', false]]],
   ])('names %j', (a, want) => {

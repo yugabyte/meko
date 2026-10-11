@@ -1554,7 +1554,7 @@ reduced motion it doesn't rotate and names them all at once.
 A sentence matches no command (the filter needs every word), so the item is usually alone and
 Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
 the exchange so far (the last 10, kept only while the palette is open) and what's on screen to
-`POST /api/ask-agentk` (`src/server/askagentk.ts`). Esc while AgentK thinks cancels the ask and
+`POST /api/ask-agentk` (`src/server/askagentk.ts`). Esc (or **Cancel**) while AgentK thinks cancels the ask and
 puts the text back; closing the palette cancels it too, and the server stops Claude when the
 request closes.
 

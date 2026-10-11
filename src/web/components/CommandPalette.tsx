@@ -443,7 +443,11 @@ export function CommandPalette({
             {asking && (
               <div className="pal-turn">
                 <p className="pal-you">You: {asking}</p>
-                <p className="pal-reply muted"><Busy label="AgentK is thinking" /></p>
+                {/* A tap's way to Esc: the ask stops, its text comes back, and the exchange stays. */}
+                <div className="pal-reply muted">
+                  <Busy label="AgentK is thinking" />
+                  <button className="btn small" onClick={cancelAsk}>Cancel</button>
+                </div>
               </div>
             )}
             {askError && (
