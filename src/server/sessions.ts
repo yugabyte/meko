@@ -292,6 +292,7 @@ export class SessionManager {
       midTurn: this.midTurn(id),
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
+      mekoCall: this.core.config.claude.mod && this.mod.callingMeko(id),
       approvalQueued: this.core.lifecycle.approvalQueued(id),
     };
   }
@@ -1200,7 +1201,8 @@ export class SessionManager {
    * hello when it loads, polls for prompts, acks them, and reports measurements after each turn;
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
-   * design_questions tool (`/mod/questions`).
+   * design_questions tool (`/mod/questions`); and Claude's Meko calls starting and ending
+   * (`/mod/meko`), for the session's dot.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -1252,6 +1254,9 @@ export class SessionManager {
         return this.core.lifecycle.questionsFromTool(row, body.questions);
       case '/mod/learn':
         return this.core.learn.fromMod(row, body);
+      case '/mod/meko':
+        this.mod.mekoCall(row.id, body.id, body.state);
+        return { status: 204 };
       case '/mod/learn/start':
         // /agentk_learn in the terminal: the answer is the command's output there.
         try {
@@ -1434,6 +1439,8 @@ export class SessionManager {
       }
       case 'Stop': {
         void this.captureTranscript(id);
+        // No Meko call outlives its turn, the plan approval's included.
+        this.mod.endMeko(id);
         if (this.planPending.has(id)) break;
         this.update(id, { interrupted: 0 });
         this.turns.delete(id);

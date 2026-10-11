@@ -55,6 +55,18 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     expect(events(id, 'ask')).toEqual(["Answered AgentK's question in AgentK Local"]);
   });
 
+  it("shows Claude's Meko call while it runs, and forgets one whose end never came when the turn ends", async () => {
+    const id = await start({ 'meko-ms': '1500' }, { kind: 'quick' });
+    await env.core.sessions.submit(id, 'MEKO_SEARCH now');
+    expect((await waitFor(() => get(id), (x) => x.mekoCall, 10000, 'the Meko call')).status).toBe('working');
+    await waitFor(() => get(id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the call and the turn to end');
+
+    writeFileSync(join(env.fakeDir, 'meko-lost'), '');
+    await env.core.sessions.submit(id, 'MEKO_SEARCH again');
+    await waitFor(() => get(id).mekoCall, (m) => m, 10000, 'the second Meko call');
+    await waitFor(() => get(id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the turn to end');
+  });
+
   it('drops the question once the terminal answers it first', async () => {
     const id = await start({ 'ask-terminal': '600' }, { kind: 'quick' });
     await env.core.sessions.submit(id, 'ASK_USER now');

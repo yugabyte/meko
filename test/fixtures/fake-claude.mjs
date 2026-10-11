@@ -314,17 +314,28 @@ async function turn(text) {
     hook('PreToolUse', { tool_name: 'ExitPlanMode', tool_input: { plan: '# Design\n\nDo the thing.' } });
     return; // waits for approval (Enter)
   }
-  if (text.includes('MEKO_SEARCH')) mekoSearch();
+  if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
   respond();
   hook('Stop', {});
   modMeasure();
 }
 
-// Like Claude Code calling the Meko MCP server: a memory_search that finds one memory.
-function mekoSearch() {
+// Like Claude Code calling the Meko MCP server: a memory_search that finds one memory. With the mod,
+// AgentK hears when it starts and ends; a `meko-ms` file makes it take that many milliseconds, and
+// a `meko-lost` file loses its end.
+async function mekoSearch() {
   const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
   const toolUseId = `toolu_${id}`;
+  if (modOn) {
+    await modPost('/mod/meko', { id: toolUseId, state: 'start' }).catch(() => undefined);
+    try {
+      await sleep(Number(readFileSync(join(dir, 'meko-ms'), 'utf8')));
+    } catch {
+      /* a quick call */
+    }
+    if (!existsSync(join(dir, 'meko-lost'))) await modPost('/mod/meko', { id: toolUseId, state: 'end' }).catch(() => undefined);
+  }
   const usage = { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100 };
   const call = { type: 'tool_use', id: toolUseId, name: 'mcp__meko__memory_search', input: { query: 'how does it work' } };
   const found = JSON.stringify({ result: JSON.stringify({ results: [{ id: 'm1', memory: 'It works like this.' }] }) });

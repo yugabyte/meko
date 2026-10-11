@@ -649,6 +649,8 @@ export interface Session {
   approvalQueued: boolean;
   /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
   learning: boolean;
+  /** Claude is running a Meko tool call, as AgentK's mod reports it; false without the mod. */
+  mekoCall: boolean;
   /** Discard was asked for: the session is discarded once its learn step ends. */
   discarding: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */

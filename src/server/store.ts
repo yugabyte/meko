@@ -230,6 +230,7 @@ export interface SessionRuntime {
   midTurn: boolean;
   promptsHeld: number;
   asking: AskRequest | null;
+  mekoCall: boolean;
   approvalQueued: boolean;
 }
 
@@ -276,6 +277,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     midTurn: rt.midTurn,
     promptsHeld: rt.promptsHeld,
     asking: rt.asking,
+    mekoCall: rt.mekoCall,
     approvalQueued: rt.approvalQueued,
     learning: !!get(db, 'SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND ended_at IS NULL', r.id),
     discarding: !!r.discarding,

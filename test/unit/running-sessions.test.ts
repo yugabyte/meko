@@ -5,7 +5,7 @@ import type { ProjectWithSessions, Session, SessionStatus } from '../../src/shar
 import { StatusDot } from '../../src/web/components/common.js';
 import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, runningSessions, type DotState } from '../../src/web/util.js';
 
-const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false) => ({ id: status, status, desired, learning }) as Session;
+const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false) => ({ id: status, status, desired, learning, mekoCall }) as Session;
 
 describe('runningSessions', () => {
   it('counts sessions whose Claude is up', () => {
@@ -20,24 +20,31 @@ describe('runningSessions', () => {
 
 describe('dotState', () => {
   // A learn step shows over Claude between turns (the mod's step) and the typed learn turn; what needs you, or a Claude that isn't there, wins.
-  it.each<[SessionStatus, boolean, DotState]>([
-    ['idle', true, 'learning'],
-    ['recovered', true, 'learning'],
-    ['working', true, 'learning'],
-    ['needs_input', true, 'needs_input'],
-    ['exited', true, 'exited'],
-    ['starting', true, 'starting'],
-    ['archived', true, 'archived'],
-    ['idle', false, 'idle'],
-    ['working', false, 'working'],
-  ])('%s, learning %s → %s', (status, learning, dot) => {
-    expect(dotState({ status, learning })).toBe(dot);
+  // A Meko call shows over working only, and a learn step over it.
+  it.each<[SessionStatus, boolean, boolean, DotState]>([
+    ['idle', true, false, 'learning'],
+    ['recovered', true, false, 'learning'],
+    ['working', true, false, 'learning'],
+    ['needs_input', true, false, 'needs_input'],
+    ['exited', true, false, 'exited'],
+    ['starting', true, false, 'starting'],
+    ['archived', true, false, 'archived'],
+    ['idle', false, false, 'idle'],
+    ['working', false, false, 'working'],
+    ['working', false, true, 'meko'],
+    ['working', true, true, 'learning'],
+    ['idle', false, true, 'idle'],
+    ['needs_input', false, true, 'needs_input'],
+  ])('%s, learning %s, Meko call %s → %s', (status, learning, mekoCall, dot) => {
+    expect(dotState({ status, learning, mekoCall })).toBe(dot);
   });
 
-  it('shows in the rail like working: over idle, under needs you', () => {
+  it('shows learning in the rail like working (over idle, under needs you), and a Meko call over both', () => {
     const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
     expect(aggregateDot(project(session('idle'), session('idle', 'running', true)))).toBe('learning');
     expect(aggregateDot(project(session('idle', 'running', true), session('needs_input')))).toBe('needs_input');
+    expect(aggregateDot(project(session('working'), session('idle', 'running', true), session('working', 'running', false, true)))).toBe('meko');
+    expect(aggregateDot(project(session('working', 'running', false, true), session('exited')))).toBe('exited');
   });
 
   it('gives a learning dot the long tooltip and keeps its label short', () => {
