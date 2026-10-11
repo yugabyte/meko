@@ -382,16 +382,22 @@ export class ModLinks {
 
   /**
    * A Meko call started or ended. Reported (onChange) when the first starts and when the last ends;
-   * a bad id or state, or a start past MEKO_MAX, is ignored.
+   * a bad id or state, or a start past MEKO_MAX, is ignored. An end only looks the link up: it can
+   * arrive after a reset (Claude exited), and mustn't bring the link back as live.
    */
   mekoCall(session: string, id: unknown, state: unknown): void {
     if (typeof id !== 'string' || !id || id.length > 200) return;
+    if (state === 'end') {
+      const l = this.links.get(session);
+      if (l?.meko.delete(id) && !l.meko.size) this.onChange(session);
+      return;
+    }
+    if (state !== 'start') return;
     const l = this.link(session);
     this.seen(session, l);
-    const was = l.meko.size;
-    if (state === 'start' && was < MEKO_MAX) l.meko.add(id);
-    else if (state === 'end') l.meko.delete(id);
-    if (!was !== !l.meko.size) this.onChange(session);
+    if (l.meko.size >= MEKO_MAX || l.meko.has(id)) return;
+    l.meko.add(id);
+    if (l.meko.size === 1) this.onChange(session);
   }
 
   /** The turn ended: no tool call outlives it, so an end the mod never got through is assumed. */

@@ -305,15 +305,19 @@ test("tells AgentK when each of Claude's Meko calls starts and ends, failed ones
   mock.env(on, ENV)
   const clock = mock.clock(on)
   const calls = routes(on, () => answer(204))
-  // Meko's MCP server and Bash, beneath the mod.
+  // Meko's MCP server and Bash, beneath the mod. The failing call must run once, as without the mod.
   on('tool.call', { tool: 'mcp__meko__context_search' }, () => ({ result: 'found 3' }))
+  let adds = 0
   on('tool.call', { tool: 'mcp__plugin_x_meko__memory_add' }, () => {
+    adds++
     throw new Error('Meko is down')
   })
   on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }))
   const r = await $.tool.call({ tool: 'mcp__meko__context_search', tool_use_id: 'tm1', query: 'login' })
   expect(r.result).toBe('found 3')
+  // The hook's `.catch` replays what its `next(e)` settled to; nothing beneath runs again.
   await $.tool.call({ tool: 'mcp__plugin_x_meko__memory_add', tool_use_id: 'tm2', text: 'a fact' }).catch(() => null)
+  expect(adds).toBe(1)
   await $.tool.call({ tool: 'Bash', tool_use_id: 'tb1', command: 'ls' })
   await clock.advance(1)
   expect(calls).toEqual([

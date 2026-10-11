@@ -324,9 +324,13 @@ export const register: Register = (on) => {
   }).catch(($, e, next) => next(e))
 
   // Claude's Meko calls: AgentK hears of each before it runs (awaited, so `start` always comes
-  // before `end`) and once it's over, whatever the outcome. The call itself is left alone.
-  on('tool.call', { tool: MEKO_TOOL }, async ($, e, next) => {
-    const l = e.tool_use_id ? await linkOf($).catch(() => null) : null
+  // before `end`) and once it's over, whatever the outcome. The call itself is left alone. The
+  // tool is checked here rather than with a RegExp matcher, which the oldest Claude Code the mod
+  // runs in (MIN_MOD_CLAUDE) may not take; every other tool goes straight on. The `.catch` replays
+  // what `next(e)` settled to, so a failed call never runs twice.
+  on('tool.call', async ($, e, next) => {
+    if (!MEKO_TOOL.test(e.tool) || !e.tool_use_id) return next(e)
+    const l = await linkOf($).catch(() => null)
     if (!l) return next(e)
     await post($, l, '/mod/meko', { id: e.tool_use_id, state: 'start' }).catch(() => undefined)
     try {

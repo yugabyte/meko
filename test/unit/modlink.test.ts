@@ -233,7 +233,7 @@ describe('the link to AgentK\'s mod', () => {
     });
   });
 
-  it("knows while Claude calls Meko: reported on the first start and the last end, forgotten at the turn's end and on a reset", () => {
+  it("knows while Claude calls Meko: reported on the first start and the last end, forgotten at the turn's end and on a reset, and not brought back by a late end", () => {
     const changes: string[] = [];
     links = new ModLinks(undefined, () => now, (s) => changes.push(s));
     links.mekoCall('s1', 'tm1', 'start'); // also the mod's first word: the link goes live
@@ -256,6 +256,10 @@ describe('the link to AgentK\'s mod', () => {
     links.mekoCall('s1', 'tm5', 'start');
     links.reset('s1');
     expect(links.callingMeko('s1')).toBe(false);
+    expect(changes).toHaveLength(7);
+    // Its end, posted as Claude exited, comes after the reset: the link stays gone.
+    links.mekoCall('s1', 'tm5', 'end');
+    expect(links.live('s1')).toBe(false);
     expect(changes).toHaveLength(7);
   });
 

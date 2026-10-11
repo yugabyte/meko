@@ -1439,12 +1439,13 @@ export class SessionManager {
       }
       case 'Stop': {
         void this.captureTranscript(id);
+        // No Meko call outlives its turn, the plan approval's included.
+        this.mod.endMeko(id);
         if (this.planPending.has(id)) break;
         this.update(id, { interrupted: 0 });
         this.turns.delete(id);
         // A tool call doesn't outlive its turn.
         this.mod.endAsk(id);
-        this.mod.endMeko(id);
         // A Design turn that wrote or republished the design (or changed its questions) leaves it
         // waiting for approval, unless the user approved it during the turn and it didn't change.
         const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));

@@ -202,7 +202,7 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions, checked and saved (`{ text }` for Claude), or what's wrong (400, `{ error }`). |
 | `/mod/learn` | A [learn step](#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
 | `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
-| `/mod/meko` | From a `tool.call` hook on Claude's Meko tools (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too. `id` is the call's `tool_use_id`; answered 204. See *Meko in the dot* under [The app](#the-app). |
+| `/mod/meko` | From a `tool.call` hook on every tool that goes straight on unless the tool is Meko's (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too, checked in the hook: the oldest Claude Code the mod runs in may not take a RegExp matcher): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too (the hook's `.catch` replays what `next(e)` settled to, so a failed call never runs twice). `id` is the call's `tool_use_id`; answered 204, and an `end` that comes after a reset is dropped without bringing the link back. See *Meko in the dot* under [The app](#the-app). |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
@@ -365,8 +365,8 @@ the dots are still.
 session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
 `tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
 memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
-when the last ends. It forgets them at the turn's end (`Stop`) and on a reset (a relaunch or
-`SessionEnd`), in case an end never got through.
+when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too) and on a reset
+(a relaunch or `SessionEnd`), in case an end never got through.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
   above working, starting and learning, under exited and needs you, so the project's dot shows the
