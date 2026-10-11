@@ -3,6 +3,7 @@ import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } fro
 import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
+import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
 /**
@@ -226,10 +227,25 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-/** Three keys typing after something in progress, so it doesn't look stuck (still with reduced motion). */
+let tuneFrames: Keyframe[][] | undefined;
+
+/**
+ * Three keys playing a tune after something in progress, so it doesn't look stuck. Each label
+ * starts at the first note when it appears; still with reduced motion.
+ */
 export function Dots() {
+  const ref = useRef<HTMLSpanElement>(null);
+  const reduce = useMedia('(prefers-reduced-motion: reduce)');
+  useEffect(() => {
+    const keys = [...(ref.current?.children ?? [])];
+    if (reduce || !keys.every((k) => typeof k.animate === 'function')) return;
+    const frames = (tuneFrames ??= [1, 2, 3].map((key) => typingKeyframes(TUNE, key)));
+    const duration = typingLoopMs(TUNE);
+    const anims = keys.map((k, i) => k.animate(frames[i], { duration, iterations: Infinity }));
+    return () => anims.forEach((a) => a.cancel());
+  }, [reduce]);
   return (
-    <span className="dots" aria-hidden="true">
+    <span ref={ref} className="dots" aria-hidden="true">
       <span className="dots-key" />
       <span className="dots-key" />
       <span className="dots-key" />

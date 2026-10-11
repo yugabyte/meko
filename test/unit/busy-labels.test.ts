@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TUNE, noteTimes, typingKeyframes, typingLoopMs } from '../../src/web/typing';
 
 const WEB = join(import.meta.dirname, '../../src/web');
 const STYLES = readFileSync(join(WEB, 'styles.css'), 'utf8');
@@ -22,13 +23,25 @@ describe('in-progress labels', () => {
     expect(found).toEqual([]);
   });
 
-  it('press their keys only when motion is allowed and without moving the text', () => {
-    const css = STYLES.slice(STYLES.indexOf('.dots {'), STYLES.indexOf('.dot.starting {'));
-    const motion = '@media (prefers-reduced-motion: no-preference)';
-    expect(css).toContain(motion);
-    expect(css.slice(0, css.indexOf(motion))).not.toMatch(/animation/);
+  it('play their tune from typing.ts, never from the CSS', () => {
+    // Dots skips the tune with reduced motion; a CSS animation would run regardless.
+    expect(STYLES.slice(STYLES.indexOf('.dots {'), STYLES.indexOf('.dot.starting {'))).not.toMatch(/animation/);
+  });
+
+  it.each([1, 2, 3])('press key %i for each of its notes in the tune, without moving the text', (key) => {
+    const frames = typingKeyframes(TUNE, key);
     // Only transform and box-shadow move, so the label's width never changes.
-    const frames = css.slice(css.indexOf('@keyframes key-press'));
-    expect([...frames.matchAll(/([a-z-]+):/g)].map((m) => m[1]).filter((p) => p !== 'transform' && p !== 'box-shadow')).toEqual([]);
+    expect(new Set(frames.flatMap((f) => Object.keys(f)))).toEqual(new Set(['offset', 'transform', 'boxShadow']));
+    const offsets = frames.map((f) => f.offset as number);
+    expect(offsets).toEqual([...offsets].sort((a, b) => a - b));
+    expect([offsets[0], offsets.at(-1)]).toEqual([0, 1]);
+    expect([frames[0].transform, frames.at(-1)!.transform]).toEqual(['none', 'none']);
+    // A press starts (at rest) at each of the key's notes and goes down; long notes stay down.
+    const loop = typingLoopMs(TUNE);
+    const notes = noteTimes(TUNE).filter((n) => n.key === key);
+    const presses = frames.slice(1, -1);
+    expect(presses.filter((f, i) => i % 4 === 0).map((f) => f.offset)).toEqual(notes.map((n) => n.at / loop));
+    expect(presses.filter((f, i) => i % 4 === 1 || i % 4 === 2).every((f) => f.transform !== 'none')).toBe(true);
+    expect(presses.filter((f, i) => i % 4 === 3).map((f) => f.offset)).toEqual(notes.map((n) => (n.at + n.ms) / loop));
   });
 });
