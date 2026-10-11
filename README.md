@@ -126,7 +126,7 @@ your phone can connect.
   design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
   AgentK asks Claude Code (one quick call with no tools) and offers what to do: start a task at
   Explore, Design or Code with a prompt, go to a session, move one to another stage, or open its PR.
-  Nothing that changes anything runs until you pick it, and you can reply to refine it.
+  Nothing runs until you pick it, a single "go to" included, and you can reply to refine it.
 - **Paste a GitHub link to start:** paste a PR or issue link into Ask AgentK (`⌘K`). A PR
   gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
   to Code), in the project it belongs to: the one whose datapack its description names, or one on

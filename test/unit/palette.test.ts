@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AskAgentkAction, LinkPlan, ProjectWithSessions } from '../../src/shared/types.js';
-import { askEntries, filterItems, goesAtOnce, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import { askEntries, filterItems, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -91,14 +91,5 @@ describe("AgentK's proposed actions", () => {
     [{ type: 'move', sessionId: 'gone', stage: 'code', instructions: '' }, [['Move a session to Code', 'Action', false]]],
   ])('names %j', (a, want) => {
     expect(rows(a)).toEqual(want);
-  });
-
-  it('goes at once only when going somewhere is the whole answer', () => {
-    const usage: AskAgentkAction = { type: 'go', view: 'usage' };
-    const move: AskAgentkAction = { type: 'move', sessionId: 's1', stage: 'code', instructions: '' };
-    expect(goesAtOnce([usage])).toBe(usage);
-    expect(goesAtOnce([usage, usage])).toBeNull();
-    expect(goesAtOnce([move])).toBeNull();
-    expect(goesAtOnce([])).toBeNull();
   });
 });

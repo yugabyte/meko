@@ -1596,8 +1596,9 @@ one that takes longer than `[ask_agentk] timeout_seconds` (45 by default) is sto
 | `move` (a session, a stage, instructions) | `moveBlockedIn()` and `moveError()` | `POST /api/sessions/:id/move`, then the session |
 | `openPr` (a session, instructions) | the session is in Code | the open-pr action, then the session |
 
-An answer whose only action is a `go` runs at once and closes the palette, since going somewhere
-changes nothing. Every other action waits to be picked, and runs through the route the UI already
+Every action waits to be picked, a lone `go` too (the first is selected, so Enter runs it): a
+question such as "how many sessions are open?" often comes back with a go to a session it names,
+and going there at once would hide the reply. A picked action runs through the route the UI already
 uses, which checks it again. Claude has no tools and sees names, branches and PR titles other
 people may have written, so at worst it proposes something the user then doesn't pick. The palette
 shows the exchange above the list; the input's placeholder becomes *Reply to AgentK, or type a

@@ -7,7 +7,7 @@ import {
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useMedia } from '../hooks/useMedia';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, goesAtOnce, linkEntries, type LabelPart } from '../palette';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
@@ -163,13 +163,7 @@ export function CommandPalette({
         ac.signal,
       );
       if (ac.signal.aborted || !mounted.current) return;
-      // An answer that only goes somewhere goes there; anything that changes something waits to be picked.
-      const only = goesAtOnce(r.actions);
-      if (only) {
-        onClose();
-        go(only);
-        return;
-      }
+      // Every action waits to be picked, a lone go too: the reply is the answer, and it stays on screen.
       setChat((c) => [...c, { text, ...r }]);
     } catch (e) {
       if (!ac.signal.aborted && mounted.current) setAskError({ text, message: errorMessage(e) });

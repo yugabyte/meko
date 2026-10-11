@@ -137,8 +137,3 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
     }
   });
 }
-
-/** The action an answer runs at once: its only one, when that only goes somewhere. Anything else waits to be picked. */
-export function goesAtOnce(actions: AskAgentkAction[]): Extract<AskAgentkAction, { type: 'go' }> | null {
-  return actions.length === 1 && actions[0].type === 'go' ? actions[0] : null;
-}
