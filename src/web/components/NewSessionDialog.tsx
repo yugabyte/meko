@@ -354,9 +354,7 @@ export function NewSessionDialog({
           hint={
             (review
               ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
-              : start === 'explore'
-                ? 'What should AgentK do? You can also type it in the terminal.'
-                : 'What should AgentK do? Left empty, AgentK starts on the name as the task.') + ' Images can be pasted or dropped in.'
+              : 'What should AgentK do? Left empty, AgentK starts on the name as the task.') + ' Images can be pasted or dropped in.'
           }
         >
           <textarea

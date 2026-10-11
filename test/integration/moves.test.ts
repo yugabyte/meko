@@ -95,13 +95,19 @@ describe('moves: moving a task session between stages', () => {
     expect(text).not.toContain('Task:');
     expect(text).toContain("Don't open a pull request yet.");
 
-    // A session without a task: one given with the move becomes its task, in the Code stage's start prompt.
-    const t = await session({ start: 'explore', name: 'Retries' });
+    // A session without a task (started at Explore with no first prompt, before the name became the
+    // task): one given with the move becomes its task, in the Code stage's start prompt.
+    const noTask = async (name: string) => {
+      const x = await session({ start: 'explore', name });
+      env.core.sessions.update(x.id, { initial_prompt: null });
+      return x;
+    };
+    const t = await noTask('Retries');
     await move(t.id, { stage: 'code', task: 'Add retries' });
     expect(row(t.id).initial_prompt).toBe('Add retries');
     expect(sent().at(-1)).toContain('Task: Retries\n\nAdd retries');
     // Without one, it moves all the same.
-    const u = await session({ start: 'explore', name: 'Nothing yet' });
+    const u = await noTask('Nothing yet');
     expect(await move(u.id, { stage: 'code' })).toMatchObject({ stage: 'code', hasTask: false });
     expect(sent().at(-1)).toContain('Implement what this session has worked out so far');
   });
