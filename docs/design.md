@@ -111,8 +111,10 @@ everything AgentK hands Claude goes through `claudePath()` (`src/server/paths.ts
 the prefix when the two are the same folder (the same device and inode of the export root; only
 this machine's own `/net/<host>` is checked, by host name, since a stat into another host's
 mount can hang while that host is down):
-the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, the allow rules in
-the hooks settings file, and the design file, questions file and image paths in prompts. What
+the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `AK_HOOK_SOCK`
+(Claude Code refuses a mod's `$.http.fetch` to a socket under `/net`, "a network location is not
+reached from here", so the mod would never reach AgentK), the allow rules in the hooks settings
+file, and the design file, questions file and image paths in prompts. What
 AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
 so the Design guard checks an edit against both, the learn step leaves out a fact that names
 either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
