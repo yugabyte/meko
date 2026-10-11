@@ -1,10 +1,17 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { StartStage } from '../../shared/types';
+import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, totalUnits, type BlinkRun } from '../blink';
+import { useMedia } from '../hooks/useMedia';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
-/** A session's status dot; `learning` is a dotted ring turning around Meko's m (`dotState()`). */
+/**
+ * A session's status dot; `learning` is a dotted ring turning around Meko's m (`dotState()`).
+ * Working and needs-you dots blink their halo (`blink.ts`).
+ */
 export function StatusDot({ status, title }: { status: DotState; title?: string }) {
+  const ref = useRef<HTMLElement>(null);
+  useBlink(ref, status === 'working' ? WORKING_RUNS : status === 'needs_input' ? KNOCK_RUNS : null);
   const cls =
     status === 'needs_input'
       ? 'needs'
@@ -12,7 +19,27 @@ export function StatusDot({ status, title }: { status: DotState; title?: string 
           ? 'idle'
           : status;
   const text = status === 'learning' ? LEARNING_TITLE : STATUS_TEXT[status];
-  return <i className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
+  return <i ref={ref} className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
+}
+
+const blinkFrames = new Map<readonly BlinkRun[], Keyframe[]>();
+
+/**
+ * Plays a blink signal on an element, on a loop. Every animation starts at time 0 on the page's
+ * timeline, so dots with the same signal blink together and one that mounts again picks up where
+ * the signal is. Still with reduced motion.
+ */
+function useBlink(ref: RefObject<HTMLElement | null>, runs: readonly BlinkRun[] | null): void {
+  const reduce = useMedia('(prefers-reduced-motion: reduce)');
+  useEffect(() => {
+    const el = ref.current;
+    if (!runs || reduce || !el || typeof el.animate !== 'function') return;
+    let frames = blinkFrames.get(runs);
+    if (!frames) blinkFrames.set(runs, (frames = blinkKeyframes(runs)));
+    const anim = el.animate(frames, { duration: totalUnits(runs) * BLINK_UNIT_MS, iterations: Infinity });
+    anim.startTime = 0;
+    return () => anim.cancel();
+  }, [ref, runs, reduce]);
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

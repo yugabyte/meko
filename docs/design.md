@@ -342,8 +342,8 @@ version moves below it first, then the user name is cut off before the server na
 
 Session states, shown with a dot in the rail and on each tab:
 
-- **Working**
-- **Needs you:** a permission prompt or a question
+- **Working:** the dot's halo blinks
+- **Needs you:** a permission prompt or a question. The diamond knocks
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
@@ -352,6 +352,11 @@ Session states, shown with a dot in the rail and on each tab:
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
   status idle; without the mod it's a working turn), never over needs you, exited or starting
   (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
+
+The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
+dot with the Web Animations API from the start of the page's timeline, so dots with the same
+signal blink together and a dot shown again picks up where the signal is. With reduced motion
+the dots are still.
 
 **Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
