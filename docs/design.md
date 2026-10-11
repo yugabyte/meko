@@ -346,7 +346,8 @@ version moves below it first, then the user name is cut off before the server na
 Session states, shown with a dot in the rail and on each tab:
 
 - **Working:** the dot's halo blinks
-- **Needs you:** a permission prompt or a question. The diamond knocks
+- **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
+  long, then pauses
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
