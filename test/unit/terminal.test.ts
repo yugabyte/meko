@@ -8,7 +8,7 @@ import { startHost, type HostHandle } from '../../src/server/host/host.js';
 import { SessionHost } from '../../src/server/hostclient.js';
 import { getPaths } from '../../src/server/paths.js';
 import { attachTerminal } from '../../src/server/terminal.js';
-import { tempDir, waitFor } from '../helpers.js';
+import { tempDir, testLockDeps, waitFor } from '../helpers.js';
 
 /** A socket stand-in: records what the server sends, and lets the test play the browser. */
 function fakeSocket() {
@@ -29,7 +29,7 @@ describe('terminal socket', () => {
   beforeEach(async () => {
     home = tempDir('akl-term-');
     const paths = getPaths(join(home, 'ak'));
-    handle = await startHost({ paths, version: 'test' });
+    handle = await startHost({ paths, version: 'test', lockDeps: testLockDeps() });
     host = new SessionHost(paths, { services: () => null });
   });
   afterEach(async () => {

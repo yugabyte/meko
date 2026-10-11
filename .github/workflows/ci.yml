@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, ak_hari90/why-are-tests-in-ci-so-slow]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -19,8 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        workers: [2, 4, 8]
+        os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -46,7 +45,11 @@ jobs:
           git config --global init.defaultBranch main
 
       - run: npm ci
-      - run: nproc; node -p 'require("os").availableParallelism()'
-      - run: npm test -- --maxWorkers=${{ matrix.workers }}
+      - run: npm run typecheck
+      - run: npm run lint
+      # By default Vitest runs one test file fewer than there are CPUs, and ubuntu-latest has 2 CPUs
+      # for this repo: one file at a time. The integration tests mostly wait on the fake Claude, so 4
+      # at once fit on 2 CPUs (8 was slower).
+      - run: npm test -- --maxWorkers=4
         env:
           TERM: xterm-256color
