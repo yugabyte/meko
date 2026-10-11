@@ -106,9 +106,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The Design-stage guard denies edits inside the worktree and main checkout, by its stored
       path and by the spelling Claude is given (`claudePath()`), and fails open (no answer means
       allow) so a slow or restarting server never blocks Claude.
-- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, allow rules, file paths in
-      prompts) goes through `claudePath()`, so a home under `/net` doesn't make Claude Code ask
-      before every file; what AgentK stores keeps its own spelling.
+- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
+      file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
+      Claude Code ask before every file or refuse the mod's socket; what AgentK stores keeps its
+      own spelling.
 
 ## 3. Lifecycle and GitHub
 

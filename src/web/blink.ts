@@ -31,6 +31,16 @@ export function totalUnits(runs: readonly BlinkRun[]): number {
 }
 
 /**
+ * How far into the signal a dot keyed by `key` (a session's or project's id) runs, in whole units:
+ * the same for every dot of that key, and spread over the signal between keys (FNV-1a).
+ */
+export function blinkOffsetMs(key: string, runs: readonly BlinkRun[]): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x01000193);
+  return ((h >>> 0) % totalUnits(runs)) * BLINK_UNIT_MS;
+}
+
+/**
  * Keyframes that hold each run's halo until the next run (a hard step, no fade). The colour is the
  * dot's `--halo`, so it follows the theme.
  */

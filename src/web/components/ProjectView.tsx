@@ -242,7 +242,7 @@ export function ProjectView({
             `${formatTokens(totalTokens(s.usage))} tokens`,
           ].join(' · ') + (mobile ? '' : '\nDouble-click to rename')}
         >
-          <StatusDot status={dotState(s)} />
+          <StatusDot status={dotState(s)} phase={s.id} />
           <span className="tab-name">{s.name}</span>
           <span className="stchip">{STAGE_LABELS[s.stage]}</span>
         </button>
