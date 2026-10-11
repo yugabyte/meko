@@ -34,7 +34,7 @@ interface Item {
 /** How long typing pauses before a pasted link is looked up. */
 const LINK_LOOKUP_MS = 250;
 /** How long each of the placeholder's hints shows. */
-const HINT_MS = 2000;
+const HINT_MS = 1250;
 
 /** One exchange with AgentK while the palette is open: what was asked, and its answer. */
 interface Exchange extends AskAgentkResult {
