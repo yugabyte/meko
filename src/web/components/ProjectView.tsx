@@ -235,9 +235,8 @@ export function ProjectView({
           onDoubleClick={mobile ? undefined : () => onRename(s.id)}
           title={[
             s.name,
-            // A queued gate's words replace the status and its detail.
             dotTitle(s) +
-              (s.statusDetail && s.status !== 'starting' && dotState(s) !== 'queued' ? `: ${s.statusDetail}` : ''),
+              (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
             STAGE_LABELS[s.stage],
             `${formatTokens(totalTokens(s.usage))} tokens`,
           ].join(' · ') + (mobile ? '' : '\nDouble-click to rename')}

@@ -360,8 +360,8 @@ Session states, shown with a dot in the rail and on each tab:
 - **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
   review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,
   turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
-  (`dotState()`). The tab's tooltip says what the gate waits on (`queuedText()`), the palette
-  *queued*. The rail ranks it above idle and recovered, under working.
+  (`dotState()`). The tab's tooltip says what the gate waits on (a merge's from `queuedText()`;
+  an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
 dot with the Web Animations API, pinned to the page's timeline. Each dot starts at its own point

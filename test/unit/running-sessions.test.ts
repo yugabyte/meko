@@ -40,7 +40,6 @@ describe('dotState', () => {
     ['needs_input', false, true, null, 'needs_input'],
     ['idle', false, false, 'merge', 'queued'],
     ['recovered', false, false, 'merge', 'queued'],
-    ['idle', false, false, 'open-pr', 'queued'],
     ['idle', true, false, 'merge', 'learning'],
     ['working', false, false, 'merge', 'working'],
     ['working', false, true, 'open-pr', 'meko'],
@@ -61,8 +60,11 @@ describe('dotState', () => {
     expect(aggregateDot(project(session('idle', 'running', false, false, 'merge'), session('working')))).toBe('working');
   });
 
-  it("titles a queued session's tab with what the gate waits on", () => {
-    expect(dotTitle({ ...session('idle', 'running', false, false, 'merge'), mergeBlockers: ['CI is still running.'] })).toBe('Merge queued: waiting on CI');
+  it.each<[QueuedGate, string]>([
+    ['merge', 'Merge queued: waiting on CI'],
+    ['open-pr', 'Open PR queued: going now'],
+  ])("titles a session's tab with what its queued %s waits on", (gate, title) => {
+    expect(dotTitle({ ...session('idle', 'running', false, false, gate), mergeBlockers: ['CI is still running.'] })).toBe(title);
   });
 
   it('gives a learning dot the long tooltip and keeps its label short', () => {
