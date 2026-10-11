@@ -107,3 +107,13 @@ The hook forwarder gives up quietly when the socket isn't there, so the server m
 It binds the socket under a temporary name and renames it into place, removes it when it stops
 only if the file is still its own, and every 10 seconds binds it again if the file was removed or
 replaced (see [One server per home](recovery.md#one-server-per-home)).
+
+**Interrupted turns.** Claude Code fires no `Stop` hook for a turn you interrupt (Ctrl+C or Esc), so
+AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` would
+(`SessionManager.endTurn`): the session is idle again, the activity log says *You interrupted the
+turn*, and what waited for the turn's end goes at once (review comments, a queued Open PR or
+approval, review prompts). It isn't a turn Claude died in, so it's never continued by itself
+(`interrupted` stays 0). It didn't do what it was sent for either: in PR & Review a review, CI or
+conflicts prompt the turn got stays sent, and the findings stay *addressing* (so a queued merge
+waits), until the next turn ends; a Review a PR session's update summary stays sent the same way.
+Without the mod, the session shows as working until the next turn ends.

@@ -46,7 +46,8 @@ motion the dots are still.
 session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
 `tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
 memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
-when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too) and on a reset
+when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too, or an
+interrupted turn's `/mod/turn`) and on a reset
 (a relaunch or `SessionEnd`), in case an end never got through.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it

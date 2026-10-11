@@ -57,6 +57,7 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | `/mod/learn` | A [learn step](recall-and-learn.md#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
 | `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
 | `/mod/meko` | From a `tool.call` hook on every tool that goes straight on unless the tool is Meko's (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too, checked in the hook: the oldest Claude Code the mod runs in may not take a RegExp matcher): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too (the hook's `.catch` replays what `next(e)` settled to, so a failed call never runs twice). `id` is the call's `tool_use_id`; answered 204, and an `end` that comes after a reset is dropped without bringing the link back. See *Meko in the dot* under [The app](app.md). |
+| `/mod/turn` | From a `turn.complete` hook: `{ turnId, reason: "aborted" }` for a main-loop turn you interrupted (`isAborted`, checked on Claude Code 2.1.287, 2.1.290 and 2.1.296), which fires no `Stop` hook; every other turn goes straight on. Awaited before `next(e)`, so it reaches the server before the engine goes idle and runs a prompt it holds. Answered 204; the server ends the turn (see *Interrupted turns* under the status path in [Architecture](architecture.md)) when one is running, and ignores it otherwise. |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
@@ -100,7 +101,8 @@ on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2
 leaves the dialog to answer alone. On the server (`modlink.ts`) an ask lives only while Claude's
 call waits: in `Session.asking` (`AskRequest`), with no copy in the database. It's dropped when the
 mod says it has its answer (`/mod/ask/done`), when the mod stops asking for 10 seconds (the call
-was interrupted, or Claude died), at the turn's end (`Stop`), and on a reset; and since the mod
+was interrupted, or Claude died), at the turn's end (`Stop`, or an interrupted turn's
+`/mod/turn`), and on a reset; and since the mod
 sends the questions with every ask, a server restart brings the ask back with the next one. Only
 choice questions (1 to 4, each with options) are offered: a question of another kind (Claude
 Code's `text` and `number` questions) is left to the terminal. Text is capped for the browser (the
@@ -128,13 +130,14 @@ within 10,000 characters) and hands them to the mod: the labels comma-joined, th
 dialog gives them. A 409 means AgentK has moved on: the terminal answered first, or the turn ended.
 
 **Answers and approvals mid-turn.** Mid-turn means a turn is running (`Session.midTurn`): from its
-`UserPromptSubmit` to its `Stop` (or Claude's end), while AgentK works or Claude waits on a
-permission prompt or a question during it. A Needs you with no turn behind it (a parked recovery,
-a prompt another plugin refused) isn't, and nor is a design waiting for approval; after a server
-restart only a session showing as working counts. While the mod is live, the design's **Send for
-revision** works mid-turn: the answers go through the mod at once and Claude holds them until the
-turn ends, so the server keeps nothing. A prompt sent mid-turn leaves the session's status alone (a
-permission prompt still shows as Needs you). Which prompts Claude still holds comes from the mod
+`UserPromptSubmit` to its `Stop` (or its interruption, or Claude's end), while AgentK works or
+Claude waits on a permission prompt or a question during it. A Needs you with no turn behind it (a
+parked recovery, a prompt another plugin refused) isn't, and nor is a design waiting for
+approval; after a server restart only a session showing as working counts. While the mod is live,
+the design's **Send for revision** works mid-turn: the answers go through the mod at once and
+Claude holds them until the turn ends, so the server keeps nothing. A prompt sent mid-turn leaves
+the session's status alone (a permission prompt still shows as Needs you). Which prompts Claude
+still holds comes from the mod
 (`held` on each poll, and `/mod/held`), so one another plugin refused, or one still held after a
 server restart, counts right; a mod too old to report it (until it reloads) has one taken off at
 each `UserPromptSubmit`. They're in `Session.promptsHeld`. While Claude holds any, the *Design

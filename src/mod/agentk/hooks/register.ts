@@ -22,6 +22,8 @@
 //   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
 //   /mod/meko     Claude's Meko tool calls: `start` before each runs, `end` once it's over (failed or
 //                 interrupted too), for the session's dot to show while one runs
+//   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: AgentK ends
+//                 the turn and sends what waited for its end
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
@@ -295,6 +297,16 @@ export const register: Register = (on) => {
     if (l) await post($, l, '/mod/measure', { context: e.context, rateLimits: e.rateLimits }).catch(() => undefined)
     return next(e)
   })
+
+  // A turn the person interrupted fires no Stop hook: AgentK hears of it here, before the engine
+  // goes idle and runs a prompt it holds, so that prompt's turn never counts as the one that ended.
+  // A subagent's turn, and every turn Stop covers, goes straight on.
+  on('turn.complete', async ($, e, next) => {
+    if (!e.isAborted || e.agentId) return next(e)
+    const l = await linkOf($).catch(() => null)
+    if (l) await post($, l, '/mod/turn', { turnId: e.turnId, reason: 'aborted' }).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // Claude's questions: the terminal's dialog opens as always (next), and the questions go to
   // AgentK Local too. The first answer wins; returning AgentK Local's while the dialog is open

@@ -4,7 +4,8 @@ Part of the [AgentK Local design](../design.md).
 
 Claude Code writes every model response to the session transcript with its token counts. The
 server reads new lines from each session's transcript, and from any subagent transcripts under
-`<session>/subagents/`, after every turn (on the `Stop` hook), when a session ends or is archived,
+`<session>/subagents/`, after every turn (on the `Stop` hook, or an interrupted turn's
+`/mod/turn`), when a session ends or is archived,
 and once a minute. It remembers the byte offset it reached, so each line is read once.
 
 One response spans several transcript lines with the same message id, so usage is stored once per

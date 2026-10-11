@@ -122,7 +122,8 @@ sent, withdrawn or dropped.
 
 - **Open PR after this turn.** In Code, while AgentK is mid-turn (working, or a question or
   permission prompt during a turn) or Claude is starting, Open PR queues the PR prompt instead of
-  being refused. It goes when the turn ends (at the `Stop`, before review comments), or at the next
+  being refused. It goes when the turn ends (at the `Stop`, or when you interrupt the turn, before
+  review comments), or at the next
   poll when Claude is back at its prompt (a turn that ended while the server was down), exactly as a
   press between turns would send it. It waits another turn while Claude holds prompts you sent
   mid-turn, and is dropped when Claude exits (however that's found: its `SessionEnd`, a dead pane at
