@@ -23,8 +23,8 @@ export const WORKING_RUNS = blinkRuns(
     '1 1 3 1 3 3 1 1 1 1 1 1 1 3 3 1 1 1 3 1 3 7',
 );
 
-/** Knock knock, pause, knock knock, long pause. */
-export const KNOCK_RUNS = blinkRuns('1 1 1 4 1 1 1 16');
+/** Three short knocks and a long one, then a long pause. */
+export const KNOCK_RUNS = blinkRuns('1 1 1 1 1 1 8 24');
 
 export function totalUnits(runs: readonly BlinkRun[]): number {
   return runs.reduce((n, r) => n + r.units, 0);
