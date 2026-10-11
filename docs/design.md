@@ -355,6 +355,11 @@ Session states, shown with a dot in the rail and on each tab:
   (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
 - **Calling Meko:** Claude is running a Meko tool call. The working dot gets Meko's m, in white,
   and its halo blinks on (*Meko in the dot*, below).
+- **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
+  review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,
+  turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
+  (`dotState()`). The tab's tooltip says what the gate waits on (`queuedText()`), the palette
+  *queued*. The rail ranks it above idle and recovered, under working.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
 dot with the Web Animations API from the start of the page's timeline, so dots with the same

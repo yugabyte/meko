@@ -5,19 +5,22 @@ import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSes
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
- * Meko, or `meko` while Claude runs a Meko tool call in a working turn.
+ * Meko, `queued` while a gate waits to go between turns, or `meko` while Claude runs a Meko tool
+ * call in a working turn.
  */
-export type DotState = SessionStatus | 'learning' | 'meko';
+export type DotState = SessionStatus | 'learning' | 'queued' | 'meko';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<DotState, number> = {
-  needs_input: 7,
-  exited: 6,
+  needs_input: 8,
+  exited: 7,
   // Above working, so the rail shows the m whenever any of the project's sessions calls Meko.
-  meko: 5,
-  working: 4,
-  starting: 4,
-  learning: 4,
+  meko: 6,
+  working: 5,
+  starting: 5,
+  learning: 5,
+  // Above idle and recovered, so a project whose only activity is a queued merge shows the ring.
+  queued: 4,
   recovered: 3,
   idle: 2,
   archived: 0,
@@ -113,12 +116,16 @@ export function sessionToOpen(live: Session[], lastOpenId: string | undefined): 
  */
 const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
 
+/** The statuses a queued gate shows over: Claude between turns. Anything else says more. */
+const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
+
 /**
  * What a session's dot shows: `Session.learning` over idle, recovered and working, then
- * `Session.mekoCall` over working.
+ * `Session.queued` over idle and recovered, then `Session.mekoCall` over working.
  */
-export function dotState(s: Pick<Session, 'status' | 'learning' | 'mekoCall'>): DotState {
+export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall'>): DotState {
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
+  if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
   return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
 }
 
@@ -141,6 +148,7 @@ export const STATUS_TEXT: Record<DotState, string> = {
   recovered: 'recovered after restart',
   archived: 'archived',
   learning: 'learning',
+  queued: 'queued',
   meko: 'calling Meko',
 };
 
@@ -473,6 +481,14 @@ export function queuedText(session: Session): string | null {
   const first = session.mergeBlockers[0];
   const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
   return `✓ Merge queued: ${waits}`;
+}
+
+/** A session's dot in words, for its tab's tooltip: the long learning text, or what a queued gate waits on. */
+export function dotTitle(s: Session): string {
+  const dot = dotState(s);
+  if (dot === 'learning') return LEARNING_TITLE;
+  if (dot === 'queued') return queuedText(s)?.replace(/^✓ /, '') ?? STATUS_TEXT.queued;
+  return STATUS_TEXT[dot];
 }
 
 /** Why answers can't be sent for AgentK to revise the design right now, or null when they can. */

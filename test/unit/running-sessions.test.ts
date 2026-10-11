@@ -1,11 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { ProjectWithSessions, Session, SessionStatus } from '../../src/shared/types.js';
+import type { ProjectWithSessions, QueuedGate, Session, SessionStatus } from '../../src/shared/types.js';
 import { StatusDot } from '../../src/web/components/common.js';
-import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, runningSessions, type DotState } from '../../src/web/util.js';
+import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, runningSessions, type DotState } from '../../src/web/util.js';
 
-const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false) => ({ id: status, status, desired, learning, mekoCall }) as Session;
+const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false, queued: QueuedGate | null = null) =>
+  ({ id: status, status, desired, learning, mekoCall, queued, mergeBlockers: [] as string[] }) as Session;
 
 describe('runningSessions', () => {
   it('counts sessions whose Claude is up', () => {
@@ -21,30 +22,46 @@ describe('runningSessions', () => {
 describe('dotState', () => {
   // A learn step shows over Claude between turns (the mod's step) and the typed learn turn; what needs you, or a Claude that isn't there, wins.
   // A Meko call shows over working only, and a learn step over it.
-  it.each<[SessionStatus, boolean, boolean, DotState]>([
-    ['idle', true, false, 'learning'],
-    ['recovered', true, false, 'learning'],
-    ['working', true, false, 'learning'],
-    ['needs_input', true, false, 'needs_input'],
-    ['exited', true, false, 'exited'],
-    ['starting', true, false, 'starting'],
-    ['archived', true, false, 'archived'],
-    ['idle', false, false, 'idle'],
-    ['working', false, false, 'working'],
-    ['working', false, true, 'meko'],
-    ['working', true, true, 'learning'],
-    ['idle', false, true, 'idle'],
-    ['needs_input', false, true, 'needs_input'],
-  ])('%s, learning %s, Meko call %s → %s', (status, learning, mekoCall, dot) => {
-    expect(dotState({ status, learning, mekoCall })).toBe(dot);
+  // A queued gate shows between turns (idle, recovered) only, and a learn step over it.
+  it.each<[SessionStatus, boolean, boolean, QueuedGate | null, DotState]>([
+    ['idle', true, false, null, 'learning'],
+    ['recovered', true, false, null, 'learning'],
+    ['working', true, false, null, 'learning'],
+    ['needs_input', true, false, null, 'needs_input'],
+    ['exited', true, false, null, 'exited'],
+    ['starting', true, false, null, 'starting'],
+    ['archived', true, false, null, 'archived'],
+    ['idle', false, false, null, 'idle'],
+    ['working', false, false, null, 'working'],
+    ['working', false, true, null, 'meko'],
+    ['working', true, true, null, 'learning'],
+    ['idle', false, true, null, 'idle'],
+    ['needs_input', false, true, null, 'needs_input'],
+    ['idle', false, false, 'merge', 'queued'],
+    ['recovered', false, false, 'merge', 'queued'],
+    ['idle', false, false, 'open-pr', 'queued'],
+    ['idle', true, false, 'merge', 'learning'],
+    ['working', false, false, 'merge', 'working'],
+    ['working', false, true, 'open-pr', 'meko'],
+    ['needs_input', false, false, 'merge', 'needs_input'],
+    ['exited', false, false, 'merge', 'exited'],
+    ['starting', false, false, 'merge', 'starting'],
+  ])('%s, learning %s, Meko call %s, queued %s → %s', (status, learning, mekoCall, queued, dot) => {
+    expect(dotState({ status, learning, mekoCall, queued })).toBe(dot);
   });
 
-  it('shows learning in the rail like working (over idle, under needs you), and a Meko call over both', () => {
+  it('ranks learning in the rail like working (over idle, under needs you), a Meko call over both, and a queued gate over idle, under working', () => {
     const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
     expect(aggregateDot(project(session('idle'), session('idle', 'running', true)))).toBe('learning');
     expect(aggregateDot(project(session('idle', 'running', true), session('needs_input')))).toBe('needs_input');
     expect(aggregateDot(project(session('working'), session('idle', 'running', true), session('working', 'running', false, true)))).toBe('meko');
     expect(aggregateDot(project(session('working', 'running', false, true), session('exited')))).toBe('exited');
+    expect(aggregateDot(project(session('idle'), session('recovered'), session('idle', 'running', false, false, 'merge')))).toBe('queued');
+    expect(aggregateDot(project(session('idle', 'running', false, false, 'merge'), session('working')))).toBe('working');
+  });
+
+  it("titles a queued session's tab with what the gate waits on", () => {
+    expect(dotTitle({ ...session('idle', 'running', false, false, 'merge'), mergeBlockers: ['CI is still running.'] })).toBe('Merge queued: waiting on CI');
   });
 
   it('gives a learning dot the long tooltip and keeps its label short', () => {
