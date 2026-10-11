@@ -357,9 +357,11 @@ Session states, shown with a dot in the rail and on each tab:
   and its halo blinks on (*Meko in the dot*, below).
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
-dot with the Web Animations API from the start of the page's timeline, so dots with the same
-signal blink together and a dot shown again picks up where the signal is. With reduced motion
-the dots are still.
+dot with the Web Animations API, pinned to the page's timeline. Each dot starts at its own point
+in the signal, a whole number of units set by a hash of its session's id (the project's for the
+rail's dot, `blinkOffsetMs()`), so different sessions blink out of step, a session's tab and
+palette dots blink together, and a dot shown again picks up where its signal is. With reduced
+motion the dots are still.
 
 **Meko in the dot.** While Claude runs a Meko tool call, `Session.mekoCall` is true and a working
 session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
