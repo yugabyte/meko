@@ -40,8 +40,9 @@ with a finger. Before you finish a UI change:
 ## In-progress labels
 
 A label for something still running ("Starting", "Opening", "Loading") is `<Busy label="Starting" />`
-from `common.tsx`, never a static "Starting…", which looks stuck. Its dots cycle `.` `..` `...`
-by opacity (Safari doesn't animate `content`) and stay still with reduced motion.
+from `common.tsx`, never a static "Starting…", which looks stuck. Its dots (`Dots`) are three
+keycaps pressed in turn like typing (`transform` and `box-shadow` only, so the width never
+changes) and stay still with reduced motion.
 `test/unit/busy-labels.test.ts` flags a static label like "Saving…" in a component.
 
 ## Reloads after an update

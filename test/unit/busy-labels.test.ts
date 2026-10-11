@@ -22,12 +22,17 @@ describe('in-progress labels', () => {
     expect(found).toEqual([]);
   });
 
-  it('cycle the dots with opacity, only when motion is allowed', () => {
+  it('press their keys in turn, only when motion is allowed and without moving the text', () => {
     const css = STYLES.slice(STYLES.indexOf('.dots {'), STYLES.indexOf('.dot.starting {'));
-    expect(css).toContain('@media (prefers-reduced-motion: no-preference)');
-    expect(css).toMatch(/@keyframes dots-2 \{\s*0% \{ opacity: 0; \}\s*33\.333% \{ opacity: 1; \}/);
-    expect(css).toMatch(/@keyframes dots-3 \{\s*0% \{ opacity: 0; \}\s*66\.667% \{ opacity: 1; \}/);
-    // Safari doesn't animate `content`, so dots drawn that way never move on an iPhone.
-    expect(css).not.toMatch(/content:/);
+    const motion = '@media (prefers-reduced-motion: no-preference)';
+    expect(css).toContain(motion);
+    expect(css.slice(0, css.indexOf(motion))).not.toMatch(/animation/);
+    // Typing, not a wave: key 1, then 3, then 2.
+    const delay = (n: number) => Number(new RegExp(`\\.key:nth-child\\(${n}\\) \\{\\s*animation-delay: ([\\d.]+)s`).exec(css)?.[1]);
+    expect(delay(3)).toBeGreaterThan(0);
+    expect(delay(2)).toBeGreaterThan(delay(3));
+    // Only transform and box-shadow move, so the label's width never changes.
+    const frames = css.slice(css.indexOf('@keyframes key-press'));
+    expect([...frames.matchAll(/([a-z-]+):/g)].map((m) => m[1]).filter((p) => p !== 'transform' && p !== 'box-shadow')).toEqual([]);
   });
 });
