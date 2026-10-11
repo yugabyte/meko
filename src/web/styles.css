@@ -4425,6 +4425,20 @@ div[id^='dak-mermaid-'] .label {
     padding-left: 14px;
     padding-right: 14px;
   }
+  /* Settings' tabs don't fit beside the title and pushed the × off the right edge: they take
+     their own row under both, split evenly. Only the look changes: the DOM, and so Tab and a
+     screen reader, still go title, tabs, × as on a desktop, which keeps close last. */
+  .dialog-hd {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .dialog-hd > .seg {
+    order: 1;
+    flex: 1 0 100%;
+  }
+  .dialog-hd > .seg button {
+    flex: 1;
+  }
   .dialog-ft {
     flex-wrap: wrap;
     padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
