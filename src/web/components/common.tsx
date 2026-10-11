@@ -226,13 +226,13 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-/** Dots cycling ". .. ..." after something in progress, so it doesn't look stuck (a static "..." with reduced motion). */
+/** Three keys typing after something in progress, so it doesn't look stuck (still with reduced motion). */
 export function Dots() {
   return (
     <span className="dots" aria-hidden="true">
-      <span>.</span>
-      <span>.</span>
-      <span>.</span>
+      <span className="dots-key" />
+      <span className="dots-key" />
+      <span className="dots-key" />
     </span>
   );
 }

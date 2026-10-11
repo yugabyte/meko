@@ -9,7 +9,7 @@ import { approveLabel, cx, designApprovalBlocker, headerApproves, relativeTime }
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
-import { Busy } from './common';
+import { Busy, Dots } from './common';
 
 /**
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
@@ -106,6 +106,7 @@ export function DesignPanel({
             <p className="muted">
               No design yet. AgentK is reading the code; the design shows up here as soon as it’s written, and is
               saved to the project’s datapack.
+              {session.status === 'working' && <Dots />}
             </p>
           )}
         </div>
