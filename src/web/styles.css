@@ -2254,6 +2254,17 @@ div[id^='dak-mermaid-'] .label {
   text-overflow: ellipsis;
   max-width: 260px;
 }
+/* A row that only says something (a link being looked up, or why it can't start): read in full, not picked. */
+.pal-item.inert {
+  cursor: default;
+  color: var(--muted);
+}
+.pal-item.inert .pal-label {
+  white-space: normal;
+}
+.pal-error {
+  padding: 0 16px 10px;
+}
 
 /* ---------- Project home ---------- */
 .home-view {

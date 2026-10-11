@@ -988,6 +988,68 @@ export interface ReviewablePrs {
   error?: string;
 }
 
+/**
+ * GET /api/github-link?ref=: what pasting a GitHub PR or issue into Search would start, and where.
+ * A PR gets a Review a PR session, an issue a task that fixes or implements it.
+ */
+export interface LinkPlan {
+  kind: 'pr' | 'issue';
+  /** `owner/name` on GitHub. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: 'open' | 'closed' | 'merged';
+  /**
+   * The open project to start in: one with a datapack the description's Meko lines name, else the
+   * first on the repo. Null when none fits (then `newProject` is set).
+   */
+  project: LinkProject | null;
+  /** The project AgentK opens when no open project fits. */
+  newProject: LinkNewProject | null;
+  /** Running sessions already on it: a review of the PR, or tasks whose first prompt names the issue's link. */
+  existing: { sessionId: string; projectId: string; name: string }[];
+}
+
+export interface LinkProject {
+  id: string;
+  name: string;
+  /** `datapack`: it has a datapack the description names; `repo`: its repo is a clone of the link's. */
+  why: 'datapack' | 'repo';
+  /** The clone of the link's repo the session works in; null when it has to be cloned first. */
+  clone: string | null;
+}
+
+export interface LinkNewProject {
+  name: string;
+  /** A local clone of the link's repo it opens on; null when it clones `cloneUrl`. */
+  repoPath: string | null;
+  cloneUrl: string;
+  /**
+   * Its dedicated datapack: one the description names (`invite`: a share accepted on the way),
+   * `create` for a new one (an issue's project), or none.
+   */
+  datapack: { id: string; name: string; invite: boolean } | 'create' | null;
+  /** The closed project (its id) that opens again with that datapack, if any. */
+  reopens: string | null;
+}
+
+/** POST /api/github-link/start. */
+export interface StartFromLinkRequest {
+  /** The pasted link, or `owner/name#N`. */
+  ref: string;
+  /** The open project to start in; left out, AgentK opens the plan's new project (or uses an open one that fits by now). */
+  projectId?: string;
+  /** An issue's task: where it starts. Defaults to `design`. */
+  start?: 'design' | 'code';
+}
+
+export interface StartFromLinkResult {
+  project: Project;
+  session: Session;
+}
+
 /** An open PR a new task session can work on (New session → Advanced → Pull request). */
 export interface TaskPr {
   /** `owner/name` on GitHub: the repo the PR is in. */
@@ -1654,6 +1716,11 @@ export type TermServerMessage =
 // GET    /api/projects/:id/task-prs?repoPath=&pr= → TaskPrs   (your open PRs in `repoPath` (default: the project's
 //        repo), newest first; with `pr` (a number, #number, owner/name#number or PR link) that one PR; 400 for a PR
 //        that can't be found or isn't open)
+// GET    /api/github-link?ref=             → LinkPlan   (a pasted GitHub PR or issue: link or owner/name#N; 400 for anything
+//        else or one GitHub can't find)
+// POST   /api/github-link/start StartFromLinkRequest → StartFromLinkResult   (starts a Review a PR session on a PR, or a
+//        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
+//        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
