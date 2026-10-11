@@ -3760,9 +3760,12 @@ div[id^='dak-mermaid-'] .label {
   border: 1px solid var(--rule);
   border-radius: 10px;
 }
-/* The stage name keeps its width; the gate goes on the next line when both don't fit. */
+/* The stage name keeps its width and grows to fill the line, which holds the gate at the right
+   edge; the gate goes on the next line when both don't fit. The right margin keeps a gap between
+   the name and a gate beside it, and counts toward that fit. */
 .sheet-stage .stg-now {
   flex: 1 0 auto;
+  margin-right: 10px;
 }
 .sheet-stage .blockers {
   padding-top: 2px;
