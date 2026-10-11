@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { connect } from 'node:net';
+import { connect, type AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { makeEnv, type TestEnv } from '../helpers.js';
-import { buildServer } from '../../src/server/server.js';
+import { buildServer, SHUTDOWN_CLOSE_MS } from '../../src/server/server.js';
 import { COOKIE_NAME, issueSetupToken } from '../../src/server/auth.js';
 import { get, kvGet, kvSet, run } from '../../src/server/db.js';
 import { createHash } from 'node:crypto';
@@ -170,6 +170,21 @@ describe('HTTP API: access control', () => {
       ws.terminate();
     });
 
+    it("closes without waiting out a socket that never answers the close (ws's 30 s)", async () => {
+      const cookie = await setup();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const { port } = app.server.address() as AddressInfo;
+      // A sleeping phone: the socket opens, then nothing it receives is ever answered.
+      const peer = connect(port, '127.0.0.1');
+      const upgraded = new Promise<void>((resolve) => peer.once('data', () => resolve()));
+      peer.write(`GET /ws/events HTTP/1.1\r\nHost: localhost\r\nCookie: ${cookie}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n`
+        + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n');
+      await upgraded;
+      const started = Date.now();
+      await app.close();
+      expect(Date.now() - started).toBeLessThan(SHUTDOWN_CLOSE_MS + 2000);
+      peer.destroy();
+    });
   });
 });
 
