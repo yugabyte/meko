@@ -12,6 +12,10 @@ export const CONNECT_MS = 10_000;
 export const STATE_MS = 30_000;
 /** Each deadline that passes doubles the next ones, up to 2^MAX_SLOW times. */
 export const MAX_SLOW = 3;
+/** While an update installs the server restarts into it: a dropped socket retries this often... */
+export const UPDATE_RETRY_MS = 1000;
+/** ...for this long, then backs off as usual (a new version that won't start takes a while to roll back). */
+export const UPDATE_RETRY_FOR_MS = 120_000;
 
 /** The parts of a browser WebSocket the connection uses. */
 export type SocketLike = Pick<WebSocket, 'readyState' | 'onopen' | 'onmessage' | 'onclose' | 'onerror' | 'send' | 'close'>;
@@ -40,6 +44,9 @@ export interface EventsHandlers {
  * live socket. Each deadline that passes doubles the next ones (up to 2^MAX_SLOW times), so such a
  * link gets the time it needs instead of starting over forever; a ping answered within PROBE_MS
  * shows the link is quick again.
+ *
+ * A socket dropped while the last state said an update is installing retries every UPDATE_RETRY_MS
+ * rather than backing off, so the page sees the new version (and reloads into it) as soon as it's up.
  */
 export class EventsConnection {
   private ws: SocketLike | null = null;
@@ -52,6 +59,10 @@ export class EventsConnection {
   /** How many times the deadlines have been doubled. */
   private slow = 0;
   private attempt = 0;
+  /** The last state said an update is installing. */
+  private updating = false;
+  /** When the socket was dropped during an update, or 0. */
+  private droppedAt = 0;
   private stopped = false;
 
   constructor(private readonly h: EventsHandlers) {}
@@ -118,6 +129,8 @@ export class EventsConnection {
       // The server sends the state first thing, so the connection has proved itself: the
       // backoff starts over. (An open alone doesn't: the server upgrades, then may refuse.)
       this.attempt = 0;
+      this.updating = !!msg.state.update?.applying;
+      this.droppedAt = 0;
       this.h.onState(msg.state);
     } else if (msg.type === 'notify' || msg.type === 'invite') this.h.onEvent(msg);
   }
@@ -178,7 +191,10 @@ export class EventsConnection {
   private retry(code: number | null): void {
     if (this.stopped) return;
     this.h.onConn('closed');
-    const delay = Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
+    if (this.updating) this.droppedAt ||= Date.now();
+    const delay = this.updating && Date.now() - this.droppedAt < UPDATE_RETRY_FOR_MS
+      ? UPDATE_RETRY_MS
+      : Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
     const later = () => {
       if (!this.stopped && !this.ws) this.retryTimer = setTimeout(() => this.connect(), delay);
     };

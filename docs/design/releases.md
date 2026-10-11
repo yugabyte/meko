@@ -69,7 +69,12 @@ offered again. When you click it, the server:
 2. unpacks it next to the current version and runs its self-test;
 3. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
    migrations on start, and points `app/current` at the new version;
-4. restarts only the web server unit. Sessions keep running;
+4. restarts only the web server unit. Sessions keep running. Closing, the server gives each
+   browser's socket 1 second to answer its close and then drops it, so a page that can't answer
+   (a sleeping phone or laptop) doesn't hold the restart for the 30 seconds `ws` would wait. An open
+   page whose last state said an update was installing retries its events socket every second
+   (for up to 2 minutes, then with the usual backoff), so it reloads into the new version as soon
+   as it's up;
 5. if the new version fails to come up three times in a row (the service manager restarts it) before
    it has been healthy for 5 minutes, points back to the previous version and marks the new one as
    bad. A deliberate stop (SIGTERM, as for a service restart) takes its start back off the count,

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../src/shared/types.js';
-import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, STATE_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
 
 /** A socket the test drives: what the page sent, and whether it let go of it. */
 class FakeSocket {
@@ -130,6 +130,37 @@ describe('the events connection', () => {
     expect(t.sockets).toHaveLength(5);
     t.conn.resume();
     expect(t.sockets).toHaveLength(6);
+    t.conn.stop();
+  });
+
+  it('retries every second while an update restarts the server, then backs off as before', () => {
+    const t = setup();
+    t.last().accept({ update: { applying: true } } as never);
+    // The old server stops, and the new one refuses connections until it's up.
+    const tries = (UPDATE_RETRY_FOR_MS / UPDATE_RETRY_MS) - 1;
+    for (let i = 0; i < tries; i++) {
+      t.last().serverClose();
+      vi.advanceTimersByTime(UPDATE_RETRY_MS);
+    }
+    expect(t.sockets).toHaveLength(tries + 1);
+    // An update that never comes back up stops getting tries every second.
+    for (let i = 0; i < 6; i++) {
+      t.last().serverClose();
+      const n = t.sockets.length;
+      while (t.sockets.length === n) vi.advanceTimersByTime(100);
+    }
+    t.last().serverClose();
+    vi.advanceTimersByTime(UPDATE_RETRY_MS * 10);
+    expect(t.sockets).toHaveLength(tries + 7);
+    // Once it's up, a later drop backs off from the start.
+    vi.advanceTimersByTime(30_000);
+    t.last().accept({ update: { applying: false } } as never);
+    t.last().serverClose();
+    vi.advanceTimersByTime(900);
+    expect(t.sockets).toHaveLength(tries + 9);
+    t.last().serverClose();
+    vi.advanceTimersByTime(900);
+    expect(t.sockets).toHaveLength(tries + 9);
     t.conn.stop();
   });
 

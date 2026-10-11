@@ -41,6 +41,8 @@ const ACTIONS: SessionAction[] = [
   'learn',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
+/** How long a closing server waits for a browser's socket to answer its close before dropping it. */
+export const SHUTDOWN_CLOSE_MS = 1000;
 
 export interface ServerOptions {
   tls: TlsMaterial | null;
@@ -593,6 +595,20 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   }, 30_000);
   heartbeat.unref();
   app.addHook('onClose', async () => clearInterval(heartbeat));
+  // Closing, @fastify/websocket asks every socket to close, and the server's close waits for each
+  // to answer. ws gives a peer that never does (a sleeping phone or laptop) 30 s, and every restart,
+  // an update's included, waited that long: drop the sockets still open after SHUTDOWN_CLOSE_MS.
+  let dropOpen: NodeJS.Timeout | null = null;
+  app.addHook('preClose', (done) => {
+    dropOpen = setTimeout(() => {
+      for (const ws of app.websocketServer.clients) ws.terminate();
+    }, SHUTDOWN_CLOSE_MS);
+    dropOpen.unref();
+    done();
+  });
+  app.addHook('onClose', async () => {
+    if (dropOpen) clearTimeout(dropOpen);
+  });
   let pending: NodeJS.Timeout | null = null;
   /**
    * Browsers that aren't keeping up (a phone on a slow link) skip state snapshots rather than
