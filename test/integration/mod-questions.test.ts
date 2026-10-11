@@ -160,7 +160,9 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await waitFor(() => get(id).stage, (st) => st === 'code', 10000, 'the approval');
     expect(events(id, 'design')).not.toContain('Queued approval dropped: AgentK changed the design during its turn');
     // Sent, the approval leaves the question to AgentK: the design's time moves on for that only.
-    expect(env.core.questions.get(row(id)).questions[0]).toMatchObject({ id: 'store', status: 'resolved', decision: 'Left to AgentK: Datapack' });
+    // (The stage moves to Code before the approval reaches Claude, and the question is resolved after.)
+    const q = await waitFor(() => env.core.questions.get(row(id)).questions[0], (x) => x.status === 'resolved', 10000, 'the question resolved');
+    expect(q).toMatchObject({ id: 'store', decision: 'Left to AgentK: Datapack' });
     expect(get(id).designUpdatedAt).toBeGreaterThanOrEqual(at!);
   }, 60_000);
 

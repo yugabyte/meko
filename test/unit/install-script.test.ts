@@ -247,14 +247,22 @@ describe('install.sh: installing missing tools', () => {
   /** Runs the script in a terminal, answering its question with `answer`. */
   function runInTerminal(answer: string, prompt = 'Install them now?'): Promise<{ code: number; out: string; calls: string[] }> {
     return new Promise((resolve) => {
-      const p = pty.spawn(join(bin, 'sh'), [SCRIPT, '--deps-only'], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
+      // Once the script ends, a shell keeps the terminal open until its last output is read: a pty
+      // whose program has exited can lose what it wrote just before.
+      const wrap = 'sh "$0" --deps-only; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
+      const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
       let out = '';
       let asked = false;
+      let ended = false;
       p.onData((d) => {
         out += d;
         if (!asked && out.includes(prompt)) {
           asked = true;
           p.write(`${answer}\r`);
+        }
+        if (!ended && /\[exited \d+\]/.test(out)) {
+          ended = true;
+          p.write('\r');
         }
       });
       p.onExit(({ exitCode }) => resolve({ code: exitCode, out, calls: calls() }));
