@@ -1596,11 +1596,13 @@ one that takes longer than `[ask_agentk] timeout_seconds` (45 by default) is sto
 | `move` (a session, a stage, instructions) | `moveBlockedIn()` and `moveError()` | `POST /api/sessions/:id/move`, then the session |
 | `openPr` (a session, instructions) | the session is in Code | the open-pr action, then the session |
 
-Every action waits to be picked, a lone `go` too (the first is selected, so Enter runs it): a
-question such as "how many sessions are open?" often comes back with a go to a session it names,
-and going there at once would hide the reply. A picked action runs through the route the UI already
-uses, which checks it again. Claude has no tools and sees names, branches and PR titles other
-people may have written, so at worst it proposes something the user then doesn't pick. The palette
+Every action waits to be picked, a lone `go` too: a question such as "how many sessions are
+open?" often comes back with a go to a session it names, and going there at once would hide the
+reply. The first is selected, and focus goes back to the input when an ask started with a click
+(not on a touch screen, where it would raise the keyboard), so Enter runs it. A picked action runs
+through the route the UI already uses, which checks it again. Claude has no tools and sees names,
+branches and PR titles other people may have written, so at worst it proposes something the user
+then doesn't pick. The palette
 shows the exchange above the list; the input's placeholder becomes *Reply to AgentK, or type a
 command…*, and typing filters commands again, with the Ask item for a follow-up. Errors say what
 went wrong with **Try again**: Claude Code missing (503), not signed in, failed, or an answer that
