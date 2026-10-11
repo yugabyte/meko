@@ -52,7 +52,7 @@ describe('a pasted GitHub link', () => {
       { label: 'Review #7 Add the widget in a new project demo', hint: 'Opens a new project · Clones acme/demo', action: { start: null }, clones: true },
     ]],
     ['reopens a closed project', { project: null, newProject: { ...elsewhere.newProject, repoPath: '/code/demo', datapack: { id: 'd', name: 'adlc/proj/demo/widget', invite: false }, reopens: 'w' } }, [
-      { label: 'Review #7 Add the widget in a new project demo', hint: 'Opens the project again', action: { start: null }, clones: false },
+      { label: 'Review #7 Add the widget in demo', hint: 'Opens the project again', action: { start: null }, clones: false },
     ]],
     ['works on an issue from Design or Code, after the session already on it', {
       kind: 'issue', state: 'closed', title: 'Dark mode', project: { id: 'w', name: 'Widget', why: 'repo', clone: null },

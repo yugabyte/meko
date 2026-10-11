@@ -56,7 +56,10 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
     }];
   }
   const np = plan.newProject;
-  const where: LabelPart[] = plan.project ? [' in ', { project: plan.project.name }] : [' in a new project ', { project: np?.name ?? plan.repo }];
+  // A closed project that opens again is named as itself, not as a new one.
+  const where: LabelPart[] = plan.project
+    ? [' in ', { project: plan.project.name }]
+    : [np?.reopens ? ' in ' : ' in a new project ', { project: np?.name ?? plan.repo }];
   const clones = plan.project ? !plan.project.clone : !np?.repoPath;
   const notes: string[] = [];
   if (plan.project) notes.push(plan.project.why === 'datapack' ? 'Names its datapack' : 'Same repo');

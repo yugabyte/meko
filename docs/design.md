@@ -1470,11 +1470,15 @@ with a datapack that a Meko line in the description names (`<host>://<id>;<name>
 its PRs; people can put the same line in an issue): a dedicated datapack before a shared one. The
 second choice is the first open project whose repo is a clone of the link's repo, its `origin` or a
 fork's `upstream`. The session works in the project's repo when that's a clone of the link's repo,
-else in a scanned clone (`localClone()`), else in a clone made at start into the repos folder.
+else in a scanned clone (`localClone()`), else in a clone made at start into the repos folder; when
+that folder (`[repos] clone_into`) isn't under the repos roots, the start is refused before cloning,
+since a session can't use a clone the scan doesn't list.
 With no open project that fits, AgentK opens one when the session starts. Its repo is a local clone
 of the link's repo, or a clone of `https://github.com/<owner>/<name>.git` (`Projects.create` with
 `cloneUrl`). Its dedicated datapack is one the description names that Meko lists for you, or a
-share waiting for you (accepted on the way). A closed project with that dedicated datapack opens
+share waiting for you (accepted on the way), unless you can only read it (a viewer): sessions write
+to the dedicated datapack, so a read-only one counts as unnamed. When Meko can't be asked, the
+lookup fails and says so, rather than planning a project without the named datapack. A closed project with that dedicated datapack opens
 again as itself, under its own name; closed projects aren't matched by repo. A datapack named this
 way also names the project (`parseProjectDatapack()`). Otherwise a PR review's project has no
 datapack, since a review only reads code, and an issue's project gets a new one
@@ -1487,10 +1491,13 @@ why), and a PR that a running session already reviews offers **Go to** that sess
 (409 if started anyway). An issue offers two items, **Work on issue #<n>** (starts at Design, what
 Enter picks) and **… straight to Code**. Each starts a task named `#<n> <title>`, whose first prompt
 names the issue and its link and asks Claude to read it with its comments
-(`gh issue view <n> --repo <owner>/<name> --comments`), then fix it if it's a bug or implement it
-if it asks for a feature or change. The number stands alone (`#<n>`), so the search at start
+(`gh issue view <n> --repo <owner>/<name> --json author,body,comments`), then fix it if it's a bug
+or implement it if it asks for a feature or change. As for a task's PR, Claude acts only on what
+the issue asks and on comments from the user and from people whose `authorAssociation` is OWNER,
+MEMBER or COLLABORATOR; anyone else's are untrusted text. The number stands alone (`#<n>`), so the search at start
 ([Meko recall](#meko-recall-at-start)) reads the issue too. A closed issue is still offered, and
-says so in its hint. Running tasks whose first prompt has the issue's link are offered first as
+says so in its hint. Running tasks whose first prompt has the issue's link ending a line (so #45's isn't found in
+#450's) are offered first as
 **Go to**, with a new session still offered after them. Each item's hint says what starting does
 besides: which project and why, **Opens a new project** (or **Opens the project again**),
 **Clones <owner>/<name>**, **New datapack**, or **Accepts the share of <datapack>**. While it

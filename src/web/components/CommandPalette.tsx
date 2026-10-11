@@ -68,12 +68,21 @@ export function CommandPalette({
   const [, setLooked] = useState(0);
   const [starting, setStarting] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
-  const mounted = useRef(true);
-  useEffect(() => () => {
-    mounted.current = false;
+  // Set in the effect, not only at first render: StrictMode mounts, cleans up and mounts again.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
   }, []);
+  // A plan whose project was closed meanwhile is looked up again, rather than started in a project that's gone.
+  const cached = refKey ? lookups.current.get(refKey) : undefined;
+  const planProject = cached && 'plan' in cached ? cached.plan.project?.id : undefined;
+  const stale = !!planProject && !projects.some((p) => p.id === planProject);
   useEffect(() => {
     setStartError(null);
+    if (refKey && stale) lookups.current.delete(refKey);
     if (!refKey || lookups.current.has(refKey)) return;
     let live = true;
     const t = window.setTimeout(() => {
@@ -86,8 +95,8 @@ export function CommandPalette({
       live = false;
       window.clearTimeout(t);
     };
-  }, [refKey]);
-  const looked = refKey ? lookups.current.get(refKey) : undefined;
+  }, [refKey, stale]);
+  const looked = stale ? undefined : cached;
   const plan = looked && 'plan' in looked ? looked.plan : null;
 
   const linkItems = useMemo<Item[]>(() => {

@@ -219,7 +219,7 @@ export class ProjectService {
    * left alone (409).
    */
   async clone(url: string): Promise<string> {
-    const dest = join(expandHome(this.core.config.repos.cloneInto), repoNameFromUrl(url));
+    const dest = this.cloneDest(url);
     if (existsSync(dest)) {
       const origin = isMainRepo(dest) ? (await readRemotes(dest)).origin : null;
       const want = normaliseRemote(url);
@@ -233,6 +233,16 @@ export class ProjectService {
       throw new HttpError(400, `Clone failed: ${errMsg(e)}`);
     }
     return dest;
+  }
+
+  /** Where clone() puts <url>: the repos folder (`[repos] clone_into`) and the repo's name. */
+  cloneDest(url: string): string {
+    return join(expandHome(this.core.config.repos.cloneInto), repoNameFromUrl(url));
+  }
+
+  /** Whether a repo at <path> (there or not yet) would be a scanned repo, so another project's sessions could work in it. */
+  scannable(path: string): boolean {
+    return this.underRoots(join(repoKey(dirname(path)), basename(path)));
   }
 
   /** Where the new repo <name> goes: the repos folder (`[repos] clone_into`), once the name is checked. */
@@ -492,7 +502,15 @@ export class ProjectService {
    */
   private scannedRepo(key: string): string {
     const cfg = this.core.config;
-    const listed = isMainRepo(key) && repoRoots(cfg).some((root) => {
+    const listed = isMainRepo(key) && this.underRoots(key);
+    if (!listed) throw new HttpError(400, `${key} isn't one of the repos under ${cfg.repos.roots.join(', ') || 'your repos folders'}.`);
+    return key;
+  }
+
+  /** <key> is at most `depth` folders under a repos root, through no hidden folder or other repo (what the scan lists). */
+  private underRoots(key: string): boolean {
+    const cfg = this.core.config;
+    return repoRoots(cfg).some((root) => {
       const rel = relative(repoKey(root), key);
       if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false;
       const parts = rel.split(sep);
@@ -500,8 +518,6 @@ export class ProjectService {
       // The scan stops at a repo, so one nested inside another isn't listed.
       return parts.slice(0, -1).every((_, i) => !isMainRepo(join(repoKey(root), ...parts.slice(0, i + 1))));
     });
-    if (!listed) throw new HttpError(400, `${key} isn't one of the repos under ${cfg.repos.roots.join(', ') || 'your repos folders'}.`);
-    return key;
   }
 
   /** A scanned repo's branches and default branch, for the New session dialog. */
