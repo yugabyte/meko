@@ -604,6 +604,11 @@ textarea.input {
   -webkit-mask: url('/meko-m.png') center / 8px 8px no-repeat;
   mask: url('/meko-m.png') center / 8px 8px no-repeat;
 }
+/* A gate is queued (Merge when ready, waiting on CI or the AgentK review): the idle ring with its
+   top quarter open, turning once every 3 s. Same 10px box as idle. */
+.dot.queued {
+  border-top-color: transparent;
+}
 /* The selected tab is the terminal's near-black in both themes: the light theme's accent is lost on it. */
 .tab.sel .dot.learning {
   --accent: #86a4ff;
@@ -617,9 +622,12 @@ textarea.input {
 }
 @media (prefers-reduced-motion: no-preference) {
   .dot.learning::before {
-    animation: learning-spin 1.6s linear infinite;
+    animation: dot-spin 1.6s linear infinite;
   }
-  @keyframes learning-spin {
+  .dot.queued {
+    animation: dot-spin 3s linear infinite;
+  }
+  @keyframes dot-spin {
     to {
       transform: rotate(360deg);
     }

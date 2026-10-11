@@ -6,9 +6,10 @@ import { useMedia } from '../hooks/useMedia';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
 /**
- * A session's status dot; `learning` is a dotted ring turning around Meko's m, and `meko` is the
- * working dot with Meko's m in it (`dotState()`). Working (`meko` too) and needs-you dots blink
- * their halo (`blink.ts`), each `phase` (the session's or project's id) at its own point in the signal.
+ * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
+ * ring with a gap, turning, and `meko` the working dot with Meko's m in it (`dotState()`). Working
+ * (`meko` too) and needs-you dots blink their halo (`blink.ts`), each `phase` (the session's or
+ * project's id) at its own point in the signal.
  */
 export function StatusDot({ status, title, phase = '' }: { status: DotState; title?: string; phase?: string }) {
   const ref = useRef<HTMLElement>(null);
@@ -20,7 +21,9 @@ export function StatusDot({ status, title, phase = '' }: { status: DotState; tit
           ? 'idle'
           : status === 'meko'
             ? 'working meko'
-            : status;
+            : status === 'queued'
+              ? 'idle queued'
+              : status;
   const text = status === 'learning' ? LEARNING_TITLE : STATUS_TEXT[status];
   return <i ref={ref} className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
 }
