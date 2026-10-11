@@ -717,7 +717,9 @@ recommendation, keeping the text.
 
 With open questions, **Approve design** reads **Answer & approve**: the gate, the panel header and
 the ⋯ sheet take you to the questions, and the approval goes from their footer, **Approve with
-answers**. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
+answers** (the header leaves its button out while the questions are on screen). On a panel too
+short for the questions and their footer (a phone with the keyboard up), the view scrolls, so the
+footer stays reachable. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
 recommendation (its own judgment when it has none). **Send for revision** sends them as the `design-answers` prompt instead, and AgentK
 revises the design. Without AgentK's mod it only works

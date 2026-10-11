@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Session } from '../../src/shared/types.js';
-import { mergeGate, openPrGate, queuedText } from '../../src/web/util.js';
+import { headerApproves, mergeGate, openPrGate, queuedText } from '../../src/web/util.js';
 
 const session = (over: Partial<Session> = {}) =>
   ({
@@ -51,5 +51,18 @@ describe('queuedText', () => {
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['CI is still running.'] }))).toBe('✓ Merge queued: waiting on CI');
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['Waiting for the AgentK review.'] }))).toBe('✓ Merge queued: waiting on the AgentK review');
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['AgentK is still working.', 'CI is still running.'] }))).toBe('✓ Merge queued: waiting on AgentK');
+  });
+});
+
+describe('headerApproves', () => {
+  const design = (open: number, over: Partial<Session> = {}) => session({ stage: 'design', hasDesign: true, designQuestions: { open }, ...over });
+  it.each([
+    ['approves a design with no open questions', design(0), true, true],
+    ['takes the user to the open questions', design(2), false, true],
+    ['leaves it to the footer while the open questions show', design(2), true, false],
+    ['shows nothing before there is a design', design(0, { hasDesign: false }), false, false],
+    ['shows nothing past Design', design(0, { stage: 'code' }), false, false],
+  ])('%s', (_, s, questionsShown, shown) => {
+    expect(headerApproves(s, questionsShown)).toBe(shown);
   });
 });

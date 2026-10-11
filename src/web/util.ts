@@ -365,6 +365,15 @@ export function approveLabel(openQuestions: number): string {
   return openQuestions ? 'Answer & approve' : 'Approve design';
 }
 
+/**
+ * Whether the design panel's header shows the approve button. With open questions it only takes
+ * the user to them, so it's left out while they're on screen: their footer approves, with the answers.
+ */
+export function headerApproves(session: Session, questionsShown: boolean): boolean {
+  if (session.stage !== 'design' || !session.hasDesign) return false;
+  return !session.designQuestions.open || !questionsShown;
+}
+
 /** The status detail while Claude asks the user something (`askDetail()` in sessions.ts). */
 const ASKING = 'AgentK asks: ';
 
