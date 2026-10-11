@@ -24,7 +24,7 @@ interface Item {
   keepOpen?: boolean;
   /** Shown instead of the label while it runs. */
   busy?: string;
-  /** Its label wraps rather than being cut (AgentK's actions, read before they run). */
+  /** Its label wraps rather than being cut (AgentK's actions, read before they run, and a link's items, whose project ends the label). */
   wrap?: boolean;
   dot?: DotState;
   /** Where in the blink signal the dot is: its session's id. */
@@ -83,9 +83,11 @@ export function CommandPalette({
   const paletteRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // A pasted GitHub PR or issue: looked up once typing pauses, and kept while the palette is open.
+  // A pasted GitHub PR or issue: looked up once typing pauses, and kept while the palette is open
+  // (per project on screen, which the plan prefers).
   const ref = useMemo(() => parseGithubRef(q), [q]);
   const refKey = ref ? `${ref.repo}#${ref.number}` : null;
+  const lookupKey = refKey ? `${refKey}@${currentProjectId ?? ''}` : null;
   const lookups = useRef(new Map<string, { plan: LinkPlan } | { error: string }>());
   const [, setLooked] = useState(0);
   const [starting, setStarting] = useState<string | null>(null);
@@ -98,26 +100,26 @@ export function CommandPalette({
       mounted.current = false;
     };
   }, []);
-  // A plan whose project was closed meanwhile is looked up again, rather than started in a project that's gone.
-  const cached = refKey ? lookups.current.get(refKey) : undefined;
-  const planProject = cached && 'plan' in cached ? cached.plan.project?.id : undefined;
-  const stale = !!planProject && !projects.some((p) => p.id === planProject);
+  // A plan naming a project that was closed meanwhile is looked up again, rather than started in a project that's gone.
+  const cached = lookupKey ? lookups.current.get(lookupKey) : undefined;
+  const planProjects = cached && 'plan' in cached ? [cached.plan.project, ...cached.plan.others] : [];
+  const stale = planProjects.some((pp) => pp && !projects.some((p) => p.id === pp.id));
   useEffect(() => {
     setStartError(null);
-    if (refKey && stale) lookups.current.delete(refKey);
-    if (!refKey || lookups.current.has(refKey)) return;
+    if (lookupKey && stale) lookups.current.delete(lookupKey);
+    if (!refKey || !lookupKey || lookups.current.has(lookupKey)) return;
     let live = true;
     const t = window.setTimeout(() => {
       api
-        .githubLink(refKey)
-        .then((plan) => lookups.current.set(refKey, { plan }), (e: unknown) => lookups.current.set(refKey, { error: errorMessage(e) }))
+        .githubLink(refKey, currentProjectId)
+        .then((plan) => lookups.current.set(lookupKey, { plan }), (e: unknown) => lookups.current.set(lookupKey, { error: errorMessage(e) }))
         .then(() => live && setLooked((n) => n + 1));
     }, LINK_LOOKUP_MS);
     return () => {
       live = false;
       window.clearTimeout(t);
     };
-  }, [refKey, stale]);
+  }, [refKey, lookupKey, currentProjectId, stale]);
   const looked = stale ? undefined : cached;
   const plan = looked && 'plan' in looked ? looked.plan : null;
 
@@ -249,11 +251,11 @@ export function CommandPalette({
     if (!looked) return [{ id: 'link-lookup', label: [], busy: `Looking up ${refKey}`, hint: '', keywords: '' }];
     if (!('plan' in looked)) return [{ id: 'link-error', label: [looked.error], hint: '', keywords: '' }];
     const p = looked.plan;
-    const startFrom = async (id: string, start: 'design' | 'code' | null) => {
+    const startFrom = async (id: string, start: 'design' | 'code' | null, projectId: string | undefined) => {
       setStarting(id);
       setStartError(null);
       try {
-        const r = await api.startFromLink({ ref: refKey, projectId: p.project?.id, start: start ?? undefined });
+        const r = await api.startFromLink({ ref: refKey, projectId, start: start ?? undefined });
         // Closed meanwhile: the session shows up in the state anyway, and another dialog may be open now.
         if (!mounted.current) return;
         onClose();
@@ -271,11 +273,12 @@ export function CommandPalette({
         label: e.label,
         hint: e.hint,
         keywords: '',
+        wrap: true,
         busy: starting === e.id ? (e.clones ? `Cloning ${p.repo}` : 'Starting') : undefined,
         ...(a && 'go' in a
           ? { run: () => navigate({ view: 'project', projectId: a.go.projectId, sessionId: a.go.sessionId }) }
           : a
-            ? { keepOpen: true, run: () => void (!starting && startFrom(e.id, a.start)) }
+            ? { keepOpen: true, run: () => void (!starting && startFrom(e.id, a.start, a.projectId)) }
             : {}),
       };
     });
