@@ -77,10 +77,12 @@ export function Rail({
 
   return (
     <nav className={cx('rail', open && 'open')} aria-label="Projects" inert={mobile && !open}>
-      <div className="brand">
-        <img src="/logo.png" alt="" width={26} height={26} />
-        <span>AgentK Local</span>
-      </div>
+      {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing. */}
+      <button className="rail-search" onClick={onPalette} aria-label="Search and commands" aria-haspopup="dialog">
+        <img src="/logo.png" alt="" width={16} height={16} />
+        <span className="rail-search-text">Search AgentK Local</span>
+        {!touch && <kbd>{mod}K</kbd>}
+      </button>
       <div className="rail-list">
         {projects.map((p, i) => {
           const count = liveSessions(p).length;
@@ -133,11 +135,6 @@ export function Rail({
           <Icon d="M4 20V10 M10 20V4 M16 20v-7 M22 20H2" />
           Usage
         </button>
-        {mobile && (
-          <button className="rail-add" onClick={onPalette}>
-            Search and commands
-          </button>
-        )}
       </div>
       <div className="rail-foot">
         <Limits limits={limits} />

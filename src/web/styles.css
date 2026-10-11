@@ -611,7 +611,8 @@ textarea.input {
 /* ---------- Shell ---------- */
 .app {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  /* Wide enough for "Search AgentK Local" beside Ctrl+K in the rail's search bar. */
+  grid-template-columns: 228px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
@@ -624,14 +625,46 @@ textarea.input {
   gap: 4px;
   min-height: 0;
 }
-.brand {
+/* Search and commands: a button that looks like a field, with the logo where a search icon would be.
+   The palette opens over it (.pal-overlay). */
+.rail-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 15px;
-  padding: 2px 8px 12px;
+  gap: 6px;
+  min-height: 34px;
+  margin-bottom: 8px;
+  padding: 6px;
+  font-size: 13px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-search:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
+  color: var(--ink);
+}
+.rail-search img {
+  flex: none;
+}
+.rail-search-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-search kbd {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 3px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--sunk);
 }
 /* The list scrolls, which clips what's drawn outside its rows: the selected ring and the focus
    outline (2px, 2px out). The padding leaves room for them; the margin keeps the rows in place. */
@@ -2142,6 +2175,12 @@ div[id^='dak-mermaid-'] .label {
 }
 
 /* palette */
+/* At the top left with the rail's padding, so the palette opens over the rail's search bar. The
+   phone section's .overlay.top comes later and puts it across the top instead. */
+.overlay.pal-overlay {
+  justify-content: flex-start;
+  padding: 12px 8px;
+}
 .palette {
   width: min(620px, 100%);
   background: var(--surface);
@@ -2150,11 +2189,21 @@ div[id^='dak-mermaid-'] .label {
   box-shadow: var(--shadow);
   overflow: hidden;
 }
-.pal-input {
-  width: 100%;
-  border: 0;
+.pal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 12px;
   border-bottom: 1px solid var(--rule);
-  padding: 14px 16px;
+}
+.pal-row img {
+  flex: none;
+}
+.pal-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 14px 16px 14px 0;
   font-size: 15px;
   background: transparent;
   outline: none;
@@ -4064,6 +4113,9 @@ div[id^='dak-mermaid-'] .label {
   .proj,
   .rail-add {
     padding: 10px 8px;
+  }
+  .rail-search {
+    min-height: 40px;
   }
   .chg-row,
   .chg-file-hd {
