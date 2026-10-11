@@ -26,7 +26,7 @@ from a browser.
 | Meko wiring | Each session gets its own `MEKO_AGENT_ID=claude_code:<session slug>-<hash>`, and the project's datapack is pinned for that agent id when it starts. The Meko hooks already honour both, so no plugin change is needed. |
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko, from the project home or, for a PR's reviewers, from its PR & Review step. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
-| Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with Meko searched for the design and decisions behind it. It posts to GitHub only when the user says. |
+| Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with the PR's design (named in its description, fetched from Meko) open beside it and Meko searched for the decisions behind it. It posts to GitHub only when the user says. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
 | Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
 | Other terminal sessions | Not adopted. Only sessions created by AgentK Local are shown. |
@@ -101,6 +101,26 @@ only slow to answer; one that lost its lease (it stalled for longer than 45 seco
 and exits. On the server's side, only "nothing listening on the socket" means no host: a timeout or
 a garbled answer skips that reconcile tick instead, and starts of a host never run two at once. It
 writes `run/host.json` (pid, version, app directory, protocol) when it starts.
+
+**Homes under /net.** Claude Code (2.1.292 and later) asks before every read or edit of a path
+under `/net`, the automounter's `-hosts` map, even in auto mode, and no permission rule,
+`--add-dir` or setting lifts that. A home there (`/net/<host>/data/you`) would stop a session on
+every file in its worktree, its design file, its pasted images and its own `~/.claude`. When the
+machine is that host, the same folder is mounted locally without the prefix (`/data/you`), so
+everything AgentK hands Claude goes through `claudePath()` (`src/server/paths.ts`), which drops
+the prefix when the two are the same folder (the same device and inode of the export root; only
+this machine's own `/net/<host>` is checked, by host name, since a stat into another host's
+mount can hang while that host is down):
+the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, the allow rules in
+the hooks settings file, and the design file, questions file and image paths in prompts. What
+AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
+so the Design guard checks an edit against both, the learn step leaves out a fact that names
+either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
+`src/database.ts`), and a session's transcript is looked up under both (a session started before
+keeps its transcript: a resume from the local spelling finds it). Started by the local spelling,
+a worktree isn't tied back to its repo for folder trust (its `.git` file names the stored
+spelling), so AgentK also trusts that exact folder in `~/.claude.json` before launching.
+The project's main checkout keeps its path, and paths on other hosts stay under `/net`.
 
 **Sizing.** A pane has one size: the active viewer's. A viewer is active when it has just
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
@@ -332,11 +352,21 @@ background (`minimumContrastRatio`), since Claude Code picks some colors from it
 
 Session states, shown with a dot in the rail and on each tab:
 
-- **Working**
-- **Needs you:** a permission prompt or a question
+- **Working:** the dot's halo blinks
+- **Needs you:** a permission prompt or a question. The diamond knocks
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
+- **Learning:** AgentK is saving what the session learned to Meko (the
+  [learn step](#the-learn-step), `Session.learning`). The dot becomes a ring of dots turning around
+  Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
+  status idle; without the mod it's a working turn), never over needs you, exited or starting
+  (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
+
+The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
+dot with the Web Animations API from the start of the page's timeline, so dots with the same
+signal blink together and a dot shown again picks up where the signal is. With reduced motion
+the dots are still.
 
 **Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
@@ -346,7 +376,9 @@ empty, longer than 100 characters or hold control characters. The project's acti
 rename, the session's Meko conversation is retitled in the background (`conversation_update`, in
 the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
 keeps the old title), and Claude reads the new name in its system prompt
-the next time it's launched. Claude Code's own name for the conversation (`--name`, given at the
+the next time it's launched, and at the head of the task in any later prompt that names it. A task
+that was its name (started at Design or Code with no first prompt) takes the new name too, so the
+task never carries both. Claude Code's own name for the conversation (`--name`, given at the
 first launch) stays. An archived session can't be renamed.
 
 ### Open project
@@ -362,7 +394,7 @@ project on a repo gets its own datapack, settings, sessions and worktrees; proje
 names must differ within a repo, and a name is taken from the moment its open starts, so two
 opens of the same name at once can't both succeed. Their session branches
 share the repo, so a branch name that another project already uses gets a number added
-(`ak/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
+(`ak_<login>/fix-tests-2`). Per-repo files such as `.agent-k/stages/` overrides apply to every project on
 the repo.
 
 ![The Open project dialog listing the git repos under ~/code](screenshots/new-project.png)
@@ -467,7 +499,8 @@ numbered from 0 and joined by lines (dotted from Explore, which is optional), th
 a PR. They sit in one row on a desktop and one column on a phone, with a line under them saying what
 the selected one is for. The Name and First prompt fields show an example of work that suits it
 (`START_EXAMPLES`): a question for Explore, a feature with choices to make for Design, a one-line
-fix for Code:
+fix for Code. The name heads the task Claude gets (`taskWithName()` in `prompts.ts`: the name, then
+the first prompt, unless the prompt already starts with it), so the prompt needn't repeat it:
 
 | Start | For | First prompt |
 |---|---|---|
@@ -743,11 +776,14 @@ terminal**, which hides it for that start in this page.
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
-session or project home, create a session, or move or rename the one on screen; session names show
-in the accent colour and project names in bold, so they don't read as commands. On Linux and
-Windows these use Ctrl, so the terminal
-doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
-it has focus. To copy from the terminal, drag across the text and press `Ctrl+C` (`⌘C`), which
+session or project home, create a session, or move or rename the one on screen (or, with a GitHub
+PR or issue pasted, start a session on it: see [Starting from a GitHub link](#starting-from-a-github-link)).
+The search bar at the top of the rail (the AgentK logo, "Search AgentK Local" and the shortcut)
+opens it too; either way it opens over that bar, at the top left. In the palette, session names show
+in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
+these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
+through to the terminal whenever it has focus. To copy from the terminal, drag across the text and
+press `Ctrl+C` (`⌘C`), which
 copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
@@ -785,7 +821,7 @@ still pastes into the box), and the image key at the end of the key bar's ▾ ro
 hold.
 
 Images can go with a session's first prompt too: paste them into the New session dialog's First
-prompt field (a review's Notes), drop them on it, or pick them with **Add image**. There's no
+prompt field (a review's Notes), drop them on it, or pick them with the image button under it. There's no
 session yet, so each one uploads to the project as it's added (`POST /api/projects/:id/images`,
 the same checks), is saved owner-only under `~/.agent-k-local/pastes/.new/<project>/`, and the
 dialog holds the id the server gave it (the file's name), with the same strip of thumbnails.
@@ -797,10 +833,10 @@ the ones that got there (`sessions.start_images`). One gone by then (swept, or t
 start) is left out, and the session's activity log says to paste it into the terminal. The first
 prompt reaches Claude on its command line, where a path isn't taken as an attached image, so
 every prompt that names the task (a review's notes) adds the paths with a line asking Claude to
-open each with its Read tool: the first prompt, a move from Explore, a relaunch without resume.
+open each with its Read tool: the first prompt, a move that gives the session its task, a relaunch without resume.
 The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
 prompt. The images aren't the task: at Explore, images with no text are a first prompt, but the
-session still has no task (`Session.hasTask`), so moving it on asks for one. AgentK's Meko search
+session still has no task (`Session.hasTask`), so moving it on offers to take one. AgentK's Meko search
 at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
@@ -829,12 +865,13 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 ### On a phone
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
-app bar (the Back gesture closes it, and it holds **Search and commands** in place of `⌘K`). The
-app bar also holds the session tabs, between the drawer button and ⋯, so the session name isn't
-repeated above them (each tab shows its status and stage). The session header,
+app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
+top of the screen, in place of `⌘K`). The app bar also holds the session tabs, between the drawer
+button and ⋯, so the session name isn't repeated above them (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you, and the sheet says why a closed gate is closed. Dialogs open as bottom sheets. The app, the
+you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
+tap outside it, or Escape. Dialogs open as bottom sheets. The app, the
 overlay behind a dialog or sheet, and the sign-in and setup screens are pinned to the visible
 viewport (its height and, where iOS pans the page for a focused field, its offset), so the on-screen
 keyboard shrinks them instead of covering the prompt or a dialog's fields. The sign-in screens
@@ -869,7 +906,8 @@ never pushes the rest of the page down.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
 datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with
-no web app or API URL set) it's off, with a note to set the web app URL on the Meko tab. With Meko
+no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL on
+the Meko tab (the tab warns about it too). With Meko
 off it asks for a Meko API key first (**Add a Meko API key**), and for a project without a
 dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
 maintainer. See [Sharing a project](#sharing-a-project).
@@ -898,6 +936,40 @@ one). The request names the datapack it replaces
 row is demoted or detached in the same transaction as the new one is added, the project's
 server-side Meko conversation (used for search) is made again in the new datapack. Pins are per session, so a running
 session's stays on the old datapack and the next one to start pins the new one.
+
+**Log Meko calls** (Project settings, off by default; shown while Meko is on, or while it's on for
+the project so it can be turned off) keeps, for each of the project's sessions, every Meko call
+AgentK makes for it, with what it sent and what came back, in
+`~/.agent-k-local/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
+(the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
+conversation (created and renamed), design uploads, the learn step's searches and writes, and the
+"Shipped in…" memory: the call sites wrap their work in `withMekoScope(session)`, an
+AsyncLocalStorage that `MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). The
+scope names the session's id and when that start of it was made: Try again reuses a failed start's
+id, and a call the failed start still had in flight is dropped rather than logged as the new
+start's. Calls
+that belong to no session (the project home's search and Datapacks box, sharing, the invite sync,
+Settings → Meko's checks) and Claude's own Meko calls (already in its transcript) aren't kept, nor
+are transcript capture runs (their failures go to `server.log`). Each line holds the tool, its
+args and its reply (parsed, or its text), the error, how long it took, the tries (2 when it was
+sent again after a transport failure: a read, or a write that surely never reached Meko) and the
+learn step that made it. The summary's keys come first, before `args`. Nothing is cut and the
+file has no cap: it's deleted when the session is archived, when its start fails and when the
+project is closed. A line a crash cut short is skipped when the file is read, and the next line
+written starts on a line of its own. The API key
+is never in it: it's only ever in a header. The file is the owner's alone (`0600`).
+
+**View calls**, beside the setting, opens the **Meko calls** page (`/p/<project>/meko`, or
+`/p/<project>/meko/<session>` from the session's ⋯ sheet or the command palette, both offered while
+the setting is on). It shows one session at a time (the one written to last unless one is named),
+newest first, 50 at a time with **Load older**, filtered by tool or **Failed only**. The server reads
+the file backwards from the end in 64 KB chunks, asynchronously so it never holds up other requests
+(`GET /api/sessions/:id/meko-calls?before=`, the byte offset the page stopped at), parsing only each
+line's summary. An unfiltered page reads only as far back as its own calls; a filter that matches
+few calls may read the whole file. A call opens to **Sent** and **Got
+back** by the offset its line starts at, checked against its id. **Copy call**, **Download** (the
+file) and **Clear** (deletes it) are there too. With the setting off, the page says so and offers
+**Turn on**.
 
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
 picked up from GitHub), a dialog offers **Close project** (as on the project home; the repo and
@@ -941,6 +1013,7 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
   designs/<session>/questions-approval.json # what an approval left to AgentK, undone on a move back to Design
+  designs/<session>/meko-calls.jsonl # the session's Meko calls with their content, while its project has Log Meko calls on (removed on archive)
   pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
   pastes/.new/<project>/<time>-<random>.<ext>  # images added in the New session dialog, until a session starts with them (or a day)
 
@@ -963,7 +1036,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
 # web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
-# capture_transcripts = false  # stop sending session transcripts to Meko conversations; on by default
+# capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
 [claude]
 # command = "claude"         # how Claude Code is run
@@ -979,7 +1052,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b ak/<slug> <base>` (or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b ak/<slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b <prefix><slug> <base>` (`<prefix>` is the project's branch prefix, `ak_<login>/` by default; or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b <prefix><slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
 | Open tab | Attaches to the pane in the session host, one attach per viewer. The pane takes the size of the viewer that attached or was used last (see Sizing above). A phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, so it holds no connections it doesn't show, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Ends that attach only. The session host and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
@@ -1020,13 +1093,14 @@ CREATE TABLE sessions (
   push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
                                    --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
                                    --   heads in a row did (both cleared once the PR merges cleanly)
   queued_gate TEXT,                -- a gate pressed before it could go: 'open-pr' (at the turn's end) | 'merge' (once
                                    --   nothing blocks it); NULL: none
+  queued_instructions TEXT,        -- the user's instructions for a queued Open PR (OpenPrRequest); cleared with queued_gate
   skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
   discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
@@ -1045,6 +1119,8 @@ CREATE TABLE designs (         -- one per session: markdown, or an Artifact's pa
   session_id TEXT PRIMARY KEY, markdown TEXT, html TEXT, artifact_url TEXT,
   md_version INTEGER, md_sent INTEGER,        -- versions sent to Meko (names the next one), and
   html_version INTEGER, html_sent INTEGER,    -- whether the current one was sent
+  md_hash TEXT, html_hash TEXT,               -- the latest version's Meko content hash, which the PR's meko_design line names
+  source TEXT, source_told TEXT,              -- Review a PR: the PR line its copy came from ({name, sha256}), and the hash Claude was last told of
   questions TEXT, questions_source TEXT,      -- unused: a design's questions are read from questions.json and
   open_questions INTEGER, updated_at INTEGER);  -- kept in memory; dropped once the release before that has aged out
 CREATE TABLE design_answers (  -- unused: answers aren't stored, the browser sends them; dropped with the columns above
@@ -1186,9 +1262,9 @@ stateDiagram-v2
 | Stage | Claude | AgentK Local | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers. With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
-| 2 · Code | Implements the design and runs the repo's tests and checks. | Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
-| 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): add a *Questions and decisions* section to the design (each question, the answer, the decision) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 2 · Code | Implements the design and runs the repo's tests and checks, keeping the design current. | Saves each change to the design as a new version in Meko (see [The design after approval](#the-design-after-approval)). Shows the diff size against the base branch in the footer; clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
+| 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` (when the task has a design in Meko) and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running, AgentK's review to come), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
 | 4 · Merge & Close | Nothing. | Runs `gh pr merge` using the project's merge method (the repo's default unless changed in project settings). Once GitHub reports the PR as merged (also when it was merged on GitHub), first runs the [learn step](#the-learn-step) while Claude is still there (Claude gone or busy: it's skipped; not at all when **Don't save learnings** beside the button was checked), then writes a summary of what shipped (PR title, link and description) to the dedicated datapack, ends the session's pane, lets the worktree go idle for the next session (or removes it), deletes the local and remote branch, runs `git fetch --prune` in the session's repo, and archives the session. If Claude is mid-turn when the PR merges, this waits until the turn ends. Branches with commits the merged PR doesn't have are kept (the remote branch is deleted only while it still points at the PR's head). If the server restarts partway, the next poll finishes the job. If the PR is closed instead, or is still open 10 minutes after the merge was requested (for example, it left a merge queue), the session goes back to Review. | Done. The session record and its history stay. |
 
@@ -1224,18 +1300,30 @@ stateDiagram-v2
   Prompts a repo overrides keep its own wording; the trigger check applies to them anyway.
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
-  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
-  Lines AgentK adds in code (the Meko recall steps, and the saving rule appended to `explore` and
-  `learn`) are added to a repo's own prompt too. This lets a team
+  `design-answers`, `approved-answers`, `review`, `review-people`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
+  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
+  `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
+  [Reviewing a PR](#reviewing-a-pr)) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing agent-k-local. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),
   merge conflicts with the base through `conflicts` (`{{sha}}`, the conflicting head), and CI failures
   through the `ci` template (`{{sha}}` and `{{checks}}`, the failing checks with links).
-- **Branch names.** The branch prefix is a project setting, `ak/` by default, because some orgs
-  enforce a branch-name prefix with rulesets.
+- **Branch names.** The branch prefix is a project setting, `ak_{login}/` by default, because some
+  orgs enforce a branch-name prefix with rulesets, and so a shared repo's branches say whose they
+  are. `{login}` is the login `gh` is signed in as, lowercased (`expandBranchPrefix` in
+  `src/shared/branches.ts`). The server asks gh until it answers (`Core.ghLogin`, which the PR
+  stages' "is this review the user's" checks use too), one lookup at a time, and sends it in
+  `AppState.ghLogin` for the New session dialog's branch preview and the setting's hint. A session
+  start waits for the lookup (5 s cap); a gh that hit the cap isn't asked again for a minute, so
+  starts go on without it meanwhile. Without a login (gh missing, signed out or hanging),
+  `{login}` is left out with the `_`, `-` or `.` before it and doubled slashes are collapsed, so
+  `ak_{login}/` comes to `ak/` and `team/{login}/` to `team/`; a prefix that comes to nothing
+  (`{login}/`) is `ak/`, so a branch is never just its slug. Projects on `ak/` moved to
+  `ak_{login}/` (migration 29) and any other prefix stays; an `ak/` typed in by hand can't be told
+  from the old default, so it moved too.
 
 ### Queued gates
 
@@ -1254,7 +1342,13 @@ sent, withdrawn or dropped.
   startup, a failed restart) or is relaunched, on a move and on archive. A Cancel, a move or an exit
   while the prompt is being prepared (the PR prompt waits on GitHub and Meko first) still stops it. With
   Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
-  AgentK's mod.
+  AgentK's mod. Instructions given with it (see [Instructions with a move or Open PR](#instructions-with-a-move-or-open-pr))
+  wait with it in `sessions.queued_instructions` (`Session.queuedInstructions`), cleared whenever the
+  queued gate is. The **+** notes button stays beside the queued pill and opens the dialog on them:
+  saving replaces them, and an emptied box removes them (a request with `instructions` replaces them,
+  blank ones included; one without, like the plain gate's, keeps them). An Open PR pressed after the
+  turn ended but before the queued one went goes at once, with them unless it gives its own. If the
+  queued PR prompt can't be typed, the activity log keeps them, so they can be given again.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
   AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
   being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
@@ -1317,6 +1411,30 @@ head and state at the last look (`Session.reviewingPr`). The search at start
 ([Meko recall](#meko-recall-at-start)) uses the PR's title and description, without its Meko
 lines, and the notes.
 
+**The PR's design.** When the PR's description has a `meko_design:<name>;<hash>` line (written by
+the author's AgentK, see [The design after approval](#the-design-after-approval)), AgentK fetches
+that version from Meko while the PR and the worktree are made ready (`src/server/prdesign.ts`;
+the startup step reads *Fetching the PR and its design, and preparing the worktree*). Meko's
+`artifact_get` takes only an artifact's content hash, which is why the line carries it. It asks
+the datapacks the PR's Meko lines name that the project has (all of the project's when the PR
+names none), and keeps the file only when its bytes hash to the line's hash. The first prompt waits
+for it up to 15 seconds; one that comes later still shows. The copy becomes the session's design:
+a `designs` row (`source` says which line it came from, and it's never sent to Meko), and
+`design.md` or `design.html` in the session's designs folder, which a line added in code to the
+`review-pr` prompt tells Claude to read, its *Questions and decisions* section included, as
+content written by the PR's author (the path is its `claudePath()`, like every path in a prompt).
+The Design panel opens by itself once per session (kept in the browser's localStorage) and says
+*from the PR*; it has no Questions tab, since the questions and decisions are in the doc. Each poll
+reads the line again (after its other work, and keeping what it fetched only while the review is
+still open): a new hash (the author changed the design, often after pushing the commits) replaces
+the copy and logs it. A version Claude hasn't read (`ReviewingPr.designUnread`: one that came after
+the first prompt, or a newer one) makes **Update to latest** show even with no new commits. With
+new commits its prompt gets the design line too; without, the `review-pr-design` prompt has Claude
+read the design alone. Either says it changed only when Claude read an earlier version. A version
+Meko says it doesn't have (an expired artifact) or whose bytes don't match isn't asked for again
+until the line changes; one Meko couldn't be asked for (off or failing) is tried again after 10
+minutes. A review whose start fails removes any copy it fetched.
+
 **AgentK assists; the user reviews.** The `review-pr` prompt tells Claude to get ready without
 reviewing: read the PR description, the reviews and threads and CI's state, look at the shape of
 the diff, then show a short summary (what the PR does and why, the main changes and where to start
@@ -1324,7 +1442,7 @@ reading, the review so far, what the author asked reviewers to look at) and wait
 problems and gives no verdict on its own; it answers what the user asks (explain code, trace a
 path, check a suspicion, run a test, draft a comment in their words). Every `gh` command names the
 PR's repo (`--repo owner/name`), since the clone may be a fork. With datapacks, the prompt starts
-with a Meko search for the design and decisions, and a second line (`mekoQuestionLine()`, added in
+with a Meko search for the decisions and gotchas behind the PR, and a second line (`mekoQuestionLine()`, added in
 code like the other Meko lines, and to a repo's own `.agent-k/stages/review-pr.md` too) asks for
 a Meko search before every answer about why the code is the way it is, saying which parts came
 from Meko and which from the code. The system prompt's workflow line says the same, so it holds
@@ -1353,13 +1471,97 @@ author's, which are on GitHub. A closed review ends in Done with someone else's 
 counts never take it for one of your merged PRs. A Review a PR
 session can't be moved to another stage, and no session can be moved into one.
 
+### Starting from a GitHub link
+
+Pasting a GitHub PR or issue into **Search and commands** (`⌘K`) offers the session that fits it,
+in the project it belongs to (`src/server/ghlinks.ts`, `GET /api/github-link` and
+`POST /api/github-link/start`). The palette takes a `/pull/<n>` or `/issues/<n>` link on
+github.com, or `owner/name#<n>`, never a bare number, which names no repo (`parseGithubRef()` in
+`src/shared/github-refs.ts`). Once typing pauses for 250 ms it looks the ref up, once per ref while
+the palette is open. GitHub numbers PRs and issues together, so the server asks
+`gh api repos/<owner>/<name>/issues/<n>`, which answers for both and says which it is. The repo is
+the one GitHub's link names, so a renamed repo or other casing reads as GitHub spells it.
+
+**The project.** One project is offered. The first choice is the first open project, in rail order,
+with a datapack that a Meko line in the description names (`<host>://<id>;<name>`, as AgentK ends
+its PRs; people can put the same line in an issue): a dedicated datapack before a shared one. The
+second choice is the first open project whose repo is a clone of the link's repo, its `origin` or a
+fork's `upstream`. The session works in the project's repo when that's a clone of the link's repo,
+else in a scanned clone (`localClone()`), else in a clone made at start into the repos folder; when
+that folder (`[repos] clone_into`) isn't under the repos roots, the start is refused before cloning,
+since a session can't use a clone the scan doesn't list.
+With no open project that fits, AgentK opens one when the session starts. Its repo is a local clone
+of the link's repo, or a clone of `https://github.com/<owner>/<name>.git` (`Projects.create` with
+`cloneUrl`). Its dedicated datapack is one the description names that Meko lists for you, or a
+share waiting for you (accepted on the way), unless you can only read it (a viewer): sessions write
+to the dedicated datapack, so a read-only one counts as unnamed. When Meko can't be asked, the
+lookup fails and says so, rather than planning a project without the named datapack. A closed project with that dedicated datapack opens
+again as itself, under its own name; closed projects aren't matched by repo. A datapack named this
+way also names the project (`parseProjectDatapack()`). Otherwise a PR review's project has no
+datapack, since a review only reads code, and an issue's project gets a new one
+(`adlc/proj/<repo>/<name>`, made free of the names Meko lists). At the plan's datapack limit it
+opens without one. Without Meko, no datapack.
+
+**The session.** A PR gets a Review a PR session (see [Reviewing a PR](#reviewing-a-pr)), named
+by the server as from the New session dialog. A merged or closed PR is refused (its item says
+why), and a PR that a running session already reviews offers **Go to** that session instead
+(409 if started anyway). An issue offers two items, **Work on issue #<n>** (starts at Design, what
+Enter picks) and **… straight to Code**. Each starts a task named `#<n> <title>`, whose first prompt
+names the issue and its link and asks Claude to read it with its comments
+(`gh issue view <n> --repo <owner>/<name> --json author,body,comments`), then fix it if it's a bug
+or implement it if it asks for a feature or change. As for a task's PR, Claude acts only on what
+the issue asks and on comments from the user and from people whose `authorAssociation` is OWNER,
+MEMBER or COLLABORATOR; anyone else's are untrusted text. The number stands alone (`#<n>`), so the search at start
+([Meko recall](#meko-recall-at-start)) reads the issue too. A closed issue is still offered, and
+says so in its hint. Running tasks whose first prompt has the issue's link ending a line (so #45's isn't found in
+#450's) are offered first as
+**Go to**, with a new session still offered after them. Each item's hint says what starting does
+besides: which project and why, **Opens a new project** (or **Opens the project again**),
+**Clones <owner>/<name>**, **New datapack**, or **Accepts the share of <datapack>**. While it
+starts, the palette stays open with *Starting* (or *Cloning <owner>/<name>*). Once the server
+answers, the palette closes and the page goes to the session as after New session. Closing the
+palette meanwhile doesn't stop the start; the session shows up in the state. The browser never
+says which project or datapack to use beyond the project it showed: the server works the rest out
+again when it starts, and uses an open project that fits by then instead of opening another.
+
+### The design after approval
+
+A task's design doesn't stop at the approval: it's what the PR's reviewers read.
+
+- **Its questions go into it.** The approval asks Claude to add a *Questions and decisions*
+  section to the design before writing any code (`designQaLine()`, added in code after the
+  approval prompt): each question from the questions file, the user's answer and what was decided.
+- **It's kept current.** The approval, a move to Code by hand (`move-code`) and the prompts that
+  change code later (`comments`, `review`, `review-people`, `ci`, `conflicts`;
+  `DESIGN_UPKEEP_PROMPTS`) carry a line
+  (`designUpkeepLine()`) asking Claude to update the design in the same turn when a new question
+  comes up or the design changes, adding the question and its decision to that section. The line
+  names where: the markdown design file, or the design's Artifact to republish from the same file.
+- **Each change is a new version in Meko.** In Code, PR & Review and Merge & Close, the markdown
+  design file is read again at each turn end, and a publish of the design's own Artifact (the same
+  claude.ai link; any other page Claude publishes isn't the design) is kept from the Artifact
+  tool's `PostToolUse` hook. A change is saved as the next version (`design-<slug>-v3.md`, …), as
+  during Design, and logged as *Design updated*; nothing waits for an approval.
+- **The PR names the latest version.** `artifact_put` returns the content hash Meko keeps the file
+  under (the SHA-256 of its bytes), kept per version (`designs.md_hash`, `html_hash`). The PR
+  description's `meko_design:<name>;<hash>` line names the design by its first version's name
+  (`design-<slug>.md`, or `.html` for an Artifact's page), which never changes, and the latest
+  version's hash. AgentK keeps that line current itself (`syncPrDesign()` in `lifecycle.ts`): after
+  each new version reaches Meko, and at each PR poll that finds the line missing or stale (Claude
+  rewrote the description, say), it reads the description and rewrites only that line
+  (`gh api -X PATCH repos/<repo>/pulls/<n>`), adding it after the datapack line when it's missing.
+  Only a well-formed line counts (`meko_design:design-<…>.md;<64 hex>`): a mention of the format in
+  the description's prose or a code block is left alone.
+  A failed write is logged and tried again at a poll after 10 minutes. A Review a PR session fetches
+  the version the line names (see [Reviewing a PR](#reviewing-a-pr)).
+
 ### Moving a session
 
 Between turns you can move a task to another stage from the **Move to another stage** dialog. On a
 desktop it opens from any other stage in the stage bar (each is a button: *Move back to Code*), and
 from Explore's **Move on…** gate, which starts at Design; otherwise it starts at the next step
 (`defaultTarget`). On a phone it's in the ⋯ sheet, and the command palette has it too.
-`POST /api/sessions/:id/move` (`MoveSessionRequest`: stage, and optionally prompt and task) runs
+`POST /api/sessions/:id/move` (`MoveSessionRequest`: stage, and optionally task and instructions) runs
 `Lifecycle.move`, in the same per-session queue as the PR polls and merges. A `kind` sent by a page
 from before start stages is ignored. The rules are in `src/shared/stages.ts`, shared with the dialog:
 
@@ -1370,12 +1572,23 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 - **Refused (409)** while AgentK is mid-turn or a gate action is in flight, during a merge, and for a
   session that still designs in plan mode. A move that sends a prompt is also refused while Claude
   is waiting on you (a design waiting for approval aside) or has exited.
-- **Prompts.** A move to Explore, Design or Code can send that stage's prompt (`explore`, `design`,
-  `code`), after the `moved` line saying which stage the session is in now, since the running
-  Claude's system prompt still has the old workflow line (the next launch gets the new one). It's sent by default
-  for Design, and for Code from Explore or Design; not when going back to Code from PR & Review, or to
-  Explore. A session with no task yet (one started at Explore without a first prompt) is asked for
-  one, which becomes its task. If the prompt can't be typed, the move stays and the error says so.
+- **Prompts.** A move to Design or Code can send a prompt for that stage, after the `moved` line
+  saying which stage the session is in now, since the running Claude's system prompt still has the
+  old workflow line (the next launch gets the new one). It's sent for Design, and for Code from
+  Explore or Design; not when going back to Code from PR & Review, or to Explore (`promptByDefault`).
+  It isn't the stage's start prompt, which names the task: a session's conversation often moves on
+  from its first prompt (an exploration that found the real problem elsewhere), so the move sends
+  `move-design` or `move-code` (`movePrompt()` in `prompts.ts`), which have AgentK design or implement
+  what the session has discussed, found or done so far, where the conversation ended up, and ask
+  when that isn't clear. `move-design` revises the session's design if it has one and designs from
+  code already on the branch, and gets the design questions line as `design` does. A repo's
+  override of `design` or `code` doesn't change them; override `move-design` and `move-code` too.
+  The dialog's line on what the move does says so (or, with a task typed, that AgentK works on that task). The dialog doesn't offer a choice: what the user
+  wants on a move back goes in its optional instructions (see below). The request's `prompt` flag is
+  still honored, for pages from before (a move to Explore sends `explore`). A session with no task
+  yet (one started at Explore without a first prompt) is offered an optional Task field: a task given
+  becomes the session's, and the stage's start prompt goes with it; left empty, the move prompt goes
+  as for any other session. If the prompt can't be typed, the move stays and the error says so.
 - **Side effects.** Entering Design clears `plan_mode`, so the edit guard is on and the design is
   written as markdown or an Artifact; an earlier design is kept, and can be approved again or
   revised. Leaving Design by hand clears *Design ready* and saves the design to Meko as an approval
@@ -1391,6 +1604,29 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   where it was if the prompt can't be typed. The PR stage never takes the PR the
   session had before if it's been merged or closed since: it waits for the new one. Moving back to
   Code also gets a session out of a PR stage whose turn ended without a PR.
+
+### Instructions with a move or Open PR
+
+The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
+("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
+stays one click; the **+** notes button beside it (and *Open PR … with instructions* in the command
+palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is just the
+**+** and the notes icon, with no caption, and is 40 px square under a coarse pointer. Approve design takes none
+of its own: the design's **Other feedback** already goes with the approval. Merge & Close prompts
+Claude for nothing, so it takes none either.
+
+- **The prompt.** They go last, in the `instructions` prompt (`{{instructions}}`, overridable in
+  `.agent-k/stages/instructions.md`), which tells Claude to follow them where they conflict with
+  what's above: after the stage's prompt, and after the PR prompt's push line and Meko footer.
+- **With no stage prompt** (a move back, or to PR & Review when AgentK picks up the branch's open PR)
+  they go with the `moved` line alone. For a PR picked up, the session moves first and stays busy
+  until the instructions' turn ends, as with the PR prompt, so review prompts waiting for it go after
+  that turn; if they can't be typed, the session stays in PR & Review and the 502 says so.
+- **Checks.** At most `INSTRUCTIONS_MAX` (10,000) characters once trimmed (400 past it, or for
+  anything but text); blank is none. A move with instructions needs Claude to take a prompt, as a
+  stage prompt does (409 while it waits on you, or has exited, before anything moves). The dialogs
+  say the same before they send.
+- A queued Open PR keeps them (see [Queued gates](#queued-gates)).
 
 Moves are logged as stage entries with `moved_by = 'you'`. Sessions from before start stages may
 still have `kind` events ("Changed type to Quick Code") in their history; no new ones are logged.
@@ -1421,7 +1657,8 @@ knows to pass the right `datapack_id` when it searches them, and says when to se
 reading code for a new task, a review or a CI fix. Claude Code hides MCP tools until ToolSearch
 loads them, so it names the query that does (`+meko context_search`, which matches the Meko server
 under its own name or a plugin's). The first prompt of each task (`explore`, `design`,
-`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search.
+`design-plan`, `code`, `review-pr`) and the review, conflict and CI prompts end with one line asking for that search;
+the move prompts (`move-design`, `move-code`) ask for one only if the work has moved on to something not searched yet.
 A Review a PR session's prompts (`review-pr`, `review-pr-comments`) and system prompt also ask for a
 search before every answer about why the code is the way it is (`mekoQuestionLine()`,
 `mekoQuestionSystemLine()`). These lines are added in code (`mekoRecallLine()`, `mekoRecallSystemLine()` in `prompts.ts`), so
@@ -1447,23 +1684,42 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > file may be the user's own pin (one AgentK used to overwrite). The hooks read the pin when a session starts and keep it in the
 > session's watermark, so after a switch a running session's capture stays in the old datapack. `MEKO_DATAPACK_ID` is set too, for when the hooks learn to read it.
 
-> **Transcript capture can be turned off.** `[meko] capture_transcripts` in `config.toml`
-> defaults to `true`; set it to `false` to stop sending transcripts, for example while Meko can't
-> take the load (a restart applies a change). While it's off, the server doesn't run the plugin's
-> `capture.js checkpoint` after each turn, at startup or when a session stops, and doesn't create a named conversation per session. (With it on, a
-> server that is stopping waits up to 5 seconds for captures still running.) Sessions
-> also get `MEKO_CHECKPOINT_INTERVAL=2147483`, so the plugin's checkpoint timer, which its
-> SessionStart hook starts for a resumed session, never fires in practice: that's the longest
-> interval Node's `setInterval` honours, and a larger one would fire every millisecond. With
-> capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`. The
-> plugin's own SessionStart, PreCompact and SessionEnd hooks still run, so a running session shows
-> up in Meko's conversations only once it compacts or ends. The shipped summary
-> written at Merge & Close is a single memory, not a transcript, and is still sent.
+> **Transcript capture is off by default.** Meko's capture script extracts a skill Claude loads
+> as a user requirement and cuts the turn that loaded it short (MEKO-710, fixed in
+> yugabyte/meko-mcp-server#360, not yet released), which fills datapacks with skill text. So
+> `[meko] capture_transcripts` in `config.toml` defaults to `false`; set it to `true` to send
+> transcripts again (a restart applies a change). While it's off, the server doesn't run the
+> plugin's `capture.js checkpoint` after each turn, at startup or when a session stops, and the
+> `--settings` file sessions launch with turns the Meko plugin off (`enabledPlugins` set to
+> `false` for each `meko-agent-skills@…` key in Claude Code's plugin registry, and for
+> `meko-agent-skills@meko-agent-skills`), so its SessionStart, PreCompact and SessionEnd hooks and
+> its checkpoint timer don't run either. A session launched before the change keeps the plugin
+> until it's launched again. Sessions also get `MEKO_CHECKPOINT_INTERVAL=2147483`, the longest
+> interval Node's `setInterval` honours (a larger one would fire every millisecond), for a plugin
+> that still runs; with capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`.
+> The plugin's MCP server is configured apart from it (`~/.claude.json`), so Meko's tools stay.
+> (With capture on, a server that is stopping waits up to 5 seconds for captures still running.)
+> The shipped summary written at Merge & Close and the learn step's facts are memories, not
+> transcripts, and are still sent.
+
+> **The system prompt gives the conversation_id.** Meko's tools require a `conversation_id`, which
+> only the plugin's SessionStart context gave before. Every launch now creates (or finds) the
+> session's conversation, keyed by its Claude session id like the plugin's, in the dedicated
+> datapack, or the project's conversation (`agent-k-local-project-<id>`, owned by `agent-k-local`)
+> when the project only has shared datapacks (`launchConversation()` in `sessions.ts`, waiting up
+> to 5 seconds), and the system prompt names it (`mekoConversationLine()` in `prompts.ts`). When
+> Meko doesn't answer in time, the line gives the `conversation_create` arguments that make that
+> same conversation instead (for the project's conversation, with no datapack, which Meko takes
+> only when the account has a default one, as for AgentK's own create). Resumed and recovered
+> launches in the next minute then don't wait at all, so a restart that recovers many sessions one
+> by one isn't held up 5 seconds each. A new session still waits: its conversation has to be
+> created, and titled, before the Meko plugin's SessionStart hook creates it under a generic title.
 
 > **PRs point back at Meko.** When the project has a dedicated datapack and Meko is on, Open PR
 > appends to the PR prompt (after any repo or owner override) an instruction to end the PR
-> description with two lines: `<Meko host>://<datapack id>;<datapack name>` and
-> `meko_conversation_id:<id>`. The name is for people reading the PR; AgentK reads only the id
+> description with these lines: `<Meko host>://<datapack id>;<datapack name>`, the design's
+> `meko_design:<name>;<hash>` when the task has a design in Meko (see
+> [The design after approval](#the-design-after-approval)), and `meko_conversation_id:<id>`. The name is for people reading the PR; AgentK reads only the id
 > (`datapackIdsIn()`, which also takes the line without a name, as PRs opened before it was added end).
 > The host is the Meko web app's (`cloud.mekodata.ai` for Meko Cloud), or the MCP server's when a
 > self-hosted Meko's web app isn't set (`mekoHost()` in `config.ts`). The conversation id comes from `conversation_create` keyed by the session's
@@ -1584,9 +1840,10 @@ Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET �
 `POST …/invite/:id/resend`, `DELETE …/invite/:id`, `GET /datapacks/incoming-shares`,
 `POST /datapacks/invite-action`) are REST, not MCP. `src/server/mekoapi.ts` calls them with the
 same API key (a Meko personal access token), at `[meko] api_url` (by default the web app URL plus
-`/api/v1`). `AppState.meko.sharing` is true when Meko is on and that API URL is known; it's worked
-out from the config, not by asking Meko. Without an API URL the share routes answer 409, saying to
-set the web app URL. Meko's own refusals of a share call (a bad email, an invite already pending,
+`/api/v1`). AgentK can share when Meko is on and that API URL is known (`resolveMekoApiUrl()`, from
+the config, not by asking Meko); the state sent to the browser doesn't carry it. Without an API URL
+the share routes answer 409, saying to set the web app URL, and the invite sync skips Meko's
+invites. Meko's own refusals of a share call (a bad email, an invite already pending,
 no permission) come back with their status and message; a refused key (401) is a 502 that says to
 check the key on the Meko tab; anything else is a 502. The invite sync keeps asking every five
 minutes, but logs a failure to list the invites waiting (a refused key, say) once, until the error
@@ -1599,8 +1856,8 @@ or API URL changes or a sync works.
 | A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). |
 
 **Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
-reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and AgentK
-can share (`AppState.meko.sharing`). It opens the Share dialog with a **Reviewers on the
+reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko
+is on. It opens the Share dialog with a **Reviewers on the
 project's open PRs** section above the email form: for each open PR of the project's running sessions (in PR & Review or Merge & Close),
 each in its own session's repo, the people asked to review and the people who have reviewed,
 without bots, the PR's author or you, and the teams asked (whose members are invited by email);
@@ -1693,7 +1950,7 @@ datapack, which the team working on the project shares.
 
 **The saving rule.** Every session whose project has a dedicated datapack gets it in its system
 prompt (`mekoSaveSystemLine()` in `prompts.ts`), so it holds for saves Claude makes on its own
-too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `EXTRACT_PROMPT` and
+too. Both ways of the learn step state it in full as well (`SAVING_RULE`, in `extractPrompt()` and
 the typed prompt's `mekoLearnLine`), since a session launched before the rule has no such line,
 and so does the Explore prompt, which ends by saving under it. Only the mod path also filters what
 is written (local paths); on the typed path, and for Claude's own saves, the rule is all there is. Save what a teammate on this product would want and couldn't easily get from the code, the
@@ -1711,9 +1968,9 @@ the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn*
 Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
 that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
 Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
-(`Session.learning`): a Save learnings step still running when the PR merges, or when Discard is
-asked for, holds the close like one of its own, and a step that ended done since the session got
-to Merge & Close stands for it.
+(`Session.learning`, which turns the session's dot into the learning ring): a Save learnings step
+still running when the PR merges, or when Discard is asked for, holds the close like one of its
+own, and a step that ended done since the session got to Merge & Close stands for it.
 
 **Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
 checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
@@ -1736,12 +1993,23 @@ restart that cut the step short finishes the discard in `recover()`, unless the 
 turn in a Claude still running: that turn goes on, and its end discards the session. Archive
 clears `discarding`.
 
+**Only what's new.** Each step looks back over the whole session, but asks only for what earlier
+saves didn't cover. The prompt says to leave out what Claude saved itself (its `memory_add` calls are
+in the transcript), and after the first step through the mod it lists what earlier steps wrote
+(a correction by its corrected text) or found already in Meko (noted as each fact is handled; the
+latest 60, each cut to 400 characters: `coveredText()`), since a fork leaves nothing in the
+transcript. The list belongs to the datapack the steps wrote to: a session relaunched on another
+dedicated datapack starts afresh. It's kept in the server's memory only, until the session is
+archived: after a restart the next step lists everything again and the duplicate check skips
+what's known. A fact whose write failed isn't listed, so the next step finds it again. A typed step
+gets the same list. The duplicate check still runs on what comes back.
+
 **Through the mod** (its link live, protocol 2):
 
 1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll.
 2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
    served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
-   as JSON (`EXTRACT_PROMPT`), and posts the reply, the model and the usage to `/mod/learn`, which
+   as JSON (`extractPrompt()`), and posts the reply, the model and the usage to `/mod/learn`, which
    answers at once.
 3. The server parses the facts (the first JSON object in the reply), drops any that name the home
    folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
@@ -1772,7 +2040,10 @@ the Meko calls in the transcript during it.
 
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
 candidates, saves, updates, skips, lookups, errors, sent_chars)`, with `trigger` `merge`, `discard`
-or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id.
+or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id,
+and, while the project has Log Meko calls on, in the session's Meko call log with what was sent and
+what came back (see [Project home](#project-home)). A step at Merge & Close is deleted with the
+session moments later, so run `/agentk_learn` during the session to look at one.
 
 ## Token usage
 

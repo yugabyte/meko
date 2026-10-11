@@ -95,11 +95,17 @@ class Pane {
   private mouseEncoding: number | null = null;
   private cursorHidden = false;
 
-  /** A clean screen for a program started again, the modes tracked beside it included. */
+  /**
+   * A clean screen for a program started again, the modes tracked beside it included. Queued
+   * behind the output already written: the terminal parses writes later, so a reset done now
+   * would let the last program's final output land on the new screen.
+   */
   reset(): void {
-    this.term.reset();
-    this.mouseEncoding = null;
-    this.cursorHidden = false;
+    this.term.write('', () => {
+      this.term.reset();
+      this.mouseEncoding = null;
+      this.cursorHidden = false;
+    });
   }
 
   constructor(readonly name: string, cols: number, rows: number, scrollback: number) {

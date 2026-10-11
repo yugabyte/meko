@@ -23,23 +23,25 @@ function ancestors(dir: string): string[] {
   }
 }
 
-export function isTrusted(dir: string, cfg: ClaudeJson): boolean {
+/** Whether `dir`, or (unless `exact`) one of its parents, is trusted. */
+export function isTrusted(dir: string, cfg: ClaudeJson, exact = false): boolean {
   const projects = cfg.projects ?? {};
-  return ancestors(dir).some((a) => projects[a]?.hasTrustDialogAccepted === true);
+  return (exact ? [resolve(dir)] : ancestors(dir)).some((a) => projects[a]?.hasTrustDialogAccepted === true);
 }
 
 /**
  * Claude Code asks "Do you trust this folder?" the first time it runs in a
  * directory, unless that directory or a parent is trusted. For a git worktree
  * the decision is keyed by the main repository, so the server trusts each
- * project's repo before launching a session (and the worktrees root as well).
+ * project's repo before launching a session (and the worktrees root as well). `exact`: only an
+ * entry for `dir` itself counts (Claude doesn't look above a worktree it can't tie to its repo).
  */
-export function ensureWorkspaceTrust(dir: string): 'already' | 'added' | 'no-config' {
+export function ensureWorkspaceTrust(dir: string, exact = false): 'already' | 'added' | 'no-config' {
   const file = claudeConfigPath();
   if (!existsSync(file)) return 'no-config';
   const raw = readFileSync(file, 'utf8');
   const cfg = JSON.parse(raw) as ClaudeJson;
-  if (isTrusted(dir, cfg)) return 'already';
+  if (isTrusted(dir, cfg, exact)) return 'already';
   // Re-read right before writing to keep the window with concurrent Claude writes small.
   const fresh = JSON.parse(readFileSync(file, 'utf8')) as ClaudeJson;
   fresh.projects ??= {};

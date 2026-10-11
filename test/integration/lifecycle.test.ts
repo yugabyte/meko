@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
-import { sessionAgentId } from '../../src/server/meko.js';
+import { mekoScope, sessionAgentId } from '../../src/server/meko.js';
 import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 
 // GitHub is mocked; git, the session host and the (fake) claude process are real.
@@ -15,7 +16,15 @@ const gh = vi.hoisted(() => ({
   mergeError: null as null | Error,
   bots: [] as string[],
   viewer: 'me' as string | null,
+  /** How many times gh was asked for its login, and how long it takes to answer. */
+  viewerCalls: 0,
+  viewerDelay: 0,
+  /** Thrown instead of answering (a timed-out gh is `killed`). */
+  viewerError: null as null | Error,
   stats: null as null | Error | { commits: number; additions: number; deletions: number; files: { path: string; additions: number; deletions: number }[] },
+  /** The PR descriptions AgentK wrote, and the error the next write fails with. */
+  bodies: [] as string[],
+  bodyError: null as null | Error,
 }));
 
 vi.mock('../../src/server/github.js', async (orig) => {
@@ -34,12 +43,21 @@ vi.mock('../../src/server/github.js', async (orig) => {
     resolveMergeMethod: async () => 'squash' as const,
     botLogins: async () => gh.bots,
     viewerLogin: async () => {
+      gh.viewerCalls++;
+      if (gh.viewerDelay) await new Promise((r) => setTimeout(r, gh.viewerDelay));
+      if (gh.viewerError) throw gh.viewerError;
       if (!gh.viewer) throw new Error('gh: not logged in');
       return gh.viewer;
     },
     prStats: async () => {
       if (!gh.stats || gh.stats instanceof Error) throw gh.stats ?? new Error('no PR stats');
       return gh.stats;
+    },
+    prBody: async () => gh.status!.body,
+    setPrBody: async (_w: string, _n: number, body: string) => {
+      if (gh.bodyError) throw gh.bodyError;
+      gh.bodies.push(body);
+      gh.status = { ...gh.status!, body };
     },
   };
 });
@@ -75,7 +93,12 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.mergeError = null;
     gh.bots = [];
     gh.viewer = 'me';
+    gh.viewerCalls = 0;
+    gh.viewerDelay = 0;
+    gh.viewerError = null;
     gh.stats = null;
+    gh.bodies = [];
+    gh.bodyError = null;
     env = await makeEnv();
   });
   afterEach(async () => {
@@ -142,8 +165,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(row.desired).toBe('archived');
     expect(existsSync(worktree)).toBe(true); // idle, for the next session on the repo
     expect(env.core.sessions.ownsWorktree(row)).toBe(false);
-    expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak/fix-the-thing removed; worktree kept for the next session');
-    const branches = execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: env.repo, encoding: 'utf8' });
+    expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak_me/fix-the-thing removed; worktree kept for the next session');
+    const branches = execFileSync('git', ['branch', '--list', 'ak_me/*'], { cwd: env.repo, encoding: 'utf8' });
     expect(branches.trim()).toBe(''); // cleanup deletes the local branch
     const memory = env.meko.calls.find((c) => c.name === 'addMemory');
     expect(String(memory?.args[0])).toMatch(/Shipped in Demo: "Fix the thing" \(PR #7/);
@@ -177,33 +200,17 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   const stages = (id: string) => all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => r.stage);
   const shipped = () => env.meko.calls.filter((c) => c.name === 'addMemory').length;
 
-  it('closes a session whose PR was merged on GitHub', async () => {
+  it("closes a session whose PR was merged on GitHub once when polls overlap, even without the PR's size", async () => {
     const s = await inReview('Merged elsewhere');
-    gh.status = { ...gh.status!, state: 'MERGED' };
-    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    await closed(s.id);
-    expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
-    expect(shipped()).toBe(1);
-  });
-
-  it("merges and closes when the PR's size can't be read", async () => {
-    const s = await inReview('No stats');
     gh.stats = new Error('gh: rate limited');
-    gh.status = { ...gh.status!, state: 'MERGED' };
-    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    await closed(s.id);
-    const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
-    expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
-  });
-
-  it('cleans up once when polls overlap', async () => {
-    const s = await inReview('Overlap');
     gh.status = { ...gh.status!, state: 'MERGED' };
     const row = env.core.sessions.row(s.id);
     await Promise.all([env.core.lifecycle.pollReview(row), env.core.lifecycle.pollReview(row)]);
     await closed(s.id);
+    expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
     expect(shipped()).toBe(1);
-    expect(stages(s.id).filter((x) => x === 'merge')).toHaveLength(1);
+    const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
+    expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
   });
 
   it('finishes closing a session left in Merge & Close', async () => {
@@ -266,19 +273,13 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(await blockersFor({})).toEqual(['AgentK is waiting on you in the terminal.']);
     env.core.sessions.setStatus(s.id, 'idle');
 
-    gh.status = { ...approved, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
-    await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('CI is failing.') as string });
-    expect(gh.merges).toEqual([]);
-    expect(env.core.sessions.row(s.id).stage).toBe('review');
-  });
-
-  it('lists uncommitted files as a merge blocker and refuses to merge', async () => {
-    const s = await inReview('Dirty merge');
+    // A file left uncommitted, which the merged PR wouldn't have.
     writeFileSync(join(env.core.sessions.row(s.id).worktree_path, 'draft.txt'), 'wip\n');
-    await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
-    expect(env.core.sessions.get(s.id)).toMatchObject({ canMerge: false, mergeBlockers: ['The worktree has 1 uncommitted file: commit or discard them.'] });
+    expect(await blockersFor({})).toEqual(['The worktree has 1 uncommitted file: commit or discard them.']);
+
+    gh.status = { ...approved, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] };
     await expect(env.core.sessions.action(s.id, 'merge')).rejects.toMatchObject({
-      status: 409, message: 'Not ready to merge: The worktree has 1 uncommitted file: commit or discard them.',
+      status: 409, message: expect.stringMatching(/^Not ready to merge: .*The worktree has 1 uncommitted file: commit or discard them\. CI is failing\./) as string,
     });
     expect(gh.merges).toEqual([]);
     expect(env.core.sessions.row(s.id).stage).toBe('review');
@@ -291,7 +292,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const worktree = env.core.sessions.row(s.id).worktree_path;
     await env.core.sessions.action(s.id, 'merge');
     await closed(s.id);
-    expect(execFileSync('git', ['branch', '--list', 'ak/*'], { cwd: other, encoding: 'utf8' }).trim()).toBe('');
+    expect(execFileSync('git', ['branch', '--list', 'ak_me/*'], { cwd: other, encoding: 'utf8' }).trim()).toBe('');
     expect(dbGet<{ repo: string }>(env.core.db, 'SELECT repo FROM worktrees WHERE path = ? AND session_id IS NULL', worktree)?.repo).toBe(other);
   });
 
@@ -398,7 +399,11 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
         { kind: 'gotcha', component: '', text: `The worktree at ${worktree} has a stale lock.` },
       ] }),
     });
-    const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => (query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : []));
+    const similarScopes: (string | undefined)[] = [];
+    const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => {
+      similarScopes.push(mekoScope.getStore()?.id);
+      return query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : [];
+    });
     Object.assign(env.meko, { similar });
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
@@ -416,6 +421,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(String(added[1].args[0])).toMatch(/^Shipped in Demo/); // then what shipped, as before
     const updated = env.meko.calls.find((c) => c.name === 'updateMemory');
     expect(updated?.args.slice(0, 4)).toEqual(['m1', 'Decision: polls run in one queue per session.', 'dp-1', 'claude_code:other-1']);
+    // Each of these calls is the session's, for its Meko call log.
+    expect([...similarScopes, ...added.map((c) => c.scope), updated?.scope]).toEqual([s.id, s.id, s.id, s.id, s.id]);
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'done' }]);
     expect(dbGet(env.core.db, 'SELECT candidates, saves, updates, skips FROM meko_learns WHERE session_id = ?', s.id))
       .toEqual({ candidates: 2, saves: 1, updates: 1, skips: 0 });
@@ -443,6 +450,42 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.sessions.action(s.id, 'learn');
     await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
     expect(env.meko.calls.find((c) => c.name === 'updateMemory')?.args.slice(0, 2)).toEqual(['m1', 'Gotcha (x.ts): The cache is per process.']);
+  });
+
+  it('tells a later learn step what earlier ones wrote or found known, in the datapack it writes to', async () => {
+    fakeFiles({
+      mod: '',
+      'learn-facts': JSON.stringify({ facts: ['Saved', 'Known', 'Failed', 'Corrected'].map((text) => ({ kind: 'gotcha', component: 'a.ts', text })) }),
+      'learn-decisions': '{"decisions":[{"n":2,"action":"skip"},{"n":4,"action":"update","id":"m1","text":"Gotcha (a.ts): Corrected, as it now reads"}]}',
+    });
+    const s = await inReview('Twice');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    Object.assign(env.meko, {
+      addMemory: async (text: string) => { if (text.endsWith('Failed')) throw new Error('Meko is down'); },
+      similar: async (query: string) => (query.endsWith('Corrected') ? [{ id: 'm1', text: 'Corrected wrongly.', agentId: 'claude_code:other-1' }] : []),
+    });
+    const learn = async () => {
+      await env.core.sessions.action(s.id, 'learn');
+      await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+    };
+    await learn();
+    await learn();
+    const [first, second] = modLearn().filter((x) => x.job.kind === 'extract').map((x) => x.job.prompt);
+    expect(first).not.toContain('Earlier learn steps');
+    // What Meko now holds (a correction's own text), each once; the fact whose write failed is left for the next step to find again.
+    const covered = ':\n- Gotcha (a.ts): Saved\n- Gotcha (a.ts): Known\n- Gotcha (a.ts): Corrected, as it now reads';
+    expect(second).toContain(`${covered}\n\nReply with JSON`);
+    // Without the mod, the typed prompt lists them too; once the session writes to another datapack, neither does.
+    env.core.config.claude.mod = false;
+    const submit = vi.spyOn(env.core.sessions, 'submit');
+    const typed = () => String(submit.mock.calls.at(-1)?.[1]);
+    await learn();
+    expect(typed()).toMatch(/^Save what this session learned to Meko/);
+    expect(typed().endsWith(covered)).toBe(true);
+    env.core.sessions.update(s.id, { meko_datapack_id: 'dp-2', meko_datapack_name: 'team/other' });
+    await learn();
+    expect(typed()).toMatch(/^Save what this session learned to Meko/);
+    expect(typed()).not.toContain('Earlier learn steps');
   });
 
   it('lets a Save learnings step that finishes during Merge & Close stand for it', async () => {
@@ -528,10 +571,14 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(learns(s.id)).toEqual([]);
   });
 
-  it('closes a merged session without a learn step when asked to skip it', async () => {
+  it('closes a merged session without a learn step when asked to skip it, and refuses a skipLearn that is not true or false', async () => {
     fakeFiles({ mod: '' });
     const s = await inReview('Skip at merge');
     await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    await expect(env.core.sessions.action(s.id, 'discard', { skipLearn: 'true' })).rejects.toMatchObject({ status: 400, message: 'skipLearn must be true or false.' });
+    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: 1 })).rejects.toMatchObject({ status: 400 });
+    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'running', stage: 'review', discarding: 0 });
+    expect(gh.merges).toEqual([]);
     await env.core.sessions.action(s.id, 'merge', { skipLearn: true });
     await closed(s.id);
     expect(learns(s.id)).toEqual([]);
@@ -577,14 +624,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(lastEvent(s.id, 'learn-skipped')).toBeUndefined();
   });
 
-  it('refuses a skipLearn that is not true or false', async () => {
-    const s = await inReview('Bad body');
-    await expect(env.core.sessions.action(s.id, 'discard', { skipLearn: 'true' })).rejects.toMatchObject({ status: 400, message: 'skipLearn must be true or false.' });
-    await expect(env.core.sessions.action(s.id, 'merge', { skipLearn: 1 })).rejects.toMatchObject({ status: 400 });
-    expect(env.core.sessions.row(s.id)).toMatchObject({ desired: 'running', stage: 'review', discarding: 0 });
-    expect(gh.merges).toEqual([]);
-  });
-
   it('saves what the session learned through the mod before discarding it', async () => {
     fakeFiles({ mod: '', 'learn-delay': '1000' });
     const s = await inReview('Discard learned');
@@ -599,7 +638,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).desired).toBe('archived');
     expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'mod', outcome: 'done' }]);
     expect(lastEvent(s.id, 'learned')).toBe('Nothing new to save to team/demo');
-    expect(lastEvent(s.id, 'discarded')).toMatch(/^Discarded; changes and branch ak\/discard-learned deleted/);
+    expect(lastEvent(s.id, 'discarded')).toMatch(/^Discarded; changes and branch ak_me\/discard-learned deleted/);
     expect(dbGet<{ n: number }>(env.core.db, "SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'discarded'", s.id)!.n).toBe(1);
     expect(env.core.sessions.row(s.id).discarding).toBe(0);
     expect(execFileSync('git', ['branch', '--list', branch], { cwd: env.repo, encoding: 'utf8' }).trim()).toBe('');
@@ -721,15 +760,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).stage).toBe('design');
   });
 
-  it('stays in Code when the PR prompt could not be typed', async () => {
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Flaky host', prompt: 'do it', kind: 'quick' });
-    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
-    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
-    await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 502 });
-    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', busy: false });
-  });
-
   /** Opens a PR for a new session in a project with this datapack; returns the PR prompt Claude got. */
   async function prPrompt(datapack: CreateProjectRequest['datapack']) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack });
@@ -773,6 +803,90 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await expect(opening).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
     expect(env.core.sessions.row(s.id).stage).toBe('code');
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("names the design's latest version in the PR, and keeps the PR's line on it as the design changes", async () => {
+    const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+    const dp = '0f1e2d3c-2222-4333-8444-555566667777';
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: dp, name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Designed', prompt: 'do it', kind: 'quick' });
+    await idle(s.id, 'first turn');
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# One' });
+    await waitFor(() => env.core.lifecycle.prDesignRef(env.core.sessions.row(s.id)), (r) => !!r, 5000, 'design sent');
+    // The PR prompt names it: the first version's name, the latest version's hash.
+    const submit = vi.spyOn(env.core.host, 'submit');
+    gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+    gh.status = status({ body: `Summary of the change.\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_conversation_id:conv-1` });
+    await env.core.sessions.action(s.id, 'open-pr');
+    const text = String(submit.mock.calls.find((c) => String(c[1]).startsWith('Open a pull request'))?.[1]);
+    expect(text.endsWith(`\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_design:design-designed.md;${sha('# One')}\nmeko_conversation_id:conv-1`)).toBe(true);
+    expect(text).toContain('AgentK Local moves its hash to each new version of the design itself');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review', 10000, 'review stage');
+    await idle(s.id, 'PR turn');
+
+    // Claude's description left the line out: a poll puts it back, after the datapack line.
+    await poll(s.id);
+    await waitFor(() => gh.bodies.length, (n) => n === 1, 5000, 'line added');
+    expect(gh.bodies[0]).toBe(`Summary of the change.\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_design:design-designed.md;${sha('# One')}\nmeko_conversation_id:conv-1`);
+    expect(lastEvent(s.id, 'design')).toBe('Pointed PR #7 at the latest version of the design in Meko');
+
+    // A new version, the Q&A added while addressing a review, moves the hash and nothing else.
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# One\n\n## Questions and decisions' });
+    await waitFor(() => gh.bodies.length, (n) => n === 2, 5000, 'line moved');
+    expect(gh.bodies[1]).toBe(gh.bodies[0].replace(sha('# One'), sha('# One\n\n## Questions and decisions')));
+    expect(env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0])).toEqual(['design-designed.md', 'design-designed-v2.md']);
+    // A poll that finds the line current writes nothing.
+    await poll(s.id);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(gh.bodies).toHaveLength(2);
+
+    // A write GitHub refuses is only logged, and the next version's write goes through.
+    gh.bodyError = new Error('gh: HTTP 403');
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# Three' });
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').length, (n) => n === 3, 5000, 'v3 sent');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(gh.bodies).toHaveLength(2);
+    gh.bodyError = null;
+    await env.core.lifecycle.saveDesign(s.id, { markdown: '# Four' });
+    await waitFor(() => gh.bodies.length, (n) => n === 3, 5000, 'line moved again');
+    expect(gh.bodies[2]).toContain(`meko_design:design-designed.md;${sha('# Four')}`);
+  });
+
+  it("keeps a design Claude changes after the approval: a new version for the PR, without asking for an approval again", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kept', prompt: 'DESIGN_MD it' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
+    await env.core.sessions.action(s.id, 'approve-design');
+    // The approval asks for the questions and decisions in the design before any code, and to keep it current.
+    const file = join(env.core.paths.designs, s.id, 'design.md');
+    await waitFor(() => transcript(s.id), (t) => t.includes('add a \\"Questions and decisions\\" section'), 10000, 'approval prompt');
+    expect(transcript(s.id)).toContain(`section to the design (edit ${file})`);
+    expect(transcript(s.id)).toContain('If a new question comes up or the design changes while you work, update the design in the same turn');
+    await idle(s.id, 'approval turn');
+    await env.core.sessions.submit(s.id, 'DESIGN_QA');
+    await idle(s.id, 'Q&A turn');
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-kept-v2.md'), 5000, 'v2 sent');
+    expect(dbGet<{ markdown: string }>(env.core.db, 'SELECT markdown FROM designs WHERE session_id = ?', s.id)?.markdown).toContain('## Questions and decisions');
+    expect(lastEvent(s.id, 'design')).toBe('Design updated');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', status: 'idle' });
+    // A page published while coding isn't the design; a republish of the design's own Artifact would be.
+    await env.core.sessions.submit(s.id, 'PUBLISH_REPORT');
+    await idle(s.id, 'report turn');
+    expect(dbGet<{ html: string | null }>(env.core.db, 'SELECT html FROM designs WHERE session_id = ?', s.id)?.html).toBeNull();
+  });
+
+  it("takes a republish of the design's own Artifact while coding as a new version", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Page', prompt: 'DESIGN_ARTIFACT please' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
+    await env.core.sessions.action(s.id, 'approve-design');
+    await waitFor(() => transcript(s.id), (t) => t.includes('republish the same Artifact (https://claude.ai/code/artifact/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b) from the same file'), 10000, 'approval prompt');
+    await idle(s.id, 'approval turn');
+    await env.core.sessions.submit(s.id, 'REPUBLISH_DESIGN');
+    await idle(s.id, 'republish turn');
+    await waitFor(() => env.meko.calls.filter((c) => c.name === 'putArtifact').map((c) => c.args[0]), (n) => n.includes('design-page-v2.html'), 5000, 'v2 sent');
+    expect(dbGet<{ html: string }>(env.core.db, 'SELECT html FROM designs WHERE session_id = ?', s.id)?.html).toContain('Questions and decisions');
+    expect(env.core.sessions.get(s.id).status).toBe('idle');
   });
 
   it('adds no Meko lines to the PR prompt for a project without a datapack', async () => {
@@ -875,6 +989,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await inReview('Login lookup');
     const notify = vi.spyOn(env.core.sessions, 'notifyUser');
     gh.viewer = null;
+    // Starting the session looked the login up already; as if gh had been signed out then.
+    (env.core as unknown as { ghUser: string | null }).ghUser = null;
     env.core.sessions.update(s.id, { status: 'working' });
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, review('h1', 'me', 'Rename x.', 'COMMENTED', 'CONTRIBUTOR')] };
     await poll(s.id);
@@ -884,6 +1000,34 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await poll(s.id);
     expect(lastEvent(s.id, 'review')).toBe('Review from me');
     expect(queued(s.id)['review-people']).toEqual({ state: 'queued', vars: { reviewers: 'me' } });
+  });
+
+  it('asks gh for the login one lookup at a time, and not again for a while after it hung', async () => {
+    const core = env.core as unknown as { ghUser: string | null };
+    core.ghUser = null;
+    gh.viewerDelay = 50;
+    const calls = gh.viewerCalls;
+    expect(await Promise.all([env.core.ghLogin(env.repo), env.core.ghLogin(env.repo)])).toEqual(['me', 'me']);
+    expect(gh.viewerCalls).toBe(calls + 1);
+    // A signed-out gh answers at once: asked again next time.
+    core.ghUser = null;
+    gh.viewer = null;
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    gh.viewer = 'me';
+    expect(await env.core.ghLogin(env.repo)).toBe('me');
+    // One that hung (execFile killed it at the time limit) isn't asked again for a minute, so
+    // session starts don't each wait for it; their branches get the prefix without the login.
+    core.ghUser = null;
+    gh.viewerError = Object.assign(new Error('gh timed out'), { killed: true });
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    gh.viewerError = null;
+    const before = gh.viewerCalls;
+    expect(await env.core.ghLogin(env.repo)).toBeNull();
+    expect(gh.viewerCalls).toBe(before);
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Offline', prompt: 'do it', kind: 'quick' });
+    expect(s.branch).toBe('ak/offline');
+    expect(gh.viewerCalls).toBe(before);
   });
 
   it('counts /agentk review only from the user and people with a role on the repo', async () => {
@@ -982,7 +1126,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
     gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')], statusCheckRollup: [failing()] };
     await poll(s.id);
-    expect(queued(s.id)).toMatchObject({ review: { state: 'queued' }, ci: { state: 'queued' } });
+    expect(queued(s.id)).toMatchObject({ review: { state: 'queued' }, ci: { state: 'queued', vars: { sha: tip(env.core.sessions.row(s.id).worktree_path) } } });
     // The review goes in first; while Claude addresses it, it pushes and CI starts over.
     await waitFor(() => transcript(s.id), (t) => t.includes('A review from'), 10000, 'review prompt');
     commitIn(env.core.sessions.row(s.id).worktree_path);
@@ -992,17 +1136,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => queued(s.id), (q) => !q.ci, 10000, 'CI prompt dropped');
     expect(queued(s.id)).toEqual({});
     expect(transcript(s.id)).not.toContain('CI failed on PR');
-  });
-
-  it('delivers a CI failure found mid-turn when the turn ends', async () => {
-    const s = await inReview('CI mid-turn');
-    slowTurns();
-    await env.core.sessions.submit(s.id, 'something else');
-    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'working', 10000, 'working');
-    gh.status = { ...gh.status!, statusCheckRollup: [failing()] };
-    await poll(s.id);
-    expect(queued(s.id).ci).toMatchObject({ state: 'queued', vars: { sha: tip(env.core.sessions.row(s.id).worktree_path) } });
-    await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR #7'), 10000, 'CI prompt');
   });
 
   it('holds queued prompts until the turn that got one has ended, unless Claude was relaunched', async () => {
@@ -1134,14 +1267,69 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(stages(s.id)).toEqual(['code', 'pr', 'review']);
   });
 
-  it('withdraws a queued Open PR, and drops one when Claude exits', async () => {
-    const s = await working('Changed my mind');
+  it("keeps a queued Open PR's instructions until it goes, the latest press's", async () => {
+    const s = await working('Draft it later');
+    const submit = vi.spyOn(env.core.host, 'submit');
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
+    expect(lastEvent(s.id, 'queued')).toBe('Open PR queued with your instructions: it goes when AgentK finishes its turn');
+    expect(env.core.sessions.row(s.id).queued_instructions).toBe('Open it as a draft.');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ queued: 'open-pr', queuedInstructions: 'Open it as a draft.' });
+    // Blank instructions remove them; new ones replace them; a press without any keeps them.
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: ' ' });
+    expect(lastEvent(s.id, 'queued')).toBe('Your instructions for the queued Open PR were removed');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ queued: 'open-pr', queuedInstructions: null });
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft, against release-2.4.' });
+    expect(lastEvent(s.id, 'queued')).toBe('Your instructions for the queued Open PR changed');
     await env.core.sessions.action(s.id, 'open-pr');
+    await env.core.sessions.action(s.id, 'open-pr', {});
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_instructions: 'Open it as a draft, against release-2.4.' });
+    await waitFor(() => submit.mock.calls.map((c) => String(c[1])), (c) => c.some((x) => x.startsWith('Open a pull request')), 15000, 'queued PR prompt');
+    const queued = submit.mock.calls.map((c) => String(c[1])).filter((x) => x.startsWith('Open a pull request'));
+    expect(queued).toHaveLength(1);
+    expect(queued[0].endsWith('\n\nOpen it as a draft, against release-2.4.')).toBe(true);
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, queued_instructions: null });
+  });
+
+  it('sends a queued Open PR’s instructions with a press that comes before it goes', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Pressed at the turn end', prompt: 'do it', kind: 'quick' });
+    await idle(s.id, 'first turn');
+    // The turn has ended, and the queued Open PR hasn't gone yet.
+    env.core.sessions.update(s.id, { queued_gate: 'open-pr', queued_instructions: 'Open it as a draft.' });
+    const submit = vi.spyOn(env.core.host, 'submit');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const sent = String(submit.mock.calls[0][1]);
+    expect(sent).toMatch(/^Open a pull request for this work\./);
+    expect(sent.endsWith('\n\nOpen it as a draft.')).toBe(true);
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, queued_instructions: null });
+  });
+
+  it("keeps a queued Open PR's instructions in the activity log when its prompt can't be typed", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Not typed', prompt: 'do it', kind: 'quick' });
+    await idle(s.id, 'first turn');
+    const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+    env.core.sessions.update(s.id, { queued_gate: 'open-pr', queued_instructions: 'Open it as a draft.' });
+    env.core.sessions.setStatus(s.id, 'recovered');
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    await pollAll();
+    await waitFor(() => lastEvent(s.id, 'queued'), (t) => !!t?.startsWith('Queued Open PR not sent'), 10000, 'not sent');
+    expect(lastEvent(s.id, 'queued')).toMatch(/\nYour instructions with it:\nOpen it as a draft\.$/);
+    expect(notify).toHaveBeenCalledWith(s.id, 'Open PR not sent', expect.stringMatching(/your instructions are in the activity log\.$/));
+    expect(env.core.sessions.row(s.id)).toMatchObject({ stage: 'code', queued_gate: null, queued_instructions: null });
+  });
+
+  it('withdraws a queued Open PR with its instructions, and drops one when Claude exits', async () => {
+    const s = await working('Changed my mind');
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
     await env.core.sessions.action(s.id, 'cancel-queued');
-    expect(queuedGate(s.id)).toBeNull();
+    expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, queued_instructions: null });
     expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR withdrawn');
     await expect(env.core.sessions.action(s.id, 'cancel-queued')).rejects.toMatchObject({ status: 409, message: 'Nothing is queued.' });
+    // Queued again without instructions: the old ones don't come back.
     await env.core.sessions.action(s.id, 'open-pr');
+    expect(lastEvent(s.id, 'queued')).toBe('Open PR queued: it goes when AgentK finishes its turn');
+    expect(env.core.sessions.row(s.id).queued_instructions).toBeNull();
     (env.core.sessions as unknown as { forgetClaude(id: string, why?: string, ended?: string): void }).forgetClaude(s.id, 'x', 'Claude exited');
     expect(queuedGate(s.id)).toBeNull();
     expect(lastEvent(s.id, 'queued')).toBe('Queued Open PR dropped: Claude exited');

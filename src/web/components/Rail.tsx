@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { LimitWindow, PlanLimits, ProjectWithSessions } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import type { ThemePref } from '../theme';
-import { aggregateStatus, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
+import { aggregateDot, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
 import { StatusDot } from './common';
 
 export function Rail({
@@ -77,10 +77,13 @@ export function Rail({
 
   return (
     <nav className={cx('rail', open && 'open')} aria-label="Projects" inert={mobile && !open}>
-      <div className="brand">
-        <img src="/logo.png" alt="" width={26} height={26} />
-        <span>AgentK Local</span>
-      </div>
+      {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing.
+          It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
+      <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
+        <img src="/logo.png" alt="" width={16} height={16} />
+        <span className="rail-search-text">Search AgentK Local</span>
+        {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
+      </button>
       <div className="rail-list">
         {projects.map((p, i) => {
           const count = liveSessions(p).length;
@@ -112,7 +115,7 @@ export function Rail({
               }}
               title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
             >
-              {count > 0 ? <StatusDot status={aggregateStatus(p)} /> : <i className="dot idle" />}
+              {count > 0 ? <StatusDot status={aggregateDot(p)} /> : <i className="dot idle" />}
               <span className="proj-text">
                 <span className="proj-name">{p.name}</span>
                 <span className="proj-repo">{repoFolder(p.repoPath)}</span>
@@ -133,11 +136,6 @@ export function Rail({
           <Icon d="M4 20V10 M10 20V4 M16 20v-7 M22 20H2" />
           Usage
         </button>
-        {mobile && (
-          <button className="rail-add" onClick={onPalette}>
-            Search and commands
-          </button>
-        )}
       </div>
       <div className="rail-foot">
         <Limits limits={limits} />

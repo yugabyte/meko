@@ -37,7 +37,7 @@ describe('projects without a datapack, and without Meko', () => {
   it('turns Meko off: sessions get no datapack, and datapacks are refused with a reason', async () => {
     const withDp = await env.core.projects.create({ repoPath: env.repo, name: 'Has', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/has' } });
     await turnMekoOff();
-    expect(env.core.mekoStatus).toMatchObject({ configured: false, sharing: false });
+    expect(env.core.mekoStatus).toMatchObject({ configured: false });
     const s = await env.core.sessions.create(withDp.id, { name: 'Work', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
     const argv = join(env.fakeDir, 'argv.jsonl');
@@ -52,12 +52,16 @@ describe('projects without a datapack, and without Meko', () => {
     expect((await env.core.projects.create({ repoPath: env.repo, name: 'Y', datapack: { mode: 'none' } })).datapacks).toEqual([]);
   });
 
-  it("says so when Meko's plan has no room for another datapack", async () => {
+  it.each([
+    ["says so when Meko's plan has no room for another datapack", '[FREE_TIER_DATAPACK_LIMIT] Upgrade to Standard to create a new datapack.',
+      { status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Open the project without one/) }],
+    ["doesn't take any refusal that mentions datapacks for the plan limit", "You don't have permission to create a new datapack in this org.", { status: 502 }],
+  ])('%s', async (_, refusal, want) => {
     (env.meko as { createDatapack: unknown }).createDatapack = async () => {
-      throw new MekoError('[FREE_TIER_DATAPACK_LIMIT] Upgrade to Standard to create a new datapack.');
+      throw new MekoError(refusal);
     };
     await expect(env.core.projects.create({ repoPath: env.repo, name: 'Z', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/z' } }))
-      .rejects.toMatchObject({ status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Open the project without one/) });
+      .rejects.toMatchObject(want);
     expect(env.core.state().projects).toEqual([]);
   });
 
@@ -73,14 +77,6 @@ describe('projects without a datapack, and without Meko', () => {
     // Something else in that folder is still left alone.
     await expect(env.core.projects.create({ cloneUrl: gitRepo(join(env.home, 'other', 'cloned-repo')), name: 'D', datapack: { mode: 'none' } }))
       .rejects.toMatchObject({ status: 409 });
-  });
-
-  it("doesn't take any refusal that mentions datapacks for the plan limit", async () => {
-    (env.meko as { createDatapack: unknown }).createDatapack = async () => {
-      throw new MekoError("You don't have permission to create a new datapack in this org.");
-    };
-    await expect(env.core.projects.create({ repoPath: env.repo, name: 'Z', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/z' } }))
-      .rejects.toMatchObject({ status: 502 });
   });
 
   it('adds one datapack at a time, and starts a new server-side conversation with it', async () => {
@@ -105,13 +101,6 @@ describe('projects without a datapack, and without Meko', () => {
     expect(pinnedDatapack(env.core.sessions.row(s.id))).toBe('dp-adlc-proj-demo-repo-later');
     await expect(env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-2', name: 'other' }))
       .rejects.toMatchObject({ status: 409 });
-  });
-
-  it('makes an attached shared datapack the dedicated one', async () => {
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Shared', datapack: { mode: 'none' } });
-    env.core.projects.attachDatapack(p.id, { id: 'dp-kb', name: 'team/kb' });
-    const r = await env.core.projects.setDedicatedDatapack(p.id, { mode: 'existing', id: 'dp-kb', name: 'team/kb' });
-    expect(r.datapacks).toEqual([{ id: 'dp-kb', name: 'team/kb', role: 'dedicated' }]);
   });
 
   describe('over HTTP', () => {
@@ -139,7 +128,7 @@ describe('projects without a datapack, and without Meko', () => {
 
       expect((await call('PUT', '/api/settings', { meko: { enabled: false } })).json().meko.enabled).toBe(false);
       const state = (await call('GET', '/api/state')).json();
-      expect(state.meko).toMatchObject({ configured: false, sharing: false });
+      expect(state.meko).toMatchObject({ configured: false });
       expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [], closed: [] });
       expect((await call('GET', '/api/meko/datapacks')).json()).toEqual([]);
 

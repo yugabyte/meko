@@ -26,6 +26,7 @@ import { CommandPalette } from './CommandPalette';
 import { Busy } from './common';
 import { NewProjectDialog } from './NewProjectDialog';
 import { MoveSessionDialog, type MovePreset } from './MoveSessionDialog';
+import { OpenPrDialog } from './OpenPrDialog';
 import { RenameSessionDialog } from './RenameSessionDialog';
 import { NewSessionDialog } from './NewSessionDialog';
 import { DesignPanel } from './DesignPanel';
@@ -35,6 +36,7 @@ import { Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
+import { MekoCallsView } from './MekoCallsView';
 
 type Modal =
   | { kind: 'none' }
@@ -51,6 +53,8 @@ type Modal =
   | { kind: 'palette' }
   /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
   | { kind: 'move'; sessionId: string; preset?: MovePreset }
+  /** Open PR with instructions for AgentK. */
+  | { kind: 'open-pr'; sessionId: string }
   | { kind: 'rename'; sessionId: string };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
@@ -374,6 +378,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   useEffect(() => {
     if (state && modalKind === 'move' && !moveSession) setModal({ kind: 'none' });
   }, [state, modalKind, moveSession]);
+  // Gone once the session leaves Code (the PR went, or it moved) or is archived.
+  const openPrSession =
+    modal.kind === 'open-pr' ? projects.flatMap((p) => p.sessions).find((s) => s.id === modal.sessionId && s.desired === 'running' && s.stage === 'code') : undefined;
+  useEffect(() => {
+    if (state && modalKind === 'open-pr' && !openPrSession) setModal({ kind: 'none' });
+  }, [state, modalKind, openPrSession]);
   const renameSession =
     modal.kind === 'rename' ? projects.flatMap((p) => p.sessions).find((s) => s.id === modal.sessionId && s.desired === 'running') : undefined;
   useEffect(() => {
@@ -456,6 +466,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
+        ) : currentProject && route.view === 'meko' ? (
+          <MekoCallsView
+            key={currentProject.id}
+            project={currentProject}
+            sessionId={route.sessionId}
+            onMenu={openDrawer}
+            onError={showToast}
+          />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}
@@ -464,7 +482,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
             mekoConfigured={state.meko.configured}
-            sharing={state.meko.sharing}
+            ghLogin={state.ghLogin ?? null}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
             onError={showToast}
@@ -478,6 +496,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             meko={state.meko}
             onNewSession={() => setModal({ kind: 'new-session', projectId: currentProject.id })}
             onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}
+            onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onMenu={openDrawer}
             onError={showToast}
@@ -516,6 +535,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {newSessionProject && (
         <NewSessionDialog
           project={newSessionProject}
+          ghLogin={state.ghLogin ?? null}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
           initial={modal.kind === 'new-session' ? modal.retry?.request : undefined}
           onClose={() => setModal({ kind: 'none' })}
@@ -548,6 +568,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onClose={() => setModal({ kind: 'none' })}
         />
       )}
+      {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
         <SettingsDialog auth={auth} update={state.update} meko={state.meko} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
@@ -561,8 +582,15 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onNewProject={() => setModal({ kind: 'new-project' })}
           onNewSession={(projectId) => setModal({ kind: 'new-session', projectId })}
           onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
+          onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSettings={() => setModal({ kind: 'settings' })}
+          onStarted={({ project, session }) => {
+            // As after Open project and New session: both shown until a state push brings them.
+            setOpened(project);
+            setCreated({ session, seen: stateRef.current, misses: 0 });
+            navigate({ view: 'project', projectId: session.projectId, sessionId: session.id });
+          }}
         />
       )}
       {toast && (

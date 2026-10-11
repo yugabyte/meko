@@ -80,20 +80,30 @@ describe('moves: moving a task session between stages', () => {
     return () => spy.mock.calls.map((c) => String(c[1]));
   };
 
-  it('moves on from Explore to Code, saving the task and sending the Code prompt', async () => {
-    const s = await session({ start: 'explore' });
-    await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Give AgentK the task for this session.' });
+  it('moves on from Explore to Code, carrying on from the conversation, or with the task given to a session without one', async () => {
+    const s = await session({ start: 'explore', prompt: 'look around' });
     const sent = typed();
-    const moved = await move(s.id, { stage: 'code', task: 'Add retries' });
+    const moved = await move(s.id, { stage: 'code' });
     expect(moved).toMatchObject({ kind: 'plan', stage: 'code', hasTask: true, skippedStages: ['design'] });
-    expect(row(s.id).initial_prompt).toBe('Add retries');
     expect(stages(s.id)).toEqual([{ stage: 'explore', moved_by: 'you' }, { stage: 'code', moved_by: 'you' }]);
     expect(events(s.id, 'kind')).toEqual([]);
     const text = sent()[0];
     expect(text).toMatch(/^AgentK Local moved this session to the Code stage\. Stages: Explore → Design → Code → PR & Review → Merge & Close/);
     expect(text).not.toContain("It's in Explore now");
-    expect(text).toContain('Task: Add retries');
+    // Not the first prompt again: the conversation may have moved on from it.
+    expect(text).toContain('Implement what this session has worked out so far');
+    expect(text).not.toContain('Task:');
     expect(text).toContain("Don't open a pull request yet.");
+
+    // A session without a task: one given with the move becomes its task, in the Code stage's start prompt.
+    const t = await session({ start: 'explore', name: 'Retries' });
+    await move(t.id, { stage: 'code', task: 'Add retries' });
+    expect(row(t.id).initial_prompt).toBe('Add retries');
+    expect(sent().at(-1)).toContain('Task: Retries\n\nAdd retries');
+    // Without one, it moves all the same.
+    const u = await session({ start: 'explore', name: 'Nothing yet' });
+    expect(await move(u.id, { stage: 'code' })).toMatchObject({ stage: 'code', hasTask: false });
+    expect(sent().at(-1)).toContain('Implement what this session has worked out so far');
   });
 
   it('opens a PR from Explore in one move, then picks the PR up with one PR & Review line', async () => {
@@ -212,7 +222,9 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'design' });
     expect(row(s.id)).toMatchObject({ stage: 'design', plan_mode: 0 });
     expect(sent()[0]).toMatch(/^AgentK Local moved this session to the Design stage\./);
-    expect(sent()[0]).toContain('You are in the Design stage of an AgentK Local task.');
+    expect(sent()[0]).toContain('Design what this session is working toward now');
+    expect(sent()[0]).toContain("Also give the user the design's open questions");
+    expect(sent()[0]).not.toContain('Task: DESIGN_MD it');
     const wt = row(s.id).worktree_path;
     const decision = env.core.sessions.guard(row(s.id).hook_token, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(wt, 'x.ts') }, cwd: wt });
     expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
@@ -229,7 +241,8 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'code' });
     expect(row(s.id).stage).toBe('code');
     expect(events(s.id, 'design')).toContain('Design approval skipped');
-    expect(sent()[0]).toContain('Implement this on the current branch');
+    expect(sent()[0]).toContain('Implement what this session has worked out so far');
+    expect(sent()[0]).not.toContain('Task: DESIGN_MD it');
     expect(sent()[0]).not.toContain('The design is approved');
 
     const t = await session({ prompt: 'DESIGN_MD it', name: 'Too small to design' });
@@ -251,6 +264,72 @@ describe('moves: moving a task session between stages', () => {
     expect(events(s.id, 'kind')).toEqual([]);
   });
 
+  it("sends the user's instructions after the stage prompt, or with the moved line when there's none", async () => {
+    const s = await session({ start: 'explore', prompt: 'look around' });
+    const sent = typed();
+    await move(s.id, { stage: 'design', instructions: ' Design only the server side. ' });
+    const text = sent()[0];
+    expect(text).toMatch(/^AgentK Local moved this session to the Design stage\./);
+    expect(text.indexOf('Design what this session is working toward now')).toBeLessThan(text.indexOf('The user added these instructions'));
+    expect(text).not.toContain('Task: Fix the thing');
+    expect(text.endsWith('\n\nDesign only the server side.')).toBe(true);
+
+    // Back from Code to Explore sends no stage prompt: only the moved line and the instructions.
+    const t = await session({ start: 'code', prompt: 'do it', name: 'Look first' });
+    await move(t.id, { stage: 'explore', instructions: 'Find out why the retries pile up.' });
+    const back = sent().at(-1)!;
+    expect(back).toMatch(/^AgentK Local moved this session to the Explore stage\./);
+    expect(back).not.toContain('You are in the Explore stage');
+    expect(back.endsWith('\n\nFind out why the retries pile up.')).toBe(true);
+    expect(row(t.id).stage).toBe('explore');
+  });
+
+  it('refuses instructions Claude can’t take, before moving', async () => {
+    const s = await session({ start: 'code', prompt: 'do it' });
+    await expect(move(s.id, { stage: 'explore', instructions: 5 } as unknown as MoveSessionRequest)).rejects.toMatchObject({ status: 400, message: 'Instructions must be text.' });
+    env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
+    await expect(move(s.id, { stage: 'explore', instructions: 'Look around.' })).rejects.toMatchObject({ status: 409, message: 'AgentK is waiting on you in the terminal. Answer it first.' });
+    await expect(move(s.id, { stage: 'review', instructions: 'Look around.' })).rejects.toMatchObject({ status: 409 });
+    expect(row(s.id).stage).toBe('code');
+    // Blank instructions are none: the move goes, typing nothing.
+    const sent = typed();
+    await move(s.id, { stage: 'explore', instructions: '  ' });
+    expect(row(s.id).stage).toBe('explore');
+    expect(sent()).toEqual([]);
+  });
+
+  it('sends instructions with the PR prompt, or before picking up an open PR', async () => {
+    const s = await session({ start: 'explore', prompt: 'look around' });
+    const sent = typed();
+    await move(s.id, { stage: 'review', instructions: 'Open it as a draft.' });
+    expect(sent()[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
+    expect(sent()[0].indexOf('Open a pull request')).toBeLessThan(sent()[0].indexOf('The user added these instructions'));
+    expect(sent()[0].endsWith('\n\nOpen it as a draft.')).toBe(true);
+
+    const t = await session({ start: 'code', prompt: 'do it', name: 'Already opened' });
+    gh.pr = PR;
+    gh.status = status();
+    const before = sent().length;
+    await move(t.id, { stage: 'review', instructions: 'Address the open threads first.' });
+    expect(get(t.id)).toMatchObject({ stage: 'review', prNumber: 7 });
+    expect(events(t.id, 'pr')).toEqual(['Picked up PR #7']);
+    const picked = sent().slice(before);
+    expect(picked).toHaveLength(1);
+    expect(picked[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
+    expect(picked[0]).not.toContain('Open a pull request');
+    expect(picked[0].endsWith('\n\nAddress the open threads first.')).toBe(true);
+    await idle(t.id, 'instructions turn');
+
+    // The PR is picked up first: if the instructions can't be typed, the session stays in PR & Review.
+    await move(t.id, { stage: 'code' });
+    vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
+    await expect(move(t.id, { stage: 'review', instructions: 'Address the open threads first.' })).rejects.toMatchObject({
+      status: 502,
+      message: /^Moved to PR & Review, but couldn't send your instructions to Claude: no pane\./,
+    });
+    expect(get(t.id)).toMatchObject({ stage: 'review', prNumber: 7, busy: false });
+  });
+
   it('gets a PR stage out of waiting when the turn ended without a PR', async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
     await env.core.sessions.action(s.id, 'open-pr');
@@ -260,7 +339,7 @@ describe('moves: moving a task session between stages', () => {
     expect(row(s.id).stage).toBe('code');
   });
 
-  it('refuses moves that make no sense, and while AgentK or the session is busy', async () => {
+  it('refuses moves that make no sense, and while AgentK or the session is busy or archived', async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
     await expect(move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 400, message: 'Nothing to change: this session is already in Code.' });
     await expect(move(s.id, { stage: 'merge' } as unknown as MoveSessionRequest)).rejects.toMatchObject({ status: 400 });
@@ -282,6 +361,8 @@ describe('moves: moving a task session between stages', () => {
     const legacy = await session({ prompt: 'plan it', name: 'Old style' });
     env.core.sessions.update(legacy.id, { plan_mode: 1 });
     await expect(move(legacy.id, { stage: 'code' })).rejects.toMatchObject({ status: 409, message: /plan mode/ });
+    await env.core.sessions.action(legacy.id, 'archive');
+    await expect(move(legacy.id, { stage: 'code', task: 'x' })).rejects.toMatchObject({ status: 409, message: 'This session is archived.' });
   });
 
   it("keeps a move whose prompt couldn't be typed, but rolls back a PR prompt that couldn't", async () => {
@@ -294,11 +375,5 @@ describe('moves: moving a task session between stages', () => {
     vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(move(t.id, { stage: 'review' })).rejects.toMatchObject({ status: 502 });
     expect(get(t.id)).toMatchObject({ stage: 'explore', busy: false });
-  });
-
-  it('refuses to move an archived session', async () => {
-    const s = await session({ start: 'explore' });
-    await env.core.sessions.action(s.id, 'archive');
-    await expect(move(s.id, { stage: 'code', task: 'x' })).rejects.toMatchObject({ status: 409, message: 'This session is archived.' });
   });
 });

@@ -17,16 +17,7 @@ describe('projects', () => {
   const create = (name: string, repoPath = env.repo) =>
     env.core.projects.create({ repoPath, name, datapack: { mode: 'existing', id: `dp-${name}`, name } });
 
-  it('keeps project names unique per repo when renaming', async () => {
-    const a = await create('Alpha');
-    const b = await create('Beta');
-    expect(() => env.core.projects.update(b.id, { name: ' alpha ' })).toThrow(/already has a project named "Alpha"/);
-    expect(env.core.projects.get(b.id).name).toBe('Beta');
-    // Renaming a project to its own name (in any case) is fine.
-    expect(env.core.projects.update(a.id, { name: 'ALPHA' }).name).toBe('ALPHA');
-  });
-
-  it('puts several projects on one repo folder, stored by its real path however each reaches it', async () => {
+  it('puts several projects on one repo folder, stored by its real path however each reaches it, with names unique on it', async () => {
     const link = join(env.home, 'elsewhere');
     symlinkSync(env.repo, link);
     // The first one through the symlink is still named after the repo's own folder.
@@ -35,9 +26,11 @@ describe('projects', () => {
     const b = await create('Beta');
     expect(b).toMatchObject({ id: 'demo-repo-beta', repoPath: env.repo });
     await expect(create('ALPHA', link)).rejects.toThrow(/already has a project named "Alpha"/);
-    expect(() => env.core.projects.update(a.id, { name: 'beta' })).toThrow(/already has a project named "Beta"/);
+    expect(() => env.core.projects.update(a.id, { name: ' beta ' })).toThrow(/already has a project named "Beta"/);
     const listed = (await env.core.projects.repos()).repos.find((r) => r.path === env.repo);
     expect(listed?.projects.map((p) => p.name).sort()).toEqual(['Alpha', 'Beta']);
+    // Renaming a project to its own name (in any case) is fine.
+    expect(env.core.projects.update(a.id, { name: 'ALPHA' }).name).toBe('ALPHA');
   });
 
   it('holds a name while its project is being created, so a second create or a rename to it is refused', async () => {

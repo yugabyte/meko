@@ -1,16 +1,16 @@
 import { useState } from 'react';
 import { STAGE_LABELS, type MoveTarget, type Session } from '../../shared/types';
-import { defaultTarget, moveBlockedIn, moveEffect, moveError, moveTargets, offersPrompt, promptByDefault, stepOf } from '../../shared/stages';
+import { defaultTarget, moveBlockedIn, moveEffect, moveError, moveTargets, promptByDefault, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
-import { cx } from '../util';
-import { Busy, Dialog, ErrorText, Field } from './common';
+import { cx, instructionsBlocker, promptBlocker } from '../util';
+import { Busy, Dialog, ErrorText, Field, InstructionsField } from './common';
 
-/** What the new stage's prompt asks AgentK to do, for the checkbox that sends it. */
-const PROMPT_TEXT: Record<Exclude<MoveTarget, 'review'>, string> = {
-  explore: 'Send AgentK the Explore instructions (investigate the task; no design, PR or merge)',
-  design: "Send AgentK the Design instructions (design the change for your approval, without touching the repo)",
-  code: "Send AgentK the Code instructions (implement the task and run the checks; don't open a PR yet)",
-};
+/** What the instructions box says it does, by whether the move sends the new stage's prompt. */
+function instructionsHint(stage: MoveTarget, sendsPrompt: boolean): string {
+  if (stage === 'review') return 'Sent after the PR prompt, or on their own if AgentK picks up the branch’s open PR.';
+  if (sendsPrompt) return `AgentK gets the ${STAGE_LABELS[stage]} instructions; anything you write here goes after them.`;
+  return 'Tell AgentK what to do now. Left empty, AgentK isn’t sent anything.';
+}
 
 /** Where the dialog starts: a stage clicked in the stage bar. */
 export interface MovePreset {
@@ -20,26 +20,22 @@ export interface MovePreset {
 /** Moves a session to another stage. The rules are in src/shared/stages.ts, shared with the server. */
 export function MoveSessionDialog({ session, preset, onClose }: { session: Session; preset?: MovePreset; onClose: () => void }) {
   const [stage, setStage] = useState<MoveTarget>(preset?.stage ?? defaultTarget(session.stage));
-  // null: the move's default, which changes with the stage picked.
-  const [prompt, setPrompt] = useState<boolean | null>(null);
-  const [task, setTask] = useState(session.name);
+  const [task, setTask] = useState('');
+  const [instructions, setInstructions] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const pickStage = (t: MoveTarget) => {
-    setStage(t);
-    setPrompt(null);
-  };
-
-  const offers = offersPrompt(session.stage, stage);
-  const send = offers && (prompt ?? promptByDefault(session.stage, stage));
-  const needsTask = send && !session.hasTask;
+  // The new stage's prompt goes when the move's default says so; instructions go whenever they're given.
+  const send = promptByDefault(session.stage, stage);
+  const asksTask = send && !session.hasTask;
+  const types = send || !!instructions.trim();
   const midTurn = session.status === 'working' || session.status === 'starting' || session.busy;
   const blocker =
     moveBlockedIn(session.stage) ??
     moveError(session, stage) ??
     (midTurn ? 'Wait for AgentK to finish its turn.' : null) ??
-    (needsTask && !task.trim() ? 'Give AgentK the task.' : null);
+    (types ? promptBlocker(session) : null) ??
+    instructionsBlocker(instructions);
 
   const move = async () => {
     if (blocker || busy) return;
@@ -48,8 +44,8 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
     try {
       await api.moveSession(session.id, {
         stage,
-        ...(offers ? { prompt: send } : {}),
-        ...(needsTask ? { task: task.trim() } : {}),
+        ...(asksTask && task.trim() ? { task: task.trim() } : {}),
+        ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
       });
       onClose();
     } catch (e) {
@@ -93,7 +89,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
                 type="button"
                 className={cx(t === stage && 'on')}
                 aria-pressed={t === stage}
-                onClick={() => pickStage(t)}
+                onClick={() => setStage(t)}
               >
                 {STAGE_LABELS[t]}
                 {t === stepOf(session.stage) ? ' (now)' : ''}
@@ -101,18 +97,19 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
             ))}
           </div>
         </div>
-        {needsTask && (
-          <Field label="Task" hint="This session has no task yet. AgentK works on this from now on.">
+        {asksTask && (
+          <Field label="Task (optional)" hint="This session has no task yet. AgentK works on this from now on; left empty, it carries on from the conversation.">
             <textarea id="mv-task" className="input" rows={3} value={task} onChange={(e) => setTask(e.target.value)} />
           </Field>
         )}
-        {offers && stage !== 'review' && (
-          <label className="check">
-            <input id="mv-prompt" type="checkbox" checked={send} onChange={(e) => setPrompt(e.target.checked)} />
-            <span>{PROMPT_TEXT[stage]}</span>
-          </label>
-        )}
-        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage)}</p>
+        <InstructionsField
+          id="mv-instructions"
+          value={instructions}
+          onChange={setInstructions}
+          hint={instructionsHint(stage, send)}
+          placeholder={stage === 'review' ? 'e.g. Open it as a draft.' : 'e.g. Keep the public API as it is.'}
+        />
+        <p className="move-effect">{moveBlockedIn(session.stage) ?? moveError(session, stage) ?? moveEffect(session, stage, asksTask && !!task.trim())}</p>
         <ErrorText error={error} />
       </form>
     </Dialog>

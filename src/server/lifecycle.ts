@@ -4,16 +4,20 @@ import { mekoHost } from './config.js';
 import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { designAnswers, type CheckedAnswers } from './answers.js';
-import { artifactUrlIn, checkToolQuestions, isArtifactPublish, mekoDesignName, readArtifactHtml, readDesignFile } from './design.js';
+import {
+  artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
+  withDesignLine, type PrDesignRef,
+} from './design.js';
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
-import { launchedAgentId } from './meko.js';
+import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
-import { mekoPrFooter } from './prompts.js';
+import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
+import { mekoDatapackLineId, mekoPrFooter, movePrompt } from './prompts.js';
 import { HttpError } from './projects.js';
-import { KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
+import { INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type MoveSessionRequest, type QueuedGate, type ReviewerMode, type Stage } from '../shared/types.js';
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type MergeInfo, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
@@ -43,6 +47,17 @@ const MAX_CONFLICT_FIXES = 3;
 const CI_START_MS = 2 * 60 * 1000;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
+/** How long a PR poll waits before trying again to update a design line it couldn't. */
+const DESIGN_LINE_RETRY_MS = 10 * 60 * 1000;
+/** How long a Review a PR poll waits before trying again to fetch a PR design it couldn't. */
+const PR_DESIGN_RETRY_MS = 10 * 60 * 1000;
+/** The stages after a design's approval, where a change to it is saved as a new version and named in the PR. */
+const LATER_DESIGN_STAGES: readonly Stage[] = ['code', 'pr', 'review', 'merge'];
+
+/** True when a PR's design line names `ref`. */
+function sameRef(a: PrDesignRef | null, ref: PrDesignRef): boolean {
+  return !!a && a.name === ref.name && a.sha256 === ref.sha256;
+}
 
 /** What mergeInfo learns from looking at the branch and the worktree (see there). */
 interface MergeChecks {
@@ -67,8 +82,8 @@ export const DESIGN_READY = 'Design ready for your approval';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'conflicts', 'ci'] as const;
-/** The one prompt queued in a Review a PR session: the summary after Update to latest. */
-const REVIEWING_ORDER = ['review-pr-update'] as const;
+/** The prompts queued in a Review a PR session: the summary after Update to latest, or the PR's new design alone. */
+const REVIEWING_ORDER = ['review-pr-update', 'review-pr-design'] as const;
 type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
 
 /** The prompts that may go out in a stage, in order: none outside Review and Reviewing PR. */
@@ -91,6 +106,28 @@ const REVIEW_REQUEST = /^\/agentk review\b/;
 /** The reviews' authors, each once, as `a, b`. */
 function loginList(reviews: github.PrReview[]): string {
   return [...new Set(reviews.map((r) => r.author?.login))].join(', ');
+}
+
+/** The user's instructions in a move or Open PR request: trimmed, '' when there are none. */
+export function checkInstructions(v: unknown): string {
+  if (v === undefined || v === null) return '';
+  if (typeof v !== 'string') throw new HttpError(400, 'Instructions must be text.');
+  const text = v.trim();
+  if (text.length > INSTRUCTIONS_MAX) {
+    throw new HttpError(400, `Instructions can be at most ${INSTRUCTIONS_MAX.toLocaleString('en-US')} characters; these have ${text.length.toLocaleString('en-US')}.`);
+  }
+  return text;
+}
+
+/**
+ * The instructions in an open-pr action's body (OpenPrRequest): '' for blank ones, null when the
+ * request gives none (the plain gate's press), which leaves a queued Open PR's alone.
+ */
+export function openPrInstructions(body: unknown): string | null {
+  if (body === undefined || body === null) return null;
+  if (typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'The Open PR request must be {instructions}.');
+  const v = (body as Record<string, unknown>).instructions;
+  return v === undefined || v === null ? null : checkInstructions(v);
 }
 
 /**
@@ -135,12 +172,14 @@ export class Lifecycle {
   private chains = new Map<string, Promise<void>>();
   /** Per session, the tail of its design sends to Meko. */
   private designSends = new Map<string, Promise<void>>();
+  /** Per task, when updating its PR's design line last failed. */
+  private designLineFailedAt = new Map<string, number>();
+  /** Per review, the PR design it last failed to fetch (its hash) and when. */
+  private prDesignFailed = new Map<string, { sha256: string; at: number; missing: boolean }>();
   /** Per session, the failing head whose checks are still running, and when its failure was first seen. */
   private ciFailSince = new Map<string, { head: string; at: number }>();
   /** Per session, the PR head at the last look and when it was first seen there (CI_START_MS). */
   private headSeen = new Map<string, { head: string; at: number }>();
-  /** The GitHub login gh is signed in as, once known (whose reviews a Review a PR session logs). */
-  private ghLogin: string | null = null;
 
   constructor(private core: Core) {}
 
@@ -203,38 +242,120 @@ export class Lifecycle {
   private async sendDesignNow(id: string): Promise<void> {
     const row = sessionRow(this.db, id);
     const dp = row && sessionDatapack(this.db, row);
-    // No datapack, or Meko is off: the design stays here until it can be sent.
-    if (!row || !dp || !this.core.mekoStatus.configured) return;
+    // No datapack, or Meko is off: the design stays here until it can be sent. A review's design
+    // is its PR's, already in Meko.
+    if (!row || !dp || !this.core.mekoStatus.configured || row.kind === 'review-pr') return;
     const d = get<{ markdown: string; html: string | null; md_version: number; md_sent: number; html_version: number; html_sent: number }>(
       this.db, 'SELECT markdown, html, md_version, md_sent, html_version, html_sent FROM designs WHERE session_id = ?', id);
     if (!d) return;
     const parts: { name: string; text: string; type: string; sent: string; version: number }[] = [];
     if (!d.md_sent && d.markdown) {
       parts.push({ name: mekoDesignName(row.slug, 'md', d.md_version + 1), text: d.markdown, type: 'text/markdown',
-        sent: 'UPDATE designs SET md_version = ?, md_sent = (markdown = ?) WHERE session_id = ?', version: d.md_version + 1 });
+        sent: 'UPDATE designs SET md_version = ?, md_hash = ?, md_sent = (markdown = ?) WHERE session_id = ?', version: d.md_version + 1 });
     }
     if (!d.html_sent && d.html !== null) {
       parts.push({ name: mekoDesignName(row.slug, 'html', d.html_version + 1), text: d.html, type: 'text/html',
-        sent: 'UPDATE designs SET html_version = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
+        sent: 'UPDATE designs SET html_version = ?, html_hash = ?, html_sent = (html IS ?) WHERE session_id = ?', version: d.html_version + 1 });
     }
     if (!parts.length) return;
     const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv);
-      // The version is used; it's the current design only if nothing changed while it was sent.
-      run(this.db, p.sent, p.version, p.text, id);
+      const hash = await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
+      // The version is used, and is the one the PR names; it's the current design only if nothing
+      // changed while it was sent.
+      run(this.db, p.sent, p.version, hash, p.text, id);
     }));
+    await this.syncPrDesign(id);
   }
 
-  /** After an Artifact tool call during Design: keeps the published page and its link as the design. */
-  async captureArtifact(id: string, p: HookPayload): Promise<void> {
+  /**
+   * The design a task's PR names (see designLine): its first version's Meko name and the hash of
+   * the latest version sent, the Artifact's page for an Artifact design. Null without a design, or
+   * before a version reached Meko. A version sent before hashes were kept is named by the hash of
+   * the design as it is, when that's the one sent.
+   */
+  prDesignRef(row: SessionRow): PrDesignRef | null {
+    if (row.kind === 'review-pr') return null;
+    const d = get<{ markdown: string; html: string | null; md_version: number; md_sent: number; md_hash: string | null; html_version: number; html_sent: number; html_hash: string | null }>(
+      this.db, 'SELECT markdown, html, md_version, md_sent, md_hash, html_version, html_sent, html_hash FROM designs WHERE session_id = ?', row.id);
+    if (!d) return null;
+    const [ext, text, version, sent, hash] = d.html !== null
+      ? ['html', d.html, d.html_version, d.html_sent, d.html_hash] as const
+      : ['md', d.markdown, d.md_version, d.md_sent, d.md_hash] as const;
+    const sha256 = hash ?? (version > 0 && sent && text ? sha256Hex(text) : null);
+    return sha256 ? { name: mekoDesignName(row.slug, ext, 1), sha256 } : null;
+  }
+
+  /**
+   * Points the task's PR at the latest version of its design: rewrites the `meko_design:` line of
+   * the PR's description (adding it after the Meko datapack line when it's missing) and nothing
+   * else. `body` is the description as just polled, read from GitHub when not given. A failure is
+   * logged and tried again at a poll after DESIGN_LINE_RETRY_MS. Never throws.
+   */
+  private async syncPrDesign(id: string, body?: string): Promise<void> {
+    const row = sessionRow(this.db, id);
+    if (!row?.pr_number || row.kind === 'review-pr' || !LATER_DESIGN_STAGES.includes(row.stage)) return;
+    const ref = this.prDesignRef(row);
+    if (!ref) return;
+    if (body !== undefined && sameRef(parseDesignLine(body), ref)) return;
+    if (Date.now() - (this.designLineFailedAt.get(id) ?? 0) < DESIGN_LINE_RETRY_MS && body !== undefined) return;
+    const repo = prRepoOf(row.pr_url);
+    const cwd = this.ghCwd(row);
+    try {
+      const cur = await github.prBody(cwd, row.pr_number, repo);
+      if (sameRef(parseDesignLine(cur), ref)) return;
+      await github.setPrBody(cwd, row.pr_number, withDesignLine(cur, designLine(ref), (l) => mekoDatapackLineId(l) !== null), repo);
+      this.designLineFailedAt.delete(id);
+      this.sessions.event(id, 'design', `Pointed PR #${row.pr_number} at the latest version of the design in Meko`);
+    } catch (e) {
+      this.designLineFailedAt.set(id, Date.now());
+      this.warn(id, `Updating the design's line in PR #${row.pr_number}`, e);
+    }
+  }
+
+  /**
+   * After an Artifact tool call: keeps the published page and its link as the design. During
+   * Design any publish counts; later (`sameOnly`), only a republish of the design's own Artifact,
+   * so a page Claude publishes while coding isn't taken for the design.
+   */
+  async captureArtifact(id: string, p: HookPayload, sameOnly = false): Promise<void> {
     const input = p.tool_input ?? {};
     if (!isArtifactPublish(input)) return;
     const url = artifactUrlIn(JSON.stringify(p.tool_response ?? ''));
+    if (sameOnly) {
+      const d = get<{ artifact_url: string | null }>(this.db, 'SELECT artifact_url FROM designs WHERE session_id = ?', id);
+      if (!url || !d?.artifact_url || d.artifact_url !== url) return;
+    }
     const html = readArtifactHtml(input.file_path, p.cwd);
     if (!url && html === null) return;
+    if (sameOnly) {
+      const prev = get<{ html: string | null }>(this.db, 'SELECT html FROM designs WHERE session_id = ?', id);
+      if (html === null || prev?.html === html) return;
+      await this.saveDesign(id, { html });
+      this.sessions.event(id, 'design', 'Design updated');
+      return;
+    }
     await this.saveDesign(id, { ...(url ? { artifactUrl: url } : {}), ...(html !== null ? { html } : {}) });
     this.designChanged.add(id);
+  }
+
+  /**
+   * At the end of a turn after the design was approved (Code, PR & Review, Merge & Close): picks up
+   * a change to the markdown design file, which saves a new version to Meko and points the PR at
+   * it. Nothing waits for the user: it's only noted in the activity log.
+   */
+  async collectLaterDesign(row: SessionRow): Promise<void> {
+    if (row.kind === 'review-pr' || row.plan_mode || !LATER_DESIGN_STAGES.includes(row.stage)) return;
+    const prev = get<{ markdown: string; html: string | null }>(this.db, 'SELECT markdown, html FROM designs WHERE session_id = ?', row.id);
+    if (!prev) return;
+    // An Artifact design is kept by its republishes (captureArtifact); the file is a markdown design's.
+    const md = prev.html === null ? readDesignFile(this.sessions.designFile(row)) : null;
+    if (md !== null && md !== prev.markdown) {
+      await this.saveDesign(row.id, { markdown: md });
+      this.sessions.event(row.id, 'design', 'Design updated');
+      return;
+    }
+    void this.sendDesign(row.id); // anything an earlier send couldn't deliver
   }
 
   /**
@@ -506,17 +627,28 @@ export class Lifecycle {
 
   /**
    * Sends the PR prompt, or, while AgentK is mid-turn (or Claude is starting), queues it for the
-   * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go.
+   * turn's end (takeQueuedPr). A queued Open PR is cleared once the prompt is about to go. Pressed
+   * again with instructions (blank ones included) while one is queued, they replace its own.
    */
-  async openPr(row: SessionRow): Promise<void> {
+  async openPr(row: SessionRow, body?: unknown): Promise<void> {
+    const given = openPrInstructions(body);
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
-      if (row.queued_gate !== 'open-pr') this.queueGate(row.id, 'open-pr', 'Open PR queued: it goes when AgentK finishes its turn');
+      if (row.queued_gate !== 'open-pr') {
+        const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
+        this.queueGate(row.id, 'open-pr', text, given ?? '');
+      } else if (given !== null && given !== (row.queued_instructions ?? '')) {
+        this.sessions.update(row.id, { queued_instructions: given || null });
+        this.sessions.event(row.id, 'queued', given ? 'Your instructions for the queued Open PR changed' : 'Your instructions for the queued Open PR were removed');
+      }
       return;
     }
+    // Pressed between a turn's end and the queued Open PR going: it goes now, with the queued
+    // instructions unless this press gives its own. Read before the check, which clears them.
+    const instructions = given ?? (row.queued_gate === 'open-pr' ? row.queued_instructions ?? '' : '');
     const check = this.prCheck(row.id, false);
     check(row);
-    await this.sendPr(row, check);
+    await this.sendPr(row, check, { instructions });
   }
 
   /**
@@ -549,6 +681,8 @@ export class Lifecycle {
         return;
       }
       if ((row.status !== 'idle' && row.status !== 'recovered') || this.sessions.runtime(id).busy || this.sessions.promptsHeld(id) > 0) return;
+      // Cleared with the gate before the prompt is typed: if it can't be, the activity log keeps them.
+      const instructions = row.queued_instructions;
       try {
         await this.sendPr(row, this.prCheck(id, true));
         this.sessions.event(id, 'queued', 'Queued Open PR sent');
@@ -559,28 +693,33 @@ export class Lifecycle {
         // Still queued: Claude took another prompt meanwhile, and the PR goes after that turn.
         if (cur?.queued_gate === 'open-pr') return;
         this.warn(id, 'Sending the queued Open PR', e);
-        this.sessions.event(id, 'queued', `Queued Open PR not sent: ${errMsg(e)}`);
-        this.sessions.notifyUser(id, 'Open PR not sent', `The queued PR prompt couldn't be sent (${errMsg(e)}). Press Open PR again.`);
+        this.sessions.event(id, 'queued', `Queued Open PR not sent: ${errMsg(e)}${instructions ? `\nYour instructions with it:\n${instructions}` : ''}`);
+        this.sessions.notifyUser(id, 'Open PR not sent', `The queued PR prompt couldn't be sent (${errMsg(e)}). Press Open PR again${instructions ? '; your instructions are in the activity log' : ''}.`);
       }
     });
   }
 
   /**
-   * Types the PR prompt (with a moved session's `moved` line first, `lead`): the session goes to the
-   * PR stage, and back to where it was if the prompt can't be typed. `check` runs again after
-   * waiting on GitHub and Meko, which gave Claude and the user time to move on.
+   * Types the PR prompt (with a moved session's `moved` line first, `lead`, and the user's
+   * `instructions` last): the session goes to the PR stage, and back to where it was if the prompt
+   * can't be typed. `check` runs again after waiting on GitHub and Meko, which gave Claude and the
+   * user time to move on. Without `instructions` (a queued Open PR, from takeQueuedPr), those kept
+   * with the queued gate go.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, lead?: string): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string } = {}): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
     const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
     const cur = this.sessions.row(row.id);
+    // Read before the check, which clears a queued Open PR with its instructions; the latest, if a
+    // press replaced them while this waited.
+    const instructions = opts.instructions ?? (cur.queued_gate === 'open-pr' ? cur.queued_instructions ?? '' : '');
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', 'you');
     this.sessions.setBusy(row.id, true);
     try {
-      await this.sessions.submit(row.id, [lead, this.sessions.prompt(cur, 'pr'), footer].filter(Boolean).join('\n\n'));
+      await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
@@ -613,10 +752,16 @@ export class Lifecycle {
     if (!MOVE_TARGETS.includes(stage)) throw new HttpError(400, `Pick a stage to move to: ${MOVE_TARGETS.join(', ')}.`);
     if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
-    await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim()));
+    const instructions = checkInstructions(req?.instructions);
+    await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim(), instructions));
   }
 
-  private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string): Promise<void> {
+  /**
+   * `task`: the session's first task, for one that has none ('' leaves it without). `instructions`:
+   * the user's, sent after the stage's prompt, or after the `moved` line alone when the move sends
+   * no stage prompt; '' for none.
+   */
+  private async doMove(id: string, stage: MoveSessionRequest['stage'], prompt: boolean | undefined, task: string, instructions: string): Promise<void> {
     const cur = this.sessions.row(id);
     if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     const blocked = moveBlockedIn(cur.stage);
@@ -630,17 +775,18 @@ export class Lifecycle {
     this.checkBetweenTurns(cur);
     // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes.
     const dropQueued = () => this.dropQueued(id, `the session moved to ${STAGE_LABELS[stage]}`);
-    if (stage === 'review' && movesStep(cur.stage, stage)) {
+    if (instructions) this.checkPromptable(cur);
+    // A move within PR & Review was refused above (moveError).
+    if (stage === 'review') {
       dropQueued();
-      return this.moveToReview(this.sessions.row(id));
+      return this.moveToReview(this.sessions.row(id), instructions);
     }
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
-    if (send) {
-      this.checkPromptable(cur);
-      if (!cur.initial_prompt && !task) throw new HttpError(400, 'Give AgentK the task for this session.');
-    }
-    if (task && !cur.initial_prompt) this.sessions.update(id, { initial_prompt: task });
+    if (send) this.checkPromptable(cur);
+    // A task given with the move is the session's first (the dialog offers it only to one without).
+    const newTask = !!task && !cur.initial_prompt;
+    if (newTask) this.sessions.update(id, { initial_prompt: task });
     // Designs are written as markdown or an Artifact now; plan mode is only for older sessions.
     if (stage === 'design') this.sessions.update(id, { plan_mode: 0 });
     if (movesStep(cur.stage, stage)) {
@@ -651,21 +797,25 @@ export class Lifecycle {
       // Back in Design, what an approval left to AgentK is open again.
       if (stage === 'design') this.questionsUpdate(id, 'Reopening', (row) => this.core.questions.reopen(row));
     }
-    if (!send) return;
+    if (!send && !instructions) return;
     const row = this.sessions.row(id);
-    const body = this.sessions.prompt(row, this.sessions.firstPrompt(row));
+    // The stage's start prompt names the task; that's right only for one just given. Otherwise AgentK
+    // carries on from the conversation, which may have moved on from the first prompt.
+    const body = send ? this.sessions.prompt(row, newTask ? this.sessions.firstPrompt(row) : movePrompt(stage)) : '';
     try {
-      await this.sessions.submit(id, `${this.movedLine(row)}\n\n${body}`);
+      await this.sessions.submit(id, [this.movedLine(row), body, this.instructionsPrompt(row, instructions)].filter(Boolean).join('\n\n'));
     } catch (e) {
-      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send the ${STAGE_LABELS[stage]} prompt to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      const what = send ? `the ${STAGE_LABELS[stage]} prompt` : 'your instructions';
+      throw new HttpError(502, `Moved to ${STAGE_LABELS[stage]}, but couldn't send ${what} to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
     }
   }
 
   /**
    * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
-   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does.
+   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does. The
+   * user's `instructions` go after the PR prompt, or with the `moved` line once a PR is picked up.
    */
-  private async moveToReview(row: SessionRow): Promise<void> {
+  private async moveToReview(row: SessionRow, instructions: string): Promise<void> {
     const cwd = this.ghCwd(row);
     const pr = await this.branchPr(row, true).catch(() => null);
     let adopt = false;
@@ -687,11 +837,32 @@ export class Lifecycle {
       await this.sendPr(cur, (r) => {
         check(r);
         this.checkPromptable(r);
-      }, cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'));
+      }, { lead: cur.stage === 'code' ? undefined : this.movedLine(cur, 'review'), instructions });
       return;
     }
+    if (instructions) this.checkPromptable(cur);
     if (cur.stage === 'design') this.leaveDesign(row.id, false);
-    await this.adoptPr(row.id, pr, 'you');
+    // As sendPr does, the stage moves first and the session is busy until the turn ends: review
+    // prompts waiting for the session go after the instructions' turn, not before or during it.
+    if (instructions) this.sessions.setBusy(row.id, true);
+    try {
+      await this.adoptPr(row.id, pr, 'you');
+    } catch (e) {
+      if (instructions) this.sessions.setBusy(row.id, false);
+      throw e;
+    }
+    if (!instructions) return;
+    try {
+      await this.sessions.submit(row.id, `${this.movedLine(this.sessions.row(row.id))}\n\n${this.instructionsPrompt(cur, instructions)}`);
+    } catch (e) {
+      this.sessions.setBusy(row.id, false);
+      throw new HttpError(502, `Moved to PR & Review, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+    }
+  }
+
+  /** The `instructions` prompt with the user's text, or '' when they gave none. */
+  private instructionsPrompt(row: SessionRow, instructions: string): string {
+    return instructions ? this.sessions.prompt(row, 'instructions', { instructions }) : '';
   }
 
   /** The `moved` line: where the session is now, since Claude's system prompt still says where it was. */
@@ -749,7 +920,8 @@ export class Lifecycle {
       }, PR_CONVERSATION_TIMEOUT_MS);
     });
     const conv = await Promise.race([lookup, late]).finally(() => clearTimeout(timer));
-    return mekoPrFooter(mekoHost(this.core.config), dp, conv);
+    const design = this.prDesignRef(row);
+    return mekoPrFooter(mekoHost(this.core.config), dp, conv, design && designLine(design));
   }
 
   /**
@@ -797,10 +969,11 @@ export class Lifecycle {
       await this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
     } else if (row.stage === 'reviewing-pr') {
       await this.serial(id, async () => {
-        // The turn that got the update summary is over.
+        // The turn that got the update summary (or the PR's new design) is over.
         const q = this.queue(id);
-        if (q['review-pr-update']?.state === 'sent') {
-          delete q['review-pr-update'];
+        const sent = REVIEWING_ORDER.filter((n) => q[n]?.state === 'sent');
+        if (sent.length) {
+          sent.forEach((n) => delete q[n]);
           this.setQueue(id, q);
         }
         await this.doPollReviewedPr(id);
@@ -964,6 +1137,8 @@ export class Lifecycle {
     const turnAtStart = this.inTurn(before);
     const st = await github.prStatus(this.ghCwd(before), before.pr_number, prRepoOf(before.pr_url));
     if (st.headRefOid && this.headSeen.get(id)?.head !== st.headRefOid) this.headSeen.set(id, { head: st.headRefOid, at: Date.now() });
+    // The PR names the latest version of the design, even after Claude rewrote the description.
+    if (st.state === 'OPEN') void this.syncPrDesign(id, st.body ?? '');
     const unpushed = st.state === 'OPEN' && (await lacksLocalCommits(sessionRepo(this.db, before) ?? p.repo_path, before.branch, st));
     // Merge & Close ends in an archive, which would keep a dirty worktree on the branch.
     const uncommitted = this.sessions.ownsWorktree(before) ? await uncommittedCount(before.worktree_path) : 0;
@@ -1363,19 +1538,62 @@ export class Lifecycle {
     }
     fields.seen_review_ids = JSON.stringify([...seen]);
     this.sessions.update(id, fields);
+    // Last, as it's the slowest: it checks the session is still open before keeping what it fetched.
+    await this.refreshPrDesign(id, st.body ?? '');
     await this.deliverNext(id).catch((e) => this.warn(id, 'Sending a queued prompt', e));
     this.core.changed();
   }
 
-  /** gh's login, looked up once; null (and asked again next time) when gh can't say. */
-  private async viewerLogin(cwd: string): Promise<string | null> {
-    if (this.ghLogin) return this.ghLogin;
+  /**
+   * A Review a PR session's copy of its PR's design: fetched when the review starts, and again by
+   * its polls when the PR's `meko_design:` line names a version it doesn't have (the author changed
+   * the design, or Meko couldn't be reached before). A version Meko said it doesn't have isn't asked for again until the line
+   * changes; one Meko couldn't be asked for is tried again after PR_DESIGN_RETRY_MS. What's fetched
+   * is kept only while the review is still open. Claude hears of it when the user presses Update to
+   * latest (offered for a design Claude hasn't read, without new commits too).
+   */
+  async refreshPrDesign(id: string, body: string): Promise<void> {
+    const ref = parseDesignLine(body);
+    if (!ref || prDesignSource(this.core, id)?.ref.sha256 === ref.sha256) return;
+    const failed = this.prDesignFailed.get(id);
+    if (failed?.sha256 === ref.sha256 && (failed.missing || Date.now() - failed.at < PR_DESIGN_RETRY_MS)) return;
+    const before = sessionRow(this.db, id);
+    if (!before) return;
+    const had = !!prDesignSource(this.core, id);
+    let d: Awaited<ReturnType<typeof fetchPrDesign>>;
     try {
-      this.ghLogin = (await github.viewerLogin(cwd)) || null;
+      d = await fetchPrDesign(this.core, before, body);
     } catch (e) {
-      this.core.log.warn('looking up the GitHub login failed', errMsg(e));
+      this.core.log.warn(`fetching PR #${before.pr_number}'s design failed for ${id}`, errMsg(e));
+      this.prDesignFailed.set(id, { sha256: ref.sha256, at: Date.now(), missing: false });
+      return;
     }
-    return this.ghLogin;
+    if (!d) {
+      this.prDesignFailed.set(id, { sha256: ref.sha256, at: Date.now(), missing: true });
+      return;
+    }
+    this.prDesignFailed.delete(id);
+    const row = sessionRow(this.db, id);
+    if (!row || row.stage !== 'reviewing-pr' || row.desired !== 'running') return;
+    savePrDesign(this.core, row, d);
+    this.sessions.event(id, 'design', had ? `PR #${row.pr_number}'s design changed: the Design panel shows the new version` : `Loaded PR #${row.pr_number}'s design (${ref.name}) from Meko`);
+  }
+
+  /**
+   * How Claude is to hear of the review's PR design with the next Update to latest: 'new' when it
+   * hasn't read any version (the design came after its first prompt), 'changed' when it read an
+   * earlier one, null when it has read this one (or there's none). Marks it read.
+   */
+  private takePrDesignNews(id: string): 'new' | 'changed' | null {
+    const design = prDesignSource(this.core, id);
+    if (!design || design.told === design.ref.sha256) return null;
+    markPrDesignTold(this.core, id, design.ref.sha256);
+    return design.told === null ? 'new' : 'changed';
+  }
+
+  /** gh's login, looked up once; null (and asked again next time) when gh can't say. */
+  private viewerLogin(cwd: string): Promise<string | null> {
+    return this.core.ghLogin(cwd);
   }
 
   /**
@@ -1417,16 +1635,25 @@ export class Lifecycle {
       }
       if (sha === old) {
         this.sessions.update(cur.id, { pr_head_sha: sha, pr_new_commits: 0 });
+        // No new commits, but a design AgentK hasn't read: it reads that alone.
+        const news = this.takePrDesignNews(cur.id);
+        if (news) {
+          this.enqueue(cur.id, 'review-pr-design', { design: news });
+          await this.deliverNext(cur.id);
+        }
         return;
       }
       const count = await commitsBetween(repo, old, sha);
       await moveReviewBranch(cur.worktree_path, sha);
       this.sessions.update(cur.id, { review_sha: sha, pr_head_sha: sha, pr_new_commits: 0 });
       this.sessions.event(cur.id, 'pr-update', `Updated to PR #${n} at ${sha.slice(0, 7)}`, { sha });
+      // Claude is told of a design it hasn't read (this version, or any).
+      const news = this.takePrDesignNews(cur.id);
       this.enqueue(cur.id, 'review-pr-update', {
         oldSha: old,
         sha,
         count: count === null ? 'its history was rewritten, a force-push' : `${count === 1 ? '1 new commit' : `${count} new commits`}`,
+        ...(news ? { design: news } : {}),
       });
       await this.deliverNext(cur.id);
       void this.sessions.refreshDiff(cur.id).catch(() => undefined);
@@ -1499,13 +1726,14 @@ export class Lifecycle {
 
   // ---- queued gates ----
 
-  private setQueued(id: string, gate: QueuedGate | null): void {
-    this.sessions.update(id, { queued_gate: gate });
+  /** Sets or clears the queued gate; its instructions (a queued Open PR's) go with it. */
+  private setQueued(id: string, gate: QueuedGate | null, instructions = ''): void {
+    this.sessions.update(id, { queued_gate: gate, queued_instructions: gate && instructions ? instructions : null });
     this.core.changed();
   }
 
-  private queueGate(id: string, gate: QueuedGate, text: string): void {
-    this.setQueued(id, gate);
+  private queueGate(id: string, gate: QueuedGate, text: string, instructions = ''): void {
+    this.setQueued(id, gate, instructions);
     this.sessions.event(id, 'queued', text);
   }
 
@@ -1619,11 +1847,11 @@ export class Lifecycle {
         this.sessions.ingestUsage(row.id);
         const u = this.sessions.runtime(row.id).usage;
         const tokens = `Token usage: ${u.output} output, ${u.input} input, ${u.cacheWrite} cache write, ${u.cacheRead} cache read tokens over ${u.messages} responses.`;
-        await this.core.meko.addMemory(
+        await withMekoScope(row, () => this.core.meko.addMemory(
           `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}. ${tokens}${body ? `\n\n${body}` : ''}`,
           dp.id, launchedAgentId(row), conv,
           { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },
-        );
+        ));
         this.sessions.event(row.id, 'shipped', `Saved what shipped to ${dp.name}`);
       } catch (e) {
         this.core.log.warn(`saving the shipped summary to Meko failed for ${row.id}`, errMsg(e));

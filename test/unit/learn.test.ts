@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dedupPrompt, firstJson, learnSummary, machineSpecific, memoryText, parseDecisions, parseFacts } from '../../src/server/learn.js';
+import { coveredText, dedupPrompt, firstJson, machineSpecific, memoryText, parseDecisions, parseFacts } from '../../src/server/learn.js';
 
 describe('the learn step', () => {
   it('reads the facts from a reply, whatever wraps the JSON', () => {
@@ -19,10 +19,13 @@ describe('the learn step', () => {
       { kind: 'gotcha', component: 'x' },
       { text: 'y'.repeat(5000) },
       'not an object',
+      // Named like an object's own property: still unknown.
+      ...['constructor', 'toString', '__proto__', 'hasOwnProperty'].map((kind) => ({ kind, text: 'x' })),
     ] }));
     expect(facts).toEqual([
       { kind: 'how-it-works', component: '', text: 'The cache key includes the model.' },
       { kind: 'how-it-works', component: '', text: 'y'.repeat(2000) },
+      ...Array.from({ length: 4 }, () => ({ kind: 'how-it-works', component: '', text: 'x' })),
     ]);
   });
 
@@ -42,10 +45,12 @@ describe('the learn step', () => {
     expect(machineSpecific('a/b', ['', '/'])).toBe(false);
   });
 
-  it("reads a kind named like an object's own property as how it works", () => {
-    const facts = parseFacts(JSON.stringify({ facts: ['constructor', 'toString', '__proto__', 'hasOwnProperty'].map((kind) => ({ kind, text: 'x' })) }));
-    expect(facts?.map((f) => f.kind)).toEqual(['how-it-works', 'how-it-works', 'how-it-works', 'how-it-works']);
-    expect(memoryText({ kind: 'constructor', component: '', text: 'x' })).toBe('How it works: x');
+  it('matches a path only whole, so a short local spelling of the home leaves longer names alone', () => {
+    const paths = ['/data', '/data/ak/worktrees/repo.1a2b3c4d/wt-1'];
+    expect(machineSpecific('Facts quote /data/ak/worktrees/repo.1a2b3c4d/wt-1/src as the root.', paths)).toBe(true);
+    expect(machineSpecific('The home is /data, mounted locally.', paths)).toBe(true);
+    expect(machineSpecific('`/data/notes.md` is mine', paths)).toBe(true);
+    expect(machineSpecific('src/shared/types.ts and src/database.ts hold it; /data-sets and app/data/x too.', paths)).toBe(false);
   });
 
   it('saves each fact with its kind and component first', () => {
@@ -53,6 +58,15 @@ describe('the learn step', () => {
       .toBe('Gotcha (src/server/db.ts): Migrations are append-only.');
     expect(memoryText({ kind: 'root-cause', component: '', text: 'The poll ran twice.' })).toBe('Root cause: The poll ran twice.');
     expect(memoryText({ kind: 'decision', component: 'x', text: 'Decision: use SQLite.' })).toBe('Decision: use SQLite.');
+    expect(memoryText({ kind: 'constructor', component: '', text: 'x' })).toBe('How it works: x');
+  });
+
+  it('tells a learn step the latest facts earlier ones covered, each cut short', () => {
+    expect(coveredText([])).toBe('');
+    const list = coveredText([...Array.from({ length: 61 }, (_, i) => `Fact ${i}.`), `Long\n${'x'.repeat(500)}`]).split('\n').filter((l) => l.startsWith('- '));
+    expect(list).toHaveLength(60);
+    expect(list[0]).toBe('- Fact 2.');
+    expect(list[59]).toBe(`- Long ${'x'.repeat(395)}…`);
   });
 
   it('asks the duplicate check about each fact beside the memories most like it', () => {
@@ -73,10 +87,5 @@ describe('the learn step', () => {
       [3, { action: 'add', id: null, text: null }],
     ]);
     expect(parseDecisions('no')).toBeNull();
-  });
-
-  it('says what it saved', () => {
-    expect(learnSummary(1, 0, 'team/demo')).toBe('Saved 1 memory and corrected 0 in team/demo');
-    expect(learnSummary(3, 2, 'team/demo')).toBe('Saved 3 memories and corrected 2 in team/demo');
   });
 });

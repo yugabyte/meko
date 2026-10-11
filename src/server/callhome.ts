@@ -4,10 +4,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
-  type CallHomeKind, type FileTypeCount, type MekoStatus, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
+  type CallHomeKind, type FileTypeCount, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
   type CallHomeReport, type CallHomeTokens,
 } from '../shared/types.js';
-import { isLoopback, mekoConfigured, resolveMekoWithSource, type Config } from './config.js';
+import { isLoopback, mekoConfigured, resolveMekoApiUrl, resolveMekoWithSource, type Config } from './config.js';
 import { all, get, kvGet, kvSet, type Db } from './db.js';
 import { readFileTypes, sumFileTypes } from './filetypes.js';
 import { errMsg, type Logger } from './log.js';
@@ -409,7 +409,6 @@ function serviceKind(): CallHomeInstall['service'] {
 export interface InstallInputs {
   config: Config;
   version: string;
-  meko: MekoStatus;
   firstDay: string;
   probe?: Probe;
 }
@@ -430,7 +429,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     meko: {
       enabled: meko,
       keySource: (meko && resolveMekoWithSource(o.config).keySource) || 'none',
-      sharing: meko && o.meko.sharing ? 'api' : 'none',
+      sharing: meko && resolveMekoApiUrl(o.config) ? 'api' : 'none',
     },
     firstDay: o.firstDay,
   };
@@ -461,7 +460,6 @@ export interface CallHomeOptions {
   db: Db;
   config: () => Config;
   version: string;
-  meko: () => MekoStatus;
   log: Logger;
   fetch?: typeof fetch;
   now?: () => number;
@@ -532,7 +530,7 @@ export class CallHomeService {
       firstDay = utcDay(now);
       kvSet(this.o.db, KV_FIRST_DAY, firstDay);
     }
-    const install = await installFacts({ config: this.o.config(), version: this.o.version, meko: this.o.meko(), firstDay, probe: this.o.probe });
+    const install = await installFacts({ config: this.o.config(), version: this.o.version, firstDay, probe: this.o.probe });
     const first = !kvGet(this.o.db, KV_LAST_SENT);
     const r = buildReport(this.o.db, { installId: this.installId(), install, days: first ? FIRST_REPORT_DAYS : REPORT_DAYS, now });
     const max = this.o.maxReportBytes ?? MAX_REPORT_BYTES;

@@ -192,6 +192,10 @@ code,
   font-size: 12px;
   color: var(--muted);
 }
+/* Instructions for AgentK past their limit (InstructionsField). */
+.hint .over {
+  color: var(--bad);
+}
 .error-text {
   color: var(--bad);
   font-size: 13px;
@@ -428,6 +432,15 @@ textarea.input {
   font-size: 12px;
   color: var(--muted);
 }
+/* Beside the Open PR gate: open it with instructions for AgentK. Keeps its size in the phone's gate rows. */
+.gate-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.gate-group > .btn.gate-note {
+  flex: 0 0 auto;
+}
 /* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
 .move-stages {
   align-self: flex-start;
@@ -540,11 +553,14 @@ textarea.input {
   display: inline-block;
   flex: none;
 }
+/* Working and needs-you dots blink their --halo (blink.ts). */
 .dot.working {
+  --halo: color-mix(in srgb, var(--ok) 22%, transparent);
   background: var(--ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+  box-shadow: 0 0 0 3px var(--halo);
 }
 .dot.needs {
+  --halo: color-mix(in srgb, var(--warn) 22%, transparent);
   background: var(--warn);
   border-radius: 2px;
   transform: rotate(45deg);
@@ -561,13 +577,50 @@ textarea.input {
 .dot.recovered {
   background: var(--accent);
 }
+/* AgentK is saving what the session learned to Meko: a ring of ten dots turning around Meko's m.
+   Drawn at 14px but 10px in the layout, so a tab keeps its width when learning starts or stops.
+   Both layers are the accent through a mask, so they follow the theme. */
+.dot.learning {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin: -2px;
+  border-radius: 0;
+  --learning-ring: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Ccircle cx='7.00' cy='1.00' r='0.95'/%3E%3Ccircle cx='3.47' cy='2.15' r='0.95'/%3E%3Ccircle cx='1.29' cy='5.15' r='0.95'/%3E%3Ccircle cx='1.29' cy='8.85' r='0.95'/%3E%3Ccircle cx='3.47' cy='11.85' r='0.95'/%3E%3Ccircle cx='7.00' cy='13.00' r='0.95'/%3E%3Ccircle cx='10.53' cy='11.85' r='0.95'/%3E%3Ccircle cx='12.71' cy='8.85' r='0.95'/%3E%3Ccircle cx='12.71' cy='5.15' r='0.95'/%3E%3Ccircle cx='10.53' cy='2.15' r='0.95'/%3E%3C/svg%3E");
+}
+.dot.learning::before,
+.dot.learning::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+}
+.dot.learning::before {
+  -webkit-mask: var(--learning-ring) center / contain no-repeat;
+  mask: var(--learning-ring) center / contain no-repeat;
+}
+.dot.learning::after {
+  -webkit-mask: url('/meko-m.png') center / 7px 7px no-repeat;
+  mask: url('/meko-m.png') center / 7px 7px no-repeat;
+}
+/* The selected tab is the terminal's near-black in both themes: the light theme's accent is lost on it. */
+.tab.sel .dot.learning {
+  --accent: #86a4ff;
+}
+/* Its halos too: brighter, so the light theme's blink still shows. */
+.tab.sel .dot.working {
+  --halo: color-mix(in srgb, #5cc592 30%, transparent);
+}
+.tab.sel .dot.needs {
+  --halo: color-mix(in srgb, #e9a64a 30%, transparent);
+}
 @media (prefers-reduced-motion: no-preference) {
-  .dot.working {
-    animation: pulse 1.8s ease-in-out infinite;
+  .dot.learning::before {
+    animation: learning-spin 1.6s linear infinite;
   }
-  @keyframes pulse {
-    50% {
-      box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 8%, transparent);
+  @keyframes learning-spin {
+    to {
+      transform: rotate(360deg);
     }
   }
 }
@@ -575,7 +628,8 @@ textarea.input {
 /* ---------- Shell ---------- */
 .app {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  /* Wide enough for "Search AgentK Local" beside Ctrl+K in the rail's search bar. */
+  grid-template-columns: 228px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
@@ -588,14 +642,46 @@ textarea.input {
   gap: 4px;
   min-height: 0;
 }
-.brand {
+/* Search and commands: a button that looks like a field, with the logo where a search icon would be.
+   The palette opens over it (.pal-overlay). */
+.rail-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 15px;
-  padding: 2px 8px 12px;
+  gap: 6px;
+  min-height: 34px;
+  margin-bottom: 8px;
+  padding: 6px;
+  font-size: 13px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-search:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
+  color: var(--ink);
+}
+.rail-search img {
+  flex: none;
+}
+.rail-search-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-search kbd {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 3px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--sunk);
 }
 /* The list scrolls, which clips what's drawn outside its rows: the selected ring and the focus
    outline (2px, 2px out). The padding leaves room for them; the margin keeps the rows in place. */
@@ -2106,6 +2192,12 @@ div[id^='dak-mermaid-'] .label {
 }
 
 /* palette */
+/* At the top left with the rail's padding, so the palette opens over the rail's search bar. The
+   phone section's .overlay.top comes later and puts it across the top, centred, instead. */
+.overlay.pal-overlay {
+  justify-content: flex-start;
+  padding: 12px 8px;
+}
 .palette {
   width: min(620px, 100%);
   background: var(--surface);
@@ -2114,11 +2206,21 @@ div[id^='dak-mermaid-'] .label {
   box-shadow: var(--shadow);
   overflow: hidden;
 }
-.pal-input {
-  width: 100%;
-  border: 0;
+.pal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 12px;
   border-bottom: 1px solid var(--rule);
-  padding: 14px 16px;
+}
+.pal-row img {
+  flex: none;
+}
+.pal-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 14px 16px 14px 0;
   font-size: 15px;
   background: transparent;
   outline: none;
@@ -2169,6 +2271,17 @@ div[id^='dak-mermaid-'] .label {
   text-overflow: ellipsis;
   max-width: 260px;
 }
+/* A row that only says something (a link being looked up, or why it can't start): read in full, not picked. */
+.pal-item.inert {
+  cursor: default;
+  color: var(--muted);
+}
+.pal-item.inert .pal-label {
+  white-space: normal;
+}
+.pal-error {
+  padding: 0 16px 10px;
+}
 
 /* ---------- Project home ---------- */
 .home-view {
@@ -2191,11 +2304,6 @@ div[id^='dak-mermaid-'] .label {
   align-self: center;
 }
 .home-share-banner {
-  border-bottom: 1px solid var(--rule);
-}
-.home-share-note {
-  margin: 0;
-  padding: 6px 20px;
   border-bottom: 1px solid var(--rule);
 }
 /* A project without a dedicated datapack: what to do about it. */
@@ -2334,6 +2442,140 @@ div[id^='dak-mermaid-'] .label {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+/* A check with a link beside it (Log Meko calls, View calls). */
+.check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 12px;
+}
+.check-hint {
+  display: block;
+}
+
+/* ---------- Meko calls page ---------- */
+.mc-off {
+  border-radius: 10px;
+}
+.mc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.mc-bar .input {
+  width: auto;
+  max-width: 100%;
+}
+.mc-failed {
+  align-items: center;
+  font-size: 13px;
+}
+.mc-failed input {
+  margin-top: 0;
+}
+.mc-list {
+  display: flex;
+  flex-direction: column;
+}
+.mc-call {
+  border-top: 1px solid var(--rule);
+  min-width: 0;
+}
+.mc-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto auto;
+  gap: 4px 14px;
+  align-items: baseline;
+  width: 100%;
+  padding: 9px 6px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mc-row:hover {
+  background: var(--sunk);
+}
+.mc-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.mc-time,
+.mc-ms {
+  font: 12px var(--mono);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mc-tool-name {
+  font: 500 13px var(--mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mc-tag {
+  font: 11px var(--mono);
+  color: var(--accent);
+  margin-left: 8px;
+}
+.mc-pill {
+  font: 500 11px/1 var(--mono);
+  padding: 3px 7px;
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.mc-pill.ok {
+  color: var(--ok);
+}
+.mc-pill.bad {
+  color: var(--bad);
+}
+.mc-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 6px 12px;
+}
+.mc-error {
+  color: var(--bad);
+  font: 12.5px var(--mono);
+  overflow-wrap: anywhere;
+}
+.mc-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* What was sent or came back: scrolls in its own box, both ways, so the page never does. */
+.mc-json {
+  margin: 0;
+  max-height: 480px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: var(--sunk);
+  font: 12px/1.5 var(--mono);
+  white-space: pre;
+}
+.mc-more {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 2px;
+}
+@media (pointer: coarse) {
+  .mc-bar .btn.small,
+  .mc-label .btn.small,
+  .mc-more .btn.small {
+    min-height: 36px;
+  }
+  .mc-row {
+    min-height: 44px;
+  }
 }
 
 /* settings dialog */
@@ -3391,16 +3633,32 @@ div[id^='dak-mermaid-'] .label {
   flex-direction: column;
   gap: 10px;
 }
-/* The sheet takes focus on open (not its first button, which can be a gate). */
+/* The sheet takes focus on open (not its ×, or the gate that can be the first row after it). */
 .sheet:focus {
   outline: none;
+}
+/* The grab bar centred, the × at the right, near the corner; the row takes the ×'s height. */
+.sheet-hd {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 40px;
+  margin: -4px -8px -4px;
 }
 .sheet-grab {
   width: 36px;
   height: 4px;
   border-radius: 4px;
   background: var(--rule);
-  align-self: center;
+}
+.sheet-x {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 40px;
+  min-height: 40px;
+  font-size: 20px;
 }
 .sheet-items {
   display: flex;
@@ -3780,13 +4038,17 @@ div[id^='dak-mermaid-'] .label {
   color: var(--muted);
   white-space: nowrap;
 }
-/* The New session dialog's images for the first prompt: Add image, then the held ones. */
+/* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 10px;
   min-width: 0;
+}
+#ns-add-image {
+  padding: 3px 5px;
+  justify-content: center;
 }
 .ns-images .held-images {
   flex: 1 1 auto;
@@ -3798,6 +4060,10 @@ div[id^='dak-mermaid-'] .label {
 @media (pointer: coarse) {
   .ns-images .btn.small {
     min-height: 40px;
+  }
+  #ns-add-image {
+    min-width: 40px;
+    padding: 6px;
   }
 }
 
@@ -3876,6 +4142,9 @@ div[id^='dak-mermaid-'] .label {
   .rail-add {
     padding: 10px 8px;
   }
+  .rail-search {
+    min-height: 40px;
+  }
   .chg-row,
   .chg-file-hd {
     padding-top: 10px;
@@ -3888,6 +4157,14 @@ div[id^='dak-mermaid-'] .label {
   /* Swipes scroll the terminal (terminals.ts), not the page. */
   .term-host {
     touch-action: none;
+  }
+}
+/* The + notes button beside Open PR: a finger-sized box on touch. */
+@media (pointer: coarse) {
+  .btn.small.gate-note {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
   }
 }
 @media (hover: none) {
@@ -4145,8 +4422,10 @@ div[id^='dak-mermaid-'] .label {
   html.kb-open .dialog-body:last-child {
     padding-bottom: 14px;
   }
+  /* Centred, undoing .pal-overlay's left: the palette is narrower than a wide phone layout. */
   .overlay.top {
     align-items: flex-start;
+    justify-content: center;
     padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 0;
   }
   .dialog,
@@ -4218,9 +4497,6 @@ div[id^='dak-mermaid-'] .label {
   .home-hd h1 {
     font-size: 1.3rem;
   }
-  .home-share-note {
-    padding: 6px 12px;
-  }
   .home-scroll {
     padding: 12px 12px 32px;
   }
@@ -4232,6 +4508,31 @@ div[id^='dak-mermaid-'] .label {
   }
   .dp .tag {
     justify-self: start;
+  }
+  /* A Meko call takes two lines: when and how it went, then the tool and how long it took. */
+  .mc-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .mc-time {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .mc-pill {
+    grid-row: 1;
+    grid-column: 2;
+    justify-self: end;
+  }
+  .mc-tool-name {
+    grid-row: 2;
+    grid-column: 1;
+  }
+  .mc-ms {
+    grid-row: 2;
+    grid-column: 2;
+    justify-self: end;
+  }
+  .mc-json {
+    max-height: calc(var(--app-h, 100dvh) * 0.6);
   }
   /* Datapack names are long and differ at the end: on a phone they wrap, with the tags below. */
   .dp-row {

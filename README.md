@@ -60,6 +60,11 @@ If your home directory is shared with other hosts (over NFS, say), AgentK Local 
 host you installed it on: logging in to another host doesn't start a second server on the same
 `~/.agent-k-local`. To run it on another host too, give that host its own home with `AK_HOME`.
 
+If your home is under `/net` (the automounter's `/net/<host>/...`), Claude Code 2.1.292 and later
+asks before every file it reads or edits there, even in auto mode. When the home is this host's
+own folder, AgentK Local starts Claude in it without the `/net/<host>` prefix (with `HOME` to
+match), so sessions don't stop for that. In plain Claude Code, open your repos by that path too.
+
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
 Code keeps its login in your Keychain, so AgentK Local runs while you're logged in. For a Mac mini
 that stays on, turn on automatic login and stop it sleeping (System Settings > Energy). With the
@@ -77,7 +82,8 @@ your phone can connect.
   **Open project** starts one; **Close project** stops its sessions when you're done. The repo,
   branches and datapack stay: opening its datapack again brings the same project back, with its
   sessions, settings and usage.
-  New sessions start from the base branch after it's fast-forwarded to `origin`. Under
+  New sessions start from the base branch after it's fast-forwarded to `origin`, on a branch
+  named `ak_<your GitHub login>/<task>` (the prefix is a project setting). Under
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
   requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on
@@ -85,8 +91,9 @@ your phone can connect.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
-  shared ones. Designs, session transcripts and a summary of each merged PR are saved there, so
-  the whole team, and its agents, start from the same context. **Switch** on the project's home
+  shared ones. Designs, what each session learned and a summary of each merged PR are saved there,
+  so the whole team, and its agents, start from the same context. (Session transcripts are kept
+  out for now; `[meko] capture_transcripts = true` in `config.toml` sends them.) **Switch** on the project's home
   moves the project to another dedicated datapack; the old one stays attached to search, or is
   detached. When a session starts, AgentK searches the project's datapacks for its task (and the
   GitHub issues it names) and gives Claude what Meko already knows, and the prompts ask Claude to
@@ -111,9 +118,14 @@ your phone can connect.
   (in every repo its sessions work in) with their emails, to share with in one click.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
   of a project shared with you, checks one out on a branch a plain `git push` refuses, and has AgentK sum
-  it up for you, using the author's design and decisions from Meko. Then AgentK waits and helps with
+  it up for you, with the author's design (named in the PR, fetched from Meko, with its questions and
+  decisions) open beside the terminal and the decisions behind it from Meko. Then AgentK waits and helps with
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
+- **Paste a GitHub link to start:** paste a PR or issue link into Search and commands (`⌘K`). A PR
+  gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
+  to Code), in the project it belongs to: the one whose datapack its description names, or one on
+  its repo. If there's none, AgentK opens a project for it and clones the repo if needed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
@@ -155,14 +167,18 @@ your phone can connect.
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
   at any point between turns: an exploration that should ship moves on to Code or opens a PR with
-  **Move on…**, and a session in review can go back to Code or Design. Rename a session any time
+  **Move on…**, and a session in review can go back to Code or Design. A move carries on from what the
+  session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
+  button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
-  takes you to them first. You approve the design, opening the PR, and Merge & Close, which merges the PR and
+  takes you to them first. Once it's approved, AgentK writes the answers into the design and keeps it current
+  while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
+  You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
   and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and
@@ -173,6 +189,11 @@ your phone can connect.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
+- **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
+  keeps every Meko call it makes for each session (recall at start, design uploads, the learn step,
+  the "Shipped in…" memory) with what it sent and what came back, in a file in the session's
+  folder that's deleted with the session. **View calls** opens them, a session at a time, with
+  filters for the tool and failed calls.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home

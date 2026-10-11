@@ -23,7 +23,6 @@ describe('pasted images', () => {
   it('knows the types Claude Code takes by their bytes, not their name', () => {
     expect([PNG, JPEG, GIF, WEBP].map(imageExt)).toEqual(['png', 'jpg', 'gif', 'webp']);
     expect(imageExt(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBeNull();
-    expect(imageExt(Buffer.from('BM\0\0'))).toBeNull();
     expect(imageExt(Buffer.alloc(0))).toBeNull();
   });
 

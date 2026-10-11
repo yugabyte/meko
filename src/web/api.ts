@@ -15,8 +15,12 @@ import type {
   DiscardCheck,
   InviteCheck,
   LoginRequest,
+  MekoCallDetail,
+  MekoCallPage,
   MekoDatapack,
+  MekoLogInfo,
   MoveSessionRequest,
+  OpenPrRequest,
   NewComment,
   PastedImage,
   Project,
@@ -28,6 +32,9 @@ import type {
   RepoInfo,
   ReviewablePrs,
   TaskPrs,
+  LinkPlan,
+  StartFromLinkRequest,
+  StartFromLinkResult,
   ReviewComment,
   SearchResult,
   SendCommentsResult,
@@ -150,6 +157,9 @@ export const api = {
   },
   reviewPrs: (id: string, q: { pr?: string; repoPath?: string } = {}) =>
     get<ReviewablePrs>(`/api/projects/${enc(id)}/review-prs${q.pr ? `?pr=${enc(q.pr)}${q.repoPath ? `&repoPath=${enc(q.repoPath)}` : ''}` : ''}`),
+  /** What a pasted GitHub PR or issue (a link or owner/name#N) would start, and where. */
+  githubLink: (ref: string) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}`),
+  startFromLink: (b: StartFromLinkRequest) => post<StartFromLinkResult>('/api/github-link/start', b),
   usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>
@@ -163,6 +173,8 @@ export const api = {
   /** merge and discard take a CloseSessionRequest (skip the learn step). */
   sessionAction: (id: string, action: SessionAction, b?: CloseSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/${action}`, b),
   moveSession: (id: string, b: MoveSessionRequest) => post<Session>(`/api/sessions/${enc(id)}/move`, b),
+  /** Open PR with the user's instructions (the plain gate uses sessionAction). */
+  openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
@@ -184,6 +196,20 @@ export const api = {
   reviseDesign: (id: string, b: DesignAnswersRequest) => post<void>(`/api/sessions/${enc(id)}/design/answers`, b),
   answerAsk: (id: string, askId: string, b: AskAnswerRequest) => post<void>(`/api/sessions/${enc(id)}/ask/${enc(askId)}`, b),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
+  mekoLogs: (projectId: string) => get<MekoLogInfo[]>(`/api/projects/${enc(projectId)}/meko-logs`),
+  mekoCalls: (id: string, q: { before?: number; tool?: string; failed?: boolean } = {}) => {
+    const qs = new URLSearchParams();
+    if (q.before !== undefined) qs.set('before', String(q.before));
+    if (q.tool) qs.set('tool', q.tool);
+    if (q.failed) qs.set('failed', '1');
+    const tail = qs.toString();
+    return get<MekoCallPage>(`/api/sessions/${enc(id)}/meko-calls${tail ? `?${tail}` : ''}`);
+  },
+  mekoCall: (id: string, offset: number, callId: string) =>
+    get<MekoCallDetail>(`/api/sessions/${enc(id)}/meko-calls/${offset}?id=${enc(callId)}`),
+  /** Where the browser downloads the session's Meko call log (a plain link: the login cookie goes with it). */
+  mekoLogUrl: (id: string) => `/api/sessions/${enc(id)}/meko-calls.jsonl`,
+  clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
 
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: SettingsUpdate) => request<Settings>('PUT', '/api/settings', b),

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
@@ -8,8 +8,9 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  LinkPlan, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -24,6 +25,7 @@ import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError } from './mekoapi.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
+import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { attachTerminal } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
@@ -366,6 +368,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.prReview.reviewable(req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
   app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/task-prs', async (req): Promise<TaskPrs> =>
     taskPrs(core, req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
+  app.get<{ Querystring: { ref?: string } }>('/api/github-link', async (req): Promise<LinkPlan> => core.githubLinks.plan(req.query.ref));
+  app.post<{ Body: StartFromLinkRequest }>('/api/github-link/start', async (req): Promise<StartFromLinkResult> =>
+    core.githubLinks.start(req.body && typeof req.body === 'object' ? req.body : ({} as StartFromLinkRequest)));
   app.get('/api/usage', async () => usageOverview(core.db));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 
@@ -391,6 +396,31 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.sessions.rename(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
+  app.get<{ Params: { id: string } }>('/api/projects/:id/meko-logs', async (req): Promise<MekoLogInfo[]> => core.sessions.mekoLogs(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; failed?: string } }>(
+    '/api/sessions/:id/meko-calls', async (req): Promise<MekoCallPage> => {
+      const { before, limit, tool, failed } = req.query;
+      const num = (v: string | undefined, what: string) => {
+        if (v === undefined || v === '') return undefined;
+        const n = Number(v);
+        if (!Number.isSafeInteger(n) || n < 0) throw new HttpError(400, `${what} must be a whole number.`);
+        return n;
+      };
+      return core.sessions.mekoCalls(req.params.id, {
+        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, failed: failed === '1' || failed === 'true',
+      });
+    });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/meko-calls.jsonl', async (req, reply) => {
+    const file = core.sessions.mekoLogFile(req.params.id);
+    const name = `${req.params.id.replace(/[^A-Za-z0-9._-]+/g, '_')}-meko-calls.jsonl`;
+    return reply.type('application/x-ndjson').header('Content-Disposition', `attachment; filename="${name}"`).send(createReadStream(file));
+  });
+  app.get<{ Params: { id: string; offset: string }; Querystring: { id?: string } }>('/api/sessions/:id/meko-calls/:offset',
+    async (req): Promise<MekoCallDetail> => core.sessions.mekoCall(req.params.id, Number(req.params.offset), req.query.id ?? ''));
+  app.delete<{ Params: { id: string } }>('/api/sessions/:id/meko-calls', async (req, reply) => {
+    core.sessions.clearMekoLog(req.params.id);
+    return reply.code(204).send();
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {
@@ -428,7 +458,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const q = core.questions.get(row);
     return {
       markdown: r?.markdown || null, html: r?.html ?? null, artifactUrl: r?.artifact_url ?? null, updatedAt: r?.updated_at ?? null,
-      questions: q.questions, questionsSource: q.source,
+      questions: q.questions, questionsSource: q.source, fromPr: prDesignSource(core, row.id)?.ref.name ?? null,
     };
   });
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/design/answers', async (req, reply) => {

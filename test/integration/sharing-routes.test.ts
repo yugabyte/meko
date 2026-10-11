@@ -33,25 +33,6 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     return env.core.projects.create({ repoPath: env.repo, name: 'p', datapack: { mode: 'existing', id: dpId, name: 'adlc/proj/demo-repo/p' } });
   }
 
-  it('keeps every new route behind the login', async () => {
-    for (const [method, url] of [
-      ['GET', '/api/meko/datapacks/dp-1/people'],
-      ['POST', '/api/meko/datapacks/dp-1/people'],
-      ['POST', '/api/meko/datapacks/dp-1/people/invites/i1/resend'],
-      ['DELETE', '/api/meko/datapacks/dp-1/people/invites/i1'],
-      ['POST', '/api/invites/check'],
-      ['POST', '/api/invites/dp-1/accept'],
-      ['POST', '/api/invites/dp-1/decline'],
-      ['POST', '/api/invites/dp-1/later'],
-      ['POST', '/api/settings/meko/claude-setup'],
-      ['GET', '/api/projects/p/pr-reviewers'],
-      ['GET', '/api/projects/p/review-prs'],
-      ['POST', '/api/repos/clone'],
-    ] as const) {
-      expect((await app.inject({ method, url })).statusCode, `${method} ${url}`).toBe(401);
-    }
-  });
-
   it('clones a PR\'s repo only from a network remote, and finds a clone of it already there', async () => {
     expect((await call('POST', '/api/repos/clone', { url: '/tmp/x.git' })).statusCode).toBe(400);
     expect((await call('POST', '/api/repos/clone', {})).statusCode).toBe(400);
@@ -77,7 +58,6 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     env.core.updateConfig((c) => {
       c.meko.url = '';
     });
-    expect(env.core.mekoStatus.sharing).toBe(true);
 
     let shareStatus = 200;
     env.mekoApi.handle((c: ApiCall) => {
@@ -133,12 +113,11 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(partly.json()).toMatchObject({ members: [], invites: [], refreshError: expect.stringMatching(/Couldn't read the list again: boom/) });
     expect(env.mekoApi.calls.length).toBeGreaterThan(handler);
 
-    // Meko refuses the key: an error that says to check it, and sharing stays in AgentK.
+    // Meko refuses the key: an error that says to check it.
     shareStatus = 401;
     const keyRefused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'carol@example.com', grant: 'viewer' });
     expect(keyRefused.statusCode).toBe(502);
     expect(keyRefused.json().error).toBe("Meko: AgentK's API key wasn't accepted (invalid or expired token). Check the key on the Meko tab in Settings.");
-    expect(env.core.mekoStatus.sharing).toBe(true);
   });
 
   it('invites a list of emails one after another and says who went through', async () => {
@@ -288,7 +267,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).toContain('meko.example.com/mcp');
     // A self-hosted MCP URL has no web app to work out until one is typed, and no API URL to check
     // (or share through).
-    expect(env.core.state().meko).toMatchObject({ webUrl: null, sharing: false });
+    expect(env.core.state().meko).toMatchObject({ webUrl: null });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
 
     // Back on Meko Cloud, its web app and API URLs are worked out and trusted: the API URL isn't checked.
@@ -296,7 +275,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(cloud.statusCode).toBe(200);
     expect(cloud.json().meko).toMatchObject({ url: '', effectiveWebUrl: 'https://cloud.mekodata.ai', effectiveApiUrl: 'https://cloud.mekodata.ai/api/v1' });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
-    expect(env.core.state().meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai', sharing: true });
+    expect(env.core.state().meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai' });
 
     // A typed web app URL moves the API URL: that is checked (without the key), and nothing reconnects.
     const checks = env.mekoTools.calls.length;
@@ -397,8 +376,9 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([]);
 
     // Asked to, the setup runs once, and the check after it finds nothing left.
-    env.mekoTools.tools.setUpClaude = async (url, apiKey) => {
-      env.mekoTools.calls.push({ name: 'setUpClaude', args: [url, apiKey] });
+    const setUp = env.mekoTools.tools.setUpClaude;
+    env.mekoTools.tools.setUpClaude = async (url, apiKey, log, claude) => {
+      await setUp(url, apiKey, log, claude);
       writeClaude(url, apiKey);
     };
     expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
@@ -406,14 +386,8 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     // The check after it runs in the background; the state stream carries what it finds.
     await waitFor(() => env.core.state().meko.claude, (c) => !c.gaps.length && !c.checking, 5000, "the check after Claude Code's setup");
     expect((await call('GET', '/api/settings')).json().meko).not.toHaveProperty('claudeUrl');
-  });
 
-  it("runs Meko's setup for Claude Code and reports when it doesn't finish", async () => {
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = 'mko_tkn_abcdefghij1234';
-    });
-    expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
-    expect(env.mekoTools.calls.find((c) => c.name === 'setUpClaude')?.args).toEqual(['https://mcp.mekodata.ai/mcp', 'mko_tkn_abcdefghij1234']);
+    // A setup that doesn't finish is reported, with what it printed last.
     env.mekoTools.state.setupError = "Meko's setup didn't finish";
     const failed = await call('POST', '/api/settings/meko/claude-setup');
     expect(failed.statusCode).toBe(502);

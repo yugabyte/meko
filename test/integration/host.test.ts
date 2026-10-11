@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostRunningError, startHost, type HostHandle } from '../../src/server/host/host.js';
+import { startHost, type HostHandle } from '../../src/server/host/host.js';
 import { MIN_PROTOCOL, type HostControl } from '../../src/server/host/protocol.js';
 import { HostRequestError, NoHostError, SessionHost, type HostStream } from '../../src/server/hostclient.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
@@ -169,9 +169,11 @@ describe('session host (real ptys)', () => {
     slow.stream.pause();
     const fast = await viewer(host, 'ak-yes', { cols: 80, rows: 24 });
     streams.push(fast.stream);
-    // The other viewer keeps getting output while the slow one is stalled.
+    // The other viewer keeps getting output while the slow one is stalled. Everything it got was
+    // written to the slow one too, less what the socket's kernel buffers took (a few hundred KB on
+    // Linux): well past the host's 1 MB, the slow one is surely skipped by now.
     const seen = fast.out.length;
-    await waitFor(() => fast.out.length, (n) => n > seen + 1024 * 1024, 10000, 'output keeps flowing');
+    await waitFor(() => fast.out.length, (n) => n > seen + 3 * 1024 * 1024, 10000, 'output keeps flowing');
     const before = slow.out.length;
     slow.stream.resume();
     // It catches up from a fresh screen copy, not from everything it missed.
@@ -189,10 +191,6 @@ describe('session host (real ptys)', () => {
     await host.spawn('ak-s', home, ['/bin/sh', '-c', 'sleep 30']);
     await host.stop();
     expect((await host.panes()).size).toBe(0);
-  });
-
-  it('refuses to start a second host on the same socket', async () => {
-    await expect(startHost({ paths, version: 'other' })).rejects.toBeInstanceOf(HostRunningError);
   });
 
   it("refuses to start while another host holds the home's lease, even one that doesn't answer", async () => {

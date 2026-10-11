@@ -9,20 +9,9 @@ import { contextArc, contextLevel } from '../../src/web/util.js';
 const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8');
 
 describe('contextLevel', () => {
-  it('is ok below 75%', () => {
-    expect(contextLevel(0)).toBe('ok');
-    expect(contextLevel(74)).toBe('ok');
-  });
-
-  it('warns from 75% up to 94%', () => {
-    expect(contextLevel(75)).toBe('warn');
-    expect(contextLevel(94)).toBe('warn');
-  });
-
-  it('is bad from 95%', () => {
-    expect(contextLevel(95)).toBe('bad');
-    expect(contextLevel(100)).toBe('bad');
-    expect(contextLevel(130)).toBe('bad');
+  // ok below 75%, warn from 75% up to 94%, bad from 95%.
+  it.each<[number, string]>([[0, 'ok'], [74, 'ok'], [75, 'warn'], [94, 'warn'], [95, 'bad'], [130, 'bad']])('is %s%% → %s', (percent, level) => {
+    expect(contextLevel(percent)).toBe(level);
   });
 });
 

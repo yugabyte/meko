@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseRoute, routePath } from '../../src/web/router.js';
+import { parseRoute, routePath, type Route } from '../../src/web/router.js';
 
 describe('router', () => {
   it('parses every view', () => {
@@ -9,11 +9,17 @@ describe('router', () => {
     expect(parseRoute('/p/a/home')).toEqual({ view: 'home', projectId: 'a' });
     expect(parseRoute('/p/a/s/b')).toEqual({ view: 'project', projectId: 'a', sessionId: 'b' });
     expect(parseRoute('/p/a/s/b/design')).toEqual({ view: 'design', projectId: 'a', sessionId: 'b' });
+    expect(parseRoute('/p/a/meko')).toEqual({ view: 'meko', projectId: 'a', sessionId: null });
+    expect(parseRoute('/p/a/meko/b')).toEqual({ view: 'meko', projectId: 'a', sessionId: 'b' });
   });
 
-  it('round-trips ids that need encoding', () => {
-    const r = { view: 'project', projectId: 'my repo/x', sessionId: 'a%b' } as const;
-    expect(parseRoute(routePath(r))).toEqual(r);
+  it('round-trips every view, ids that need encoding included', () => {
+    const routes: Route[] = [
+      { view: 'root' }, { view: 'usage' }, { view: 'home', projectId: 'a b' }, { view: 'design', projectId: 'a', sessionId: 's/1' },
+      { view: 'project', projectId: 'my repo/x', sessionId: 'a%b' }, { view: 'project', projectId: 'a', sessionId: null },
+      { view: 'meko', projectId: 'a b', sessionId: 's/1' }, { view: 'meko', projectId: 'a', sessionId: null },
+    ];
+    for (const r of routes) expect(parseRoute(routePath(r))).toEqual(r);
   });
 
   it('keeps a segment that is not valid percent-encoding instead of throwing', () => {

@@ -1,6 +1,7 @@
 import type { SearchResult } from '../shared/types.js';
 import { run, type Db } from './db.js';
 import type { IssueText } from './github.js';
+import { isDesignLine } from './design.js';
 import { mekoDatapackLineId } from './prompts.js';
 
 /**
@@ -52,12 +53,13 @@ export function issueRefs(task: string): number[] {
 
 /**
  * A PR description without the Meko lines AgentK ends it with (the datapack's, see
- * mekoDatapackLineId, and `meko_conversation_id:<id>`), which mean nothing to a search.
+ * mekoDatapackLineId, the design's, `meko_design:<name>;<hash>`, and `meko_conversation_id:<id>`),
+ * which mean nothing to a search.
  */
 export function withoutMekoLines(body: string): string {
   return body
     .split('\n')
-    .filter((l) => mekoDatapackLineId(l) === null && !/^\s*meko_conversation_id:\S+\s*$/i.test(l))
+    .filter((l) => mekoDatapackLineId(l) === null && !isDesignLine(l) && !/^\s*meko_conversation_id:\S+\s*$/i.test(l))
     .join('\n')
     .trim();
 }

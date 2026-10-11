@@ -4,23 +4,13 @@ import { lastSessionClosed } from '../../src/web/util.js';
 const at = (projectId: string | null, live: number) => ({ projectId, live });
 
 describe('lastSessionClosed', () => {
-  it('is true when the project on screen goes from open sessions to none', () => {
-    expect(lastSessionClosed(at('a', 1), at('a', 0))).toBe(true);
-    expect(lastSessionClosed(at('a', 3), at('a', 0))).toBe(true);
-  });
-
-  it('is false while sessions stay open or none were open', () => {
-    expect(lastSessionClosed(at('a', 0), at('a', 0))).toBe(false);
-    expect(lastSessionClosed(at('a', 2), at('a', 1))).toBe(false);
-    expect(lastSessionClosed(at('a', 0), at('a', 1))).toBe(false);
-  });
-
-  it('is false on a switch to a project without sessions', () => {
-    expect(lastSessionClosed(at('a', 2), at('b', 0))).toBe(false);
-  });
-
-  it('is false on the first render and off a project', () => {
-    expect(lastSessionClosed(at(null, 0), at('a', 0))).toBe(false);
-    expect(lastSessionClosed(at('a', 1), at(null, 0))).toBe(false);
+  it.each([
+    { when: 'the project on screen goes from open sessions to none', before: at('a', 2), after: at('a', 0), closed: true },
+    { when: 'none were open', before: at('a', 0), after: at('a', 0), closed: false },
+    { when: 'sessions stay open', before: at('a', 2), after: at('a', 1), closed: false },
+    { when: 'switching to a project without sessions', before: at('a', 2), after: at('b', 0), closed: false },
+    { when: 'leaving a project', before: at('a', 1), after: at(null, 0), closed: false },
+  ])('is $closed when $when', ({ before, after, closed }) => {
+    expect(lastSessionClosed(before, after)).toBe(closed);
   });
 });

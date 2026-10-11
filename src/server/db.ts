@@ -465,6 +465,28 @@ const MIGRATIONS: string[] = [
   ALTER TABLE meko_learns_v28 RENAME TO meko_learns;
   CREATE INDEX meko_learns_session ON meko_learns(session_id, started_at);
   `,
+  // 29: the default branch prefix is ak_<your GitHub login>/ (DEFAULT_BRANCH_PREFIX). Projects
+  // on ak/ move to it, and any other prefix stays. A project stores its whole settings when it's
+  // made, so an ak/ typed in by hand can't be told from the old default and moves too.
+  `
+  UPDATE projects SET settings_json = json_set(settings_json, '$.branchPrefix', 'ak_{login}/')
+    WHERE json_valid(settings_json) AND json_extract(settings_json, '$.branchPrefix') = 'ak/';
+  `,
+  // 30: the user's instructions given with an Open PR queued for the turn's end (OpenPrRequest),
+  // sent with it and cleared with queued_gate. NULL: none.
+  `
+  ALTER TABLE sessions ADD COLUMN queued_instructions TEXT;
+  `,
+  // 31: designs in PRs. md_hash/html_hash: the content hash of the latest version sent to Meko,
+  // which the PR's `meko_design:` line names (NULL: none sent since this). source: for a Review a
+  // PR session's copy of its PR's design, the PR line it came from as JSON {name, sha256}, and
+  // source_told the sha256 Claude was last pointed at. Both NULL for a task's own design.
+  `
+  ALTER TABLE designs ADD COLUMN md_hash TEXT;
+  ALTER TABLE designs ADD COLUMN html_hash TEXT;
+  ALTER TABLE designs ADD COLUMN source TEXT;
+  ALTER TABLE designs ADD COLUMN source_told TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

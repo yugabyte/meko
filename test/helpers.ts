@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +8,7 @@ import { DEFAULT_CONFIG, type Config } from '../src/server/config.js';
 import { Core } from '../src/server/core.js';
 import { openDb } from '../src/server/db.js';
 import { silentLogger } from '../src/server/log.js';
-import { pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
+import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import { getPaths } from '../src/server/paths.js';
@@ -29,11 +30,18 @@ export function gitRepo(dir: string): string {
   return dir;
 }
 
+/** A call the stand-in Meko client got: `scope` is the session it was made for (mekoScope), if any. */
+export interface StubMekoCall {
+  name: string;
+  args: unknown[];
+  scope?: string | null;
+}
+
 /** In-memory stand-in for the Meko MCP client. */
-export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> = {}): MekoClient & { calls: { name: string; args: unknown[] }[] } {
-  const calls: { name: string; args: unknown[] }[] = [];
+export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> = {}): MekoClient & { calls: StubMekoCall[] } {
+  const calls: StubMekoCall[] = [];
   const rec = (name: string, ret: unknown) => async (...args: unknown[]) => {
-    calls.push({ name, args });
+    calls.push({ name, args, scope: mekoScope.getStore()?.id ?? null });
     return typeof ret === 'function' ? (ret as (...a: unknown[]) => unknown)(...args) : ret;
   };
   const base = {
@@ -51,7 +59,9 @@ export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> =
     addMemory: rec('addMemory', undefined),
     updateMemory: rec('updateMemory', undefined),
     similar: rec('similar', []),
-    putArtifact: rec('putArtifact', undefined),
+    // Meko keeps a file under its content's SHA-256, which artifact_put returns.
+    putArtifact: rec('putArtifact', (_name: unknown, content: unknown) => createHash('sha256').update(String(content), 'utf8').digest('hex')),
+    getArtifact: rec('getArtifact', null),
     ensureConversation: rec('ensureConversation', 'conv-1'),
     retitleConversation: rec('retitleConversation', undefined),
     ...overrides,
@@ -195,6 +205,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   cfg.repos.cloneInto = join(home, 'code');
   cfg.claude.command = FAKE_CLAUDE;
   cfg.meko.apiKey = 'test-key';
+  cfg.meko.captureTranscripts = opts.capture !== false;
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();

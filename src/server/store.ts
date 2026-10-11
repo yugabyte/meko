@@ -7,6 +7,7 @@ import type {
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
+import { DEFAULT_BRANCH_PREFIX } from '../shared/branches.js';
 
 /**
  * What new task sessions store in `sessions.kind` (see StoredKind): a name a release or page from
@@ -18,9 +19,10 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
   reviewer: 'agentk-people',
   reviewerLogin: 'yb-agentk-dev',
-  branchPrefix: 'ak/',
+  branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
+  mekoLog: false,
 };
 
 export interface ProjectRow {
@@ -110,6 +112,8 @@ export interface SessionRow {
   start_images: string | null;
   /** A gate pressed before it could go (Session.queued). */
   queued_gate: QueuedGate | null;
+  /** The user's instructions for a queued Open PR, sent after its prompt; cleared with queued_gate. */
+  queued_instructions: string | null;
   /** Discard was asked for and waits for the learn step (Session.discarding). */
   discarding: number;
   /** The user asked Merge & Close to skip the learn step. */
@@ -230,7 +234,7 @@ export interface SessionRuntime {
 }
 
 export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
-  const design = get<{ updated_at: number }>(db, 'SELECT updated_at FROM designs WHERE session_id = ?', r.id);
+  const design = get<{ updated_at: number; source: string | null; source_told: string | null }>(db, 'SELECT updated_at, source, source_told FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
     projectId: r.project_id,
@@ -257,6 +261,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     mergeBlockers: rt.mergeBlockers,
     mergeQueueable: rt.mergeQueueable,
     queued: r.queued_gate,
+    queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
     busy: rt.busy,
     skippedStages: skippedStages(db, r),
     hasDesign: !!design,
@@ -264,7 +269,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     diffStat: rt.diffStat,
     comments: commentCounts(db, r.id),
     designQuestions: { open: openQuestions },
-    reviewingPr: reviewingPr(r),
+    reviewingPr: reviewingPr(r, design ?? null),
     usage: rt.usage,
     contextPercent: rt.contextPercent,
     modLive: rt.modLive,
@@ -282,9 +287,18 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
   };
 }
 
-/** A Review a PR session's PR, or null for other kinds (and a row missing the PR, never expected). */
-function reviewingPr(r: SessionRow): ReviewingPr | null {
+/**
+ * A Review a PR session's PR, or null for other kinds (and a row missing the PR, never expected).
+ * `design` is its copy of the PR's design: unread while Claude hasn't been pointed at that version.
+ */
+function reviewingPr(r: SessionRow, design: { source: string | null; source_told: string | null } | null): ReviewingPr | null {
   if (r.kind !== 'review-pr' || !r.pr_repo || !r.review_sha) return null;
+  let unread = false;
+  try {
+    unread = !!design?.source && (JSON.parse(design.source) as { sha256?: unknown }).sha256 !== design.source_told;
+  } catch {
+    /* a source that isn't JSON: nothing to read */
+  }
   return {
     repo: r.pr_repo,
     title: r.pr_title ?? '',
@@ -293,6 +307,7 @@ function reviewingPr(r: SessionRow): ReviewingPr | null {
     headSha: r.pr_head_sha ?? r.review_sha,
     newCommits: r.pr_new_commits,
     prState: r.pr_state ?? 'OPEN',
+    designUnread: unread,
   };
 }
 

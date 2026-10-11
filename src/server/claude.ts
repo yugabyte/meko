@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Paths } from './paths.js';
+import { claudePath, type Paths } from './paths.js';
 
 /**
  * Markers a running Claude Code session puts in its children's environment.
@@ -179,8 +179,11 @@ export function hooksSettingsPath(paths: Paths): string {
   return join(paths.run, 'hooks.json');
 }
 
-/** Writes the hook script and the --settings file every session is launched with. */
-export function writeHookFiles(paths: Paths): void {
+/**
+ * Writes the hook script and the --settings file every session is launched with. `disabledPlugins`
+ * (plugin keys) are turned off in sessions whatever the user's own settings say.
+ */
+export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] } = {}): void {
   mkdirSync(paths.run, { recursive: true });
   const script = hookScriptPath(paths);
   writeFileSync(script, HOOK_SCRIPT);
@@ -205,8 +208,9 @@ export function writeHookFiles(paths: Paths): void {
     // Artifact (private by default), shouldn't stop for a permission prompt. Edit() rules cover
     // every file-editing tool, Write included; Claude Code ignores Write() rules and warns about them.
     // Images added in the New session dialog reach Claude as paths in its first prompt, for it to read.
+    // Claude is given these folders' local spelling (claudePath), so the rules use it too.
     permissions: {
-      allow: [`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`],
+      allow: [`Edit(/${claudePath(paths.designs)}/**)`, 'Artifact', `Read(/${claudePath(paths.pastes)}/**)`],
     },
     statusLine: {
       type: 'command',
@@ -231,6 +235,7 @@ export function writeHookFiles(paths: Paths): void {
       Stop: all,
       SessionEnd: all,
     },
+    ...(opts.disabledPlugins?.length ? { enabledPlugins: Object.fromEntries(opts.disabledPlugins.map((k) => [k, false])) } : {}),
   };
   writeFileSync(hooksSettingsPath(paths), JSON.stringify(settings, null, 2));
 }
@@ -381,15 +386,17 @@ export function loginShellCommand(shell: string, script: string): [string, strin
  */
 export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
   mkdirSync(paths.run, { recursive: true });
-  const args = ['--settings', hooksSettingsPath(paths)];
+  // Every path Claude is started with is in its local spelling (see claudePath).
+  const cwd = claudePath(spec.worktree);
+  const args = ['--settings', claudePath(hooksSettingsPath(paths))];
   if (spec.resume) {
     args.push('--resume', spec.claudeSessionId);
   } else {
     args.push('--session-id', spec.claudeSessionId, '--name', spec.name);
   }
   if (spec.planMode) args.push('--permission-mode', 'plan');
-  for (const d of spec.addDirs) args.push('--add-dir', d);
-  for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', d);
+  for (const d of spec.addDirs) args.push('--add-dir', claudePath(d));
+  for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', claudePath(d));
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);
@@ -401,12 +408,12 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
     '#!/bin/sh',
     `# agent-k-local launcher for session ${spec.sessionId}. Rewritten on every launch.`,
     `if [ "$1" != ${INNER} ]; then`,
-    `  cd ${shq(spec.worktree)} || exit 1`,
+    `  cd ${shq(cwd)} || exit 1`,
     // Never let an outer Claude Code session's markers, or this install's own home and app, leak in.
     `  unset ${CLAUDE_SESSION_MARKERS.join(' ')} TMUX TMUX_PANE AK_HOME AK_APP_DIR AK_VERSION`,
     `  exec ${shq(shell)} -l -c ${shq(cmd)}`,
     'fi',
-    `cd ${shq(spec.worktree)} || exit 1`,
+    `cd ${shq(cwd)} || exit 1`,
     // The installer puts Claude Code and gh in ~/.local/bin, which a login profile (zsh on macOS
     // by default) may not add to PATH.
     'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac',
@@ -430,7 +437,15 @@ export function loginShell(): string {
   return process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : '/bin/sh';
 }
 
-/** Where Claude Code stores a session transcript for a given cwd. */
+/**
+ * Where Claude Code stores a session transcript for a given cwd. Claude keys the folder on the cwd
+ * it started in: the local spelling (claudePath) for sessions launched since AgentK started using
+ * it, the stored one for older sessions (a resume from the local spelling finds and keeps adding
+ * to their transcript). Whichever exists, the local one if neither does.
+ */
 export function transcriptPathFor(cwd: string, claudeSessionId: string): string {
-  return join(claudeUserDir(), 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${claudeSessionId}.jsonl`);
+  const at = (dir: string) => join(claudeUserDir(), 'projects', dir.replace(/[^A-Za-z0-9]/g, '-'), `${claudeSessionId}.jsonl`);
+  const local = at(claudePath(cwd));
+  const stored = at(cwd);
+  return local === stored || existsSync(local) || !existsSync(stored) ? local : stored;
 }

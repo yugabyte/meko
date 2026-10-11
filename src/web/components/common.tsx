@@ -1,16 +1,45 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
-import type { SessionStatus, StartStage } from '../../shared/types';
-import { STATUS_TEXT, contextArc, contextLevel, cx, mekoDatapackUrl } from '../util';
+import type { StartStage } from '../../shared/types';
+import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, totalUnits, type BlinkRun } from '../blink';
+import { useMedia } from '../hooks/useMedia';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
-export function StatusDot({ status, title }: { status: SessionStatus; title?: string }) {
+/**
+ * A session's status dot; `learning` is a dotted ring turning around Meko's m (`dotState()`).
+ * Working and needs-you dots blink their halo (`blink.ts`).
+ */
+export function StatusDot({ status, title }: { status: DotState; title?: string }) {
+  const ref = useRef<HTMLElement>(null);
+  useBlink(ref, status === 'working' ? WORKING_RUNS : status === 'needs_input' ? KNOCK_RUNS : null);
   const cls =
     status === 'needs_input'
       ? 'needs'
       : status === 'archived'
           ? 'idle'
           : status;
-  return <i className={cx('dot', cls)} title={title ?? STATUS_TEXT[status]} aria-label={STATUS_TEXT[status]} />;
+  const text = status === 'learning' ? LEARNING_TITLE : STATUS_TEXT[status];
+  return <i ref={ref} className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
+}
+
+const blinkFrames = new Map<readonly BlinkRun[], Keyframe[]>();
+
+/**
+ * Plays a blink signal on an element, on a loop. Every animation starts at time 0 on the page's
+ * timeline, so dots with the same signal blink together and one that mounts again picks up where
+ * the signal is. Still with reduced motion.
+ */
+function useBlink(ref: RefObject<HTMLElement | null>, runs: readonly BlinkRun[] | null): void {
+  const reduce = useMedia('(prefers-reduced-motion: reduce)');
+  useEffect(() => {
+    const el = ref.current;
+    if (!runs || reduce || !el || typeof el.animate !== 'function') return;
+    let frames = blinkFrames.get(runs);
+    if (!frames) blinkFrames.set(runs, (frames = blinkKeyframes(runs)));
+    const anim = el.animate(frames, { duration: totalUnits(runs) * BLINK_UNIT_MS, iterations: Infinity });
+    anim.startTime = 0;
+    return () => anim.cancel();
+  }, [ref, runs, reduce]);
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -221,6 +250,51 @@ export function Check({ size = 10 }: { size?: number }) {
     <svg className="check" width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2.5 6.3 5 8.7l4.5-5.1" />
     </svg>
+  );
+}
+
+/** A note with lines: shown beside a gate to add instructions for AgentK (Open PR with instructions). */
+export function NotesIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.5 1.75h6l3 3v9.5h-9z" />
+      <path d="M6 7.5h4M6 10h4M6 12.5h2.5" />
+    </svg>
+  );
+}
+
+/**
+ * Optional instructions for AgentK, sent after a move's or Open PR's prompt; left empty, nothing
+ * extra goes. Says so in place of the hint when the text is too long (instructionsBlocker).
+ */
+export function InstructionsField({
+  id,
+  value,
+  onChange,
+  hint,
+  placeholder,
+  autoFocus = false,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  hint: ReactNode;
+  placeholder?: string;
+  autoFocus?: boolean;
+}) {
+  const tooLong = instructionsBlocker(value);
+  return (
+    <Field label="Instructions for AgentK (optional)" hint={tooLong ? <span className="over">{tooLong}</span> : hint}>
+      <textarea
+        id={id}
+        className="input"
+        rows={3}
+        value={value}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </Field>
   );
 }
 

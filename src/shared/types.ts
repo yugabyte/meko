@@ -500,10 +500,58 @@ export interface ProjectSettings {
   reviewer: ReviewerMode;
   /** GitHub login of the AgentK bot, matched with or without a `[bot]` suffix. */
   reviewerLogin: string;
+  /** New sessions' branches start with it; `{login}` in it is your GitHub login (expandBranchPrefix). */
   branchPrefix: string;
   mergeMethod: MergeMethod;
   /** Browser notifications for this project. */
   notify: boolean;
+  /**
+   * Keep each session's Meko calls (what AgentK sent and what came back) in meko-calls.jsonl in the
+   * session's folder, deleted with the session. Off by default.
+   */
+  mekoLog: boolean;
+}
+
+/** The Meko tools AgentK calls for a session: the Meko calls page's tool filter. */
+export const MEKO_LOG_TOOLS = [
+  'context_search', 'conversation_create', 'conversation_update', 'memory_add', 'memory_update', 'artifact_put',
+] as const;
+
+/** GET /api/projects/:id/meko-logs: a session of the project that has a Meko call log. */
+export interface MekoLogInfo {
+  sessionId: string;
+  name: string;
+  bytes: number;
+  updatedAt: number;
+}
+
+/** One call in a session's Meko call log, without what was sent and what came back. */
+export interface MekoCallSummary {
+  id: string;
+  /** Where its line starts in the file: the detail route's key, and `before` for the next page. */
+  offset: number;
+  at: number;
+  tool: string;
+  /** The learn step that made it, if any. */
+  learn: string | null;
+  ms: number;
+  ok: boolean;
+  attempts: number;
+  error: string | null;
+}
+
+/** GET /api/sessions/:id/meko-calls/:offset: one call, with what was sent and what came back. */
+export interface MekoCallDetail extends MekoCallSummary {
+  args: unknown;
+  /** The parsed reply, its text when it isn't JSON, or null when none came. */
+  result: unknown;
+}
+
+/** GET /api/sessions/:id/meko-calls: a page of a session's Meko calls, newest first. */
+export interface MekoCallPage {
+  calls: MekoCallSummary[];
+  /** Older calls match too: ask again with `before` set to the last call's offset. */
+  more: boolean;
 }
 
 export interface DatapackRef {
@@ -564,6 +612,8 @@ export interface Session {
   mergeQueueable: boolean;
   /** A gate pressed early, waiting to go (kept in state.db across restarts); null when none. */
   queued: QueuedGate | null;
+  /** The user's instructions for a queued Open PR (OpenPrRequest); null when it has none, or none is queued. */
+  queuedInstructions: string | null;
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   /**
@@ -630,6 +680,8 @@ export interface ReviewingPr {
   /** Commits on the PR since reviewSha; null when the PR's history was rewritten (a force-push). */
   newCommits: number | null;
   prState: 'OPEN' | 'CLOSED' | 'MERGED';
+  /** The PR's design (from Meko) has a version AgentK hasn't read: Update to latest has it read, with no new commits too. */
+  designUnread: boolean;
 }
 
 export interface ProjectWithSessions extends Project {
@@ -660,11 +712,6 @@ export interface MekoStatus {
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
-   * AgentK shares datapacks and answers invites through Meko's share API with our key: Meko is on
-   * and its API URL is known.
-   */
-  sharing: boolean;
-  /**
    * Whether Claude Code's sessions reach the Meko AgentK uses: the same server in Claude Code's
    * settings and on its `meko` MCP server, tokens there that work (accepted, and seeing AgentK's
    * project datapacks), and the plugin. Fixed only when the user asks (POST
@@ -688,6 +735,8 @@ export interface AppState {
   update: UpdateStatus;
   version: string;
   username: string;
+  /** The login gh is signed in as, or null until it has said (gh missing or signed out): `{login}` in a branch prefix. */
+  ghLogin: string | null;
   /** The name shown next to the user name: `[server] name` from config.toml, else the machine's short host name. */
   serverName: string;
   /** The machine's full host name as the OS reports it, for the tooltip when it differs from `serverName`. */
@@ -937,6 +986,68 @@ export interface ReviewablePrs {
   prs: ReviewablePr[];
   /** Set when GitHub couldn't be searched (the list is then empty). */
   error?: string;
+}
+
+/**
+ * GET /api/github-link?ref=: what pasting a GitHub PR or issue into Search would start, and where.
+ * A PR gets a Review a PR session, an issue a task that fixes or implements it.
+ */
+export interface LinkPlan {
+  kind: 'pr' | 'issue';
+  /** `owner/name` on GitHub. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: 'open' | 'closed' | 'merged';
+  /**
+   * The open project to start in: one with a datapack the description's Meko lines name, else the
+   * first on the repo. Null when none fits (then `newProject` is set).
+   */
+  project: LinkProject | null;
+  /** The project AgentK opens when no open project fits. */
+  newProject: LinkNewProject | null;
+  /** Running sessions already on it: a review of the PR, or tasks whose first prompt names the issue's link. */
+  existing: { sessionId: string; projectId: string; name: string }[];
+}
+
+export interface LinkProject {
+  id: string;
+  name: string;
+  /** `datapack`: it has a datapack the description names; `repo`: its repo is a clone of the link's. */
+  why: 'datapack' | 'repo';
+  /** The clone of the link's repo the session works in; null when it has to be cloned first. */
+  clone: string | null;
+}
+
+export interface LinkNewProject {
+  name: string;
+  /** A local clone of the link's repo it opens on; null when it clones `cloneUrl`. */
+  repoPath: string | null;
+  cloneUrl: string;
+  /**
+   * Its dedicated datapack: one the description names (`invite`: a share accepted on the way),
+   * `create` for a new one (an issue's project), or none.
+   */
+  datapack: { id: string; name: string; invite: boolean } | 'create' | null;
+  /** The closed project (its id) that opens again with that datapack, if any. */
+  reopens: string | null;
+}
+
+/** POST /api/github-link/start. */
+export interface StartFromLinkRequest {
+  /** The pasted link, or `owner/name#N`. */
+  ref: string;
+  /** The open project to start in; left out, AgentK opens the plan's new project (or uses an open one that fits by now). */
+  projectId?: string;
+  /** An issue's task: where it starts. Defaults to `design`. */
+  start?: 'design' | 'code';
+}
+
+export interface StartFromLinkResult {
+  project: Project;
+  session: Session;
 }
 
 /** An open PR a new task session can work on (New session → Advanced → Pull request). */
@@ -1212,6 +1323,11 @@ export interface DesignDoc {
    * `markdown` (the list under an "Open questions" heading of a markdown design), or null (none).
    */
   questionsSource: 'file' | 'markdown' | null;
+  /**
+   * For a Review a PR session: the Meko name of its PR's design (`design-<slug>.md` or `.html`, from
+   * the PR's `meko_design:` line), when this is that design fetched from Meko; null otherwise.
+   */
+  fromPr: string | null;
 }
 
 export interface DesignQuestionOption {
@@ -1399,9 +1515,9 @@ export interface CreateSessionRequest {
   /** A main git repo to work in instead of the project's (one of the scanned repos). */
   repoPath?: string;
   /**
-   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`. An
-   * existing branch (local, or only on origin) is picked up as it is, unless a running session
-   * uses it or another checkout has it.
+   * The branch, used as typed. Left out or empty, it's `<branchPrefix><slug of the name>`, with
+   * `{login}` in the prefix filled in. An existing branch (local, or only on origin) is picked up
+   * as it is, unless a running session uses it or another checkout has it.
    */
   branch?: string;
   /**
@@ -1440,23 +1556,42 @@ export interface CreateSessionRequest {
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
 export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
 
+/** The most characters of instructions a move or Open PR takes (`MoveSessionRequest`, `OpenPrRequest`). */
+export const INSTRUCTIONS_MAX = 10_000;
+
 /** Moves a task session to another stage (see `src/shared/stages.ts` for the rules). */
 export interface MoveSessionRequest {
   stage: MoveTarget;
   /**
-   * Send the new stage's prompt. Left out, it follows promptByDefault. Ignored for PR & Review,
-   * which picks up the branch's open PR, or sends the PR prompt when there's work to push.
+   * Send the new stage's prompt. Left out, it follows promptByDefault, as the move dialog leaves it;
+   * kept for pages from before the dialog dropped its checkbox. Ignored for PR & Review, which
+   * picks up the branch's open PR, or sends the PR prompt when there's work to push.
    */
   prompt?: boolean;
-  /** The task, for a session that has none yet (one started at Explore without a first prompt). */
+  /**
+   * The task, for a session that has none yet (one started at Explore without a first prompt); the
+   * stage's start prompt then goes with it. Optional: without it, the move's prompt has AgentK carry
+   * on from the conversation, as it does for a session that has a task.
+   */
   task?: string;
+  /**
+   * The user's instructions for the new stage (at most INSTRUCTIONS_MAX characters; blank is
+   * none): sent after the stage's prompt, or after the `moved` line when the move sends none.
+   */
+  instructions?: string;
+}
+
+/** The optional body of the open-pr action. */
+export interface OpenPrRequest {
+  /** The user's instructions, sent after the PR prompt (at most INSTRUCTIONS_MAX characters; blank is none). */
+  instructions?: string;
 }
 
 export type SessionAction =
   | 'approve-design'
   /** Withdraws an approval waiting for AgentK's turn to end (`Session.approvalQueued`). */
   | 'cancel-approval'
-  /** Sends the PR prompt, or mid-turn queues it for the turn's end (`Session.queued`). */
+  /** Sends the PR prompt, or mid-turn queues it for the turn's end (`Session.queued`); takes an optional OpenPrRequest. */
   | 'open-pr'
   /** Merges now, or queues the merge when only blockers that clear by themselves are left (`Session.mergeQueueable`). */
   | 'merge'
@@ -1554,7 +1689,7 @@ export type TermServerMessage =
 //        the email is remembered for that GitHub login)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
-//        The four above answer 409 when AgentK can't share (AppState.meko.sharing false).
+//        The four above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
 // POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the Open project dialog's one read of Meko)
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204
@@ -1573,6 +1708,7 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
+// GET    /api/projects/:id/meko-logs           → MekoLogInfo[]   (the project's sessions with a Meko call log, newest first)
 // GET    /api/projects/:id/pr-reviewers        → PrReviewers[]   (the open PRs of the project's running sessions)
 // GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
 //        project's datapacks, in any repo; with `pr` (a number, #number, owner/name#number or PR link) that one PR,
@@ -1580,6 +1716,11 @@ export type TermServerMessage =
 // GET    /api/projects/:id/task-prs?repoPath=&pr= → TaskPrs   (your open PRs in `repoPath` (default: the project's
 //        repo), newest first; with `pr` (a number, #number, owner/name#number or PR link) that one PR; 400 for a PR
 //        that can't be found or isn't open)
+// GET    /api/github-link?ref=             → LinkPlan   (a pasted GitHub PR or issue: link or owner/name#N; 400 for anything
+//        else or one GitHub can't find)
+// POST   /api/github-link/start StartFromLinkRequest → StartFromLinkResult   (starts a Review a PR session on a PR, or a
+//        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
+//        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
@@ -1604,7 +1745,10 @@ export type TermServerMessage =
 //        end (Session.approvalQueued) and dropped if the turn changes the design; without the mod that's a 409. Once
 //        sent, every open question is resolved, with its answer or left to AgentK (reopened on a move back to Design).
 //        cancel-approval withdraws it: 409 when none is queued. open-pr while AgentK is mid-turn or Claude is starting is
-//        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it.
+//        queued for the turn's end (Session.queued), and 409 when Claude exited or waits on the user with no turn behind it;
+//        it takes an optional OpenPrRequest (400 for instructions that aren't text or are too long), whose instructions
+//        go after the PR prompt and are kept with a queued one (Session.queuedInstructions). Pressed again while one is
+//        queued, a request with instructions replaces them (blank ones remove them); one without keeps them.
 //        merge while the only blockers clear by themselves (Session.mergeQueueable) is queued and goes at the first poll
 //        that finds none; any other blocker is a 409, and one found later drops a queued merge, mid-turn or not (the user
 //        is notified). cancel-queued withdraws either, a queued Open PR up to the moment its prompt is typed: 409 when
@@ -1613,9 +1757,10 @@ export type TermServerMessage =
 //        an optional CloseSessionRequest (400 for a skipLearn that isn't a boolean): skipLearn skips the learn step they
 //        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
 //        when the step ends; asked again with skipLearn, it discards now)
-// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to or a
-//        missing task; 409 while AgentK is mid-turn, in Merge & Close, or a prompt is due and Claude is waiting or exited;
-//        502 when the move was made but its prompt couldn't be sent)
+// POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
+//        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
+//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when its prompt
+//        couldn't be sent: the move stays made, except a PR prompt's, which goes back to where it was)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
 //        and resolves the questions answered with their answers in questions.json, unless the questions come from a
@@ -1625,6 +1770,11 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
+// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&failed=1 → MekoCallPage   (the session's Meko call log, newest
+//        first, read backwards from the byte offset `before`; limit 1 to 200, default 50; an empty page when it has none)
+// GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
+// GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
+// DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)
 // GET    /api/sessions/:id/changes             → SessionChanges
 // GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;

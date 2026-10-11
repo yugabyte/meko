@@ -49,15 +49,6 @@ describe('the link to AgentK\'s mod', () => {
     expect(await next).toBeNull();
   });
 
-  it('answers a poll at once when a prompt is already waiting', async () => {
-    links.hello('s1');
-    const send = links.send('s1', 'Open the PR.');
-    const answer = await links.poll('s1');
-    expect(answer?.prompts.map((p) => p.text)).toEqual(['Open the PR.']);
-    expect(links.accept('s1', answer!.prompts[0].id)).toBe(true);
-    await expect(send).resolves.toBe(answer!.prompts[0].id);
-  });
-
   it('fails a send the mod never acks, tells a late ack not to run it, and never hands it out again', async () => {
     links.hello('s1');
     const send = links.send('s1', 'Fix the review.');

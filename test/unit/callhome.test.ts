@@ -3,16 +3,15 @@ import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MekoStatus, CallHomeInstall, CallHomeReport } from '../../src/shared/types.js';
-import { DEFAULT_CONFIG, loadConfig, saveConfig, type Config } from '../../src/server/config.js';
+import type { CallHomeInstall, CallHomeReport } from '../../src/shared/types.js';
+import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import { kvGet, kvSet, openDb, run, type Db } from '../../src/server/db.js';
 import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, sumFileTypes } from '../../src/server/filetypes.js';
 import type { Logger } from '../../src/server/log.js';
-import { getPaths } from '../../src/server/paths.js';
 import {
   CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_DAY_MS, FIRST_DAY_SEND_AFTER_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, NEW_INSTALL_FIRST_CHECK_MS, REPORT_DAYS,
   SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport, callHomeKind,
-  installFacts, utcDay, type Probe,
+  installFacts, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
 import { usageOverview } from '../../src/server/usage.js';
@@ -511,7 +510,6 @@ describe('the usage stats report', () => {
 });
 
 describe('what the report says about the install', () => {
-  const meko: MekoStatus = { configured: true, webUrl: null, sharing: true, claude: { gaps: [], unchecked: [], checking: false } };
   const probe = (answers: Record<string, string | Error>): Probe => async (cmd) => {
     const a = answers[cmd];
     if (a instanceof Error || a === undefined) throw a ?? new Error('not found');
@@ -523,13 +521,14 @@ describe('what the report says about the install', () => {
     cfg.server.bind = '127.0.0.1';
     cfg.meko.apiKey = 'key';
     cfg.update.channel = 'prerelease';
-    const facts = await installFacts({ config: cfg, version: '0.20260928.0', meko, firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n' }) });
+    const facts = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n' }) });
     expect(facts).toMatchObject({
       version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
       claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
     });
-    // Without Meko's API URL, AgentK can't share.
-    const noApi = await installFacts({ config: cfg, version: '0.20260928.0', meko: { ...meko, sharing: false }, firstDay: '2026-09-28', probe: probe({}) });
+    // A self-hosted Meko with no web app or API URL set: AgentK can't share.
+    cfg.meko.url = 'https://meko.example.com/mcp';
+    const noApi = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({}) });
     expect(noApi.meko).toEqual({ enabled: true, keySource: 'config', sharing: 'none' });
   });
 
@@ -549,7 +548,7 @@ describe('what the report says about the install', () => {
 
   it('leaves out versions it cannot read, and Meko details when Meko is off', async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
-    const facts = await installFacts({ config: cfg, version: 'not a version!', meko, firstDay: '2026-09-28', probe: probe({ claude: 'no digits here' }) });
+    const facts = await installFacts({ config: cfg, version: 'not a version!', firstDay: '2026-09-28', probe: probe({ claude: 'no digits here' }) });
     expect(facts).not.toHaveProperty('tmux');
     expect(facts).toMatchObject({ version: '0.0.0', claudeCode: '', access: 'remote', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
   });
@@ -560,26 +559,6 @@ describe('what the report says about the install', () => {
     writeFileSync(join(dir, 'CALL_HOME_URL'), 'https://collector.test\n');
     expect(bakedCallHomeUrl(dir)).toBe('https://collector.test');
     expect(bakedCallHomeUrl(undefined)).toBe('');
-  });
-});
-
-describe('[call_home] in config.toml', () => {
-  it('is on by default, can be turned off, and is written only when changed', () => {
-    const paths = getPaths(tempDir('akl-callhome-cfg-'));
-    expect(loadConfig(paths).callHome).toEqual({ enabled: true, url: '' });
-    saveConfig(paths, structuredClone(DEFAULT_CONFIG));
-    expect(readFileSync(paths.config, 'utf8')).not.toContain('call_home');
-
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.callHome.enabled = false;
-    saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).toMatch(/\[call_home\]\nenabled = false/);
-    expect(loadConfig(paths).callHome).toEqual({ enabled: false, url: '' });
-
-    writeFileSync(paths.config, '[call_home]\nenabled = "no"\nurl = "https://collector.test"\n');
-    const warnings: string[] = [];
-    expect(loadConfig(paths, (m) => warnings.push(m)).callHome).toEqual({ enabled: true, url: 'https://collector.test' });
-    expect(warnings).toEqual(['config.toml: call_home.enabled should be a boolean; using the default (true)']);
   });
 });
 
@@ -601,7 +580,7 @@ describe('sending the report', () => {
     const logs: string[] = [];
     const log: Logger = { info: (m) => logs.push(`info ${m}`), warn: (m) => logs.push(`warn ${m}`), error: (m) => logs.push(`error ${m}`) };
     const service = () => new CallHomeService({
-      db, config: () => cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false, claude: { gaps: [], unchecked: [], checking: false } }), log,
+      db, config: () => cfg, version: '0.20260928.0', log,
       fetch: fetchImpl, now: () => clock.now, bakedUrl: () => o.baked ?? '', probe: async () => { throw new Error('no probes in tests'); },
       maxReportBytes: o.maxReportBytes,
     });
@@ -655,7 +634,7 @@ describe('sending the report', () => {
   it("stamps a report with its check's time, however long the send takes", async () => {
     const t = setup();
     const svc = new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false, claude: { gaps: [], unchecked: [], checking: false } }),
+      db: t.db, config: () => t.cfg, version: '0.20260928.0',
       log: { info() {}, warn() {}, error() {} }, now: () => t.clock.now, probe: async () => '',
       fetch: (async () => {
         t.clock.now += 6 * 60_000;
@@ -778,7 +757,7 @@ describe('sending the report', () => {
     vi.useFakeTimers();
     const t = setup();
     const service = () => new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0', meko: () => ({ configured: false, webUrl: null, sharing: false, claude: { gaps: [], unchecked: [], checking: false } }),
+      db: t.db, config: () => t.cfg, version: '0.20260928.0',
       log: { info() {}, warn() {}, error() {} }, fetch: (async () => new Response(null, { status: 204 })) as typeof fetch,
       now: () => Date.now(), probe: async () => '', random: () => 0.5,
     });
@@ -821,11 +800,6 @@ describe('sending the report', () => {
     svc2.stop();
     await vi.advanceTimersByTimeAsync(FIRST_CHECK_MS[1]);
     expect(tick2).not.toHaveBeenCalled();
-  });
-
-  it('uses UTC days', () => {
-    expect(utcDay(Date.parse('2026-09-28T23:59:59Z'))).toBe('2026-09-28');
-    expect(utcDay(Date.parse('2026-09-29T00:00:00Z'))).toBe('2026-09-29');
   });
 });
 

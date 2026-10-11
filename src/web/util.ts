@@ -1,13 +1,18 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
+import { INSTRUCTIONS_MAX } from '../shared/types';
 import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
+/** What a status dot shows: the session's status, or `learning` while AgentK saves what it learned to Meko. */
+export type DotState = SessionStatus | 'learning';
+
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
-const URGENCY: Record<SessionStatus, number> = {
+const URGENCY: Record<DotState, number> = {
   needs_input: 6,
   exited: 5,
   working: 4,
   starting: 4,
+  learning: 4,
   recovered: 3,
   idle: 2,
   archived: 0,
@@ -97,13 +102,28 @@ export function sessionToOpen(live: Session[], lastOpenId: string | undefined): 
   );
 }
 
-export function aggregateStatus(p: ProjectWithSessions): SessionStatus {
-  let best: SessionStatus = 'idle';
-  for (const s of liveSessions(p)) if (URGENCY[s.status] > URGENCY[best]) best = s.status;
+/**
+ * The statuses a learn step shows over: Claude between turns (the mod's step) or in the typed
+ * learn turn. Needs you, exited and starting win.
+ */
+const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
+
+/** What a session's dot shows (`Session.learning` over idle, recovered and working). */
+export function dotState(s: Pick<Session, 'status' | 'learning'>): DotState {
+  return s.learning && LEARNING_SHOWS.has(s.status) ? 'learning' : s.status;
+}
+
+/** The project's dot in the rail: its most urgent session's. */
+export function aggregateDot(p: ProjectWithSessions): DotState {
+  let best: DotState = 'idle';
+  for (const s of liveSessions(p)) {
+    const dot = dotState(s);
+    if (URGENCY[dot] > URGENCY[best]) best = dot;
+  }
   return best;
 }
 
-export const STATUS_TEXT: Record<SessionStatus, string> = {
+export const STATUS_TEXT: Record<DotState, string> = {
   starting: 'starting',
   working: 'working',
   needs_input: 'needs you',
@@ -111,7 +131,11 @@ export const STATUS_TEXT: Record<SessionStatus, string> = {
   exited: 'exited',
   recovered: 'recovered after restart',
   archived: 'archived',
+  learning: 'learning',
 };
+
+/** A learning dot's tooltip. */
+export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
 
 /** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {
@@ -341,6 +365,23 @@ function otherPrompt(session: Session): boolean {
   if (session.statusDetail.startsWith(ASKING)) return true;
   // (Plan mode's approval dialog can carry Claude's own wording, so any mention of a plan is allowed.)
   return !/plan/i.test(session.statusDetail);
+}
+
+/**
+ * Why Claude can't take a prompt typed by a move (its stage's, or the user's instructions), or null.
+ * Mirrors checkPromptable in lifecycle.ts; the move dialog checks the turn itself.
+ */
+export function promptBlocker(session: Session): string | null {
+  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (session.status === 'needs_input' && session.statusDetail !== DESIGN_READY) return 'AgentK is waiting on you in the terminal. Answer it first.';
+  return null;
+}
+
+/** Why the user's instructions for a move or Open PR can't go: too long (INSTRUCTIONS_MAX), or null. */
+export function instructionsBlocker(text: string): string | null {
+  const n = text.trim().length;
+  if (n <= INSTRUCTIONS_MAX) return null;
+  return `Instructions can be at most ${INSTRUCTIONS_MAX.toLocaleString('en-US')} characters; these have ${n.toLocaleString('en-US')}.`;
 }
 
 /**

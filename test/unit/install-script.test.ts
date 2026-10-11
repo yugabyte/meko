@@ -162,14 +162,6 @@ describe('install.sh: installing missing tools', () => {
     expect(r.err).not.toContain('(as root) dnf');
   });
 
-  it('uses Homebrew on a Mac', () => {
-    have('git', 'curl');
-    const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
-    expect(r.code).toBe(0);
-    expect(r.calls).toContain('brew install gh');
-    expect(r.calls.some((c) => c.startsWith('sudo'))).toBe(false);
-  });
-
   // A brew that installs what it can from the repo, then exits with an error (as on a macOS
   // Homebrew builds from source for).
   const failingBrew = () =>
@@ -196,13 +188,6 @@ describe('install.sh: installing missing tools', () => {
     expect(r.err).not.toContain('going on');
   });
 
-  it('needs no tmux', () => {
-    have('git', 'curl', 'gh');
-    const r = run(['--non-interactive']);
-    expect(r.code).toBe(0);
-    expect(r.err).not.toMatch(/tmux/i);
-  });
-
   it('stops when the Linux package manager exits with an error, even if the tools landed', () => {
     have('gh');
     // A failed dnf or apt-get can leave the package database half-configured.
@@ -213,7 +198,7 @@ describe('install.sh: installing missing tools', () => {
     expect(r.err).not.toContain('going on');
   });
 
-  it('finds Homebrew outside PATH without garbling its own output', () => {
+  it('uses Homebrew on a Mac, finding it outside PATH without garbling its own output', () => {
     have('git', 'curl');
     // brew in its usual folder but not on PATH, as in a fresh shell on a Mac.
     const brewDir = join(root, 'homebrew', 'bin');
@@ -222,6 +207,7 @@ describe('install.sh: installing missing tools', () => {
     const r = run(['--non-interactive', '--install-deps'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64', AK_BREW_DIRS: brewDir });
     expect(r.code).toBe(0);
     expect(r.calls).toContain('brew install gh');
+    expect(r.calls.some((c) => c.startsWith('sudo'))).toBe(false);
     // The folder it looked in never leaks into the messages (it once shared a name with a color code).
     expect(r.err).not.toContain(brewDir);
   });
@@ -244,12 +230,13 @@ describe('install.sh: installing missing tools', () => {
     expect(r.err).toMatch(/Install Homebrew \(https:\/\/brew\.sh\)/);
   });
 
-  it('installs nothing when every tool is there, and never with --no-install-deps', () => {
+  it('installs nothing when every tool is there (tmux isn\'t one), and never with --no-install-deps', () => {
     have('git', 'curl', 'gh');
     const ok = run(['--non-interactive']);
     expect(ok.code).toBe(0);
     expect(ok.calls).toEqual([]);
     expect(ok.err).toContain('Tools');
+    expect(ok.err).not.toMatch(/tmux/i);
     rmSync(join(bin, 'git'));
     const no = run(['--no-install-deps']);
     expect(no.code).toBe(1);
@@ -260,14 +247,22 @@ describe('install.sh: installing missing tools', () => {
   /** Runs the script in a terminal, answering its question with `answer`. */
   function runInTerminal(answer: string, prompt = 'Install them now?'): Promise<{ code: number; out: string; calls: string[] }> {
     return new Promise((resolve) => {
-      const p = pty.spawn(join(bin, 'sh'), [SCRIPT, '--deps-only'], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
+      // Once the script ends, a shell keeps the terminal open until its last output is read: a pty
+      // whose program has exited can lose what it wrote just before.
+      const wrap = 'sh "$0" --deps-only; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
+      const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
       let out = '';
       let asked = false;
+      let ended = false;
       p.onData((d) => {
         out += d;
         if (!asked && out.includes(prompt)) {
           asked = true;
           p.write(`${answer}\r`);
+        }
+        if (!ended && /\[exited \d+\]/.test(out)) {
+          ended = true;
+          p.write('\r');
         }
       });
       p.onExit(({ exitCode }) => resolve({ code: exitCode, out, calls: calls() }));
@@ -415,20 +410,19 @@ exit 0`);
     expect(current()).toBe('1.2.4');
   });
 
-  it('installs again when the services aren\'t set up (an install that failed there, or was uninstalled)', () => {
-    writeFileSync(join(root, 'no-services'), '');
+  it.each([
+    // An install that failed at its services, or was uninstalled.
+    ["the services aren't set up", () => writeFileSync(join(root, 'no-services'), '')],
+    ['~/.local/bin/agent-k-local is gone', () => rmSync(join(home, '.local', 'bin', 'agent-k-local'))],
+    // An install that stopped before its setup was saved.
+    ['config.toml is missing', () => rmSync(join(akHome(), 'config.toml'))],
+  ])('installs again when %s', (_, breakIt) => {
+    breakIt();
     const r = runAll(['--non-interactive']);
     expect(r.err).not.toContain('already installed');
     expect(r.code).toBe(0);
     expect(r.calls).toContain('agent-k-local install --non-interactive');
     expect(current()).toBe('1.2.4');
-  });
-
-  it('installs again when ~/.local/bin/agent-k-local is gone', () => {
-    rmSync(join(home, '.local', 'bin', 'agent-k-local'));
-    const r = runAll(['--non-interactive']);
-    expect(r.err).not.toContain('already installed');
-    expect(r.calls).toContain('agent-k-local install --non-interactive');
     expect(existsSync(join(home, '.local', 'bin', 'agent-k-local'))).toBe(true);
   });
 
@@ -450,15 +444,6 @@ exit 0`);
     const unset = runAll(['--non-interactive'], env);
     expect(unset.err).not.toContain('already installed');
     expect(downloads(unset.calls).length).toBeGreaterThan(0);
-  });
-
-  it('finishes an install that stopped before its setup was saved', () => {
-    rmSync(join(akHome(), 'config.toml'));
-    const r = runAll(['--non-interactive']);
-    expect(r.err).not.toContain('already installed');
-    expect(r.code).toBe(0);
-    expect(r.calls).toContain('agent-k-local install --non-interactive');
-    expect(current()).toBe('1.2.4');
   });
 
   it('installs into another AK_HOME', () => {

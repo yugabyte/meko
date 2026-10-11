@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -16,11 +17,17 @@ import { findPr, isRepoName, issueText, prInfo, type PrInfo } from './github.js'
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
-import { launchedAgentId, sessionAgentId } from './meko.js';
-import { designQuestionsLine, loadPrompt, mekoLearnLine, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, withAttachedImages, type PromptName } from './prompts.js';
-import { HttpError } from './projects.js';
+import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
+import { mekoLogPath, removeMekoLog } from './mekolog.js';
+import {
+  DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
+  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
+} from './prompts.js';
+import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
+import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
+import { expandBranchPrefix } from '../shared/branches.js';
 import {
   EDIT_TOOLS, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
 } from './claude.js';
@@ -34,6 +41,7 @@ import {
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
 import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
+import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
 const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
@@ -116,8 +124,10 @@ export const MISSED_START_MS = 20_000;
 const TRANSCRIPT_ACTIVE_MS = 15_000;
 /** How long stopping a session waits for its last turns to reach Meko. */
 const FINAL_CAPTURE_MS = 15000;
-/** How long a new session waits for its Meko conversation to be created before Claude starts anyway. */
+/** How long a launch waits for the session's Meko conversation (its id goes in the system prompt) before Claude starts anyway. */
 const NAME_CONVERSATION_MS = 5000;
+/** After a launch gave up waiting on Meko for that, how long resumed and recovered launches don't wait (recovery launches one at a time). */
+const SLOW_CONVERSATION_MS = 60_000;
 /** How many failed starts are kept for Try again. */
 const MAX_FAILED_STARTS = 20;
 /** How long stopping a session waits for it to finish starting. */
@@ -144,12 +154,12 @@ const LINK_PR_MS = 5000;
  * The "created" event: where the branch started, and what happened to the local base. For an
  * existing branch, <sync> is what happened to it: fast-forwarded to its remote's copy, or not.
  */
-/** The paths of the images added in the New session dialog that reached the session. */
+/** The paths of the images added in the New session dialog that reached the session, as Claude reads them. */
 export function startImages(row: SessionRow): string[] {
   if (!row.start_images) return [];
   try {
     const paths: unknown = JSON.parse(row.start_images);
-    return Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [];
+    return Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string').map((p) => claudePath(p)) : [];
   } catch {
     return [];
   }
@@ -199,6 +209,8 @@ export class SessionManager {
   private busy = new Set<string>();
   private diffs = new Map<string, { added: number; removed: number } | null>();
   private mergeInfo = new Map<string, MergeInfo>();
+  /** Until when launches don't wait for their Meko conversation (see launchConversation). */
+  private conversationSlowUntil = 0;
   /** Sessions showing Claude's plan-approval dialog. */
   readonly planPending = new Set<string>();
   /** Sessions being launched right now; reconcile leaves them alone. */
@@ -323,11 +335,11 @@ export class SessionManager {
     return r;
   }
 
-  /** Saves an image pasted into the session's terminal, for the browser to paste its path. */
+  /** Saves an image pasted into the session's terminal, for the browser to paste its path (as Claude reads it). */
   pasteImage(id: string, data: unknown): PastedImage {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-    return { path: savePastedImage(this.core.paths.pastes, row.id, data) };
+    return { path: claudePath(savePastedImage(this.core.paths.pastes, row.id, data)) };
   }
 
   /** Saves an image added in the New session dialog, until a session is created with it. */
@@ -485,8 +497,10 @@ export class SessionManager {
     // Pushes go where the PR's head is, when that isn't origin's branch of the same name.
     const push = attach && (from.remote !== 'origin' || from.branch !== wanted) ? from : null;
 
-    const slug = await this.uniqueSlug(projectId, repo, wanted ? null : settings.branchPrefix, review ? `review-pr-${review.info.number}` : slugify(name));
-    const branch = wanted || `${settings.branchPrefix}${slug}`;
+    // A new branch's prefix names you (ak_<GitHub login>/ by default).
+    const prefix = wanted ? null : expandBranchPrefix(settings.branchPrefix, await this.core.ghLogin(repo));
+    const slug = await this.uniqueSlug(projectId, repo, prefix, review ? `review-pr-${review.info.number}` : slugify(name));
+    const branch = wanted || `${prefix}${slug}`;
     const id = `${projectId}--${slug}`;
     const now = Date.now();
     const pool = this.core.worktrees;
@@ -532,6 +546,15 @@ export class SessionManager {
     return { session: this.get(id), done };
   }
 
+  /**
+   * Fetches the design a reviewed PR's description names and keeps it as the review's design (see
+   * LifecycleManager.refreshPrDesign, which the review's polls use too). Never throws: a review
+   * without its PR's design starts as before.
+   */
+  private async loadPrDesign(row: SessionRow, body: string): Promise<void> {
+    await this.core.lifecycle.refreshPrDesign(row.id, body).catch((e: unknown) => this.core.log.warn(`fetching the PR's design failed for ${row.id}`, errMsg(e)));
+  }
+
   /** The slow part of `begin`: the PR head for a review, the worktree, then Claude. */
   private async finishCreate(id: string, c: {
     request: CreateSessionRequest; repo: string; worktree: string; reused: boolean; branch: string; base: string;
@@ -543,7 +566,10 @@ export class SessionManager {
     // A review searches on the PR: its title and description (where the author's design is
     // summed up), and the user's notes.
     this.startRecall(this.row(id), review ? [review.info.title, withoutMekoLines(review.info.body), c.notes].filter(Boolean).join('\n') : task);
+    // Started now; launch() waits for it before Claude starts, and gives Claude its id.
     const naming = this.nameConversation(this.row(id));
+    // The PR's design, fetched from Meko while the PR and the worktree are made ready.
+    const design = review ? this.loadPrDesign(this.row(id), review.info.body) : null;
     let sha: string | undefined;
     if (review) {
       try {
@@ -572,14 +598,17 @@ export class SessionManager {
       waiting = false;
     }
 
+    // The first prompt says where the PR's design is, if it came in time; one that comes later is still shown.
+    if (design) await within(design, PR_DESIGN_TIMEOUT_MS);
     const row = this.row(id);
     const first = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
+    const told = review && first ? prDesignSource(this.core, id) : null;
+    if (told) markPrDesignTold(this.core, id, told.ref.sha256);
     // A session on an existing branch is told so first, so it builds on the work there.
     const prompt = first && row.branch_reused && row.kind !== 'review-pr' ? `${this.prompt(row, 'attached', this.attachedVars(row))}\n\n${first}` : first;
     this.setStartup(id, 'launch');
-    await within(naming, NAME_CONVERSATION_MS);
     try {
-      await this.launch(row, { resume: false, prompt });
+      await this.launch(row, { resume: false, prompt, conversation: naming });
     } catch (e) {
       this.startup.delete(id);
       if (e instanceof HttpError && e.status === 409) throw e;
@@ -652,6 +681,8 @@ export class SessionManager {
     release();
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
+    removeMekoLog(this.core.paths.designs, id);
+    if (row?.kind === 'review-pr') removePrDesignFiles(this.core, id);
     run(this.db, 'DELETE FROM sessions WHERE id = ?', id);
     this.core.changed();
     return new HttpError(400, message);
@@ -816,14 +847,14 @@ export class SessionManager {
     };
   }
 
-  /** Where Claude writes a markdown design during the Design stage (outside the repo). */
+  /** Where Claude writes a markdown design during the Design stage (outside the repo), as Claude is told it. */
   designFile(row: SessionRow): string {
-    return join(this.core.paths.designs, row.id, 'design.md');
+    return claudePath(join(this.core.paths.designs, row.id, 'design.md'));
   }
 
   /** Where Claude lists the design's open questions, beside the markdown design. */
   questionsFile(row: SessionRow): string {
-    return join(this.core.paths.designs, row.id, 'questions.json');
+    return claudePath(join(this.core.paths.designs, row.id, 'questions.json'));
   }
 
   /**
@@ -861,7 +892,7 @@ export class SessionManager {
       : {};
     const text = render(loadPrompt(this.db, name, row.worktree_path), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
-      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(row.initial_prompt ?? '', startImages(row)),
+      task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
       base: row.base_branch,
       pr: row.pr_number,
@@ -875,8 +906,28 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...this.designLines(row, name, extra), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
+  }
+
+  /**
+   * A prompt's lines about the design, added in code so a repo's own prompts get them too: for a
+   * task with a design, the approval asks for its questions and decisions in it before coding, and
+   * the prompts that change code later ask to keep it current; for a review, where AgentK put the
+   * PR's design (in its first prompt, and in the summary after Update to latest when it changed).
+   */
+  private designLines(row: SessionRow, name: PromptName, extra: Record<string, string | number | null>): string[] {
+    if (row.kind === 'review-pr') {
+      // Update to latest's prompts say it when Claude hasn't read this version ('new': any version).
+      const news = name === 'review-pr' ? 'first' : (name === 'review-pr-update' || name === 'review-pr-design') ? extra.design : null;
+      const src = news ? prDesignSource(this.core, row.id) : null;
+      return src ? [reviewDesignLine(src.ref.name, claudePath(prDesignFile(this.core, row, src.ref.name)), news === 'changed')] : [];
+    }
+    if (row.plan_mode || !DESIGN_UPKEEP_PROMPTS.includes(name)) return [];
+    const d = get<{ artifact_url: string | null; html: string | null }>(this.db, 'SELECT artifact_url, html FROM designs WHERE session_id = ?', row.id);
+    if (!d) return [];
+    const where = designWhere(d.html !== null ? d.artifact_url : null, this.designFile(row));
+    return name === 'approved' ? [designQaLine(where, this.questionsFile(row)), designUpkeepLine(where)] : [designUpkeepLine(where)];
   }
 
   /** The project's datapacks for a session to use: none while Meko is off, so nothing points it at Meko. */
@@ -904,6 +955,8 @@ export class SessionManager {
       ...(this.core.capture.enabled ? {} : { MEKO_CHECKPOINT_INTERVAL: String(MAX_TIMER_SECS) }),
       // Plugins' hooks modules are early access in Claude Code, off unless this says otherwise.
       ...(mod ? { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } : {}),
+      // A home under /net: Claude reaches ~/.claude (memory, skills, plugins) by its local spelling.
+      ...(claudePath(homedir()) !== homedir() ? { HOME: claudePath(homedir()) } : {}),
     };
   }
 
@@ -918,7 +971,7 @@ export class SessionManager {
   }
 
 
-  private systemPrompt(row: SessionRow): string {
+  private systemPrompt(row: SessionRow, conversationId: string | null): string {
     const p = projectRow(this.db, row.project_id);
     const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
@@ -935,7 +988,14 @@ export class SessionManager {
     if (shared.length) {
       lines.push(`Shared datapacks you may search (read-only, pass datapack_id explicitly): ${shared.map((d) => `"${d.name}" (${d.id})`).join(', ')}.`);
     }
-    if (dps.length) lines.push(mekoRecallSystemLine());
+    if (dps.length) {
+      // The same conversation launchConversation looks up: the session's, else the project's.
+      const make = dedicated
+        ? { sessionId: row.claude_session_id, agentId: launchedAgentId(row), datapackId: dedicated.id }
+        : { sessionId: projectConversationKey(row.project_id), agentId: AGENTK_AGENT_ID, datapackId: null };
+      lines.push(mekoConversationLine(conversationId, make));
+      lines.push(mekoRecallSystemLine());
+    }
     if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
     return lines.join('\n');
@@ -992,18 +1052,24 @@ export class SessionManager {
 
   /**
    * Starts (or restarts) Claude in the session's pane in the session host. Callers mark the session as
-   * creating or launching for the whole start (see `starting()`).
+   * creating or launching for the whole start (see `starting()`). `conversation`: the session's
+   * Meko conversation id under way (a new session names it early).
    */
-  async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null }): Promise<void> {
+  async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
     // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
     const repo = sessionRepo(this.db, row);
     if (repo) await this.trustRepo(repo);
+    // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
+    // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
+    const cwd = claudePath(row.worktree_path);
+    if (cwd !== row.worktree_path) await this.trustRepo(cwd, true);
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
     const mod = await this.modDir();
+    const conversation = await this.launchConversation(row, opts.conversation);
     const script = writeLauncher(this.core.paths, {
       sessionId: row.id,
       worktree: row.worktree_path,
@@ -1014,7 +1080,7 @@ export class SessionManager {
       planMode: row.stage === 'design' && !!row.plan_mode,
       addDirs: [designDir],
       pluginDirs: mod ? [mod] : [],
-      appendSystemPrompt: this.systemPrompt(row),
+      appendSystemPrompt: this.systemPrompt(row, conversation),
       prompt: opts.prompt,
       env: this.env(row, !!mod),
       unsetEnv: SESSION_ENV_UNSET,
@@ -1029,7 +1095,7 @@ export class SessionManager {
     this.forgetClaude(row.id);
     this.contextFill.delete(row.id);
     try {
-      await this.core.host.spawn(row.tmux_name, row.worktree_path, ['/bin/sh', script]);
+      await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script]);
     } catch (e) {
       this.awaitingStart.delete(row.id);
       throw e;
@@ -1040,12 +1106,13 @@ export class SessionManager {
   /**
    * Makes sure Claude Code trusts the repo. Other Claude processes rewrite
    * ~/.claude.json with their own copy when they start, which can drop a
-   * fresh entry, so a new entry is checked again after a moment.
+   * fresh entry, so a new entry is checked again after a moment. `exact`: only an entry for
+   * `repo` itself counts, not one for a parent.
    */
-  async trustRepo(repo: string): Promise<void> {
+  async trustRepo(repo: string, exact = false): Promise<void> {
     try {
       for (let i = 0; i < 3; i++) {
-        if (ensureWorkspaceTrust(repo) !== 'added') return;
+        if (ensureWorkspaceTrust(repo, exact) !== 'added') return;
         await sleep(400);
       }
     } catch (e) {
@@ -1102,7 +1169,8 @@ export class SessionManager {
     if (typeof raw !== 'string' || !raw) return null;
     const file = resolve(p.cwd || row.worktree_path, raw);
     const repo = sessionRepo(this.db, row);
-    const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d)]);
+    // Claude reaches the worktree by its local spelling (claudePath), which realpath doesn't give.
+    const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
     if (!roots.some((d) => file === d || file.startsWith(d + sep))) return null;
     return {
       hookSpecificOutput: {
@@ -1336,7 +1404,8 @@ export class SessionManager {
           const resp = JSON.stringify(p.tool_response ?? '').toLowerCase();
           if (row.stage === 'design' && !/reject|denied|keep planning/.test(resp)) this.core.lifecycle.designApproved(id, 'you');
         }
-        if (p.tool_name === 'Artifact' && row.stage === 'design' && !row.plan_mode) await this.core.lifecycle.captureArtifact(id, p);
+        // During Design any publish is the design; later only a republish of the design's own Artifact.
+        if (p.tool_name === 'Artifact' && !row.plan_mode && row.kind !== 'review-pr') await this.core.lifecycle.captureArtifact(id, p, row.stage !== 'design');
         if (row.status !== 'working') this.setStatus(id, 'working');
         // Keep usage live during long turns without reading the transcript on every tool call.
         if (Date.now() - (this.usageReadAt.get(id) ?? 0) > 10_000) this.ingestUsage(id);
@@ -1373,6 +1442,8 @@ export class SessionManager {
         // A Design turn that wrote or republished the design (or changed its questions) leaves it
         // waiting for approval, unless the user approved it during the turn and it didn't change.
         const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));
+        // After the approval, a design Claude kept current is saved as a new version too.
+        if (row.stage !== 'design') await this.core.lifecycle.collectLaterDesign(this.row(id));
         const queued = await this.core.lifecycle.takeQueuedApproval(id, changed);
         if (queued === 'sent' || queued === 'failed') {
           /* the approval went (the session is in Code), or the design waits for it again */
@@ -1616,7 +1687,10 @@ export class SessionManager {
 
   // ---- actions ----
 
-  /** `body` is the request's: approve-design takes the user's answers to the design (DesignAnswersRequest). */
+  /**
+   * `body` is the request's: approve-design takes the user's answers to the design (DesignAnswersRequest),
+   * open-pr the user's instructions (OpenPrRequest), merge and discard a CloseSessionRequest.
+   */
   async action(id: string, action: SessionAction, body?: unknown): Promise<Session> {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
@@ -1625,7 +1699,7 @@ export class SessionManager {
       case 'approve-design': await lc.approveDesign(row, body); break;
       case 'cancel-approval': lc.cancelApproval(row); break;
       case 'cancel-queued': lc.cancelQueued(row); break;
-      case 'open-pr': await lc.openPr(row); break;
+      case 'open-pr': await lc.openPr(row, body); break;
       case 'merge': await lc.merge(row, closeRequest(body)); break;
       case 'request-review': await lc.requestReview(row, false); break;
       case 'force-review': await lc.requestReview(row, true); break;
@@ -1703,7 +1777,8 @@ export class SessionManager {
     if (req.name !== undefined) {
       const name = sessionName(req.name);
       if (name !== r.name) {
-        this.update(id, { name });
+        // A task that was its name (no first prompt) follows it, or Claude would get both names.
+        this.update(id, r.initial_prompt === r.name && kindOf(r.kind) === 'task' ? { name, initial_prompt: name } : { name });
         this.event(id, 'renamed', `Renamed from "${r.name}" to "${name}"`);
         void this.retitleConversation(this.row(id));
       }
@@ -1793,6 +1868,40 @@ export class SessionManager {
     return img;
   }
 
+  // ---- the Meko call log (mekolog.ts) ----
+
+  /** The project's sessions that have a Meko call log, the latest written to first. */
+  mekoLogs(projectId: string): MekoLogInfo[] {
+    if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
+    const out: MekoLogInfo[] = [];
+    for (const r of sessionRows(this.db, projectId)) {
+      const s = r.desired === 'archived' ? null : this.core.mekoLog.stat(r.id);
+      if (s) out.push({ sessionId: r.id, name: r.name, ...s });
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean }): Promise<MekoCallPage> {
+    return this.core.mekoLog.page(this.row(id).id, q);
+  }
+
+  async mekoCall(id: string, offset: number, callId: string): Promise<MekoCallDetail> {
+    const d = await this.core.mekoLog.detail(this.row(id).id, offset, callId);
+    if (!d) throw new HttpError(404, 'That call is no longer in the session\'s Meko call log.');
+    return d;
+  }
+
+  /** The session's Meko call log file, for a download. */
+  mekoLogFile(id: string): string {
+    const file = mekoLogPath(this.core.paths.designs, this.row(id).id);
+    if (!existsSync(file)) throw new HttpError(404, 'This session has no Meko call log.');
+    return file;
+  }
+
+  clearMekoLog(id: string): void {
+    this.core.mekoLog.clear(this.row(id).id);
+  }
+
   async discardCheck(id: string): Promise<DiscardCheck> {
     const row = this.row(id);
     const p = projectRow(this.db, row.project_id);
@@ -1837,7 +1946,9 @@ export class SessionManager {
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
+      removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
+      this.core.learn.forget(row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
@@ -1945,7 +2056,9 @@ export class SessionManager {
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
+      removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
+      this.core.learn.forget(row.id);
     }
     removeStaged(this.core.paths.pastes, projectId);
     // Idle worktrees stay for the repo's other projects; the last project on the repo takes them along.
@@ -1989,14 +2102,16 @@ export class SessionManager {
     if (!task || !this.sessionDatapacks(r.project_id).length) return;
     const pid = r.project_id;
     const cwd = sessionRepo(this.db, r) ?? r.worktree_path;
-    this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
-    const work = runRecall(r.name, task, {
-      issue: (n) => issueText(cwd, n),
-      search: async (q) => {
-        const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
-        if (s.searched && s.failed === s.searched) throw s.error;
-        return s.results;
-      },
+    const work = withMekoScope(r, () => {
+      this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
+      return runRecall(r.name, task, {
+        issue: (n) => issueText(cwd, n),
+        search: async (q) => {
+          const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
+          if (s.searched && s.failed === s.searched) throw s.error;
+          return s.results;
+        },
+      });
     });
     work.catch((e) => this.core.log.warn(`the Meko search at start failed for ${r.id}`, errMsg(e)));
     this.recall.start(r.id, work);
@@ -2015,15 +2130,17 @@ export class SessionManager {
    * conversation_create and ignores later creates and conversation_update, so
    * this has to come before the plugin's SessionStart hook, which titles every
    * conversation "Claude Code session (auto-captured)". Both key it by the
-   * Claude session id, so the hook's create lands on this conversation. Never throws.
+   * Claude session id, so the hook's create lands on this conversation. Its id, for the system
+   * prompt; null without a dedicated datapack or when Meko fails. Never throws.
    */
-  private async nameConversation(r: SessionRow): Promise<void> {
+  private async nameConversation(r: SessionRow): Promise<string | null> {
     const dp = dedicatedDatapack(this.db, r.project_id);
-    if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
+    if (!dp || !this.core.mekoStatus.configured) return null;
     try {
-      await this.conversationId(r, dp);
+      return await this.conversationId(r, dp);
     } catch (e) {
       this.core.log.warn(`naming the Meko conversation for ${r.id} failed`, errMsg(e));
+      return null;
     }
   }
 
@@ -2033,10 +2150,11 @@ export class SessionManager {
    */
   private async retitleConversation(r: SessionRow): Promise<void> {
     const dp = sessionDatapack(this.db, r);
-    if (!dp || !this.core.capture.enabled || !this.core.mekoStatus.configured) return;
+    if (!dp || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);
-      await this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id));
+      await withMekoScope(r, () =>
+        this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id)));
     } catch (e) {
       this.core.log.warn(`renaming the Meko conversation for ${r.id} failed`, errMsg(e));
     }
@@ -2049,7 +2167,36 @@ export class SessionManager {
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
-    return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
+    return withMekoScope(r, () => this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title));
+  }
+
+  /**
+   * The conversation_id for the system prompt of a Claude about to start: the session's
+   * conversation in its project's dedicated datapack, else the project's own (sessions of a project
+   * with only shared datapacks); null when Meko is off, fails or takes too long, and the prompt
+   * then says how to make it.
+   */
+  private async launchConversation(r: SessionRow, pending?: Promise<string | null>): Promise<string | null> {
+    if (!this.core.mekoStatus.configured || !this.sessionDatapacks(r.project_id).length) return null;
+    // Meko just kept a launch waiting: don't hold up the next resumes and recoveries (a restart
+    // recovering many sessions). A new session still waits: its conversation has to be created, and
+    // titled, before the Meko plugin's SessionStart hook creates it under a generic title.
+    if (!pending && Date.now() < this.conversationSlowUntil) return null;
+    const dp = dedicatedDatapack(this.db, r.project_id);
+    const conv = dp ? (pending ?? this.conversationId(r, dp)) : this.core.projects.ensureConversation(r.project_id, NAME_CONVERSATION_MS);
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<null>((res) => (timer = setTimeout(() => {
+      this.conversationSlowUntil = Date.now() + SLOW_CONVERSATION_MS;
+      res(null);
+    }, NAME_CONVERSATION_MS)));
+    try {
+      return await Promise.race([conv, late]);
+    } catch (e) {
+      this.core.log.warn(`the Meko conversation for ${r.id} isn't there; its prompt says how to make it`, errMsg(e));
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ---- token usage ----

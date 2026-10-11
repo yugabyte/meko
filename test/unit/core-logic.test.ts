@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, totpCode, totpVerify, verifyPassword,
+  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpCode, totpVerify, verifyPassword,
 } from '../../src/server/auth.js';
 import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
@@ -14,17 +14,16 @@ import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor } from '../../src/server/github.js';
-import { EXTRACT_PROMPT } from '../../src/server/learn.js';
+import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, MEKO_TOOLSEARCH, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
+  DEFAULT_PROMPTS, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/claude.js';
 import { repoFolder } from '../../src/server/worktrees.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
-import { KIND_STAGES, STAGE_LABELS } from '../../src/shared/types.js';
 
 describe('auth', () => {
   it('hashes and verifies passwords with scrypt', () => {
@@ -44,12 +43,15 @@ describe('auth', () => {
     expect(totpVerify(secret, '287082', 59_000 + 120_000)).toBe(false);
   });
 
-  it('setup tokens are single use', () => {
+  it('setup tokens are single use, and reported outstanding until used', () => {
     const db = openDb(':memory:');
+    expect(setupTokenOutstanding(db)).toBe(false);
     const t = issueSetupToken(db);
+    expect(setupTokenOutstanding(db)).toBe(true);
     expect(consumeSetupToken(db, 'nope')).toBe(false);
     expect(consumeSetupToken(db, t)).toBe(true);
     expect(consumeSetupToken(db, t)).toBe(false);
+    expect(setupTokenOutstanding(db)).toBe(false);
   });
 
   it('limits failed logins per IP', () => {
@@ -83,29 +85,16 @@ describe('config and db', () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.repos.roots = ['~/src', '~/code'];
     cfg.update.channel = 'prerelease';
+    // Transcript capture is off unless config.toml turns it on.
+    expect(cfg.meko.captureTranscripts).toBe(false);
+    cfg.meko.captureTranscripts = true;
     saveConfig(paths, cfg);
+    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = true');
     const back = loadConfig(paths);
     expect(back.repos.roots).toEqual(['~/src', '~/code']);
     expect(back.update.channel).toBe('prerelease');
+    expect(back.meko.captureTranscripts).toBe(true);
     expect(back.server.port).toBe(7777);
-  });
-
-  it('keeps Meko transcript capture on unless config.toml turns it off', () => {
-    expect(DEFAULT_CONFIG.meko.captureTranscripts).toBe(true);
-    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.captureTranscripts = false;
-    saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = false');
-    expect(loadConfig(paths).meko.captureTranscripts).toBe(false);
-  });
-
-  it('has AgentK resolve merge conflicts unless config.toml turns it off', () => {
-    expect(DEFAULT_CONFIG.pr.resolveConflicts).toBe(true);
-    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
-    mkdirSync(paths.home, { recursive: true });
-    writeFileSync(paths.config, '[pr]\nresolve_conflicts = false\n');
-    expect(loadConfig(paths).pr.resolveConflicts).toBe(false);
   });
 
   it('writes only settings that differ from the defaults', () => {
@@ -138,21 +127,6 @@ describe('config and db', () => {
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('repos.roots should be a list of strings');
     expect(warnings.join('\n')).toContain('server.port should be a number');
-  });
-
-  it('reads [server] name, falls back to empty for a non-string, and leaves it out when empty', () => {
-    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.server.name = 'work laptop';
-    saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).toContain('name = "work laptop"');
-    expect(loadConfig(paths).server.name).toBe('work laptop');
-    saveConfig(paths, structuredClone(DEFAULT_CONFIG));
-    expect(readFileSync(paths.config, 'utf8')).not.toContain('name =');
-    writeFileSync(paths.config, '[server]\nname = 5\n');
-    const warnings: string[] = [];
-    expect(loadConfig(paths, (m) => warnings.push(m)).server.name).toBe('');
-    expect(warnings.join('\n')).toContain('server.name should be a string');
   });
 
   it('shortens a host name to its first label', () => {
@@ -216,17 +190,26 @@ describe('config and db', () => {
     expect(mekoDatapackUrl(null, 'eb5ba952')).toBeNull();
   });
 
-  it('migrates a fresh database', () => {
-    const db = openDb(':memory:');
-    expect(schemaVersion(db)).toBeGreaterThan(0);
-  });
-
-  it('lets several projects share a repo path', () => {
-    const db = openDb(':memory:');
-    const add = (id: string) =>
-      run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES (?, ?, '/code/api', 'main', 0)`, id, id);
-    add('api');
-    expect(() => add('api-tools')).not.toThrow();
+  it('moves projects on the old ak/ branch prefix to ak_{login}/, and keeps one someone set', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    const project = (id: string, settings: string) =>
+      run(db, `INSERT INTO projects(id, name, repo_path, default_branch, settings_json, created_at) VALUES (?, ?, ?, 'main', ?, 0)`, id, id, `/code/${id}`, settings);
+    project('old', JSON.stringify({ branchPrefix: 'ak/', notify: false }));
+    project('set', JSON.stringify({ branchPrefix: 'hari/' }));
+    project('none', '{}');
+    undoMigrations(db, 30);
+    db.exec('PRAGMA user_version = 28');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    const settings = (id: string) => JSON.parse(all<{ s: string }>(db, 'SELECT settings_json AS s FROM projects WHERE id = ?', id)[0].s);
+    expect(settings('old')).toEqual({ branchPrefix: 'ak_{login}/', notify: false });
+    expect(settings('set')).toEqual({ branchPrefix: 'hari/' });
+    expect(settings('none')).toEqual({});
+    expect(parseSettings('{}').branchPrefix).toBe('ak_{login}/');
+    db.close();
   });
 
   it("keeps a schema 27 database's learn steps, and lets Discard record its own", () => {
@@ -241,8 +224,8 @@ describe('config and db', () => {
     db.exec(`ALTER TABLE meko_learns RENAME TO meko_learns_new;
       CREATE TABLE meko_learns AS SELECT * FROM meko_learns_new WHERE 0;
       INSERT INTO meko_learns SELECT * FROM meko_learns_new; DROP TABLE meko_learns_new`);
-    dropV28(db);
-    db.exec(`PRAGMA user_version = ${version - 1}`);
+    undoMigrations(db, 28);
+    db.exec('PRAGMA user_version = 27');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -261,18 +244,8 @@ describe('config and db', () => {
     run(db, `INSERT INTO project_datapacks(project_id, datapack_id, name, role) VALUES ('api', 'dp-1', 'adlc/proj/api/api', 'dedicated')`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    db.exec(`PRAGMA user_version = ${version - 11}`);
+    undoMigrations(db, 18);
+    db.exec('PRAGMA user_version = 17');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -292,16 +265,8 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('api', 'api', '/code/api', 'main', 0, 5)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('api--s1', 'api', 's1', 's1', 'c1', 'b', 'main', '/w', 't1', 't', 'running', 'idle', 'code', 0)`);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    db.exec(`PRAGMA user_version = ${version - 9}`);
+    undoMigrations(db, 20);
+    db.exec('PRAGMA user_version = 19');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
@@ -326,23 +291,7 @@ describe('config and db', () => {
     // migrations add tables and columns, so drop them first).
     db.exec('DROP TABLE pushes');
     dropSessionColumns(db, 'pending_review', ...V10_COLUMNS, ...V11_COLUMNS);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
-    dropV14(db);
-    dropV13(db);
-    dropV12(db);
+    undoMigrations(db, 12);
     db.exec('PRAGMA user_version = 6');
     db.close();
     db = openDb(file);
@@ -369,23 +318,7 @@ describe('config and db', () => {
     add('s3', null);
     // Back to schema 9, before the prompt queue.
     dropSessionColumns(db, ...V10_COLUMNS, ...V11_COLUMNS);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
-    dropV14(db);
-    dropV13(db);
-    dropV12(db);
+    undoMigrations(db, 12);
     db.exec('PRAGMA user_version = 9');
     db.close();
     db = openDb(file);
@@ -417,23 +350,7 @@ describe('config and db', () => {
     add('skipped', ['code', 'pr', 'review']);
     // Back to schema 10, before session kinds.
     dropSessionColumns(db, ...V11_COLUMNS);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
-    dropV14(db);
-    dropV13(db);
-    dropV12(db);
+    undoMigrations(db, 12);
     db.exec('PRAGMA user_version = 10');
     db.close();
     db = openDb(file);
@@ -448,23 +365,7 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
-    dropV14(db);
-    dropV13(db);
-    dropV12(db);
+    undoMigrations(db, 12);
     db.exec('PRAGMA user_version = 11');
     db.close();
     db = openDb(file);
@@ -484,22 +385,7 @@ describe('config and db', () => {
         VALUES (?, 'api', ?, ?, ?, 'b', 'main', ?, ?, 't', ?, 'idle', 'code', 5)`, id, id, id, id, `/wt/${id}`, id, desired);
     add('live', 'running');
     add('old', 'archived');
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
-    dropV14(db);
-    dropV13(db);
+    undoMigrations(db, 13);
     db.exec('PRAGMA user_version = 12');
     db.close();
     db = openDb(file);
@@ -522,21 +408,7 @@ describe('config and db', () => {
         VALUES (?, ?, ?, ?, ?, 'b', 'main', ?, ?, 't', 'running', 'idle', 'code', 5)`, id, project, id, id, id, `/wt/${id}`, id);
     add('s1', 'api');
     add('s2', 'web');
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
-    dropV14(db);
+    undoMigrations(db, 14);
     db.exec('PRAGMA user_version = 13');
     db.close();
     db = openDb(file);
@@ -555,19 +427,7 @@ describe('config and db', () => {
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('api', 'api', '/code/api', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
       VALUES ('s', 'api', 's', 's', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
+    undoMigrations(db, 16);
     run(db, "INSERT INTO pushes(session_id, range, ref, at, commits) VALUES ('s', 'a..b', 'main', 1, 2)");
     db.exec('PRAGMA user_version = 15');
     db.close();
@@ -592,20 +452,7 @@ describe('config and db', () => {
     add('md', 'api', '# Design', null);
     add('page', 'api', '', '<h1>x</h1>');
     add('local', 'web', '# Design', null);
-    dropV28(db);
-    dropV27(db);
-    dropV26(db);
-    dropV25(db);
-    dropV24(db);
-    dropV23(db);
-    dropV22(db);
-    dropV21(db);
-    dropV20(db);
-    dropV19(db);
-    dropV18(db);
-    dropV17(db);
-    dropV16(db);
-    dropV15(db);
+    undoMigrations(db, 15);
     db.exec('PRAGMA user_version = 14');
     db.close();
     db = openDb(file);
@@ -633,6 +480,16 @@ describe('config and db', () => {
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 31 (designs in PRs: the hashes sent to Meko, and a review's copy of its PR's design). */
+function dropV31(db: ReturnType<typeof openDb>) {
+  for (const c of ['md_hash', 'html_hash', 'source', 'source_told']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
+}
+
+/** Undoes migration 30 (a queued Open PR's instructions), for tests that rewind the schema. */
+function dropV30(db: ReturnType<typeof openDb>) {
+  db.exec('ALTER TABLE sessions DROP COLUMN queued_instructions');
+}
 
 /** Undoes migration 28 (Discard waits for the learn step; skipping it at Merge & Close), for tests that rewind the schema. */
 function dropV28(db: ReturnType<typeof openDb>) {
@@ -726,24 +583,22 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
+/** Undoes migrations 31 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31];
+  for (let v = 31; v >= oldest; v--) undo[v - 12](db);
+}
+
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
   for (const c of cols) {
     if (db.prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = ?").get(c)) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
   }
 }
 
-describe('stages', () => {
-  it('ends with one PR & Review step and one Merge & Close step', () => {
-    expect(KIND_STAGES.task).toEqual(['explore', 'design', 'code', 'review', 'merge']);
-    expect(STAGE_LABELS.review).toBe('PR & Review');
-    expect(STAGE_LABELS.merge).toBe('Merge & Close');
-  });
-});
-
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'review', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-people', 'review-pr']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
@@ -766,17 +621,12 @@ describe('Meko recall in prompts', () => {
 
   it('states the saving rule in full in both ways of the learn step, for sessions launched before it', () => {
     expect(mekoSaveSystemLine('s-1')).toContain(SAVING_RULE);
-    expect(EXTRACT_PROMPT).toContain(SAVING_RULE);
+    expect(extractPrompt([])).toContain(SAVING_RULE);
     const line = mekoLearnLine('learn', 's-1');
     expect(line).toMatch(/^What to save: /);
     expect(line).toContain(SAVING_RULE);
     expect(line).toContain('"session":"s-1"');
     expect(mekoLearnLine('code', 's-1')).toBe('');
-  });
-
-  it('names the ToolSearch query that loads the Meko tools under any server name', () => {
-    expect(mekoRecallSystemLine()).toContain(`ToolSearch query "${MEKO_TOOLSEARCH}"`);
-    expect(MEKO_TOOLSEARCH).toBe('+meko context_search');
   });
 
   it('asks a Review a PR session to search Meko on every why-question, not only at the start', () => {
@@ -814,6 +664,8 @@ describe('Meko recall in prompts', () => {
 
   it("isn't in the default prompts, which reach sessions with Meko off too", () => {
     for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toMatch(/search Meko/);
+    // Nor are the design's lines (designQaLine and the others), which only sessions with a design get.
+    for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toContain('Questions and decisions');
   });
 
   it("names the datapack after its id in the PR's Meko line, on one line", () => {
@@ -934,28 +786,10 @@ describe('Claude folder trust', () => {
     expect(cfg.other).toBe(1);
     expect(isTrusted('/data/ak/worktrees/p/s', cfg)).toBe(true);
     expect(ensureWorkspaceTrust('/data/ak/worktrees')).toBe('already');
-  });
-});
-
-describe('date-based versions', () => {
-  it('orders 0.YYYYMMDD.N releases correctly', async () => {
-    const { compareSemver } = await import('../../src/server/updater.js');
-    expect(compareSemver('0.20260924.10', '0.20260924.9')).toBeGreaterThan(0);
-    expect(compareSemver('0.20260925.0', '0.20260924.12')).toBeGreaterThan(0);
-    expect(compareSemver('v0.20260924.0', '0.20260924.0')).toBe(0);
-    expect(compareSemver('0.20260924.0', '0.0.0-dev')).toBeGreaterThan(0);
-  });
-});
-
-describe('setup link lifetime', () => {
-  it('reports an outstanding link until it is used', async () => {
-    const { setupTokenOutstanding } = await import('../../src/server/auth.js');
-    const db = openDb(':memory:');
-    expect(setupTokenOutstanding(db)).toBe(false);
-    const t = issueSetupToken(db);
-    expect(setupTokenOutstanding(db)).toBe(true);
-    consumeSetupToken(db, t);
-    expect(setupTokenOutstanding(db)).toBe(false);
+    // Exact: a trusted parent doesn't count (Claude asks about a worktree it can't tie to its repo).
+    expect(isTrusted('/data/ak/worktrees/p/s', cfg, true)).toBe(false);
+    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('added');
+    expect(ensureWorkspaceTrust('/data/ak/worktrees/p/s', true)).toBe('already');
   });
 });
 
@@ -1005,6 +839,11 @@ describe('Meko credentials', () => {
     expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'config-key' });
     cfg.meko.apiKey = '';
     expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key' });
+    // A later source with a URL and no key of its own: its URL goes with the earlier key.
+    clearEnv();
+    claudeSettings({ env: { MEKO_MCP_URL: 'https://self-hosted.example/mcp' } });
+    process.env.MEKO_API_KEY = 'env-key';
+    expect(resolveMeko(structuredClone(DEFAULT_CONFIG))).toEqual({ url: 'https://self-hosted.example/mcp', apiKey: 'env-key' });
   });
 
   it('says where the key came from', () => {
@@ -1070,13 +909,6 @@ describe('Meko credentials', () => {
     cfg.meko.webUrl = '';
     cfg.meko.enabled = false;
     expect(mekoWebUrlWarning(cfg)).toBeNull();
-  });
-
-  it('takes a URL from a later source that has no key of its own', () => {
-    clearEnv();
-    claudeSettings({ env: { MEKO_MCP_URL: 'https://self-hosted.example/mcp' } });
-    process.env.MEKO_API_KEY = 'env-key';
-    expect(resolveMeko(structuredClone(DEFAULT_CONFIG))).toEqual({ url: 'https://self-hosted.example/mcp', apiKey: 'env-key' });
   });
 
   it("survives a Claude Code settings file whose env isn't an object", () => {

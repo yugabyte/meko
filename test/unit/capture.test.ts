@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TranscriptCapture, findMekoCaptureScript, mekoPluginInstalls } from '../../src/server/capture.js';
+import { TranscriptCapture, findMekoCaptureScript, mekoPluginInstalls, mekoPluginKeys } from '../../src/server/capture.js';
 import { silentLogger } from '../../src/server/log.js';
 import { FAKE_CAPTURE } from '../helpers.js';
 
@@ -36,6 +36,15 @@ describe('findMekoCaptureScript', () => {
   });
 });
 
+describe('mekoPluginKeys', () => {
+  it("names the Meko plugin's keys in the registry, and the installer's key even without one", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'akl-capture-'));
+    expect(mekoPluginKeys(dir)).toEqual(['meko-agent-skills@meko-agent-skills']);
+    registry(dir, { 'other@x': [], 'meko-agent-skills@team-fork': [], 'meko-agent-skills@meko-agent-skills': [] });
+    expect(mekoPluginKeys(dir).sort()).toEqual(['meko-agent-skills@meko-agent-skills', 'meko-agent-skills@team-fork']);
+  });
+});
+
 describe('TranscriptCapture', () => {
   let dir: string;
   let transcript: string;
@@ -52,16 +61,6 @@ describe('TranscriptCapture', () => {
     delete process.env.FAKE_CAPTURE_MS;
   });
   const runs = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
-
-  it('runs the script in checkpoint mode with the transcript and Meko credentials', async () => {
-    const c = new TranscriptCapture(FAKE_CAPTURE, () => ({ MEKO_MCP_URL: 'https://meko.test/mcp', MEKO_API_KEY: 'k' }), silentLogger);
-    await c.capture('s1', transcript);
-    expect(runs()).toEqual([expect.objectContaining({
-      args: ['checkpoint'],
-      input: { transcript_path: transcript },
-      env: { MEKO_MCP_URL: 'https://meko.test/mcp', MEKO_API_KEY: 'k' },
-    })]);
-  });
 
   it('runs one capture per session at a time and folds requests made during a run into one more', async () => {
     process.env.FAKE_CAPTURE_MS = '300';

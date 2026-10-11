@@ -10,6 +10,7 @@ import {
   type ReviewerMode,
   type SearchResult,
 } from '../../shared/types';
+import { LOGIN_PLACEHOLDER, expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
@@ -32,7 +33,7 @@ export function ProjectHomeView({
   onMove,
   mekoWebUrl,
   mekoConfigured,
-  sharing,
+  ghLogin,
   onMenu,
   onBack,
   onError,
@@ -45,8 +46,8 @@ export function ProjectHomeView({
   mekoWebUrl: string | null;
   /** Meko is on (a key is set). */
   mekoConfigured: boolean;
-  /** AgentK can share datapacks through Meko's API (Meko on, its API URL known). */
-  sharing: boolean;
+  /** The login gh is signed in as, for `{login}` in the branch prefix. */
+  ghLogin: string | null;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
@@ -72,8 +73,6 @@ export function ProjectHomeView({
   const cantShare = !!dedicated?.grant && dedicated.grant !== 'owner' && dedicated.grant !== 'maintainer';
   /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
   const [sharers, setSharers] = useState<string[] | null>(null);
-  // Sharing the project is sharing its dedicated datapack, which needs Meko's API URL.
-  const noApi = !!dedicated && mekoConfigured && !sharing && !cantShare;
   const share = () => {
     if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add your Meko API key to turn it on.' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
@@ -82,15 +81,13 @@ export function ProjectHomeView({
       const person = (name: string | null, email: string | null) => (name && email ? `${name} (${email})` : (name ?? email ?? ''));
       setSharers(owner ? [`its owner, ${person(dedicated.ownerName, dedicated.ownerEmail)}`] : []);
       // Meko lists the maintainers.
-      if (sharing) {
-        api
-          .datapackPeople(dedicated.id)
-          .then((p) => {
-            const maintainers = p.members.filter((m) => m.grant === 'maintainer').map((m) => person(m.name || null, m.email || null));
-            if (maintainers.length) setSharers((cur) => [...(cur ?? []), `a maintainer: ${maintainers.join(', ')}`]);
-          })
-          .catch(() => undefined);
-      }
+      api
+        .datapackPeople(dedicated.id)
+        .then((p) => {
+          const maintainers = p.members.filter((m) => m.grant === 'maintainer').map((m) => person(m.name || null, m.email || null));
+          if (maintainers.length) setSharers((cur) => [...(cur ?? []), `a maintainer: ${maintainers.join(', ')}`]);
+        })
+        .catch(() => undefined);
     } else setDialog({ kind: 'share' });
   };
 
@@ -128,8 +125,7 @@ export function ProjectHomeView({
         <span className="mono muted small home-repo">
           {project.repoPath} · {project.defaultBranch}
         </span>
-        {/* Off only without Meko's API URL; the note below says why. */}
-        <button className="btn small home-share" disabled={noApi} onClick={share}>
+        <button className="btn small home-share" onClick={share}>
           Share
         </button>
       </header>
@@ -145,7 +141,6 @@ export function ProjectHomeView({
           </button>
         </div>
       )}
-      {noApi && <p className="hint home-share-note">To share this project, set Meko’s web app URL on the Meko tab in Settings.</p>}
       <div className="home-scroll">
         {mekoConfigured && project.datapacks.length > 0 && <SearchBox projectId={project.id} />}
         {loadError && <p className="error-text">{loadError}</p>}
@@ -240,7 +235,7 @@ export function ProjectHomeView({
           </section>
         </div>
         {home && <UsagePanel projectId={project.id} usage={home.usage} mekoOn={mekoConfigured && project.datapacks.length > 0} />}
-        <ProjectSettingsForm project={project} order={order} onMove={onMove} onError={onError} />
+        <ProjectSettingsForm project={project} order={order} onMove={onMove} ghLogin={ghLogin} mekoConfigured={mekoConfigured} onError={onError} />
       </div>
       {dialog?.kind === 'share' && dedicated && (
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
@@ -383,15 +378,29 @@ function AttachDatapack({
   );
 }
 
+/** Under the branch prefix: what {login} stands for, and what the prefix comes to. */
+function branchPrefixHint(prefix: string, login: string | null): string | null {
+  if (!prefix.includes(LOGIN_PLACEHOLDER)) return null;
+  const now = expandBranchPrefix(prefix, login);
+  return login
+    ? `${LOGIN_PLACEHOLDER} is your GitHub login: new branches start with ${now}`
+    : `${LOGIN_PLACEHOLDER} is your GitHub login, once gh is signed in. Until then, new branches start with ${now}`;
+}
+
 function ProjectSettingsForm({
   project,
   order,
   onMove,
+  ghLogin,
+  mekoConfigured,
   onError,
 }: {
   project: ProjectWithSessions;
   order: { index: number; count: number };
   onMove: (index: number) => void;
+  ghLogin: string | null;
+  /** Meko is on: Log Meko calls is offered (and kept on show while it's on, so it can be turned off). */
+  mekoConfigured: boolean;
   onError: (m: string) => void;
 }) {
   const [name, setName] = useState(project.name);
@@ -430,7 +439,7 @@ function ProjectSettingsForm({
         <Field label="Name">
           <input id="ps-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Branch prefix">
+        <Field label="Branch prefix" hint={branchPrefixHint(s.branchPrefix, ghLogin)}>
           <input
             id="ps-prefix"
             className="input mono"
@@ -487,6 +496,22 @@ function ProjectSettingsForm({
             <input id="ps-notify" type="checkbox" checked={s.notify} onChange={(e) => set('notify', e.target.checked)} />
             <span>Browser notifications</span>
           </label>
+          {(mekoConfigured || project.settings.mekoLog) && (
+            <div className="check-row">
+              <label className="check">
+                <input id="ps-mekolog" type="checkbox" checked={s.mekoLog} onChange={(e) => set('mekoLog', e.target.checked)} />
+                <span>
+                  Log Meko calls
+                  <span className="muted small check-hint">
+                    What AgentK sends to Meko for each session, and what comes back. Deleted with the session.
+                  </span>
+                </span>
+              </label>
+              <button type="button" className="link-btn" onClick={() => navigate({ view: 'meko', projectId: project.id, sessionId: null })}>
+                View calls
+              </button>
+            </div>
+          )}
         </div>
         {order.count > 1 && (
           <div className="settings-actions">

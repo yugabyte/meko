@@ -99,8 +99,16 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       design's questions (from Claude's `questions.json` or its `design_questions` tool) and the
       questions Claude asks (`AskUserQuestion`, previews included) render as plain text, never
       HTML, and are size-capped and normalized on the server.
-- [ ] The Design-stage guard denies edits inside the worktree and main checkout, and fails open
-      (no answer means allow) so a slow or restarting server never blocks Claude.
+- [ ] A reviewed PR's design (`prdesign.ts`) is another person's content: it's used only when its
+      bytes hash to the PR line's hash, size-capped like any design, rendered by the same sandboxed
+      frame or sanitizer, never sent to Meko again, and the prompts call it content to review, not
+      instructions. AgentK's edits to a PR description change only its own `meko_design:` line.
+- [ ] The Design-stage guard denies edits inside the worktree and main checkout, by its stored
+      path and by the spelling Claude is given (`claudePath()`), and fails open (no answer means
+      allow) so a slow or restarting server never blocks Claude.
+- [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, allow rules, file paths in
+      prompts) goes through `claudePath()`, so a home under `/net` doesn't make Claude Code ask
+      before every file; what AgentK stores keeps its own spelling.
 
 ## 3. Lifecycle and GitHub
 
@@ -119,7 +127,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       kind reads it through `kindOf()` (comparing with `review-pr` directly is fine).
 - [ ] A move by hand leaves the session consistent: the Review
       queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
-      out of Merge & Close or while AgentK is mid-turn.
+      out of Merge & Close or while AgentK is mid-turn. A move's prompt carries on from the conversation
+      (`move-design`, `move-code`): it doesn't restate the session's first prompt, which the work may have moved on from. The
+      exceptions name a task on purpose: a move that gives a session without one its task sends the stage's start prompt, and
+      an older page's `prompt: true` on a move to Explore sends `explore`.
 - [ ] Prompts (stage, review, review-comment and design-answer prompts) are only typed into a session when Claude is
       idle (or showing a design waiting for approval), never into a permission or question prompt; otherwise they're queued (the review prompt
       in `state.db`, so it survives a restart), except answers to a design, which aren't kept on the server and are refused instead
@@ -187,9 +198,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
       session launch, after Claude Code's setup), in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
+- [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the
+      session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.
+      The log never holds the API key, is written only while the project has Log Meko calls on and
+      the session isn't archived, and is deleted wherever the session's pastes are (archive, failed
+      start, closing the project). Writing it never fails the call.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
-      worktree, repo path); the typed path relies on the saving rule in its prompt. It
+      worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
+      on the saving rule in its prompt. It
       never holds Merge & Close or Discard past its timeout on the mod path (writes included), and
       a Discard waiting for it always ends (step done, failed, interrupted, or Discard now; a
       restart finishes it), and **Don't save learnings** skips it entirely; it never holds a
@@ -210,8 +227,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
-      share notifies once. Sharing features are off while Meko's API URL isn't known (the project
-      home's Share says why; Share with reviewers is hidden).
+      share notifies once. While Meko's API URL isn't known the share and invite routes answer 409
+      saying to set the web app URL, and the invite sync skips Meko's invites.
 - [ ] Nothing that identifies a person or their work goes into the usage stats report
       (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
       field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and
@@ -231,6 +248,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 6. Tests, docs, release
 
 - [ ] `npm run typecheck`, `npm run lint` and `npm test` pass; new behavior has a test.
+- [ ] **No redundant or needless tests.** A test earns its place by catching a bug no other test
+      would. Flag (minor) a test that repeats a case another test already covers (the same path
+      reached through another entry point, or the same assertion with different values), one
+      that checks a library, the language, a type or a constant rather than our code, one that
+      asserts internals (call counts, private state) where the result a caller sees would do, and
+      one that only restates copy or a config value. Cases of one rule go in one table-driven test
+      (`it.each`), and a fix extends the nearest existing test rather than adding a new one or a
+      new file. Name which tests to drop or merge. Doc-only, comment-only and pure-refactor
+      changes need no new tests.
 - [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.md`,
       `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not

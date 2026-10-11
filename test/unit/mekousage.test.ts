@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { REPORTED_TOOLS, classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, toolCounts } from '../../src/server/mekousage.js';
+import { classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
 import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
@@ -71,32 +71,30 @@ describe('Meko calls in transcripts', () => {
     expect(parseMekoCalls(result('t1', 'mcp__meko__memory_search'))).toEqual([]);
   });
 
-  it('tells a lookup that found something from one that found nothing or failed', () => {
-    expect(classifyResult('lookup', found, false)).toMatchObject({ outcome: 'found', results: 1 });
-    expect(classifyResult('lookup', wrapped({ results: [], count: 0 }), false)).toMatchObject({ outcome: 'empty', results: 0 });
-    const buckets = (memory: unknown[]) => wrapped({ results: { knowledge_base: [], memory, conversation: { hits: [], thread: [] } }, token_savings: { total_tokens: 10000 } });
-    expect(classifyResult('lookup', buckets([]), false)).toMatchObject({ outcome: 'empty' });
-    expect(classifyResult('lookup', buckets([{ memory: 'a' }, { memory: 'b' }]), false)).toMatchObject({ outcome: 'found', results: 2 });
-    expect(classifyResult('lookup', wrapped({ memories: [], total: 0 }), false).outcome).toBe('empty');
-    expect(classifyResult('lookup', wrapped({ id: 'm1', memory: 'one record' }), false).outcome).toBe('found');
-    expect(classifyResult('lookup', "Error calling tool 'memory_search': [Errno 111] Connection refused", true).outcome).toBe('error');
-    expect(classifyResult('lookup', wrapped({ error: 'agent_id_mismatch', detail: 'x' }), false).outcome).toBe('error');
-    expect(classifyResult('save', wrapped({ message: 'Memory updated successfully!' }), false).outcome).toBe('ok');
+  const notice = 'Error: result (70,748 characters) exceeds maximum allowed tokens. Output has been saved to /x.txt';
+  const buckets = (memory: unknown[]) => wrapped({ results: { knowledge_base: [], memory, conversation: { hits: [], thread: [] } }, token_savings: { total_tokens: 10000 } });
+  it.each<[string, 'lookup' | 'save', string, boolean, object]>([
+    ['a result list', 'lookup', found, false, { outcome: 'found', results: 1 }],
+    ['an empty result list', 'lookup', wrapped({ results: [], count: 0 }), false, { outcome: 'empty', results: 0 }],
+    ['empty buckets', 'lookup', buckets([]), false, { outcome: 'empty' }],
+    ['full buckets', 'lookup', buckets([{ memory: 'a' }, { memory: 'b' }]), false, { outcome: 'found', results: 2 }],
+    ['buckets without the results wrapper, empty', 'lookup', wrapped({ memory: [], knowledge_base: [], conversation: { hits: [] } }), false, { outcome: 'empty' }],
+    ['buckets without the results wrapper, full', 'lookup', wrapped({ memory: [{ memory: 'a' }], knowledge_base: [], conversation: { hits: [] } }), false, { outcome: 'found' }],
+    ['no memories', 'lookup', wrapped({ memories: [], total: 0 }), false, { outcome: 'empty' }],
+    ['one record', 'lookup', wrapped({ id: 'm1', memory: 'one record' }), false, { outcome: 'found' }],
+    ['a failed call', 'lookup', "Error calling tool 'memory_search': [Errno 111] Connection refused", true, { outcome: 'error' }],
+    ['an error field', 'lookup', wrapped({ error: 'agent_id_mismatch', detail: 'x' }), false, { outcome: 'error' }],
+    ['an empty error field', 'lookup', wrapped({ results: [{ id: 'm1' }], error: null }), false, { outcome: 'found', results: 1 }],
+    ['an empty error string', 'lookup', wrapped({ results: [], error: '' }), false, { outcome: 'empty' }],
+    ['a plain-text miss', 'lookup', JSON.stringify({ result: 'No memories found for this query.' }), false, { outcome: 'empty' }],
+    ['an unwrapped plain-text miss', 'lookup', 'No results found', false, { outcome: 'empty' }],
+    ['a plain-text hit', 'lookup', JSON.stringify({ result: 'The deploy runs on Fridays.' }), false, { outcome: 'found' }],
     // Too large to show: Claude Code saved it to a file. Only its notice entered the context.
-    const notice = 'Error: result (70,748 characters) exceeds maximum allowed tokens. Output has been saved to /x.txt';
-    expect(classifyResult('lookup', notice, false)).toEqual({ outcome: 'found', results: null, resultChars: notice.length });
-    expect(classifyResult('lookup', 'MCP tool "meko/memory_search" is still running after 120s. It was moved to the background', false).outcome).toBe('empty');
-  });
-
-  it('reads plain-text replies, empty error fields and unwrapped buckets right', () => {
-    expect(classifyResult('lookup', JSON.stringify({ result: 'No memories found for this query.' }), false).outcome).toBe('empty');
-    expect(classifyResult('lookup', 'No results found', false).outcome).toBe('empty');
-    expect(classifyResult('lookup', JSON.stringify({ result: 'The deploy runs on Fridays.' }), false).outcome).toBe('found');
-    expect(classifyResult('lookup', wrapped({ results: [{ id: 'm1' }], error: null }), false)).toMatchObject({ outcome: 'found', results: 1 });
-    expect(classifyResult('lookup', wrapped({ results: [], error: '' }), false).outcome).toBe('empty');
-    // context_search's buckets without the results wrapper.
-    expect(classifyResult('lookup', wrapped({ memory: [], knowledge_base: [], conversation: { hits: [] } }), false).outcome).toBe('empty');
-    expect(classifyResult('lookup', wrapped({ memory: [{ memory: 'a' }], knowledge_base: [], conversation: { hits: [] } }), false).outcome).toBe('found');
+    ['a result saved to a file', 'lookup', notice, false, { outcome: 'found', results: null, resultChars: notice.length }],
+    ['a call moved to the background', 'lookup', 'MCP tool "meko/memory_search" is still running after 120s. It was moved to the background', false, { outcome: 'empty' }],
+    ['a save', 'save', wrapped({ message: 'Memory updated successfully!' }), false, { outcome: 'ok' }],
+  ])('classifies %s', (_what, kind, text, isError, want) => {
+    expect(classifyResult(kind, text, isError)).toMatchObject(want);
   });
 
   it('reads results only for calls waiting for one, as text or text blocks', () => {
@@ -153,19 +151,19 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
     db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs');
-    for (const c of ['discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
-    for (const c of ['questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
+    for (const c of ['queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+    for (const c of ['md_hash', 'html_hash', 'source', 'source_told', 'questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     }
     db.exec('ALTER TABLE sessions DROP COLUMN meko_agent_id; DROP TABLE project_events');
     db.exec('DROP TABLE meko_preloads; ALTER TABLE sessions DROP COLUMN first_turn_end_at');
     db.exec('ALTER TABLE sessions DROP COLUMN meko_datapack_id; ALTER TABLE sessions DROP COLUMN meko_datapack_name');
-    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = ${v - 12}`);
+    db.exec(`DROP TABLE meko_calls; DROP INDEX usage_messages_agent_at; ALTER TABLE usage_messages DROP COLUMN cache_write_1h; PRAGMA user_version = 16`);
     db.close();
     db = openDb(path);
     expect(schemaVersion(db)).toBe(v);
@@ -320,13 +318,6 @@ describe('Meko calls for the usage stats', () => {
     // A call stored before its tool was a lookup counts as it was stored, as summarizeMeko does.
     run(db, `UPDATE meko_calls SET kind = 'other' WHERE tool = 'memory_add'`);
     expect(toolCounts(mekoCalls(db))).toEqual({ memory_search: 2, other: 2 });
-  });
-
-  it('names exactly the lookups and saves', () => {
-    expect([...REPORTED_TOOLS].sort()).toEqual([
-      'artifact_get', 'artifact_put', 'context_search', 'conversation_add_message', 'conversation_get', 'knowledgebase_search',
-      'memory_add', 'memory_get_all', 'memory_get_by_id', 'memory_promote', 'memory_search', 'memory_update',
-    ]);
   });
 
   it('lists the searches at start', () => {
