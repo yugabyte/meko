@@ -10,6 +10,7 @@ import * as github from './github.js';
 import { mekoPluginKeys, TranscriptCapture } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
+import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, run, type Db } from './db.js';
@@ -114,6 +115,7 @@ export class Core extends EventEmitter {
   readonly comments: CommentService;
   readonly questions: DesignQuestionStore;
   readonly prReview: PrReviewService;
+  readonly githubLinks: GithubLinkService;
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
   readonly mekoTools: MekoTools;
@@ -189,6 +191,7 @@ export class Core extends EventEmitter {
     this.comments = new CommentService(this);
     this.questions = new DesignQuestionStore(this);
     this.prReview = new PrReviewService(this);
+    this.githubLinks = new GithubLinkService(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
     this.claudeMeko = new MekoClaudeWatch({

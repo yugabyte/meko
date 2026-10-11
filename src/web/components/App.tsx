@@ -585,6 +585,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSettings={() => setModal({ kind: 'settings' })}
+          onStarted={({ project, session }) => {
+            // As after Open project and New session: both shown until a state push brings them.
+            setOpened(project);
+            setCreated({ session, seen: stateRef.current, misses: 0 });
+            navigate({ view: 'project', projectId: session.projectId, sessionId: session.id });
+          }}
         />
       )}
       {toast && (

@@ -761,7 +761,8 @@ terminal**, which hides it for that start in this page.
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
-session or project home, create a session, or move or rename the one on screen; session names show
+session or project home, create a session, or move or rename the one on screen (or, with a GitHub
+PR or issue pasted, start a session on it: see [Starting from a GitHub link](#starting-from-a-github-link)); session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and
 Windows these use Ctrl, so the terminal
 doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes through to the terminal whenever
@@ -1452,6 +1453,52 @@ files. Discard works as for any session; its warning counts only your own commit
 author's, which are on GitHub. A closed review ends in Done with someone else's PR, so the usage
 counts never take it for one of your merged PRs. A Review a PR
 session can't be moved to another stage, and no session can be moved into one.
+
+### Starting from a GitHub link
+
+Pasting a GitHub PR or issue into **Search and commands** (`⌘K`) offers the session that fits it,
+in the project it belongs to (`src/server/ghlinks.ts`, `GET /api/github-link` and
+`POST /api/github-link/start`). The palette takes a `/pull/<n>` or `/issues/<n>` link on
+github.com, or `owner/name#<n>`, never a bare number, which names no repo (`parseGithubRef()` in
+`src/shared/github-refs.ts`). Once typing pauses for 250 ms it looks the ref up, once per ref while
+the palette is open. GitHub numbers PRs and issues together, so the server asks
+`gh api repos/<owner>/<name>/issues/<n>`, which answers for both and says which it is. The repo is
+the one GitHub's link names, so a renamed repo or other casing reads as GitHub spells it.
+
+**The project.** One project is offered. The first choice is the first open project, in rail order,
+with a datapack that a Meko line in the description names (`<host>://<id>;<name>`, as AgentK ends
+its PRs; people can put the same line in an issue): a dedicated datapack before a shared one. The
+second choice is the first open project whose repo is a clone of the link's repo, its `origin` or a
+fork's `upstream`. The session works in the project's repo when that's a clone of the link's repo,
+else in a scanned clone (`localClone()`), else in a clone made at start into the repos folder.
+With no open project that fits, AgentK opens one when the session starts. Its repo is a local clone
+of the link's repo, or a clone of `https://github.com/<owner>/<name>.git` (`Projects.create` with
+`cloneUrl`). Its dedicated datapack is one the description names that Meko lists for you, or a
+share waiting for you (accepted on the way). A closed project with that dedicated datapack opens
+again as itself, under its own name; closed projects aren't matched by repo. A datapack named this
+way also names the project (`parseProjectDatapack()`). Otherwise a PR review's project has no
+datapack, since a review only reads code, and an issue's project gets a new one
+(`adlc/proj/<repo>/<name>`, made free of the names Meko lists). At the plan's datapack limit it
+opens without one. Without Meko, no datapack.
+
+**The session.** A PR gets a Review a PR session (see [Reviewing a PR](#reviewing-a-pr)), named
+by the server as from the New session dialog. A merged or closed PR is refused (its item says
+why), and a PR that a running session already reviews offers **Go to** that session instead
+(409 if started anyway). An issue offers two items, **Work on issue #<n>** (starts at Design, what
+Enter picks) and **… straight to Code**. Each starts a task named `#<n> <title>`, whose first prompt
+names the issue and its link and asks Claude to read it with its comments
+(`gh issue view <n> --repo <owner>/<name> --comments`), then fix it if it's a bug or implement it
+if it asks for a feature or change. The number stands alone (`#<n>`), so the search at start
+([Meko recall](#meko-recall-at-start)) reads the issue too. A closed issue is still offered, and
+says so in its hint. Running tasks whose first prompt has the issue's link are offered first as
+**Go to**, with a new session still offered after them. Each item's hint says what starting does
+besides: which project and why, **Opens a new project** (or **Opens the project again**),
+**Clones <owner>/<name>**, **New datapack**, or **Accepts the share of <datapack>**. While it
+starts, the palette stays open with *Starting* (or *Cloning <owner>/<name>*). Once the server
+answers, the palette closes and the page goes to the session as after New session. Closing the
+palette meanwhile doesn't stop the start; the session shows up in the state. The browser never
+says which project or datapack to use beyond the project it showed: the server works the rest out
+again when it starts, and uses an open project that fits by then instead of opening another.
 
 ### The design after approval
 

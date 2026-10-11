@@ -32,6 +32,9 @@ import type {
   RepoInfo,
   ReviewablePrs,
   TaskPrs,
+  LinkPlan,
+  StartFromLinkRequest,
+  StartFromLinkResult,
   ReviewComment,
   SearchResult,
   SendCommentsResult,
@@ -154,6 +157,9 @@ export const api = {
   },
   reviewPrs: (id: string, q: { pr?: string; repoPath?: string } = {}) =>
     get<ReviewablePrs>(`/api/projects/${enc(id)}/review-prs${q.pr ? `?pr=${enc(q.pr)}${q.repoPath ? `&repoPath=${enc(q.repoPath)}` : ''}` : ''}`),
+  /** What a pasted GitHub PR or issue (a link or owner/name#N) would start, and where. */
+  githubLink: (ref: string) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}`),
+  startFromLink: (b: StartFromLinkRequest) => post<StartFromLinkResult>('/api/github-link/start', b),
   usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   createSession: (projectId: string, b: CreateSessionRequest) =>

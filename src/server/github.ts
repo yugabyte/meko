@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isRepoName, parsePrInput } from '../shared/github-refs.js';
 import type { CiState, MergeMethod } from '../shared/types.js';
 
 const exec = promisify(execFile);
@@ -276,32 +277,41 @@ export async function ghAvailable(): Promise<boolean> {
 
 // ---- Review a PR ----
 
-const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-
-/** True for an `owner/name` GitHub repo. */
-export function isRepoName(s: unknown): s is string {
-  return typeof s === 'string' && REPO_RE.test(s) && !s.split('/').some((p) => p === '.' || p === '..');
-}
-
-/**
- * A PR the user typed: `21`, `#21`, `owner/name#21`, or a PR link
- * (`https://github.com/owner/name/pull/21`, with anything after the number). A bare number has
- * no repo (null). Null for anything else.
- */
-export function parsePrInput(input: string): { repo: string | null; number: number } | null {
-  const s = input.trim();
-  let m = /^#?(\d{1,7})$/.exec(s);
-  if (m) return Number(m[1]) > 0 ? { repo: null, number: Number(m[1]) } : null;
-  m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d{1,7})$/.exec(s);
-  if (!m) m = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d{1,7})(?:[/?#].*)?$/i.exec(s);
-  if (!m || !isRepoName(m[1]) || Number(m[2]) <= 0) return null;
-  return { repo: m[1], number: Number(m[2]) };
-}
+export { isRepoName, parsePrInput };
 
 /** `owner/name` and the number from a PR's URL, or null. */
 export function prFromUrl(url: string | null): { repo: string; number: number } | null {
   const p = url ? parsePrInput(url) : null;
   return p?.repo ? { repo: p.repo, number: p.number } : null;
+}
+
+/** A PR or an issue, read through the issues API, which answers for both. */
+export interface IssueOrPr {
+  kind: 'pr' | 'issue';
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  author: string;
+  state: 'open' | 'closed' | 'merged';
+}
+
+/** PR or issue <number> of <repo> (`owner/name`): GitHub numbers them together, so this says which. */
+export async function issueOrPr(cwd: string, repo: string, number: number): Promise<IssueOrPr> {
+  const r = JSON.parse(await ghWithin(cwd, 20_000, 'api', `repos/${repo}/issues/${number}`)) as {
+    number?: number; html_url?: string; title?: string | null; body?: string | null; state?: string;
+    user?: { login?: string } | null; pull_request?: { merged_at?: string | null } | null;
+  };
+  const pr = r.pull_request ?? null;
+  return {
+    kind: pr ? 'pr' : 'issue',
+    number: r.number ?? number,
+    url: r.html_url ?? `https://github.com/${repo}/${pr ? 'pull' : 'issues'}/${number}`,
+    title: r.title ?? '',
+    body: r.body ?? '',
+    author: r.user?.login ?? '',
+    state: r.state === 'open' ? 'open' : pr?.merged_at ? 'merged' : 'closed',
+  };
 }
 
 export interface PrInfo {
