@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, type Config } from '../src/server/config.js';
 import { Core } from '../src/server/core.js';
 import { openDb } from '../src/server/db.js';
+import { defaultDeps, type InstanceDeps } from '../src/server/instance.js';
 import { silentLogger } from '../src/server/log.js';
 import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
@@ -180,6 +181,14 @@ export function pinFiles(): string[] {
 }
 
 /**
+ * Lease deps for a host started in a test: its home is new, so no rival can write the lease, and
+ * the 1 s read-back each start waits out (most of a short integration test) is skipped.
+ */
+export function testLockDeps(): InstanceDeps {
+  return { ...defaultDeps(), settleMs: 0 };
+}
+
+/**
  * A fresh temp dir by its real path. On macOS the temp dir is under /var, a symlink to
  * /private/var, and git and `process.cwd()` report the resolved path.
  */
@@ -214,7 +223,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   const host = new SessionHost(paths, {
     services: () => null,
     start: async () => {
-      hostHandle ??= await startHost({ paths, version: '0.0.0-test' });
+      hostHandle ??= await startHost({ paths, version: '0.0.0-test', lockDeps: testLockDeps() });
     },
   });
   const killHost = async () => {

@@ -88,7 +88,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      # Four files at once, as in ci.yml: by default this 2-CPU runner runs one at a time.
+      - run: npm test -- --maxWorkers=4
 
   build:
     needs: [plan, test]
