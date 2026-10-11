@@ -181,10 +181,6 @@ export function pinFiles(): string[] {
 }
 
 /**
- * A fresh temp dir by its real path. On macOS the temp dir is under /var, a symlink to
- * /private/var, and git and `process.cwd()` report the resolved path.
- */
-/**
  * Lease deps for a host started in a test: its home is new, so no rival can write the lease, and
  * the 1 s read-back each start waits out (most of a short integration test) is skipped.
  */
@@ -192,6 +188,10 @@ export function testLockDeps(): InstanceDeps {
   return { ...defaultDeps(), settleMs: 0 };
 }
 
+/**
+ * A fresh temp dir by its real path. On macOS the temp dir is under /var, a symlink to
+ * /private/var, and git and `process.cwd()` report the resolved path.
+ */
 export function tempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
