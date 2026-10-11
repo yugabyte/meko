@@ -936,7 +936,7 @@ export class Lifecycle {
     this.sessions.event(row.id, 'base', `Base set to ${base}, the base of PR #${pr!.number}`);
   }
 
-  /** Called on every Stop hook: a Claude turn just finished. */
+  /** Called at every turn's end: its Stop hook, or the mod reporting a turn you interrupted. */
   async onTurnEnd(id: string): Promise<void> {
     const row = sessionRow(this.db, id);
     if (!row) return;

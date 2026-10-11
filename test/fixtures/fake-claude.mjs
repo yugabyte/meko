@@ -266,6 +266,13 @@ async function turn(text) {
     /* default */
   }
   await sleep(ms);
+  if (text.includes('INTERRUPT')) {
+    // Like the person pressing Ctrl+C (or Esc) mid-turn: Claude Code writes the interruption to the
+    // transcript and fires no Stop hook; the mod's turn.complete hook reports the turn.
+    writeFileSync(transcript, JSON.stringify({ type: 'user', timestamp: new Date().toISOString(), message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } }) + '\n', { flag: 'a' });
+    if (modOn) await modPost('/mod/turn', { turnId: `turn-${responses}`, reason: 'aborted' }).catch(() => undefined);
+    return;
+  }
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
   if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {
     // A design with open questions, listed in the questions file beside it; RESOLVE_STORE (in the

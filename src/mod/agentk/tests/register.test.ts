@@ -156,13 +156,26 @@ test('passes the context fill and plan limits on after a turn', async ($, on) =>
   expect(calls).toEqual([{ path: '/mod/measure', body: { context, rateLimits }, socketPath: '/ak/hook.sock', token: 'tok' }])
 })
 
+test('tells AgentK of a turn the person interrupted, and of no other turn', async ($, on) => {
+  mock.env(on, ENV)
+  const calls = server(on)
+  on('turn.complete', () => ({ text: '' }))
+  const turn = { answer: '', durationMs: 900, turnId: 't1' }
+  await $.turn.complete({ ...turn, reason: 'aborted', isAborted: true })
+  await $.turn.complete({ ...turn, turnId: 't2', reason: 'answer', isAborted: false })
+  await $.turn.complete({ ...turn, turnId: 't3', reason: 'aborted', isAborted: true, agentId: 'a1' })
+  expect(calls).toEqual([{ path: '/mod/turn', body: { turnId: 't1', reason: 'aborted' }, socketPath: '/ak/hook.sock', token: 'tok' }])
+})
+
 test('does nothing outside an AgentK session', async ($, on) => {
   mock.env(on, {})
   const clock = mock.clock(on)
   const calls = server(on)
   engine(on)
+  on('turn.complete', () => ({ text: '' }))
   await $.session.start(START)
   await $.session.measure({ context: { window: 200000 }, rateLimits: [], changed: ['context'] })
+  await $.turn.complete({ answer: '', durationMs: 900, turnId: 't1', reason: 'aborted', isAborted: true })
   await clock.advance(5000)
   expect(calls).toEqual([])
 })
