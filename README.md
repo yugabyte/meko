@@ -126,11 +126,12 @@ your phone can connect.
   design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
   AgentK asks Claude Code (one quick call with no tools) and offers what to do: start a task at
   Explore, Design or Code with a prompt, go to a session, move one to another stage, or open its PR.
-  Nothing that changes anything runs until you pick it, and you can reply to refine it.
+  Nothing runs until you pick it, a single "go to" included, and you can reply to refine it.
 - **Paste a GitHub link to start:** paste a PR or issue link into Ask AgentK (`⌘K`). A PR
   gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
-  to Code), in the project it belongs to: the one whose datapack its description names, or one on
-  its repo. If there's none, AgentK opens a project for it and clones the repo if needed.
+  to Code), in the project it belongs to: the one whose datapack its description names, else the
+  project you're on when it's on that repo, else the first one on the repo; the other projects on the
+  repo are offered too. If there's none, AgentK opens a project for it and clones the repo if needed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
@@ -164,7 +165,7 @@ your phone can connect.
   Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml` and restart
   the server (the file is read at startup): AgentK then types its prompts into the terminal, running
   sessions included, though those keep the mod loaded until they're relaunched
-  ([details](docs/design.md#agentks-mod-in-claude)). Claude Code's mods are early
+  ([details](docs/design/mod.md)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
   When the host's Claude Code is too old for the mod, a banner says so and can update it.
 - **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
@@ -207,13 +208,13 @@ your phone can connect.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
-  (details in [docs/design.md](docs/design.md#usage-stats)).
+  (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
 - **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback
   if a new version won't start.
 
-Design: [`docs/design.md`](docs/design.md).
+Design: [`docs/design.md`](docs/design.md), an index with one file per area under `docs/design/`.
 
 ## Commands
 

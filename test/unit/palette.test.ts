@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AskAgentkAction, LinkPlan, ProjectWithSessions } from '../../src/shared/types.js';
-import { askEntries, filterItems, goesAtOnce, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import { askEntries, filterItems, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -32,7 +32,7 @@ describe('command palette labels', () => {
 describe('a pasted GitHub link', () => {
   const base: LinkPlan = {
     kind: 'pr', repo: 'acme/demo', number: 7, title: 'Add the widget', url: 'https://github.com/acme/demo/pull/7', author: 'dana', state: 'open',
-    project: { id: 'w', name: 'Widget', why: 'datapack', clone: '/code/demo' }, newProject: null, existing: [],
+    project: { id: 'w', name: 'Widget', why: 'datapack', clone: '/code/demo' }, others: [], newProject: null, existing: [],
   };
   const elsewhere = { project: null, newProject: { name: 'demo', repoPath: null, cloneUrl: 'https://github.com/acme/demo.git', datapack: null, reopens: null } };
   const rows = (plan: Partial<LinkPlan>) =>
@@ -40,7 +40,13 @@ describe('a pasted GitHub link', () => {
 
   it.each<[string, Partial<LinkPlan>, ReturnType<typeof rows>]>([
     ['reviews a PR in the project naming its datapack', {}, [
-      { label: 'Review #7 Add the widget in Widget', hint: 'Names its datapack', action: { start: null }, clones: false },
+      { label: 'Review #7 Add the widget in Widget', hint: 'Names its datapack', action: { start: null, projectId: 'w' }, clones: false },
+    ]],
+    ['reviews a PR in this project, or in another on the repo', {
+      project: { id: 'w', name: 'Widget', why: 'current', clone: '/code/demo' }, others: [{ id: 'g', name: 'Gadget', why: 'repo', clone: '/code/demo' }],
+    }, [
+      { label: 'Review #7 Add the widget in Widget', hint: 'This project', action: { start: null, projectId: 'w' }, clones: false },
+      { label: 'Review #7 Add the widget in Gadget', hint: 'Also on acme/demo', action: { start: null, projectId: 'g' }, clones: false },
     ]],
     ['goes to the review already running instead', { existing: [{ sessionId: 's1', projectId: 'w', name: 'Review #7 Add the widget' }] }, [
       { label: 'Go to Review #7 Add the widget', hint: 'Already reviewing it', action: { go: { projectId: 'w', sessionId: 's1' } }, clones: false },
@@ -49,24 +55,26 @@ describe('a pasted GitHub link', () => {
       { label: "PR #7 of acme/demo is merged, so there's nothing to review.", hint: '', action: null, clones: false },
     ]],
     ['opens a new project, cloning the repo', elsewhere, [
-      { label: 'Review #7 Add the widget in a new project demo', hint: 'Opens a new project · Clones acme/demo', action: { start: null }, clones: true },
+      { label: 'Review #7 Add the widget in a new project demo', hint: 'Opens a new project · Clones acme/demo', action: { start: null, projectId: undefined }, clones: true },
     ]],
     ['reopens a closed project', { project: null, newProject: { ...elsewhere.newProject, repoPath: '/code/demo', datapack: { id: 'd', name: 'adlc/proj/demo/widget', invite: false }, reopens: 'w' } }, [
-      { label: 'Review #7 Add the widget in demo', hint: 'Opens the project again', action: { start: null }, clones: false },
+      { label: 'Review #7 Add the widget in demo', hint: 'Opens the project again', action: { start: null, projectId: undefined }, clones: false },
     ]],
-    ['works on an issue from Design or Code, after the session already on it', {
+    ['works on an issue from Design or Code, after the session already on it, then from Design in the other projects on the repo', {
       kind: 'issue', state: 'closed', title: 'Dark mode', project: { id: 'w', name: 'Widget', why: 'repo', clone: null },
+      others: [{ id: 'g', name: 'Gadget', why: 'repo', clone: '/code/demo' }],
       existing: [{ sessionId: 's2', projectId: 'w', name: '#7 Dark mode' }],
     }, [
       { label: 'Go to #7 Dark mode', hint: 'Already working on it', action: { go: { projectId: 'w', sessionId: 's2' } }, clones: false },
-      { label: 'Work on issue #7 Dark mode in Widget', hint: 'Closed issue · Starts at Design · Same repo · Clones acme/demo', action: { start: 'design' }, clones: true },
-      { label: 'Work on issue #7 in Widget, straight to Code', hint: 'Closed issue · Starts at Code · Same repo · Clones acme/demo', action: { start: 'code' }, clones: true },
+      { label: 'Work on issue #7 Dark mode in Widget', hint: 'Closed issue · Starts at Design · On acme/demo · Clones acme/demo', action: { start: 'design', projectId: 'w' }, clones: true },
+      { label: 'Work on issue #7 in Widget, straight to Code', hint: 'Closed issue · Starts at Code · On acme/demo · Clones acme/demo', action: { start: 'code', projectId: 'w' }, clones: true },
+      { label: 'Work on issue #7 Dark mode in Gadget', hint: 'Closed issue · Starts at Design · Also on acme/demo', action: { start: 'design', projectId: 'g' }, clones: false },
     ]],
     ['says a new project gets a new datapack', {
       kind: 'issue', title: 'Dark mode', ...elsewhere, newProject: { ...elsewhere.newProject, repoPath: '/code/demo', datapack: 'create' },
     }, [
-      { label: 'Work on issue #7 Dark mode in a new project demo', hint: 'Starts at Design · Opens a new project · New datapack', action: { start: 'design' }, clones: false },
-      { label: 'Work on issue #7 in a new project demo, straight to Code', hint: 'Starts at Code · Opens a new project · New datapack', action: { start: 'code' }, clones: false },
+      { label: 'Work on issue #7 Dark mode in a new project demo', hint: 'Starts at Design · Opens a new project · New datapack', action: { start: 'design', projectId: undefined }, clones: false },
+      { label: 'Work on issue #7 in a new project demo, straight to Code', hint: 'Starts at Code · Opens a new project · New datapack', action: { start: 'code', projectId: undefined }, clones: false },
     ]],
   ])('%s', (_, plan, want) => {
     expect(rows(plan)).toEqual(want);
@@ -91,14 +99,5 @@ describe("AgentK's proposed actions", () => {
     [{ type: 'move', sessionId: 'gone', stage: 'code', instructions: '' }, [['Move a session to Code', 'Action', false]]],
   ])('names %j', (a, want) => {
     expect(rows(a)).toEqual(want);
-  });
-
-  it('goes at once only when going somewhere is the whole answer', () => {
-    const usage: AskAgentkAction = { type: 'go', view: 'usage' };
-    const move: AskAgentkAction = { type: 'move', sessionId: 's1', stage: 'code', instructions: '' };
-    expect(goesAtOnce([usage])).toBe(usage);
-    expect(goesAtOnce([usage, usage])).toBeNull();
-    expect(goesAtOnce([move])).toBeNull();
-    expect(goesAtOnce([])).toBeNull();
   });
 });

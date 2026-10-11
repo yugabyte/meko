@@ -3459,20 +3459,21 @@ div[id^='dak-mermaid-'] .label {
 }
 
 /* ---------- Starting ---------- */
-/* Three keycaps that play a tune (Dots in common.tsx, the tune and its keyframes in typing.ts).
-   Sized in em to follow the label, colored with currentColor to suit any button or theme; only
-   transform and box-shadow move, so the width never changes. Still with reduced motion. */
+/* Three keycaps, flat as dashes, that play a tune (Dots in common.tsx, the tune and its keyframes
+   in typing.ts). Sized in em to follow the label, colored with currentColor to suit any button or
+   theme; only transform and box-shadow move, so the width never changes. --edge is also how far a
+   key goes down. Still with reduced motion. */
 .dots {
   white-space: nowrap;
   margin-left: 0.3em;
 }
 .dots > .dots-key {
-  --edge: max(1px, 0.12em);
+  --edge: max(1px, 0.06em);
   display: inline-block;
-  width: 0.42em;
-  height: 0.42em;
-  margin-right: 0.2em;
-  border-radius: 0.1em;
+  width: 0.36em;
+  height: 0.12em;
+  margin-right: 0.14em;
+  border-radius: 0.06em;
   background: currentColor;
   box-shadow: 0 var(--edge) 0 color-mix(in srgb, currentColor 55%, transparent);
 }

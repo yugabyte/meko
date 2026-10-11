@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
@@ -719,6 +719,26 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     expect(env.core.sessions.row(s.id).stage).toBe('review');
     expect(lastEvent(s.id, 'merge')).toBe('PR #7 was closed without merging');
+  });
+
+  it("doesn't count a review addressed by a turn you interrupted, so a merge waits for the next turn", async () => {
+    mkdirSync(env.fakeDir, { recursive: true });
+    writeFileSync(join(env.fakeDir, 'mod'), '');
+    const s = await inReview('Interrupted review');
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    writeFileSync(join(env.fakeDir, 'interrupt'), '');
+    gh.status = { ...gh.status!, reviews: [...gh.status!.reviews, finding('r2')] };
+    await poll(s.id);
+    await waitFor(() => lastEvent(s.id, 'turn'), (t) => t === 'You interrupted the turn', 10000, 'the interrupt');
+    await idle(s.id, 'after the interrupt');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ reviewState: 'addressing', canMerge: false });
+    expect(env.core.sessions.get(s.id).mergeBlockers).toContain('AgentK is addressing review findings.');
+    expect(queued(s.id).review?.state).toBe('sent');
+    // The next turn to end is the one that took it.
+    rmSync(join(env.fakeDir, 'interrupt'));
+    await env.core.sessions.submit(s.id, 'go on');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.reviewState === 'addressed' && x.status === 'idle', 10000, 'addressed');
+    expect(queued(s.id)).toEqual({});
   });
 
   it('delivers a review that arrives mid-turn when the turn ends, and only then counts it addressed', async () => {

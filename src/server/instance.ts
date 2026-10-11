@@ -36,6 +36,8 @@ export interface InstanceDeps {
   now: () => number;
   alive: (pid: number) => boolean;
   sleep: (ms: number) => Promise<void>;
+  /** For tests, whose fresh homes have no rival: how long after writing the lease it's read back (default SETTLE_MS). */
+  settleMs?: number;
 }
 
 function pidAlive(pid: number): boolean {
@@ -48,7 +50,7 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-const defaultDeps = (): InstanceDeps => ({
+export const defaultDeps = (): InstanceDeps => ({
   host: hostname(),
   pid: process.pid,
   now: Date.now,
@@ -133,7 +135,7 @@ export class InstanceLock {
       const now = deps.now();
       const lease: Lease = { host: deps.host, pid: deps.pid, version: me.version, port: me.port, startedAt: now, beatAt: now };
       writeLease(file, lease);
-      await deps.sleep(SETTLE_MS);
+      await deps.sleep(deps.settleMs ?? SETTLE_MS);
       // Another server that wrote after us wins; the next pass reports it.
       if (same(readLease(file), lease)) return new InstanceLock(file, lease, deps);
     }

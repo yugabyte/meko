@@ -1202,8 +1202,9 @@ export class SessionManager {
    * hello when it loads, polls for prompts, acks them, and reports measurements after each turn;
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
-   * design_questions tool (`/mod/questions`); and Claude's Meko calls starting and ending
-   * (`/mod/meko`), for the session's dot.
+   * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
+   * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
+   * no `Stop` hook.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -1257,6 +1258,16 @@ export class SessionManager {
         return this.core.learn.fromMod(row, body);
       case '/mod/meko':
         this.mod.mekoCall(row.id, body.id, body.state);
+        return { status: 204 };
+      case '/mod/turn':
+        // Only an interrupted turn is reported, and only one with a turn running counts: one report
+        // per turn, but a turn the server already ended (a restart) is left alone.
+        if (body.reason === 'aborted' && (this.turns.has(row.id) || row.status === 'working')) {
+          run(this.db, 'UPDATE sessions SET last_event_at = ? WHERE id = ?', Date.now(), row.id);
+          void this.endTurn(row, 'interrupted')
+            .catch((e) => this.core.log.error('turn end handling failed', e))
+            .finally(() => this.core.changed());
+        }
         return { status: 204 };
       case '/mod/learn/start':
         // /agentk_learn in the terminal: the answer is the command's output there.
@@ -1353,6 +1364,43 @@ export class SessionManager {
     if (row?.desired === 'running') this.core.limits.report(input);
   }
 
+  /**
+   * A turn's end: its `Stop` hook, or (`interrupted`) the mod reporting a turn you interrupted
+   * (Ctrl+C, Esc), which fires no `Stop`. Either way the session is between turns again and what
+   * waited for the turn's end goes. A turn you interrupted isn't one Claude died in: it's never
+   * continued by itself (`interrupted` stays 0).
+   */
+  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted'): Promise<void> {
+    const id = row.id;
+    void this.captureTranscript(id);
+    // No Meko call outlives its turn, the plan approval's included.
+    this.mod.endMeko(id);
+    // A plan waiting for approval keeps its turn going past its Stop; an interrupt ends it.
+    if (how === 'interrupted') this.planPending.delete(id);
+    if (this.planPending.has(id)) return;
+    this.update(id, { interrupted: 0 });
+    this.turns.delete(id);
+    if (how === 'interrupted') this.event(id, 'turn', 'You interrupted the turn');
+    // A tool call doesn't outlive its turn.
+    this.mod.endAsk(id);
+    // A Design turn that wrote or republished the design (or changed its questions) leaves it
+    // waiting for approval, unless the user approved it during the turn and it didn't change.
+    const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));
+    // After the approval, a design Claude kept current is saved as a new version too.
+    if (row.stage !== 'design') await this.core.lifecycle.collectLaterDesign(this.row(id));
+    const queued = await this.core.lifecycle.takeQueuedApproval(id, changed);
+    if (queued === 'sent' || queued === 'failed') {
+      /* the approval went (the session is in Code), or the design waits for it again */
+    } else if (changed) {
+      this.core.lifecycle.designReady(id, queued === 'dropped');
+    } else {
+      this.setStatus(id, 'idle');
+    }
+    this.refreshDiff(id).catch(() => undefined);
+    this.ingestUsage(id);
+    await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+  }
+
   async onHook(token: string, p: HookPayload): Promise<void> {
     const row = this.byToken(token);
     if (!row || row.desired !== 'running') return;
@@ -1438,33 +1486,9 @@ export class SessionManager {
         }
         break;
       }
-      case 'Stop': {
-        void this.captureTranscript(id);
-        // No Meko call outlives its turn, the plan approval's included.
-        this.mod.endMeko(id);
-        if (this.planPending.has(id)) break;
-        this.update(id, { interrupted: 0 });
-        this.turns.delete(id);
-        // A tool call doesn't outlive its turn.
-        this.mod.endAsk(id);
-        // A Design turn that wrote or republished the design (or changed its questions) leaves it
-        // waiting for approval, unless the user approved it during the turn and it didn't change.
-        const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));
-        // After the approval, a design Claude kept current is saved as a new version too.
-        if (row.stage !== 'design') await this.core.lifecycle.collectLaterDesign(this.row(id));
-        const queued = await this.core.lifecycle.takeQueuedApproval(id, changed);
-        if (queued === 'sent' || queued === 'failed') {
-          /* the approval went (the session is in Code), or the design waits for it again */
-        } else if (changed) {
-          this.core.lifecycle.designReady(id, queued === 'dropped');
-        } else {
-          this.setStatus(id, 'idle');
-        }
-        this.refreshDiff(id).catch(() => undefined);
-        this.ingestUsage(id);
-        await this.core.lifecycle.onTurnEnd(id);
+      case 'Stop':
+        await this.endTurn(row, 'stop');
         break;
-      }
       case 'SessionEnd':
         this.ingestUsage(id);
         // /clear ends one conversation and starts the next (SessionStart follows); Claude keeps running.

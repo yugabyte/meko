@@ -368,7 +368,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.prReview.reviewable(req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
   app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/task-prs', async (req): Promise<TaskPrs> =>
     taskPrs(core, req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
-  app.get<{ Querystring: { ref?: string } }>('/api/github-link', async (req): Promise<LinkPlan> => core.githubLinks.plan(req.query.ref));
+  app.get<{ Querystring: { ref?: string; project?: string } }>('/api/github-link', async (req): Promise<LinkPlan> =>
+    core.githubLinks.plan(req.query.ref, req.query.project));
   app.post<{ Body: StartFromLinkRequest }>('/api/github-link/start', async (req): Promise<StartFromLinkResult> =>
     core.githubLinks.start(req.body && typeof req.body === 'object' ? req.body : ({} as StartFromLinkRequest)));
   // Claude answers while the request is open: a browser that goes away (the palette closed) stops it.

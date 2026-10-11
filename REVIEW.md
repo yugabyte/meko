@@ -110,8 +110,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       allow) so a slow or restarting server never blocks Claude.
 - [ ] Ask AgentK (`askagentk.ts`) only proposes: its `claude -p` keeps `--tools ""`,
       `--strict-mcp-config` and hooks off, the answer's actions are checked against the state
-      (`checkActions()`), and the browser runs one only when the user picks it (a lone `go` aside),
-      through the route the UI already uses. Names, branches and PR titles in its context stay
+      (`checkActions()`), and the browser runs one only when the user picks it (a lone `go`
+      too), through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
@@ -265,8 +265,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`it.each`), and a fix extends the nearest existing test rather than adding a new one or a
       new file. Name which tests to drop or merge. Doc-only, comment-only and pure-refactor
       changes need no new tests.
-- [ ] **Docs are updated in the same change** (see the table in AGENTS.md): `docs/design.md`,
-      `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `REVIEW.md` and `src/shared/types.ts`. Stale
+- [ ] **Docs are updated in the same change** (see the table in AGENTS.md): the part of
+      `docs/design/` that covers the change (and the contents table in `docs/design.md` for a new
+      part), `README.md`, `CONTRIBUTING.md`, `AGENTS.md` (the root one, `src/server/AGENTS.md` or
+      `src/web/AGENTS.md`), `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes `scripts/check-title.sh`, and its type

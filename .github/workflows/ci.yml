@@ -47,6 +47,10 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      # By default Vitest runs one test file fewer than there are CPUs at once. ubuntu-latest has 2 CPUs
+      # for this repo, so that was one file at a time (677 s); the tests mostly wait on the fake Claude,
+      # and 4 at once fit on 2 CPUs (233 s; 8 was slower). macos-15 already ran about 4 at once. On
+      # both, the run now ends with test/integration/lifecycle.test.ts, the longest file.
+      - run: npm test -- --maxWorkers=4
         env:
           TERM: xterm-256color
