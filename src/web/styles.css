@@ -4348,11 +4348,13 @@ div[id^='dak-mermaid-'] .label {
     min-width: 5px;
     margin: 0 1px;
   }
+  /* The right margin keeps the gate off the name when it only just fits beside it, where the
+     gate's auto margin is 0; a gate on the next line still lines up with the card's edge. */
   .stg-now {
     display: block;
     flex: 1;
     min-width: 0;
-    margin-left: 10px;
+    margin: 0 10px;
     font-size: 13px;
     white-space: nowrap;
     overflow: hidden;
