@@ -8,16 +8,18 @@ Pasting a GitHub PR or issue into **Ask AgentK** (`⌘K`) offers the session tha
 in the project it belongs to (`src/server/ghlinks.ts`, `GET /api/github-link` and
 `POST /api/github-link/start`). The palette takes a `/pull/<n>` or `/issues/<n>` link on
 github.com, or `owner/name#<n>`, never a bare number, which names no repo (`parseGithubRef()` in
-`src/shared/github-refs.ts`). Once typing pauses for 250 ms it looks the ref up, once per ref while
-the palette is open. GitHub numbers PRs and issues together, so the server asks
+`src/shared/github-refs.ts`). Once typing pauses for 250 ms it looks the ref up, once per ref and
+project on screen while the palette is open, and again when a project the plan names was closed. GitHub numbers PRs and issues together, so the server asks
 `gh api repos/<owner>/<name>/issues/<n>`, which answers for both and says which it is. The repo is
 the one GitHub's link names, so a renamed repo or other casing reads as GitHub spells it.
 
-**The project.** One project is offered. The first choice is the first open project, in rail order,
-with a datapack that a Meko line in the description names (`<host>://<id>;<name>`, as AgentK ends
-its PRs; people can put the same line in an issue): a dedicated datapack before a shared one. The
-second choice is the first open project whose repo is a clone of the link's repo, its `origin` or a
-fork's `upstream`. The session works in the project's repo when that's a clone of the link's repo,
+**The project.** One project is picked. The first choice is the first open project, in rail order
+(the one on screen first), with a datapack that a Meko line in the description names
+(`<host>://<id>;<name>`, as AgentK ends its PRs; people can put the same line in an issue): a
+dedicated datapack before a shared one. The second choice is the project on screen (the palette
+sends it, `?project=`) when its repo is a clone of the link's repo, its `origin` or a fork's
+`upstream`; the third, the first open project in rail order whose repo is such a clone. The other
+open projects on the repo (`LinkPlan.others`) are offered after it, one item each. The session works in the project's repo when that's a clone of the link's repo,
 else in a scanned clone (`localClone()`), else in a clone made at start into the repos folder; when
 that folder (`[repos] clone_into`) isn't under the repos roots, the start is refused before cloning,
 since a session can't use a clone the scan doesn't list.
@@ -46,8 +48,12 @@ MEMBER or COLLABORATOR; anyone else's are untrusted text. The number stands alon
 ([Meko recall](recall-and-learn.md#meko-recall-at-start)) reads the issue too. A closed issue is still offered, and
 says so in its hint. Running tasks whose first prompt has the issue's link ending a line (so #45's isn't found in
 #450's) are offered first as
-**Go to**, with a new session still offered after them. Each item's hint says what starting does
-besides: which project and why, **Opens a new project** (or **Opens the project again**),
+**Go to**, with a new session still offered after them. After the picked project's items, each
+other open project on the repo gets one: **Review #<n> … in <project>** for a PR, **Work on issue
+#<n> … in <project>** (at Design) for an issue. Link items wrap rather than being cut, so the
+project at the end of the label always shows. Each item's hint says what starting does
+besides: which project and why (**Names its datapack**, **This project**, **On <owner>/<name>**, or
+**Also on <owner>/<name>** for the other projects), **Opens a new project** (or **Opens the project again**),
 **Clones <owner>/<name>**, **New datapack**, or **Accepts the share of <datapack>**. While it
 starts, the palette stays open with *Starting* (or *Cloning <owner>/<name>*). Once the server
 answers, the palette closes and the page goes to the session as after New session. Closing the

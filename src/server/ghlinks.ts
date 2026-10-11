@@ -12,7 +12,7 @@ import { errMsg } from './log.js';
 import { repoKey } from './paths.js';
 import { datapackIdsIn, localClone } from './prreview.js';
 import { HttpError } from './projects.js';
-import { projectDatapacks, projectRows } from './store.js';
+import { projectDatapacks, projectRows, type ProjectRow } from './store.js';
 
 /** A new project as planned, with the datapack choice create() takes (an invite's id included). */
 interface NewProjectPlan {
@@ -32,13 +32,20 @@ export class GithubLinkService {
     return this.core.db;
   }
 
-  async plan(ref: unknown): Promise<LinkPlan> {
+  /** What the link would start, and where; `currentProjectId` (the project on screen) is preferred among those on its repo. */
+  async plan(ref: unknown, currentProjectId?: unknown): Promise<LinkPlan> {
     const { repo, item } = await this.read(ref);
     const dpIds = datapackIdsIn(item.body);
-    const project = await this.bestProject(repo, dpIds);
+    const onRepo = await this.projectsOnRepo(repo);
+    const project = await this.bestProject(repo, dpIds, onRepo, typeof currentProjectId === 'string' ? currentProjectId : null);
+    // Their repo is a clone of the link's, so it's where their sessions work.
+    const others = project
+      ? onRepo.filter((r) => r.id !== project.id).map((r): LinkProject => ({ id: r.id, name: r.name, why: 'repo', clone: r.repo_path }))
+      : [];
     return {
       kind: item.kind, repo, number: item.number, title: item.title, url: item.url, author: item.author, state: item.state,
       project,
+      others,
       newProject: project ? null : (await this.newProject(repo, item, dpIds)).plan,
       existing: this.existing(repo, item),
     };
@@ -63,7 +70,7 @@ export class GithubLinkService {
     } else {
       const dpIds = datapackIdsIn(item.body);
       // Planned again rather than taken from the browser: an open project that fits by now is used.
-      const best = await this.bestProject(repo, dpIds);
+      const best = await this.bestProject(repo, dpIds, await this.projectsOnRepo(repo));
       if (best) {
         projectId = best.id;
         clone = best.clone;
@@ -107,14 +114,24 @@ export class GithubLinkService {
     return { repo: parseGithubRef(item.url)?.repo ?? want.repo, item };
   }
 
-  /**
-   * The open project to start in: the first (in rail order) with a dedicated datapack the
-   * description names, then one with it as a shared datapack, then the first on the repo.
-   */
-  private async bestProject(repo: string, dpIds: string[]): Promise<LinkProject | null> {
+  /** The open projects (in rail order) whose repo is a clone of <repo>. */
+  private async projectsOnRepo(repo: string): Promise<ProjectRow[]> {
     const rows = projectRows(this.db);
+    const fits = await Promise.all(rows.map((r) => isCloneOf(r.repo_path, repo)));
+    return rows.filter((_, i) => fits[i]);
+  }
+
+  /**
+   * The open project to start in: the first (in rail order, the current one first) with a dedicated
+   * datapack the description names, then one with it as a shared datapack, then the current project
+   * when it's on the repo, then the first on the repo.
+   */
+  private async bestProject(repo: string, dpIds: string[], onRepo: ProjectRow[], currentId: string | null = null): Promise<LinkProject | null> {
+    const rows = projectRows(this.db);
+    const current = rows.find((p) => p.id === currentId);
+    if (current) rows.unshift(...rows.splice(rows.indexOf(current), 1));
     const named = new Set(dpIds);
-    let pick: { row: (typeof rows)[number]; why: LinkProject['why'] } | null = null;
+    let pick: { row: ProjectRow; why: LinkProject['why'] } | null = null;
     if (named.size) {
       for (const role of ['dedicated', 'shared'] as const) {
         const row = rows.find((p) => projectDatapacks(this.db, p.id).some((d) => d.role === role && named.has(d.id)));
@@ -124,14 +141,9 @@ export class GithubLinkService {
         }
       }
     }
-    if (!pick) {
-      for (const row of rows) {
-        if (await isCloneOf(row.repo_path, repo)) {
-          pick = { row, why: 'repo' };
-          break;
-        }
-      }
-    }
+    const here = onRepo.find((p) => p.id === currentId);
+    if (!pick && here) pick = { row: here, why: 'current' };
+    if (!pick && onRepo[0]) pick = { row: onRepo[0], why: 'repo' };
     if (!pick) return null;
     return { id: pick.row.id, name: pick.row.name, why: pick.why, clone: await this.cloneFor(pick.row.repo_path, repo) };
   }

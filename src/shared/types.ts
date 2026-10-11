@@ -1009,9 +1009,12 @@ export interface LinkPlan {
   state: 'open' | 'closed' | 'merged';
   /**
    * The open project to start in: one with a datapack the description's Meko lines name, else the
-   * first on the repo. Null when none fits (then `newProject` is set).
+   * project on screen (`?project=`) when it's on the repo, else the first on the repo. Null when none
+   * fits (then `newProject` is set).
    */
   project: LinkProject | null;
+  /** The other open projects on the repo, in rail order, offered too (`why: 'repo'`). Empty when `project` is null. */
+  others: LinkProject[];
   /** The project AgentK opens when no open project fits. */
   newProject: LinkNewProject | null;
   /** Running sessions already on it: a review of the PR, or tasks whose first prompt names the issue's link. */
@@ -1021,8 +1024,11 @@ export interface LinkPlan {
 export interface LinkProject {
   id: string;
   name: string;
-  /** `datapack`: it has a datapack the description names; `repo`: its repo is a clone of the link's. */
-  why: 'datapack' | 'repo';
+  /**
+   * `datapack`: it has a datapack the description names; `current`: it's the project on screen and its
+   * repo is a clone of the link's; `repo`: its repo is a clone of the link's.
+   */
+  why: 'datapack' | 'current' | 'repo';
   /** The clone of the link's repo the session works in; null when it has to be cloned first. */
   clone: string | null;
 }
@@ -1770,8 +1776,8 @@ export type TermServerMessage =
 // GET    /api/projects/:id/task-prs?repoPath=&pr= → TaskPrs   (your open PRs in `repoPath` (default: the project's
 //        repo), newest first; with `pr` (a number, #number, owner/name#number or PR link) that one PR; 400 for a PR
 //        that can't be found or isn't open)
-// GET    /api/github-link?ref=             → LinkPlan   (a pasted GitHub PR or issue: link or owner/name#N; 400 for anything
-//        else or one GitHub can't find)
+// GET    /api/github-link?ref=[&project=]  → LinkPlan   (a pasted GitHub PR or issue: link or owner/name#N; `project`, the one
+//        on screen, is preferred among those on its repo; 400 for anything else or one GitHub can't find)
 // POST   /api/github-link/start StartFromLinkRequest → StartFromLinkResult   (starts a Review a PR session on a PR, or a
 //        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
 //        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)

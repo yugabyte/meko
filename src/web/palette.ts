@@ -1,5 +1,5 @@
 // Command palette labels and filtering. Pure, so it's unit-tested.
-import { STAGE_LABELS, type AskAgentkAction, type LinkPlan, type ProjectWithSessions } from '../shared/types';
+import { STAGE_LABELS, type AskAgentkAction, type LinkPlan, type LinkProject, type ProjectWithSessions } from '../shared/types';
 
 /** A piece of a palette label: plain text, or a session's or project's name, drawn in its own style. */
 export type LabelPart = string | { session: string } | { project: string };
@@ -19,8 +19,11 @@ export function filterItems<T extends { label: LabelPart[]; keywords: string }>(
   });
 }
 
-/** What a pasted link's palette item does: go to a session, start one (an issue's at `start`), or nothing (it says why). */
-export type LinkAction = { go: { projectId: string; sessionId: string } } | { start: 'design' | 'code' | null } | null;
+/**
+ * What a pasted link's palette item does: go to a session, start one (an issue's at `start`) in
+ * `projectId` (left out: in the project the plan opens), or nothing (it says why).
+ */
+export type LinkAction = { go: { projectId: string; sessionId: string } } | { start: 'design' | 'code' | null; projectId?: string } | null;
 
 export interface LinkEntry {
   id: string;
@@ -33,8 +36,9 @@ export interface LinkEntry {
 
 /**
  * The palette items for a pasted PR or issue: sessions already on it first; then, for an open PR
- * nobody reviews yet, Review it; for an issue, work on it from Design or straight from Code. Each
- * names the project, and its hint says what else starting does (a new project, a clone, a share).
+ * nobody reviews yet, Review it; for an issue, work on it from Design or straight from Code; then the
+ * same in each other project on the repo (an issue's at Design). Each names the project, and its hint
+ * says why that project and what else starting does (a new project, a clone, a share).
  */
 export function linkEntries(plan: LinkPlan): LinkEntry[] {
   const pr = plan.kind === 'pr';
@@ -56,26 +60,46 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
     }];
   }
   const np = plan.newProject;
-  // A closed project that opens again is named as itself, not as a new one.
-  const where: LabelPart[] = plan.project
-    ? [' in ', { project: plan.project.name }]
-    : [np?.reopens ? ' in ' : ' in a new project ', { project: np?.name ?? plan.repo }];
-  const clones = plan.project ? !plan.project.clone : !np?.repoPath;
+  const why: Record<LinkProject['why'], string> = { datapack: 'Names its datapack', current: 'This project', repo: `On ${plan.repo}` };
+  /** Where an item starts: the label's end, its hint's notes, whether it clones, and the project it sends. */
+  const at = (p: LinkProject | null, notes: string[]) => {
+    const clones = p ? !p.clone : !np?.repoPath;
+    if (clones) notes.push(`Clones ${plan.repo}`);
+    return {
+      // A closed project that opens again is named as itself, not as a new one.
+      where: (p ? [' in ', { project: p.name }] : [np?.reopens ? ' in ' : ' in a new project ', { project: np?.name ?? plan.repo }]) as LabelPart[],
+      notes,
+      clones,
+      projectId: p?.id,
+    };
+  };
   const notes: string[] = [];
-  if (plan.project) notes.push(plan.project.why === 'datapack' ? 'Names its datapack' : 'Same repo');
+  if (plan.project) notes.push(why[plan.project.why]);
   if (np) notes.push(np.reopens ? 'Opens the project again' : 'Opens a new project');
-  if (clones) notes.push(`Clones ${plan.repo}`);
-  if (np?.datapack === 'create') notes.push('New datapack');
-  else if (np?.datapack?.invite) notes.push(`Accepts the share of ${np.datapack.name}`);
-  const hint = (first: string[]) => [...first, ...notes].join(' · ');
+  const main = at(plan.project, notes);
+  if (np?.datapack === 'create') main.notes.push('New datapack');
+  else if (np?.datapack?.invite) main.notes.push(`Accepts the share of ${np.datapack.name}`);
+  const others = plan.others.map((p) => ({ p, ...at(p, [`Also on ${plan.repo}`]) }));
+  const hint = (first: string[], rest: string[]) => [...first, ...rest].join(' · ');
   if (pr) {
-    out.push({ id: 'link-review', label: [`Review #${plan.number} ${plan.title}`, ...where], hint: hint([]), action: { start: null }, clones });
+    const review = (id: string, w: typeof main): LinkEntry => ({
+      id, label: [`Review #${plan.number} ${plan.title}`, ...w.where], hint: hint([], w.notes), action: { start: null, projectId: w.projectId }, clones: w.clones,
+    });
+    out.push(review('link-review', main), ...others.map((o) => review(`link-review-${o.p.id}`, o)));
     return out;
   }
   const closed = plan.state !== 'open' ? ['Closed issue'] : [];
+  const design = (id: string, w: typeof main): LinkEntry => ({
+    id, label: [`Work on issue #${plan.number} ${plan.title}`, ...w.where], hint: hint([...closed, 'Starts at Design'], w.notes),
+    action: { start: 'design', projectId: w.projectId }, clones: w.clones,
+  });
   out.push(
-    { id: 'link-design', label: [`Work on issue #${plan.number} ${plan.title}`, ...where], hint: hint([...closed, 'Starts at Design']), action: { start: 'design' }, clones },
-    { id: 'link-code', label: [`Work on issue #${plan.number}`, ...where, ', straight to Code'], hint: hint([...closed, 'Starts at Code']), action: { start: 'code' }, clones },
+    design('link-design', main),
+    {
+      id: 'link-code', label: [`Work on issue #${plan.number}`, ...main.where, ', straight to Code'], hint: hint([...closed, 'Starts at Code'], main.notes),
+      action: { start: 'code', projectId: main.projectId }, clones: main.clones,
+    },
+    ...others.map((o) => design(`link-design-${o.p.id}`, o)),
   );
   return out;
 }
