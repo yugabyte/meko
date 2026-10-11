@@ -301,6 +301,37 @@ test("answers a bad design_questions call with what's wrong, for Claude to fix",
   expect(r.deny ?? r.text).toBe('Question 1 needs an "id".')
 })
 
+test("tells AgentK when each of Claude's Meko calls starts and ends, failed ones too, and no other tool's", async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  const calls = routes(on, () => answer(204))
+  // Meko's MCP server and Bash, beneath the mod.
+  on('tool.call', { tool: 'mcp__meko__context_search' }, () => ({ result: 'found 3' }))
+  on('tool.call', { tool: 'mcp__plugin_x_meko__memory_add' }, () => {
+    throw new Error('Meko is down')
+  })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }))
+  const r = await $.tool.call({ tool: 'mcp__meko__context_search', tool_use_id: 'tm1', query: 'login' })
+  expect(r.result).toBe('found 3')
+  await $.tool.call({ tool: 'mcp__plugin_x_meko__memory_add', tool_use_id: 'tm2', text: 'a fact' }).catch(() => null)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'tb1', command: 'ls' })
+  await clock.advance(1)
+  expect(calls).toEqual([
+    { path: '/mod/meko', body: { id: 'tm1', state: 'start' } },
+    { path: '/mod/meko', body: { id: 'tm1', state: 'end' } },
+    { path: '/mod/meko', body: { id: 'tm2', state: 'start' } },
+    { path: '/mod/meko', body: { id: 'tm2', state: 'end' } },
+  ])
+})
+
+test("leaves Claude's Meko calls alone outside an AgentK session", async ($, on) => {
+  mock.env(on, {})
+  const calls = routes(on, () => answer(204))
+  on('tool.call', { tool: 'mcp__meko__context_search' }, () => ({ result: 'found 3' }))
+  expect((await $.tool.call({ tool: 'mcp__meko__context_search', tool_use_id: 'tm3', query: 'login' })).result).toBe('found 3')
+  expect(calls).toEqual([])
+})
+
 test('tells AgentK which prompts Claude still holds, until each starts its turn', async ($, on) => {
   mock.env(on, ENV)
   const clock = mock.clock(on)

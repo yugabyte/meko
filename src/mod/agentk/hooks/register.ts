@@ -20,6 +20,8 @@
 //                 step (`learn` on a poll answer) and the line saying what AgentK saved (`toast`)
 //                 come on polls
 //   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
+//   /mod/meko     Claude's Meko tool calls: `start` before each runs, `end` once it's over (failed or
+//                 interrupted too), for the session's dot to show while one runs
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
@@ -41,6 +43,8 @@ const QUESTIONS_TOOL = 'design_questions'
 const QUESTIONS_FAILED = "AgentK Local didn't take the questions. Write them to the questions file your Design prompt names instead."
 /** The slash command that saves what the session learned to Meko. */
 const LEARN_COMMAND = 'agentk_learn'
+/** Meko's tools, under its own MCP server's name or a plugin's (`mcp__plugin_x_meko__…`), as mekousage.ts reads them. */
+const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__/
 /** The most the duplicate check may write. */
 const DEDUP_MAX_TOKENS = 8000
 
@@ -316,6 +320,19 @@ export const register: Register = (on) => {
     } finally {
       call.settled = true
       void post($, l, '/mod/ask/done', { id }).catch(() => undefined)
+    }
+  }).catch(($, e, next) => next(e))
+
+  // Claude's Meko calls: AgentK hears of each before it runs (awaited, so `start` always comes
+  // before `end`) and once it's over, whatever the outcome. The call itself is left alone.
+  on('tool.call', { tool: MEKO_TOOL }, async ($, e, next) => {
+    const l = e.tool_use_id ? await linkOf($).catch(() => null) : null
+    if (!l) return next(e)
+    await post($, l, '/mod/meko', { id: e.tool_use_id, state: 'start' }).catch(() => undefined)
+    try {
+      return await next(e)
+    } finally {
+      void post($, l, '/mod/meko', { id: e.tool_use_id, state: 'end' }).catch(() => undefined)
     }
   }).catch(($, e, next) => next(e))
 

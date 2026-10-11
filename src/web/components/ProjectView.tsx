@@ -235,7 +235,7 @@ export function ProjectView({
           onDoubleClick={mobile ? undefined : () => onRename(s.id)}
           title={[
             s.name,
-            (dotState(s) === 'learning' ? LEARNING_TITLE : STATUS_TEXT[s.status]) +
+            (dotState(s) === 'learning' ? LEARNING_TITLE : STATUS_TEXT[dotState(s)]) +
               (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
             STAGE_LABELS[s.stage],
             `${formatTokens(totalTokens(s.usage))} tokens`,

@@ -3,13 +3,18 @@ import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX } from '../shared/types';
 import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
-/** What a status dot shows: the session's status, or `learning` while AgentK saves what it learned to Meko. */
-export type DotState = SessionStatus | 'learning';
+/**
+ * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
+ * Meko, or `meko` while Claude runs a Meko tool call in a working turn.
+ */
+export type DotState = SessionStatus | 'learning' | 'meko';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<DotState, number> = {
-  needs_input: 6,
-  exited: 5,
+  needs_input: 7,
+  exited: 6,
+  // Above working, so the rail shows the m whenever any of the project's sessions calls Meko.
+  meko: 5,
   working: 4,
   starting: 4,
   learning: 4,
@@ -108,9 +113,13 @@ export function sessionToOpen(live: Session[], lastOpenId: string | undefined): 
  */
 const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
 
-/** What a session's dot shows (`Session.learning` over idle, recovered and working). */
-export function dotState(s: Pick<Session, 'status' | 'learning'>): DotState {
-  return s.learning && LEARNING_SHOWS.has(s.status) ? 'learning' : s.status;
+/**
+ * What a session's dot shows: `Session.learning` over idle, recovered and working, then
+ * `Session.mekoCall` over working.
+ */
+export function dotState(s: Pick<Session, 'status' | 'learning' | 'mekoCall'>): DotState {
+  if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
+  return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
 }
 
 /** The project's dot in the rail: its most urgent session's. */
@@ -132,6 +141,7 @@ export const STATUS_TEXT: Record<DotState, string> = {
   recovered: 'recovered after restart',
   archived: 'archived',
   learning: 'learning',
+  meko: 'calling Meko',
 };
 
 /** A learning dot's tooltip. */

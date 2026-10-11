@@ -233,6 +233,32 @@ describe('the link to AgentK\'s mod', () => {
     });
   });
 
+  it("knows while Claude calls Meko: reported on the first start and the last end, forgotten at the turn's end and on a reset", () => {
+    const changes: string[] = [];
+    links = new ModLinks(undefined, () => now, (s) => changes.push(s));
+    links.mekoCall('s1', 'tm1', 'start'); // also the mod's first word: the link goes live
+    links.mekoCall('s1', 'tm2', 'start');
+    expect(links.callingMeko('s1')).toBe(true);
+    expect(changes).toEqual(['s1', 's1']);
+    links.mekoCall('s1', 'tm1', 'end');
+    links.mekoCall('s1', 'x'.repeat(201), 'start');
+    links.mekoCall('s1', 42, 'start');
+    links.mekoCall('s1', 'tm3', 'begin');
+    expect(changes).toHaveLength(2);
+    links.mekoCall('s1', 'tm2', 'end');
+    expect(links.callingMeko('s1')).toBe(false);
+    expect(changes).toHaveLength(3);
+    links.mekoCall('s1', 'tm4', 'start');
+    links.endMeko('s1');
+    expect(links.callingMeko('s1')).toBe(false);
+    links.endMeko('s1'); // nothing left: nothing to report
+    expect(changes).toHaveLength(5);
+    links.mekoCall('s1', 'tm5', 'start');
+    links.reset('s1');
+    expect(links.callingMeko('s1')).toBe(false);
+    expect(changes).toHaveLength(7);
+  });
+
   it('counts the prompts Claude holds: added mid-turn, then as the mod reports them', async () => {
     links.hello('s1');
     const held = links.poll('s1');

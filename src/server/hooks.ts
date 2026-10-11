@@ -41,7 +41,7 @@ export type GuardDecision = Record<string, unknown> | null;
 export type HookContext = Record<string, unknown> | null;
 
 /** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
-export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/held', '/mod/ask', '/mod/ask/done', '/mod/questions', '/mod/learn', '/mod/learn/start'];
+export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/held', '/mod/ask', '/mod/ask/done', '/mod/questions', '/mod/learn', '/mod/learn/start', '/mod/meko'];
 
 /** How the server answers the mod: the status, and a JSON body (always sent with a 200). */
 export interface ModReply {

@@ -588,6 +588,22 @@ textarea.input {
   -webkit-mask: url('/meko-m.png') center / 7px 7px no-repeat;
   mask: url('/meko-m.png') center / 7px 7px no-repeat;
 }
+/* Claude is running a Meko tool call: the working dot with Meko's m in white. Drawn at 12px but
+   10px in the layout, so a tab keeps its width when a call starts or ends; the halo blinks on. */
+.dot.meko {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  margin: -1px;
+}
+.dot.meko::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  -webkit-mask: url('/meko-m.png') center / 8px 8px no-repeat;
+  mask: url('/meko-m.png') center / 8px 8px no-repeat;
+}
 /* The selected tab is the terminal's near-black in both themes: the light theme's accent is lost on it. */
 .tab.sel .dot.learning {
   --accent: #86a4ff;

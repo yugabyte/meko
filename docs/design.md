@@ -202,6 +202,7 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions, checked and saved (`{ text }` for Claude), or what's wrong (400, `{ error }`). |
 | `/mod/learn` | A [learn step](#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
 | `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
+| `/mod/meko` | From a `tool.call` hook on Claude's Meko tools (`/^mcp__(?:[\w-]+_)?meko__/`, a plugin's Meko too): `{ id, state: "start" }` before the call runs, awaited so it always comes before its end, then `{ id, state: "end" }` from a `finally`, so a failed or interrupted call ends too. `id` is the call's `tool_use_id`; answered 204. See *Meko in the dot* under [The app](#the-app). |
 
 **Prompts.** `submit()` (`sessions.ts`) sends a prompt through the mod while its link is live:
 
@@ -352,11 +353,30 @@ Session states, shown with a dot in the rail and on each tab:
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
   status idle; without the mod it's a working turn), never over needs you, exited or starting
   (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
+- **Calling Meko:** Claude is running a Meko tool call. The working dot gets Meko's m, in white,
+  and its halo blinks on (*Meko in the dot*, below).
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
 dot with the Web Animations API from the start of the page's timeline, so dots with the same
 signal blink together and a dot shown again picks up where the signal is. With reduced motion
 the dots are still.
+
+**Meko in the dot.** While Claude runs a Meko tool call, `Session.mekoCall` is true and a working
+session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
+`tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
+memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
+when the last ends. It forgets them at the turn's end (`Stop`) and on a reset (a relaunch or
+`SessionEnd`), in case an end never got through.
+
+- **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
+  above working, starting and learning, under exited and needs you, so the project's dot shows the
+  m whenever one of its sessions is calling Meko.
+- **How it looks:** the working dot drawn at 12 px (10 px in the layout, with `margin: -1px`, so the
+  tab keeps its width as calls start and end), with `/meko-m.png` as an 8 px white mask. It keeps
+  the working blink. The tab's tooltip and the palette say *calling Meko*.
+- **Why the mod and not command hooks:** AgentK's hooks see the end of every tool call
+  (`PostToolUse`) but the start of only a few. A `PreToolUse` matcher would add a process per call
+  and leave a failed or interrupted call to a guess. The mod brackets each call exactly.
 
 **Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name

@@ -292,6 +292,7 @@ export class SessionManager {
       midTurn: this.midTurn(id),
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
+      mekoCall: this.core.config.claude.mod && this.mod.callingMeko(id),
       approvalQueued: this.core.lifecycle.approvalQueued(id),
     };
   }
@@ -1200,7 +1201,8 @@ export class SessionManager {
    * hello when it loads, polls for prompts, acks them, and reports measurements after each turn;
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
-   * design_questions tool (`/mod/questions`).
+   * design_questions tool (`/mod/questions`); and Claude's Meko calls starting and ending
+   * (`/mod/meko`), for the session's dot.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -1252,6 +1254,9 @@ export class SessionManager {
         return this.core.lifecycle.questionsFromTool(row, body.questions);
       case '/mod/learn':
         return this.core.learn.fromMod(row, body);
+      case '/mod/meko':
+        this.mod.mekoCall(row.id, body.id, body.state);
+        return { status: 204 };
       case '/mod/learn/start':
         // /agentk_learn in the terminal: the answer is the command's output there.
         try {
@@ -1439,6 +1444,7 @@ export class SessionManager {
         this.turns.delete(id);
         // A tool call doesn't outlive its turn.
         this.mod.endAsk(id);
+        this.mod.endMeko(id);
         // A Design turn that wrote or republished the design (or changed its questions) leaves it
         // waiting for approval, unless the user approved it during the turn and it didn't change.
         const changed = row.stage === 'design' && !row.plan_mode && (await this.core.lifecycle.collectDesign(this.row(id)));
