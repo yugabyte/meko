@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppState, AuthStatus, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
+import type { AppState, AuthStatus, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
 import { approveDesign, settleApprovals } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
@@ -44,9 +44,9 @@ type Modal =
   | { kind: 'new-project'; invite?: DatapackInvite }
   /**
    * `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review.
-   * `retry`: a failed start to try again, filling the dialog in.
+   * `retry`: a failed start to try again, filling the dialog in. `initial`: a task Ask AgentK proposed, to change before it starts.
    */
-  | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart }
+  | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings'; tab?: SettingsTab }
@@ -537,7 +537,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           project={newSessionProject}
           ghLogin={state.ghLogin ?? null}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
-          initial={modal.kind === 'new-session' ? modal.retry?.request : undefined}
+          initial={modal.kind === 'new-session' ? (modal.retry?.request ?? modal.initial) : undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
             // The failed start it retried is done with. One under the same id was cleared when the
@@ -585,6 +585,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSettings={() => setModal({ kind: 'settings' })}
+          askAgentk={!!state.askAgentk}
+          onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           onStarted={({ project, session }) => {
             // As after Open project and New session: both shown until a state push brings them.
             setOpened(project);

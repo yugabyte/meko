@@ -487,6 +487,17 @@ const MIGRATIONS: string[] = [
   ALTER TABLE designs ADD COLUMN source TEXT;
   ALTER TABLE designs ADD COLUMN source_told TEXT;
   `,
+  // 32: Ask AgentK's asks, for the usage report (counts only, never the text): when, whether
+  // Claude answered, how many actions the answer proposed, and how long it took.
+  `
+  CREATE TABLE agentk_asks (
+    at INTEGER NOT NULL,
+    ok INTEGER NOT NULL,
+    actions INTEGER NOT NULL,
+    ms INTEGER NOT NULL
+  );
+  CREATE INDEX agentk_asks_at ON agentk_asks(at);
+  `,
 ];
 
 export function openDb(path: string): Db {

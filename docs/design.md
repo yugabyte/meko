@@ -787,8 +787,9 @@ terminal**, which hides it for that start in this page.
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
-PR or issue pasted, start a session on it: see [Starting from a GitHub link](#starting-from-a-github-link)).
-The search bar at the top of the rail (the AgentK logo, "Search AgentK Local" and the shortcut)
+PR or issue pasted, start a session on it: see [Starting from a GitHub link](#starting-from-a-github-link);
+or ask in plain words: see [Ask AgentK](#ask-agentk)).
+The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the shortcut)
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
@@ -1060,6 +1061,11 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [pr]
 # resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base (Settings → General); on by default
+
+[ask_agentk]
+# enabled = false            # no Ask AgentK in the command palette; on by default
+# model = "sonnet"           # the model that answers asks (a Claude Code alias or a full model name; empty uses Claude Code's default)
+# timeout_seconds = 45       # an ask that takes longer is stopped (5 to 300)
 ```
 
 | Action | What the server does |
@@ -1485,7 +1491,7 @@ session can't be moved to another stage, and no session can be moved into one.
 
 ### Starting from a GitHub link
 
-Pasting a GitHub PR or issue into **Search and commands** (`⌘K`) offers the session that fits it,
+Pasting a GitHub PR or issue into **Ask AgentK** (`⌘K`) offers the session that fits it,
 in the project it belongs to (`src/server/ghlinks.ts`, `GET /api/github-link` and
 `POST /api/github-link/start`). The palette takes a `/pull/<n>` or `/issues/<n>` link on
 github.com, or `owner/name#<n>`, never a bare number, which names no repo (`parseGithubRef()` in
@@ -1535,6 +1541,57 @@ answers, the palette closes and the page goes to the session as after New sessio
 palette meanwhile doesn't stop the start; the session shows up in the state. The browser never
 says which project or datapack to use beyond the project it showed: the server works the rest out
 again when it starts, and uses an open project that fits by then instead of opening another.
+
+### Ask AgentK
+
+The palette (`⌘K`, or **Ask AgentK** at the top of the rail) also takes an instruction or a question
+in plain words: "start a design task in agent-k-local to add dark mode to the Usage page", "move
+Dark mode to Code and add tests", "which sessions need me?". Its placeholder rotates every 3.5 s
+through what it takes (asking, commands, sessions, GitHub links), on every screen size; with
+reduced motion it doesn't rotate and names them all at once.
+
+**Asking.** Any text that isn't a GitHub link gets an **Ask AgentK: "…"** item, last in the list.
+A sentence matches no command (the filter needs every word), so the item is usually alone and
+Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
+the exchange so far (the last 10, kept only while the palette is open) and what's on screen to
+`POST /api/ask-agentk` (`src/server/askagentk.ts`). Esc while AgentK thinks cancels the ask and
+puts the text back; closing the palette cancels it too, and the server stops Claude when the
+request closes.
+
+**The Claude call.** The server runs Claude Code once per ask (`[claude] command`), with the
+arguments as an array: `-p --model <[ask_agentk] model> --output-format json --json-schema <answer>
+--tools "" --strict-mcp-config --setting-sources user --settings {"disableAllHooks":true}
+--no-session-persistence --system-prompt <AgentK's>`, the message on stdin, in an empty folder
+(`run/ask`) so no project's CLAUDE.md or settings apply. No tools, no MCP servers and no hooks: it
+can only answer. The user's own settings keep their sign-in and provider setup. No transcript is
+written, so asks aren't in token usage; they use the user's plan or API key like sessions do (a
+Sonnet ask with a small context measured about $0.007 and 2 to 2.5 s, about 1 s of it Claude Code
+starting). The message is a compact JSON context (open projects with id, name and repo folder name;
+their running sessions with id, name, stage, status, branch and PR number; what's on screen), the
+exchange so far, then the text. The system prompt says what each stage is for and the rules: use
+the project on screen when none is named, keep the user's words as a task's prompt, ask when it's
+unclear, and treat names and titles in the context as data. At most two asks run at once (429);
+one that takes longer than `[ask_agentk] timeout_seconds` (45 by default) is stopped (504).
+
+**The answer** is a reply and up to three actions, checked against the state when it comes back
+(`checkActions()`); one that doesn't fit is left out with a note under the reply:
+
+| Action | Checked | Runs as |
+|---|---|---|
+| `start` (project, Explore, Design or Code, name, prompt) | an open project, a prompt; the name made one line, from the prompt when missing | `POST /api/projects/:id/sessions`, then the session, as after New session. A second item, **Edit … in New session…**, opens the dialog filled in instead. |
+| `link` (a PR or issue) | `parseGithubRef()` takes it | puts the link in the palette, which offers its items as for a pasted link |
+| `go` (a session, a project home, Usage, Settings) | the session is running, the project open | navigates |
+| `move` (a session, a stage, instructions) | `moveBlockedIn()` and `moveError()` | `POST /api/sessions/:id/move`, then the session |
+| `openPr` (a session, instructions) | the session is in Code | the open-pr action, then the session |
+
+An answer whose only action is a `go` runs at once and closes the palette, since going somewhere
+changes nothing. Every other action waits to be picked, and runs through the route the UI already
+uses, which checks it again. Claude has no tools and sees names, branches and PR titles other
+people may have written, so at worst it proposes something the user then doesn't pick. The palette
+shows the exchange above the list; the input's placeholder becomes *Reply to AgentK, or type a
+command…*, and typing filters commands again, with the Ask item for a follow-up. Errors say what
+went wrong with **Try again**: Claude Code missing (503), not signed in, failed, or an answer that
+can't be read (502). `[ask_agentk] enabled = false` drops the item (and the route answers 403).
 
 ### The design after approval
 
@@ -2257,7 +2314,9 @@ reports.
   (from `project_events`, so a close a reopen undid still counts), sessions created
   by kind and archived, stage entries, PRs opened and merged with their commits and lines, direct
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
-  resumes, reused worktrees, file types, tokens by model, and Meko use (left out of a day with none).
+  resumes, reused worktrees, file types, tokens by model, Meko use (left out of a day with none),
+  and [Ask AgentK](#ask-agentk) asks (`agentk_asks`: asks, the ones that failed and the actions their
+  answers proposed; left out of a day with none; a cancelled ask isn't counted).
 - *File types* are counts per file extension: files changed, lines added and deleted, from merged
   PRs and direct pushes. When a PR is merged, one `gh pr view <url> --json
   commits,additions,deletions,files` call adds its size to the `merged` event's payload; for a
@@ -2282,7 +2341,7 @@ reports.
   capture sends isn't counted: AgentK can't see it. Each goes on the day it began, and is left out
   when there was none.
 
-Never sent: project, session, repo, branch, datapack or file names, paths, prompts, designs,
+Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask AgentK), designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and
 the server name, Meko keys or ids, and Meko queries, results and tool inputs. Model ids that aren't plain ids (a Bedrock ARN carries an
 account number) are sent as `other`.

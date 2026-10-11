@@ -131,7 +131,17 @@
           "worktreesReused": { "$ref": "#/$defs/count" },
           "fileTypes": { "type": "array", "maxItems": 26, "items": { "$ref": "#/$defs/fileType" } },
           "tokensByModel": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/modelTokens" } },
-          "meko": { "$ref": "#/$defs/meko" }
+          "meko": { "$ref": "#/$defs/meko" },
+          "askAgentk": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["asks", "failed", "actions"],
+            "properties": {
+              "asks": { "$ref": "#/$defs/count" },
+              "failed": { "$ref": "#/$defs/count" },
+              "actions": { "$ref": "#/$defs/count" }
+            }
+          }
         }
       }
     }

@@ -46,6 +46,22 @@ if (args[0] === 'update') {
   }
   process.exit(0);
 }
+// Like `claude -p` (Ask AgentK): writes what it got (argv, cwd, stdin) to `ask-input.json` in the
+// fake's dir and prints `ask-reply.json` from there; with an `ask-hang` file it never answers.
+if (args[0] === '-p') {
+  const fake = process.env.FAKE_CLAUDE_DIR ?? '';
+  let input = '';
+  for await (const chunk of process.stdin) input += chunk;
+  mkdirSync(fake, { recursive: true });
+  writeFileSync(join(fake, 'ask-input.json'), JSON.stringify({ args, cwd: process.cwd(), input }));
+  if (existsSync(join(fake, 'ask-hang'))) {
+    setInterval(() => undefined, 1000);
+    await new Promise(() => undefined);
+  }
+  // Exits once the reply is written: a pipe's writes can still be pending at process.exit.
+  process.stdout.write(readFileSync(join(fake, 'ask-reply.json'), 'utf8'), () => process.exit(0));
+  await new Promise(() => undefined);
+}
 const opt = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : null;

@@ -349,6 +349,16 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     days.get(day)!.meko = callHomeMeko(summarizeMeko(m.calls), toolCounts(m.calls), m.starts, { sentByTool: toolSent(m.calls), ...m });
   }
 
+  // Ask AgentK: asks on the day they were made; a day with none leaves `askAgentk` out.
+  for (const a of all<{ at: number; ok: number; actions: number }>(db, 'SELECT at, ok, actions FROM agentk_asks WHERE at >= ?', start)) {
+    const d = dayOf(a.at);
+    if (!d) continue;
+    const t = (d.askAgentk ??= { asks: 0, failed: 0, actions: 0 });
+    t.asks++;
+    if (!a.ok) t.failed++;
+    t.actions += n(a.actions);
+  }
+
   const overview = usageOverview(db, 1, now, calls);
   return {
     schema: 1,

@@ -481,6 +481,11 @@ describe('config and db', () => {
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
+/** Undoes migration 32 (Ask AgentK's asks), for tests that rewind the schema. */
+function dropV32(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE agentk_asks');
+}
+
 /** Undoes migration 31 (designs in PRs: the hashes sent to Meko, and a review's copy of its PR's design). */
 function dropV31(db: ReturnType<typeof openDb>) {
   for (const c of ['md_hash', 'html_hash', 'source', 'source_told']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
@@ -585,8 +590,8 @@ const V11_COLUMNS = ['kind'];
 
 /** Undoes migrations 31 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31];
-  for (let v = 31; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32];
+  for (let v = 32; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

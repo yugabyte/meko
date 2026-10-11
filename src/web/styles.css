@@ -629,7 +629,7 @@ textarea.input {
 /* ---------- Shell ---------- */
 .app {
   display: grid;
-  /* Wide enough for "Search AgentK Local" beside Ctrl+K in the rail's search bar. */
+  /* Wide enough for the rail's search bar ("Ask AgentK" beside Ctrl+K) and the projects' names. */
   grid-template-columns: 228px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
@@ -643,7 +643,7 @@ textarea.input {
   gap: 4px;
   min-height: 0;
 }
-/* Search and commands: a button that looks like a field, with the logo where a search icon would be.
+/* Ask AgentK: a button that looks like a field, with the logo where a search icon would be.
    The palette opens over it (.pal-overlay). */
 .rail-search {
   display: flex;
@@ -2277,11 +2277,58 @@ div[id^='dak-mermaid-'] .label {
   cursor: default;
   color: var(--muted);
 }
-.pal-item.inert .pal-label {
+.pal-item.inert .pal-label,
+.pal-item.wrap .pal-label {
   white-space: normal;
+}
+/* AgentK's actions: the hint goes under the label, which keeps the whole width. */
+.pal-item.wrap {
+  grid-template-columns: 16px minmax(0, 1fr);
+  row-gap: 2px;
+}
+.pal-item.wrap .pal-hint {
+  grid-column: 2;
+  max-width: none;
 }
 .pal-error {
   padding: 0 16px 10px;
+}
+/* Ask AgentK's exchange while the palette is open: what you asked, muted, then AgentK's reply. */
+.pal-chat {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 10px 16px 4px;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pal-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.pal-turn p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pal-you {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pal-reply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sunk);
+}
+.pal-note {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* ---------- Project home ---------- */
@@ -4477,6 +4524,9 @@ div[id^='dak-mermaid-'] .label {
   }
   .pal-list {
     max-height: 55dvh;
+  }
+  .pal-chat {
+    max-height: 30dvh;
   }
   .kv {
     grid-template-columns: 100px minmax(0, 1fr);
