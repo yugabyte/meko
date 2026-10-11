@@ -122,7 +122,12 @@ your phone can connect.
   decisions) open beside the terminal and the decisions behind it from Meko. Then AgentK waits and helps with
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
-- **Paste a GitHub link to start:** paste a PR or issue link into Search and commands (`⌘K`). A PR
+- **Ask AgentK in plain words:** type an instruction into **Ask AgentK** (`⌘K`), such as "start a
+  design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
+  AgentK asks Claude Code (one quick call with no tools) and offers what to do: start a task at
+  Explore, Design or Code with a prompt, go to a session, move one to another stage, or open its PR.
+  Nothing that changes anything runs until you pick it, and you can reply to refine it.
+- **Paste a GitHub link to start:** paste a PR or issue link into Ask AgentK (`⌘K`). A PR
   gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
   to Code), in the project it belongs to: the one whose datapack its description names, or one on
   its repo. If there's none, AgentK opens a project for it and clones the repo if needed.

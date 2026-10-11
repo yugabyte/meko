@@ -1,23 +1,30 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { StartStage } from '../../shared/types';
-import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, totalUnits, type BlinkRun } from '../blink';
+import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
+import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
 
 /**
- * A session's status dot; `learning` is a dotted ring turning around Meko's m (`dotState()`).
- * Working and needs-you dots blink their halo (`blink.ts`).
+ * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
+ * ring with a gap, turning, and `meko` the working dot with Meko's m in it (`dotState()`). Working
+ * (`meko` too) and needs-you dots blink their halo (`blink.ts`), each `phase` (the session's or
+ * project's id) at its own point in the signal.
  */
-export function StatusDot({ status, title }: { status: DotState; title?: string }) {
+export function StatusDot({ status, title, phase = '' }: { status: DotState; title?: string; phase?: string }) {
   const ref = useRef<HTMLElement>(null);
-  useBlink(ref, status === 'working' ? WORKING_RUNS : status === 'needs_input' ? KNOCK_RUNS : null);
+  useBlink(ref, status === 'working' || status === 'meko' ? WORKING_RUNS : status === 'needs_input' ? KNOCK_RUNS : null, phase);
   const cls =
     status === 'needs_input'
       ? 'needs'
       : status === 'archived'
           ? 'idle'
-          : status;
+          : status === 'meko'
+            ? 'working meko'
+            : status === 'queued'
+              ? 'idle queued'
+              : status;
   const text = status === 'learning' ? LEARNING_TITLE : STATUS_TEXT[status];
   return <i ref={ref} className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
 }
@@ -25,11 +32,12 @@ export function StatusDot({ status, title }: { status: DotState; title?: string 
 const blinkFrames = new Map<readonly BlinkRun[], Keyframe[]>();
 
 /**
- * Plays a blink signal on an element, on a loop. Every animation starts at time 0 on the page's
- * timeline, so dots with the same signal blink together and one that mounts again picks up where
- * the signal is. Still with reduced motion.
+ * Plays a blink signal on an element, on a loop. Every animation is pinned to the page's timeline,
+ * started as far before time 0 as its phase's offset, so one session's dots blink together,
+ * different sessions' dots don't, and one that mounts again picks up where the signal is. Still
+ * with reduced motion.
  */
-function useBlink(ref: RefObject<HTMLElement | null>, runs: readonly BlinkRun[] | null): void {
+function useBlink(ref: RefObject<HTMLElement | null>, runs: readonly BlinkRun[] | null, phase: string): void {
   const reduce = useMedia('(prefers-reduced-motion: reduce)');
   useEffect(() => {
     const el = ref.current;
@@ -37,9 +45,9 @@ function useBlink(ref: RefObject<HTMLElement | null>, runs: readonly BlinkRun[] 
     let frames = blinkFrames.get(runs);
     if (!frames) blinkFrames.set(runs, (frames = blinkKeyframes(runs)));
     const anim = el.animate(frames, { duration: totalUnits(runs) * BLINK_UNIT_MS, iterations: Infinity });
-    anim.startTime = 0;
+    anim.startTime = -blinkOffsetMs(phase, runs);
     return () => anim.cancel();
-  }, [ref, runs, reduce]);
+  }, [ref, runs, reduce, phase]);
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -219,13 +227,28 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-/** Dots cycling ". .. ..." after something in progress, so it doesn't look stuck (a static "..." with reduced motion). */
+let tuneFrames: Keyframe[][] | undefined;
+
+/**
+ * Three keys playing a tune after something in progress, so it doesn't look stuck. Each label
+ * starts at the first note when it appears; still with reduced motion.
+ */
 export function Dots() {
+  const ref = useRef<HTMLSpanElement>(null);
+  const reduce = useMedia('(prefers-reduced-motion: reduce)');
+  useEffect(() => {
+    const keys = [...(ref.current?.children ?? [])];
+    if (reduce || !keys.every((k) => typeof k.animate === 'function')) return;
+    const frames = (tuneFrames ??= [1, 2, 3].map((key) => typingKeyframes(TUNE, key)));
+    const duration = typingLoopMs(TUNE);
+    const anims = keys.map((k, i) => k.animate(frames[i], { duration, iterations: Infinity }));
+    return () => anims.forEach((a) => a.cancel());
+  }, [reduce]);
   return (
-    <span className="dots" aria-hidden="true">
-      <span>.</span>
-      <span>.</span>
-      <span>.</span>
+    <span ref={ref} className="dots" aria-hidden="true">
+      <span className="dots-key" />
+      <span className="dots-key" />
+      <span className="dots-key" />
     </span>
   );
 }

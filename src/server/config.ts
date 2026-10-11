@@ -45,6 +45,12 @@ export interface Config {
    * (false leaves them to the user). Set in Settings → General; an edit to config.toml takes effect after a restart.
    */
   pr: { resolveConflicts: boolean };
+  /**
+   * Ask AgentK in the command palette (askagentk.ts): an instruction in plain words, answered by one `claude -p`.
+   * enabled: offer it. model: the model it asks (a Claude Code alias or a full name). timeoutSeconds: how long an
+   * answer may take before Claude is stopped (5 to 300).
+   */
+  askAgentk: { enabled: boolean; model: string; timeoutSeconds: number };
 }
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
@@ -60,6 +66,7 @@ export const DEFAULT_CONFIG: Config = {
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '' },
   pr: { resolveConflicts: true },
+  askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

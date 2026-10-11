@@ -81,7 +81,7 @@ export function Rail({
           It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
       <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
         <img src="/logo.png" alt="" width={16} height={16} />
-        <span className="rail-search-text">Search AgentK Local</span>
+        <span className="rail-search-text">Ask AgentK</span>
         {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
       </button>
       <div className="rail-list">
@@ -115,7 +115,7 @@ export function Rail({
               }}
               title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
             >
-              {count > 0 ? <StatusDot status={aggregateDot(p)} /> : <i className="dot idle" />}
+              {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
               <span className="proj-text">
                 <span className="proj-name">{p.name}</span>
                 <span className="proj-repo">{repoFolder(p.repoPath)}</span>

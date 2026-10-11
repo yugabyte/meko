@@ -5,18 +5,18 @@ import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
 import { useDataTheme } from '../theme';
-import { approveLabel, cx, designApprovalBlocker, relativeTime } from '../util';
+import { approveLabel, cx, designApprovalBlocker, headerApproves, relativeTime } from '../util';
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
-import { Busy } from './common';
+import { Busy, Dots } from './common';
 
 /**
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
  * questions to answer. Shown as a resizable side panel next to the terminal (the questions on
  * their own tab), or the whole page in its own tab (`page`, the questions beside the design on a
- * wide screen). With open questions, Approve shows them, and the approval goes from there with
- * the answers; `onApprove` approves a design with none.
+ * wide screen). With open questions, Approve shows them (and is left out while they show or can't), and the
+ * approval goes from there with the answers; `onApprove` approves a design with none.
  */
 export function DesignPanel({
   session,
@@ -66,6 +66,7 @@ export function DesignPanel({
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
   // The Questions tab's count takes in what Claude is asking right now, shown at its top.
   const waiting = open + (session.asking ? 1 : 0);
+  const questions = !hasQuestions ? 'none' : split || tab === 'questions' ? 'shown' : 'hidden';
   const toQuestions = () => {
     setTab('questions');
     qcol.current?.scrollIntoView({ block: 'nearest' });
@@ -105,6 +106,7 @@ export function DesignPanel({
             <p className="muted">
               No design yet. AgentK is reading the code; the design shows up here as soon as it’s written, and is
               saved to the project’s datapack.
+              {session.status === 'working' && <Dots />}
             </p>
           )}
         </div>
@@ -133,7 +135,7 @@ export function DesignPanel({
           </div>
         )}
         <span className="sp" />
-        {session.stage === 'design' && session.hasDesign && (
+        {headerApproves(session, questions) && (
           <button
             className="btn small primary"
             // With open questions it only shows them; the approval waits for the answers.

@@ -15,6 +15,8 @@ const TAKEN_KEEP_MS = 10 * 60 * 1000;
 
 /** How often links are checked for going stale, and asks for being abandoned. */
 const SWEEP_MS = 2_000;
+/** The most Meko calls in flight kept per session (Claude runs a few in parallel at most). */
+const MEKO_MAX = 20;
 
 /**
  * A part of a learn step for the mod (learn.ts): `extract`, fork the session with `prompt`; `check`,
@@ -90,6 +92,8 @@ interface Link {
   reported: boolean;
   /** The questions Claude is asking through the mod, if any: one AskUserQuestion runs at a time. */
   ask: Ask | null;
+  /** Claude's Meko tool calls running now, by tool call id. */
+  meko: Set<string>;
   /**
    * Prompts the mod submitted that Claude holds until its turn ends, by id, oldest first: added when
    * a prompt is sent mid-turn, and replaced by what the mod reports (`/mod/poll`, `/mod/held`).
@@ -118,6 +122,10 @@ interface Link {
  * answers first wins. An ask lives only while the mod keeps asking: it's dropped when the mod says
  * it has its answer, when it stops asking for LINK_STALE_MS, at the turn's end, and on a reset; and
  * since the mod sends the questions each time, a server restart brings it back with the next ask.
+ *
+ * It reports Claude's Meko tool calls too (`mekoCall`), each by its tool call id, before the call
+ * runs and once it's over; they're forgotten at the turn's end (`endMeko`) and on a reset, for an
+ * end that never got through.
  */
 export class ModLinks {
   private links = new Map<string, Link>();
@@ -126,8 +134,8 @@ export class ModLinks {
   private sweeper: NodeJS.Timeout;
 
   /**
-   * `onChange` is told when a session's link goes live or stale, and when the questions it's
-   * asking change (`asking`).
+   * `onChange` is told when a session's link goes live or stale, when the questions it's asking
+   * change (`asking`), and when Claude starts or stops calling Meko (`callingMeko`).
    */
   constructor(
     private onDropped: (session: string, dropped: DroppedPrompt) => void = () => undefined,
@@ -140,7 +148,7 @@ export class ModLinks {
 
   private link(session: string): Link {
     let l = this.links.get(session);
-    if (!l) this.links.set(session, (l = { seenAt: 0, protocol: 0, learn: null, toast: null, reported: false, ask: null, held: new Set(), waiter: null, queue: [], taken: new Map() }));
+    if (!l) this.links.set(session, (l = { seenAt: 0, protocol: 0, learn: null, toast: null, reported: false, ask: null, meko: new Set(), held: new Set(), waiter: null, queue: [], taken: new Map() }));
     return l;
   }
 
@@ -333,7 +341,7 @@ export class ModLinks {
       clearTimeout(p.timer);
       p.reject(new Error(why));
     }
-    if (l.reported || l.ask) this.onChange(session);
+    if (l.reported || l.ask || l.meko.size) this.onChange(session);
   }
 
   // ---- prompts Claude holds until its turn ends ----
@@ -363,6 +371,41 @@ export class ModLinks {
   /** How many prompts sent mid-turn Claude still holds. */
   heldCount(session: string): number {
     return this.links.get(session)?.held.size ?? 0;
+  }
+
+  // ---- Claude's Meko calls ----
+
+  /** True while Claude runs a Meko tool call, as the mod reports (`/mod/meko`). */
+  callingMeko(session: string): boolean {
+    return !!this.links.get(session)?.meko.size;
+  }
+
+  /**
+   * A Meko call started or ended. Reported (onChange) when the first starts and when the last ends;
+   * a bad id or state, or a start past MEKO_MAX, is ignored. An end only looks the link up: it can
+   * arrive after a reset (Claude exited), and mustn't bring the link back as live.
+   */
+  mekoCall(session: string, id: unknown, state: unknown): void {
+    if (typeof id !== 'string' || !id || id.length > 200) return;
+    if (state === 'end') {
+      const l = this.links.get(session);
+      if (l?.meko.delete(id) && !l.meko.size) this.onChange(session);
+      return;
+    }
+    if (state !== 'start') return;
+    const l = this.link(session);
+    this.seen(session, l);
+    if (l.meko.size >= MEKO_MAX || l.meko.has(id)) return;
+    l.meko.add(id);
+    if (l.meko.size === 1) this.onChange(session);
+  }
+
+  /** The turn ended: no tool call outlives it, so an end the mod never got through is assumed. */
+  endMeko(session: string): void {
+    const l = this.links.get(session);
+    if (!l?.meko.size) return;
+    l.meko.clear();
+    this.onChange(session);
   }
 
   // ---- Claude's questions (AskUserQuestion) ----

@@ -603,6 +603,27 @@ textarea.input {
   -webkit-mask: url('/meko-m.png') center / 7px 7px no-repeat;
   mask: url('/meko-m.png') center / 7px 7px no-repeat;
 }
+/* Claude is running a Meko tool call: the working dot with Meko's m in white. Drawn at 12px but
+   10px in the layout, so a tab keeps its width when a call starts or ends; the halo blinks on. */
+.dot.meko {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  margin: -1px;
+}
+.dot.meko::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  -webkit-mask: url('/meko-m.png') center / 8px 8px no-repeat;
+  mask: url('/meko-m.png') center / 8px 8px no-repeat;
+}
+/* A gate is queued (Merge when ready, waiting on CI or the AgentK review): the idle ring with its
+   top quarter open, turning once every 3 s. Same 10px box as idle. */
+.dot.queued {
+  border-top-color: transparent;
+}
 /* The selected tab is the terminal's near-black in both themes: the light theme's accent is lost on it. */
 .tab.sel .dot.learning {
   --accent: #86a4ff;
@@ -616,9 +637,12 @@ textarea.input {
 }
 @media (prefers-reduced-motion: no-preference) {
   .dot.learning::before {
-    animation: learning-spin 1.6s linear infinite;
+    animation: dot-spin 1.6s linear infinite;
   }
-  @keyframes learning-spin {
+  .dot.queued {
+    animation: dot-spin 3s linear infinite;
+  }
+  @keyframes dot-spin {
     to {
       transform: rotate(360deg);
     }
@@ -628,7 +652,7 @@ textarea.input {
 /* ---------- Shell ---------- */
 .app {
   display: grid;
-  /* Wide enough for "Search AgentK Local" beside Ctrl+K in the rail's search bar. */
+  /* Wide enough for the rail's search bar ("Ask AgentK" beside Ctrl+K) and the projects' names. */
   grid-template-columns: 228px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
@@ -642,7 +666,7 @@ textarea.input {
   gap: 4px;
   min-height: 0;
 }
-/* Search and commands: a button that looks like a field, with the logo where a search icon would be.
+/* Ask AgentK: a button that looks like a field, with the logo where a search icon would be.
    The palette opens over it (.pal-overlay). */
 .rail-search {
   display: flex;
@@ -1486,6 +1510,9 @@ textarea.input {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* The questions scroll on their own; this only scrolls when the panel is too short for the
+     header and footer (a phone with the keyboard up), so the footer's buttons stay reachable. */
+  overflow-y: auto;
 }
 .dq-scroll {
   flex: 1;
@@ -1510,6 +1537,10 @@ textarea.input {
   min-width: 0;
   font-size: 12px;
   color: var(--muted);
+}
+/* With nothing to say it only pushes the buttons right, keeping them on one row on a phone. */
+.dq-foot-note:empty {
+  flex-basis: 0;
 }
 .dq-list {
   list-style: none;
@@ -2276,11 +2307,58 @@ div[id^='dak-mermaid-'] .label {
   cursor: default;
   color: var(--muted);
 }
-.pal-item.inert .pal-label {
+.pal-item.inert .pal-label,
+.pal-item.wrap .pal-label {
   white-space: normal;
+}
+/* AgentK's actions: the hint goes under the label, which keeps the whole width. */
+.pal-item.wrap {
+  grid-template-columns: 16px minmax(0, 1fr);
+  row-gap: 2px;
+}
+.pal-item.wrap .pal-hint {
+  grid-column: 2;
+  max-width: none;
 }
 .pal-error {
   padding: 0 16px 10px;
+}
+/* Ask AgentK's exchange while the palette is open: what you asked, muted, then AgentK's reply. */
+.pal-chat {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 10px 16px 4px;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pal-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.pal-turn p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pal-you {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pal-reply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sunk);
+}
+.pal-note {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* ---------- Project home ---------- */
@@ -3381,25 +3459,25 @@ div[id^='dak-mermaid-'] .label {
 }
 
 /* ---------- Starting ---------- */
-/* Opacity, not an animated content, so the dots run in Safari too and the width never changes. */
+/* Three keycaps that play a tune (Dots in common.tsx, the tune and its keyframes in typing.ts).
+   Sized in em to follow the label, colored with currentColor to suit any button or theme; only
+   transform and box-shadow move, so the width never changes. Still with reduced motion. */
 .dots {
   white-space: nowrap;
+  margin-left: 0.3em;
 }
-@media (prefers-reduced-motion: no-preference) {
-  .dots > span:nth-child(2) {
-    animation: dots-2 1.2s steps(1, end) infinite;
-  }
-  .dots > span:nth-child(3) {
-    animation: dots-3 1.2s steps(1, end) infinite;
-  }
-  @keyframes dots-2 {
-    0% { opacity: 0; }
-    33.333% { opacity: 1; }
-  }
-  @keyframes dots-3 {
-    0% { opacity: 0; }
-    66.667% { opacity: 1; }
-  }
+.dots > .dots-key {
+  --edge: max(1px, 0.12em);
+  display: inline-block;
+  width: 0.42em;
+  height: 0.42em;
+  margin-right: 0.2em;
+  border-radius: 0.1em;
+  background: currentColor;
+  box-shadow: 0 var(--edge) 0 color-mix(in srgb, currentColor 55%, transparent);
+}
+.dots > .dots-key:last-child {
+  margin-right: 0;
 }
 .dot.starting {
   border: 2px solid var(--accent);
@@ -4440,6 +4518,20 @@ div[id^='dak-mermaid-'] .label {
     padding-left: 14px;
     padding-right: 14px;
   }
+  /* Settings' tabs don't fit beside the title and pushed the × off the right edge: they take
+     their own row under both, split evenly. Only the look changes: the DOM, and so Tab and a
+     screen reader, still go title, tabs, × as on a desktop, which keeps close last. */
+  .dialog-hd {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .dialog-hd > .seg {
+    order: 1;
+    flex: 1 0 100%;
+  }
+  .dialog-hd > .seg button {
+    flex: 1;
+  }
   .dialog-ft {
     flex-wrap: wrap;
     padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
@@ -4462,6 +4554,9 @@ div[id^='dak-mermaid-'] .label {
   }
   .pal-list {
     max-height: 55dvh;
+  }
+  .pal-chat {
+    max-height: 30dvh;
   }
   .kv {
     grid-template-columns: 100px minmax(0, 1fr);

@@ -10,7 +10,7 @@ import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
-  LinkPlan, StartFromLinkRequest, StartFromLinkResult,
+  AskAgentkRequest, AskAgentkResult, LinkPlan, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -371,6 +371,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Querystring: { ref?: string } }>('/api/github-link', async (req): Promise<LinkPlan> => core.githubLinks.plan(req.query.ref));
   app.post<{ Body: StartFromLinkRequest }>('/api/github-link/start', async (req): Promise<StartFromLinkResult> =>
     core.githubLinks.start(req.body && typeof req.body === 'object' ? req.body : ({} as StartFromLinkRequest)));
+  // Claude answers while the request is open: a browser that goes away (the palette closed) stops it.
+  app.post<{ Body: AskAgentkRequest }>('/api/ask-agentk', async (req, reply): Promise<AskAgentkResult> => {
+    const gone = new AbortController();
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) gone.abort();
+    });
+    return core.askAgentk.ask(req.body, gone.signal);
+  });
   app.get('/api/usage', async () => usageOverview(core.db));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 

@@ -481,6 +481,8 @@ export interface CallHomeDay {
   tokensByModel: (CallHomeTokens & { model: string })[];
   /** Left out of a day with no Meko calls or searches at session start. */
   meko?: CallHomeMeko;
+  /** Ask AgentK on the day: asks, the ones that failed, and the actions the answers proposed. Left out of a day with none. */
+  askAgentk?: { asks: number; failed: number; actions: number };
 }
 
 export interface CallHomeReport {
@@ -649,6 +651,8 @@ export interface Session {
   approvalQueued: boolean;
   /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
   learning: boolean;
+  /** Claude is running a Meko tool call, as AgentK's mod reports it; false without the mod. */
+  mekoCall: boolean;
   /** Discard was asked for: the session is discarded once its learn step ends. */
   discarding: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */
@@ -749,6 +753,8 @@ export interface AppState {
   failedStarts: FailedStart[];
   /** The Claude Code sessions launch with, and whether it runs AgentK's mod. */
   claudeCode: ClaudeCodeStatus;
+  /** `[ask_agentk] enabled`: the command palette offers Ask AgentK. */
+  askAgentk: boolean;
   /** The session host that runs every Claude, as it last answered. */
   sessionHost: SessionHostStatus;
 }
@@ -1048,6 +1054,54 @@ export interface StartFromLinkRequest {
 export interface StartFromLinkResult {
   project: Project;
   session: Session;
+}
+
+/** The most characters an instruction for Ask AgentK takes (`AskAgentkRequest.text`). */
+export const ASK_AGENTK_TEXT_MAX = 2000;
+/** The most earlier exchanges an ask carries (`AskAgentkRequest.history`); older ones are left out. */
+export const ASK_AGENTK_HISTORY_MAX = 10;
+
+/**
+ * POST /api/ask-agentk: an instruction in plain words from the command palette's Ask AgentK. AgentK
+ * hands it to Claude Code once, with no tools, and Claude answers with a reply and the actions to offer.
+ */
+export interface AskAgentkRequest {
+  /** At most ASK_AGENTK_TEXT_MAX characters. */
+  text: string;
+  /** The exchange so far while the palette is open, oldest first (the last ASK_AGENTK_HISTORY_MAX are used). */
+  history?: AskAgentkTurn[];
+  /** What's on screen, so "this project" and "this session" mean something. */
+  projectId?: string | null;
+  sessionId?: string | null;
+}
+
+export interface AskAgentkTurn {
+  text: string;
+  reply: string;
+}
+
+/**
+ * An action Claude proposed, checked against the state when it answered. The browser runs it
+ * through the route the UI already uses, which checks it again: `start` as POST
+ * /api/projects/:id/sessions, `link` through the palette's GitHub link lookup, `move` and `openPr`
+ * as the session's move and open-pr routes; `go` only navigates.
+ */
+export type AskAgentkAction =
+  | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string }
+  | { type: 'link'; ref: string }
+  | { type: 'go'; view: 'session'; projectId: string; sessionId: string }
+  | { type: 'go'; view: 'home'; projectId: string }
+  | { type: 'go'; view: 'usage' | 'settings' }
+  | { type: 'move'; sessionId: string; stage: MoveTarget; instructions: string }
+  | { type: 'openPr'; sessionId: string; instructions: string };
+
+export interface AskAgentkResult {
+  /** What AgentK says back: what it proposes, an answer, or a question when it can't tell what's meant. */
+  reply: string;
+  /** At most three, in the order Claude gave them. */
+  actions: AskAgentkAction[];
+  /** Why a proposed action was left out (a project or session that doesn't exist, a move that isn't allowed). */
+  notes: string[];
 }
 
 /** An open PR a new task session can work on (New session → Advanced → Pull request). */
@@ -1721,6 +1775,10 @@ export type TermServerMessage =
 // POST   /api/github-link/start StartFromLinkRequest → StartFromLinkResult   (starts a Review a PR session on a PR, or a
 //        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
 //        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)
+// POST   /api/ask-agentk AskAgentkRequest  → AskAgentkResult   (an instruction in plain words, answered by one `claude -p`
+//        with no tools; 400 for empty or too long text, 403 when [ask_agentk] is off, 429 with two asks already running,
+//        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
+//        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a

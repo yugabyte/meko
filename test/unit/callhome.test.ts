@@ -375,7 +375,7 @@ describe('the usage stats report', () => {
     expect(first.days.reduce((n, d) => n + (d.meko?.calls ?? 0), 0)).toBe(5);
   });
 
-  it("counts learn steps, AgentK's own Meko calls and transcript captures, on the day each began", () => {
+  it("counts learn steps, AgentK's own Meko calls, transcript captures and Ask AgentK's asks, on the day each began", () => {
     const db = seeded();
     const learn = (id: string, s: string, trigger: string, path: string, start: string, end: string, outcome: string, c: number[]) =>
       run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, candidates, saves, updates, skips, lookups, errors, sent_chars)
@@ -398,6 +398,9 @@ describe('the usage stats report', () => {
     own('2026-09-27T17:00:55Z', 'memory_add', 200, 0, 900);
     own('2026-09-28T05:00:00Z', 'Weird.Tool', 40, 1, 100);
     run(db, 'INSERT INTO meko_capture_runs(at, ok, ms) VALUES (?, 1, 300), (?, 0, 100)', at('2026-09-27T18:00:00Z'), at('2026-09-28T06:00:00Z'));
+    // Ask AgentK: two asks one day (one timed out), one the next.
+    run(db, 'INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, 1, 2, 2100), (?, 0, 0, 45000), (?, 1, 0, 1900)',
+      at('2026-09-27T19:00:00Z'), at('2026-09-27T19:05:00Z'), at('2026-09-28T07:00:00Z'));
 
     const r = report(db);
     const tokens = (input: number, output: number, cacheRead: number) => ({ input, output, cacheRead, cacheWrite: 0, messages: 1 });
@@ -416,6 +419,9 @@ describe('the usage stats report', () => {
     expect(day('2026-09-28').meko?.learn).toMatchObject({ runs: 2, byOutcome: { done: 1, skipped: 1 } });
     expect(day('2026-09-28').meko?.agentk).toMatchObject({ calls: 1, byTool: { other: 1 } });
     expect(day('2026-09-26').meko?.learn).toBeUndefined();
+    expect(day('2026-09-27').askAgentk).toEqual({ asks: 2, failed: 1, actions: 2 });
+    expect(day('2026-09-28').askAgentk).toEqual({ asks: 1, failed: 0, actions: 0 });
+    expect(day('2026-09-26').askAgentk).toBeUndefined();
     expect(validate(r, SCHEMA)).toEqual([]);
   });
 

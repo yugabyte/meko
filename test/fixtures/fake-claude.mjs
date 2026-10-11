@@ -46,6 +46,22 @@ if (args[0] === 'update') {
   }
   process.exit(0);
 }
+// Like `claude -p` (Ask AgentK): writes what it got (argv, cwd, stdin) to `ask-input.json` in the
+// fake's dir and prints `ask-reply.json` from there; with an `ask-hang` file it never answers.
+if (args[0] === '-p') {
+  const fake = process.env.FAKE_CLAUDE_DIR ?? '';
+  let input = '';
+  for await (const chunk of process.stdin) input += chunk;
+  mkdirSync(fake, { recursive: true });
+  writeFileSync(join(fake, 'ask-input.json'), JSON.stringify({ args, cwd: process.cwd(), input }));
+  if (existsSync(join(fake, 'ask-hang'))) {
+    setInterval(() => undefined, 1000);
+    await new Promise(() => undefined);
+  }
+  // Exits once the reply is written: a pipe's writes can still be pending at process.exit.
+  process.stdout.write(readFileSync(join(fake, 'ask-reply.json'), 'utf8'), () => process.exit(0));
+  await new Promise(() => undefined);
+}
 const opt = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : null;
@@ -314,17 +330,28 @@ async function turn(text) {
     hook('PreToolUse', { tool_name: 'ExitPlanMode', tool_input: { plan: '# Design\n\nDo the thing.' } });
     return; // waits for approval (Enter)
   }
-  if (text.includes('MEKO_SEARCH')) mekoSearch();
+  if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
   respond();
   hook('Stop', {});
   modMeasure();
 }
 
-// Like Claude Code calling the Meko MCP server: a memory_search that finds one memory.
-function mekoSearch() {
+// Like Claude Code calling the Meko MCP server: a memory_search that finds one memory. With the mod,
+// AgentK hears when it starts and ends; a `meko-ms` file makes it take that many milliseconds, and
+// a `meko-lost` file loses its end.
+async function mekoSearch() {
   const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
   const toolUseId = `toolu_${id}`;
+  if (modOn) {
+    await modPost('/mod/meko', { id: toolUseId, state: 'start' }).catch(() => undefined);
+    try {
+      await sleep(Number(readFileSync(join(dir, 'meko-ms'), 'utf8')));
+    } catch {
+      /* a quick call */
+    }
+    if (!existsSync(join(dir, 'meko-lost'))) await modPost('/mod/meko', { id: toolUseId, state: 'end' }).catch(() => undefined);
+  }
   const usage = { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100 };
   const call = { type: 'tool_use', id: toolUseId, name: 'mcp__meko__memory_search', input: { query: 'how does it work' } };
   const found = JSON.stringify({ result: JSON.stringify({ results: [{ id: 'm1', memory: 'It works like this.' }] }) });
