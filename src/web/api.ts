@@ -163,7 +163,7 @@ export const api = {
   reviewPrs: (id: string, q: { pr?: string; repoPath?: string } = {}) =>
     get<ReviewablePrs>(`/api/projects/${enc(id)}/review-prs${q.pr ? `?pr=${enc(q.pr)}${q.repoPath ? `&repoPath=${enc(q.repoPath)}` : ''}` : ''}`),
   /** What a pasted GitHub PR or issue (a link or owner/name#N) would start, and where. */
-  githubLink: (ref: string) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}`),
+  githubLink: (ref: string, projectId: string | null) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}${projectId ? `&project=${enc(projectId)}` : ''}`),
   startFromLink: (b: StartFromLinkRequest) => post<StartFromLinkResult>('/api/github-link/start', b),
   askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
   usage: () => get<UsageOverview>('/api/usage'),

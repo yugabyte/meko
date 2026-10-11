@@ -129,8 +129,9 @@ your phone can connect.
   Nothing runs until you pick it, a single "go to" included, and you can reply to refine it.
 - **Paste a GitHub link to start:** paste a PR or issue link into Ask AgentK (`⌘K`). A PR
   gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
-  to Code), in the project it belongs to: the one whose datapack its description names, or one on
-  its repo. If there's none, AgentK opens a project for it and clones the repo if needed.
+  to Code), in the project it belongs to: the one whose datapack its description names, else the
+  project you're on when it's on that repo, else the first one on the repo; the other projects on the
+  repo are offered too. If there's none, AgentK opens a project for it and clones the repo if needed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:

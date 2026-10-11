@@ -79,15 +79,22 @@ describe('starting from a GitHub link pasted into Search (real session host + gi
     await env.cleanup();
   });
 
-  it('picks the project naming the datapack over one on the repo, then one on the repo, else plans a new one', async () => {
+  it('picks the project naming the datapack, then the one on screen on the repo, then the first on the repo, else plans a new one', async () => {
     const widget = await dedicated(env.repo);
     const onRepo = await plain(clone, 'Demo');
+    const second = await plain(clone, 'Demo 2');
+    const others = (...ps: { id: string; name: string }[]) => ps.map((p) => ({ id: p.id, name: p.name, why: 'repo', clone }));
     item('pr', 7, true);
     item('issue', 8, false);
-    expect(await env.core.githubLinks.plan('https://github.com/acme/demo/pull/7')).toMatchObject({
-      kind: 'pr', repo: 'acme/demo', number: 7, state: 'open', project: { id: widget.id, why: 'datapack', clone }, newProject: null, existing: [],
+    // The datapack wins over the project on screen, and the projects on the repo are offered too.
+    expect(await env.core.githubLinks.plan('https://github.com/acme/demo/pull/7', second.id)).toMatchObject({
+      kind: 'pr', repo: 'acme/demo', number: 7, state: 'open', project: { id: widget.id, why: 'datapack', clone },
+      others: others(onRepo, second), newProject: null, existing: [],
     });
-    expect((await env.core.githubLinks.plan('acme/demo#8')).project).toEqual({ id: onRepo.id, name: 'Demo', why: 'repo', clone });
+    expect(await env.core.githubLinks.plan('acme/demo#8')).toMatchObject({ project: { id: onRepo.id, name: 'Demo', why: 'repo', clone }, others: others(second) });
+    expect(await env.core.githubLinks.plan('acme/demo#8', second.id)).toMatchObject({ project: { id: second.id, why: 'current' }, others: others(onRepo) });
+    // The project on screen counts only when it's on the repo.
+    expect((await env.core.githubLinks.plan('acme/demo#8', widget.id)).project).toMatchObject({ id: onRepo.id, why: 'repo' });
     // A project with no clone of the link's repo clones it, but not outside the repos folders, where its sessions couldn't use it.
     item('pr', 3, true, {}, 'acme/other');
     env.core.config.repos.cloneInto = join(env.home, 'elsewhere');
@@ -95,6 +102,7 @@ describe('starting from a GitHub link pasted into Search (real session host + gi
 
     // With no open project on it: a PR naming a datapack we can open gets it, and the closed project with it opens again.
     await env.core.projects.delete(onRepo.id);
+    await env.core.projects.delete(second.id);
     await env.core.projects.delete(widget.id);
     listed([{ id: DP, name: DP_NAME, grant: 'owner' }]);
     expect((await env.core.githubLinks.plan('acme/demo#7')).newProject).toEqual({
