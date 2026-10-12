@@ -53,9 +53,10 @@ with a finger. Before you finish a UI change:
   there, not `inset: 0`: iOS doesn't shrink the layout viewport, so its bottom is behind the keyboard.
   Things pinned to the top or bottom edge pad themselves with `env(safe-area-inset-*)`.
 - **Dialogs** use `Dialog` from `common.tsx`, which is already a bottom sheet on phones, and whose
-  Ctrl+Enter presses the main button (`submitButton()`): give it `btn primary` in the footer or as its
-  form's submit, or mark it `data-submit`. New bottom menus use `Sheet` from `SessionSheet.tsx`,
-  which brings a × at its top right, as `Dialog` does.
+  Ctrl+Enter presses the main button (`submitButton()`): make it the `btn primary` in the footer or
+  its form's submit, or, outside a form and footer, a `btn primary` marked `data-submit`. A field that
+  takes Enter itself prevents its default, and the dialog leaves it alone. New bottom menus use
+  `Sheet` from `SessionSheet.tsx`, which brings a × at its top right, as `Dialog` does.
 - **The terminal** takes touch input through `terminals.ts` (`sendKey`, `submit`, swipe scrolling)
   and the pure helpers in `keys.ts`, which have unit tests. Don't focus the terminal on touch
   screens unless typing mode is on (`term.typing`), or the keyboard pops up on every tap.

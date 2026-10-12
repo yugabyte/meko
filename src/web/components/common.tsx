@@ -77,17 +77,14 @@ export function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
 
 /**
  * The button Ctrl+Enter (⌘+Enter) presses in a dialog: the primary submit button of the form being
- * typed in, else the footer's primary button (a form whose action sits in the footer), else one marked
- * `data-submit`. A form whose only submit isn't primary (Turn off two-factor) gets none.
+ * typed in; none if that form's submit isn't primary (Turn off two-factor); else the footer's primary
+ * button (a form whose action sits in the footer); else a `btn primary` marked `data-submit`.
  */
 export function submitButton(root: ParentNode, focused: Element | null): HTMLButtonElement | null {
   const form = focused?.closest('form');
-  const own = form?.querySelector<HTMLButtonElement>('button.primary:not([type="button"])');
-  if (own) return own;
-  const foot = root.querySelector<HTMLButtonElement>('.dialog-ft button.primary');
-  if (foot) return foot;
-  if (form?.querySelector('button:not([type="button"])')) return null;
-  return root.querySelector<HTMLButtonElement>('button.primary[data-submit]');
+  const submit = form?.querySelector<HTMLButtonElement>('button:not([type="button"])');
+  if (submit) return submit.classList.contains('primary') ? submit : null;
+  return root.querySelector<HTMLButtonElement>('.dialog-ft button.primary') ?? root.querySelector<HTMLButtonElement>('button.primary[data-submit]');
 }
 
 export function Dialog({
@@ -110,22 +107,14 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Focus the first control once on open; Escape closes; Ctrl+Enter presses the main button, as a click would (not while it's disabled); Tab stays inside.
+  // Focus the first control once on open; Escape closes; Tab stays inside.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         closeRef.current();
       }
-      const root = ref.current;
-      if (isSubmitKey(e) && root && e.target instanceof Element && root.contains(e.target)) {
-        const button = submitButton(root, e.target);
-        if (button) {
-          e.preventDefault();
-          button.click();
-        }
-      }
-      trapTab(e, root);
+      trapTab(e, ref.current);
     };
     window.addEventListener('keydown', onKey, true);
     const root = ref.current;
@@ -136,7 +125,21 @@ export function Dialog({
   }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cx('dialog', wide && 'wide', className)} role="dialog" aria-modal="true" ref={ref}>
+      <div
+        className={cx('dialog', wide && 'wide', className)}
+        role="dialog"
+        aria-modal="true"
+        ref={ref}
+        onKeyDown={(e) => {
+          // Ctrl+Enter presses the main button, as a click would (nothing while it's disabled). Bubbling
+          // here, after the field's own handler: a field that takes Enter itself (Another PR's Find) keeps it.
+          if (!isSubmitKey(e.nativeEvent) || !(e.target instanceof Element)) return;
+          const button = submitButton(e.currentTarget, e.target);
+          if (!button) return;
+          e.preventDefault();
+          button.click();
+        }}
+      >
         <div className="dialog-hd">
           <h2>{title}</h2>
           {aside}

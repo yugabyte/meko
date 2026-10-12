@@ -156,10 +156,12 @@ instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipbo
 needs HTTPS or localhost.
 
 In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would (nothing while it's
-disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). That's the
-primary submit button of the form being typed in, else the dialog footer's primary button, else
-one marked `data-submit` (Answer, in AgentK is asking). A form whose only submit isn't primary, like
-Turn off two-factor, gets none.
+disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). In a form
+with a submit button, that's the submit button if it's primary and nothing otherwise (Turn off
+two-factor); else the dialog footer's primary button; else, outside a form and footer, a primary
+button marked `data-submit` (Answer, in AgentK is asking). A field that takes Enter itself keeps it:
+in the Another PR box, `Ctrl+Enter` is Find, as Enter is, so a session can't start on the PR picked
+before.
 
 To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
 Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it

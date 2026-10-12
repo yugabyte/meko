@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { submitButton } from '../../src/web/components/common.js';
 import { isSubmitKey } from '../../src/web/util.js';
 
-/** Just enough of an element for submitButton's selectors: tag, classes, attributes and `.a b` descendants. */
+/** Just enough of an element for submitButton: its selectors (tag, classes, attributes, `.a b` descendants) and classList. */
 class El {
   parent: El | null = null;
   readonly children: El[];
@@ -14,14 +14,14 @@ class El {
     this.children = children;
     for (const c of children) c.parent = this;
   }
+  readonly classList = { contains: (c: string) => (this.attrs.class ?? '').split(' ').includes(c) };
   private is(simple: string): boolean {
     const m = /^(\w*)((?:\.[\w-]+)*)((?:\[[\w-]+\])*)(?::not\(\[(\w+)="(\w+)"\]\))?$/.exec(simple);
     if (!m) throw new Error(`unsupported selector ${simple}`);
     const [, tag, classes, attrs, notAttr, notValue] = m;
-    const cls = (this.attrs.class ?? '').split(' ');
     return (
       (!tag || tag === this.tag) &&
-      classes.split('.').filter(Boolean).every((c) => cls.includes(c)) &&
+      classes.split('.').filter(Boolean).every((c) => this.classList.contains(c)) &&
       [...attrs.matchAll(/\[([\w-]+)\]/g)].every(([, a]) => a in this.attrs) &&
       (!notAttr || this.attrs[notAttr] !== notValue)
     );
@@ -49,11 +49,13 @@ const pick = (root: El, focused: El) => submitButton(root as unknown as ParentNo
 
 describe('Ctrl+Enter in a dialog', () => {
   it.each([
-    [{ key: 'Enter', ctrlKey: true, metaKey: false }, true],
-    [{ key: 'Enter', ctrlKey: false, metaKey: true }, true],
-    [{ key: 'Enter', ctrlKey: false, metaKey: false }, false],
-    [{ key: 'a', ctrlKey: true, metaKey: false }, false],
-  ])('takes Ctrl or ⌘ plus Enter only: %o', (e, sends) => {
+    [{ key: 'Enter', ctrlKey: true, metaKey: false, defaultPrevented: false }, true],
+    [{ key: 'Enter', ctrlKey: false, metaKey: true, defaultPrevented: false }, true],
+    [{ key: 'Enter', ctrlKey: false, metaKey: false, defaultPrevented: false }, false],
+    [{ key: 'a', ctrlKey: true, metaKey: false, defaultPrevented: false }, false],
+    // Another PR's box takes Enter as Find, so the dialog doesn't start on the PR picked before.
+    [{ key: 'Enter', ctrlKey: true, metaKey: false, defaultPrevented: true }, false],
+  ])('takes Ctrl or ⌘ plus Enter only, unless a field took it: %o', (e, sends) => {
     expect(isSubmitKey(e)).toBe(sends);
   });
 
@@ -71,6 +73,9 @@ describe('Ctrl+Enter in a dialog', () => {
     const settings = el('div', {}, el('form', {}, el('button', { type: 'button', class: 'btn small primary' }), name, save), el('form', {}, code, el('button', { class: 'btn danger' })));
     expect(pick(settings, name)).toBe(save);
     expect(pick(settings, code)).toBeNull();
+    // Nor does it get a footer's primary button.
+    const turnOff = el('input');
+    expect(pick(el('div', {}, el('form', {}, turnOff, el('button', { class: 'btn danger' })), el('div', { class: 'dialog-ft' }, el('button', { class: 'btn primary' }))), turnOff)).toBeNull();
 
     // AgentK is asking: no form or footer, an Answer marked as the dialog's.
     const answer = el('button', { class: 'btn small primary', 'data-submit': '' });

@@ -251,9 +251,12 @@ export function modKey(e: KeyboardEvent): boolean {
   return isMac() ? e.metaKey : e.ctrlKey;
 }
 
-/** Ctrl+Enter or ⌘+Enter, on any platform: sends a dialog's form from a text box, where plain Enter adds a line. */
-export function isSubmitKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey'>): boolean {
-  return e.key === 'Enter' && (e.ctrlKey || e.metaKey);
+/**
+ * Ctrl+Enter or ⌘+Enter, on any platform: sends a dialog's form from a text box, where plain Enter
+ * adds a line. Not when a field already took the Enter (prevented its default).
+ */
+export function isSubmitKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'defaultPrevented'>): boolean {
+  return e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.defaultPrevented;
 }
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
