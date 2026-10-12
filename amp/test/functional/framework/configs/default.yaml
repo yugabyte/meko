@@ -1122,6 +1122,76 @@ apps:
     # most of an oracle (0.00 dbs/s in run e9ec2452); 5000 is a new schema
     # every 10-50 s.
     extra_args: ["--num-queries", "5000"]
+  # apps/jepsen: the yugabyte/jepsen suite, run in a client pod against an amp
+  # endpoint. jepsen's OWN nemesis is always off (the app passes --nemesis none):
+  # faults come from framework/chaos, so they are the actions amp understands and
+  # they are driven by the framework's seed.
+  #
+  # repo_ref tracks a BRANCH by default, so the suite follows yugabyte/jepsen's
+  # yba branch as the stress framework does. That means this test's behaviour can
+  # change with no diff in this repo — set it to a commit SHA to pin.
+  #
+  # image is public on purpose: needing a registry credential for the runner pod
+  # would put the whole suite behind a secret it does not otherwise require.
+  jepsen:
+    image: "clojure:temurin-21-lein-bookworm"
+    repo_url: "https://github.com/yugabyte/jepsen"
+    repo_ref: "yba"
+    repo_dir: "/opt/ampqa/jepsen"
+    # concurrency is jepsen's own --concurrency; "80n" is 80 threads per node,
+    # and each instance sees one node. An endpoint's max_connections is 100
+    # (compute/endpoint_supervisor/src/spec.rs), so 80 stays under it with room
+    # for the harness's own connections.
+    concurrency: "80n"
+    # time_to_run is --time-limit, the length of the workload itself. Setup and
+    # analysis are on top of it and are bounded separately.
+    time_to_run: "10m"
+    repeats: 1
+    # setup_timeout bounds the wait for jepsen's "Setup successful" — its schema
+    # DDL and initial data. NOTHING may fault the system before that line
+    # appears; a scenario's fault gate waits for it.
+    setup_timeout: "10m"
+    # analysis_timeout bounds the wait for "Analysis complete". An elle append
+    # history can take longer to check than it took to record.
+    analysis_timeout: "20m"
+    poll_interval: "2s"
+    # collect_max_bytes caps EACH collected file. An append history runs to
+    # hundreds of MiB; a collected file over the cap is its tail and says so.
+    collect_max_bytes: 10485760
+    # patches rewrite the checkout before the first run, for the places jepsen
+    # reaches for something only YugabyteDB has. An amp compute is stock
+    # PostgreSQL (18.2, compute/vendor/revisions.json), and the suite mostly does
+    # not notice: the DDL, the CONCAT-based append, the covering indexes, the
+    # isolation levels and the YugabyteDB JDBC driver (42.3.5-yb-3) were all
+    # verified against PostgreSQL 18 unchanged. Two places do differ, and neither
+    # is patched here:
+    #   - GRANT yb_extension — never issued; apps/jepsen's own SetupDatabase
+    #     deliberately omits the role, which only YugabyteDB defines.
+    #   - the /*+ IndexOnlyScan(...) */ pg_hint_plan hints in bank-contention —
+    #     a plain comment on stock PostgreSQL, so they are ignored rather than
+    #     rejected. bank-contention still runs; its reads are simply not forced
+    #     through the index.
+    # Each entry is {file, find, replace, reason, optional}. find is LITERAL,
+    # not a regex, and file is relative to <repo_dir>/yugabyte. Override with
+    # `-o apps.jepsen.patches=json_text:[]` to apply none.
+    #
+    # A find that matches nothing is a hard ERROR unless optional is true. That
+    # is deliberate: repo_ref tracks a branch, so an anchor can vanish under us,
+    # and a silently skipped patch would leave the run claiming to test something
+    # it does not.
+    #
+    # The single entry below is DEFENSIVE, not corrective. The GUC it disables is
+    # already gated on the cluster version, and jepsen's own --version default
+    # (1.3.1.0) does not clear the gate's 2.8.0.0-b1 — so the line does not
+    # execute today. That leaves this suite depending on an unrelated upstream
+    # default staying where it is; pinning the flag off makes it depend on
+    # nothing.
+    patches:
+      - file: "src/yugabyte/ysql/bank_improved.clj"
+        find: "(def enable-follower-reads true)"
+        replace: "(def enable-follower-reads false)"
+        reason: "bank-contention issues SET yb_read_from_followers on every read; that GUC is YugabyteDB's and stock PostgreSQL answers 'unrecognized configuration parameter'"
+        optional: false
 
   # apps/benchbase: the BenchBase benchmark suite (yugabyte fork), run against the
   # backing YSQL. TPC-C default with small load params so a real run stays cheap.
