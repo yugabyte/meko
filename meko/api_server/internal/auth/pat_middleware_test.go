@@ -243,3 +243,75 @@ func TestRequireScope_403WhenScopesMissing(t *testing.T) {
 		t.Errorf("expected 403 when no scopes set, got %d", rec.Code)
 	}
 }
+
+// DevAuthOrPAT: with no identity provider, a PAT resolves to its own account,
+// and anything else still gets the dev account DevAuth injects.
+func TestDevAuthOrPAT(t *testing.T) {
+	pats := &fakePATValidator{verdict: &auth.PATValidateResult{Valid: true, TokenID: "pat-1", UserID: "user-1",
+		Scopes: []string{"*"}}}
+	patAccounts := &fakePATAccountLookup{account: &models.Account{ID: "user-1"}}
+	devAccounts := &fakePATAccountLookup{account: &models.Account{ID: "dev-account"}}
+
+	e := echo.New()
+	e.GET("/protected", func(c echo.Context) error {
+		acct, ok := c.Get(auth.ContextKeyAccount).(*models.Account)
+		if !ok {
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		method, ok := c.Get(auth.ContextKeyAuthMethod).(string)
+		if !ok {
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		return c.JSON(http.StatusOK, map[string]string{"account_id": acct.ID, "auth_method": method})
+	}, auth.DevAuthOrPAT(auth.DevAuth(devAccounts), pats, patAccounts))
+
+	for _, tc := range []struct {
+		name, header, wantAccount, wantMethod string
+		wantPATCalls                          int
+	}{
+		{"PAT resolves to its own account", "Bearer mko_tkn_aaaaaaaaaaaaaaaa", "user-1", "pat", 1},
+		{"no bearer keeps the dev account", "", "dev-account", "cognito", 0},
+		{"a non-PAT bearer keeps the dev account", "Bearer some.jwt.value", "dev-account", "cognito", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pats.calls = 0
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d body=%s", rec.Code, rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["account_id"] != tc.wantAccount || body["auth_method"] != tc.wantMethod {
+				t.Errorf("got account=%s method=%s, want %s/%s", body["account_id"], body["auth_method"],
+					tc.wantAccount, tc.wantMethod)
+			}
+			if pats.calls != tc.wantPATCalls {
+				t.Errorf("PAT validator called %d times, want %d", pats.calls, tc.wantPATCalls)
+			}
+		})
+	}
+}
+
+// An invalid PAT is rejected, not quietly downgraded to the dev account.
+func TestDevAuthOrPAT_InvalidPATIsRejected(t *testing.T) {
+	pats := &fakePATValidator{verdict: &auth.PATValidateResult{Valid: false}}
+	devAccounts := &fakePATAccountLookup{account: &models.Account{ID: "dev-account"}}
+	e := echo.New()
+	e.GET("/protected", func(c echo.Context) error { return c.NoContent(http.StatusOK) },
+		auth.DevAuthOrPAT(auth.DevAuth(devAccounts), pats, devAccounts))
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer mko_tkn_aaaaaaaaaaaaaaaa")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an invalid PAT, got %d", rec.Code)
+	}
+}

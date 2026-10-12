@@ -1,0 +1,367 @@
+# The MCP-surface test stack, beside the scale-test universe in one namespace:
+# LiteLLM (OpenAI-compatible, backed by Bedrock through IRSA), Redis, MinIO,
+# Langfuse web + worker, api-server and meko-mcp-server. Same images and the
+# same environment the meko chart renders, minus ingress and Cognito: MCP
+# authenticates Meko PATs (meko_tkn) against this api-server.
+#
+# Rendered by deploy.sh through envsubst (the image tags and the memory-setting env
+# blocks; see its call). Secrets come from deploy.sh too. Don't write a
+# dollar-brace variable in a comment here: envsubst expands comments as well.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: litellm-config }
+data:
+  config.yaml: |
+    litellm_settings:
+      drop_params: true
+      # Bedrock throttles embeddings past the account's quota; retry with backoff
+      # so a burst slows indexing instead of failing documents.
+      num_retries: 8
+      request_timeout: 120
+    router_settings:
+      num_retries: 8
+      retry_policy: { RateLimitErrorRetries: 8 }
+    model_list:
+      # mem0 extraction asks for this name; Haiku 4.5 on Bedrock answers it.
+      - model_name: gpt-4.1-nano-2025-04-14
+        litellm_params: { model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0, aws_region_name: us-west-2 }
+      # Titan v1 is 1536-wide, like every vector column. The KB index is registered as
+      # text-embedding-3-large, so both names map to it.
+      - model_name: text-embedding-3-small
+        litellm_params: { model: bedrock/amazon.titan-embed-text-v1, aws_region_name: us-west-2 }
+      - model_name: text-embedding-3-large
+        litellm_params: { model: bedrock/amazon.titan-embed-text-v1, aws_region_name: us-west-2 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: litellm }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: litellm } }
+  template:
+    metadata: { labels: { app: litellm, stack: onemil } }
+    spec:
+      serviceAccountName: litellm
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: litellm
+          image: ${REG}/meko-onemil/litellm:${LITELLM_TAG}
+          args: [--config, /app/config.yaml, --port, "4000", --num_workers, "4"]
+          env: [{ name: AWS_DEFAULT_REGION, value: us-west-2 }]
+          ports: [{ containerPort: 4000 }]
+          readinessProbe: { httpGet: { path: /health/liveliness, port: 4000 }, periodSeconds: 10 }
+          resources: { requests: { cpu: "1", memory: 2Gi }, limits: { memory: 4Gi } }
+          volumeMounts: [{ name: config, mountPath: /app/config.yaml, subPath: config.yaml }]
+      volumes: [{ name: config, configMap: { name: litellm-config } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: litellm }
+spec: { selector: { app: litellm }, ports: [{ port: 4000, targetPort: 4000 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: redis }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis, stack: onemil } }
+    spec:
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: redis
+          image: docker.io/redis:7
+          args: [--requirepass, $(REDIS_AUTH), --maxmemory-policy, noeviction]
+          env: [{ name: REDIS_AUTH, valueFrom: { secretKeyRef: { name: stack-secrets, key: redis-auth } } }]
+          ports: [{ containerPort: 6379 }]
+          resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { memory: 4Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis }
+spec: { selector: { app: redis }, ports: [{ port: 6379, targetPort: 6379 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: minio }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: minio } }
+  template:
+    metadata: { labels: { app: minio, stack: onemil } }
+    spec:
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: minio
+          image: cgr.dev/chainguard/minio
+          args: [server, /data]
+          env:
+            - { name: MINIO_ROOT_USER, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-access-key } } }
+            - { name: MINIO_ROOT_PASSWORD, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-secret-key } } }
+          ports: [{ containerPort: 9000 }]
+          resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 2Gi } }
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: minio }
+spec: { selector: { app: minio }, ports: [{ port: 9000, targetPort: 9000 }] }
+---
+# Langfuse's metadata DB and its YugabyteDB tracing schema, loaded once. Buckets
+# for Langfuse and the api-server's KB uploads are created in the same Job.
+apiVersion: batch/v1
+kind: Job
+metadata: { name: stack-init }
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: langfuse-schema
+          image: postgres:17-alpine
+          env: [{ name: PGHOST, value: yb-tservers }, { name: PGPORT, value: "5433" }, { name: PGUSER, value: yugabyte }]
+          command: [sh, -eu, -c]
+          args:
+            - |
+              if [ "$(psql -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname='langfuse'")" != "1" ]; then
+                psql -d yugabyte -c "CREATE DATABASE langfuse"
+                psql -v ON_ERROR_STOP=1 -d langfuse -f /schema/yb_postgres_data.sql
+                psql -d langfuse -c "CREATE SCHEMA IF NOT EXISTS clickhouse"
+                PGOPTIONS="-c search_path=clickhouse,public" psql -v ON_ERROR_STOP=1 -d langfuse -f /schema/tracing_postgres_schema.sql
+              fi
+          volumeMounts: [{ name: schema, mountPath: /schema }]
+        - name: buckets
+          # MinIO no longer publishes its mc image; its S3 API takes the AWS CLI.
+          image: amazon/aws-cli
+          env:
+            - { name: AWS_ACCESS_KEY_ID, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-access-key } } }
+            - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-secret-key } } }
+            - { name: AWS_DEFAULT_REGION, value: us-east-1 }
+          command: [sh, -eu, -c]
+          args:
+            - |
+              for b in langfuse meko-kb-store; do
+                until aws --endpoint-url http://minio:9000 s3api head-bucket --bucket "$b" 2>/dev/null \
+                  || aws --endpoint-url http://minio:9000 s3 mb "s3://$b"; do sleep 3; done
+              done
+      volumes: [{ name: schema, configMap: { name: langfuse-schema } }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: langfuse-config }
+data:
+  DATABASE_URL: postgresql://yugabyte@yb-tservers:5433/langfuse
+  TRACING_DATABASE_URL: postgresql://yugabyte@yb-tservers:5433/langfuse?schema=clickhouse
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  NEXTAUTH_URL: http://langfuse-web:3000
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+  LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED: "true"
+  LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED: "true"
+  NEXT_PUBLIC_LANGFUSE_RUN_NEXT_INIT: "true"
+  LANGFUSE_INIT_ORG_ID: 11111111-1111-4111-8111-111111111111
+  LANGFUSE_INIT_ORG_NAME: onemil
+  LANGFUSE_INIT_PROJECT_ID: 22222222-2222-4222-8222-222222222222
+  LANGFUSE_INIT_PROJECT_NAME: onemil-account
+  LANGFUSE_INIT_USER_EMAIL: onemil@scale.test
+  LANGFUSE_INIT_USER_NAME: onemil
+  LANGFUSE_EE_LICENSE_KEY: langfuse_ee_local_dev
+  LANGFUSE_DISABLE_CLICKHOUSE_WRITES: "true"
+  LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: "false"
+  LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED: "false"
+  LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED: "false"
+  LANGFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED: "false"
+  QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED: "true"
+  QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: langfuse }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: langfuse } }
+  template:
+    metadata: { labels: { app: langfuse, stack: onemil } }
+    spec:
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: langfuse-web
+          image: ${REG}/meko/langfuse-web:${LANGFUSE_TAG}
+          envFrom: [{ configMapRef: { name: langfuse-config } }, { secretRef: { name: langfuse-secrets } }]
+          ports: [{ containerPort: 3000 }]
+          resources: { requests: { cpu: "1", memory: 2Gi }, limits: { memory: 6Gi } }
+        - name: langfuse-worker
+          image: ${REG}/meko/langfuse-worker:${LANGFUSE_TAG}
+          envFrom: [{ configMapRef: { name: langfuse-config } }, { secretRef: { name: langfuse-secrets } }]
+          ports: [{ containerPort: 3030 }]
+          resources: { requests: { cpu: "1", memory: 2Gi }, limits: { memory: 6Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: langfuse-web }
+spec: { selector: { app: langfuse }, ports: [{ port: 3000, targetPort: 3000 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: meko-api-server }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: meko-api-server } }
+  template:
+    metadata: { labels: { app: meko-api-server, stack: onemil } }
+    spec:
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: meko-api-server
+          image: ${REG}/meko/meko-api-server:${API_TAG}
+          args:
+            - --db-host=yb-tservers
+            - --db-port=5433
+            - --db-user-name=yugabyte
+            - --db-name=yugabyte
+            - --enable-byoc
+            - --langfuse-host=http://langfuse-web:3000
+            - --langfuse-admin-api-key=$(LANGFUSE_ADMIN_API_KEY)
+            - --langfuse-db-host=yb-tservers
+            - --langfuse-db-port=5433
+            - --langfuse-db-user=yugabyte
+            - --langfuse-db-name=langfuse
+            - --s3-auth-mode=minio
+            - --s3-endpoint=http://minio:9000
+            - --s3-access-key=$(S3_ACCESS_KEY)
+            - --s3-secret-key=$(S3_SECRET_KEY)
+            - --s3-bucket=meko-kb-store
+            - --openai-api-key=sk-litellm-proxy
+            - --openai-llm-model=gpt-4.1-nano-2025-04-14
+            - --openai-embedding-model=text-embedding-3-small
+            - --mcp-internal-secret=$(MCP_INTERNAL_SECRET)
+            - --pat-rate-limit-per-min=0
+            - --deploy-env=dev
+            ${API_EXTRA_ARGS}
+          env:
+            - { name: LANGFUSE_ADMIN_API_KEY, valueFrom: { secretKeyRef: { name: stack-secrets, key: langfuse-admin-api-key } } }
+            - { name: S3_ACCESS_KEY, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-access-key } } }
+            - { name: S3_SECRET_KEY, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-secret-key } } }
+            - { name: MCP_INTERNAL_SECRET, valueFrom: { secretKeyRef: { name: stack-secrets, key: mcp-internal-secret } } }
+            - { name: OPENAI_BASE_URL, value: "http://litellm:4000/v1" }
+            ${MEMORY_ENV_API}
+          ports: [{ containerPort: 25433 }]
+          readinessProbe: { httpGet: { path: /api/v1/health, port: 25433 }, periodSeconds: 10 }
+          resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { memory: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: meko-api-server }
+spec: { selector: { app: meko-api-server }, ports: [{ port: 80, targetPort: 25433 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: meko-mcp-server }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: meko-mcp-server } }
+  template:
+    metadata: { labels: { app: meko-mcp-server, stack: onemil } }
+    spec:
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      containers:
+        - name: meko-mcp
+          image: ${REG}/meko/meko-mcp-server:${MCP_TAG}
+          env:
+            - { name: YUGABYTEDB_URL, value: "host=yb-tservers port=5433 dbname=yugabyte user=yugabyte" }
+            - { name: YUGABYTEDB_SYSTEM_URL, value: "host=yb-tservers port=5433 dbname=yugabyte user=yugabyte" }
+            - { name: HOST, value: yb-tservers }
+            - { name: DBNAME, value: yugabyte }
+            - { name: YB_MCP_TRANSPORT, value: http }
+            - { name: YB_LOG_LEVEL, value: INFO }
+            - { name: YB_ALLOWED_HOSTS, value: all }
+            - { name: YB_MCP_STATELESS_HTTP, value: "true" }
+            - { name: MCP_AUTH_PROVIDER, value: meko_tkn }
+            - { name: MEKO_TKN_AUTH_ENABLED, value: "true" }
+            - { name: MEKO_MCP_INTERNAL_SECRET, valueFrom: { secretKeyRef: { name: stack-secrets, key: mcp-internal-secret } } }
+            - { name: MEKO_BASE_URL, value: "http://meko-api-server/api/v1" }
+            - { name: MCP_BASE_URL, value: "http://meko-mcp-server:8000" }
+            - { name: MCP_ENV, value: local }
+            - { name: LANGFUSE_HOST, value: "http://langfuse-web:3000" }
+            - { name: LLM_PROVIDER, value: openai }
+            - { name: LLM_MODEL, value: gpt-4.1-nano-2025-04-14 }
+            - { name: EMBEDDER_PROVIDER, value: openai }
+            - { name: EMBEDDER_MODEL, value: text-embedding-3-small }
+            - { name: OPENAI_API_KEY, value: sk-litellm-proxy }
+            - { name: OPENAI_BASE_URL, value: "http://litellm:4000/v1" }
+            - { name: MEM0_MAXCONN, value: "10" }
+            - { name: CONVERSATION_SEARCH_ENABLED, value: "true" }
+            - { name: MEKO_FREE_TIER_QUOTA_ENABLED, value: "false" }
+            - { name: MEKO_ENABLE_BYOC, value: "true" }
+            - { name: ENABLE_ASYNC_MEMORY_EXTRACTION, value: "true" }
+            ${MEMORY_ENV_MCP}
+          ports: [{ containerPort: 8000 }]
+          readinessProbe: { httpGet: { path: /ping, port: 8000 }, periodSeconds: 10 }
+          resources: { requests: { cpu: 500m, memory: 2Gi }, limits: { cpu: "2", memory: ${MCP_MEMORY_LIMIT} } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: meko-mcp-server }
+spec: { selector: { app: meko-mcp-server }, ports: [{ port: 8000, targetPort: 8000 }] }
+---
+# The RAG text worker. The chart hard-codes one replica; RAG_REPLICAS in deploy.sh
+# sets it here, so the test can measure ingestion throughput and fairness per
+# replica count. The PDF worker needs a GPU and is left out.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: rag-agent-text }
+spec:
+  replicas: ${RAG_REPLICAS}
+  selector: { matchLabels: { app: rag-agent-text } }
+  template:
+    metadata: { labels: { app: rag-agent-text, stack: onemil } }
+    spec:
+      nodeSelector: { workload: meko-onemil-app }
+      tolerations: [{ key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }]
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: rag-agent
+          image: ${REG}/meko/rag-agent:${RAG_TAG}
+          env:
+            - { name: YUGABYTEDB_CONNECTION_STRING, value: "postgresql://yugabyte@yb-tservers:5433/yugabyte" }
+            - { name: WORKER_DOCUMENT_TYPE, value: TEXT }
+            - { name: ENABLE_LANGFUSE_TRACING, value: "false" }
+            - { name: TASK_LEASE_DURATION, value: "600" }
+            # Embeddings go to LiteLLM: LangChain reads OPENAI_API_BASE, the OpenAI SDK
+            # OPENAI_BASE_URL. The KB index is registered as OpenAI text-embedding-3-large.
+            - { name: OPENAI_API_KEY, value: sk-litellm-proxy }
+            - { name: OPENAI_API_BASE, value: "http://litellm:4000/v1" }
+            - { name: OPENAI_BASE_URL, value: "http://litellm:4000/v1" }
+            # Documents come from MinIO; boto3 takes the endpoint from AWS_ENDPOINT_URL_S3.
+            - { name: AWS_ENDPOINT_URL_S3, value: "http://minio:9000" }
+            - { name: AWS_REGION, value: us-east-1 }
+            - { name: AWS_S3_BUCKET_NAME, value: meko-kb-store }
+            - { name: AWS_ACCESS_KEY_ID, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-access-key } } }
+            - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: stack-secrets, key: s3-secret-key } } }
+          resources: { requests: { cpu: 500m, memory: 2Gi }, limits: { cpu: "2", memory: 4Gi } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

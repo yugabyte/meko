@@ -672,6 +672,24 @@ func DevAuth(accounts AccountLookup) echo.MiddlewareFunc {
 	}
 }
 
+// DevAuthOrPAT wraps DevAuth so that a request bearing a Meko PAT is resolved
+// to the PAT's own account, as RequireAuth(WithPAT) does, while every other
+// request still gets the dev account. Only for deployments with no identity
+// provider, where DevAuth would otherwise map every caller -- every MCP user --
+// onto one account. Mount it only on the routes that accept PATs under Cognito
+// (dpDirect); the router keeps PAT management and /auth on plain DevAuth.
+func DevAuthOrPAT(devAuth echo.MiddlewareFunc, pats PATValidator, accounts AccountLookup) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		dev := devAuth(next)
+		return func(c echo.Context) error {
+			if tokenStr, err := ExtractBearerToken(c.Request()); err == nil && IsPATFormat(tokenStr) {
+				return authViaPAT(c, tokenStr, pats, accounts, next)
+			}
+			return dev(c)
+		}
+	}
+}
+
 // ExtractBearerToken pulls the token from the "Authorization: Bearer <token>"
 // header. Returns an error if the header is missing or malformed.
 func ExtractBearerToken(r *http.Request) (string, error) {

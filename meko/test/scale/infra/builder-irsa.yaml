@@ -1,0 +1,39 @@
+# ECR push for in-cluster Kaniko builds of the scale test's images, limited to the
+# repositories they push to: meko/meko-mcp-server and meko/meko-api-server (the
+# production repositories, under scale-test tags) and meko-onemil/* (LiteLLM and
+# the patched RAG agent).
+#
+#   AWS_PROFILE=AdministratorAccess-161908593886 eksctl create iamserviceaccount -f builder-irsa.yaml --approve
+#   AWS_PROFILE=AdministratorAccess-161908593886 eksctl delete iamserviceaccount -f builder-irsa.yaml
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: amp-bench
+  region: us-east-2
+iam:
+  withOIDC: true
+  serviceAccounts:
+    - metadata:
+        name: image-builder
+        namespace: meko-onemil
+      roleName: meko-onemil-image-builder
+      tags: { owner: amiram, purpose: meko-onemil-scale-test }
+      attachPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [ecr:GetAuthorizationToken]
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+            Resource:
+              - arn:aws:ecr:us-east-2:161908593886:repository/meko/meko-mcp-server
+              - arn:aws:ecr:us-east-2:161908593886:repository/meko/meko-api-server
+              - arn:aws:ecr:us-east-2:161908593886:repository/meko-onemil/*

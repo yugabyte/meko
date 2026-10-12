@@ -1,0 +1,27 @@
+# Bedrock access for the LiteLLM proxy only, through its service account. It can
+# invoke the two models the proxy maps OpenAI names to, and nothing else.
+#
+#   AWS_PROFILE=AdministratorAccess-161908593886 eksctl create iamserviceaccount -f litellm-irsa.yaml --approve
+#   AWS_PROFILE=AdministratorAccess-161908593886 eksctl delete iamserviceaccount -f litellm-irsa.yaml
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: amp-bench
+  region: us-east-2
+iam:
+  withOIDC: true
+  serviceAccounts:
+    - metadata:
+        name: litellm
+        namespace: meko-onemil
+      roleName: meko-onemil-litellm-bedrock
+      tags: { owner: amiram, purpose: meko-onemil-scale-test }
+      attachPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource:
+              - arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1
+              - arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0
+              - arn:aws:bedrock:*:161908593886:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0

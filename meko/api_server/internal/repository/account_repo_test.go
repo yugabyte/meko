@@ -302,3 +302,29 @@ func TestAccountRepo_Create_HostedOmitsUserType(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+func TestAccountRepo_GetByID_ReadsUserWithoutCognitoSub(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(`WHERE user_id = \$1`).
+		WithArgs("user-1").
+		WillReturnRows(sqlmock.NewRows(userColumns).AddRow(
+			"user-1", "Jane", "Doe",
+			"jane@example.com", "free", nil, nil,
+			nil, false,
+			now, now,
+		))
+
+	acct, err := NewAccountRepo(db, false).GetByID(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GetByID: unexpected error: %v", err)
+	}
+	if acct == nil || acct.ID != "user-1" || acct.CognitoSub != "" {
+		t.Fatalf("GetByID = %+v, want user-1 with an empty cognito_sub", acct)
+	}
+}

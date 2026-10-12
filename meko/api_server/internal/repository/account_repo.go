@@ -184,6 +184,9 @@ func (r *AccountRepo) GetByID(
 	id string,
 ) (*models.Account, error) {
 	var acct models.Account
+	// cognito_sub is NULL for a user with no Cognito identity: the seeded admin,
+	// and every user of a Cognito-less deployment that authenticates by PAT.
+	var sub sql.NullString
 	err := r.db.QueryRowContext(ctx,
 		`SELECT user_id, user_first_name, user_last_name,
 			user_email, user_type, user_org, cognito_sub,
@@ -194,7 +197,7 @@ func (r *AccountRepo) GetByID(
 		id,
 	).Scan(
 		&acct.ID, &acct.FirstName, &acct.LastName,
-		&acct.Email, &acct.AccountType, &acct.UserOrg, &acct.CognitoSub,
+		&acct.Email, &acct.AccountType, &acct.UserOrg, &sub,
 		&acct.EmailVerifiedAt, &acct.HasCompletedOnboarding,
 		&acct.CreatedAt, &acct.UpdatedAt,
 	)
@@ -204,6 +207,7 @@ func (r *AccountRepo) GetByID(
 	if err != nil {
 		return nil, fmt.Errorf("failed to look up account by id: %w", err)
 	}
+	acct.CognitoSub = sub.String
 	return &acct, nil
 }
 

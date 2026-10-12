@@ -1,0 +1,63 @@
+# Dedicated capacity for the 1M-datapack scale test on amp-bench.
+#
+# Tainted so the amp benchmarks sharing the cluster never schedule here, and so
+# our load never lands on their nodes. One DB nodegroup per AZ because EBS
+# volumes are zonal: a tserver pod must come back in the zone its PVC lives in.
+#
+#   AWS_PROFILE=AdministratorAccess-161908593886 eksctl create nodegroup -f nodegroups.yaml
+#   AWS_PROFILE=AdministratorAccess-161908593886 eksctl delete nodegroup -f nodegroups.yaml --approve
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: amp-bench
+  region: us-east-2
+
+managedNodeGroups:
+  - name: meko-onemil-yb-2a
+    instanceType: r5dn.8xlarge
+    desiredCapacity: 1
+    minSize: 0
+    maxSize: 1
+    subnets: [subnet-061ebc2a582639084]
+    labels: { workload: meko-onemil-db, zone: us-east-2a }
+    taints: [{ key: dedicated, value: meko-onemil, effect: NoSchedule }]
+    tags: { owner: amiram, purpose: meko-onemil-scale-test }
+    volumeSize: 100
+    volumeType: gp3
+    privateNetworking: true
+  - name: meko-onemil-yb-2b
+    instanceType: r5dn.8xlarge
+    desiredCapacity: 1
+    minSize: 0
+    maxSize: 1
+    subnets: [subnet-0766347d26e133f56]
+    labels: { workload: meko-onemil-db, zone: us-east-2b }
+    taints: [{ key: dedicated, value: meko-onemil, effect: NoSchedule }]
+    tags: { owner: amiram, purpose: meko-onemil-scale-test }
+    volumeSize: 100
+    volumeType: gp3
+    privateNetworking: true
+  - name: meko-onemil-yb-2c
+    instanceType: r5dn.8xlarge
+    desiredCapacity: 1
+    minSize: 0
+    maxSize: 1
+    subnets: [subnet-007049bed0493c208]
+    labels: { workload: meko-onemil-db, zone: us-east-2c }
+    taints: [{ key: dedicated, value: meko-onemil, effect: NoSchedule }]
+    tags: { owner: amiram, purpose: meko-onemil-scale-test }
+    volumeSize: 100
+    volumeType: gp3
+    privateNetworking: true
+  - name: meko-onemil-app
+    instanceType: m6i.4xlarge
+    desiredCapacity: 2
+    minSize: 0
+    maxSize: 3
+    subnets: [subnet-061ebc2a582639084]
+    labels: { workload: meko-onemil-app }
+    taints: [{ key: dedicated, value: meko-onemil, effect: NoSchedule }]
+    tags: { owner: amiram, purpose: meko-onemil-scale-test }
+    volumeSize: 100
+    volumeType: gp3
+    privateNetworking: true

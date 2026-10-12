@@ -1,0 +1,62 @@
+# YugabyteDB RF3 for the scale test: one master + one tserver per meko-onemil-yb-* node
+# (r5dn.8xlarge, 32 vCPU / 256 GiB). Same image and gflag as the meko chart's
+# bundled database (deploy/helm/meko/values.yaml `yugabyte:`). 2.5 TB per tserver is
+# sized for 1M datapacks on both memory schemas, projected from ~300 GB per node at 300k.
+#
+#   helm upgrade --install yb yugabytedb/yugabyte --version 2025.2.5 \
+#     -n meko-onemil -f yugabyte-values.yaml
+Image:
+  repository: 161908593886.dkr.ecr.us-east-2.amazonaws.com/yugabyte-db/ybdb-meko-release
+  tag: 2026.1.0.0-b1-meko-2
+
+replicas: { master: 3, tserver: 3, totalMasters: 3 }
+
+gflags:
+  tserver:
+    ysql_yb_enable_mage: "true"
+
+enableLoadBalancer: false
+
+storage:
+  master: { count: 1, size: 50Gi, storageClass: gp3 }
+  # gp3-max is 16k IOPS / 1000 MB/s; the default gp3 (3k / 125 MB/s) would make the
+  # bulk load measure EBS rather than the database.
+  tserver: { count: 1, size: 2500Gi, storageClass: gp3-max }
+
+resource:
+  master:
+    requests: { cpu: "2", memory: 8Gi }
+    limits: { cpu: "2", memory: 8Gi }
+  tserver:
+    requests: { cpu: "26", memory: 200Gi }
+    limits: { cpu: "26", memory: 200Gi }
+
+nodeSelector:
+  workload: meko-onemil-db
+
+master:
+  # One of each per node: the chart's own anti-affinity is only preferred, and it put
+  # two masters on one node, where losing that node loses quorum.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector: { matchLabels: { app: yb-master } }
+          topologyKey: kubernetes.io/hostname
+  tolerations:
+    - { key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }
+tserver:
+  # One per node, required rather than the chart's preferred anti-affinity: with RF3,
+  # two tservers on one node can hold two replicas of a tablet, and losing that node
+  # then loses the tablet's majority.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector: { matchLabels: { app: yb-tserver } }
+          topologyKey: kubernetes.io/hostname
+  tolerations:
+    - { key: dedicated, operator: Equal, value: meko-onemil, effect: NoSchedule }
+
+# EKS's containerd caps open files at 65536; the chart's preflight wants 1048576 and
+# crash-loops every pod otherwise. 65536 is ample for 3 tservers at test scale.
+preflight:
+  skipUlimit: true

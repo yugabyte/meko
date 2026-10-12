@@ -654,8 +654,13 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	default:
 		slog.Warn("no identity provider configured, auth disabled – using dev account for all requests")
 		devAuth := auth.DevAuth(reg.accountRepo)
-		datapackGroup = v1.Group("", devAuth)
-		dpDirect = datapackGroup
+		var patAuth echo.MiddlewareFunc
+		if cfg.DevAuthAcceptPATs {
+			patAuth = auth.DevAuthOrPAT(devAuth, newPATAdapter(reg), reg.accountRepo)
+			slog.Warn("dev auth accepts Meko PATs on PAT routes: a PAT resolves to its own account")
+		}
+		datapackGroup, dpDirect = devAuthGroups(v1, devAuth, patAuth,
+			PerPATRateLimiter(cfg.PATRateLimitPerMin, cfg.PATRateLimitBurst))
 		// Register the minimal /auth surface the SPA needs so it can bootstrap
 		// (and complete onboarding) without an IdP. See registerNoAuthRoutes.
 		registerNoAuthRoutes(v1, devAuth, reg)
@@ -680,6 +685,20 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	registerDeploymentRoutes(datapackGroup, reg)
 
 	return e, reg, nil
+}
+
+// devAuthGroups builds the route groups for a deployment with no identity
+// provider. Every group runs devAuth. When patAuth is set, dpDirect (the group
+// the Cognito branch opens to PATs) runs it instead, with the per-PAT rate
+// limit, so a PAT resolves to its own account there. datapackGroup, which holds
+// PAT management and deployments, stays on devAuth as it is JWT-only under
+// Cognito: a PAT sent there is treated like no token at all.
+func devAuthGroups(v1 *echo.Group, devAuth, patAuth, patRateLimit echo.MiddlewareFunc) (datapackGroup, dpDirect *echo.Group) {
+	datapackGroup = v1.Group("", devAuth)
+	if patAuth == nil {
+		return datapackGroup, datapackGroup
+	}
+	return datapackGroup, v1.Group("", patAuth, patRateLimit)
 }
 
 // registerDeploymentRoutes wires the agent-deployment endpoints onto the

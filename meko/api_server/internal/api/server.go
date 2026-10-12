@@ -259,6 +259,13 @@ type ServerConfig struct {
 	// exist, rather than existing and returning empty.
 	EnableProjects bool
 
+	// DevAuthAcceptPATs, with no identity provider configured, resolves a
+	// request carrying a Meko PAT to the PAT's own account instead of the single
+	// dev account DevAuth injects. Lets one Cognito-less stack serve several
+	// accounts (the multi-account scale test). Other requests keep the dev
+	// account. Off by default.
+	DevAuthAcceptPATs bool
+
 	// ControlPlaneMode gates the YCP fleet registry + agent API (BYOC control
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.

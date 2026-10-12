@@ -158,6 +158,8 @@ func run() error {
 	enableBYOC := flag.Bool("enable-byoc",
 		envBoolOrDefault("MEKO_ENABLE_BYOC", false),
 		"run as a BYOC data plane: new users are created pro (no tier caps)")
+	devAuthAcceptPATs := flag.Bool("dev-auth-accept-pats", envBoolOrDefault("DEV_AUTH_ACCEPT_PATS", false),
+		"with no identity provider, resolve Meko PATs to their own account on the PAT routes instead of the dev account")
 	// Projects & folders. The SAME env var gates the UI's Projects nav via
 	// runtime-config, so one switch turns the feature on/off end to end.
 	enableProjects := flag.Bool("enable-projects",
@@ -658,6 +660,7 @@ func run() error {
 		EnableConversationSearch:           *enableConversationSearch,
 		BYOCMode:                           *enableBYOC,
 		EnableProjects:                     *enableProjects,
+		DevAuthAcceptPATs:                  *devAuthAcceptPATs,
 		ControlPlaneMode:                   *controlPlaneMode,
 		BasePath:                           *basePath,
 		AWSMarketplaceProductCode:          *awsMarketplaceProductCode,
