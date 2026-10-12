@@ -792,3 +792,36 @@ tests:
       - equal:
           path: spec.template.metadata.annotations["amp.yugabyte.com/storage-pool-name"]
           value: Acme prod pool
+
+  - it: runs the supervisor as root with four capabilities when the users are split
+    template: templates/deployment.yaml
+    set:
+      userSplit:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [SETUID, SETGID, CHOWN, KILL]
+
+  - it: leaves the container security context alone by default
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext
+
+  - it: refuses a storage group that is not the pod's fsGroup
+    template: templates/deployment.yaml
+    set:
+      userSplit:
+        enabled: true
+        storageGid: 2000
+    asserts:
+      - failedTemplate:
+          errorPattern: "userSplit.storageGid must equal podSecurityContext.fsGroup"

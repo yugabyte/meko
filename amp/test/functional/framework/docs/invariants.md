@@ -47,6 +47,7 @@ means nobody has broken this guarantee on purpose yet.
 | An endpoint is exposed exactly as requested, never wider | features/amp_endpoint_connectivity | none | minutes | |
 | An endpoint answers only to the password its writer was created with, and none is stored in the clear | features/amp_endpoint_client_access | none, pod_delete | minutes | |
 | An endpoint's recorded address survives a reschedule and a redeploy | features/amp_endpoint_client_access | pod_delete | minutes | |
+| With the endpoint user split, Postgres holds no YugabyteDB credential and cannot change the pageserver's or safekeeper's state, and LFC prewarm still works | features/amp_endpoint_user_split | none, pod_delete | minutes | |
 | A cancelled task stops at a step boundary, ends failed as cancelled, and blocks nothing after it | features/amp_task_cancel; stress/branch_churn | none | minutes | |
 | Every extension the release commits to is present and works | features/pg_extensions_matrix, features/amp_cluster_engine, features/amp_extension_age, features/amp_extension_hexabridge, features/amp_extension_hexabridge_mssql, features/amp_extension_pg_cron, features/amp_extension_pgvector, features/amp_extension_registry (an operator-registered image) | none, pod_delete | minutes | |
 | The shipped deployment is what the release claims: release build, declared RBAC, working metrics | features/amp_release_build, features/amp_byoc_scope, features/amp_otel_pipeline, features/backing_config_contract | none | minutes | |

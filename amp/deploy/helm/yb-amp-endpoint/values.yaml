@@ -569,6 +569,19 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 securityContext: {}
+# Run the pageserver and safekeeper as the storage user and the compute as its
+# own user, so a compromised Postgres cannot read the YugabyteDB client key
+# (compute/architecture/single-container-endpoint.md). The container then runs
+# the supervisor as root with only SETUID, SETGID, CHOWN and KILL. Assumes the
+# foundation enforces client certificates; without that, hiding the key does not
+# keep the compute out. storageGid must equal podSecurityContext.fsGroup, which is
+# the group the key Secret is readable by.
+userSplit:
+  enabled: false
+  storageUid: 1000
+  storageGid: 1000
+  computeUid: 1001
+  computeGid: 1001
 # Pod-level security context. fsGroup defaults to the endpoint image's "yugabyte"
 # gid (uid/gid 1000 in deploy/endpoint/Dockerfile): a provisioned PVC for /data
 # mounts root-owned, and this gid makes it group-writable for the non-root

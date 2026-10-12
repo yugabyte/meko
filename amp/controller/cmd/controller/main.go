@@ -185,6 +185,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ComputeTLSCertDuration:        cfg.Deploy.ComputeTLSCertDuration,
 				ComputeTLSCertRenewBefore:     cfg.Deploy.ComputeTLSCertRenewBefore,
 				ComputeTLSIncludeServiceDNS:   cfg.Deploy.ComputeTLSIncludeServiceDNS,
+				EndpointUserSplit:             cfg.Deploy.EndpointUserSplit,
 				Timeout:                       cfg.Deploy.Timeout,
 			}, logger)
 			prov.EndpointVersion = cfg.Deploy.EndpointImageTag

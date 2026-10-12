@@ -67,6 +67,8 @@ pub struct PageServerConf {
     pub listen_pg_addr: String,
     /// Example (default): 127.0.0.1:9898
     pub listen_http_addr: String,
+    /// See [`pageserver_api::config::ConfigToml::http_control_secret`].
+    pub http_control_secret: Option<utils::logging::SecretString>,
     /// Example: 127.0.0.1:9899
     pub listen_https_addr: Option<String>,
     /// If set, expose a gRPC API on this address.
@@ -319,6 +321,7 @@ impl PageServerConf {
         let pageserver_api::config::ConfigToml {
             branch_id,
             require_write_token: _,
+            http_control_secret,
             listen_pg_addr,
             listen_http_addr,
             listen_https_addr,
@@ -404,6 +407,7 @@ impl PageServerConf {
             timeline_identity,
             listen_pg_addr,
             listen_http_addr,
+            http_control_secret: http_control_secret.map(Into::into),
             listen_https_addr,
             listen_grpc_addr,
             ssl_key_file,

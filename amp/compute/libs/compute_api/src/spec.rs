@@ -184,6 +184,13 @@ pub struct ComputeSpec {
     #[serde(default)]
     pub yb_storage_conn: Option<remote_storage::TypedRemoteStorageKind>,
 
+    /// Base URL of the supervisor's loopback LFC state service. When set,
+    /// `compute_ctl` reads and writes the blob through it instead of
+    /// [`Self::yb_storage_conn`], so a compute running as its own user needs no
+    /// YugabyteDB credential.
+    #[serde(default)]
+    pub lfc_state_url: Option<String>,
+
     #[serde(default)]
     /// Download LFC state from endpoint storage and pass it to Postgres on compute startup
     pub autoprewarm: bool,

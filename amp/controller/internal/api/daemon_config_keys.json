@@ -10,7 +10,8 @@
     "listen_http",
     "safekeeper_pg_addr",
     "control_plane_api",
-    "yb_storage_conn"
+    "yb_storage_conn",
+    "http_control_secret"
   ],
   "pageserver": {
     "background_task_maximum_delay": "string",

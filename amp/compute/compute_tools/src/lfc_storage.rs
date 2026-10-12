@@ -43,7 +43,19 @@ const MAX_STATE_BYTES: usize = 256 * 1024 * 1024;
 
 /// The blob store for one compute's LFC state.
 pub struct LfcStorage {
-    storage: GenericRemoteStorage,
+    backend: Backend,
+}
+
+enum Backend {
+    /// YugabyteDB directly, with the credentials the spec carries.
+    Remote(GenericRemoteStorage),
+    /// The supervisor's loopback service, for a compute that runs as its own
+    /// user and holds no YugabyteDB credential. The supervisor fixes the branch,
+    /// so only the endpoint id travels.
+    Proxy {
+        base_url: String,
+        client: reqwest::Client,
+    },
 }
 
 impl LfcStorage {
@@ -52,7 +64,22 @@ impl LfcStorage {
         let storage = GenericRemoteStorage::from_storage_kind(kind)
             .await
             .context("connecting to the LFC state store")?;
-        Ok(Self { storage })
+        Ok(Self {
+            backend: Backend::Remote(storage),
+        })
+    }
+
+    pub fn proxy(base_url: &str) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .context("building the LFC state client")?;
+        Ok(Self {
+            backend: Backend::Proxy {
+                base_url: base_url.trim_end_matches('/').to_string(),
+                client,
+            },
+        })
     }
 
     /// `{branch_id}/{endpoint_id}/lfc_state` — the same key the HTTP service
@@ -78,9 +105,15 @@ impl LfcStorage {
         key: &RemotePath,
         cancel: &CancellationToken,
     ) -> Result<Option<Bytes>> {
+        let storage = match &self.backend {
+            Backend::Remote(storage) => storage,
+            Backend::Proxy { base_url, client } => {
+                return proxy_download(client, &proxy_url(base_url, key)?, cancel).await;
+            }
+        };
         let opts = DownloadOpts::default();
         let download = retry(
-            || async { self.storage.download(key, &opts, cancel).await },
+            || async { storage.download(key, &opts, cancel).await },
             DownloadError::is_permanent,
             WARN_THRESHOLD,
             MAX_RETRIES,
@@ -120,10 +153,16 @@ impl LfcStorage {
             len <= MAX_STATE_BYTES,
             "LFC state is {len} bytes, over the {MAX_STATE_BYTES} limit"
         );
+        let storage = match &self.backend {
+            Backend::Remote(storage) => storage,
+            Backend::Proxy { base_url, client } => {
+                return proxy_upload(client, &proxy_url(base_url, key)?, bytes, cancel).await;
+            }
+        };
         retry(
             || async {
                 let stream = futures::stream::once(futures::future::ready(Ok(bytes.clone())));
-                self.storage.upload(stream, len, key, None, cancel).await
+                storage.upload(stream, len, key, None, cancel).await
             },
             TimeoutOrCancel::caused_by_cancel,
             WARN_THRESHOLD,
@@ -134,6 +173,73 @@ impl LfcStorage {
         .await
         .unwrap_or(Err(anyhow::anyhow!("uploading LFC state was cancelled")))
         .context("uploading LFC state")
+    }
+}
+
+/// `{base}/v1/lfc_state/{endpoint_id}`, from a key [`LfcStorage::key`] built and
+/// so already validated.
+fn proxy_url(base_url: &str, key: &RemotePath) -> Result<String> {
+    let endpoint_id = key
+        .get_path()
+        .iter()
+        .nth(1)
+        .context("the LFC state key has no endpoint component")?;
+    Ok(format!("{base_url}/v1/lfc_state/{endpoint_id}"))
+}
+
+async fn proxy_download(
+    client: &reqwest::Client,
+    url: &str,
+    cancel: &CancellationToken,
+) -> Result<Option<Bytes>> {
+    match retry(
+        || async {
+            let resp = client.get(url).send().await?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            let resp = resp.error_for_status()?;
+            Ok::<_, reqwest::Error>(Some(resp.bytes().await?))
+        },
+        |_| false,
+        WARN_THRESHOLD,
+        MAX_RETRIES,
+        "downloading LFC state through the supervisor",
+        cancel,
+    )
+    .await
+    {
+        Some(got) => got.context("downloading LFC state through the supervisor"),
+        None => anyhow::bail!("downloading LFC state was cancelled"),
+    }
+}
+
+async fn proxy_upload(
+    client: &reqwest::Client,
+    url: &str,
+    bytes: Bytes,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    match retry(
+        || async {
+            client
+                .put(url)
+                .body(bytes.clone())
+                .send()
+                .await?
+                .error_for_status()
+                .map(|_| ())
+        },
+        |_| false,
+        WARN_THRESHOLD,
+        MAX_RETRIES,
+        "uploading LFC state through the supervisor",
+        cancel,
+    )
+    .await
+    {
+        Some(done) => done.context("uploading LFC state through the supervisor"),
+        None => anyhow::bail!("uploading LFC state was cancelled"),
     }
 }
 
@@ -166,6 +272,16 @@ mod tests {
         assert_eq!(
             k.get_path().as_str(),
             "9a054903-242f-46bc-a0c9-cc6b91a37e4c/ep-123/lfc_state"
+        );
+    }
+
+    /// The proxy is addressed by endpoint alone; the supervisor fixes the branch.
+    #[test]
+    fn the_proxy_url_carries_the_endpoint_id() {
+        let k = LfcStorage::key("9a054903-242f-46bc-a0c9-cc6b91a37e4c", "ep-123").unwrap();
+        assert_eq!(
+            proxy_url("http://127.0.0.1:9896", &k).unwrap(),
+            "http://127.0.0.1:9896/v1/lfc_state/ep-123"
         );
     }
 

@@ -1547,3 +1547,19 @@ func TestIngressWithADNSZoneLeavesTheNamesToTheChart(t *testing.T) {
 			vals.ComputeTLS.IpAddresses, vals.ComputeTLS.DnsNames)
 	}
 }
+
+// The chart's userSplit follows the controller flag, and is omitted otherwise
+// so an endpoint keeps the chart default rather than an explicit false.
+func TestKubernetesValuesUserSplit(t *testing.T) {
+	off := NewKubernetesDeployer(testKubernetesConfig(), nil).values(testEndpointSpec(), "rel")
+	if off.UserSplit != nil {
+		t.Errorf("UserSplit = %+v with the flag off, want omitted", off.UserSplit)
+	}
+
+	cfg := testKubernetesConfig()
+	cfg.EndpointUserSplit = true
+	on := NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "rel")
+	if on.UserSplit == nil || !on.UserSplit.Enabled {
+		t.Errorf("UserSplit = %+v with the flag on, want enabled", on.UserSplit)
+	}
+}

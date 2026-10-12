@@ -269,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         pg_auth,
         pg_tenant_only_auth,
         http_auth,
+        http_control_secret: cfg.http_control_secret.map(Into::into),
         sk_auth_token,
         current_thread_runtime: cfg.current_thread_runtime,
         wal_reader_fanout: cfg.wal_reader_fanout,

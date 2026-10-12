@@ -112,17 +112,33 @@ func (a *ampFeatureRun) lfcWorkingSet(ctx context.Context) (controller.Endpoint,
 	if err != nil {
 		return fail(err)
 	}
+	sum, pages, offloading, err := a.lfcSeedAndOffload(ctx, ep)
+	if err != nil {
+		return fail(err)
+	}
+	if !offloading {
+		a.f.t.Skip(lfcOffloadOffReason)
+		return fail(nil)
+	}
+	return ep, sum, pages, nil
+}
+
+const lfcOffloadOffReason = "this control plane renders endpoints with LFC offload and autoprewarm off (deploy-lfc-offload-interval-seconds=0), so there is nothing to prewarm"
+
+// lfcSeedAndOffload reads a working set larger than shared_buffers into ep's LFC
+// and waits for compute_ctl's periodic offload to save it. offloading is false,
+// with nothing seeded, when the control plane renders offload off.
+func (a *ampFeatureRun) lfcSeedAndOffload(ctx context.Context, ep controller.Endpoint) (sum string, pages int64, offloading bool, err error) {
+	fail := func(err error) (string, int64, bool, error) {
+		return "", 0, false, err
+	}
 	cctl, d, err := a.computeCtl(ctx, ep)
 	if err != nil {
 		return fail(err)
 	}
 	interval, err := lfcOffloadInterval(ctx, d)
-	if err != nil {
+	if err != nil || interval == 0 {
 		return fail(err)
-	}
-	if interval == 0 {
-		a.f.t.Skip("this control plane renders endpoints with LFC offload and autoprewarm off (deploy-lfc-offload-interval-seconds=0), so there is nothing to prewarm")
-		return fail(nil)
 	}
 
 	c, err := a.f.endpointSQL(ctx, ep)
@@ -154,12 +170,10 @@ func (a *ampFeatureRun) lfcWorkingSet(ctx context.Context) (controller.Endpoint,
 			return fail(fmt.Errorf("seed the working set: %w", err))
 		}
 	}
-	sum, err := c.QueryString(ctx, lfcChecksum)
-	if err != nil {
+	if sum, err = c.QueryString(ctx, lfcChecksum); err != nil {
 		return fail(err)
 	}
-	pages, err := c.QueryInt(ctx, "SELECT relpages::bigint FROM pg_class WHERE relname = $1", lfcTable)
-	if err != nil {
+	if pages, err = c.QueryInt(ctx, "SELECT relpages::bigint FROM pg_class WHERE relname = $1", lfcTable); err != nil {
 		return fail(err)
 	}
 
@@ -184,7 +198,7 @@ func (a *ampFeatureRun) lfcWorkingSet(ctx context.Context) (controller.Endpoint,
 	} else if errs > 0 {
 		return fail(fmt.Errorf("compute_ctl counted %v LFC offload errors before the restart", errs))
 	}
-	return ep, sum, pages, nil
+	return sum, pages, true, nil
 }
 
 var lfcChecksum = "SELECT md5(string_agg(md5(id::text || pad), '' ORDER BY id)) FROM " + lfcTable

@@ -561,6 +561,7 @@ Kubernetes driver:
 | `--deploy-compute-tls-cert-duration` / `-renew-before` | compute certificate lifetime and renewal lead (default `2160h` / `720h`). Leave the duration **empty** for an ACME issuer, which fixes it at 90 days and only warns that the request was ignored |
 | (no flag) | the endpoint's own client-facing address is added to its certificate automatically — as an IP SAN for an `nlb_*` load balancer or an `ingress_*` shard in a zone-less deployment, as a name otherwise (`ac-compute-tls.md` §The two addresses the chart cannot derive) |
 | `--deploy-compute-tls-include-service-dns` | put the endpoint's in-cluster Service DNS name in its certificate (default true). Must be **false** for `mode=issue` against an ACME issuer: no public CA can validate a `.svc.cluster.local` name and one unvalidatable name fails the whole order. No effect under `mode=existing-secret`, which renders no `Certificate` |
+| `--deploy-endpoint-user-split` | run each endpoint's pageserver and safekeeper and its compute as different Unix users (the endpoint chart's `userSplit`), so a compromised Postgres cannot read the YugabyteDB client key (default false). Needs the foundation to enforce client certificates; see `compute/architecture/single-container-endpoint.md` |
 
 `--deploy-service-type` and `--deploy-service-annotations` above are the
 deployment-wide default. **Client reachability is also a per-endpoint choice**,

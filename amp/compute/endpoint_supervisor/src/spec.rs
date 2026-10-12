@@ -61,6 +61,9 @@ pub struct ComputeSpecParams<'a> {
     /// The YB blob store `compute_ctl` reads and writes LFC state in, as the
     /// externally tagged object its spec field deserializes.
     pub yb_storage_conn: Value,
+    /// The supervisor's LFC state service, used instead of `yb_storage_conn`
+    /// when the compute runs as its own user.
+    pub lfc_state_url: Option<String>,
     /// Load the previous LFC state on startup.
     pub autoprewarm: bool,
     /// Save the LFC state this often. `None` means never.
@@ -202,6 +205,7 @@ pub fn render_compute_spec(
             // keys the blob; without it there is nothing to address.
             "endpoint_id": p.endpoint_id,
             "yb_storage_conn": p.yb_storage_conn,
+            "lfc_state_url": p.lfc_state_url,
             "autoprewarm": p.autoprewarm,
             "offload_lfc_interval_seconds": p.offload_lfc_interval_seconds,
             "cluster": {
@@ -242,6 +246,7 @@ mod tests {
             endpoint_id: Some("3f2b1c4e-0000-4000-8000-000000000001"),
             yb_storage_conn: json!({"type": "YbStore", "host_ports": "h:5433",
                                     "user": "yugabyte", "dbname": "yb_storage"}),
+            lfc_state_url: None,
             autoprewarm: false,
             offload_lfc_interval_seconds: None,
             compute_ctl_jwks: json!({"keys": []}),
@@ -514,6 +519,21 @@ mod tests {
         let parsed: compute_api::responses::ComputeConfig =
             serde_json::from_value(spec).expect("must deserialize as ComputeConfig");
         assert_eq!(parsed.compute_ctl_config.jwks.keys.len(), 1);
+    }
+
+    /// A split compute carries the loopback URL and no YugabyteDB connection, and
+    /// `compute_ctl` must still parse it.
+    #[test]
+    fn a_split_compute_gets_the_lfc_url_not_the_connection() {
+        let mut p = params();
+        p.yb_storage_conn = Value::Null;
+        p.lfc_state_url = Some("http://127.0.0.1:9896".into());
+        let spec = render_compute_spec(&p, &[], &BTreeMap::new(), &BTreeMap::new());
+        let parsed: compute_api::responses::ComputeConfig =
+            serde_json::from_value(spec).expect("must deserialize as ComputeConfig");
+        let spec = parsed.spec.unwrap();
+        assert!(spec.yb_storage_conn.is_none());
+        assert_eq!(spec.lfc_state_url.as_deref(), Some("http://127.0.0.1:9896"));
     }
 
     /// The guard for the shape itself: the rendered file must deserialize into the

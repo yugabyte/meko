@@ -127,6 +127,8 @@ spec:
             - name: AMP_DEPLOY_COMPUTE_TLS_INCLUDE_SERVICE_DNS
               value: {{ .Values.controller.endpoint.computeTlsIncludeServiceDns | quote }}
             {{- end }}
+            - name: AMP_DEPLOY_ENDPOINT_USER_SPLIT
+              value: {{ .Values.controller.endpoint.userSplit | quote }}
             # The in-cluster URL endpoints use to reach this controller's storage-layer surface.
             - name: AMP_DEPLOY_CONTROLLER_URL
               value: {{ include "yb-amp-controller.endpointControllerUrl" . | quote }}

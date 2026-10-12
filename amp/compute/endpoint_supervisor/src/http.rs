@@ -394,7 +394,13 @@ async fn check_handler(mut request: Request<Body>) -> Result<Response<Body>, Api
     // Spawns processes, so not on the reactor thread.
     let not_applied = tokio::task::spawn_blocking(move || {
         let l = &state.env.layout;
-        let mut refused = crate::guc::screen(&l.pg_bin(), &l.run_dir, &req.pg_settings).refused;
+        let mut refused = crate::guc::screen(
+            &l.pg_bin(),
+            &l.run_dir,
+            l.identities.map(|i| i.compute),
+            &req.pg_settings,
+        )
+        .refused;
         // The probe cannot catch these: a certificate path parses, so Postgres
         // accepts it and the render then overrides it. Checked here so the
         // controller refuses the edit rather than storing one that does nothing.

@@ -283,6 +283,11 @@ type DeployConfig struct {
 	// the certificate. Off for an ACME issuer: no public CA can validate a
 	// .svc.cluster.local name, and its presence fails the whole order.
 	ComputeTLSIncludeServiceDNS bool
+	// EndpointUserSplit runs each endpoint's storage processes and compute as
+	// different Unix users (the chart's userSplit), so the compute cannot read
+	// the YugabyteDB client key. Needs the foundation to enforce client
+	// certificates.
+	EndpointUserSplit bool
 
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait / container ready)
 }
@@ -463,6 +468,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ComputeTLSCertDuration, "deploy-compute-tls-cert-duration", env("AMP_DEPLOY_COMPUTE_TLS_CERT_DURATION", "2160h"), "k8s: lifetime of each compute's server certificate (a cert-manager duration). Empty lets the issuer decide, which is what an ACME issuer needs")
 	fs.StringVar(&d.ComputeTLSCertRenewBefore, "deploy-compute-tls-cert-renew-before", env("AMP_DEPLOY_COMPUTE_TLS_CERT_RENEW_BEFORE", "720h"), "k8s: how long before expiry cert-manager renews each compute's server certificate")
 	fs.BoolVar(&d.ComputeTLSIncludeServiceDNS, "deploy-compute-tls-include-service-dns", envBool("AMP_DEPLOY_COMPUTE_TLS_INCLUDE_SERVICE_DNS", true), "k8s: include the endpoint's in-cluster Service DNS name in its server certificate. Turn OFF for an ACME issuer: no public CA can validate a .svc.cluster.local name, and its presence fails the whole order")
+	fs.BoolVar(&d.EndpointUserSplit, "deploy-endpoint-user-split", envBool("AMP_DEPLOY_ENDPOINT_USER_SPLIT", false), "k8s: run each endpoint's pageserver and safekeeper and its compute as different Unix users, so the compute cannot read the YugabyteDB client key. Needs the foundation to enforce client certificates")
 	fs.DurationVar(&d.Timeout, "deploy-timeout", envDuration("AMP_DEPLOY_TIMEOUT", 10*time.Minute), "how long to wait for a deploy/retire to converge")
 	// Docker driver (--deploy-driver docker).
 	fs.StringVar(&d.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-amp/neon-endpoint:dev"), "docker: single-container endpoint image to run")

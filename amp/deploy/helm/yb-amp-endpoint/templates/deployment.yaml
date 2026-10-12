@@ -63,7 +63,19 @@ spec:
         - name: endpoint
           image: {{ include "yb-amp-endpoint.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- with .Values.securityContext }}
+          {{- $sc := deepCopy (.Values.securityContext | default dict) }}
+          {{- if .Values.userSplit.enabled }}
+          {{- if ne (int .Values.userSplit.storageGid) (int (.Values.podSecurityContext | default dict).fsGroup) }}
+          {{- fail "userSplit.storageGid must equal podSecurityContext.fsGroup: the YugabyteDB key Secret is readable by fsGroup, and only the storage user may read it" }}
+          {{- end }}
+          {{- /* The supervisor starts as root to give each child its user. */}}
+          {{- $_ := set $sc "runAsUser" 0 }}
+          {{- $_ := set $sc "runAsGroup" 0 }}
+          {{- $_ := set $sc "runAsNonRoot" false }}
+          {{- $_ := set $sc "allowPrivilegeEscalation" false }}
+          {{- $_ := set $sc "capabilities" (dict "drop" (list "ALL") "add" (list "SETUID" "SETGID" "CHOWN" "KILL")) }}
+          {{- end }}
+          {{- with $sc }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

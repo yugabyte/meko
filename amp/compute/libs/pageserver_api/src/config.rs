@@ -180,6 +180,11 @@ pub struct ConfigToml {
     /// it off is a deliberate act, for a topology whose single writer is
     /// guaranteed some other way.
     pub require_write_token: bool,
+    /// When set, every HTTP request other than `GET`/`HEAD`/`OPTIONS` must carry
+    /// it in `x-storage-control-secret`. The endpoint supervisor sets it when the
+    /// compute runs as a different user, so the compute cannot change this
+    /// process's state through the loopback it shares.
+    pub http_control_secret: Option<String>,
     // types mapped 1:1 into the runtime PageServerConfig type
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -864,6 +869,7 @@ impl Default for ConfigToml {
         Self {
             branch_id: None,
             require_write_token: true,
+            http_control_secret: None,
             listen_pg_addr: (DEFAULT_PG_LISTEN_ADDR.to_string()),
             listen_http_addr: (DEFAULT_HTTP_LISTEN_ADDR.to_string()),
             listen_https_addr: (None),

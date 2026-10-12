@@ -185,6 +185,8 @@ type KubernetesConfig struct {
 	ComputeTLSCertDuration      string
 	ComputeTLSCertRenewBefore   string
 	ComputeTLSIncludeServiceDNS bool
+	// EndpointUserSplit sets the chart's userSplit.enabled.
+	EndpointUserSplit bool
 
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait)
 }
@@ -1549,6 +1551,8 @@ type chartValues struct {
 	// ComputeTLS is nil (omitted) unless the computes present a certificate to
 	// their own clients. Independent of TLS above.
 	ComputeTLS *computeTlsValues `json:"computeTls,omitempty"`
+	// UserSplit is nil (omitted) to leave the chart's default, one user.
+	UserSplit *userSplitValues `json:"userSplit,omitempty"`
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
 	Persistence *persistenceValues `json:"persistence,omitempty"`
@@ -1853,6 +1857,12 @@ type certificateValue struct {
 	RenewBefore string `json:"renewBefore"`
 }
 
+// userSplitValues mirrors the chart's userSplit block; the ids keep the chart's
+// defaults, which match the image.
+type userSplitValues struct {
+	Enabled bool `json:"enabled"`
+}
+
 // computeTlsValues mirrors the chart's computeTls block.
 //
 // The chart derives what it can — the Service DNS name and the ingress slot's
@@ -2041,6 +2051,10 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 				RenewBefore: k.cfg.BackingYBTLSCertRenewBefore,
 			},
 		}
+	}
+
+	if k.cfg.EndpointUserSplit {
+		v.UserSplit = &userSplitValues{Enabled: true}
 	}
 
 	// Server TLS on the compute's listener. Set independently of the block

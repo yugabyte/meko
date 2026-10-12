@@ -166,6 +166,8 @@ WORKDIR /data
 # declares it, so the .so loads by transitive luck today and a preload FATAL is
 # what a change to that edge would look like. Declared here instead; it is
 # already installed, so this adds no layer size.
+# pgcompute (uid/gid 1001, the chart's userSplit default) is the compute's own
+# user. It must not share the yugabyte group, which can read the YB key.
 RUN set -e \
     && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update \
@@ -190,7 +192,9 @@ RUN set -e \
     && rm -f /etc/apt/apt.conf.d/80-retries \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && useradd -d /data -m yugabyte \
-    && chown -R yugabyte:yugabyte /data
+    && chown -R yugabyte:yugabyte /data \
+    && groupadd -g 1001 pgcompute \
+    && useradd -u 1001 -g 1001 -M -d /data/compute -s /usr/sbin/nologin pgcompute
 
 # Storage + control-plane binaries (copied out of the cache-mounted target dir
 # into /home/nonroot/out by the build stage). The supervisor is copied further

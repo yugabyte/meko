@@ -291,6 +291,10 @@ pub fn make_router(
     // NB: on any changes do not forget to update the OpenAPI spec
     // located nearby (/safekeeper/src/http/openapi_spec.yaml).
     let auth = conf.http_auth.clone();
+    let router = match conf.http_control_secret.clone() {
+        Some(secret) => router.middleware(http_utils::endpoint::control_secret_middleware(secret)),
+        None => router,
+    };
     router
         .data(conf)
         .data(global_timelines)

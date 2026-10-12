@@ -27,6 +27,7 @@ starts the services in order, and monitors/restarts them:
  tini ─ endpoint-supervisor
           ├─ safekeeper            (WAL → amp_storage.wals)
           ├─ pageserver            (page service → amp_storage.* ; initdb on bootstrap)
+          ├─ lfc_state             (user split only; see below)
           └─ compute_ctl ─ postgres + yb_amp extension   (the compute)
 ```
 
@@ -34,6 +35,69 @@ A crashed service is restarted with backoff (default 2 s); more than
 `SUPERVISOR_MAX_RESTARTS` (5) restarts within
 `SUPERVISOR_RESTART_WINDOW_SECONDS` (180) fails the whole pod so
 Kubernetes replaces it.
+
+### Storage and compute run as different users
+
+With `STORAGE_UID`/`STORAGE_GID` and `COMPUTE_UID`/`COMPUTE_GID` set, the
+supervisor (which must then run as root) starts the safekeeper and pageserver as
+the storage user and `compute_ctl` as the compute user. The point is that a
+compromised Postgres cannot read the YugabyteDB client key or password, which
+only the storage user holds. All four or none: a partial set, a child id of 0,
+a shared uid or gid, or a non-root supervisor refuses to boot rather than run
+with less isolation than asked for.
+
+- The compute child gets no supplementary groups (checked before `exec`, since
+  std ignores an `EPERM` from `setgroups`) and no-new-privileges.
+- The compute does not inherit `YB_*`, the variable `YB_PASSWORD_ENV` names, or
+  `COMPUTE_PASSWORD`.
+- The run directory is `root:root` `0755`. `pageserver/` and `safekeeper/` are
+  `root:<storage gid>` and `compute/` is `root:<compute gid>`, all `0770`: the
+  children enter through their primary group, and the supervisor, which has no
+  `DAC_OVERRIDE`, as owner. pgdata moves
+  to `compute/pgdata`, because `compute_ctl` deletes and recreates pgdata and so
+  needs write access to its parent.
+- The settings probe (`postgres -C`) runs as the compute user, because Postgres
+  refuses to run as root. Its config is in `settings-probe/` under the run
+  directory, owned by root and only readable by the compute, because the
+  supervisor writes it as root. The supervisor refuses to probe if any
+  directory on that path is a symlink or writable by another user.
+- The compute's server certificate and key are mounted readable only by the
+  storage group, so the supervisor copies them to `compute/server.crt` and
+  `compute/server.key` (`0600`, compute user) at boot and again on each
+  rotation, before it reloads Postgres, and the spec points at the copies. If
+  the copy at boot fails, the watcher tries it again on each poll. Each
+  copy goes to a fresh `O_EXCL` file renamed into place, so a symlink the compute
+  plants is replaced rather than written through.
+
+Unset, every child inherits the supervisor's identity, as before.
+
+LFC prewarm state is the one thing the compute reads and writes in YugabyteDB
+itself. In this mode its spec carries `lfc_state_url` instead of
+`yb_storage_conn`, and a supervisor child, `lfc_state`
+(`endpoint-supervisor serve-lfc-state`), serves `GET`/`PUT
+/v1/lfc_state/{endpoint_id}` on `127.0.0.1:$LFC_STATE_PORT` (default 9896),
+storing the blob with the storage credentials. It runs as the storage user
+rather than inside the supervisor, so the compute's requests are parsed by a
+process with no more privilege than the pageserver, not by root. It is not a
+pageserver route because the pageserver's HTTP port is reachable from off the
+pod and its writes need the control secret. Like the other children it is
+restarted on exit. The branch is the supervisor's,
+never the request's. `GET` may name another endpoint on the branch, which
+`POST /lfc/prewarm?from_endpoint=` needs; `PUT` may name only this endpoint
+(`ENDPOINT_ID`), otherwise 403. Uploads are capped at 256 MiB, as in
+`compute_ctl`.
+
+The compute shares the daemons' loopback, so it could otherwise push a write
+token, create a branch or set a failpoint. The supervisor generates a random
+secret at boot, renders it as `http_control_secret` into `pageserver.toml` and
+`safekeeper.toml` (in the storage directories), and sends it on its own
+requests; the daemons refuse any request other than `GET`/`HEAD`/`OPTIONS`
+without it. The controller only reads from the daemons, so it needs no secret.
+The key is protected from registry overrides. Because the supervisor must write
+the daemons' tomls itself, the split refuses to boot with `PRERENDERED_CONFIG`.
+
+The chart sets all of this with `userSplit.enabled` (off by default), which also
+runs the container as root with only `SETUID`, `SETGID`, `CHOWN` and `KILL`.
 
 ### The same supervisor runs local endpoints
 
@@ -160,8 +224,10 @@ endpoint running prerendered config and concurrently with a reload.
 
 Served only where something calls it: the chart emits `SUPERVISOR_HTTP_PORT`
 only when `controller.url` is set, and with no port the supervisor serves
-nothing. It is unauthenticated, like the pageserver and safekeeper HTTP APIs the
-same Service already publishes — inherited posture rather than a new decision.
+nothing. It is unauthenticated, like the daemons' read routes the same Service
+already publishes — inherited posture rather than a new decision. (Their
+state-changing routes need the control secret when the users are split; see
+above.)
 `reload` takes no body, so the most a caller can do there is make the supervisor
 re-read state it already trusts. `check` does take one, and does work
 proportional to it — a `postgres` per setting when a set is refused — so it is

@@ -94,16 +94,21 @@ impl ComputeNode {
     /// long-lived connection to YB for a blob written every few minutes is a
     /// connection to keep alive for nothing.
     async fn lfc_storage(&self) -> Result<LfcStorage> {
-        let kind = {
+        let (proxy, kind) = {
             let state = self.state.lock().unwrap();
             let pspec = state.pspec.as_ref().context("spec not set")?;
-            pspec
-                .spec
-                .yb_storage_conn
-                .clone()
-                .context("spec.yb_storage_conn missing; LFC prewarm needs the blob store")?
+            (
+                pspec.spec.lfc_state_url.clone(),
+                pspec.spec.yb_storage_conn.clone(),
+            )
         };
-        LfcStorage::new(kind).await
+        if let Some(url) = proxy {
+            return LfcStorage::proxy(&url);
+        }
+        LfcStorage::new(
+            kind.context("spec.yb_storage_conn missing; LFC prewarm needs the blob store")?,
+        )
+        .await
     }
 
     /// Request LFC state from endpoint storage and load corresponding pages into Postgres.

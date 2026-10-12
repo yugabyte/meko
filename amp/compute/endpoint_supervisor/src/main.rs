@@ -68,6 +68,8 @@ pub mod coordinate;
 pub mod fence;
 pub mod guc;
 pub mod http;
+pub mod identity;
+pub mod lfc_proxy;
 pub mod pg_settings;
 pub mod pidfile;
 pub mod protected_keys;
@@ -309,7 +311,10 @@ impl Env {
             compute_id: env_or("COMPUTE_ID", boot::COMPUTE_ID),
             privileged_role_name: env_opt("PRIVILEGED_ROLE_NAME"),
             log_files: prerender.caller_driven(),
+            identities: identity::Identities::from_env()?,
+            lfc_state_port: env_port("LFC_STATE_PORT", 9896)?,
         };
+        refuse_prerendered_split(prerender, layout.identities.is_some())?;
 
         // A malformed id means the overrides cannot be read, which is a warning
         // rather than a failure — but say so, since the pod will look fine while
@@ -508,6 +513,11 @@ fn chart_settings() -> Result<BTreeMap<String, String>> {
 
 fn main() -> std::process::ExitCode {
     init_logging();
+    if std::env::args().nth(1).as_deref() == Some(lfc_proxy::SUBCOMMAND) {
+        let Err(e) = lfc_proxy::run_from_env();
+        tracing::error!("LFC state service failed: {e:#}");
+        return std::process::ExitCode::FAILURE;
+    }
     match run() {
         Ok(code) => code,
         Err(e) => {
@@ -526,6 +536,12 @@ fn run() -> Result<std::process::ExitCode> {
 
     let env = std::sync::Arc::new(Env::read()?);
     let l = &env.layout;
+    // Before anything renders a daemon config or builds the HTTP client: both
+    // capture it. Only with the users split, where the compute shares the
+    // daemons' loopback but cannot read their tomls.
+    if l.identities.is_some() {
+        coordinate::init_control_secret()?;
+    }
     let fence_cfg = fence::Config::from_env(&l.branch_id)?;
     if !fence_cfg.required {
         tracing::warn!(
@@ -552,6 +568,9 @@ fn run() -> Result<std::process::ExitCode> {
 
     for dir in [l.run_dir.clone(), l.ps_datadir(), l.sk_datadir()] {
         std::fs::create_dir_all(&dir).with_context(|| format!("create {dir}"))?;
+    }
+    if let Some(ids) = l.identities {
+        boot::prepare_split_dirs(l, &ids)?;
     }
 
     // Before the registry read and before any child: everything below needs YB,
@@ -611,7 +630,12 @@ fn run() -> Result<std::process::ExitCode> {
     // Same reasoning, and the same scope: the certificate is the endpoint's, so
     // one watcher for the process outlives every lease it serves under.
     if let Some(tls) = env.compute_tls() {
-        compute_tls::spawn(tls.cert_file, tls.key_file, l.compute_port);
+        compute_tls::spawn(
+            tls.cert_file,
+            tls.key_file,
+            l.compute_port,
+            l.staged_compute_tls(),
+        );
     }
 
     let mut fence = if fence_cfg.required {
@@ -715,6 +739,14 @@ fn serve_one_lease(
 
     let mut sup = Supervisor::new(Policy::from_env());
     for svc in services {
+        sup.add(svc);
+    }
+    // Before the compute, whose spec points at it.
+    if let Some(svc) = boot::lfc_state_service(
+        l,
+        env.endpoint_id.as_deref(),
+        &env.yb_conn_typed_json().to_string(),
+    ) {
         sup.add(svc);
     }
     // Renewing runs for the whole bring-up, not just once it is over. Starting a
@@ -963,7 +995,12 @@ pub fn render_config(
     // Asked before the render, not after: a name or value Postgres refuses would
     // take the whole config file down with it, and at create there is no server
     // to have asked instead.
-    let screened = guc::screen(&l.pg_bin(), &l.run_dir, &overrides.pg);
+    let screened = guc::screen(
+        &l.pg_bin(),
+        &l.run_dir,
+        l.identities.map(|i| i.compute),
+        &overrides.pg,
+    );
     for r in &screened.refused {
         tracing::warn!(
             name = %r.name,
@@ -982,7 +1019,12 @@ pub fn render_config(
     // that caused it. Dropping the one setting instead costs that extension its
     // waiver and leaves everything else in force, which is the recoverable
     // failure.
-    let screened_chart = guc::screen(&l.pg_bin(), &l.run_dir, &env.chart_settings);
+    let screened_chart = guc::screen(
+        &l.pg_bin(),
+        &l.run_dir,
+        l.identities.map(|i| i.compute),
+        &env.chart_settings,
+    );
     for r in &screened_chart.refused {
         tracing::warn!(
             name = %r.name,
@@ -1057,6 +1099,9 @@ pub fn render_config(
     let (pageserver, safekeeper) = if env.prerender == Prerender::Nothing {
         let mut ps_base = boot::pageserver_base(l, env.yb_conn(), fence_required);
         ps_base.extend(scale.clone());
+        if let Some(secret) = coordinate::control_secret() {
+            ps_base.push(("http_control_secret", secret.into()));
+        }
         let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
             .context("rendering pageserver.toml")?;
         let pageserver = write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
@@ -1065,6 +1110,9 @@ pub fn render_config(
         // than a table, which is the shape its config type expects.
         let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string(), fence_required);
         sk_base.extend(scale);
+        if let Some(secret) = coordinate::control_secret() {
+            sk_base.push(("http_control_secret", secret.into()));
+        }
         let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
             .context("rendering safekeeper.toml")?;
         let safekeeper = write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
@@ -1073,6 +1121,7 @@ pub fn render_config(
         (false, false)
     };
 
+    let staged_tls = l.staged_compute_tls();
     let compute_spec = spec::render_compute_spec(
         &spec::ComputeSpecParams {
             compute_port: l.compute_port,
@@ -1081,11 +1130,23 @@ pub fn render_config(
             pageserver_connstring: &l.pageserver_connstring(),
             shared_preload_libraries: &env.shared_preload_libraries,
             endpoint_id: env.endpoint_id.as_deref(),
-            yb_storage_conn: env.yb_conn_typed_json(),
+            // A compute running as its own user holds no YugabyteDB credential,
+            // so it gets the loopback service instead of the connection.
+            yb_storage_conn: match l.lfc_state_url() {
+                Some(_) => serde_json::Value::Null,
+                None => env.yb_conn_typed_json(),
+            },
+            lfc_state_url: l.lfc_state_url(),
             autoprewarm: env.autoprewarm,
             offload_lfc_interval_seconds: env.offload_lfc_interval_seconds,
             compute_ctl_jwks: env.compute_ctl_jwks.clone(),
-            compute_tls: env.compute_tls(),
+            compute_tls: match (&staged_tls, env.compute_tls()) {
+                (Some(to), Some(_)) => Some(spec::ComputeTls {
+                    cert_file: to.cert_file.as_str(),
+                    key_file: to.key_file.as_str(),
+                }),
+                (_, mounted) => mounted,
+            },
         },
         &settings,
         &screened_chart.keep,
@@ -1162,6 +1223,19 @@ fn require_prerendered(l: &boot::Layout, mode: Prerender) -> Result<()> {
             tracing::info!("running on the caller's config; rendering nothing")
         }
         _ => tracing::info!("running on the caller's daemon config; rendering the compute spec"),
+    }
+    Ok(())
+}
+
+/// The split's control secret goes into the daemons' tomls, which this process
+/// does not write when the caller brought them; running split without it would
+/// leave the daemons' mutating routes open to the compute.
+fn refuse_prerendered_split(prerender: Prerender, split: bool) -> Result<()> {
+    if split && prerender != Prerender::Nothing {
+        anyhow::bail!(
+            "PRERENDERED_CONFIG cannot be combined with the user split \
+             (STORAGE_UID/GID, COMPUTE_UID/GID): the daemons' configs would lack the control secret"
+        );
     }
     Ok(())
 }
@@ -1392,6 +1466,8 @@ mod tests {
                 compute_id: boot::COMPUTE_ID.into(),
                 privileged_role_name: None,
                 log_files: false,
+                identities: None,
+                lfc_state_port: 9896,
             },
             yb_host_ports: "127.0.0.1:5433".into(),
             yb_user: "yugabyte".into(),
@@ -1417,6 +1493,15 @@ mod tests {
     /// The id reaches the compute spec as well as the registry read, and
     /// `compute_ctl` keys its LFC blobs by it. An id that is absent disables
     /// prewarm; an arbitrary string would become a blob key instead.
+    #[test]
+    fn a_split_refuses_prerendered_config() {
+        refuse_prerendered_split(Prerender::Nothing, true).unwrap();
+        refuse_prerendered_split(Prerender::Everything, false).unwrap();
+        for p in [Prerender::Daemons, Prerender::Everything] {
+            assert!(refuse_prerendered_split(p, true).is_err());
+        }
+    }
+
     #[test]
     fn only_a_uuid_becomes_an_endpoint_id() {
         const ID: &str = "3f2b1c4e-0000-4000-8000-000000000001";

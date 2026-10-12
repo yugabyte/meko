@@ -56,6 +56,10 @@ pub struct Layout {
     /// `yb_amp_local` wants `endpoints/<id>/pageserver/pageserver.log`, because
     /// several endpoints share a host and each daemon's log is read on its own.
     pub log_files: bool,
+    /// Set when the storage processes and the compute run as different users.
+    pub identities: Option<crate::identity::Identities>,
+    /// Loopback port of the LFC state service, used only with the users split.
+    pub lfc_state_port: u16,
 }
 
 /// Loopback is what the compute and the supervisor's own probes use, even when
@@ -77,8 +81,32 @@ impl Layout {
     pub fn sk_datadir(&self) -> Utf8PathBuf {
         self.run_dir.join("safekeeper")
     }
+    /// Under the compute user's own directory when the users are split:
+    /// `compute_ctl` deletes and recreates pgdata, which needs write access to
+    /// its parent, and the run directory stays the supervisor's.
     pub fn pgdata(&self) -> Utf8PathBuf {
-        self.run_dir.join("pgdata")
+        match self.identities {
+            Some(_) => self.compute_dir().join("pgdata"),
+            None => self.run_dir.join("pgdata"),
+        }
+    }
+    pub fn compute_dir(&self) -> Utf8PathBuf {
+        self.run_dir.join("compute")
+    }
+    /// Where `compute_ctl` reads and writes its LFC state when it holds no
+    /// YugabyteDB credential of its own.
+    pub fn lfc_state_url(&self) -> Option<String> {
+        self.identities
+            .map(|_| format!("http://{LISTEN_HOST}:{}", self.lfc_state_port))
+    }
+    /// Where the compute reads its server certificate and key when it runs as
+    /// its own user and cannot read the mount.
+    pub fn staged_compute_tls(&self) -> Option<crate::compute_tls::Staged> {
+        self.identities.map(|ids| crate::compute_tls::Staged {
+            cert_file: self.compute_dir().join("server.crt"),
+            key_file: self.compute_dir().join("server.key"),
+            owner: ids.compute,
+        })
     }
     /// The compute spec `compute_ctl` loads — written by this process in the pod,
     /// and by the caller when the config is pre-rendered.
@@ -318,6 +346,52 @@ fn probe_addr(host: &str, port: u16) -> bool {
         .any(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_millis(500)).is_ok())
 }
 
+/// The inherited variables a compute running as its own user must not see: every
+/// `YB_*` connection setting, the password variable the connection names, and
+/// the `cloud_admin` verifier, which only the supervisor applies.
+///
+/// A denylist rather than an allowlist because the chart passes externalized
+/// extensions' data directories (`PROJ_DATA` and the like) under names this
+/// process cannot know in advance.
+pub fn storage_only_env(names: impl Iterator<Item = String>) -> Vec<String> {
+    let password_env = crate::env_opt("YB_PASSWORD_ENV").unwrap_or_else(|| "YB_PASSWORD".into());
+    names
+        .filter(|k| k.starts_with("YB_") || k == "COMPUTE_PASSWORD" || *k == password_env)
+        .collect()
+}
+
+/// Gives each user its directories before any child starts.
+///
+/// Owned by root with the user's group and mode `0770`, not owned by the user:
+/// the supervisor keeps only `SETUID`, `SETGID`, `CHOWN` and `KILL`, so without
+/// `DAC_OVERRIDE` it could not write the daemons' tomls or the compute's staged
+/// certificate into a directory another uid owns `0700`. The children get in
+/// through their primary group (supplementary groups are cleared), and neither
+/// side can enter the other's directory.
+pub fn prepare_split_dirs(l: &Layout, ids: &crate::identity::Identities) -> anyhow::Result<()> {
+    use std::os::unix::fs::{PermissionsExt, chown};
+
+    use anyhow::Context;
+    std::fs::create_dir_all(l.compute_dir())
+        .with_context(|| format!("create {}", l.compute_dir()))?;
+    for (dir, who) in [
+        (l.ps_datadir(), ids.storage),
+        (l.sk_datadir(), ids.storage),
+        (l.compute_dir(), ids.compute),
+    ] {
+        chown(&dir, Some(0), Some(who.gid)).with_context(|| format!("chown {dir}"))?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770))
+            .with_context(|| format!("chmod {dir}"))?;
+    }
+    // Root's and closed to both children: the settings probe and the staged
+    // certificate rely on nothing under it but their own directories being
+    // writable by them.
+    chown(&l.run_dir, Some(0), Some(0)).with_context(|| format!("chown {}", l.run_dir))?;
+    std::fs::set_permissions(&l.run_dir, std::fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("chmod {}", l.run_dir))?;
+    Ok(())
+}
+
 /// The compute's argv.
 ///
 /// Every flag here is one `compute-ctl` actually declares. The spec file is
@@ -379,6 +453,7 @@ pub fn services(l: &Layout) -> Vec<Service> {
             ],
         )
         .cwd(l.sk_datadir())
+        .run_as(l.identities.map(|i| i.storage))
         .health(status_probe(l.safekeeper_http_port, "/v1/status"))
         .logging_to(log(l.sk_datadir(), "safekeeper")),
         Service::new(
@@ -390,14 +465,53 @@ pub fn services(l: &Layout) -> Vec<Service> {
             ],
         )
         .cwd(l.ps_datadir())
+        .run_as(l.identities.map(|i| i.storage))
         .health(status_probe(l.pageserver_http_port, "/v1/status"))
         .logging_to(log(l.ps_datadir(), "pageserver")),
         Service::new(COMPUTE_SERVICE, compute_ctl_argv(l))
-            .cwd(l.run_dir.clone())
+            .cwd(match l.identities {
+                Some(_) => l.compute_dir(),
+                None => l.run_dir.clone(),
+            })
+            .run_as(l.identities.map(|i| i.compute))
+            .without_env(match l.identities {
+                Some(_) => storage_only_env(std::env::vars().map(|(k, _)| k)),
+                None => Vec::new(),
+            })
             .health(tcp_probe(l.compute_port))
             .logging_to(log(l.run_dir.clone(), "compute")),
     ]
 }
+
+/// The LFC state server ([`crate::lfc_proxy`]), only with the users split: it
+/// is how a compute holding no YugabyteDB credential reaches its prewarm state.
+/// Runs as the storage user, with the storage credentials it inherits.
+pub fn lfc_state_service(
+    l: &Layout,
+    endpoint_id: Option<&str>,
+    storage_json: &str,
+) -> Option<Service> {
+    let ids = l.identities?;
+    let mut svc = Service::new(
+        LFC_STATE_SERVICE,
+        vec![
+            l.bin_dir.join("endpoint-supervisor").to_string(),
+            crate::lfc_proxy::SUBCOMMAND.into(),
+        ],
+    )
+    .cwd(l.ps_datadir())
+    .run_as(Some(ids.storage))
+    .env("LFC_STATE_PORT", &l.lfc_state_port.to_string())
+    .env("LFC_STATE_BRANCH_ID", &l.branch_id)
+    .env("LFC_STATE_STORAGE", storage_json)
+    .health(tcp_probe(l.lfc_state_port));
+    if let Some(id) = endpoint_id {
+        svc = svc.env("LFC_STATE_ENDPOINT_ID", id);
+    }
+    Some(svc)
+}
+
+pub const LFC_STATE_SERVICE: &str = "lfc_state";
 
 #[cfg(test)]
 mod tests {
@@ -424,7 +538,51 @@ mod tests {
             compute_id: COMPUTE_ID.into(),
             privileged_role_name: None,
             log_files: false,
+            identities: None,
+            lfc_state_port: 9896,
         }
+    }
+
+    /// The compute must not inherit anything that reaches the foundation.
+    #[test]
+    fn the_compute_loses_every_foundation_variable() {
+        let names = [
+            "YB_PASSWORD",
+            "YB_SSLKEY",
+            "YB_HOST_PORTS",
+            "COMPUTE_PASSWORD",
+            "PROJ_DATA",
+            "PATH",
+        ]
+        .map(String::from);
+        let mut gone = storage_only_env(names.into_iter());
+        gone.sort();
+        assert_eq!(
+            gone,
+            [
+                "COMPUTE_PASSWORD",
+                "YB_HOST_PORTS",
+                "YB_PASSWORD",
+                "YB_SSLKEY"
+            ]
+        );
+    }
+
+    #[test]
+    fn split_mode_moves_pgdata_under_the_compute_dir() {
+        let mut l = layout();
+        assert_eq!(l.pgdata(), "/data/pgdata");
+        l.identities = Some(crate::identity::Identities {
+            storage: crate::identity::RunAs {
+                uid: 1000,
+                gid: 1000,
+            },
+            compute: crate::identity::RunAs {
+                uid: 1001,
+                gid: 1001,
+            },
+        });
+        assert_eq!(l.pgdata(), "/data/compute/pgdata");
     }
 
     /// The order is the dependency chain; a reshuffle here breaks compute startup.
@@ -433,6 +591,95 @@ mod tests {
         let s = services(&layout());
         let names: Vec<&str> = s.iter().map(|x| x.name.as_str()).collect();
         assert_eq!(names, ["safekeeper", "pageserver", "compute_ctl"]);
+    }
+
+    /// With the users split, each child runs as its own user from its own
+    /// directory, and only the compute loses the storage variables.
+    #[test]
+    fn a_split_runs_each_child_as_its_user() {
+        use crate::identity::{Identities, RunAs};
+        let ids = Identities {
+            storage: RunAs {
+                uid: 1000,
+                gid: 1000,
+            },
+            compute: RunAs {
+                uid: 1001,
+                gid: 1001,
+            },
+        };
+        let mut l = layout();
+        l.identities = Some(ids);
+        let s = services(&l);
+        let get = |name: &str| {
+            s.iter()
+                .find(|x| x.name == name)
+                .unwrap()
+                .identity_for_test()
+        };
+
+        for (name, dir) in [
+            ("safekeeper", l.sk_datadir()),
+            ("pageserver", l.ps_datadir()),
+        ] {
+            let (run_as, cwd, removed) = get(name);
+            assert_eq!(run_as, Some(ids.storage), "{name}");
+            assert_eq!(cwd.unwrap(), dir.as_std_path(), "{name}");
+            assert!(removed.is_empty(), "{name} lost {removed:?}");
+        }
+
+        let (run_as, cwd, removed) = get(COMPUTE_SERVICE);
+        assert_eq!(run_as, Some(ids.compute));
+        assert_eq!(cwd.unwrap(), l.compute_dir().as_std_path());
+        assert_eq!(
+            removed,
+            storage_only_env(std::env::vars().map(|(k, _)| k)).as_slice()
+        );
+        let argv = s
+            .iter()
+            .find(|x| x.name == COMPUTE_SERVICE)
+            .unwrap()
+            .argv_for_test();
+        let pgdata = &argv[argv.iter().position(|a| a == "--pgdata").unwrap() + 1];
+        assert_eq!(pgdata, l.compute_dir().join("pgdata").as_str());
+    }
+
+    /// The LFC state server exists only split, and runs as the storage user.
+    #[test]
+    fn the_lfc_state_server_runs_as_the_storage_user() {
+        use crate::identity::{Identities, RunAs};
+        let mut l = layout();
+        assert!(lfc_state_service(&l, Some("ep"), "{}").is_none());
+        let ids = Identities {
+            storage: RunAs {
+                uid: 1000,
+                gid: 1000,
+            },
+            compute: RunAs {
+                uid: 1001,
+                gid: 1001,
+            },
+        };
+        l.identities = Some(ids);
+        let svc = lfc_state_service(&l, Some("ep"), "{}").unwrap();
+        assert_eq!(svc.identity_for_test().0, Some(ids.storage));
+        assert_eq!(
+            svc.argv_for_test(),
+            [
+                "/usr/local/bin/endpoint-supervisor",
+                crate::lfc_proxy::SUBCOMMAND
+            ]
+        );
+    }
+
+    /// Unsplit, every child inherits this process's identity and environment.
+    #[test]
+    fn unsplit_children_inherit_everything() {
+        for svc in services(&layout()) {
+            let (run_as, _, removed) = svc.identity_for_test();
+            assert_eq!(run_as, None, "{}", svc.name);
+            assert!(removed.is_empty(), "{}", svc.name);
+        }
     }
 
     /// The image lays Postgres out under `<pg_distrib_dir>/v<major>`, so every

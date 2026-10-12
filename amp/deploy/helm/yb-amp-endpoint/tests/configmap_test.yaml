@@ -408,3 +408,28 @@ tests:
       - equal:
           path: data.COMPUTE_SSL_KEY_FILE
           value: /etc/amp/tls/compute/tls.key
+
+  - it: passes the split users to the supervisor when enabled
+    set:
+      userSplit:
+        enabled: true
+    asserts:
+      - equal:
+          path: data.STORAGE_UID
+          value: "1000"
+      - equal:
+          path: data.STORAGE_GID
+          value: "1000"
+      - equal:
+          path: data.COMPUTE_UID
+          value: "1001"
+      - equal:
+          path: data.COMPUTE_GID
+          value: "1001"
+
+  - it: sets no split users by default
+    asserts:
+      - notExists:
+          path: data.STORAGE_UID
+      - notExists:
+          path: data.COMPUTE_UID

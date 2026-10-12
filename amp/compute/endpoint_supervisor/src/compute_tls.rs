@@ -187,6 +187,80 @@ impl Watched {
         self.last = seen;
         COMPUTE_CERT_RELOAD_PENDING.set(0);
     }
+
+    /// The compute has loaded nothing, so the next poll that can read the pair
+    /// treats it as a change. For a staging copy that failed at boot: the mount
+    /// itself has not moved, so without this nothing retries the copy until the
+    /// next renewal.
+    fn forget(&mut self) {
+        self.last = (None, None);
+    }
+}
+
+/// Where a compute running as its own user reads its certificate and key.
+///
+/// The mount is `0440` to the pod's `fsGroup`, which is the storage group, so
+/// the compute cannot read it directly; this process copies the pair into the
+/// compute's own directory instead. Only into that directory itself: it sits in
+/// the root-owned run directory, so the compute cannot replace it with a symlink,
+/// whereas it could replace any subdirectory.
+#[derive(Clone)]
+pub struct Staged {
+    pub cert_file: camino::Utf8PathBuf,
+    pub key_file: camino::Utf8PathBuf,
+    pub owner: crate::identity::RunAs,
+}
+
+impl Staged {
+    pub fn copy_from(&self, cert_src: &str, key_src: &str) -> anyhow::Result<()> {
+        stage_one(cert_src, &self.cert_file, self.owner)?;
+        stage_one(key_src, &self.key_file, self.owner)
+    }
+}
+
+/// Copies `src` to `dst` as a `0600` file the owner holds.
+///
+/// The directory belongs to the compute user, who could plant a symlink at
+/// `dst` or at a predictable temporary name. So the contents go to a fresh file
+/// created with `O_EXCL` (which refuses an existing name, symlink included),
+/// handed to the owner through the open descriptor, and renamed over `dst`,
+/// which replaces a symlink rather than following it.
+fn stage_one(
+    src: &str,
+    dst: &camino::Utf8Path,
+    owner: crate::identity::RunAs,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, fchown};
+
+    use anyhow::Context;
+    let bytes = std::fs::read(src).with_context(|| format!("read {src}"))?;
+    let mut nonce = [0u8; 8];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut nonce))
+        .context("reading /dev/urandom")?;
+    let tmp = dst.with_file_name(format!(
+        ".{}.{}",
+        dst.file_name().unwrap_or("staged"),
+        u64::from_le_bytes(nonce)
+    ));
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)
+        .with_context(|| format!("create {tmp}"))?;
+    let staged = (|| -> anyhow::Result<()> {
+        fchown(&f, Some(owner.uid), Some(owner.gid)).with_context(|| format!("chown {tmp}"))?;
+        f.write_all(&bytes)
+            .with_context(|| format!("write {tmp}"))?;
+        f.sync_all().with_context(|| format!("sync {tmp}"))?;
+        std::fs::rename(&tmp, dst).with_context(|| format!("rename {tmp} -> {dst}"))
+    })();
+    if staged.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    staged
 }
 
 /// The CA bundle cert-manager writes beside the leaf in the same Secret.
@@ -302,8 +376,18 @@ fn log_served_names(cert_file: &str) {
 /// endpoint, not to whichever lease it is serving under, and a reload between
 /// leases is a no-op that says so ([`crate::http::reload_compute`] finds no
 /// supervisor published).
-pub fn spawn(cert_file: &str, key_file: &str, compute_port: u16) {
+///
+/// With `staged`, the pair is first copied for the compute, before it starts, so
+/// it comes up on it. A failed copy is not fatal (the certificate may not be
+/// issued yet) and is retried on every poll.
+pub fn spawn(cert_file: &str, key_file: &str, compute_port: u16, staged: Option<Staged>) {
     let mut watched = Watched::new(cert_file, key_file);
+    if let Some(to) = &staged
+        && let Err(e) = to.copy_from(cert_file, key_file)
+    {
+        tracing::warn!("could not stage the compute's certificate yet: {e:#}");
+        watched.forget();
+    }
     log_served_names(cert_file);
     let spawned = std::thread::Builder::new()
         .name("compute-tls".into())
@@ -314,6 +398,18 @@ pub fn spawn(cert_file: &str, key_file: &str, compute_port: u16) {
                     continue;
                 };
                 tracing::info!("the compute's server certificate changed; reloading Postgres");
+                // A compute running as its own user reads copies, not the mount;
+                // the copies have to move first or the reload loads the old pair.
+                if let Some(to) = &staged {
+                    if let Err(e) = to.copy_from(&watched.cert_file, &watched.key_file) {
+                        tracing::warn!(
+                            "could not stage the renewed certificate for the compute; \
+                             retrying in {}s: {e:#}",
+                            POLL.as_secs()
+                        );
+                        continue;
+                    }
+                }
                 // A SIGHUP to `compute_ctl` reaches Postgres as
                 // `pg_reload_conf()`, which re-reads both files and keeps every
                 // open connection — the whole point of not restarting.
@@ -362,6 +458,53 @@ pub fn spawn(cert_file: &str, key_file: &str, compute_port: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn me() -> crate::identity::RunAs {
+        // SAFETY: getuid/getgid take no arguments and cannot fail.
+        unsafe {
+            crate::identity::RunAs {
+                uid: libc::getuid(),
+                gid: libc::getgid(),
+            }
+        }
+    }
+
+    #[test]
+    fn staging_copies_the_pair_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = camino_tempfile::tempdir().unwrap();
+        let src = dir.path().join("mounted.key");
+        std::fs::write(&src, b"secret key").unwrap();
+        let dst = dir.path().join("server.key");
+        stage_one(src.as_str(), &dst, me()).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"secret key");
+        assert_eq!(
+            std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    /// The directory is the compute user's, so a symlink at the destination is
+    /// replaced, never written through.
+    #[test]
+    fn staging_replaces_a_planted_symlink() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let dst = dir.path().join("server.key");
+        std::os::unix::fs::symlink(&victim, &dst).unwrap();
+        let src = dir.path().join("mounted.key");
+        std::fs::write(&src, b"new key").unwrap();
+        stage_one(src.as_str(), &dst, me()).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(
+            !std::fs::symlink_metadata(&dst)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&dst).unwrap(), b"new key");
+    }
 
     /// A self-signed certificate for an endpoint-shaped name.
     fn self_signed_pem() -> String {
@@ -539,6 +682,20 @@ mod tests {
         let mut w = Watched::new(cert.as_str(), key.as_str());
         std::fs::write(&cert, b"leaf-1").unwrap();
         std::fs::write(&key, b"key-1").unwrap();
+        assert!(w.poll().is_some());
+    }
+
+    /// A pair that was readable at boot but could not be staged is still a
+    /// change on the next poll, or the compute never gets it before a renewal.
+    #[test]
+    fn a_forgotten_pair_is_a_change_on_the_next_poll() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("tls.crt"), dir.path().join("tls.key"));
+        std::fs::write(&cert, b"leaf-1").unwrap();
+        std::fs::write(&key, b"key-1").unwrap();
+        let mut w = Watched::new(cert.as_str(), key.as_str());
+        assert!(w.poll().is_none());
+        w.forget();
         assert!(w.poll().is_some());
     }
 

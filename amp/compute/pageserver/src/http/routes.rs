@@ -774,6 +774,10 @@ pub fn make_router(
         }))
     }
 
+    if let Some(secret) = state.conf.http_control_secret.clone() {
+        router = router.middleware(endpoint::control_secret_middleware(secret));
+    }
+
     router = router.middleware(
         endpoint::add_response_header_middleware(
             "PAGESERVER_LAUNCH_TIMESTAMP",

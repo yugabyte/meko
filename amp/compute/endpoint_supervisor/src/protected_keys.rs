@@ -21,4 +21,5 @@ pub const PROTECTED_KEYS: &[&str] = &[
     "safekeeper_pg_addr",
     "control_plane_api",
     "yb_storage_conn",
+    "http_control_secret",
 ];

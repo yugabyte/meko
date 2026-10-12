@@ -665,6 +665,56 @@ pub fn auth_middleware<B: hyper::body::HttpBody + Send + Sync + 'static>(
     })
 }
 
+/// The header the endpoint supervisor proves itself with to its pageserver and
+/// safekeeper.
+pub const CONTROL_SECRET_HEADER: &str = "x-storage-control-secret";
+
+/// Refuses every request that is not a `GET`, `HEAD` or `OPTIONS` unless it
+/// carries `secret` in [`CONTROL_SECRET_HEADER`].
+///
+/// The secret is in a config file only the storage user can read. A process on
+/// the same loopback as another user (the compute, in a split endpoint) can reach
+/// the port but cannot change the daemon's state: push a write token, create a
+/// branch, flush, run GC or set a failpoint. Gated by method rather than by route
+/// so a state-changing route added later is covered without being listed.
+pub fn control_secret_middleware<B: hyper::body::HttpBody + Send + Sync + 'static>(
+    secret: utils::logging::SecretString,
+) -> Middleware<B, ApiError> {
+    let secret = std::sync::Arc::new(secret);
+    Middleware::pre(move |req: Request<Body>| {
+        let secret = secret.clone();
+        async move {
+            if matches!(
+                *req.method(),
+                hyper::Method::GET | hyper::Method::HEAD | hyper::Method::OPTIONS
+            ) {
+                return Ok(req);
+            }
+            let given = req
+                .headers()
+                .get(CONTROL_SECRET_HEADER)
+                .map(|v| v.as_bytes())
+                .unwrap_or_default();
+            if constant_time_eq(given, secret.get_contents().as_bytes()) {
+                Ok(req)
+            } else {
+                Err(ApiError::Forbidden(format!(
+                    "{} {} needs the control secret",
+                    req.method(),
+                    req.uri().path()
+                )))
+            }
+        }
+    })
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 pub fn add_response_header_middleware<B>(
     header: &str,
     value: &str,
@@ -717,6 +767,39 @@ mod tests {
     use routerify::RequestServiceBuilder;
 
     use super::*;
+
+    /// Reads pass; a state-changing request needs the exact secret.
+    #[tokio::test]
+    async fn the_control_secret_gates_everything_but_reads() {
+        let router = make_router()
+            .middleware(control_secret_middleware("s3cret".to_string().into()))
+            .get("/x", |_| async { Ok(Response::new(Body::empty())) })
+            .post("/x", |_| async { Ok(Response::new(Body::empty())) })
+            .build()
+            .unwrap();
+        let builder = RequestServiceBuilder::new(router).unwrap();
+        let mut service =
+            builder.build(SocketAddr::new(IpAddr::from_str("127.0.0.1").unwrap(), 80));
+        poll_fn(|ctx| service.poll_ready(ctx)).await.unwrap();
+
+        let req = |method: Method, secret: Option<&str>| {
+            let mut b = Request::builder().method(method).uri("/x");
+            if let Some(v) = secret {
+                b = b.header(CONTROL_SECRET_HEADER, v);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        for (r, want) in [
+            (req(Method::GET, None), 200),
+            (req(Method::POST, None), 403),
+            (req(Method::POST, Some("wrong!")), 403),
+            (req(Method::POST, Some("s3cre")), 403),
+            (req(Method::POST, Some("s3cret")), 200),
+        ] {
+            let got = service.call(r).await.unwrap().status().as_u16();
+            assert_eq!(got, want);
+        }
+    }
 
     #[tokio::test]
     async fn test_request_id_returned() {

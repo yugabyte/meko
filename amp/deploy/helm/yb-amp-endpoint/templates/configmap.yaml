@@ -28,6 +28,15 @@ data:
   COMPUTE_SSL_KEY_FILE: "/etc/amp/tls/compute/tls.key"
   {{- end }}
 
+  {{- if .Values.userSplit.enabled }}
+
+  # --- Storage and compute as separate Unix users ---
+  STORAGE_UID: {{ .Values.userSplit.storageUid | quote }}
+  STORAGE_GID: {{ .Values.userSplit.storageGid | quote }}
+  COMPUTE_UID: {{ .Values.userSplit.computeUid | quote }}
+  COMPUTE_GID: {{ .Values.userSplit.computeGid | quote }}
+  {{- end }}
+
   {{- if include "yb-amp-endpoint.hasPassword" . }}
   # Name of the env var carrying the YB password (injected from a Secret).
   YB_PASSWORD_ENV: "YB_PASSWORD"

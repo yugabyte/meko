@@ -202,6 +202,7 @@ keep working:
 | `safekeeper_connstrings` | `safekeeper_connstrings` | `yb_amp.safekeepers` GUC (required, non-empty, unique entries — Primary only) |
 | `storage_auth_token` | `storage_auth_token` | — (bearer auth to PS/SK when set; exported to Postgres as `YBAMP_AUTH_TOKEN`) |
 | `yb_storage_conn` | `yb_storage_conn` | the YB blob store LFC prewarm/offload reads and writes |
+| `lfc_state_url` | `lfc_state_url` | when set, LFC prewarm/offload goes through the supervisor's loopback service instead of `yb_storage_conn` (compute running as its own user; see `single-container-endpoint.md`) |
 
 The compute is **single-shard and branch-scoped**: storage is addressed by a single
 `BranchId`, with no shard or tenant/timeline identifiers anywhere in the spec or the

@@ -40,11 +40,43 @@ pub const SLOW_CONTROL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub fn client() -> &'static reqwest::blocking::Client {
     static C: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
     C.get_or_init(|| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(secret) = control_secret() {
+            let mut v =
+                reqwest::header::HeaderValue::from_str(secret).expect("the control secret is hex");
+            v.set_sensitive(true);
+            headers.insert(http_utils::endpoint::CONTROL_SECRET_HEADER, v);
+        }
         reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(5))
+            .default_headers(headers)
             .build()
-            .expect("a blocking client with only a timeout set cannot fail to build")
+            .expect("a blocking client with a timeout and headers cannot fail to build")
     })
+}
+
+static CONTROL_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Generates the secret the pageserver and safekeeper require on every request
+/// that changes their state, and that [`client`] then sends. Per process: the
+/// daemons are this process's children and read it from the tomls it renders.
+/// Must run before the first [`client`] call, which captures it.
+pub fn init_control_secret() -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut raw = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut raw))
+        .context("reading /dev/urandom for the control secret")?;
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    anyhow::ensure!(
+        CONTROL_SECRET.set(hex).is_ok(),
+        "the control secret was already set"
+    );
+    Ok(())
+}
+
+pub fn control_secret() -> Option<&'static str> {
+    CONTROL_SECRET.get().map(String::as_str)
 }
 
 /// A GET returning 2xx, which is what "up" means for the pod's HTTP services.

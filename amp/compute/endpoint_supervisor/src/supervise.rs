@@ -88,6 +88,10 @@ pub struct Service {
     argv: Vec<String>,
     cwd: Option<PathBuf>,
     env: Vec<(String, String)>,
+    /// Inherited variables this child must not see, such as the YugabyteDB
+    /// password for a child that runs as the compute user.
+    env_remove: Vec<String>,
+    run_as: Option<crate::identity::RunAs>,
     health: Option<HealthCheck>,
     child: Option<Child>,
     /// Restart instants inside the rolling window, oldest first.
@@ -116,6 +120,8 @@ impl Service {
             argv,
             cwd: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
+            run_as: None,
             health: None,
             child: None,
             restarts: VecDeque::new(),
@@ -138,6 +144,16 @@ impl Service {
 
     pub fn env(mut self, k: &str, v: &str) -> Self {
         self.env.push((k.to_string(), v.to_string()));
+        self
+    }
+
+    pub fn without_env(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.env_remove.extend(names);
+        self
+    }
+
+    pub fn run_as(mut self, id: Option<crate::identity::RunAs>) -> Self {
+        self.run_as = id;
         self
     }
 
@@ -167,8 +183,18 @@ impl Service {
         if let Some(dir) = &self.cwd {
             cmd.current_dir(dir);
         }
+        for k in &self.env_remove {
+            cmd.env_remove(k);
+        }
         for (k, v) in &self.env {
             cmd.env(k, v);
+        }
+        if let Some(id) = self.run_as {
+            use std::os::unix::process::CommandExt;
+            // std clears the supplementary groups when root sets a uid.
+            cmd.uid(id.uid).gid(id.gid);
+            // SAFETY: harden_child makes only async-signal-safe calls.
+            unsafe { cmd.pre_exec(crate::identity::harden_child) };
         }
         // Seeded at every spawn, not just the first: a child restarted mid-lease
         // arms itself before the supervisor can push anything over HTTP, and one
@@ -212,6 +238,14 @@ impl Service {
     #[cfg(test)]
     pub fn argv_for_test(&self) -> Vec<String> {
         self.argv.clone()
+    }
+
+    /// Who this child runs as, where, and without which inherited variables.
+    #[cfg(test)]
+    pub fn identity_for_test(
+        &self,
+    ) -> (Option<crate::identity::RunAs>, Option<&PathBuf>, &[String]) {
+        (self.run_as, self.cwd.as_ref(), &self.env_remove)
     }
 
     /// Whether this service holds a child handle, i.e. has been started and not

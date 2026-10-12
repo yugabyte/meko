@@ -105,6 +105,7 @@ pub struct Screened {
 pub fn screen(
     pg_bin: &Utf8Path,
     work_dir: &Utf8Path,
+    run_as: Option<crate::identity::RunAs>,
     settings: &BTreeMap<String, String>,
 ) -> Screened {
     let mut out = Screened::default();
@@ -115,7 +116,7 @@ pub fn screen(
     // operator's settings because the check itself broke would turn a missing
     // binary into a silently under-configured database, and unchecked is what
     // these were before this existed.
-    let probe = match probe_dir(work_dir) {
+    let probe = match probe_dir(work_dir, run_as) {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("cannot prepare a settings probe, rendering unchecked: {e:#}");
@@ -129,7 +130,7 @@ pub fn screen(
     // render because a temp directory would not delete would be worse.
     let _cleanup = Cleanup(probe.clone());
 
-    if accepts(&postgres, &probe, settings) {
+    if accepts(&postgres, &probe, run_as, settings) {
         out.keep = settings.clone();
         return out;
     }
@@ -137,7 +138,7 @@ pub fn screen(
     // hears about all three rather than fixing one and coming back for the next.
     for (name, value) in settings {
         let one = BTreeMap::from([(name.clone(), value.clone())]);
-        match verdict(&postgres, &probe, &one) {
+        match verdict(&postgres, &probe, run_as, &one) {
             Ok(()) => {
                 out.keep.insert(name.clone(), value.clone());
             }
@@ -160,7 +161,7 @@ pub fn screen(
     // them is the lesser harm: this leaves the endpoint exactly as it was before
     // this check existed, where blanking an operator's configuration on a guess
     // would be a new way to break it.
-    if !out.keep.is_empty() && !accepts(&postgres, &probe, &out.keep) {
+    if !out.keep.is_empty() && !accepts(&postgres, &probe, run_as, &out.keep) {
         tracing::error!(
             settings = ?out.keep.keys().collect::<Vec<_>>(),
             "Postgres refuses these settings together though each is valid alone; \
@@ -182,16 +183,49 @@ pub fn screen(
 /// a verdict of "acceptable" for a set that was never tested is how a fatal
 /// setting gets written. That is the failure this module exists to prevent, so it
 /// must not be reintroduced by the mechanism preventing it.
-fn probe_dir(work_dir: &Utf8Path) -> Result<Utf8PathBuf> {
+///
+/// With the users split, Postgres refuses to run as root, so the probe runs as
+/// the compute user. The directory stays this process's and is only made
+/// readable: `postgres -C` reads the config and exits before it checks the data
+/// directory. Nothing on the path may be writable by the compute, which would
+/// otherwise plant a symlink there and have this process (root) write through it.
+fn probe_dir(work_dir: &Utf8Path, run_as: Option<crate::identity::RunAs>) -> Result<Utf8PathBuf> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let parent = work_dir.join("settings-probe");
+    std::fs::create_dir_all(&parent).with_context(|| format!("create {parent}"))?;
+    if run_as.is_some() {
+        for d in [work_dir, parent.as_path()] {
+            only_ours(d)?;
+        }
+    }
     // Process id as well as the counter: a restarted supervisor reuses run_dir,
     // and a directory left behind by a killed one must not be mistaken for ours.
-    let dir = work_dir
-        .join("settings-probe")
-        .join(format!("{}-{unique}", std::process::id()));
-    std::fs::create_dir_all(&dir).with_context(|| format!("create {dir}"))?;
+    let dir = parent.join(format!("{}-{unique}", std::process::id()));
+    std::fs::create_dir(&dir).with_context(|| format!("create {dir}"))?;
+    if run_as.is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("chmod {dir}"))?;
+    }
     Ok(dir)
+}
+
+/// `dir` is a real directory owned by this process's user and writable by no one
+/// else.
+fn only_ours(dir: &Utf8Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(dir).with_context(|| format!("stat {dir}"))?;
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let euid = unsafe { libc::geteuid() };
+    anyhow::ensure!(
+        m.file_type().is_dir() && m.uid() == euid && m.mode() & 0o022 == 0,
+        "{dir} must be a directory owned by uid {euid} and writable by no one else \
+         (uid {}, mode {:o})",
+        m.uid(),
+        m.mode() & 0o7777
+    );
+    Ok(())
 }
 
 /// Whether Postgres parses a config file made of exactly `settings`.
@@ -202,8 +236,13 @@ fn probe_dir(work_dir: &Utf8Path) -> Result<Utf8PathBuf> {
 /// answers about a different file than the one that gets written — and a value
 /// ending in a backslash is the case that bites, because `'foo\'` escapes its own
 /// closing quote and turns a valid setting into a refusal.
-fn accepts(postgres: &Utf8Path, probe: &Utf8Path, settings: &BTreeMap<String, String>) -> bool {
-    verdict(postgres, probe, settings).is_ok()
+fn accepts(
+    postgres: &Utf8Path,
+    probe: &Utf8Path,
+    run_as: Option<crate::identity::RunAs>,
+    settings: &BTreeMap<String, String>,
+) -> bool {
+    verdict(postgres, probe, run_as, settings).is_ok()
 }
 
 /// [`accepts`], keeping what Postgres said when it refused.
@@ -213,6 +252,7 @@ fn accepts(postgres: &Utf8Path, probe: &Utf8Path, settings: &BTreeMap<String, St
 fn verdict(
     postgres: &Utf8Path,
     probe: &Utf8Path,
+    run_as: Option<crate::identity::RunAs>,
     settings: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     let body: String = settings
@@ -223,14 +263,27 @@ fn verdict(
         })
         .collect();
     let conf = probe.join("postgresql.conf");
-    if let Err(e) = std::fs::write(&conf, body) {
+    let written = std::fs::write(&conf, body).and_then(|()| match run_as {
+        // Readable by the compute user whatever this process's umask is.
+        Some(_) => {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o644))
+        }
+        None => Ok(()),
+    });
+    if let Err(e) = written {
         tracing::warn!("cannot write the settings probe, treating them as acceptable: {e:#}");
         return Ok(());
     }
-    match Command::new(postgres)
-        .args(["-D", probe.as_str(), "-C", ANY_KNOWN_SETTING])
-        .output()
-    {
+    let mut cmd = Command::new(postgres);
+    cmd.args(["-D", probe.as_str(), "-C", ANY_KNOWN_SETTING]);
+    if let Some(id) = run_as {
+        use std::os::unix::process::CommandExt;
+        cmd.uid(id.uid).gid(id.gid);
+        // SAFETY: harden_child makes only async-signal-safe calls.
+        unsafe { cmd.pre_exec(crate::identity::harden_child) };
+    }
+    match cmd.output() {
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stderr);
@@ -274,6 +327,52 @@ mod tests {
             .collect()
     }
 
+    const SPLIT: Option<crate::identity::RunAs> = Some(crate::identity::RunAs {
+        uid: 1001,
+        gid: 1001,
+    });
+
+    fn private_dir() -> camino_tempfile::Utf8TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let d = camino_tempfile::tempdir().unwrap();
+        std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        d
+    }
+
+    /// The probe directory is this process's, readable by the compute, so the
+    /// compute has nothing it can replace.
+    #[test]
+    fn a_split_probe_dir_is_ours_and_readable() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let work = private_dir();
+        let dir = probe_dir(work.path(), SPLIT).unwrap();
+        let m = std::fs::symlink_metadata(&dir).unwrap();
+        assert_eq!(m.uid(), unsafe { libc::geteuid() });
+        assert_eq!(m.permissions().mode() & 0o777, 0o755);
+    }
+
+    /// A planted symlink is refused rather than followed: following it is how
+    /// the compute would get this process to write wherever it points.
+    #[test]
+    fn a_split_probe_dir_refuses_a_symlinked_parent() {
+        let work = private_dir();
+        let elsewhere = camino_tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), work.path().join("settings-probe")).unwrap();
+        let err = probe_dir(work.path(), SPLIT).unwrap_err();
+        assert!(err.to_string().contains("must be a directory"), "{err:#}");
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    /// A work directory others can write lets them swap the parent after the
+    /// check, so it is refused too.
+    #[test]
+    fn a_split_probe_dir_refuses_a_shared_work_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let work = private_dir();
+        std::fs::set_permissions(work.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(probe_dir(work.path(), SPLIT).is_err());
+    }
+
     fn tmp(name: &str) -> Utf8PathBuf {
         let dir = Utf8PathBuf::try_from(std::env::temp_dir())
             .expect("temp dir is utf8")
@@ -288,6 +387,7 @@ mod tests {
         let got = screen(
             Utf8Path::new("/nonexistent/bin"),
             &tmp("guc-empty"),
+            None,
             &BTreeMap::new(),
         );
         assert_eq!(got, Screened::default());
@@ -303,6 +403,7 @@ mod tests {
         let got = screen(
             Utf8Path::new("/nonexistent/bin"),
             &tmp("guc-nopg"),
+            None,
             &settings,
         );
         assert_eq!(got.keep, settings);
@@ -338,6 +439,7 @@ mod tests {
             let got = screen(
                 &bin,
                 &tmp("guc-typo"),
+                None,
                 &set(&[("work_mem", "64MB"), ("work_memm", "5MB")]),
             );
             assert_eq!(
@@ -358,6 +460,7 @@ mod tests {
             let got = screen(
                 &bin,
                 &tmp("guc-badvalue"),
+                None,
                 &set(&[("work_mem", "banana"), ("maintenance_work_mem", "128MB")]),
             );
             assert_eq!(
@@ -381,7 +484,7 @@ mod tests {
                 ("search_path", r"public, a\b"),
                 ("archive_command", r"cp %p /wal/%f\"),
             ]);
-            let got = screen(&bin, &tmp("guc-backslash"), &settings);
+            let got = screen(&bin, &tmp("guc-backslash"), None, &settings);
             assert!(
                 got.refused.is_empty(),
                 "a backslash in a value was refused: {:?}",
@@ -412,7 +515,7 @@ mod tests {
                     } else {
                         set(&[("work_memm", "5MB")])
                     };
-                    let got = screen(&bin, &dir, &settings);
+                    let got = screen(&bin, &dir, None, &settings);
                     (i, got)
                 }));
             }
@@ -446,6 +549,7 @@ mod tests {
             let got = screen(
                 &bin,
                 &tmp("guc-many"),
+                None,
                 &set(&[
                     ("work_memm", "5MB"),              // typo
                     ("work_mem", "banana"),            // real name, unusable value
@@ -491,7 +595,7 @@ mod tests {
                 ("amp_probe.nothing_applies_this", "1"),
                 ("pg_stat_statements.max", "5000"),
             ]);
-            let got = screen(&bin, &tmp("guc-dotted"), &settings);
+            let got = screen(&bin, &tmp("guc-dotted"), None, &settings);
             assert!(got.refused.is_empty(), "refused {:?}", got.refused);
             assert_eq!(got.keep, settings);
         }
@@ -502,7 +606,12 @@ mod tests {
         #[test]
         fn a_compiled_in_setting_is_refused() {
             let Some(bin) = pg_bin() else { return };
-            let got = screen(&bin, &tmp("guc-internal"), &set(&[("block_size", "8192")]));
+            let got = screen(
+                &bin,
+                &tmp("guc-internal"),
+                None,
+                &set(&[("block_size", "8192")]),
+            );
             assert_eq!(
                 got.refused,
                 vec![NotApplied {
@@ -522,6 +631,7 @@ mod tests {
             let got = screen(
                 &bin,
                 &tmp("guc-quote"),
+                None,
                 &set(&[("search_path", "public, o'brien")]),
             );
             assert!(got.refused.is_empty(), "refused {:?}", got.refused);
@@ -537,7 +647,7 @@ mod tests {
                 ("post_auth_delay", "0"),
                 ("log_min_duration_statement", "250ms"),
             ]);
-            let got = screen(&bin, &tmp("guc-valid"), &settings);
+            let got = screen(&bin, &tmp("guc-valid"), None, &settings);
             assert!(got.refused.is_empty(), "refused {:?}", got.refused);
             assert_eq!(got.keep, settings);
         }

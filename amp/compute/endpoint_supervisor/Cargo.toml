@@ -19,6 +19,11 @@ path = "src/bin/dump_config_keys.rs"
 
 [dependencies]
 anyhow.workspace = true
+# The LFC state service: serves compute_ctl's prewarm blob with the storage
+# credentials when the compute runs as its own user.
+bytes.workspace = true
+futures.workspace = true
+remote_storage.workspace = true
 camino.workspace = true
 # Only to type-check the rendered compute spec against what compute_ctl reads.
 compute_api.workspace = true
@@ -39,7 +44,7 @@ routerify.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tokio-util.workspace = true
 safekeeper_api.workspace = true
-tokio = { workspace = true, features = ["rt", "time", "net", "sync"] }
+tokio = { workspace = true, features = ["rt", "time", "net", "sync", "io-util"] }
 toml_edit.workspace = true
 tracing.workspace = true
 # The write fence: the token store client, the wire types, and the deadline
@@ -59,7 +64,4 @@ camino-tempfile.workspace = true
 # A real certificate for the expiry gauge test, generated rather than checked in
 # so a fixture cannot expire and fail the suite on a date nobody chose.
 rcgen.workspace = true
-# The compute spec's storage connection is deserialized into the type compute_ctl
-# parses it with, so a wrong shape fails here rather than at the compute's startup.
-remote_storage.workspace = true
 serde = { workspace = true, features = ["derive"] }

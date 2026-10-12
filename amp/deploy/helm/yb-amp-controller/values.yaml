@@ -189,6 +189,11 @@ controller:
     # OFF for an ACME issuer, which cannot validate a .svc.cluster.local name and
     # fails the whole order over its presence.
     computeTlsIncludeServiceDns: true
+    # -- Run each endpoint's pageserver and safekeeper and its compute as
+    # different Unix users (the endpoint chart's userSplit), so a compromised
+    # Postgres cannot read the YugabyteDB client key. Needs the foundation to
+    # enforce client certificates.
+    userSplit: false
     # -- Issuer for computeTlsMode=issue. Separate from tls.issuerRef, which is
     # the private CA the stack's internal certificates come from: the client-facing
     # certificate is the one that may need a public CA instead.

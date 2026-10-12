@@ -163,6 +163,12 @@ pub struct SafekeeperConfigToml {
     /// the escape hatch for a fencing bug, not an operating mode — an unfenced
     /// safekeeper has nothing stopping a second writer on its branch.
     pub require_write_token: bool,
+
+    /// When set, every HTTP request other than `GET`/`HEAD`/`OPTIONS` must carry
+    /// it in `x-storage-control-secret`. The endpoint supervisor sets it when the
+    /// compute runs as a different user, so the compute cannot change this
+    /// process's state through the loopback it shares.
+    pub http_control_secret: Option<String>,
 }
 
 impl Default for SafekeeperConfigToml {
@@ -200,6 +206,7 @@ impl Default for SafekeeperConfigToml {
             force_metric_collection_on_scrape: true,
             dev: false,
             require_write_token: true,
+            http_control_secret: None,
         }
     }
 }

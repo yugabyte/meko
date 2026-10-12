@@ -1179,9 +1179,11 @@ name = "endpoint_supervisor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "camino",
  "camino-tempfile",
  "compute_api",
+ "futures",
  "http-utils",
  "hyper 0.14.30",
  "libc",

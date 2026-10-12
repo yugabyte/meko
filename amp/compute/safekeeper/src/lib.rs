@@ -102,6 +102,8 @@ pub struct SafeKeeperConf {
     pub pg_auth: Option<Arc<JwtAuth>>,
     pub pg_tenant_only_auth: Option<Arc<JwtAuth>>,
     pub http_auth: Option<Arc<SwappableJwtAuth>>,
+    /// See `SafekeeperConfigToml::http_control_secret`.
+    pub http_control_secret: Option<SecretString>,
     /// JWT token to connect to other safekeepers with.
     pub sk_auth_token: Option<SecretString>,
     pub current_thread_runtime: bool,
@@ -155,6 +157,7 @@ impl SafeKeeperConf {
             pg_auth: None,
             pg_tenant_only_auth: None,
             http_auth: None,
+            http_control_secret: None,
             sk_auth_token: None,
             heartbeat_timeout: Duration::new(5, 0),
             max_timeline_disk_usage_bytes: defaults::DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,

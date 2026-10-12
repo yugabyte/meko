@@ -25,6 +25,10 @@ speaks (WAL push/stream); see
   `check_permission()` (`compute/safekeeper/src/auth.rs`): `SafekeeperData`
   tokens pass everywhere; `Tenant` tokens pass only branch-scoped routes for
   their own `branch_id`; every other scope is rejected.
+- **Control secret**: with `http_control_secret` in `safekeeper.toml`, every
+  request other than `GET`/`HEAD`/`OPTIONS` must carry it in
+  `x-storage-control-secret`, or gets 403. Same mechanism and purpose as the
+  pageserver's ([`pageserver-apis.md`](pageserver-apis.md#auth-model)).
 
 `make_router()` is the source of truth for the route set — it registers
 exactly the routes tabled below. The `openapi_spec.yaml` file next to the

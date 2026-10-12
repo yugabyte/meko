@@ -59,6 +59,14 @@ Routes exempt from auth even when JWT is enabled
 (`State::allowlist_routes`): `/v1/status`, `/v1/doc`, `/swagger.yml`,
 `/metrics`, `/profile/cpu`, `/profile/heap`.
 
+Independently of JWT, `http_control_secret` in `pageserver.toml` makes every
+request other than `GET`/`HEAD`/`OPTIONS` carry that value in
+`x-storage-control-secret`, or get 403 (`control_secret_middleware`). The
+endpoint supervisor sets it when the compute runs as its own user (see
+[`single-container-endpoint.md`](single-container-endpoint.md)), so the compute
+can reach the port over the shared loopback but cannot change state. Gated by
+method, so a state-changing route added later is covered without being listed.
+
 ### Status / health / introspection
 
 | Method | Path | Behavior |
