@@ -4,7 +4,7 @@ import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
 /**
  * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
@@ -75,6 +75,21 @@ export function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
   }
 }
 
+/**
+ * The button Ctrl+Enter (⌘+Enter) presses in a dialog: the primary submit button of the form being
+ * typed in, else the footer's primary button (a form whose action sits in the footer), else one marked
+ * `data-submit`. A form whose only submit isn't primary (Turn off two-factor) gets none.
+ */
+export function submitButton(root: ParentNode, focused: Element | null): HTMLButtonElement | null {
+  const form = focused?.closest('form');
+  const own = form?.querySelector<HTMLButtonElement>('button.primary:not([type="button"])');
+  if (own) return own;
+  const foot = root.querySelector<HTMLButtonElement>('.dialog-ft button.primary');
+  if (foot) return foot;
+  if (form?.querySelector('button:not([type="button"])')) return null;
+  return root.querySelector<HTMLButtonElement>('button.primary[data-submit]');
+}
+
 export function Dialog({
   title,
   onClose,
@@ -95,14 +110,22 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Focus the first control once on open; Escape closes; Tab stays inside.
+  // Focus the first control once on open; Escape closes; Ctrl+Enter presses the main button, as a click would (not while it's disabled); Tab stays inside.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         closeRef.current();
       }
-      trapTab(e, ref.current);
+      const root = ref.current;
+      if (isSubmitKey(e) && root && e.target instanceof Element && root.contains(e.target)) {
+        const button = submitButton(root, e.target);
+        if (button) {
+          e.preventDefault();
+          button.click();
+        }
+      }
+      trapTab(e, root);
     };
     window.addEventListener('keydown', onKey, true);
     const root = ref.current;

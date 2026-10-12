@@ -155,6 +155,12 @@ full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) sel
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
 
+In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would (nothing while it's
+disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). That's the
+primary submit button of the form being typed in, else the dialog footer's primary button, else
+one marked `data-submit` (Answer, in AgentK is asking). A form whose only submit isn't primary, like
+Turn off two-factor, gets none.
+
 To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
 Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it
 runs on, which is the browser's only when both are on one computer, so the page uploads each image
