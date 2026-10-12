@@ -4,7 +4,7 @@ import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, mekoDatapackUrl } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
 /**
  * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
@@ -75,6 +75,18 @@ export function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
   }
 }
 
+/**
+ * The button Ctrl+Enter (⌘+Enter) presses in a dialog: the primary submit button of the form being
+ * typed in; none if that form's submit isn't primary (Turn off two-factor); else the footer's primary
+ * button (a form whose action sits in the footer); else a `btn primary` marked `data-submit`.
+ */
+export function submitButton(root: ParentNode, focused: Element | null): HTMLButtonElement | null {
+  const form = focused?.closest('form');
+  const submit = form?.querySelector<HTMLButtonElement>('button:not([type="button"])');
+  if (submit) return submit.classList.contains('primary') ? submit : null;
+  return root.querySelector<HTMLButtonElement>('.dialog-ft button.primary') ?? root.querySelector<HTMLButtonElement>('button.primary[data-submit]');
+}
+
 export function Dialog({
   title,
   onClose,
@@ -113,7 +125,21 @@ export function Dialog({
   }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cx('dialog', wide && 'wide', className)} role="dialog" aria-modal="true" ref={ref}>
+      <div
+        className={cx('dialog', wide && 'wide', className)}
+        role="dialog"
+        aria-modal="true"
+        ref={ref}
+        onKeyDown={(e) => {
+          // Ctrl+Enter presses the main button, as a click would (nothing while it's disabled). Bubbling
+          // here, after the field's own handler: a field that takes Enter itself (Another PR's Find) keeps it.
+          if (!isSubmitKey(e.nativeEvent) || !(e.target instanceof Element)) return;
+          const button = submitButton(e.currentTarget, e.target);
+          if (!button) return;
+          e.preventDefault();
+          button.click();
+        }}
+      >
         <div className="dialog-hd">
           <h2>{title}</h2>
           {aside}
