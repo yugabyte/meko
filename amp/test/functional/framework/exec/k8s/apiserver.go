@@ -27,3 +27,10 @@ func apiServerNeverDialed(out string) bool {
 	}
 	return false
 }
+
+const kubeletDialAttempts = 4
+
+// The API server could not reach the node's kubelet, so the exec never started.
+func kubeletUnreachable(stderr string) bool {
+	return strings.HasPrefix(strings.TrimSpace(stderr), "Error from server: error dialing backend")
+}

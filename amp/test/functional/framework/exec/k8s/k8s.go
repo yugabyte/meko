@@ -192,11 +192,23 @@ func (k *Kubectl) RunStdin(ctx context.Context, stdin io.Reader, cmd string) (ex
 	}
 	extra = append(extra, "--", "sh", "-c", cmd)
 	argv := append(k.base(), extra...)
-	res, err := k.run(ctx, stdin, argv)
-	if err != nil {
-		return res, fmt.Errorf("kubectl exec %s: %w", k.cfg.Pod, err)
+	for attempt := 1; ; attempt++ {
+		res, err := k.run(ctx, stdin, argv)
+		if err != nil {
+			return res, fmt.Errorf("kubectl exec %s: %w", k.cfg.Pod, err)
+		}
+		if stdin != nil || attempt >= kubeletDialAttempts || !kubeletUnreachable(res.Stderr) {
+			return res, nil
+		}
+		if k.logf != nil {
+			k.logf("kubectl exec %s: %s; retrying (attempt %d/%d)", k.cfg.Pod, strings.TrimSpace(res.Stderr), attempt, kubeletDialAttempts)
+		}
+		select {
+		case <-ctx.Done():
+			return res, fmt.Errorf("kubectl exec %s: %s: %w", k.cfg.Pod, strings.TrimSpace(res.Stderr), ctx.Err())
+		case <-time.After(time.Duration(attempt) * 3 * time.Second):
+		}
 	}
-	return res, nil
 }
 
 // Copy uploads localPath into the bound pod via `kubectl cp`.

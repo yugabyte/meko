@@ -987,7 +987,7 @@ func TestProvisionYBAPartialFailureTearsYBADown(t *testing.T) {
 	}
 }
 
-const lostReplyErr = "yba port-forward broke mid-request; POST /api/v1/customers/c1/universes/clusters may already have been applied and is not replayed: EOF"
+var lostReplyErr = &ybastack.NotReplayedError{Method: http.MethodPost, Path: "/api/v1/customers/c1/universes/clusters", Err: io.EOF}
 
 // A create whose reply the dead port-forward swallowed still built the universe;
 // setup adopts it by name and waits on the create task that locked it.
@@ -996,7 +996,7 @@ func TestProvisionYBAAdoptsAUniverseWhoseCreateReplyWasLost(t *testing.T) {
 	st := &fakeStack{ev: ev, info: ybastack.Info{URL: "http://yba", CustomerUUID: "c1", APIToken: "tok"}}
 	uni := liveUniverse()
 	uni.UniverseDetails.UpdatingTaskUUID = "t-lost-reply"
-	pr := &fakeProvisioner{ev: ev, universe: uni, universeID: "u-1", createErr: fmt.Errorf(lostReplyErr)}
+	pr := &fakeProvisioner{ev: ev, universe: uni, universeID: "u-1", createErr: lostReplyErr}
 	p := provisionYBAProvider(st, pr)
 
 	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
@@ -1025,7 +1025,7 @@ func TestProvisionYBADoesNotAdoptAUniverseNoTaskLocked(t *testing.T) {
 	st := &fakeStack{ev: ev, info: ybastack.Info{URL: "http://yba", CustomerUUID: "c1", APIToken: "tok"}}
 	uni := liveUniverse()
 	uni.UniverseDetails.UpdateSucceeded = true
-	pr := &fakeProvisioner{ev: ev, universe: uni, universeID: "u-1", createErr: fmt.Errorf(lostReplyErr)}
+	pr := &fakeProvisioner{ev: ev, universe: uni, universeID: "u-1", createErr: lostReplyErr}
 	p := provisionYBAProvider(st, pr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

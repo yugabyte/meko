@@ -31,8 +31,9 @@ func init() {
 		Params:      []string{"functional.failed_create_reclaim", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		// The create fails only once helm gives up: --wait --timeout is the
 		// controller's deploy timeout (35m on the QA control plane), and 51m was
-		// observed before the task settled.
-		Timeout: 120 * time.Minute,
+		// observed before the task settled. A controller pod replaced mid-deploy
+		// reclaims the task and restarts that wait, which took 85m once.
+		Timeout: 150 * time.Minute,
 		Run:     runAmpFailedCreateReclaim,
 	})
 }

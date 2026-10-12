@@ -857,9 +857,9 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 // silence — a failing readiness probe is reported only as an event. Neither
 // echoes the env block holding the backing DSN the way `kubectl describe` would,
 // and a password that reached the config joins the Masker, which every sink
-// applies to this string (AGENTS.md §7). Runs on a short independent deadline so
-// a cancelled/expired parent ctx still yields evidence; returns "" (never an
-// error) when nothing could be read.
+// applies to this string (AGENTS.md §7). Runs on short independent deadlines
+// (60s, then 45s for the backing's sessions) so a cancelled/expired parent ctx
+// still yields evidence; returns "" (never an error) when nothing could be read.
 func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	defer cancel()
@@ -887,7 +887,50 @@ func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
 		fmt.Fprintf(&b, "\nnamespace events unavailable: %v\n", err)
 	}
 	b.WriteString(a.controllerCrashLogs(dctx))
+	sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer scancel()
+	b.WriteString(a.backingSessions(sctx))
 	return b.String()
+}
+
+// backingSessions lists every session on the storage database, tserver by
+// tserver: a controller that never logs is stuck in its connect or its
+// migrations, and only the backing can say which.
+func (a *App) backingSessions(ctx context.Context) string {
+	ns := strings.TrimSpace(a.cfg.Backing.KubeNamespace)
+	if ns == "" {
+		return ""
+	}
+	kube := a.kube.InNamespace(ns)
+	var b strings.Builder
+	for _, sel := range tserverServiceSelectors {
+		lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		names, err := kube.GetSelector(lctx, "pod", sel.key+"="+sel.value, "{.items[*].metadata.name}")
+		cancel()
+		if err != nil || strings.TrimSpace(names) == "" {
+			continue
+		}
+		for _, pod := range strings.Fields(names) {
+			qctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			res, err := kube.ForPod(pod, backingContainer).Run(qctx, storageSessionsScript(a.storageDBName()))
+			cancel()
+			switch {
+			case err != nil:
+				fmt.Fprintf(&b, "%s: %v\n", pod, err)
+			case res.ExitCode != 0:
+				fmt.Fprintf(&b, "%s: exited %d: %s\n", pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+			case strings.TrimSpace(res.Stdout) == "":
+				fmt.Fprintf(&b, "%s: none\n", pod)
+			default:
+				fmt.Fprintf(&b, "%s:\n%s\n", pod, strings.TrimSpace(res.Stdout))
+			}
+		}
+		break
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nsessions on %s (pid|app|client|state|wait type|wait event|connected for|in query for|query):\n%s", a.storageDBName(), b.String())
 }
 
 // controllerCrashLogs appends what the controller actually said before it died.

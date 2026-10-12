@@ -230,6 +230,19 @@ type revivingTransport struct {
 	logf       func(string, ...any)
 }
 
+// NotReplayedError is a mutation the broken forward may or may not have
+// delivered; only the caller can check which.
+type NotReplayedError struct {
+	Method, Path string
+	Err          error
+}
+
+func (e *NotReplayedError) Error() string {
+	return fmt.Sprintf("yba port-forward broke mid-request; %s %s may already have been applied and is not replayed: %v", e.Method, e.Path, e.Err)
+}
+
+func (e *NotReplayedError) Unwrap() error { return e.Err }
+
 func (t *revivingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	res, err := t.attempt(req, false)
 	if err == nil || !isDeadForward(err) {
@@ -244,8 +257,7 @@ func (t *revivingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		return res, core.AsEnvFailure(fmt.Errorf("%w (the yba port-forward is down and this request's body cannot be replayed)", err))
 	}
 	if !replayable(req.Method, err) {
-		return res, core.AsEnvFailure(fmt.Errorf("yba port-forward broke mid-request; %s %s may already have been applied and is not replayed: %w",
-			req.Method, req.URL.Path, err))
+		return res, core.AsEnvFailure(&NotReplayedError{Method: req.Method, Path: req.URL.Path, Err: err})
 	}
 	for attempt := 1; attempt <= reforwardAttempts; attempt++ {
 		if t.logf != nil {

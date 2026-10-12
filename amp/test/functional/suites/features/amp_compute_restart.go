@@ -268,5 +268,14 @@ func (r *kubeComputeRoller) deletePod(ctx context.Context, name string) error {
 // after the pod was rolled. It is a convergence hint; the true readiness gate is
 // the pg connection (which polls SELECT 1) the caller makes right after.
 func (r *kubeComputeRoller) waitReady(ctx context.Context, endpointID string) error {
+	// Right after a delete the Deployment still reads Available, and the
+	// replacement pod can take seconds to appear.
+	sel := r.instanceSelector(endpointID)
+	if err := pollUntil(ctx, r.timeout, 2*time.Second, func() (bool, error) {
+		running, err := r.kube.GetSelector(ctx, "pod", sel, `{.items[?(@.status.phase=="Running")].metadata.name}`)
+		return err == nil && strings.TrimSpace(running) != "", nil
+	}); err != nil {
+		return fmt.Errorf("no Running pod for endpoint %s (selector %q): %w", endpointID, sel, err)
+	}
 	return ampstack.WaitEndpointWorkloadReady(ctx, r.kube, endpointID, r.timeout)
 }

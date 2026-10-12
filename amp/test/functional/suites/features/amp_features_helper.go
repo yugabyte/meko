@@ -282,10 +282,19 @@ func createEndpointReq(ctx context.Context, cl ampCtl, poolID, projID, branchID 
 			}
 			return controller.Endpoint{}, classifyEndpointCreate(ctx, cl, projID, lastErr)
 		}
-		if ep, ok := lastEndpoint(ctx, cl, poolID, projID, branchID); ok {
-			return ep, nil
+		var ep controller.Endpoint
+		var listErr error
+		if err := pollUntil(ctx, 30*time.Second, 3*time.Second, func() (bool, error) {
+			eps, err := cl.ListAllEndpoints(ctx, poolID, projID, branchID)
+			if listErr = err; err != nil || len(eps) == 0 {
+				return false, nil
+			}
+			ep = eps[len(eps)-1]
+			return true, nil
+		}); err != nil {
+			return controller.Endpoint{}, fmt.Errorf("endpoint create on branch %s succeeded but the branch lists no endpoint (last list error: %v): %w", branchID, listErr, err)
 		}
-		return controller.Endpoint{}, fmt.Errorf("endpoint create returned no endpoint on branch %s", branchID)
+		return ep, nil
 	}
 	return controller.Endpoint{}, fmt.Errorf("create endpoint failed after retries: %w", lastErr)
 }

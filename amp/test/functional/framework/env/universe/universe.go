@@ -853,6 +853,19 @@ func (p *Provider) createUniverse(ctx context.Context, cp *ybaControlPlane, uniS
 	// DURING the wait, so a wait/task failure must still reap them.
 	adopted := false
 	ref, err := cl.CreateUniverseFromSpec(ctx, uniSpec)
+	var notReplayed *ybastack.NotReplayedError
+	if err != nil && errors.As(err, &notReplayed) {
+		// YBA refuses a second universe of the same name, so resending a create
+		// that did land falls through to the adopt below.
+		if u, gerr := cl.GetUniverse(ctx, universeName); gerr != nil || u.UniverseUUID == "" {
+			p.log("provision_yba: create universe %q lost its forward (%v) and is not confirmed listed (%v); sending the create again", universeName, err, gerr)
+			if resent, err2 := cl.CreateUniverseFromSpec(ctx, uniSpec); err2 == nil {
+				ref, err = resent, nil
+			} else {
+				err = fmt.Errorf("%w; resent create: %v", err, err2)
+			}
+		}
+	}
 	if err != nil {
 		// A create whose reply was lost (the yba port-forward died mid-POST) may
 		// still have landed, and the name is this run's alone: adopt the universe

@@ -168,6 +168,11 @@ else
 fi`, dbName)
 }
 
+func storageSessionsScript(dbName string) string {
+	return fmt.Sprintf(`YSQLSH="$(command -v ysqlsh || echo /home/yugabyte/bin/ysqlsh)"
+"$YSQLSH" -h "$(hostname -f)" -p 5433 -U yugabyte -d yugabyte -tAc "SELECT pid, application_name, client_addr, state, wait_event_type, wait_event, now() - backend_start, now() - query_start, left(query, 200) FROM pg_stat_activity WHERE datname = '%s'"`, dbName)
+}
+
 // selectVersionScript reads the backing's own `select version()` from inside a
 // YB pod. Same ysqlsh resolution and advertise-address rules as
 // createStorageDBScript.
