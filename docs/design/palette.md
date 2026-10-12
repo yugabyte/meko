@@ -69,9 +69,9 @@ Dark mode to Code and add tests", "which sessions need me?". Its placeholder rot
 through what it takes (asking, commands, sessions, GitHub links), on every screen size; with
 reduced motion it doesn't rotate and names them all at once.
 
-**Asking.** Any text that isn't a GitHub link gets an **Ask AgentK: "…"** item, last in the list.
-A sentence matches no command (the filter needs every word), so the item is usually alone and
-Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
+**Asking.** Any text that isn't a GitHub link gets an **Ask AgentK: "…"** item, after the commands
+that match and before the [sessions found](#finding-a-session). A sentence matches no command (the
+filter needs every word), so the item comes first and Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
 the exchange so far (the last 10, kept only while the palette is open) and what's on screen to
 `POST /api/ask-agentk` (`src/server/askagentk.ts`). Esc (or **Cancel**) while AgentK thinks cancels the ask and
 puts the text back; closing the palette cancels it too, and the server stops Claude when the
@@ -122,12 +122,15 @@ project or branch. Once typing pauses (250 ms) on two characters or more, the pa
 `GET /api/sessions/search` (`src/server/sessionsearch.ts`) for the sessions the text is about: in the
 project on screen, or every open project from elsewhere. The server reads each session's name, PR
 number and title, task (its first prompt), branch and design markdown from `state.db`, archived
-sessions included, and ranks them with `rankSessions()`:
+sessions included, and ranks them with `rankSessions()`. A Review a PR session has its PR's title from
+the start; a task's own PR gets it from the review poll (`pollReview()` in `lifecycle.ts`, which keeps
+`sessions.pr_title` current), so a task whose PR was never polled is found by its PR number only.
 
 - The words are the text split on anything but letters and digits, lowercased, without one-letter
   words and stop words ("the", "session", "find"…), unless that leaves none.
-- A word matches at the start of a word in a field; a word over five letters drops its last two
-  letters first, so "searching" finds "search" and "searches".
+- A word matches at the start of a word in a field, without its ending first (`stem()`: -ing, -ed,
+  -es or -s, and a doubled last consonant after one, keeping three letters at least), so
+  "searching" finds "search" and "searches", "rotating" finds "rotate", and "logging" finds "log".
 - A session needs at least half the words. It ranks by how many it has, then by where: each word
   counts for the field that counts most among those having it (name 8, PR 6, task 5, branch 3,
   design 2). Then open before closed, then newest. At most 20 come back.

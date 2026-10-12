@@ -1809,7 +1809,7 @@ export type TermServerMessage =
 //        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
 //        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
-//        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters)
+//        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters or given twice, or two `project`s)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a

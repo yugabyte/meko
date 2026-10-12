@@ -32,10 +32,22 @@ export function searchTerms(q: string): string[] {
   return [...new Set(kept.length ? kept : words)];
 }
 
-/** A word's pattern: at the start of a word, with a long word's last two letters left out so "searching" finds "search". */
+/**
+ * A word without its ending (-ing, -ed, -es, -s, and a doubled last letter after one), keeping at
+ * least three letters, so "searching" finds "search" and "searches", and "logging" finds "log".
+ */
+export function stem(term: string): string {
+  for (const end of ['ing', 'ed', 'es', 's']) {
+    if (!term.endsWith(end) || term.length - end.length < 3) continue;
+    const s = term.slice(0, -end.length);
+    return s.length > 3 && s.at(-1) === s.at(-2) && !/[aeiou]/.test(s.at(-1)!) ? s.slice(0, -1) : s;
+  }
+  return term;
+}
+
+/** A word's pattern: its stem at the start of a word. */
 function termPattern(term: string): RegExp {
-  const stem = term.length > 5 ? term.slice(0, -2) : term;
-  return new RegExp(`(?<![\\p{L}\\p{N}])${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'iu');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${stem(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'iu');
 }
 
 function snippetAt(text: string, at: number): string {
@@ -92,10 +104,10 @@ interface Row {
 }
 
 /** The sessions of the projects open (or only `projectId`) matching `q`; see rankSessions. */
-export function searchSessions(db: Db, q: unknown, projectId?: string): SessionMatch[] {
-  if (typeof q !== 'string' || q.length > SESSION_SEARCH_MAX) {
-    throw new HttpError(400, `Search for at most ${SESSION_SEARCH_MAX} characters.`);
-  }
+export function searchSessions(db: Db, q: unknown, projectId?: unknown): SessionMatch[] {
+  if (typeof q !== 'string') throw new HttpError(400, 'Give the search as one q parameter of text.');
+  if (q.length > SESSION_SEARCH_MAX) throw new HttpError(400, `Search for at most ${SESSION_SEARCH_MAX} characters.`);
+  if (projectId !== undefined && typeof projectId !== 'string') throw new HttpError(400, 'Give at most one project id.');
   if (!searchTerms(q).length) return [];
   const rows = all<Row>(db,
     `SELECT s.id, s.project_id, s.name, s.stage, s.desired, s.branch, s.initial_prompt, s.pr_number, s.pr_url, s.pr_title,

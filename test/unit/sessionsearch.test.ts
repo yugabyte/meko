@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { openDb, run } from '../../src/server/db.js';
-import { searchSessions, searchTerms } from '../../src/server/sessionsearch.js';
+import { searchSessions, searchTerms, stem } from '../../src/server/sessionsearch.js';
 
 function setup() {
   const db = openDb(':memory:');
@@ -27,10 +27,11 @@ describe('finding a session', () => {
       [['login', 'name'], ['other', 'name'], ['totp', 'task']]],
     ['one project only', 'login', 'p', [['login', 'name'], ['totp', 'task']]],
     ['a word in a design, and in a task', 'password', 'p', [['login', 'task'], ['palette', 'design']]],
-    ['a word ending another way, in a branch', 'search', 'p', [['search', 'branch']]],
+    ['a word ending another way, in a branch', 'searches', 'p', [['search', 'branch']]],
+    ['an -ing word by its stem', 'rotating', 'p', [['palette', 'task']]],
     ['at least half the words, the most first', 'login password rotate', 'p', [['login', 'name'], ['palette', 'task']]],
     ['a PR by number', '#12', 'p', [['totp', 'pr']]],
-    ['stop words alone', 'what is the', 'p', []],
+    ['stop words when nothing else is left', 'the', 'p', [['palette', 'task'], ['totp', 'task']]],
   ])('finds %s', (_what, q, project, want) => {
     expect(searchSessions(setup(), q, project).map((m) => [m.sessionId, m.field])).toEqual(want);
   });
@@ -42,9 +43,17 @@ describe('finding a session', () => {
     expect(d.snippet).toMatch(/^….*password manager never fills it\.$/);
   });
 
-  it('turns away a query that is too long or not text', () => {
+  it('turns away a query that is too long or not text, and more than one project', () => {
     expect(() => searchSessions(setup(), 'x'.repeat(201))).toThrow(/at most 200/);
-    expect(() => searchSessions(setup(), ['login'])).toThrow(/at most 200/);
+    expect(() => searchSessions(setup(), ['login'])).toThrow(/one q parameter/);
+    expect(() => searchSessions(setup(), 'login', ['p', 'q'])).toThrow(/at most one project/);
     expect(searchTerms('Fix the LOGIN, login page!')).toEqual(['fix', 'login', 'page']);
+  });
+
+  it.each([
+    ['searching', 'search'], ['searches', 'search'], ['rotating', 'rotat'], ['logging', 'log'], ['fixed', 'fix'],
+    ['press', 'pres'], ['used', 'used'], ['login', 'login'],
+  ])('stems %s as %s', (word, want) => {
+    expect(stem(word)).toBe(want);
   });
 });
