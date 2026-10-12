@@ -1,4 +1,4 @@
-# GitHub links and Ask AgentK
+# GitHub links, Ask AgentK and finding a session
 
 Part of the [AgentK Local design](../design.md).
 
@@ -114,3 +114,32 @@ shows the exchange above the list; the input's placeholder becomes *Reply to Age
 command…*, and typing filters commands again, with the Ask item for a follow-up. Errors say what
 went wrong with **Try again**: Claude Code missing (503), not signed in, failed, or an answer that
 can't be read (502). `[ask_agentk] enabled = false` drops the item (and the route answers 403).
+
+## Finding a session
+
+Typing in the palette filters its items by name, which finds a running session only by its name,
+project or branch. Once typing pauses (250 ms) on two characters or more, the palette also asks
+`GET /api/sessions/search` (`src/server/sessionsearch.ts`) for the sessions the text is about: in the
+project on screen, or every open project from elsewhere. The server reads each session's name, PR
+number and title, task (its first prompt), branch and design markdown from `state.db`, archived
+sessions included, and ranks them with `rankSessions()`:
+
+- The words are the text split on anything but letters and digits, lowercased, without one-letter
+  words and stop words ("the", "session", "find"…), unless that leaves none.
+- A word matches at the start of a word in a field; a word over five letters drops its last two
+  letters first, so "searching" finds "search" and "searches".
+- A session needs at least half the words. It ranks by how many it has, then by where: each word
+  counts for the field that counts most among those having it (name 8, PR 6, task 5, branch 3,
+  design 2). Then open before closed, then newest. At most 20 come back.
+- Each says the field that counts most among those that matched, and the text around its first
+  match on one line (none for the name).
+
+The browser shows them after Ask AgentK's item, so Enter still asks AgentK when a sentence matches
+no command, and leaves out the running sessions the name filter already shows. Each shows its
+project (when not the one on screen), its stage or *Closed* with its PR number, and the matching
+text under the name, wrapped, so it reads on a phone. Picking a running session goes to it; a
+closed session isn't in `AppState`, so picking it opens its PR on GitHub, and one without a PR only
+shows. A result is kept with the text and project it was for, and a newer search cancels an older one.
+
+Everything searched is in `state.db`, so a search takes no Claude or Meko call. Not searched: the
+transcripts (what was said in the session) and an Artifact design's page.

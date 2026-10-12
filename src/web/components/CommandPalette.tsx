@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
 import {
   STAGE_LABELS, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type LinkPlan, type ProjectWithSessions, type Session,
-  type StartFromLinkResult,
+  type SessionMatch, type StartFromLinkResult,
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useMedia, useTouch } from '../hooks/useMedia';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, linkEntries, type LabelPart } from '../palette';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
@@ -33,6 +33,8 @@ interface Item {
 
 /** How long typing pauses before a pasted link is looked up. */
 const LINK_LOOKUP_MS = 250;
+/** How long typing pauses before sessions are searched for what was typed. */
+const FIND_MS = 250;
 /** How long each of the placeholder's hints shows. */
 const HINT_MS = 1250;
 
@@ -122,6 +124,28 @@ export function CommandPalette({
   }, [refKey, lookupKey, currentProjectId, stale]);
   const looked = stale ? undefined : cached;
   const plan = looked && 'plan' in looked ? looked.plan : null;
+
+  // Sessions about what was typed (their task, PR, design…), searched once typing pauses: in the
+  // project on screen, or every project from elsewhere. Kept with the text they're for, so a result
+  // never shows under other text.
+  const typed = q.trim();
+  const findKey = typed.length > 1 && !refKey ? `${typed}@${currentProjectId ?? ''}` : null;
+  const [found, setFound] = useState<{ key: string; matches: SessionMatch[] } | null>(null);
+  useEffect(() => {
+    if (!findKey) return;
+    const ac = new AbortController();
+    const t = window.setTimeout(() => {
+      api
+        .findSessions(typed, currentProjectId, ac.signal)
+        .then((matches) => setFound({ key: findKey, matches }), () => undefined);
+    }, FIND_MS);
+    return () => {
+      window.clearTimeout(t);
+      ac.abort();
+    };
+    // typed and currentProjectId are in findKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findKey]);
 
   // Ask AgentK: the exchange so far (forgotten when the palette closes), the ask Claude is answering, and one that failed.
   const [chat, setChat] = useState<Exchange[]>([]);
@@ -371,19 +395,38 @@ export function CommandPalette({
     return out;
   }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSettings]);
 
-  const typed = q.trim();
+  const findItems = useMemo<Item[]>(() => {
+    if (!found || found.key !== findKey) return [];
+    return findEntries(found.matches, projects, currentProjectId).map((e): Item => {
+      const a = e.action;
+      const s = a && 'go' in a ? projects.find((p) => p.id === a.go.projectId)?.sessions.find((x) => x.id === a.go.sessionId) : undefined;
+      return {
+        id: e.id, label: e.label, hint: e.hint, keywords: '', wrap: true,
+        ...(s ? { dot: dotState(s), phase: s.id } : {}),
+        ...(a && 'go' in a
+          ? { run: () => navigate({ view: 'project', projectId: a.go.projectId, sessionId: a.go.sessionId }) }
+          : a
+            ? { run: () => void window.open(a.open, '_blank', 'noopener') }
+            : {}),
+      };
+    });
+  }, [found, findKey, projects, currentProjectId]);
+
   const shown = useMemo<Item[]>(() => {
     if (asking) return [];
     // Before typing again, the last answer's actions.
     if (!typed && last) return answerItems;
-    // Last: alone, and so picked by Enter, when nothing matches (a sentence never does). Not for a pasted link.
+    // After the commands, and so picked by Enter when none matches (a sentence never does). Not for a pasted link.
     const askItem: Item[] = askAgentk && typed && !refKey
       ? [{ id: 'ask', label: [`Ask AgentK: “${typed}”`], hint: `${isMac() ? '⌘' : 'Ctrl'}+Enter`, keywords: '', run: () => void ask(typed), keepOpen: true }]
       : [];
-    return [...linkItems, ...filterItems(items, q), ...askItem];
+    const matched = filterItems(items, q);
+    // After Ask AgentK, so Enter still asks when a sentence matches nothing but finds sessions.
+    const more = findItems.filter((f) => !matched.some((m) => m.id === `s-${f.id.slice('find-'.length)}`));
+    return [...linkItems, ...matched, ...askItem, ...more];
     // ask() reads the chat and screen, which change no more often than the deps here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkItems, items, q, typed, refKey, asking, last, answerItems, askAgentk]);
+  }, [linkItems, items, q, typed, refKey, asking, last, answerItems, askAgentk, findItems]);
 
   useEffect(() => setIdx(0), [q, plan, last]);
   useEffect(() => {

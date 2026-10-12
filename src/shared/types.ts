@@ -1062,6 +1062,28 @@ export interface StartFromLinkResult {
   session: Session;
 }
 
+/** Where a session search found the words, from the field that counts most to the one that counts least. */
+export type SessionMatchField = 'name' | 'pr' | 'task' | 'branch' | 'design';
+
+/** The most characters a session search takes (`GET /api/sessions/search?q=`). */
+export const SESSION_SEARCH_MAX = 200;
+
+/** A session whose name, task, PR, branch or design has the words searched for (`GET /api/sessions/search`). */
+export interface SessionMatch {
+  sessionId: string;
+  projectId: string;
+  name: string;
+  stage: Stage;
+  /** Archived (merged, discarded or closed): it isn't in AppState, so only its PR can be opened. */
+  closed: boolean;
+  prNumber: number | null;
+  prUrl: string | null;
+  /** The field that counts most among those with a match. */
+  field: SessionMatchField;
+  /** The text around the first match in that field, on one line; empty when it's the name. */
+  snippet: string;
+}
+
 /** The most characters an instruction for Ask AgentK takes (`AskAgentkRequest.text`). */
 export const ASK_AGENTK_TEXT_MAX = 2000;
 /** The most earlier exchanges an ask carries (`AskAgentkRequest.history`); older ones are left out. */
@@ -1785,6 +1807,9 @@ export type TermServerMessage =
 //        with no tools; 400 for empty or too long text, 403 when [ask_agentk] is off, 429 with two asks already running,
 //        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
 //        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
+// GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
+//        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
+//        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a

@@ -142,7 +142,8 @@ terminal**, which hides it for that start in this page.
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
-or ask in plain words: see [Ask AgentK](palette.md#ask-agentk)).
+or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
+[Finding a session](palette.md#finding-a-session)).
 The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the shortcut)
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
