@@ -14,6 +14,12 @@ Release notes for the Meko portal, API, and platform. For Installer, MCP server,
 
 {{< card-group >}}
   {{< card
+    href="changelog/meko/v1.0.2/"
+    title="v1.0.2 - October 5, 2026"
+    desc="Bulk sharing, Ask Meko in the docs, faster datapack navigation, and reliability fixes."
+    cta="View release notes &rarr;"
+  >}}
+  {{< card
     href="changelog/meko/v1.0.1/"
     title="v1.0.1 — September 25, 2026"
     desc="Labs, datapack Analytics, WorkbenchLM tool use, and Standard on AWS Marketplace."

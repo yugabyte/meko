@@ -12,34 +12,35 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
 
 {{< card-group variant="half" >}}
   {{< card
-    href="changelog/meko/v1.0.1/"
-    title="Meko v1.0.1 — September 25, 2026"
-    desc="Labs, datapack Analytics, WorkbenchLM tool use, and Standard on AWS Marketplace."
+    href="changelog/meko/v1.0.2/"
+    title="Meko v1.0.2 - October 5, 2026"
+    desc="Bulk sharing, Ask Meko in the docs, faster datapack navigation, and reliability fixes."
     cta="View release notes &rarr;"
   >}}
   {{< card
     href="changelog/installer/v2.2.0/"
-    title="Installer v2.2.0 — August 31, 2026"
+    title="Installer v2.2.0 - August 31, 2026"
     desc="Kiro support, durable capture, safer memory guidance, and independent installer and skills releases."
     cta="View release notes &rarr;"
   >}}
 {{< /card-group >}}
 
-## Meko portal and platform — v1.0.1
+## Meko portal and platform - v1.0.2
 
-- **Try Meko in Labs** — open **Labs** and launch **Review a PR with AgentK**. You build datapack context, watch the review, and choose which memories to keep.
-- **See more on a datapack's Analytics tab** — Analytics now show context size, a memory breakdown, and recent search activity. **Your datapacks** no longer shows an account-wide efficiency tile, or a context badge of 0 on every card.
-- **Let WorkbenchLM call your datapack** — Reads run immediately, as does saving a memory. Deleting a memory, promoting a memory, or updating the datapack waits until you choose **Allow**.
-- **Upgrade to Standard on AWS Marketplace** — Choose **Settings > Pricing** to upgrade a Free account to Standard using AWS Marketplace ($25/month). Finish account setup in Meko after you subscribe, or the plan stays on Free.
-- **Long conversations accept new messages** — Add or delete messages after a conversation's stored history exceeds its size limit. Reading or updating that conversation can still fail while the history is over the limit.
+- **[Invite a team in one step](../architecture/core-concepts/datapacks/#share-a-datapack)** - On a datapack's **Share** page, paste email addresses or upload a CSV file, choose one role, and send up to 50 invitations. Meko reports a result for each address.
+- **[Ask questions from the docs](../troubleshooting/#report-an-issue)** - Open **Ask Meko** on any documentation page. Your conversation stays open while you move between pages in the same browser tab.
+- **Find members and datapacks faster** - [Search a datapack's members](../architecture/core-concepts/datapacks/#share-a-datapack) by name, email address, domain, or role. In [WorkbenchLM](../guides/workbench-lm/#what-you-can-do), type to filter the datapack picker or scroll through a long list.
+- **[Open a datapack in WorkbenchLM](../guides/workbench-lm/#what-you-can-do)** - On a datapack page, open the actions menu (the gear next to **Share**) and choose **Open WorkbenchLM** to start with that datapack selected.
+- **Learn from production code reviews** - The [code review lab](../examples/labs/) now has four chapters, uses your datapack for cost estimates, and links to public reviews.
+- **Keep conversations and memory available** - Temporary tracing failures are now retryable, oversized traces use less memory, and entity operations search only the current datapack. See how to [work with memory](../guides/working-with-memory/) and [review conversation traces](../guides/observability/).
 
-## Installer and public skills — v2.2.0
+## Installer and public skills - v2.2.0
 
-- **Kiro IDE and CLI support** — one install configures Kiro's shared MCP and skills locations and installs durable capture hooks.
-- **Capture survives delivery failures** — Claude Code, Cursor, Codex, and Kiro keep failed exchanges in a local outbox. `npx @yugabytedb/meko-mcp@latest --capture-status` shows whether capture is healthy, catching up, retrying, or needs action.
-- **Codex transcripts now capture correctly** — Codex uses `codex:<repo>` ownership and holds incomplete turns for retry instead of advancing past them.
-- **Safer memory guidance** — agents distinguish failed searches from empty results, keep retrieval evidence bounded, verify writes, and treat `memory_get_all` as a recent window rather than an export.
-- **Independent releases** — the public skills plugin and MCP server are each now released independently from the installer and Desktop extension.
+- **Kiro IDE and CLI support** - one install configures Kiro's shared MCP and skills locations and installs durable capture hooks.
+- **Capture survives delivery failures** - Claude Code, Cursor, Codex, and Kiro keep failed exchanges in a local outbox. `npx @yugabytedb/meko-mcp@latest --capture-status` shows whether capture is healthy, catching up, retrying, or needs action.
+- **Codex transcripts now capture correctly** - Codex uses `codex:<repo>` ownership and holds incomplete turns for retry instead of advancing past them.
+- **Safer memory guidance** - agents distinguish failed searches from empty results, keep retrieval evidence bounded, verify writes, and treat `memory_get_all` as a recent window rather than an export.
+- **Independent releases** - the public skills plugin and MCP server are each now released independently from the installer and Desktop extension.
 
 > [!NOTE] Upgrade Claude Desktop's Node.js runtime
 >

@@ -60,8 +60,16 @@ To share your datapack with colleagues:
 
 1. In the Meko portal, under **Datapacks**, select the datapack you want to share.
 1. Click **Share**.
-1. Enter the email of the person you want to share with, and select the permission level.
-1. Click **Send Invite**.
+1. Stay on **Invite humans**.
+1. Under **Email addresses**, type one address, paste a list, or click **Upload CSV**. Separate pasted addresses with commas, semicolons, or new lines. A CSV can include a header row when one column is an email column.
+1. Under **Role for everyone in this list**, choose **Viewer**, **Contributor**, or **Maintainer**. That role applies to every address in the batch.
+1. Click **Send invite** for one address. For more than one, the button reads **Send N invites**, where N is the number of addresses Meko will send.
+
+One batch accepts up to 50 addresses. More than that shows **Too many addresses**. Split the list and send it again. Meko reports a result for each address. A row with no valid email is skipped and does not stop the others. Inviting someone who already has access does nothing.
+
+If **Email addresses** is empty, the button stays disabled. A file Meko cannot read as text shows **Could not read file**. Export it as CSV and upload it again.
+
+On the same page, search **Members** by name, email address, domain, or role. The box placeholder is **Search name, email, domain (@company.com), or role**. You can also filter by **All roles**, **Owner**, **Viewer**, **Contributor**, or **Maintainer**. While a filter is on, the list shows how many rows match and offers **Clear filters**.
 
 ## Isolation model
 

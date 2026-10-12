@@ -46,7 +46,7 @@ The installer handles this for you. For hand-written config, see [Choose an auth
 - Up to **10 active keys** per account.
 - Each key expires after **one year** (365 days) from creation.
 - Keys are scoped to your account, not to a single datapack — any key can access all your datapacks.
-- A key can also share a datapack on your behalf: invite people, and accept or decline invites sent to you. Inviting someone who has no Meko account creates one for them and emails them a temporary password.
+- A key can also share a datapack on your behalf. It can invite up to 50 people in one request, list members, and list pending invitations. It can accept or decline an invitation sent to you. Inviting someone who has no Meko account creates one for them and emails them a temporary password.
 
 ## Revoke a key
 

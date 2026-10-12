@@ -83,7 +83,9 @@ If you have problems with your setup, check the following common issues:
 
 ## Report an issue
 
-The fastest way to get help and report bugs is the Meko Discord. Join the community, post in the relevant channel, and the team or other community members will respond.
+For a question the documentation can answer, open **Ask Meko** in the header of any page. Your conversation stays open while you move between pages in the same browser tab.
+
+To report a bug, use the Meko Discord. Join the community, post in the relevant channel, and the team or other community members will respond.
 
 [Join the Meko Discord &rarr;](https://discord.gg/GWcSST7GqZ)
 
