@@ -142,7 +142,8 @@ terminal**, which hides it for that start in this page.
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
-or ask in plain words: see [Ask AgentK](palette.md#ask-agentk)).
+or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
+[Finding a session](palette.md#finding-a-session)).
 The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the shortcut)
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
@@ -153,6 +154,14 @@ copies rather than interrupting Claude while text is selected. While Claude has 
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
+
+In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would (nothing while it's
+disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). In a form
+with a submit button, that's the submit button if it's primary and nothing otherwise (Turn off
+two-factor); else the dialog footer's primary button; else, outside a form and footer, a primary
+button marked `data-submit` (Answer, in AgentK is asking). A field that takes Enter itself keeps it:
+in the Another PR box, `Ctrl+Enter` is Find, as Enter is, so a session can't start on the PR picked
+before.
 
 To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
 Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it

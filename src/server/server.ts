@@ -10,7 +10,7 @@ import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
-  AskAgentkRequest, AskAgentkResult, LinkPlan, StartFromLinkRequest, StartFromLinkResult,
+  AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -27,6 +27,7 @@ import { MekoApiError } from './mekoapi.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
+import { searchSessions } from './sessionsearch.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
@@ -383,6 +384,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return core.askAgentk.ask(req.body, gone.signal);
   });
   app.get('/api/usage', async () => usageOverview(core.db));
+  app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>
+    searchSessions(core.db, req.query.q ?? '', req.query.project || undefined));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 
   // ---- sessions ----

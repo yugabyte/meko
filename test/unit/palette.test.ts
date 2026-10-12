@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AskAgentkAction, LinkPlan, ProjectWithSessions } from '../../src/shared/types.js';
-import { askEntries, filterItems, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import type { AskAgentkAction, LinkPlan, ProjectWithSessions, SessionMatch } from '../../src/shared/types.js';
+import { askEntries, filterItems, findEntries, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -99,5 +99,22 @@ describe("AgentK's proposed actions", () => {
     [{ type: 'move', sessionId: 'gone', stage: 'code', instructions: '' }, [['Move a session to Code', 'Action', false]]],
   ])('names %j', (a, want) => {
     expect(rows(a)).toEqual(want);
+  });
+});
+
+describe('sessions a search found', () => {
+  const projects = [{ id: 'p1', name: 'agent-k-local' }, { id: 'p2', name: 'docs' }] as unknown as ProjectWithSessions[];
+  const match = (m: Partial<SessionMatch>): SessionMatch => ({
+    sessionId: 's1', projectId: 'p1', name: 'Dark mode', stage: 'code', closed: false, prNumber: null, prUrl: null, field: 'name', snippet: '', ...m,
+  });
+
+  it.each<[Partial<SessionMatch>, string, unknown]>([
+    [{}, 'Code', { go: { projectId: 'p1', sessionId: 's1' } }],
+    [{ projectId: 'p2', field: 'task', snippet: 'Add dark mode…' }, 'docs · Code · Task: Add dark mode…', { go: { projectId: 'p2', sessionId: 's1' } }],
+    [{ closed: true, prNumber: 7, prUrl: 'https://github.com/o/r/pull/7', field: 'design', snippet: '…the theme' }, 'Closed · PR #7 · Design: …the theme', { open: 'https://github.com/o/r/pull/7' }],
+    [{ closed: true }, 'Closed', null],
+  ])('describes %j', (m, hint, action) => {
+    const [e] = findEntries([match(m)], projects, 'p1');
+    expect([labelText(e.label), e.hint, e.action]).toEqual(['Dark mode', hint, action]);
   });
 });

@@ -364,12 +364,6 @@ export function NewSessionDialog({
             placeholder={START_EXAMPLES[start].prompt}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canStart) {
-                e.preventDefault();
-                create();
-              }
-            }}
             onPaste={(e) => {
               // A paste with images holds them; text (a spreadsheet's cells come with a picture) pastes as usual.
               const images = pastedImages(e.clipboardData);

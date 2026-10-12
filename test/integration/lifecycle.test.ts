@@ -163,6 +163,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(row.stage).toBe('done');
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'turn', outcome: 'done' }]);
     expect(row.desired).toBe('archived');
+    expect(row.pr_title).toBe('Fix the thing');
     expect(existsSync(worktree)).toBe(true); // idle, for the next session on the repo
     expect(env.core.sessions.ownsWorktree(row)).toBe(false);
     expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak_me/fix-the-thing removed; worktree kept for the next session');
