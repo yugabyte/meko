@@ -88,6 +88,12 @@ The project's main checkout keeps its path, and paths on other hosts stay under 
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
 viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
 used themselves. When the active viewer leaves, the one used most recently before it takes over.
+Any input counts as use, mouse and focus reports included, since Claude Code turns both on. The
+server log has each terminal socket's attach (its address and browser) and close, numbered so
+viewers of one session can be told apart, and its sizing: the sizes it asks for, the pane's size
+and whether this viewer set it, and the kind of input (keys, mouse report, focus report) that came
+while another viewer had the size. Sizing lines are capped at 20 a minute per socket, then counted,
+so a resize loop can't flood the log.
 
 **From a terminal.** `agent-k-local attach <name>` shows a session's terminal in the one you run it
 in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no

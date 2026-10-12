@@ -37,7 +37,8 @@ describe('terminal socket', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  const coreFor = () => ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }) }, host }) as unknown as Core;
+  const coreFor = (lines: string[] = []) =>
+    ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }) }, host, log: { info: (m: string) => lines.push(m), warn: () => {}, error: () => {} } }) as unknown as Core;
   const text = (ws: ReturnType<typeof fakeSocket>) => ws.sent.filter((m): m is Buffer => m instanceof Buffer).map((b) => b.toString('utf8')).join('');
   const sizeMessage = (ws: ReturnType<typeof fakeSocket>) => ws.sent.find((m): m is string => typeof m === 'string' && m.includes('"size"'));
 
@@ -73,6 +74,33 @@ describe('terminal socket', () => {
     }
     // Closing the viewer leaves the program running.
     expect((await host.panes()).get('x')?.dead).toBe(false);
+  });
+
+  it('logs which viewer takes the size and why, and caps a resize loop', async () => {
+    await host.spawn('x', home, ['/bin/sh', '-c', 'sleep 5']);
+    const lines: string[] = [];
+    const laptop = fakeSocket();
+    const phone = fakeSocket();
+    attachTerminal(coreFor(lines), laptop as unknown as WebSocket, 's1', { cols: '100', rows: '30' }, 'laptop');
+    await waitFor(() => lines.join('\n'), (t) => /pane is 100x30, this viewer's size/.test(t));
+    attachTerminal(coreFor(lines), phone as unknown as WebSocket, 's1', { cols: '40', rows: '20' }, 'phone');
+    try {
+      // The newest viewer took the size; a mouse report from the laptop takes it back.
+      await waitFor(() => lines.join('\n'), (t) => /pane is 40x20, another viewer's size/.test(t));
+      laptop.emit('message', Buffer.from(JSON.stringify({ type: 'input', data: '\x1b[<35;10;5M' })), false);
+      await waitFor(() => lines.join('\n'), (t) => /a mouse report while another viewer has the size[\s\S]*pane is 100x30, this viewer's size/.test(t));
+      expect(lines.join('\n')).toMatch(/terminal \d+ \(session s1\): attached at 40x20 from phone/);
+      // A browser that keeps resizing logs a bounded number of lines, then how many it left out.
+      const before = lines.length;
+      for (let i = 0; i < 100; i++) laptop.emit('message', Buffer.from(JSON.stringify({ type: 'resize', cols: 100, rows: 30 + (i % 2) })), false);
+      await waitFor(() => lines.length, (n) => n > before);
+      laptop.close();
+      expect(lines.length - before).toBeLessThan(30);
+      expect(lines.slice(-2).join('\n')).toMatch(/more sizing events not logged\n.*closed after \d+ s/);
+    } finally {
+      laptop.close();
+      phone.close();
+    }
   });
 
   it('stops reading terminal output while the browser has a backlog, and resumes once it drains', async () => {

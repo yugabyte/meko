@@ -687,7 +687,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>('/ws/term/:id', { websocket: true },
     (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>) => {
     if (!wsGuard(socket, req)) return;
-    attachTerminal(core, socket, req.params.id, req.query);
+    attachTerminal(core, socket, req.params.id, req.query, `${req.ip} (${(req.headers['user-agent'] ?? 'no user agent').slice(0, 160)})`);
   });
 
   // ---- web app ----
