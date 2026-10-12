@@ -203,7 +203,18 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				"extension_registry", cfg.Deploy.ExtensionRegistry,
 				"backing_yb", cfg.Deploy.BackingYBHostPorts,
 				"storage_class", cfg.Deploy.StorageClass,
+				"scratch_backing", cfg.Deploy.ScratchBacking,
+				"node_selector", cfg.Deploy.NodeSelector,
 				"controller_url", prov.ControllerURL)
+			// Not refused: this is what every release before the knob ran, and a
+			// controller that stops starting on upgrade is worse than a slow LFC.
+			if cfg.Deploy.ScratchBackingUndeclared() {
+				logger.Warn("endpoint /data is an emptyDir on whichever node the scheduler picks, and nothing says that node's " +
+					"ephemeral storage is local NVMe — on EKS it is the EBS boot volume, and the LFC runs at that volume's IOPS (#1612). " +
+					"Set --deploy-scratch-backing=local-nvme with --deploy-node-selector naming a local-NVMe pool " +
+					"(chart: controller.endpoint.scratchBacking / nodeSelector), --deploy-scratch-backing=node-disk to accept " +
+					"the node's own disk, or --deploy-storage-class for a PVC")
+			}
 		default: // config.DriverDocker
 			prov.Deployer = deploy.NewDockerDeployer(deploy.DockerConfig{
 				EndpointImage: cfg.Deploy.EndpointImage,

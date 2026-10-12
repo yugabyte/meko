@@ -104,6 +104,10 @@ ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 # "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each endpoint's
 # emptyDir /data on NVMe. Empty (default) => no selector (schedules anywhere).
 ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR:-}"
+# What that emptyDir sits on: "local-nvme" (ENDPOINT_NODE_SELECTOR must name the
+# pool) or "node-disk" (the node's own disk, accepted). Empty (default) => the
+# controller warns at startup when no selector pins /data either.
+ENDPOINT_SCRATCH_BACKING="${ENDPOINT_SCRATCH_BACKING:-}"
 # Internal-LB annotations (used only for *-lb / LoadBalancer modes).
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
 # Resolve ENDPOINT_EXPOSE (friendly wrapper) into the endpoint Service type +
@@ -345,6 +349,7 @@ NS="${NS}" \
   ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS}" \
   ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE}" \
   ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR}" \
+  ENDPOINT_SCRATCH_BACKING="${ENDPOINT_SCRATCH_BACKING}" \
   LB_ANNOTATIONS="${LB_ANNOTATIONS}" \
   "${SCRIPT_DIR}/controller/redeploy.sh"
 

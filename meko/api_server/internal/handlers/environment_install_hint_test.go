@@ -132,6 +132,12 @@ func TestInstallHint_Amp(t *testing.T) {
 		// reach storage, and shipping metrics to a store that is not there.
 		`--set-string controller.endpoint.ybHostPorts="${YB}"`,
 		`--set "imagePullSecrets[0].name=${PULL_SECRET}"`,
+		// /data is an emptyDir on node ephemeral storage, which on a stock EKS node
+		// is the EBS boot volume (meko#1612). local-nvme makes the selector a
+		// startup requirement rather than a habit.
+		"--set controller.endpoint.scratchBacking=local-nvme",
+		`--set "controller.endpoint.nodeSelector[0]=${NODE_SELECTOR}"`,
+		"NODE_SELECTOR=<label>=<value>",
 		// Telemetry is the whole point of a YCP-managed install: without these the
 		// console has no metrics for the environment, and the chart's preflight
 		// refuses to render.

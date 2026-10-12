@@ -202,6 +202,8 @@ rm -rf /var/lib/otelcol/<release>-logs   # on each node
 | `tls.controllerUser` | `yugabyte` | CN of the controller's certificate, the YSQL role it logs in as |
 | `tls.certificate.duration` / `.renewBefore` | `720h` / `240h` | controller certificate lifetime and renewal lead |
 | `controller.endpoint.storageClass` | _(empty)_ | `AMP_DEPLOY_STORAGE_CLASS` (empty ⇒ emptyDir) |
+| `controller.endpoint.scratchBacking` | _(empty)_ | `AMP_DEPLOY_SCRATCH_BACKING` — what the emptyDir `/data` sits on when `storageClass` is empty: `local-nvme` (then `nodeSelector` is required and `storageClass` must stay empty; the render fails otherwise) or `node-disk` (the node's own disk, accepted). Empty ⇒ the controller warns at startup when `nodeSelector` is also empty |
+| `controller.endpoint.nodeSelector` | `[]` | list of `"k=v"` strings → `AMP_DEPLOY_NODE_SELECTOR` (CSV): node labels every endpoint pod must schedule onto, e.g. a local-NVMe pool (GKE `cloud.google.com/gke-ephemeral-storage-local-ssd=true`, EKS `amp/local-nvme=true` on a nodeadm `localStorage` RAID0 group) |
 | `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` (a **floor**; the size itself is 20 GiB × the endpoint's vCPU) |
 | `controller.endpoint.memoryGiBPerVCPU` | `0` | `AMP_DEPLOY_MEMORY_GIB_PER_VCPU` — GiB of memory per endpoint vCPU. Fills in the memory when a create names only CPU, and is the **floor** every request is held to (a pair below it is a `400`). `0` ⇒ the built-in 8. Lower it only for a cluster whose nodes cannot back that shape |
 | `controller.endpoint.diskSizeOverride` | _(empty)_ | `AMP_DEPLOY_DISK_SIZE_OVERRIDE` — flat `/data` size for every endpoint whatever its CPU, bypassing the ratio and the floor. Empty ⇒ CPU-proportional. Test clusters only |

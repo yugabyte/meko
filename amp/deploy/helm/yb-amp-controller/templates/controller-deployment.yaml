@@ -187,6 +187,23 @@ spec:
               value: {{ .Values.controller.endpoint.storageClass | quote }}
             - name: AMP_DEPLOY_DISK_SIZE
               value: {{ .Values.controller.endpoint.diskSize | quote }}
+            # What the emptyDir /data sits on when no storage class is set:
+            # local-nvme (nodeSelector must name the pool) or node-disk. The
+            # controller refuses the same combinations at startup, so checked here
+            # for the same reason as cloud above: a render-time fail, not a
+            # CrashLoopBackOff after a clean install.
+            {{- $scratch := .Values.controller.endpoint.scratchBacking | default "" }}
+            {{- if not (has $scratch (list "" "local-nvme" "node-disk")) }}
+            {{- fail (printf "controller.endpoint.scratchBacking must be local-nvme or node-disk (or empty), got %q" $scratch) }}
+            {{- end }}
+            {{- if and (eq $scratch "local-nvme") (empty .Values.controller.endpoint.nodeSelector) }}
+            {{- fail "controller.endpoint.scratchBacking=local-nvme needs controller.endpoint.nodeSelector naming the local-NVMe pool" }}
+            {{- end }}
+            {{- if and (eq $scratch "local-nvme") .Values.controller.endpoint.storageClass }}
+            {{- fail (printf "controller.endpoint.scratchBacking=local-nvme contradicts controller.endpoint.storageClass=%q: a PVC is a network volume, not node-local scratch" .Values.controller.endpoint.storageClass) }}
+            {{- end }}
+            - name: AMP_DEPLOY_SCRATCH_BACKING
+              value: {{ .Values.controller.endpoint.scratchBacking | default "" | quote }}
             # Flat /data size for every endpoint, whatever its CPU — bypasses the
             # per-vCPU ratio. Empty (the default) = CPU-proportional sizing.
             - name: AMP_DEPLOY_DISK_SIZE_OVERRIDE

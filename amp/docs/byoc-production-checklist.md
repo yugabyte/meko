@@ -393,12 +393,20 @@ per-endpoint one:
 
 - **PVC** (`controller.endpoint.storageClass` set) — network block volume, survives
   reschedule, counts against per-node volume-attachment limits.
-- **emptyDir** (storage class empty) — node ephemeral storage. Point
-  `controller.endpoint.nodeSelector` at a local-NVMe pool for NVMe scratch
-  (GKE: `cloud.google.com/gke-ephemeral-storage-local-ssd=true`). A rescheduled pod gets
-  an empty `/data`, which is fine — the durable copy is in YugabyteDB. Node ephemeral
-  capacity is then the real limit: a GKE node on a 100 GB boot disk has ~43.8 GiB
-  allocatable, i.e. **one** 2-vCPU endpoint.
+- **emptyDir** (storage class empty) — node ephemeral storage, which is **whatever
+  disk the kubelet's root is on**: local NVMe on a GKE local-SSD pool, the EBS boot
+  volume on a stock EKS node. On the boot volume the endpoint works and the LFC runs at
+  that volume's IOPS (#1612). Set `controller.endpoint.scratchBacking: local-nvme` and
+  point `controller.endpoint.nodeSelector` at a pool whose ephemeral storage is the
+  instance NVMe (GKE: `cloud.google.com/gke-ephemeral-storage-local-ssd=true`; EKS: an
+  AL2023 node group whose nodeadm config sets `localStorage.strategy: RAID0`, labelled
+  `amp/local-nvme=true` — recipe in `amp/deploy/README.md`). The YCP install hint
+  carries both, with the label as its `NODE_SELECTOR` header variable. Without the
+  selector the chart fails to render and the controller refuses to start, rather than
+  quietly scheduling onto a boot disk. A
+  rescheduled pod gets an empty `/data`, which is fine — the durable copy is in
+  YugabyteDB. Node ephemeral capacity is then the real limit: a GKE node on a 100 GB
+  boot disk has ~43.8 GiB allocatable, i.e. **one** 2-vCPU endpoint.
 
 Also plan for:
 
@@ -474,7 +482,7 @@ kubectl -n "$NS" get secret
 | `imageTag` | Required in practice — the fallback is the chart appVersion, which is not published. Covers all four amp images and the agent. |
 | `imageRegistry` | `quay.io/yugabyte`, or the customer's mirror. A repository carrying its own host wins. |
 | `controller.databaseUrl` | The backing YugabyteDB DSN. Use `--set-string`: `--set` mis-tokenizes a DSN's `?` and `=`. |
-| `controller.endpoint.storageClass` / `nodeSelector` | PVC vs local-NVMe emptyDir (§4). |
+| `controller.endpoint.storageClass` / `scratchBacking` / `nodeSelector` | PVC vs local-NVMe emptyDir (§4). With the class empty, set `scratchBacking: local-nvme` and the selector together; leaving all three empty only earns a startup warning. |
 | `controller.endpoint.service.type` | Leave `ClusterIP`; per-endpoint exposure is the `connectivity` mode, not this. |
 | `controller.service.type` / `ui.service.type` | `internal-lb` (§3d). |
 | `controller.deployTimeout` | Raise above 10 m for cold multi-node clusters. |

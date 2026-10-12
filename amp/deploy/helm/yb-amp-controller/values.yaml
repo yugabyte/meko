@@ -239,6 +239,16 @@ controller:
       # drain by themselves as endpoints retire).
       placement: spread
     storageClass: ""
+    # -- What the emptyDir /data sits on when storageClass is empty
+    # (AMP_DEPLOY_SCRATCH_BACKING). An emptyDir is carved out of the node's
+    # ephemeral storage, which is local NVMe on a GKE local-SSD pool but the EBS
+    # boot volume on a stock EKS node — where the LFC then runs at the boot
+    # disk's IOPS (#1612). "local-nvme": /data must be local NVMe, and
+    # nodeSelector below must name that pool (the render fails otherwise).
+    # "node-disk": the node's own disk, accepted (kind, CI, dev). Empty: the
+    # controller still starts, and warns at startup when nodeSelector is also
+    # empty.
+    scratchBacking: ""
     # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
     diskSize: "10Gi"
     # -- Flat /data size for every endpoint regardless of CPU, bypassing the
@@ -261,9 +271,11 @@ controller:
     memoryGiBPerVCPU: 0
     # -- Node labels endpoint pods must schedule onto, as a list of "key=value"
     # strings (joined into the AMP_DEPLOY_NODE_SELECTOR CSV). Leave storageClass
-    # empty and point this at a local-NVMe-SSD ephemeral node pool (GKE:
-    # "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
-    # endpoint's emptyDir /data on NVMe. Empty => no selector (schedules anywhere).
+    # empty and point this at a node pool whose ephemeral storage is local NVMe
+    # (GKE: "cloud.google.com/gke-ephemeral-storage-local-ssd=true"; EKS: a
+    # nodeadm localStorage RAID0 group you labelled, e.g. "amp/local-nvme=true")
+    # to put each endpoint's emptyDir /data on NVMe. Empty => no selector
+    # (schedules anywhere).
     nodeSelector: []
     # -- Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") used to derive each
     # endpoint's tailnet address when its Service is tailnet-exposed

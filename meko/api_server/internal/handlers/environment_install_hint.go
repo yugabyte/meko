@@ -396,6 +396,10 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "AGENT_API_KEY='%s'   # shown once by the YCP console; revocable there\n", apiKeyPlaceholder)
 	fmt.Fprintf(&b, "TAG=<amp image tag>            # quay.io/yugabyte/amp-* release tag\n")
 	fmt.Fprintf(&b, "PULL_SECRET=<secret name>      # docker-registry Secret for quay.io/yugabyte\n")
+	fmt.Fprintf(&b, "NODE_SELECTOR=<label>=<value>  # endpoint pool whose ephemeral storage is local NVMe:\n")
+	fmt.Fprintf(&b, "                               # GKE  cloud.google.com/gke-ephemeral-storage-local-ssd=true\n")
+	fmt.Fprintf(&b, "                               # EKS  amp/local-nvme=true on a nodeadm localStorage RAID0 group\n")
+	fmt.Fprintf(&b, "                               # (amp/deploy/README.md, \"NVMe-ephemeral endpoints\")\n")
 	fmt.Fprintf(&b, "BYOC_PASSWORD='<byoc password>'  # BasicAuth password for the metrics door\n")
 	fmt.Fprintf(&b, "DD_API_KEY='<datadog api key>'   # logs fan-out to Datadog\n")
 	fmt.Fprintf(&b, "POD_METRICS=true               # per-pod CPU/mem; needs a cluster-scoped ClusterRole\n")
@@ -473,6 +477,12 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	fmt.Fprintf(&b, "  --set-string controller.ybPasswordSecret.name=\"${YB_PASSWORD:+%s}\" \\\n", ybPasswordSecretName)
 	fmt.Fprintf(&b, "  --set-string controller.endpoint.ybHostPorts=\"${YB}\" \\\n")
 	fmt.Fprintf(&b, "  --set \"imagePullSecrets[0].name=${PULL_SECRET}\" \\\n")
+	// Each endpoint's /data is an emptyDir on the node's ephemeral storage, which
+	// is the EBS boot volume on a stock EKS node (meko#1612). local-nvme makes the
+	// controller refuse to start without the selector, so a hint that loses the
+	// line fails at install rather than running the LFC on a boot disk.
+	fmt.Fprintf(&b, "  --set controller.endpoint.scratchBacking=local-nvme \\\n")
+	fmt.Fprintf(&b, "  --set \"controller.endpoint.nodeSelector[0]=${NODE_SELECTOR}\" \\\n")
 	fmt.Fprintf(&b, "  --set controller.service.type=none \\\n")
 	fmt.Fprintf(&b, "  --set ui.enabled=false \\\n")
 	fmt.Fprintf(&b, "  --set otel.enabled=true \\\n")
@@ -495,6 +505,9 @@ func ampInstallHint(ycpURL, envID, placement, accountID, byocMetricsURL string) 
 	}
 	fmt.Fprintf(&b, "  --set agent.apiKeySecret.name=%s\n\n", ampAPIKeySecretName)
 
+	fmt.Fprintf(&b, "# For a network volume instead of NVMe scratch, drop the two scratchBacking /\n")
+	fmt.Fprintf(&b, "# nodeSelector lines and set controller.endpoint.storageClass=<block class>.\n")
+	fmt.Fprintf(&b, "#\n")
 	fmt.Fprintf(&b, "# The agent binds this controller, then converges it to the environment's desired\n")
 	fmt.Fprintf(&b, "# state and reports the result to this console.\n")
 	fmt.Fprintf(&b, "#   kubectl -n \"${NS}\" rollout status deploy/amp-controller\n")

@@ -56,6 +56,7 @@ ENDPOINT_SERVICE_TYPE=LoadBalancer deploy/up.sh            # per-endpoint LB ins
 ENDPOINT_EXPOSE=internal-lb deploy/up.sh                    # each endpoint gets a private VPC LoadBalancer (mirrors CONTROLLER_EXPOSE)
 ENDPOINT_STORAGE_CLASS=yb-standard deploy/up.sh            # endpoints get a /data PVC (EBS/PD) instead of emptyDir
 ENDPOINT_NODE_SELECTOR=cloud.google.com/gke-ephemeral-storage-local-ssd=true deploy/up.sh  # endpoints' emptyDir /data on local NVMe SSD
+ENDPOINT_SCRATCH_BACKING=local-nvme ENDPOINT_NODE_SELECTOR=... deploy/up.sh  # ...and refuse to start without that selector
 ```
 
 **NVMe-ephemeral endpoints.** Each endpoint's `/data` (pgdata, LFC, logs) defaults to
@@ -73,11 +74,42 @@ gcloud container node-pools create nvme-ephemeral --cluster <cluster> --region <
 ENDPOINT_NODE_SELECTOR=cloud.google.com/gke-ephemeral-storage-local-ssd=true deploy/up.sh
 ```
 
+On **EKS** nothing is automatic: a stock node's ephemeral storage is its EBS root
+volume, and an `emptyDir` there runs the LFC at that volume's baseline IOPS (#1612).
+Instance types with an instance store (`m6id`, `r6id`, `i4i`, …) have the NVMe, but the
+kubelet only uses it if the node is told to. With AL2023 that is a nodeadm `NodeConfig`
+in the node group's launch-template user data — `localStorage.strategy: RAID0` formats
+the instance-store disks into one array and moves `/var/lib/kubelet` and
+`/var/lib/containerd` onto it, so every pod's `emptyDir` lands on the NVMe — plus a
+label the selector can name:
+
+```yaml
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  instance:
+    localStorage:
+      strategy: RAID0
+  kubelet:
+    flags:
+      - --node-labels=amp/local-nvme=true
+```
+
+```sh
+ENDPOINT_SCRATCH_BACKING=local-nvme ENDPOINT_NODE_SELECTOR=amp/local-nvme=true deploy/up.sh
+```
+
 The selector threads through to the controller (`AMP_DEPLOY_NODE_SELECTOR`), which pins
 every endpoint pod (`nodeSelector`) onto that pool. NVMe here is **ephemeral** — a
 rescheduled pod gets a fresh empty `/data`; that's fine because the durable copy lives
 in YugabyteDB. Don't combine it with `ENDPOINT_STORAGE_CLASS` (a PVC would override the
 `emptyDir`).
+
+`ENDPOINT_SCRATCH_BACKING=local-nvme` (`controller.endpoint.scratchBacking`) makes the
+controller refuse to start without a selector, so a deploy that drops it fails instead
+of landing endpoints on a boot disk. Without it the controller only **warns** at startup
+when nothing says where `/data` goes; `node-disk` accepts the node's own disk (kind, CI)
+and silences that.
 
 ### Exposure
 

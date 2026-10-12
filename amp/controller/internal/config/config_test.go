@@ -477,6 +477,74 @@ func TestDeployLFCOffloadInterval(t *testing.T) {
 	}
 }
 
+// #1612: the emptyDir /data lands on whatever the node's ephemeral storage is,
+// which on EKS is the EBS boot volume. The knob makes the operator say which;
+// local-nvme is only honest with a node selector behind it.
+func TestDeployScratchBacking(t *testing.T) {
+	chart := t.TempDir()
+	base := func() []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+		}
+	}
+
+	// Undeclared by default — an existing release keeps starting — and that
+	// default is exactly the configuration the startup warning is for.
+	c, err := Load(base())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.ScratchBacking != "" {
+		t.Errorf("ScratchBacking = %q, want empty by default", c.Deploy.ScratchBacking)
+	}
+	if !c.Deploy.ScratchBackingUndeclared() {
+		t.Error("ScratchBackingUndeclared() = false with no class, selector or backing")
+	}
+
+	// Anything that says where /data goes silences the warning.
+	for _, extra := range [][]string{
+		{"--deploy-scratch-backing", "node-disk"},
+		{"--deploy-node-selector", "amp/local-nvme=true"},
+		{"--deploy-storage-class", "gp3"},
+		{"--deploy-scratch-backing", "local-nvme", "--deploy-node-selector", "amp/local-nvme=true"},
+	} {
+		c, err := Load(append(base(), extra...))
+		if err != nil {
+			t.Fatalf("Load(%v): %v", extra, err)
+		}
+		if c.Deploy.ScratchBackingUndeclared() {
+			t.Errorf("ScratchBackingUndeclared() = true with %v", extra)
+		}
+	}
+
+	// local-nvme is a claim the selector has to back.
+	if _, err := Load(append(base(), "--deploy-scratch-backing", "local-nvme")); err == nil {
+		t.Error("expected error for local-nvme without --deploy-node-selector")
+	}
+	// ...and a PVC is a network volume, not scratch.
+	if _, err := Load(append(base(), "--deploy-scratch-backing", "local-nvme", "--deploy-node-selector", "amp/local-nvme=true", "--deploy-storage-class", "gp3")); err == nil {
+		t.Error("expected error for local-nvme with --deploy-storage-class")
+	}
+	if _, err := Load(append(base(), "--deploy-scratch-backing", "nvme")); err == nil {
+		t.Error("expected error for an unknown scratch backing")
+	}
+
+	// The docker driver has no nodes, so nothing to declare.
+	c, err = Load([]string{"--database-url", "postgres://localhost/db", "--deploy", "--deploy-driver", "docker", "--deploy-yb-host-ports", "yb:5433"})
+	if err != nil {
+		t.Fatalf("Load(docker): %v", err)
+	}
+	if c.Deploy.ScratchBackingUndeclared() {
+		t.Error("ScratchBackingUndeclared() = true on the docker driver")
+	}
+}
+
 // #602: the flat per-endpoint size override. Off by default (prod keeps the
 // per-vCPU policy); a bad quantity fails startup rather than at endpoint-create.
 func TestDeployDiskSizeOverride(t *testing.T) {

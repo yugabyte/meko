@@ -342,6 +342,32 @@ rather than network-attached, which is why `emptyDir` is the right backing for
 this pool and a PVC/generic-ephemeral volume — provisioned by a CSI driver
 against a storage class — would silently move `/data` onto a network disk.
 
+Which disk that ephemeral storage *is* is a property of the node, not of the pod,
+and nothing in the node API reports it: `emptyDir` lives under the kubelet's root,
+which is the local NVMe on that GKE pool but the **EBS boot volume** on a stock EKS
+node. An endpoint scheduled there works and is merely slow — the LFC runs at the
+boot volume's IOPS (#1612). So the controller makes the operator say which, with
+`--deploy-scratch-backing` / `AMP_DEPLOY_SCRATCH_BACKING` (chart:
+`controller.endpoint.scratchBacking`):
+
+- **`local-nvme`** — `/data` must be local NVMe. `--deploy-node-selector` is then
+  **required** and must name the pool whose ephemeral storage is the instance NVMe
+  (GKE labels its local-SSD pools itself; on EKS the operator labels the nodeadm
+  `localStorage` group, `amp/local-nvme=true` by convention —
+  `deploy/README.md`). A `--deploy-storage-class` alongside is refused: a PVC is
+  a network volume, not scratch.
+- **`node-disk`** — `/data` rides whatever the node has, and the operator has
+  accepted that (kind, CI, a dev cluster).
+- **empty** — undeclared. It stays the default because a controller that stops
+  starting on upgrade is worse than a slow LFC; instead, when the `emptyDir` is in
+  use and no selector pins it either, the controller **warns at startup** naming
+  the three ways out. A selector on its own is a choice and silences it.
+
+Neither whether a matching node really has NVMe under its kubelet (not visible
+from the API) nor whether any node matches is checked: the recipe pools autoscale
+from zero, and a selector no pool satisfies already surfaces per deploy as the
+scheduler's `Pending` reason.
+
 The controller deliberately does **not** inspect nodes to size this. `rbac.nodeRead`
 does grant a cluster-scoped `nodes: [get, list]` since #1166, so the read is
 available where it once was not (#584) — but sizing from it could only ever be an
@@ -518,6 +544,8 @@ Kubernetes driver:
 | `--deploy-service-annotations` | `k=v,k=v` annotations on the endpoint Service (e.g. internal-LB) |
 | `--deploy-cloud` | override the cloud whose LB annotations the `nlb_*` connectivity modes render: `aws`, `gcp` or `azure`. Empty (normal) = detect from a node's `spec.providerID`, which `rbac.nodeRead` grants by default. Chart value: `controller.endpoint.cloud` |
 | `--deploy-storage-class` | storage class for the endpoint `/data` PVC (EBS/PD); empty = ephemeral `emptyDir` |
+| `--deploy-scratch-backing` | what the `emptyDir` `/data` sits on when no storage class is set: `local-nvme` (then `--deploy-node-selector` is required, naming the local-NVMe pool) or `node-disk` (the node's own disk, accepted). Empty (default) = the controller warns at startup when nothing pins `/data` (#1612). Chart value: `controller.endpoint.scratchBacking` |
+| `--deploy-node-selector` | `k=v,k=v` node labels every endpoint pod must schedule onto. Chart value: `controller.endpoint.nodeSelector` |
 | `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 20 GiB × the endpoint's vCPU |
 | `--deploy-disk-gib-per-vcpu` | GiB of `/data` per endpoint vCPU (`0` = the built-in 20; for a pool built to a different disk-per-core shape) |
 | `--deploy-memory-gib-per-vcpu` | GiB of memory per endpoint vCPU (`0` = the built-in 8). Fills in the memory when a request names only CPU, and is the floor every request is held to — a pair below it is a `400`. The escape hatch for a pool whose nodes cannot back 8 GiB/core |

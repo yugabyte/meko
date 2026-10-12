@@ -175,6 +175,21 @@ type DeployConfig struct {
 	// emptyDir (no persistent volume). DiskSize is that PVC's requested size.
 	StorageClass string
 	DiskSize     string
+	// ScratchBacking says what the emptyDir /data sits on when no StorageClass is
+	// set. Kubernetes carves an emptyDir out of the node's ephemeral storage,
+	// which is whatever the kubelet's root is on — local NVMe on a GKE
+	// local-SSD pool, but the EBS boot volume on a stock EKS node, where the
+	// LFC then runs at the boot disk's IOPS (#1612). Nothing in the node API
+	// says which, so the operator has to.
+	//   ScratchLocalNVMe  /data must be local NVMe: NodeSelector is required, and
+	//                     names the pool whose ephemeral storage is the instance
+	//                     NVMe.
+	//   ScratchNodeDisk   /data rides whatever the node has; the operator has
+	//                     accepted that (kind, CI, a dev cluster).
+	//   ""                undeclared. Kept as the default so an existing release
+	//                     still starts; the controller warns at startup when the
+	//                     emptyDir is in use with no selector.
+	ScratchBacking string
 	// DiskGiBPerVCPU sizes the endpoint data volume per vCPU. 0 = the built-in
 	// 20 GiB/vCPU policy every pool is expected to be provisioned to honour;
 	// set it only for a pool built to a deliberately different disk-per-core
@@ -306,6 +321,12 @@ const (
 	DriverLocal = "local"
 )
 
+// ScratchBacking values (DeployConfig.ScratchBacking).
+const (
+	ScratchLocalNVMe = "local-nvme"
+	ScratchNodeDisk  = "node-disk"
+)
+
 // Config is the fully-resolved controller configuration.
 type Config struct {
 	ListenAddr     string
@@ -415,6 +436,7 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&d.IngressQuarantine, "deploy-ingress-quarantine", envDuration("AMP_DEPLOY_INGRESS_QUARANTINE", 10*time.Minute), "k8s: how long a released ingress port stays unissued, so a cached address cannot reach the database that takes the slot next")
 	fs.StringVar(&d.IngressPlacement, "deploy-ingress-placement", env("AMP_DEPLOY_INGRESS_PLACEMENT", "spread"), "k8s: which shard a new endpoint lands on — spread (emptiest: smallest blast radius, shards never empty) or pack (fullest with room: shards drain and can be reclaimed)")
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
+	fs.StringVar(&d.ScratchBacking, "deploy-scratch-backing", env("AMP_DEPLOY_SCRATCH_BACKING", ""), "k8s: what the emptyDir /data sits on when --deploy-storage-class is empty — local-nvme (requires --deploy-node-selector naming a pool whose ephemeral storage is instance NVMe) or node-disk (the node's own disk, accepted). Empty = undeclared: the controller warns at startup when /data may land on a network boot volume")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")
 	fs.IntVar(&d.DiskGiBPerVCPU, "deploy-disk-gib-per-vcpu", envInt("AMP_DEPLOY_DISK_GIB_PER_VCPU", 0), "k8s: GiB of endpoint data volume per vCPU (0 = the built-in 20 GiB/vCPU policy; override only for a pool built to a different disk-per-core shape)")
 	fs.IntVar(&d.MemoryGiBPerVCPU, "deploy-memory-gib-per-vcpu", envInt("AMP_DEPLOY_MEMORY_GIB_PER_VCPU", 0), "GiB of endpoint memory per vCPU: fills in the memory when a request names only CPU, and is the floor every request must meet (0 = the built-in 8 GiB/vCPU)")
@@ -575,6 +597,15 @@ func parseKeyValueList(s string) map[string]string {
 	return m
 }
 
+// ScratchBackingUndeclared reports an emptyDir /data that nothing pins or
+// vouches for: no storage class, no node selector, no --deploy-scratch-backing.
+// That is the configuration that put the LFC on an EBS boot volume (#1612), so
+// the controller warns about it at startup rather than refusing — the default
+// has to keep starting on the releases that predate the knob.
+func (d *DeployConfig) ScratchBackingUndeclared() bool {
+	return d.Driver == DriverKubernetes && d.StorageClass == "" && d.ScratchBacking == "" && len(d.NodeSelector) == 0
+}
+
 // validateDeploy validates the endpoint deployer config for the selected
 // driver. It is a no-op unless the deployer is enabled.
 func validateDeploy(d *DeployConfig) error {
@@ -662,6 +693,22 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	// class the data volume is an ephemeral emptyDir and the size is unused.
 	if d.StorageClass != "" && d.DiskSize == "" {
 		return fmt.Errorf("deploy disk size is required when --deploy-storage-class is set")
+	}
+	// local-nvme is a claim about where the emptyDir lands, and the node
+	// selector is the only thing that makes it true: without one the scheduler
+	// picks any node, which on EKS is an EBS boot volume (#1612). A storage
+	// class contradicts it outright — a PVC is a network volume, not scratch.
+	switch d.ScratchBacking {
+	case "", ScratchNodeDisk:
+	case ScratchLocalNVMe:
+		if d.StorageClass != "" {
+			return fmt.Errorf("deploy scratch backing %s contradicts --deploy-storage-class %q: a PVC is a network volume, not node-local scratch", ScratchLocalNVMe, d.StorageClass)
+		}
+		if len(d.NodeSelector) == 0 {
+			return fmt.Errorf("deploy scratch backing %s needs --deploy-node-selector naming the local-NVMe pool (e.g. amp/local-nvme=true, or cloud.google.com/gke-ephemeral-storage-local-ssd=true on GKE)", ScratchLocalNVMe)
+		}
+	default:
+		return fmt.Errorf("invalid deploy scratch backing %q (want %s or %s)", d.ScratchBacking, ScratchLocalNVMe, ScratchNodeDisk)
 	}
 	// The flat override sizes every endpoint's volume, so an unparseable value
 	// has to fail startup rather than silently fall back to the ratio.

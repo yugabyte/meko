@@ -55,6 +55,9 @@
 #   ENDPOINT_NODE_SELECTOR  "k=v,k=v" node labels endpoint pods must schedule onto;
 #                           leave ENDPOINT_STORAGE_CLASS empty and point this at a
 #                           local-NVMe-SSD ephemeral pool to put /data on NVMe
+#   ENDPOINT_SCRATCH_BACKING  what that emptyDir sits on: local-nvme (the selector
+#                           must name the pool) or node-disk (accepted as is);
+#                           empty => the controller warns when nothing pins /data
 # The in-cluster ClusterIP Service (amp-controller, API + SC port) is always
 # created. ClusterIP endpoints avoid a per-endpoint cloud LB entirely (reach via
 # Service DNS in-cluster, or `kubectl port-forward` from outside).
@@ -254,6 +257,7 @@ ENDPOINT_MEMORY_GIB_PER_VCPU="${ENDPOINT_MEMORY_GIB_PER_VCPU:-2}"
 # (e.g. "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
 # endpoint's emptyDir /data on NVMe. Empty => no selector (schedules anywhere).
 ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR:-}"
+ENDPOINT_SCRATCH_BACKING="${ENDPOINT_SCRATCH_BACKING:-}"
 
 # Image repo paths within the registry; the canonical repos are amp/controller +
 # amp/endpoint. Override via CONTROLLER_IMAGE_REPO / ENDPOINT_IMAGE_REPO if needed.
@@ -292,7 +296,7 @@ UI_IMAGE_REPOSITORY="${ECR}/${UI_IMAGE_REPO}"
 
 echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_TAG}  endpoint=${ENDPOINT_IMAGE_REPOSITORY}:${ENDPOINT_TAG}"
 echo ">> mcp=${MCP_ENABLED} (${MCP_IMAGE_REPOSITORY}:${MCP_TAG})  ui=${UI_ENABLED} (${UI_IMAGE_REPOSITORY}:${UI_TAG})  expose=${CONTROLLER_EXPOSE}"
-echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}  disk override=${ENDPOINT_DISK_SIZE_OVERRIDE:-<per-vCPU>}"
+echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  scratch backing=${ENDPOINT_SCRATCH_BACKING:-<undeclared>}  disk size=${ENDPOINT_DISK_SIZE}  disk override=${ENDPOINT_DISK_SIZE_OVERRIDE:-<per-vCPU>}"
 
 # Sanity: warn (don't fail) if the namespace is missing (up.sh / an admin creates it).
 kubectl get ns "${NS}" >/dev/null 2>&1 || echo "WARN: namespace ${NS} not found"
@@ -311,6 +315,7 @@ HELM_SET=(
   "controller.endpoint.ybHostPorts=${YB_HOST_PORTS}"
   "controller.endpoint.service.type=${ENDPOINT_SERVICE_TYPE}"
   "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
+  "controller.endpoint.scratchBacking=${ENDPOINT_SCRATCH_BACKING}"
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
   "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
   "controller.endpoint.memoryGiBPerVCPU=${ENDPOINT_MEMORY_GIB_PER_VCPU}"
