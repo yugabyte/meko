@@ -201,7 +201,17 @@ func (b *PgBackend) RenameStoragePool(ctx context.Context, poolID uuid.UUID, nam
 	return p, nil
 }
 
+// The tombstone UPDATE follows other statements in its transaction, so YSQL's
+// query-layer retry cannot absorb a write-write conflict on the pool row and the
+// 40001 reaches us. The writer that conflicts by design is EnsureCluster's pool
+// interlock; when the cluster wins, the re-run sees it and answers ErrConflict.
+// The transaction rolled back in full, so it is re-run here rather than answered
+// as a 500 (#1849).
 func (b *PgBackend) DeleteStoragePool(ctx context.Context, poolID uuid.UUID) error {
+	return db.RetryAborted(ctx, func() error { return b.deleteStoragePool(ctx, poolID) })
+}
+
+func (b *PgBackend) deleteStoragePool(ctx context.Context, poolID uuid.UUID) error {
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)

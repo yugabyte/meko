@@ -69,6 +69,11 @@ const (
 // including /readyz, whose callers need it to answer immediately.
 const storeUnavailableMessage = "state store unavailable"
 
+// The 503 a synchronous mutation answers once its transaction keeps losing a
+// serialization race (40001). The database rolled each attempt back in full, so
+// a replay is as safe as for the state-store 503.
+const abortedMessage = "conflicted with a concurrent write"
+
 // Client is a controller REST client. Base URL and http.Client are injectable.
 type Client struct {
 	baseURL string // scheme://host[:port], no trailing slash; health lives here
@@ -1167,9 +1172,10 @@ func (c *Client) async(ctx context.Context, method, url string, body any) (Task,
 	return task, loc, nil
 }
 
-// doJSON retries while the controller reports its state store unavailable. Safe
-// on every method: it sends that answer only for a request it established never
-// reached the store, and a 500 when it cannot (db.SafeToRetry).
+// doJSON retries while the controller reports its state store unavailable, or a
+// mutation whose transaction lost a serialization race. Safe on every method: it
+// sends those answers only for a request it established changed nothing, and a
+// 500 when it cannot (db.SafeToRetry).
 func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) (int, http.Header, error) {
 	var raw []byte
 	if body != nil {
@@ -1202,7 +1208,8 @@ func storeUnavailable(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) &&
 		apiErr.StatusCode == http.StatusServiceUnavailable &&
-		strings.Contains(apiErr.Message, storeUnavailableMessage)
+		(strings.Contains(apiErr.Message, storeUnavailableMessage) ||
+			strings.Contains(apiErr.Message, abortedMessage))
 }
 
 func (c *Client) retryAfter(hdr http.Header) time.Duration {

@@ -17,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/db"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	applog "github.com/yugabyte/amp/controller/internal/log"
@@ -259,6 +260,16 @@ func (c *Controllers) DeleteStoragePool(ctx context.Context, request DeleteStora
 		return DeleteStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
 	case errors.Is(err, core.ErrConflict):
 		return DeleteStoragePool409JSONResponse{ConflictJSONResponse(apiError("conflict", "the storage pool still has clusters; delete them first"))}, nil
+	case db.IsAbortedTransaction(err):
+		// The backend's re-runs all lost; each rolled back in full, so nothing
+		// changed and the caller can safely repeat the delete.
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "storage pool delete lost a serialization race",
+			slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+			slog.String("error", err.Error()))
+		return DeleteStoragePool503JSONResponse{ServiceUnavailableJSONResponse{
+			Body:    apiError("service_unavailable", "the delete conflicted with a concurrent write to the storage pool; retry the request"),
+			Headers: ServiceUnavailableResponseHeaders{RetryAfter: retryAfterSeconds},
+		}}, nil
 	case err != nil:
 		return nil, fmt.Errorf("delete storage pool: %w", err)
 	}

@@ -996,3 +996,29 @@ func TestWaitTaskFailsFastOnAServedAPIError(t *testing.T) {
 		t.Errorf("a served error must fail fast, took %s", elapsed)
 	}
 }
+
+// A pool delete whose transaction kept losing a serialization race changed
+// nothing, so its 503 is replayed like the state-store one (#1849).
+func TestPoolDeleteWaitsOutASerializationAbort(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var calls atomic.Int32
+	f.on("DELETE /api/v1/storage-pools/p", func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{
+				"code":    "service_unavailable",
+				"message": "the delete conflicted with a concurrent write to the storage pool; retry the request",
+			}})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := fastRetry(f.client()).DeleteStoragePool(context.Background(), "p"); err != nil {
+		t.Fatalf("DeleteStoragePool: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (the 503 then the delete)", got)
+	}
+}

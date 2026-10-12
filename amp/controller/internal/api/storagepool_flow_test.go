@@ -2,13 +2,16 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/core"
 )
 
 // TestStoragePoolFlow runs the storage-pool workflow over the *top-level* pool
@@ -280,4 +283,33 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// abortingDeleteBackend loses every pool delete to a serialization conflict, as
+// PgBackend does once its own re-runs are exhausted.
+type abortingDeleteBackend struct {
+	*core.MemBackend
+}
+
+func (abortingDeleteBackend) DeleteStoragePool(context.Context, uuid.UUID) error {
+	return fmt.Errorf("tombstone storage pool: %w", &pgconn.PgError{Code: "40001"})
+}
+
+// A delete that lost a serialization race changed nothing, so it answers a
+// retryable 503, not a 500 that reads as the controller being broken (#1849).
+func TestStoragePoolDeleteAbortIsRetryable(t *testing.T) {
+	client, _ := newTestServerBackend(t, abortingDeleteBackend{core.NewMemBackend()}, api.Provisioning{})
+	alice := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, alice.Id, "contended")
+
+	del, err := client.DeleteStoragePoolWithResponse(context.Background(), pool.Id)
+	if err != nil {
+		t.Fatalf("DeleteStoragePool: %v", err)
+	}
+	if del.StatusCode() != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503, body = %s", del.StatusCode(), del.Body)
+	}
+	if del.HTTPResponse.Header.Get("Retry-After") == "" {
+		t.Error("503 carries no Retry-After")
+	}
 }
