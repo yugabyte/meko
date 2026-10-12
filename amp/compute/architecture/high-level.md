@@ -201,7 +201,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Safekeeper control file | YB `amp_storage.branch_state` | one row per branch, typed columns |
 | Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, version, segno, chunk_offset)` all-range, pre-split into 6 |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
-| Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` |
+| Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` through the supervisor's `lfc_state` server |
 | Control-plane resource model | YB `amp_registry` schema | users, pools, clusters, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
 | Task log | YB `controller` schema | `task`, `task_step` |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, the supervisor's pidfile and control socket, `compute_spec.json`); the directory and the daemon configs come from `endpoint create`, `compute_spec.json` from the supervisor at start, `pgdata` from `endpoint start`, and all of it goes on destroy |

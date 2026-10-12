@@ -79,7 +79,7 @@ const DRIVE_ROWS: i64 = 20000;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let conninfo = db::compute_conn(c.compute_port());
-    let http = reqwest::Client::new();
+    let http = c.daemon_client(c.sk_http_port())?;
     let failpoints_url = format!("http://127.0.0.1:{}/v1/failpoints", c.sk_http_port());
 
     // The safekeeper log spans the whole suite run; assert on the delta.

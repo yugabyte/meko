@@ -3,6 +3,13 @@ package pageserver
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -167,6 +174,43 @@ func TestParseLSN(t *testing.T) {
 	for _, bad := range []string{"", "16B3748", "z/1", "0/zz"} {
 		if _, err := ParseLSN(bad); err == nil {
 			t.Errorf("ParseLSN(%q) must error", bad)
+		}
+	}
+}
+
+// The script is shell inside a Go format string inside single quotes, so the
+// secret's extraction and the header are only proven by running it.
+func TestStateChangingRequestsCarryTheControlSecret(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	got := make(chan string, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Method + " " + r.Header.Get("x-storage-control-secret")
+		_, _ = io.WriteString(w, "{}")
+	}))
+	defer srv.Close()
+	port, _ := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
+
+	run := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(run, "pageserver"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toml := "id = 1\nhttp_control_secret = \"c0ffee\"\nlisten_http_addr = \"127.0.0.1:9898\"\n"
+	if err := os.WriteFile(filepath.Join(run, "pageserver", "pageserver.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ script, want string }{
+		{httpScriptBody("PUT", port, "/v1/branch/b/do_gc", `{"gc_horizon":1}`), "PUT c0ffee"},
+		{httpScript("GET", port, "/metrics"), "GET "},
+	} {
+		cmd := exec.Command("sh", "-c", tc.script)
+		cmd.Env = append(os.Environ(), "RUN_DIR="+run)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("script failed: %v\n%s", err, out)
+		}
+		if g := <-got; g != tc.want {
+			t.Errorf("server saw %q, want %q", g, tc.want)
 		}
 	}
 }

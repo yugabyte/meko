@@ -30,7 +30,7 @@ const RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const WAITING_LEVELS: [&str; 3] = ["local", "remote_write", "on"];
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let http = reqwest::Client::new();
+    let http = c.daemon_client(c.sk_http_port())?;
     let failpoints_url = format!("http://127.0.0.1:{}/v1/failpoints", c.sk_http_port());
     let result = exercise(c, &http, &failpoints_url).await;
     // A failpoint left armed would stall every later test on this cluster.

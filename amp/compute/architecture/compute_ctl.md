@@ -202,7 +202,7 @@ keep working:
 | `safekeeper_connstrings` | `safekeeper_connstrings` | `yb_amp.safekeepers` GUC (required, non-empty, unique entries — Primary only) |
 | `storage_auth_token` | `storage_auth_token` | — (bearer auth to PS/SK when set; exported to Postgres as `YBAMP_AUTH_TOKEN`) |
 | `yb_storage_conn` | `yb_storage_conn` | the YB blob store LFC prewarm/offload reads and writes |
-| `lfc_state_url` | `lfc_state_url` | when set, LFC prewarm/offload goes through the supervisor's loopback service instead of `yb_storage_conn` (compute running as its own user; see `single-container-endpoint.md`) |
+| `lfc_state_url` | `lfc_state_url` | when set, LFC prewarm/offload goes through the supervisor's loopback `lfc_state` server instead of `yb_storage_conn`. Set whenever the supervisor renders the spec (see `single-container-endpoint.md`) |
 
 The compute is **single-shard and branch-scoped**: storage is addressed by a single
 `BranchId`, with no shard or tenant/timeline identifiers anywhere in the spec or the
@@ -434,11 +434,12 @@ same in-flight attempt and receive its final `PromoteState`
 ## LFC prewarm / offload (`compute_prewarm.rs`)
 
 The Local File Cache's contents can be saved to and restored from **YugabyteDB**,
-read and written by `compute_ctl` itself through `remote_storage`'s `YbStore`
-backend — no separate service in the path. Losing that store costs only cache
+stored through `remote_storage`'s `YbStore` backend. Losing that store costs only cache
 warmth, never durability. The object key is
-`{branch_id}/{endpoint_id}/lfc_state`, and the spec's `yb_storage_conn` carries
-the connection.
+`{branch_id}/{endpoint_id}/lfc_state`. A spec the endpoint supervisor rendered
+reaches it through the supervisor's `lfc_state` server (`lfc_state_url`), so
+`compute_ctl` holds no YugabyteDB credential; otherwise the spec's
+`yb_storage_conn` carries the connection.
 
 Both ids are validated before they reach the key: `?from_endpoint=` arrives from
 a query parameter, so an id containing `/` or `..` would otherwise address a key

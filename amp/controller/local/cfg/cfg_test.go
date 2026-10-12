@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -256,4 +257,33 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// The secret survives the read-modify-write with the file's other keys, and
+// reads back as written.
+func TestControlSecretRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pageserver.toml")
+	if err := os.WriteFile(path, []byte("id = 7\nlisten_http_addr = \"127.0.0.1:9898\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ControlSecret(path); err != nil || got != "" {
+		t.Fatalf("unset secret = %q, %v", got, err)
+	}
+	secret, err := NewControlSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secret) != 64 {
+		t.Fatalf("secret %q is not 32 hex bytes", secret)
+	}
+	if err := SetControlSecret(path, secret); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ControlSecret(path); err != nil || got != secret {
+		t.Fatalf("read back %q, %v; want %q", got, err, secret)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "listen_http_addr") {
+		t.Fatalf("other keys lost:\n%s", data)
+	}
 }

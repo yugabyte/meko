@@ -62,9 +62,10 @@ Routes exempt from auth even when JWT is enabled
 Independently of JWT, `http_control_secret` in `pageserver.toml` makes every
 request other than `GET`/`HEAD`/`OPTIONS` carry that value in
 `x-storage-control-secret`, or get 403 (`control_secret_middleware`). The
-endpoint supervisor sets it when the compute runs as its own user (see
+endpoint supervisor, or `yb_amp_local` for local endpoints, always sets it (see
 [`single-container-endpoint.md`](single-container-endpoint.md)), so the compute
-can reach the port over the shared loopback but cannot change state. Gated by
+can reach the port over the shared loopback but cannot change state. Unset, there
+is no check, so an older config keeps working. Gated by
 method, so a state-changing route added later is covered without being listed.
 
 ### Status / health / introspection

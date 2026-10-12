@@ -51,7 +51,12 @@ type endpointConf struct {
 	// the same surface. The compute spec is the supervisor's to render on both,
 	// so a pg_settings edit applies here too — only a daemon override comes back
 	// in `not_applied`, since those two files are the launcher's.
-	SettingsHTTPPort             uint16               `json:"settings_http_port"`
+	SettingsHTTPPort uint16 `json:"settings_http_port"`
+	// Where the supervisor's LFC state server listens; the compute's prewarm
+	// state goes through it. Pods use the chart's fixed port, but local
+	// endpoints share a host. 0 for an endpoint created before it existed, whose
+	// compute then reaches YugabyteDB itself as before.
+	LFCStatePort                 uint16               `json:"lfc_state_port,omitempty"`
 	PgVersion                    int                  `json:"pg_version"`
 	Grpc                         bool                 `json:"grpc"`
 	SkipPgCatalogUpdates         bool                 `json:"skip_pg_catalog_updates"`
@@ -168,7 +173,7 @@ func nextCandidatePort(endpoints launcherEndpoints) uint16 {
 	// Over `all`, not the by-name index: an endpoint whose name collides with
 	// another's is missing from the index but still holds its ports.
 	for _, ep := range endpoints.all {
-		for _, p := range []uint16{ep.conf.PgPort, ep.conf.ExternalHTTPPort, ep.conf.InternalHTTPPort, ep.conf.SettingsHTTPPort} {
+		for _, p := range []uint16{ep.conf.PgPort, ep.conf.ExternalHTTPPort, ep.conf.InternalHTTPPort, ep.conf.SettingsHTTPPort, ep.conf.LFCStatePort} {
 			if p > max {
 				max = p
 			}
@@ -317,6 +322,11 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch
 		return err
 	}
 
+	lfcPort, err := findFreePort(settingsPort + 1)
+	if err != nil {
+		return err
+	}
+
 	pub, err := env.ReadPublicKey()
 	if err != nil {
 		return err
@@ -334,6 +344,7 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch
 		ExternalHTTPPort:             extPort,
 		InternalHTTPPort:             intPort,
 		SettingsHTTPPort:             settingsPort,
+		LFCStatePort:                 lfcPort,
 		PgVersion:                    pgVersion,
 		Grpc:                         false,
 		SkipPgCatalogUpdates:         true, // minimal path never runs catalog updates

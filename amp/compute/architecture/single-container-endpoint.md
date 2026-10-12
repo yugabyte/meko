@@ -27,7 +27,7 @@ starts the services in order, and monitors/restarts them:
  tini ─ endpoint-supervisor
           ├─ safekeeper            (WAL → amp_storage.wals)
           ├─ pageserver            (page service → amp_storage.* ; initdb on bootstrap)
-          ├─ lfc_state             (user split only; see below)
+          ├─ lfc_state             (LFC prewarm state; see below)
           └─ compute_ctl ─ postgres + yb_amp extension   (the compute)
 ```
 
@@ -71,12 +71,14 @@ with less isolation than asked for.
 
 Unset, every child inherits the supervisor's identity, as before.
 
-LFC prewarm state is the one thing the compute reads and writes in YugabyteDB
-itself. In this mode its spec carries `lfc_state_url` instead of
-`yb_storage_conn`, and a supervisor child, `lfc_state`
+LFC prewarm state is the one thing the compute would read and write in
+YugabyteDB itself. Whenever the supervisor renders the compute spec, the spec
+carries `lfc_state_url` instead of `yb_storage_conn`, and a supervisor child, `lfc_state`
 (`endpoint-supervisor serve-lfc-state`), serves `GET`/`PUT
 /v1/lfc_state/{endpoint_id}` on `127.0.0.1:$LFC_STATE_PORT` (default 9896),
-storing the blob with the storage credentials. It runs as the storage user
+storing the blob with the storage credentials. `yb_amp_local` allocates each
+endpoint its own port; an endpoint it created before that has none, and its
+compute keeps `yb_storage_conn`. With the users split it runs as the storage user
 rather than inside the supervisor, so the compute's requests are parsed by a
 process with no more privilege than the pageserver, not by root. It is not a
 pageserver route because the pageserver's HTTP port is reachable from off the
@@ -88,13 +90,15 @@ never the request's. `GET` may name another endpoint on the branch, which
 `compute_ctl`.
 
 The compute shares the daemons' loopback, so it could otherwise push a write
-token, create a branch or set a failpoint. The supervisor generates a random
-secret at boot, renders it as `http_control_secret` into `pageserver.toml` and
-`safekeeper.toml` (in the storage directories), and sends it on its own
-requests; the daemons refuse any request other than `GET`/`HEAD`/`OPTIONS`
-without it. The controller only reads from the daemons, so it needs no secret.
-The key is protected from registry overrides. Because the supervisor must write
-the daemons' tomls itself, the split refuses to boot with `PRERENDERED_CONFIG`.
+token, create a branch or set a failpoint. In every mode the daemons' tomls carry
+`http_control_secret`, the supervisor sends it on its own requests, and the
+daemons refuse any request other than `GET`/`HEAD`/`OPTIONS` without it. The
+supervisor generates a random one at each boot when it renders the tomls; with
+`PRERENDERED_CONFIG` the caller writes one into both (`yb_amp_local` does) and
+the supervisor reads it back. A caller's config without one runs unchecked with
+a warning, which the split refuses. The controller only reads from the daemons,
+so it needs no secret. The key is protected from registry overrides. Tools that
+change daemon state from inside the pod read it from `pageserver.toml`.
 
 The chart sets all of this with `userSplit.enabled` (off by default), which also
 runs the container as root with only `SETUID`, `SETGID`, `CHOWN` and `KILL`.
@@ -226,8 +230,7 @@ Served only where something calls it: the chart emits `SUPERVISOR_HTTP_PORT`
 only when `controller.url` is set, and with no port the supervisor serves
 nothing. It is unauthenticated, like the daemons' read routes the same Service
 already publishes — inherited posture rather than a new decision. (Their
-state-changing routes need the control secret when the users are split; see
-above.)
+state-changing routes need the control secret; see above.)
 `reload` takes no body, so the most a caller can do there is make the supervisor
 re-read state it already trusts. `check` does take one, and does work
 proportional to it — a `postgres` per setting when a set is refused — so it is

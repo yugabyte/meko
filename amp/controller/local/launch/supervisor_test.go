@@ -40,6 +40,7 @@ func envWithProvisionedEndpoint() (*config.LocalEnv, launcherEndpoint) {
 		ExternalHTTPPort: 3080,
 		InternalHTTPPort: 47119,
 		SettingsHTTPPort: 47120,
+		LFCStatePort:     47121,
 		PgVersion:        18,
 		// A real endpoint gets this at create (see `endpoint create`), and the
 		// supervisor needs it to render a spec whose compute_ctl will accept the
@@ -77,6 +78,9 @@ func TestSupervisorEnvCarriesTheAllocatedPorts(t *testing.T) {
 		"SAFEKEEPER_HTTP_PORT":           "7686",
 		"ENDPOINT_PG_VERSION":            "18",
 		"SUPERVISOR_HTTP_PORT":           "47120",
+		// Endpoints share the host, so the pod's fixed LFC state port would
+		// collide; each gets its own.
+		"LFC_STATE_PORT": "47121",
 	}
 	for k, v := range want {
 		if got[k] != v {

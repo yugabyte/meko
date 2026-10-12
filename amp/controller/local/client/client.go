@@ -40,12 +40,19 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("%s %s: http %d", e.Method, e.URL, e.Status)
 }
 
+// ControlSecretHeader is the header the pageserver and safekeeper check against
+// their `http_control_secret` (amp/compute/libs/http-utils endpoint.rs).
+const ControlSecretHeader = "x-storage-control-secret"
+
 // transport bundles a base URL, an *http.Client, and an optional bearer token
 // shared by every request a given client makes.
 type transport struct {
 	base   string
 	hc     *http.Client
 	bearer string // empty = no Authorization header
+	// controlSecret is sent as x-storage-control-secret, which the pageserver
+	// and safekeeper require on every request that changes their state.
+	controlSecret string
 }
 
 // normalizeBase trims a trailing slash and prepends the http scheme when the
@@ -89,6 +96,9 @@ func (t *transport) do(ctx context.Context, method, path string, body, out any) 
 	}
 	if t.bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+t.bearer)
+	}
+	if t.controlSecret != "" {
+		req.Header.Set(ControlSecretHeader, t.controlSecret)
 	}
 
 	resp, err := t.hc.Do(req)

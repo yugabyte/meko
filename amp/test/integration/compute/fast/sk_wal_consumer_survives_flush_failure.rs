@@ -36,7 +36,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let conninfo = db::compute_conn(c.compute_port());
-    let http = reqwest::Client::new();
+    let http = c.daemon_client(c.sk_http_port())?;
     let failpoints_url = format!("http://127.0.0.1:{}/v1/failpoints", c.sk_http_port());
 
     step("Seed load table and confirm commits flow");

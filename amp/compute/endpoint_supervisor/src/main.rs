@@ -312,9 +312,20 @@ impl Env {
             privileged_role_name: env_opt("PRIVILEGED_ROLE_NAME"),
             log_files: prerender.caller_driven(),
             identities: identity::Identities::from_env()?,
-            lfc_state_port: env_port("LFC_STATE_PORT", 9896)?,
+            // The chart's fixed port in a pod; a launcher sharing a host allocates
+            // one per endpoint, and one that allocated none keeps the old path.
+            lfc_state_port: match env_opt("LFC_STATE_PORT") {
+                _ if prerender.brings_compute_spec() => None,
+                None if prerender == Prerender::Nothing => Some(9896),
+                None => None,
+                Some(_) => Some(env_port("LFC_STATE_PORT", 9896)?),
+            },
         };
-        refuse_prerendered_split(prerender, layout.identities.is_some())?;
+        anyhow::ensure!(
+            layout.identities.is_none() || layout.lfc_state_port.is_some(),
+            "the user split needs the LFC state server (LFC_STATE_PORT), or the compute \
+             would need a YugabyteDB credential for its prewarm state"
+        );
 
         // A malformed id means the overrides cannot be read, which is a warning
         // rather than a failure — but say so, since the pod will look fine while
@@ -537,11 +548,25 @@ fn run() -> Result<std::process::ExitCode> {
     let env = std::sync::Arc::new(Env::read()?);
     let l = &env.layout;
     // Before anything renders a daemon config or builds the HTTP client: both
-    // capture it. Only with the users split, where the compute shares the
-    // daemons' loopback but cannot read their tomls.
-    if l.identities.is_some() {
-        coordinate::init_control_secret()?;
+    // capture it.
+    let secret = match env.prerender {
+        Prerender::Nothing => Some(coordinate::generate_control_secret()?),
+        Prerender::Daemons | Prerender::Everything => prerendered_control_secret(l)?,
+    };
+    if secret.is_none() {
+        // A caller's config from before the secret existed. The daemons then
+        // accept a write from anything that reaches their port.
+        anyhow::ensure!(
+            l.identities.is_none(),
+            "the user split needs http_control_secret in the caller's pageserver.toml and \
+             safekeeper.toml; without it the compute could change the daemons' state"
+        );
+        tracing::warn!(
+            "the caller's daemon config sets no http_control_secret; the pageserver and \
+             safekeeper accept state-changing requests from anything on their port"
+        );
     }
+    coordinate::set_control_secret(secret)?;
     let fence_cfg = fence::Config::from_env(&l.branch_id)?;
     if !fence_cfg.required {
         tracing::warn!(
@@ -1130,8 +1155,8 @@ pub fn render_config(
             pageserver_connstring: &l.pageserver_connstring(),
             shared_preload_libraries: &env.shared_preload_libraries,
             endpoint_id: env.endpoint_id.as_deref(),
-            // A compute running as its own user holds no YugabyteDB credential,
-            // so it gets the loopback service instead of the connection.
+            // The compute gets the LFC state server instead of the storage
+            // connection whenever one runs, so it holds no YugabyteDB credential.
             yb_storage_conn: match l.lfc_state_url() {
                 Some(_) => serde_json::Value::Null,
                 None => env.yb_conn_typed_json(),
@@ -1227,17 +1252,28 @@ fn require_prerendered(l: &boot::Layout, mode: Prerender) -> Result<()> {
     Ok(())
 }
 
-/// The split's control secret goes into the daemons' tomls, which this process
-/// does not write when the caller brought them; running split without it would
-/// leave the daemons' mutating routes open to the compute.
-fn refuse_prerendered_split(prerender: Prerender, split: bool) -> Result<()> {
-    if split && prerender != Prerender::Nothing {
-        anyhow::bail!(
-            "PRERENDERED_CONFIG cannot be combined with the user split \
-             (STORAGE_UID/GID, COMPUTE_UID/GID): the daemons' configs would lack the control secret"
-        );
-    }
-    Ok(())
+/// The secret the caller rendered into both daemon tomls, which this process
+/// has to send. A missing file is left to [`require_prerendered`] to report.
+fn prerendered_control_secret(l: &boot::Layout) -> Result<Option<String>> {
+    let read = |path: Utf8PathBuf| -> Result<Option<String>> {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Ok(None);
+        };
+        let doc: toml_edit::DocumentMut =
+            text.parse().with_context(|| format!("parsing {path}"))?;
+        Ok(doc
+            .get("http_control_secret")
+            .and_then(|v| v.as_str())
+            .map(String::from))
+    };
+    let ps = read(l.ps_datadir().join("pageserver.toml"))?;
+    let sk = read(l.sk_datadir().join("safekeeper.toml"))?;
+    anyhow::ensure!(
+        ps == sk,
+        "pageserver.toml and safekeeper.toml disagree on http_control_secret; \
+         one secret has to serve both"
+    );
+    Ok(ps)
 }
 
 /// Reads the operator overrides. A failure is a warning: an endpoint that cannot
@@ -1467,7 +1503,7 @@ mod tests {
                 privileged_role_name: None,
                 log_files: false,
                 identities: None,
-                lfc_state_port: 9896,
+                lfc_state_port: Some(9896),
             },
             yb_host_ports: "127.0.0.1:5433".into(),
             yb_user: "yugabyte".into(),
@@ -1494,12 +1530,28 @@ mod tests {
     /// `compute_ctl` keys its LFC blobs by it. An id that is absent disables
     /// prewarm; an arbitrary string would become a blob key instead.
     #[test]
-    fn a_split_refuses_prerendered_config() {
-        refuse_prerendered_split(Prerender::Nothing, true).unwrap();
-        refuse_prerendered_split(Prerender::Everything, false).unwrap();
-        for p in [Prerender::Daemons, Prerender::Everything] {
-            assert!(refuse_prerendered_split(p, true).is_err());
-        }
+    fn the_prerendered_secret_is_read_from_both_tomls() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let mut l = test_env().layout;
+        l.run_dir = dir.path().to_path_buf();
+        std::fs::create_dir_all(l.ps_datadir()).unwrap();
+        std::fs::create_dir_all(l.sk_datadir()).unwrap();
+        let write = |ps: &str, sk: &str| {
+            std::fs::write(l.ps_datadir().join("pageserver.toml"), ps).unwrap();
+            std::fs::write(l.sk_datadir().join("safekeeper.toml"), sk).unwrap();
+        };
+        write("id = 1\n", "id = 1\n");
+        assert_eq!(prerendered_control_secret(&l).unwrap(), None);
+        write(
+            "http_control_secret = \"s\"\n",
+            "http_control_secret = \"s\"\n",
+        );
+        assert_eq!(
+            prerendered_control_secret(&l).unwrap().as_deref(),
+            Some("s")
+        );
+        write("http_control_secret = \"s\"\n", "id = 1\n");
+        assert!(prerendered_control_secret(&l).is_err());
     }
 
     #[test]

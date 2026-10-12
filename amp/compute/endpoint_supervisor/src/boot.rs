@@ -59,7 +59,10 @@ pub struct Layout {
     /// Set when the storage processes and the compute run as different users.
     pub identities: Option<crate::identity::Identities>,
     /// Loopback port of the LFC state service, used only with the users split.
-    pub lfc_state_port: u16,
+    /// Where the LFC state server listens. `None` when the supervisor does not
+    /// render the compute spec, or a launcher allocated no port for it; the
+    /// compute then reaches YugabyteDB itself.
+    pub lfc_state_port: Option<u16>,
 }
 
 /// Loopback is what the compute and the supervisor's own probes use, even when
@@ -93,11 +96,11 @@ impl Layout {
     pub fn compute_dir(&self) -> Utf8PathBuf {
         self.run_dir.join("compute")
     }
-    /// Where `compute_ctl` reads and writes its LFC state when it holds no
-    /// YugabyteDB credential of its own.
+    /// Where `compute_ctl` reads and writes its LFC state, through the storage
+    /// side, so it needs no YugabyteDB credential of its own.
     pub fn lfc_state_url(&self) -> Option<String> {
-        self.identities
-            .map(|_| format!("http://{LISTEN_HOST}:{}", self.lfc_state_port))
+        self.lfc_state_port
+            .map(|port| format!("http://{LISTEN_HOST}:{port}"))
     }
     /// Where the compute reads its server certificate and key when it runs as
     /// its own user and cannot read the mount.
@@ -483,15 +486,15 @@ pub fn services(l: &Layout) -> Vec<Service> {
     ]
 }
 
-/// The LFC state server ([`crate::lfc_proxy`]), only with the users split: it
-/// is how a compute holding no YugabyteDB credential reaches its prewarm state.
-/// Runs as the storage user, with the storage credentials it inherits.
+/// The LFC state server ([`crate::lfc_proxy`]): how the compute reaches its
+/// prewarm state without a YugabyteDB credential. Runs as the storage user when
+/// the users are split, with the storage credentials it inherits.
 pub fn lfc_state_service(
     l: &Layout,
     endpoint_id: Option<&str>,
     storage_json: &str,
 ) -> Option<Service> {
-    let ids = l.identities?;
+    let port = l.lfc_state_port?;
     let mut svc = Service::new(
         LFC_STATE_SERVICE,
         vec![
@@ -500,11 +503,11 @@ pub fn lfc_state_service(
         ],
     )
     .cwd(l.ps_datadir())
-    .run_as(Some(ids.storage))
-    .env("LFC_STATE_PORT", &l.lfc_state_port.to_string())
+    .run_as(l.identities.map(|i| i.storage))
+    .env("LFC_STATE_PORT", &port.to_string())
     .env("LFC_STATE_BRANCH_ID", &l.branch_id)
     .env("LFC_STATE_STORAGE", storage_json)
-    .health(tcp_probe(l.lfc_state_port));
+    .health(tcp_probe(port));
     if let Some(id) = endpoint_id {
         svc = svc.env("LFC_STATE_ENDPOINT_ID", id);
     }
@@ -539,7 +542,7 @@ mod tests {
             privileged_role_name: None,
             log_files: false,
             identities: None,
-            lfc_state_port: 9896,
+            lfc_state_port: Some(9896),
         }
     }
 
@@ -644,12 +647,17 @@ mod tests {
         assert_eq!(pgdata, l.compute_dir().join("pgdata").as_str());
     }
 
-    /// The LFC state server exists only split, and runs as the storage user.
+    /// The LFC state server runs whenever it has a port, as the storage user
+    /// when the users are split.
     #[test]
     fn the_lfc_state_server_runs_as_the_storage_user() {
         use crate::identity::{Identities, RunAs};
         let mut l = layout();
+        l.lfc_state_port = None;
         assert!(lfc_state_service(&l, Some("ep"), "{}").is_none());
+        l.lfc_state_port = Some(9896);
+        let unsplit = lfc_state_service(&l, Some("ep"), "{}").unwrap();
+        assert_eq!(unsplit.identity_for_test().0, None);
         let ids = Identities {
             storage: RunAs {
                 uid: 1000,

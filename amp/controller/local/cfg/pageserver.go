@@ -2,6 +2,8 @@ package cfg
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -185,6 +187,51 @@ func SetPageserverFencing(path string, require *bool) error {
 		return fmt.Errorf("serialize %q: %w", path, err)
 	}
 	return writeFile(path, out)
+}
+
+// NewControlSecret returns a fresh secret for `http_control_secret`.
+func NewControlSecret() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate the control secret: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+// SetControlSecret writes `http_control_secret` into an existing pageserver or
+// safekeeper toml (read-modify-write, like SetPageserverIdentity). The
+// supervisor reads it back from both files and sends it on its own requests;
+// the daemons refuse any other state-changing request.
+func SetControlSecret(path, secret string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse %q: %w", path, err)
+	}
+	doc["http_control_secret"] = secret
+	out, err := encodeTOML(doc)
+	if err != nil {
+		return fmt.Errorf("serialize %q: %w", path, err)
+	}
+	return writeFile(path, out)
+}
+
+// ControlSecret reads `http_control_secret` from a daemon toml; "" when unset.
+func ControlSecret(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %q: %w", path, err)
+	}
+	var doc struct {
+		Secret string `toml:"http_control_secret"`
+	}
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return "", fmt.Errorf("parse %q: %w", path, err)
+	}
+	return doc.Secret, nil
 }
 
 // NodeMetadata is the metadata.json the pageserver reads on startup to

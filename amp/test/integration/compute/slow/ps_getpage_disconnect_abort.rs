@@ -198,7 +198,7 @@ async fn ps_page_service_finished(c: &Cluster) -> anyhow::Result<i64> {
 async fn set_failpoint(c: &Cluster, name: &str, actions: &str) -> anyhow::Result<()> {
     let url = format!("http://127.0.0.1:{}/v1/failpoints", c.ps_http_port());
     let body = serde_json::json!([{ "name": name, "actions": actions }]);
-    let resp = reqwest::Client::new().put(&url).json(&body).send().await?;
+    let resp = c.daemon_client(c.ps_http_port())?.put(&url).json(&body).send().await?;
     ensure!(
         resp.status().is_success(),
         "PUT {name} failpoint -> {}",

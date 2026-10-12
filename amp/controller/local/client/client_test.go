@@ -31,6 +31,7 @@ type capture struct {
 	query  string
 	body   []byte
 	auth   string
+	secret string
 }
 
 // recordingServer returns an httptest.Server that records the last request into
@@ -44,6 +45,7 @@ func recordingServer(t *testing.T, cap *capture, status int, respBody string) *h
 		cap.query = r.URL.RawQuery
 		cap.body = body
 		cap.auth = r.Header.Get("Authorization")
+		cap.secret = r.Header.Get(ControlSecretHeader)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if respBody != "" {
@@ -291,5 +293,25 @@ func TestComputeCtlStatusAndTerminate(t *testing.T) {
 	}
 	if resp.LSN == nil || *resp.LSN != "0/16B3E10" {
 		t.Fatalf("unexpected terminate lsn: %+v", resp.LSN)
+	}
+}
+
+// The pageserver refuses a flush without the control secret once its toml sets
+// one, so the ancestor flush has to carry it.
+func TestPageserverSendsTheControlSecret(t *testing.T) {
+	var cap capture
+	rec := recordingServer(t, &cap, http.StatusOK, "")
+	ps := NewPageserver(rec.URL, nil)
+	if err := ps.BranchFlush(context.Background(), testBranchID, ""); err != nil {
+		t.Fatalf("BranchFlush: %v", err)
+	}
+	if cap.secret != "" {
+		t.Fatalf("sent a secret it was not given: %q", cap.secret)
+	}
+	if err := ps.WithControlSecret("s3cr3t").BranchFlush(context.Background(), testBranchID, ""); err != nil {
+		t.Fatalf("BranchFlush: %v", err)
+	}
+	if cap.secret != "s3cr3t" {
+		t.Fatalf("secret header = %q, want s3cr3t", cap.secret)
 	}
 }

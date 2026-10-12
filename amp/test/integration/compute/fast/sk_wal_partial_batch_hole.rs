@@ -32,7 +32,7 @@ const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let conninfo = db::compute_conn(c.compute_port());
-    let http = reqwest::Client::new();
+    let http = c.daemon_client(c.sk_http_port())?;
     let sk_dir = c.repo_dir().join("endpoints/main/safekeeper");
 
     step("Seed the table and the fill procedure");
@@ -139,7 +139,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         c.ps_http_port(),
         c.branch()
     );
-    let resp = tokio::time::timeout(CATCH_UP_TIMEOUT, http.put(&url).send())
+    let ps = c.daemon_client(c.ps_http_port())?;
+    let resp = tokio::time::timeout(CATCH_UP_TIMEOUT, ps.put(&url).send())
         .await
         .with_context(|| {
             format!("the pageserver did not reach {tip} within {CATCH_UP_TIMEOUT:?}")

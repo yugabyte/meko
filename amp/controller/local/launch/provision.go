@@ -299,6 +299,10 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	// Best-effort ancestor flush up to the branch point (relies on the
 	// branch-PS startup retry for correctness).
 	ancestorPS := client.NewPageserver(ancestorConf.ListenHTTPAddr, httpClient())
+	// The ancestor's own toml carries the secret it was started with.
+	if secret, err := cfg.ControlSecret(filepath.Join(ancestorConf.DataDir, "pageserver.toml")); err == nil {
+		ancestorPS = ancestorPS.WithControlSecret(secret)
+	}
 	if err := ancestorPS.BranchFlush(ctx, ancestorBranchID, startLSN); err != nil {
 		fmt.Printf("branch: best-effort ancestor flush failed (relying on startup retry): %v\n", err)
 	}
@@ -394,9 +398,11 @@ func clonePageserverFromTemplate(env *config.LocalEnv, psConf, ancestorConf *con
 		delete(doc, "listen_https_addr")
 	}
 	doc["safekeeper_pg_addr"] = safekeeperPgAddr
-	// Strip any inherited identity: this node serves its own branch.
+	// Strip any inherited identity: this node serves its own branch, and gets
+	// its own control secret on first start.
 	delete(doc, "branch_id")
 	delete(doc, "generation")
+	delete(doc, "http_control_secret")
 
 	out, err := marshalTOMLMap(doc)
 	if err != nil {

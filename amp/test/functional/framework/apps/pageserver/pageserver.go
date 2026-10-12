@@ -151,8 +151,15 @@ func httpScript(method string, port int, path string) string {
 // (stdout would otherwise carry an error body that a parser happily reads as an
 // empty exposition), and print the body. A JSON body must contain no % or single
 // quote: either would break the shell printf that sends it.
+//
+// Anything but a GET carries the pageserver's control secret, which it refuses
+// a state-changing request without. It is read from the pageserver.toml the
+// supervisor rendered; the exec user can read it with or without the user split.
 func httpScriptBody(method string, port int, path, body string) string {
 	req := fmt.Sprintf(`%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n`, method, path)
+	if method != "GET" {
+		req += `x-storage-control-secret: $secret\r\n`
+	}
 	if body == "" {
 		req += `\r\n`
 	} else {
@@ -160,6 +167,7 @@ func httpScriptBody(method string, port int, path, body string) string {
 		req += fmt.Sprintf(`Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s`, len(body), escaped)
 	}
 	return fmt.Sprintf(`bash -c '
+secret=$(sed -n "s/^http_control_secret *= *.\(.*\).$/\1/p" "${RUN_DIR:-/data}/pageserver/pageserver.toml" 2>/dev/null)
 exec 3<>/dev/tcp/127.0.0.1/%d || exit %d
 printf "%s" >&3
 resp=$(cat <&3)

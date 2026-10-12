@@ -105,7 +105,7 @@ async fn run_inner(
 /// `"60%return(80)"` or `"off"`).
 async fn set_failpoint(c: &Cluster, actions: &str) -> anyhow::Result<()> {
     let url = format!("http://127.0.0.1:{}/v1/failpoints", c.ps_http_port());
-    reqwest::Client::new()
+    c.daemon_client(c.ps_http_port())?
         .put(&url)
         .json(&serde_json::json!([{ "name": FP, "actions": actions }]))
         .send()

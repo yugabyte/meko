@@ -21,6 +21,15 @@ func NewPageserver(base string, hc *http.Client) *Pageserver {
 	return &Pageserver{t: newTransport(base, hc, "")}
 }
 
+// WithControlSecret returns the client sending secret on every request. The
+// pageserver refuses a state-changing request without it once its toml sets
+// `http_control_secret`.
+func (p *Pageserver) WithControlSecret(secret string) *Pageserver {
+	c := *p
+	c.t.controlSecret = secret
+	return &c
+}
+
 // PageserverTimelineInfo is the minimal slice of
 // pageserver_api::models::TimelineInfo the launcher reads. The full response
 // carries many more fields; only these are decoded. State is the

@@ -237,6 +237,9 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 	if conf.SettingsHTTPPort != 0 {
 		out["SUPERVISOR_HTTP_PORT"] = strconv.Itoa(int(conf.SettingsHTTPPort))
 	}
+	if conf.LFCStatePort != 0 {
+		out["LFC_STATE_PORT"] = strconv.Itoa(int(conf.LFCStatePort))
+	}
 	if conf.PrivilegedRoleName != nil {
 		out["PRIVILEGED_ROLE_NAME"] = *conf.PrivilegedRoleName
 	}

@@ -34,9 +34,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.endpoint_create_on_branch("ep_gc_dm", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let http = c.endpoint_ps_http_port("ep_gc_dm")?;
+    let ps = c.daemon_client(http)?;
 
     step("Arm the materialise-hold failpoint on the branch pageserver");
-    set_failpoint(http, &format!("return({HOLD_MS})")).await?;
+    set_failpoint(&ps, http, &format!("return({HOLD_MS})")).await?;
 
     step("Cross the image-chain threshold on one block (held job)");
     db::batch(
@@ -91,12 +92,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
     }
     if !deferred {
-        let _ = set_failpoint(http, "off").await;
+        let _ = set_failpoint(&ps, http, "off").await;
         bail!("drop was not deferred — expected pages=0 with the queue row still present while the job was held");
     }
 
     step("Job lands → fork quiet → drop acts → everything reclaimed");
-    let _ = set_failpoint(http, "off").await; // new jobs run normally; held ones wake on their timer
+    let _ = set_failpoint(&ps, http, "off").await; // new jobs run normally; held ones wake on their timer
     let (mut pages, mut queue) = (i64::MAX, i64::MAX);
     for i in 0..40 {
         db::batch(
@@ -124,10 +125,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 /// Configure the `ps::materialise-redo-one` failpoint on the branch's
 /// pageserver. `actions` is a fail-crate action string (`"return(20000)"`
 /// holds each job that long; `"off"` clears).
-async fn set_failpoint(http_port: u16, actions: &str) -> anyhow::Result<()> {
+async fn set_failpoint(
+    ps: &reqwest::Client,
+    http_port: u16,
+    actions: &str,
+) -> anyhow::Result<()> {
     let url = format!("http://127.0.0.1:{http_port}/v1/failpoints");
-    reqwest::Client::new()
-        .put(&url)
+    ps.put(&url)
         .json(&serde_json::json!([{ "name": "ps::materialise-redo-one", "actions": actions }]))
         .send()
         .await?

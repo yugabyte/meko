@@ -941,6 +941,45 @@ impl Cluster {
         Ok(())
     }
 
+    /// A client for the pageserver or safekeeper on `http_port`, carrying the
+    /// `x-storage-control-secret` both refuse a state-changing request without.
+    /// The launcher writes it into each daemon's toml under the repo.
+    pub fn daemon_client(&self, http_port: u16) -> anyhow::Result<reqwest::Client> {
+        let value = |line: &str, key: &str| {
+            let (k, v) = line.split_once('=')?;
+            (k.trim() == key).then(|| v.trim().trim_matches(['"', '\'']).to_string())
+        };
+        let mut tomls = Vec::new();
+        for ep in std::fs::read_dir(self.repo_dir.join("endpoints"))? {
+            let ep = ep?.path();
+            tomls.push((ep.join("pageserver/pageserver.toml"), "listen_http_addr"));
+            tomls.push((ep.join("safekeeper/safekeeper.toml"), "listen_http"));
+        }
+        for (path, addr_key) in tomls {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let port = text
+                .lines()
+                .find_map(|l| value(l, addr_key))
+                .and_then(|a| a.rsplit(':').next()?.parse::<u16>().ok());
+            if port != Some(http_port) {
+                continue;
+            }
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Some(secret) = text.lines().find_map(|l| value(l, "http_control_secret")) {
+                headers.insert("x-storage-control-secret", secret.parse()?);
+            }
+            return Ok(reqwest::Client::builder()
+                .default_headers(headers)
+                .build()?);
+        }
+        bail!(
+            "no daemon toml under {} listens on HTTP port {http_port}",
+            self.repo_dir.display()
+        )
+    }
+
     /// The HTTP (management/metrics) port of the pageserver a branch
     /// endpoint was provisioned with, read from its generated
     /// `pageserver.toml` (`listen_http_addr`). Robust against the
@@ -1301,7 +1340,11 @@ impl Cluster {
             self.ps_http_port(),
         );
         let t0 = Instant::now();
-        let resp = reqwest::Client::new().put(&url).send().await?;
+        let resp = self
+            .daemon_client(self.ps_http_port())?
+            .put(&url)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             bail!("pageserver flush returned {}", resp.status());
         }

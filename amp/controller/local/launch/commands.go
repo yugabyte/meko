@@ -63,18 +63,40 @@ func daemonStop(ctx context.Context, env *config.LocalEnv, endpointID, service s
 // fencing escape hatch — has to reach both daemons' own configs this way, or
 // they arm themselves from their defaults and refuse every write the unfenced
 // supervisor never sends a token for.
+//
+// Both files get the control secret, which the supervisor reads back from them.
+// It is minted once and kept in pageserver.toml, so a test holding a client
+// for one session's daemons still gets in after a restart.
 func renderDaemonConfig(env *config.LocalEnv, le launcherEndpoint, _ string) error {
+	psConf := env.PageserverConfForBranch(le.conf.BranchID)
+	secret := ""
+	if psConf != nil {
+		secret, _ = cfg.ControlSecret(filepath.Join(psConf.DataDir, "pageserver.toml"))
+	}
+	if secret == "" {
+		var err error
+		if secret, err = cfg.NewControlSecret(); err != nil {
+			return err
+		}
+	}
 	for i := range env.Safekeepers {
 		if env.Safekeepers[i].EndpointID == le.conf.EndpointID {
 			if err := writeSafekeeperFiles(env, &env.Safekeepers[i]); err != nil {
 				return err
 			}
+			skToml := filepath.Join(env.SafekeeperDataDir(le.conf.EndpointID), "safekeeper.toml")
+			if err := cfg.SetControlSecret(skToml, secret); err != nil {
+				return err
+			}
 			break
 		}
 	}
-	if psConf := env.PageserverConfForBranch(le.conf.BranchID); psConf != nil {
+	if psConf != nil {
 		tomlPath := filepath.Join(psConf.DataDir, "pageserver.toml")
 		if err := cfg.SetPageserverFencing(tomlPath, fencingOverride()); err != nil {
+			return err
+		}
+		if err := cfg.SetControlSecret(tomlPath, secret); err != nil {
 			return err
 		}
 	}

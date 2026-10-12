@@ -55,28 +55,32 @@ pub fn client() -> &'static reqwest::blocking::Client {
     })
 }
 
-static CONTROL_SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static CONTROL_SECRET: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
-/// Generates the secret the pageserver and safekeeper require on every request
-/// that changes their state, and that [`client`] then sends. Per process: the
-/// daemons are this process's children and read it from the tomls it renders.
-/// Must run before the first [`client`] call, which captures it.
-pub fn init_control_secret() -> anyhow::Result<()> {
+/// A fresh secret for the pageserver and safekeeper to require on every request
+/// that changes their state. Per process: the daemons are this process's
+/// children and read it from the tomls it renders.
+pub fn generate_control_secret() -> anyhow::Result<String> {
     use std::io::Read;
     let mut raw = [0u8; 32];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut raw))
         .context("reading /dev/urandom for the control secret")?;
-    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Fixes the secret [`client`] sends, `None` for daemons that check none. Must
+/// run before the first [`client`] call, which captures it.
+pub fn set_control_secret(secret: Option<String>) -> anyhow::Result<()> {
     anyhow::ensure!(
-        CONTROL_SECRET.set(hex).is_ok(),
+        CONTROL_SECRET.set(secret).is_ok(),
         "the control secret was already set"
     );
     Ok(())
 }
 
 pub fn control_secret() -> Option<&'static str> {
-    CONTROL_SECRET.get().map(String::as_str)
+    CONTROL_SECRET.get().and_then(Option::as_deref)
 }
 
 /// A GET returning 2xx, which is what "up" means for the pod's HTTP services.

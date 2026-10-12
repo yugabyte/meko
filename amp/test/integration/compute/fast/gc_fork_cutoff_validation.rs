@@ -75,11 +75,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         db::batch(&parent, "UPDATE gc_fork_val SET v = md5(v); CHECKPOINT;").await?;
     }
     let tip = db::query_text(&parent, "SELECT pg_current_wal_flush_lsn()::text").await?;
-    let flush_url = format!(
-        "http://127.0.0.1:{}/v1/branch/{parent_id}/flush?lsn={tip}",
-        c.endpoint_ps_http_port(ENDPOINT)?,
-    );
-    let resp = reqwest::Client::new().put(&flush_url).send().await?;
+    let ps_http = c.endpoint_ps_http_port(ENDPOINT)?;
+    let flush_url = format!("http://127.0.0.1:{ps_http}/v1/branch/{parent_id}/flush?lsn={tip}");
+    let resp = c.daemon_client(ps_http)?.put(&flush_url).send().await?;
     if !resp.status().is_success() {
         bail!("pageserver flush returned {}", resp.status());
     }
