@@ -19,8 +19,12 @@ const idOf = (v: unknown): string => (typeof v === 'string' && /^[\w-]{1,64}$/.t
 /** A number per terminal socket, so the log tells screens of one session apart. */
 let viewerCount = 0;
 
-/** Each session's screens, while it has any. */
-const boards = new Map<string, ScreenBoard>();
+/**
+ * Each session's screens, while it has any. `released` settles once every host stream the session
+ * moved away from is closed, attaches still in flight included, so the next screen's stream opens
+ * after them and the pane ends at its size.
+ */
+const boards = new Map<string, { board: ScreenBoard; released: Promise<void> }>();
 
 /** A socket's screen, with the log prefix the board's moves are logged under. */
 type LoggedScreen = Screen & { prefix: string };
@@ -68,8 +72,19 @@ export function attachTerminal(
     return;
   }
   const pane = row.tmux_name;
+  const shared = boards.get(sessionId) ?? {
+    board: new ScreenBoard((to, from, why) => {
+      if (why === 'first' || why === 'same screen') return;
+      const t = to as LoggedScreen;
+      core.log.info(`${t.prefix}: the session moved here${from ? ` from ${(from as LoggedScreen).prefix.split(' (')[0]}` : ''} (${why})`);
+    }),
+    released: Promise.resolve(),
+  };
+  boards.set(sessionId, shared);
 
   let stream: HostStream | null = null;
+  /** The attach in flight, until its stream is open or it failed. */
+  let attaching: Promise<unknown> | null = null;
   let closed = false;
   /** This screen has the session: it holds (or is opening) a stream. */
   let here = false;
@@ -107,6 +122,12 @@ export function attachTerminal(
   const stopStream = () => {
     const s = stream;
     stream = null;
+    // An attach still in flight closes its stream when it resolves (startStream); the next screen's waits for that.
+    if (attaching) {
+      const settled = attaching.then(() => undefined, () => undefined);
+      shared.released = shared.released.then(() => settled);
+      attaching = null;
+    }
     streamGen++;
     early.length = 0;
     pending = [];
@@ -119,12 +140,16 @@ export function attachTerminal(
 
   const startStream = () => {
     const gen = ++streamGen;
-    core.host.attach(pane, { cols, rows }).then(
+    const opening = shared.released.then(() => (closed || gen !== streamGen ? null : core.host.attach(pane, { cols, rows })));
+    attaching = opening;
+    opening.then(
       (s) => {
+        if (!s) return;
         if (closed || gen !== streamGen) {
           s.close();
           return;
         }
+        if (attaching === opening) attaching = null;
         stream = s;
         s.onData((d) => {
           if (stream !== s) return;
@@ -146,6 +171,7 @@ export function attachTerminal(
         for (const m of early.splice(0)) handle(m);
       },
       (e: unknown) => {
+        if (attaching === opening) attaching = null;
         if (closed || gen !== streamGen) return;
         send({ type: 'error', error: `Couldn't attach: ${errMsg(e)}`, retry: true });
         ws.close();
@@ -171,16 +197,7 @@ export function attachTerminal(
     },
   };
 
-  let board = boards.get(sessionId);
-  if (!board) {
-    board = new ScreenBoard((to, from, why) => {
-      if (why === 'first' || why === 'same screen') return;
-      const t = to as LoggedScreen;
-      core.log.info(`${t.prefix}: the session moved here${from ? ` from ${(from as LoggedScreen).prefix.split(' (')[0]}` : ''} (${why})`);
-    });
-    boards.set(sessionId, board);
-  }
-  const b = board;
+  const b = shared.board;
 
   function handle(m: TermClientMessage) {
     if (m.type === 'show') return b.show(screen);
@@ -222,7 +239,7 @@ export function attachTerminal(
     here = false;
     stopStream();
     b.leave(screen);
-    if (b.empty && boards.get(sessionId) === b) boards.delete(sessionId);
+    if (b.empty && boards.get(sessionId) === shared) boards.delete(sessionId);
   });
 
   core.log.info(

@@ -163,11 +163,12 @@ describe('terminal reports', () => {
     }
   });
 
-  it('tells reports sent without anyone using the screen (mouse motion, focus) from use', () => {
-    for (const r of ['\x1b[<35;10;5M', '\x1b[<32;10;5M', '\x1b[<34;1;1M', '\x1b[MC!!', '\x1b[I', '\x1b[O']) {
+  it('tells reports sent without anyone using the screen (mouse motion with no button, focus) from use', () => {
+    for (const r of ['\x1b[<35;10;5M', '\x1b[<39;10;5M', '\x1b[MC!!', '\x1b[I', '\x1b[O']) {
       expect(isPassiveReport(r), JSON.stringify(r)).toBe(true);
     }
-    for (const t of ['a', '\r', '\x1b[<0;10;5M', '\x1b[<0;10;5m', '\x1b[<64;10;5M', '\x1b[<65;10;5M', '\x1b[M !!', '\x1b[A']) {
+    // Drags (motion with a button held) are use.
+    for (const t of ['a', '\r', '\x1b[<0;10;5M', '\x1b[<0;10;5m', '\x1b[<32;10;5M', '\x1b[<34;1;1M', '\x1b[M@!!', '\x1b[<64;10;5M', '\x1b[<65;10;5M', '\x1b[M !!', '\x1b[A']) {
       expect(isPassiveReport(t), JSON.stringify(t)).toBe(false);
     }
   });

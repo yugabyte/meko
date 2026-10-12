@@ -47,13 +47,14 @@ describe('terminal socket', () => {
     const ws = fakeSocket();
     attachTerminal(coreFor(), ws as unknown as WebSocket, 's1', { cols: '100', rows: '30' });
     try {
+      // The browser that opened it sets the size.
+      await waitFor(() => sizeMessage(ws), (m) => !!m);
+      expect(JSON.parse(sizeMessage(ws)!)).toEqual({ type: 'size', cols: 100, rows: 30, active: true });
       for (const m of ['null', '5', '"x"', '[]', '{"type":"resize","cols":"a","rows":null}', '{"type":"input","data":7}', '{not json']) {
         expect(() => ws.emit('message', Buffer.from(m), false)).not.toThrow();
       }
       expect(() => ws.emit('message', Buffer.from('{"type":"resize","cols":90,"rows":20}'), false)).not.toThrow();
-      // The browser that opened it sets the size.
-      await waitFor(() => sizeMessage(ws), (m) => !!m);
-      expect(JSON.parse(sizeMessage(ws)!)).toEqual({ type: 'size', cols: 100, rows: 30, active: true });
+      await waitFor(() => ws.sent.filter((m) => typeof m === 'string' && m.includes('"cols":90')).length, (n) => n > 0);
     } finally {
       ws.close();
     }
@@ -81,6 +82,20 @@ describe('terminal socket', () => {
     await waitFor(() => host.capture('x'), (t) => t.includes('ready'));
     const lines: string[] = [];
     const core = coreFor(lines);
+    // Host streams opened and closed, by width; `onAttach` runs as an attach starts.
+    const streams: string[] = [];
+    let onAttach: (() => void) | null = null;
+    Object.assign(core, {
+      host: Object.assign(Object.create(host) as SessionHost, {
+        attach: async (pane: string, size: { cols?: number; rows?: number }) => {
+          streams.push(`attach ${size.cols}`);
+          onAttach?.();
+          const s = await host.attach(pane, size);
+          const close = s.close.bind(s);
+          return Object.assign(s, { close: () => (streams.push(`close ${size.cols}`), close()) });
+        },
+      }),
+    });
     const screens = (ws: ReturnType<typeof fakeSocket>) =>
       ws.sent.filter((m): m is string => typeof m === 'string').map((m) => JSON.parse(m)).filter((m) => m.type === 'screen');
     const lastSize = (ws: ReturnType<typeof fakeSocket>) =>
@@ -112,6 +127,18 @@ describe('terminal socket', () => {
       // The laptop shows its last picture: no more output, and its keys were dropped.
       expect(laptop.sent.length).toBe(laptopSent);
       expect(lines.join('\n')).toMatch(/terminal \d+ \(session s1\): the session moved here from terminal \d+ \(Move to this screen\)/);
+
+      // Moved back to the laptop and away again while the laptop's attach is in flight: its stream
+      // closes before the phone's opens, so the pane ends at the phone's size.
+      streams.length = 0;
+      onAttach = () => {
+        onAttach = null;
+        input(phone, { type: 'move' });
+      };
+      input(laptop, { type: 'move' });
+      await waitFor(() => streams.length, (n) => n >= 4);
+      expect(streams).toEqual(['close 40', 'attach 100', 'close 100', 'attach 40']);
+      await waitFor(() => lastSize(phone), (m) => m?.cols === 40 && m.active === true);
     } finally {
       laptop.close();
       phone.close();

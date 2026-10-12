@@ -62,8 +62,14 @@ export function TerminalPane({ session, onAsk }: { session: Session; onAsk?: () 
   return (
     <div className="term-col">
       {session.asking && onAsk && <AskBar ask={session.asking} onOpen={onAsk} />}
-      {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key). */}
-      <div className={away ? 'term-wrap away' : 'term-wrap'} onClick={() => (!touch || term.typing) && term.focus()}>
+      {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key); on another screen's session it still asks for it. */}
+      <div
+        className={away ? 'term-wrap away' : 'term-wrap'}
+        onClick={() => {
+          if (!touch || term.typing) term.focus();
+          else if (away) term.show();
+        }}
+      >
         <div className="term-host" ref={hostRef} />
         {showStartup && <StartupPanel session={session} onShowTerminal={() => setPeeked(startKey)} />}
         {overlay && (

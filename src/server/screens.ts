@@ -21,11 +21,12 @@ type Entry = { screen: Screen; showing: boolean; told: string };
 
 /**
  * The rules for which screen has a session (docs/design/architecture.md, "One screen per session").
- * Only that screen gets the session's output and sends it input and its size. Another screen that
- * shows the session asks for it, and gets it at once when the screen that has it is closed, isn't
- * showing it, or hasn't been used for SCREEN_IDLE_MS; otherwise it waits until it has been that long
- * (each use restarts the wait). `move` takes it at once. A screen that lost the session asks again
- * only when it shows it again. No sockets or host calls here: terminal.ts acts on what screens are told.
+ * Only that screen gets the session's output and sends it input and its size. Nobody has it until a
+ * screen that shows it asks. Another screen that shows the session asks for it, and gets it at once
+ * when the screen that has it is closed, isn't showing it, or hasn't been used for SCREEN_IDLE_MS;
+ * otherwise it waits until it has been that long (each use restarts the wait). `move` takes it at
+ * once. A screen that lost the session asks again only when it shows it again. No sockets or host
+ * calls here: terminal.ts acts on what screens are told.
  */
 export class ScreenBoard {
   private entries: Entry[] = [];
@@ -48,7 +49,6 @@ export class ScreenBoard {
     const e: Entry = { screen, showing: ask, told: '' };
     this.entries.push(e);
     if (screen.id === this.ownerId) this.give(e, 'same screen');
-    else if (!this.ownerId) this.give(e, 'first');
     else if (ask) this.ask(e);
     this.sync();
   }
@@ -117,7 +117,7 @@ export class ScreenBoard {
   }
 
   private ask(e: Entry) {
-    if (!this.owner) return this.give(e, 'other screen closed');
+    if (!this.owner) return this.give(e, this.ownerId ? 'other screen closed' : 'first');
     if (!this.ownerShowing) return this.give(e, 'other screen not showing it');
     if (Date.now() - this.lastUse >= SCREEN_IDLE_MS) return this.give(e, 'other screen idle');
     // The latest screen to ask waits; an earlier one goes back to seeing it elsewhere.

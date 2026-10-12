@@ -15,10 +15,15 @@ describe('one screen per session', () => {
 
   // [what happens, the steps, each screen's last state (the fields given)]
   it.each<[string, (b: ScreenBoard, s: Record<'a' | 'b' | 'c', Fake>) => void, Partial<Record<'a' | 'b' | 'c', Partial<ScreenState>>>]>([
-    ['the first screen gets it; one that connects without showing it sees it elsewhere', (b, { a, b: s }) => {
-      b.join(a, false);
+    ['the first screen to show it gets it; one that connects without showing it sees it elsewhere', (b, { a, b: s }) => {
+      b.join(a, true);
       b.join(s, false);
     }, { a: { state: 'here' }, b: { state: 'elsewhere', other: { name: 'A', sameBrowser: false } } }],
+    ['nobody has it until a screen shows it', (b, { a }) => {
+      b.join(a, false);
+      expect(a.told.at(-1)).toEqual({ state: 'elsewhere', other: null });
+      b.show(a);
+    }, { a: { state: 'here' } }],
     ['a reconnect from the same page keeps it', (b, { a, b: s, c }) => {
       b.join(a, true);
       b.join(s, false);

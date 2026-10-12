@@ -112,6 +112,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const STABLE_MS = 5000;
 /** On phones, a terminal taken off screen lets go of its session after this long. */
 const DETACH_RELEASE_MS = 5000;
+/**
+ * How long a screen showing a session waits, after the screen that had it closed, before it asks for
+ * it: a page that only lost its connection reconnects within this (backoff 0.5 s, then 1 s) and keeps it.
+ */
+const RECLAIM_MS = 3000;
 
 /** Why the pty behind a terminal exited, in words (the UI adds the dots while it reconnects). */
 const EXIT_REASONS: Record<string, string> = {
@@ -171,6 +176,8 @@ class SessionTerminal {
   moveAt = 0;
   /** This screen had the session and lost it: it doesn't ask again on a reconnect, only when shown again. */
   private lost = false;
+  /** What the server last said (kept across reconnects; `screen` starts at 'here' on each connect). */
+  private told: TermScreen | null = null;
   /** The screen that last asked while this one had the session, as told (for the notice). */
   private asker = '';
   message: string | null = null;
@@ -366,7 +373,7 @@ class SessionTerminal {
    */
   private async flush(text: string, offline: string): Promise<boolean> {
     if (!this.canType) {
-      this.showNotice(this.ws?.readyState === WebSocket.OPEN ? ELSEWHERE : offline, 4000);
+      this.showNotice(this.conn === 'open' && this.screen !== 'here' ? ELSEWHERE : offline, 4000);
       return false;
     }
     this.queued = [];
@@ -491,8 +498,12 @@ class SessionTerminal {
     return this.el.isConnected && !document.hidden;
   }
 
-  /** This screen shows the session: the server hands it here, now or once the other screen is idle. */
+  /**
+   * This screen shows the session: the server hands it here, now or once the other screen is idle.
+   * A socket still connecting asks as it opens.
+   */
   show() {
+    this.lost = false;
     this.send({ type: 'show' });
   }
 
@@ -519,6 +530,8 @@ class SessionTerminal {
 
   private setScreen(s: ScreenState) {
     const was = this.screen;
+    if (this.told === 'here' && s.state === 'elsewhere') this.lost = true;
+    this.told = s.state;
     this.screen = s.state;
     this.other = s.state === 'here' ? null : s.other;
     this.moveAt = s.state === 'waiting' ? Date.now() + s.moveInMs : 0;
@@ -527,7 +540,10 @@ class SessionTerminal {
       // Another screen asked for it: say so once, with the rule that moves it there.
       const asker = s.waiting ? JSON.stringify(s.waiting) : '';
       if (s.waiting && asker !== this.asker)
-        this.showNotice(`This session is open on ${screenLabel(s.waiting)} too. It moves there after ${SCREEN_IDLE_MS / 1000} s without typing here.`, 6000);
+        this.showNotice(
+          `This session is open on ${screenLabel(s.waiting)} too. It moves there once this screen goes ${SCREEN_IDLE_MS / 1000} s unused or stops showing it.`,
+          6000,
+        );
       this.asker = asker;
       if (was !== 'here') {
         // The host sends a fresh screen; the session takes this terminal's size again.
@@ -537,9 +553,11 @@ class SessionTerminal {
       }
     } else {
       this.asker = '';
-      if (was === 'here' && s.state === 'elsewhere') this.lost = true;
-      // The screen that had it closed: a screen showing the session takes it.
-      if (s.state === 'elsewhere' && !s.other && this.showing()) this.show();
+      // The screen that had it closed: a screen showing the session takes it, unless that page reconnects first.
+      if (s.state === 'elsewhere' && !s.other)
+        setTimeout(() => {
+          if (!this.disposed && this.screen === 'elsewhere' && !this.other && this.showing()) this.show();
+        }, RECLAIM_MS);
     }
     this.listeners.forEach((l) => l());
   }
@@ -571,7 +589,8 @@ class SessionTerminal {
     }
     const { cols, rows } = this.term;
     // On screen, it asks for the session as it connects, unless this screen lost it to another one.
-    const claim = this.showing() && !this.lost ? '&claim=1' : '';
+    const claimed = this.showing() && !this.lost;
+    const claim = claimed ? '&claim=1' : '';
     const ws = new WebSocket(
       wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}?cols=${cols}&rows=${rows}&screen=${PAGE_ID}&browser=${BROWSER_ID}${claim}`),
     );
@@ -590,6 +609,8 @@ class SessionTerminal {
         this.lastSize = { cols: this.term.cols, rows: this.term.rows };
         this.send({ type: 'resize', ...this.lastSize });
       }
+      // Shown while it was connecting (a show() then had no socket to go out on): ask now.
+      if (!claimed && this.showing() && !this.lost) this.show();
     };
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;

@@ -24,14 +24,14 @@ export function isTerminalReport(data: string): boolean {
 }
 
 /**
- * Whether terminal input is a report the terminal sends without anyone using it: mouse motion (SGR or
- * X10 encoding, the motion bit set) and focus in or out. Moving the pointer across a window isn't using
- * that screen, so these don't keep a session on it (src/server/screens.ts).
+ * Whether terminal input is a report the terminal sends without anyone using it: mouse motion with no
+ * button held (SGR or X10 encoding: the motion bit set and the button bits 3) and focus in or out.
+ * Moving the pointer across a window isn't using that screen, so these don't keep a session on it
+ * (src/server/screens.ts). A drag, motion with a button held, is use.
  */
 export function isPassiveReport(data: string): boolean {
   if (data === '\x1b[I' || data === '\x1b[O') return true;
   const sgr = /^\x1b\[<(\d+);\d+;\d+[Mm]$/.exec(data); // eslint-disable-line no-control-regex
-  if (sgr) return (Number(sgr[1]) & 32) !== 0;
-  if (data.length === 6 && data.startsWith('\x1b[M')) return ((data.charCodeAt(3) - 32) & 32) !== 0;
-  return false;
+  const button = sgr ? Number(sgr[1]) : data.length === 6 && data.startsWith('\x1b[M') ? data.charCodeAt(3) - 32 : -1;
+  return button >= 0 && (button & 32) !== 0 && (button & 3) === 3;
 }
