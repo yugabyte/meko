@@ -39,6 +39,7 @@ import type {
   StartFromLinkResult,
   ReviewComment,
   SearchResult,
+  SessionMatch,
   SendCommentsResult,
   Session,
   SessionAction,
@@ -168,6 +169,9 @@ export const api = {
   askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
   usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
+  /** Sessions, closed ones too, whose name, task, PR, branch or design has the words in `q`; in `projectId`, or every project open. */
+  findSessions: (q: string, projectId: string | null, signal?: AbortSignal) =>
+    request<SessionMatch[]>('GET', `/api/sessions/search?q=${enc(q)}${projectId ? `&project=${enc(projectId)}` : ''}`, undefined, { signal }),
   createSession: (projectId: string, b: CreateSessionRequest) =>
     post<Session>(`/api/projects/${enc(projectId)}/sessions`, b),
   /** Saves an image added in the New session dialog, for `CreateSessionRequest.images`; checked by its bytes. */

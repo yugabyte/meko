@@ -2296,7 +2296,7 @@ div[id^='dak-mermaid-'] .label {
 .pal-item.wrap .pal-label {
   white-space: normal;
 }
-/* AgentK's actions: the hint goes under the label, which keeps the whole width. */
+/* AgentK's actions and sessions found: the hint goes under the label, which keeps the whole width, and wraps. */
 .pal-item.wrap {
   grid-template-columns: 16px minmax(0, 1fr);
   row-gap: 2px;
@@ -2304,6 +2304,8 @@ div[id^='dak-mermaid-'] .label {
 .pal-item.wrap .pal-hint {
   grid-column: 2;
   max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .pal-error {
   padding: 0 16px 10px;
