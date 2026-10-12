@@ -127,6 +127,10 @@ your phone can connect.
   AgentK asks Claude Code (one quick call with no tools) and offers what to do: start a task at
   Explore, Design or Code with a prompt, go to a session, move one to another stage, or open its PR.
   Nothing runs until you pick it, a single "go to" included, and you can reply to refine it.
+- **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp
+  login". Besides names, it searches each session's task, PR title, branch and design, closed sessions
+  included, in the project you're on (every project from elsewhere), and lists the best matches with
+  the text that matched. Picking one goes to it, or opens its PR when it's closed.
 - **Paste a GitHub link to start:** paste a PR or issue link into Ask AgentK (`⌘K`). A PR
   gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
   to Code), in the project it belongs to: the one whose datapack its description names, else the
@@ -136,6 +140,9 @@ your phone can connect.
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
   `agent-k-local attach <session>` (`Ctrl+\` detaches).
+- **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
+  another and that screen offers **Move to this screen**; it moves there by itself once the first
+  screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
 - **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
   colors makes them light or has them follow the app's theme, remembered per browser.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next

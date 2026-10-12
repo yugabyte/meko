@@ -80,7 +80,7 @@ rename, the session's Meko conversation is retitled in the background (`conversa
 the datapack the session was launched with, as its other Meko writes; Meko off or failing, it
 keeps the old title), and Claude reads the new name in its system prompt
 the next time it's launched, and at the head of the task in any later prompt that names it. A task
-that was its name (started at Design or Code with no first prompt) takes the new name too, so the
+that was its name (started with no first prompt) takes the new name too, so the
 task never carries both. Claude Code's own name for the conversation (`--name`, given at the
 first launch) stays. An archived session can't be renamed.
 
@@ -153,7 +153,8 @@ terminal**, which hides it for that start in this page.
 normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
-or ask in plain words: see [Ask AgentK](palette.md#ask-agentk)).
+or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
+[Finding a session](palette.md#finding-a-session)).
 The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the shortcut)
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
@@ -164,6 +165,14 @@ copies rather than interrupting Claude while text is selected. While Claude has 
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
+
+In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would (nothing while it's
+disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). In a form
+with a submit button, that's the submit button if it's primary and nothing otherwise (Turn off
+two-factor); else the dialog footer's primary button; else, outside a form and footer, a primary
+button marked `data-submit` (Answer, in AgentK is asking). A field that takes Enter itself keeps it:
+in the Another PR box, `Ctrl+Enter` is Find, as Enter is, so a session can't start on the PR picked
+before.
 
 To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
 Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it
@@ -211,9 +220,8 @@ prompt reaches Claude on its command line, where a path isn't taken as an attach
 every prompt that names the task (a review's notes) adds the paths with a line asking Claude to
 open each with its Read tool: the first prompt, a move that gives the session its task, a relaunch without resume.
 The hooks settings file allows `Read` on the pastes folder, so that doesn't stop for a permission
-prompt. The images aren't the task: at Explore, images with no text are a first prompt, but the
-session still has no task (`Session.hasTask`), so moving it on offers to take one. AgentK's Meko search
-at start uses the task's text alone. Staged images no session started with
+prompt. The images aren't the task: with no text, the name is the task, as for any session started
+with no first prompt. AgentK's Meko search at start uses the task's text alone. Staged images no session started with
 are removed after a day (at startup and hourly), and a project's when it's closed.
 
 Opening a project (`⌘1–9`, the rail, Back from its home, the app's start page, or a link that

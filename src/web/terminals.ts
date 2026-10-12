@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
-import { MAX_PASTE_BYTES, type TermClientMessage, type TermServerMessage } from '../shared/types';
+import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, type TermClientMessage, type TermServerMessage } from '../shared/types';
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
 import { HeldImages, type HeldImage } from './heldImages';
@@ -20,6 +20,38 @@ import { currentTermTheme, onTermTheme, termOptions } from './termtheme';
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
 export type TermConn = 'connecting' | 'open' | 'closed' | 'ended';
+/** Which screen has the session: this one, this one once the other is idle, or another one. */
+export type TermScreen = 'here' | 'waiting' | 'elsewhere';
+
+/** Random hex. Not crypto.randomUUID: a plain-http network bind isn't a secure context, which it needs. */
+function randomId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+/** This page load's id: the server knows it as one screen, a reconnect included. */
+const PAGE_ID = randomId();
+const BROWSER_KEY = 'ak-browser';
+/** This browser's id, so another tab in it is named as one. Empty when storage is blocked. */
+const BROWSER_ID = (() => {
+  try {
+    let id = localStorage.getItem(BROWSER_KEY);
+    if (!id) {
+      id = randomId();
+      localStorage.setItem(BROWSER_KEY, id);
+    }
+    return id;
+  } catch {
+    return '';
+  }
+})();
+
+/** Another screen, in words ("another tab in this browser", "another screen (Chrome on macOS)"). */
+export function screenLabel(other: ScreenName | null): string {
+  if (!other) return 'another screen';
+  return other.sameBrowser ? 'another tab in this browser' : `another screen (${other.name})`;
+}
+const ELSEWHERE = 'This session is open on another screen. Use Move to this screen to type here.';
 
 const FONT = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
@@ -57,6 +89,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const STABLE_MS = 5000;
 /** On phones, a terminal taken off screen lets go of its session after this long. */
 const DETACH_RELEASE_MS = 5000;
+/**
+ * How long a screen showing a session waits, after the screen that had it closed, before it asks for
+ * it: a page that only lost its connection reconnects within this (backoff 0.5 s, then 1 s) and keeps it.
+ */
+const RECLAIM_MS = 3000;
 
 /** Why the pty behind a terminal exited, in words (the UI adds the dots while it reconnects). */
 const EXIT_REASONS: Record<string, string> = {
@@ -109,6 +146,18 @@ class SessionTerminal {
   /** Select mode from the key bar (touch screens): a drag selects whole lines and copies them. */
   selecting = false;
   conn: TermConn = 'connecting';
+  /** Which screen has the session; the server says, and a server that doesn't leaves it here. */
+  screen: TermScreen = 'here';
+  /** The screen that has the session, while this one doesn't (null: it closed). */
+  other: ScreenName | null = null;
+  /** While waiting: when the session moves here (ms), unless the other screen is used first. */
+  moveAt = 0;
+  /** This screen had the session and lost it: it doesn't ask again on a reconnect, only when shown again. */
+  private lost = false;
+  /** What the server last said (kept across reconnects; `screen` starts at 'here' on each connect). */
+  private told: TermScreen | null = null;
+  /** The screen that last asked while this one had the session, as told (for the notice). */
+  private asker = '';
   message: string | null = null;
   /** `message` says what is being retried ("Reconnecting"): the UI shows it with moving dots. */
   retrying = false;
@@ -306,8 +355,8 @@ class SessionTerminal {
    * again, and the notice says to check Claude's prompt.
    */
   private async flush(text: string, offline: string): Promise<boolean> {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      this.showNotice(offline, 4000);
+    if (!this.canType) {
+      this.showNotice(this.conn === 'open' && this.screen !== 'here' ? ELSEWHERE : offline, 4000);
       return false;
     }
     this.queued = [];
@@ -354,7 +403,7 @@ class SessionTerminal {
       let dropped = false;
       for (const data of queued) if (!this.input(data)) dropped = true;
       // Say so, unless a notice already says why (the connection dropped).
-      if (dropped && !this.notice) this.showNotice(NOT_CONNECTED, 4000);
+      if (dropped && !this.notice) this.showNotice(this.cantType(), 4000);
     }
   }
 
@@ -405,6 +454,8 @@ class SessionTerminal {
   /** Returns false (and drops the message) when not connected. */
   private send(msg: TermClientMessage): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    // Only the screen that has the session types into it.
+    if (msg.type === 'input' && this.screen !== 'here') return false;
     this.ws.send(JSON.stringify(msg));
     // Input makes this the active terminal (the host does the same on its side): take its size back.
     if (msg.type === 'input' && !this.active) {
@@ -414,11 +465,84 @@ class SessionTerminal {
     return true;
   }
 
-  /** This terminal was used: the session takes its size. */
+  /** This terminal was focused: on this screen the session takes its size; elsewhere it asks for the session. */
   private claimActive() {
+    if (this.screen !== 'here') {
+      this.show();
+      return;
+    }
     if (this.active || !this.send({ type: 'active' })) return;
     this.active = true;
     this.refit();
+  }
+
+  /** On screen: in the page, and the page isn't hidden. */
+  private showing(): boolean {
+    return this.el.isConnected && !document.hidden;
+  }
+
+  /**
+   * This screen shows the session: the server hands it here, now or once the other screen is idle.
+   * A socket still connecting asks as it opens.
+   */
+  show() {
+    this.lost = false;
+    this.send({ type: 'show' });
+  }
+
+  /** This screen stopped showing the session: a screen that asks for it gets it at once. */
+  hide() {
+    this.send({ type: 'hide' });
+  }
+
+  /** Move to this screen: takes the session from the screen that has it. */
+  moveHere() {
+    this.send({ type: 'move' });
+  }
+
+  /** Whether what's typed reaches Claude: connected, and this screen has the session. */
+  get canType(): boolean {
+    return this.conn === 'open' && this.ws?.readyState === WebSocket.OPEN && this.screen === 'here';
+  }
+
+  /** Why typing can't reach Claude now; `kept`: the compose box keeps the message. */
+  cantType(kept = false): string {
+    if (this.conn === 'open' && this.screen !== 'here') return ELSEWHERE;
+    return kept ? 'Not connected to the session. Your message is kept; send it again once it reconnects.' : NOT_CONNECTED;
+  }
+
+  private setScreen(s: ScreenState) {
+    const was = this.screen;
+    if (this.told === 'here' && s.state === 'elsewhere') this.lost = true;
+    this.told = s.state;
+    this.screen = s.state;
+    this.other = s.state === 'here' ? null : s.other;
+    this.moveAt = s.state === 'waiting' ? Date.now() + s.moveInMs : 0;
+    if (s.state === 'here') {
+      this.lost = false;
+      // Another screen asked for it: say so once, with the rule that moves it there.
+      const asker = s.waiting ? JSON.stringify(s.waiting) : '';
+      if (s.waiting && asker !== this.asker)
+        this.showNotice(
+          `This session is open on ${screenLabel(s.waiting)} too. It moves there once this screen goes ${SCREEN_IDLE_MS / 1000} s unused or stops showing it.`,
+          6000,
+        );
+      this.asker = asker;
+      if (was !== 'here') {
+        // The host sends a fresh screen; the session takes this terminal's size again.
+        this.active = true;
+        this.lastSize = { cols: 0, rows: 0 };
+        this.refit();
+      }
+    } else {
+      this.asker = '';
+      // The screen that had it closed: a screen showing the session takes it, unless that page reconnects first.
+      if (s.state === 'elsewhere' && !s.other)
+        setTimeout(() => {
+          if (!this.disposed && this.screen === 'elsewhere' && !this.other && this.showing()) this.show();
+        }, RECLAIM_MS);
+    }
+    this.listeners.forEach((l) => l());
   }
 
   /** What fits this terminal's box, or null when it isn't laid out. */
@@ -447,7 +571,15 @@ class SessionTerminal {
       }
     }
     const { cols, rows } = this.term;
-    const ws = new WebSocket(wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}?cols=${cols}&rows=${rows}`));
+    // On screen, it asks for the session as it connects, unless this screen lost it to another one.
+    const claimed = this.showing() && !this.lost;
+    const claim = claimed ? '&claim=1' : '';
+    const ws = new WebSocket(
+      wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}?cols=${cols}&rows=${rows}&screen=${PAGE_ID}&browser=${BROWSER_ID}${claim}`),
+    );
+    // Until the server says otherwise (a server from before screens never does).
+    this.screen = 'here';
+    this.other = null;
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.onopen = () => {
@@ -460,6 +592,8 @@ class SessionTerminal {
         this.lastSize = { cols: this.term.cols, rows: this.term.rows };
         this.send({ type: 'resize', ...this.lastSize });
       }
+      // Shown while it was connecting (a show() then had no socket to go out on): ask now.
+      if (!claimed && this.showing() && !this.lost) this.show();
     };
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
@@ -475,7 +609,8 @@ class SessionTerminal {
           this.active = msg.active;
           if (msg.active) this.refit();
           else if (this.term.cols !== msg.cols || this.term.rows !== msg.rows) this.term.resize(msg.cols, msg.rows);
-        } else if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
+        } else if (msg.type === 'screen') this.setScreen(msg);
+        else if (msg.type === 'exit') this.setConn('ended', EXIT_REASONS[msg.reason] ?? 'The terminal closed. Reconnecting', true);
         else if (msg.type === 'error') {
           // A missing or archived session is final (Try again); a failed attach may pass, so back off and retry.
           this.failed = !msg.retry;
@@ -825,6 +960,8 @@ class SessionTerminal {
       this.paused = false;
       this.connect();
     } else this.resume();
+    // Switched back to it: ask for the session (a socket still connecting asks as it opens).
+    this.show();
     this.enableWebgl();
     this.resizeObs?.disconnect();
     this.resizeObs = new ResizeObserver(() => this.scheduleRefit());
@@ -836,6 +973,7 @@ class SessionTerminal {
   }
 
   detach() {
+    this.hide();
     this.stopFling();
     this.disableWebgl();
     this.resizeObs?.disconnect();
@@ -886,7 +1024,9 @@ class SessionTerminal {
     this.term.scrollToBottom();
   }
 
+  /** Focuses the terminal (a click on it). Elsewhere it asks for the session even when it already had focus. */
   focus() {
+    if (this.screen !== 'here') this.show();
     this.term.focus();
   }
 
@@ -974,6 +1114,8 @@ if (typeof document !== 'undefined') {
     if (hiddenTimer) clearTimeout(hiddenTimer);
     hiddenTimer = null;
     if (document.hidden) {
+      // The screen that has a session hands it to the next screen that asks, at once.
+      for (const t of cache.values()) if (t.el.isConnected) t.hide();
       if (!matches(MOBILE_QUERY)) return;
       hiddenAt = Date.now();
       hiddenTimer = setTimeout(() => {
@@ -986,6 +1128,8 @@ if (typeof document !== 'undefined') {
       hiddenAt = 0;
       // Only terminals on screen: ones taken off screen on a phone stay released until shown.
       for (const t of cache.values()) if (t.el.isConnected) t.resume();
+      // Shown again: each on screen asks for its session (one still connecting asks as it opens).
+      for (const t of cache.values()) if (t.el.isConnected) t.show();
     }
   });
 }

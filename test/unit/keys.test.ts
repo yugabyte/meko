@@ -3,6 +3,7 @@ import {
   BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
+import { isPassiveReport } from '../../src/shared/termreports.js';
 
 describe('terminal key bar', () => {
   it('sends the bytes a keyboard would, arrows, Home and End following the cursor-key mode', () => {
@@ -159,6 +160,16 @@ describe('terminal reports', () => {
     for (const r of ['\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[12;40R', '\x1b[?2004;1$y', '\x1b[0n', '\x1b[?0u', '\x1b[8;24;80t',
       '\x1b]11;rgb:1010/1414/1212\x1b\\', '\x1b]10;rgb:d5d5/dddd/d8d8\x07', '\x1bP>|xterm.js(6.0.0)\x1b\\']) {
       expect(isTerminalReport(r), JSON.stringify(r)).toBe(true);
+    }
+  });
+
+  it('tells reports sent without anyone using the screen (mouse motion with no button, focus) from use', () => {
+    for (const r of ['\x1b[<35;10;5M', '\x1b[<39;10;5M', '\x1b[MC!!', '\x1b[I', '\x1b[O']) {
+      expect(isPassiveReport(r), JSON.stringify(r)).toBe(true);
+    }
+    // Drags (motion with a button held) are use.
+    for (const t of ['a', '\r', '\x1b[<0;10;5M', '\x1b[<0;10;5m', '\x1b[<32;10;5M', '\x1b[<34;1;1M', '\x1b[M@!!', '\x1b[<64;10;5M', '\x1b[<65;10;5M', '\x1b[M !!', '\x1b[A']) {
+      expect(isPassiveReport(t), JSON.stringify(t)).toBe(false);
     }
   });
 

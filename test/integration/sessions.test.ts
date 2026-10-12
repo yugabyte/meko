@@ -635,9 +635,10 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await expect(env.core.sessions.action(plan.id, 'approve-design')).rejects.toThrow(/hasn't written a design/);
     const explore = await env.core.sessions.create(p.id, { name: 'Why slow', start: 'explore' });
     await waitFor(() => argvLog(env), (l) => l.length === 3, 10000, 'explore launch');
-    expect(argvLog(env)[2].args).not.toContain('--'); // a prompt always follows "--"
+    // Explore too: with no first prompt, the name is the task.
+    expect(argvLog(env)[2].args.at(-1)).toMatch(/^You are in the Explore stage[^]*\nTask: Why slow\n/);
     const rows = [quick, plan, explore].map((s) => env.core.sessions.row(s.id).initial_prompt);
-    expect(rows).toEqual(['Fix the typo', 'Add retries', null]);
+    expect(rows).toEqual(['Fix the typo', 'Add retries', 'Why slow']);
     await expect(env.core.sessions.create(p.id, { name: 'Typed', prompt: 123 as never })).rejects.toMatchObject({ status: 400 });
   });
 
@@ -689,14 +690,16 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // A prompt that starts with the name (in any case) isn't given it again.
     expect(prompt).toContain(`Task: fix the footer: it overflows on phones\n\nImages the user attached (open each with the Read tool to see it):\n- ${paths[0]}\n- ${paths[1]}`);
 
-    // At Explore, images alone are a first prompt, but not a task: moving on offers to take one.
+    // At Explore with images and no text, the name is the task, and the images go with it.
     const c = env.core.sessions.stageImage(p.id, png).id;
     const e = await env.core.sessions.create(p.id, { name: 'Look at this', start: 'explore', images: [c] });
-    expect(e.hasTask).toBe(false);
-    expect(env.core.sessions.row(e.id).initial_prompt).toBeNull();
+    expect(e.hasTask).toBe(true);
     await waitFor(() => argvLog(env), (l) => l.length > 1, 10000, 'second launch');
     expect(argvLog(env)[1].args.at(-1)).toContain(`Task: Look at this\n\nImages the user attached (open each with the Read tool to see it):\n- ${join(pastes, e.id, c)}`);
     await waitFor(() => env.core.sessions.get(e.id).status, (st) => st === 'idle', 10000, 'Explore turn');
+    // One started so before the name became the task has none: moving on offers to take one.
+    env.core.sessions.update(e.id, { initial_prompt: null });
+    expect(env.core.sessions.get(e.id).hasTask).toBe(false);
     const moved = await env.core.sessions.move(e.id, { stage: 'design', task: 'Make the footer wrap' });
     expect(moved.hasTask).toBe(true);
     await waitFor(() => transcriptText(moved.claudeSessionId), (t) => t.includes('You are in the Design stage'), 10000, 'Design prompt');

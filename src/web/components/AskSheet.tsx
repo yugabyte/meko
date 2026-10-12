@@ -147,7 +147,7 @@ export function AskForm({ session, ask, onDone }: { session: Session; ask: AskRe
         <span className="dq-foot-note">
           {error ? <span className="error-text">{error}</span> : (blocker ?? 'The terminal shows the same question: whichever you answer first counts.')}
         </span>
-        <button className="btn small primary" disabled={!!blocker || sending} onClick={() => void send()}>
+        <button className="btn small primary" data-submit disabled={!!blocker || sending} onClick={() => void send()}>
           {sending ? <Busy label="Answering" /> : 'Answer'}
         </button>
       </div>

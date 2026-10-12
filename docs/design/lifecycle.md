@@ -218,7 +218,8 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
   The dialog's line on what the move does says so (or, with a task typed, that AgentK works on that task). The dialog doesn't offer a choice: what the user
   wants on a move back goes in its optional instructions (see below). The request's `prompt` flag is
   still honored, for pages from before (a move to Explore sends `explore`). A session with no task
-  yet (one started at Explore without a first prompt) is offered an optional Task field: a task given
+  yet (`Session.hasTask`: one started at Explore without a first prompt before its name became the
+  task) is offered an optional Task field: a task given
   becomes the session's, and the stage's start prompt goes with it; left empty, the move prompt goes
   as for any other session. If the prompt can't be typed, the move stays and the error says so.
 - **Side effects.** Entering Design clears `plan_mode`, so the edit guard is on and the design is

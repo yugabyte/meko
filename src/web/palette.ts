@@ -1,5 +1,5 @@
 // Command palette labels and filtering. Pure, so it's unit-tested.
-import { STAGE_LABELS, type AskAgentkAction, type LinkPlan, type LinkProject, type ProjectWithSessions } from '../shared/types';
+import { STAGE_LABELS, type AskAgentkAction, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch } from '../shared/types';
 
 /** A piece of a palette label: plain text, or a session's or project's name, drawn in its own style. */
 export type LabelPart = string | { session: string } | { project: string };
@@ -105,9 +105,9 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
 }
 
 /** The palette input's placeholder, one at a time, so it shows everything the palette takes. */
-export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Jump to a session…', 'Paste a GitHub PR or issue link…'];
+export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Find a session by what it’s about…', 'Paste a GitHub PR or issue link…'];
 /** The placeholder with reduced motion, which doesn't rotate. */
-export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session or paste a GitHub link…';
+export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session by what it’s about or paste a GitHub link…';
 
 /** A palette item for an action AgentK proposed; `edit` opens New session with the task instead of starting it. */
 export interface AskEntry {
@@ -159,5 +159,35 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
       case 'openPr':
         return [{ id, label: ['Open PR for ', { session: sessionName(a.sessionId) }], hint: a.instructions ? preview(a.instructions, 80) : 'Action', action: a }];
     }
+  });
+}
+
+/** What a found session's palette item does: go to it, open its PR (a closed one's), or nothing (closed, with no PR). */
+export type FindAction = { go: { projectId: string; sessionId: string } } | { open: string } | null;
+
+export interface FindEntry {
+  id: string;
+  label: LabelPart[];
+  hint: string;
+  action: FindAction;
+}
+
+const FIELD_TEXT: Record<SessionMatch['field'], string> = { name: 'Name', pr: 'PR', task: 'Task', branch: 'Branch', design: 'Design' };
+
+/**
+ * The palette items for sessions a search found: each says where it is (its project, when not the one
+ * on screen), its stage or that it's closed, and where the words were, with the text around them.
+ */
+export function findEntries(matches: SessionMatch[], projects: ProjectWithSessions[], currentProjectId: string | null): FindEntry[] {
+  return matches.map((m) => {
+    const where = m.projectId !== currentProjectId ? projects.find((p) => p.id === m.projectId)?.name : undefined;
+    const state = m.closed ? (m.prNumber != null ? `Closed · PR #${m.prNumber}` : 'Closed') : STAGE_LABELS[m.stage];
+    const found = m.snippet ? `${FIELD_TEXT[m.field]}: ${m.snippet}` : '';
+    return {
+      id: `find-${m.sessionId}`,
+      label: [{ session: m.name }],
+      hint: [where, state, found].filter(Boolean).join(' · '),
+      action: !m.closed ? { go: { projectId: m.projectId, sessionId: m.sessionId } } : m.prUrl ? { open: m.prUrl } : null,
+    };
   });
 }

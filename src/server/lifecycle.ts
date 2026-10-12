@@ -1152,6 +1152,8 @@ export class Lifecycle {
     // Read the row again: a turn may have ended or a review been requested during the calls above.
     let row = sessionRow(this.db, id);
     if (!row || row.stage === 'done') return;
+    // For finding the session by its PR's title (sessionsearch.ts), merged ones included.
+    if (st.title && st.title !== row.pr_title && st.number === row.pr_number) this.sessions.update(id, { pr_title: st.title });
     if (st.state === 'MERGED') {
       await this.merged(row, st);
       return;

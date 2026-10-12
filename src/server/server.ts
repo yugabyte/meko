@@ -10,7 +10,7 @@ import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
-  AskAgentkRequest, AskAgentkResult, LinkPlan, StartFromLinkRequest, StartFromLinkResult,
+  AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -27,7 +27,8 @@ import { MekoApiError } from './mekoapi.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
-import { attachTerminal } from './terminal.js';
+import { searchSessions } from './sessionsearch.js';
+import { attachTerminal, type TermQuery } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 import { usageOverview } from './usage.js';
@@ -41,6 +42,8 @@ const ACTIONS: SessionAction[] = [
   'learn',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
+/** How long a closing server waits for a browser's socket to answer its close before dropping it. */
+export const SHUTDOWN_CLOSE_MS = 1000;
 
 export interface ServerOptions {
   tls: TlsMaterial | null;
@@ -381,6 +384,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return core.askAgentk.ask(req.body, gone.signal);
   });
   app.get('/api/usage', async () => usageOverview(core.db));
+  app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>
+    searchSessions(core.db, req.query.q ?? '', req.query.project || undefined));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
 
   // ---- sessions ----
@@ -593,6 +598,20 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   }, 30_000);
   heartbeat.unref();
   app.addHook('onClose', async () => clearInterval(heartbeat));
+  // Closing, @fastify/websocket asks every socket to close, and the server's close waits for each
+  // to answer. ws gives a peer that never does (a sleeping phone or laptop) 30 s, and every restart,
+  // an update's included, waited that long: drop the sockets still open after SHUTDOWN_CLOSE_MS.
+  let dropOpen: NodeJS.Timeout | null = null;
+  app.addHook('preClose', (done) => {
+    dropOpen = setTimeout(() => {
+      for (const ws of app.websocketServer.clients) ws.terminate();
+    }, SHUTDOWN_CLOSE_MS);
+    dropOpen.unref();
+    done();
+  });
+  app.addHook('onClose', async () => {
+    if (dropOpen) clearTimeout(dropOpen);
+  });
   let pending: NodeJS.Timeout | null = null;
   /**
    * Browsers that aren't keeping up (a phone on a slow link) skip state snapshots rather than
@@ -668,10 +687,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     socket.on('close', () => clients.delete(socket));
   });
 
-  app.get<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>('/ws/term/:id', { websocket: true },
-    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>) => {
+  app.get<{ Params: { id: string }; Querystring: TermQuery }>('/ws/term/:id', { websocket: true },
+    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: TermQuery }>) => {
     if (!wsGuard(socket, req)) return;
-    attachTerminal(core, socket, req.params.id, req.query);
+    attachTerminal(core, socket, req.params.id, req.query, { ip: req.ip, userAgent: req.headers['user-agent'] });
   });
 
   // ---- web app ----

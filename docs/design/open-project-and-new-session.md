@@ -125,7 +125,7 @@ the first prompt, unless the prompt already starts with it), so the prompt needn
 
 | Start | For | First prompt |
 |---|---|---|
-| **0 Explore** (`start: 'explore'`) | Investigating, answering questions, POCs and experiments; you move it on to Design, Code or a PR when you're ready | `explore`; with no first prompt it starts at an empty prompt |
+| **0 Explore** (`start: 'explore'`) | Investigating, answering questions, POCs and experiments; you move it on to Design, Code or a PR when you're ready | `explore`; with no first prompt the name is the task |
 | **1 Design** (the default) | Normal tasks: a design for you to approve, then code, PR, review and merge | `design`; with no first prompt the name is the task |
 | **2 Code** | Small tasks: straight to code, then PR, review and merge | `code`; with no first prompt the name is the task |
 | **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with AgentK assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](review-pr.md)) |

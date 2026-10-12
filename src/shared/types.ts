@@ -594,7 +594,7 @@ export interface Session {
   /** As stored (see StoredKind); `kindOf(session.kind)` is `task` or `review-pr`. */
   kind: StoredKind;
   stage: Stage;
-  /** The session has a task (its first prompt, or its name); one started at Explore without a first prompt has none. */
+  /** The session has a task (its first prompt, or its name); only one started at Explore without a first prompt before the name became its task has none. */
   hasTask: boolean;
   prNumber: number | null;
   prUrl: string | null;
@@ -1060,6 +1060,28 @@ export interface StartFromLinkRequest {
 export interface StartFromLinkResult {
   project: Project;
   session: Session;
+}
+
+/** Where a session search found the words, from the field that counts most to the one that counts least. */
+export type SessionMatchField = 'name' | 'pr' | 'task' | 'branch' | 'design';
+
+/** The most characters a session search takes (`GET /api/sessions/search?q=`). */
+export const SESSION_SEARCH_MAX = 200;
+
+/** A session whose name, task, PR, branch or design has the words searched for (`GET /api/sessions/search`). */
+export interface SessionMatch {
+  sessionId: string;
+  projectId: string;
+  name: string;
+  stage: Stage;
+  /** Archived (merged, discarded or closed): it isn't in AppState, so only its PR can be opened. */
+  closed: boolean;
+  prNumber: number | null;
+  prUrl: string | null;
+  /** The field that counts most among those with a match. */
+  field: SessionMatchField;
+  /** The text around the first match in that field, on one line; empty when it's the name. */
+  snippet: string;
 }
 
 /** The most characters an instruction for Ask AgentK takes (`AskAgentkRequest.text`). */
@@ -1629,9 +1651,9 @@ export interface MoveSessionRequest {
    */
   prompt?: boolean;
   /**
-   * The task, for a session that has none yet (one started at Explore without a first prompt); the
-   * stage's start prompt then goes with it. Optional: without it, the move's prompt has AgentK carry
-   * on from the conversation, as it does for a session that has a task.
+   * The task, for a session that has none yet (one started at Explore without a first prompt, before
+   * the name became the task); the stage's start prompt then goes with it. Optional: without it, the
+   * move's prompt has AgentK carry on from the conversation, as it does for a session that has a task.
    */
   task?: string;
   /**
@@ -1686,10 +1708,14 @@ export interface TotpEnrollResponse {
 // change or reset); the client should show the login screen rather than reconnect. The
 // server pings every 30 s and drops sockets that don't answer.
 //
-// /ws/term/:sessionId[?cols=&rows=]: the optional query is the browser terminal's size; the
-// pane takes it, as its newest viewer's. Client → server JSON TermClientMessage (text frames).
-// server → client: binary frames are raw terminal output (the screen as it is first, then
-// what follows); text frames are JSON TermServerMessage.
+// /ws/term/:sessionId[?cols=&rows=&screen=&browser=&claim=1]: `cols` and `rows` are the
+// browser terminal's size. A session is live on one screen at a time (src/server/screens.ts):
+// `screen` is the page's id (one per page load), `browser` the browser's (to name "another tab in
+// this browser"), and `claim=1` asks for the session as the socket opens (the terminal is on screen).
+// Only the screen that has the session gets output and sends input and its size to Claude.
+// Client → server JSON TermClientMessage (text frames). server → client: binary frames are raw
+// terminal output (the screen as it is first, then what follows); text frames are JSON
+// TermServerMessage.
 
 export type ServerEvent =
   | { type: 'state'; state: AppState }
@@ -1706,7 +1732,29 @@ export type TermClientMessage =
   /** This terminal's size. The pane takes it while this viewer is the active one. */
   | { type: 'resize'; cols: number; rows: number }
   /** The terminal was used (focused, typed in): it becomes the active viewer and the pane takes its size. */
-  | { type: 'active' };
+  | { type: 'active' }
+  /** This screen shows the session (opened, switched to, page shown, terminal focused): it asks for it. */
+  | { type: 'show' }
+  /** This screen stopped showing it: a request is dropped; the screen that has it counts as away. */
+  | { type: 'hide' }
+  /** Move to this screen: take the session now. */
+  | { type: 'move' };
+
+/** How long the screen that has a session keeps it, unused, from another screen that asks. */
+export const SCREEN_IDLE_MS = 10_000;
+
+/** Another screen, named for the one told: its browser and system, and whether it's this same browser. */
+export type ScreenName = { name: string; sameBrowser: boolean };
+
+/**
+ * Which screen has the session, as the one told sees it. `here`: this one (`waiting` names a screen
+ * that asked for it). `waiting`: this one asked, and gets it in `moveInMs` unless the other is used.
+ * `elsewhere`: another screen has it (`other` is null once that screen closed).
+ */
+export type ScreenState =
+  | { state: 'here'; waiting?: ScreenName }
+  | { state: 'waiting'; other: ScreenName; moveInMs: number }
+  | { state: 'elsewhere'; other: ScreenName | null };
 
 export type TermServerMessage =
   | { type: 'exit'; reason: string }
@@ -1716,7 +1764,9 @@ export type TermServerMessage =
    */
   | { type: 'size'; cols: number; rows: number; active: boolean }
   /** `retry`: the failure may pass (the attach couldn't start), so reconnect with backoff; otherwise it's final. */
-  | { type: 'error'; error: string; retry?: boolean };
+  | { type: 'error'; error: string; retry?: boolean }
+  /** Which screen has the session: sent on connect and whenever it changes. */
+  | ({ type: 'screen' } & ScreenState);
 
 // ---- REST routes (all JSON; errors are { error: string } with a 4xx/5xx) ----
 //
@@ -1785,6 +1835,9 @@ export type TermServerMessage =
 //        with no tools; 400 for empty or too long text, 403 when [ask_agentk] is off, 429 with two asks already running,
 //        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
 //        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
+// GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
+//        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
+//        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters or given twice, or two `project`s)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
