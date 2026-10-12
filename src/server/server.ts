@@ -27,7 +27,7 @@ import { MekoApiError } from './mekoapi.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
-import { attachTerminal } from './terminal.js';
+import { attachTerminal, type TermQuery } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 import { usageOverview } from './usage.js';
@@ -684,10 +684,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     socket.on('close', () => clients.delete(socket));
   });
 
-  app.get<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>('/ws/term/:id', { websocket: true },
-    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>) => {
+  app.get<{ Params: { id: string }; Querystring: TermQuery }>('/ws/term/:id', { websocket: true },
+    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: TermQuery }>) => {
     if (!wsGuard(socket, req)) return;
-    attachTerminal(core, socket, req.params.id, req.query, `${req.ip} (${(req.headers['user-agent'] ?? 'no user agent').slice(0, 160)})`);
+    attachTerminal(core, socket, req.params.id, req.query, { ip: req.ip, userAgent: req.headers['user-agent'] });
   });
 
   // ---- web app ----

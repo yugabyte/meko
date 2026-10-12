@@ -88,12 +88,30 @@ The project's main checkout keeps its path, and paths on other hosts stay under 
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
 viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
 used themselves. When the active viewer leaves, the one used most recently before it takes over.
-Any input counts as use, mouse and focus reports included, since Claude Code turns both on. The
-server log has each terminal socket's attach (its address and browser) and close, numbered so
-viewers of one session can be told apart, and its sizing: the sizes it asks for, the pane's size
-and whether this viewer set it, and the kind of input (keys, mouse report, focus report) that came
-while another viewer had the size. Sizing lines are capped at 20 a minute per socket, then counted,
-so a resize loop can't flood the log.
+Any input counts as use, mouse and focus reports included, since Claude Code turns both on.
+
+**One screen per session.** Two browsers taking a session's size from each other made the pane
+bounce between their heights, and Claude Code repaints on every resize, so the terminal flickered.
+So a session is live on one screen (a browser tab, window or phone; one page load) at a time, and
+the server decides which (`ScreenBoard` in `src/server/screens.ts`, wired in by `terminal.ts`).
+Only the screen that has the session holds an attach stream, at its size; any other screen's
+socket stays open but gets no output and its input is dropped, and the browser shows its last
+picture dimmed with **Move to this screen**. A screen asks for the session when it shows it
+(opened or switched to, the page shown again, the terminal clicked or focused, or a reconnect while
+on screen unless it had lost the session). It gets the session at once when the screen that has
+it is closed, isn't showing it (another session or tab in front, the page hidden), or hasn't been
+used for 10 s (`SCREEN_IDLE_MS`); otherwise it waits with a countdown, and each use of the other
+screen restarts it. Use is any input but mouse motion and focus reports (`isPassiveReport`), so
+moving the pointer across a window doesn't hold the session. The screen that has the session gets
+a notice when another one asks. **Move to this screen** moves it at once, and a screen that lost
+the session doesn't ask again until it shows it again, so two idle screens never trade it. Screens
+are told apart by a page id the browser makes per page load (a reconnect keeps the session), and
+another tab of the same browser by a browser id in `localStorage`; the other screen is named by its
+browser and system from the user agent. The board lives in the server's memory: after a restart,
+the first screen to reconnect and ask gets the session. `agent-k-local attach` talks to the host
+directly and is not part of this: it still takes the size when used. The server log has each
+terminal socket's attach (its address and browser) and close, numbered, and one line per move with
+its reason.
 
 **From a terminal.** `agent-k-local attach <name>` shows a session's terminal in the one you run it
 in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no

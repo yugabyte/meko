@@ -1686,10 +1686,14 @@ export interface TotpEnrollResponse {
 // change or reset); the client should show the login screen rather than reconnect. The
 // server pings every 30 s and drops sockets that don't answer.
 //
-// /ws/term/:sessionId[?cols=&rows=]: the optional query is the browser terminal's size; the
-// pane takes it, as its newest viewer's. Client → server JSON TermClientMessage (text frames).
-// server → client: binary frames are raw terminal output (the screen as it is first, then
-// what follows); text frames are JSON TermServerMessage.
+// /ws/term/:sessionId[?cols=&rows=&screen=&browser=&claim=1]: `cols` and `rows` are the
+// browser terminal's size. A session is live on one screen at a time (src/server/screens.ts):
+// `screen` is the page's id (one per page load), `browser` the browser's (to name "another tab in
+// this browser"), and `claim=1` asks for the session as the socket opens (the terminal is on screen).
+// Only the screen that has the session gets output and sends input and its size to Claude.
+// Client → server JSON TermClientMessage (text frames). server → client: binary frames are raw
+// terminal output (the screen as it is first, then what follows); text frames are JSON
+// TermServerMessage.
 
 export type ServerEvent =
   | { type: 'state'; state: AppState }
@@ -1706,7 +1710,29 @@ export type TermClientMessage =
   /** This terminal's size. The pane takes it while this viewer is the active one. */
   | { type: 'resize'; cols: number; rows: number }
   /** The terminal was used (focused, typed in): it becomes the active viewer and the pane takes its size. */
-  | { type: 'active' };
+  | { type: 'active' }
+  /** This screen shows the session (opened, switched to, page shown, terminal focused): it asks for it. */
+  | { type: 'show' }
+  /** This screen stopped showing it: a request is dropped; the screen that has it counts as away. */
+  | { type: 'hide' }
+  /** Move to this screen: take the session now. */
+  | { type: 'move' };
+
+/** How long the screen that has a session keeps it, unused, from another screen that asks. */
+export const SCREEN_IDLE_MS = 10_000;
+
+/** Another screen, named for the one told: its browser and system, and whether it's this same browser. */
+export type ScreenName = { name: string; sameBrowser: boolean };
+
+/**
+ * Which screen has the session, as the one told sees it. `here`: this one (`waiting` names a screen
+ * that asked for it). `waiting`: this one asked, and gets it in `moveInMs` unless the other is used.
+ * `elsewhere`: another screen has it (`other` is null once that screen closed).
+ */
+export type ScreenState =
+  | { state: 'here'; waiting?: ScreenName }
+  | { state: 'waiting'; other: ScreenName; moveInMs: number }
+  | { state: 'elsewhere'; other: ScreenName | null };
 
 export type TermServerMessage =
   | { type: 'exit'; reason: string }
@@ -1716,7 +1742,9 @@ export type TermServerMessage =
    */
   | { type: 'size'; cols: number; rows: number; active: boolean }
   /** `retry`: the failure may pass (the attach couldn't start), so reconnect with backoff; otherwise it's final. */
-  | { type: 'error'; error: string; retry?: boolean };
+  | { type: 'error'; error: string; retry?: boolean }
+  /** Which screen has the session: sent on connect and whenever it changes. */
+  | ({ type: 'screen' } & ScreenState);
 
 // ---- REST routes (all JSON; errors are { error: string } with a 4xx/5xx) ----
 //

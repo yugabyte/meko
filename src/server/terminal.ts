@@ -1,71 +1,58 @@
 import type { WebSocket } from 'ws';
-import type { TermClientMessage, TermServerMessage } from '../shared/types.js';
+import { isPassiveReport } from '../shared/termreports.js';
+import type { ScreenState, TermClientMessage, TermServerMessage } from '../shared/types.js';
 import type { Core } from './core.js';
 import type { HostStream } from './hostclient.js';
 import { clampCols, clampRows } from './host/protocol.js';
-import { errMsg, type Logger } from './log.js';
+import { errMsg } from './log.js';
+import { ScreenBoard, screenName, type Screen } from './screens.js';
 
 /** Unsent output past which the host stream is paused until the browser catches up. */
 const MAX_BUFFERED = 1024 * 1024;
-/** Sizing lines one terminal socket logs per window; past that they're only counted, so a resize loop can't flood the log. */
-const SIZING_LOG_MAX = 20;
-const SIZING_LOG_WINDOW_MS = 60_000;
 
 const sizeOf = (v: unknown, clamp: (n: number) => number): number | undefined =>
   v !== undefined && v !== '' && Number.isFinite(Number(v)) ? clamp(Number(v)) : undefined;
 
-/** A number per terminal socket, so the log tells viewers of one session apart. */
+/** Page and browser ids from the socket URL: short and plain, or none. */
+const idOf = (v: unknown): string => (typeof v === 'string' && /^[\w-]{1,64}$/.test(v) ? v : '');
+
+/** A number per terminal socket, so the log tells screens of one session apart. */
 let viewerCount = 0;
 
-/** What kind of input a browser sent, for the log (never the input itself). */
-function inputKind(data: string): string {
-  if (data.startsWith('\x1b[<') || data.startsWith('\x1b[M')) return 'a mouse report';
-  if (data === '\x1b[I' || data === '\x1b[O') return 'a focus report';
-  return 'keys';
-}
+/** Each session's screens, while it has any. */
+const boards = new Map<string, ScreenBoard>();
 
-/** Logs up to SIZING_LOG_MAX lines a window, then counts the rest; `flush` logs the count. */
-function sizingLog(log: Logger, prefix: string) {
-  let start = 0;
-  let n = 0;
-  let dropped = 0;
-  const flush = () => {
-    if (dropped) log.info(`${prefix}: ${dropped} more sizing events not logged`);
-    dropped = 0;
-  };
-  const line = (msg: string) => {
-    const now = Date.now();
-    if (now - start >= SIZING_LOG_WINDOW_MS) {
-      flush();
-      start = now;
-      n = 0;
-    }
-    if (n++ < SIZING_LOG_MAX) log.info(`${prefix}: ${msg}`);
-    else dropped++;
-  };
-  return { line, flush };
+/** A socket's screen, with the log prefix the board's moves are logged under. */
+type LoggedScreen = Screen & { prefix: string };
+
+/** The query of a terminal socket's URL (see the /ws/term route in src/shared/types.ts). */
+export interface TermQuery {
+  cols?: unknown;
+  rows?: unknown;
+  screen?: unknown;
+  browser?: unknown;
+  claim?: unknown;
 }
 
 /**
- * Bridges one browser terminal to a session's pane in the session host: an attach stream per
- * viewer. Closing the socket ends only that stream, never Claude. `size` is the browser's
- * terminal size from the socket URL, if it sent one: the pane takes it, as the newest viewer's.
- * `client` says where the socket came from, for the log.
+ * Bridges one browser terminal to a session's pane in the session host. A session is live on one
+ * screen at a time (screens.ts): only the screen that has it holds an attach stream, at its size,
+ * and gets output; another screen's socket stays open to hear when the session moves, its input is
+ * dropped, and its last size is kept for when the session moves to it. Closing a socket ends only
+ * its stream, never Claude. `client` says where the socket came from, for the log.
  *
- * The log gets each socket's attach and close, and its sizing: the sizes it asks for, the pane's
- * size as the host reports it and whether this viewer set it, and input that arrives while another
- * viewer has the size (it takes the size). That is what tells which viewer resized a session.
+ * The log gets each socket's attach and close, and one line per move of the session between
+ * screens (Move to this screen, the other screen idle, not showing the session, or closed).
  */
 export function attachTerminal(
   core: Core,
   ws: WebSocket,
   sessionId: string,
-  size: { cols?: unknown; rows?: unknown } = {},
-  client = '',
+  query: TermQuery = {},
+  client: { ip?: string; userAgent?: string } = {},
 ): void {
   const send = (m: TermServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
   const prefix = `terminal ${++viewerCount} (session ${sessionId})`;
-  const sizing = sizingLog(core.log, prefix);
   const openedAt = Date.now();
   let row;
   try {
@@ -80,38 +67,142 @@ export function attachTerminal(
     ws.close();
     return;
   }
+  const pane = row.tmux_name;
 
   let stream: HostStream | null = null;
   let closed = false;
-  // Input that came before the stream was open.
+  /** This screen has the session: it holds (or is opening) a stream. */
+  let here = false;
+  // Counts streams, so a stream that opens after the session moved away again is dropped.
+  let streamGen = 0;
+  // Input that came after the session moved here but before its stream was open.
   const early: TermClientMessage[] = [];
   // Coalesce output into ~16ms frames so bursts don't become thousands of messages.
   let pending: Buffer[] = [];
   let flushTimer: NodeJS.Timeout | null = null;
   let drainTimer: NodeJS.Timeout | null = null;
-  // The pane's size and whether this viewer set it, as the host last said.
-  let pane: { cols: number; rows: number; active: boolean } | null = null;
-  let asked = '';
+  // The size this browser last asked for: the pane takes it while this screen has the session.
+  let cols = sizeOf(query.cols, clampCols);
+  let rows = sizeOf(query.rows, clampRows);
 
-  const handle = (m: TermClientMessage) => {
+  const flush = () => {
+    flushTimer = null;
+    if (!pending.length || ws.readyState !== ws.OPEN || !stream) return;
+    ws.send(Buffer.concat(pending), { binary: true });
+    pending = [];
+    // A browser that can't keep up: stop reading from the host until it drains, so output
+    // doesn't pile up here. The host sends a fresh screen once it catches up; Claude never waits.
+    if (ws.bufferedAmount > MAX_BUFFERED && !drainTimer) {
+      const s = stream;
+      s.pause();
+      drainTimer = setInterval(() => {
+        if (ws.readyState === ws.OPEN && ws.bufferedAmount > MAX_BUFFERED / 4 && stream === s) return;
+        clearInterval(drainTimer!);
+        drainTimer = null;
+        if (stream === s) s.resume();
+      }, 50);
+    }
+  };
+
+  const stopStream = () => {
+    const s = stream;
+    stream = null;
+    streamGen++;
+    early.length = 0;
+    pending = [];
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = null;
+    if (drainTimer) clearInterval(drainTimer);
+    drainTimer = null;
+    s?.close();
+  };
+
+  const startStream = () => {
+    const gen = ++streamGen;
+    core.host.attach(pane, { cols, rows }).then(
+      (s) => {
+        if (closed || gen !== streamGen) {
+          s.close();
+          return;
+        }
+        stream = s;
+        s.onData((d) => {
+          if (stream !== s) return;
+          pending.push(d);
+          flushTimer ??= setTimeout(flush, 16);
+        });
+        s.onControl((m) => {
+          if (stream === s && m.type === 'size') send({ type: 'size', cols: m.cols, rows: m.rows, active: m.active });
+        });
+        s.onClose(() => {
+          // A stream let go of because the session moved to another screen isn't the pane ending.
+          if (stream !== s) return;
+          flush();
+          send({ type: 'exit', reason: 'detached' });
+          ws.close();
+        });
+        // Without a size it attached as a watcher: make it the viewer whose size the pane takes.
+        if (!cols || !rows) s.active();
+        for (const m of early.splice(0)) handle(m);
+      },
+      (e: unknown) => {
+        if (closed || gen !== streamGen) return;
+        send({ type: 'error', error: `Couldn't attach: ${errMsg(e)}`, retry: true });
+        ws.close();
+      },
+    );
+  };
+
+  const screen: LoggedScreen = {
+    id: idOf(query.screen) || `socket-${viewerCount}`,
+    browser: idOf(query.browser),
+    name: screenName(client.userAgent),
+    prefix,
+    tell: (state: ScreenState) => {
+      if (closed) return;
+      send({ type: 'screen', ...state });
+      if (state.state === 'here' && !here) {
+        here = true;
+        startStream();
+      } else if (state.state !== 'here' && here) {
+        here = false;
+        stopStream();
+      }
+    },
+  };
+
+  let board = boards.get(sessionId);
+  if (!board) {
+    board = new ScreenBoard((to, from, why) => {
+      if (why === 'first' || why === 'same screen') return;
+      const t = to as LoggedScreen;
+      core.log.info(`${t.prefix}: the session moved here${from ? ` from ${(from as LoggedScreen).prefix.split(' (')[0]}` : ''} (${why})`);
+    });
+    boards.set(sessionId, board);
+  }
+  const b = board;
+
+  function handle(m: TermClientMessage) {
+    if (m.type === 'show') return b.show(screen);
+    if (m.type === 'hide') return b.hide(screen);
+    if (m.type === 'move') return b.move(screen);
+    if (m.type === 'resize') {
+      if (!Number.isFinite(m.cols) || !Number.isFinite(m.rows)) return;
+      cols = clampCols(m.cols);
+      rows = clampRows(m.rows);
+    }
+    // Only the screen that has the session reaches Claude; another one's size is kept for later.
+    if (!here) return;
     if (!stream) {
       early.push(m);
       return;
     }
     if (m.type === 'input' && typeof m.data === 'string') {
-      if (pane && !pane.active) sizing.line(`${inputKind(m.data)} while another viewer has the size`);
+      if (!isPassiveReport(m.data)) b.used(screen);
       stream.write(m.data);
-    } else if (m.type === 'resize' && Number.isFinite(m.cols) && Number.isFinite(m.rows)) {
-      const cols = clampCols(m.cols);
-      const rows = clampRows(m.rows);
-      if (`${cols}x${rows}` !== asked) sizing.line(`asks for ${cols}x${rows}`);
-      asked = `${cols}x${rows}`;
-      stream.resize(cols, rows);
-    } else if (m.type === 'active') {
-      if (pane && !pane.active) sizing.line('claims the size (focused)');
-      stream.active();
-    }
-  };
+    } else if (m.type === 'resize') stream.resize(cols!, rows!);
+    else if (m.type === 'active') stream.active();
+  }
 
   ws.on('message', (raw, isBinary) => {
     if (isBinary) return;
@@ -126,69 +217,17 @@ export function attachTerminal(
     handle(m);
   });
   ws.on('close', (code: number) => {
-    if (stream) {
-      sizing.flush();
-      core.log.info(`${prefix}: closed after ${Math.round((Date.now() - openedAt) / 1000)} s (code ${code})`);
-    }
+    core.log.info(`${prefix}: closed after ${Math.round((Date.now() - openedAt) / 1000)} s (code ${code})`);
     closed = true;
-    if (flushTimer) clearTimeout(flushTimer);
-    if (drainTimer) clearInterval(drainTimer);
-    stream?.close();
+    here = false;
+    stopStream();
+    b.leave(screen);
+    if (b.empty && boards.get(sessionId) === b) boards.delete(sessionId);
   });
 
-  const flush = () => {
-    flushTimer = null;
-    if (!pending.length || ws.readyState !== ws.OPEN || !stream) return;
-    ws.send(Buffer.concat(pending), { binary: true });
-    pending = [];
-    // A browser that can't keep up: stop reading from the host until it drains, so output
-    // doesn't pile up here. The host sends a fresh screen once it catches up; Claude never waits.
-    if (ws.bufferedAmount > MAX_BUFFERED && !drainTimer) {
-      const s = stream;
-      s.pause();
-      drainTimer = setInterval(() => {
-        if (ws.readyState === ws.OPEN && ws.bufferedAmount > MAX_BUFFERED / 4) return;
-        clearInterval(drainTimer!);
-        drainTimer = null;
-        s.resume();
-      }, 50);
-    }
-  };
-
-  const cols = sizeOf(size.cols, clampCols);
-  const rows = sizeOf(size.rows, clampRows);
-  core.host
-    .attach(row.tmux_name, { cols, rows })
-    .then(
-      (s) => {
-        if (closed) {
-          s.close();
-          return;
-        }
-        stream = s;
-        core.log.info(`${prefix}: attached at ${cols && rows ? `${cols}x${rows}` : 'no size'}${client ? ` from ${client}` : ''}`);
-        s.onData((d) => {
-          pending.push(d);
-          flushTimer ??= setTimeout(flush, 16);
-        });
-        s.onControl((m) => {
-          if (m.type !== 'size') return;
-          if (!pane || pane.cols !== m.cols || pane.rows !== m.rows || pane.active !== m.active) {
-            sizing.line(`pane is ${m.cols}x${m.rows}, ${m.active ? "this viewer's size" : "another viewer's size"}`);
-          }
-          pane = { cols: m.cols, rows: m.rows, active: m.active };
-          send({ type: 'size', cols: m.cols, rows: m.rows, active: m.active });
-        });
-        s.onClose(() => {
-          flush();
-          send({ type: 'exit', reason: 'detached' });
-          ws.close();
-        });
-        for (const m of early.splice(0)) handle(m);
-      },
-      (e: unknown) => {
-        send({ type: 'error', error: `Couldn't attach: ${errMsg(e)}`, retry: true });
-        ws.close();
-      },
-    );
+  core.log.info(
+    `${prefix}: attached at ${cols && rows ? `${cols}x${rows}` : 'no size'}${client.ip ? ` from ${client.ip}` : ''} (${(client.userAgent ?? 'no user agent').slice(0, 160)})`,
+  );
+  // A page from before screens (no id) always asks, as every viewer used to take the session.
+  b.join(screen, query.claim === '1' || !idOf(query.screen));
 }

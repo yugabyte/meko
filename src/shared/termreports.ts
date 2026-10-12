@@ -1,4 +1,5 @@
-// Terminal answers to a program's queries, told apart from typing. Used by the web UI and `agent-k-local attach`.
+// Terminal answers to a program's queries, told apart from typing (the web UI and `agent-k-local attach`),
+// and reports sent without anyone using the screen (the server's one-screen-per-session rule).
 
 /**
  * Whether terminal input is the terminal's answer to a query from the program (device attributes, cursor
@@ -20,4 +21,17 @@ export function isTerminalReport(data: string): boolean {
     /^\x1bP[\s\S]*\x1b\\$/.test(data) // DCS answers (version, settings)
   );
   /* eslint-enable no-control-regex */
+}
+
+/**
+ * Whether terminal input is a report the terminal sends without anyone using it: mouse motion (SGR or
+ * X10 encoding, the motion bit set) and focus in or out. Moving the pointer across a window isn't using
+ * that screen, so these don't keep a session on it (src/server/screens.ts).
+ */
+export function isPassiveReport(data: string): boolean {
+  if (data === '\x1b[I' || data === '\x1b[O') return true;
+  const sgr = /^\x1b\[<(\d+);\d+;\d+[Mm]$/.exec(data); // eslint-disable-line no-control-regex
+  if (sgr) return (Number(sgr[1]) & 32) !== 0;
+  if (data.length === 6 && data.startsWith('\x1b[M')) return ((data.charCodeAt(3) - 32) & 32) !== 0;
+  return false;
 }

@@ -1270,11 +1270,20 @@ textarea.input {
   pointer-events: auto;
   margin-left: 10px;
 }
+/* The session is live on another screen: its last picture here, dimmed under the overlay. */
+.term-wrap.away .term-host {
+  opacity: 0.4;
+}
 /* On touch screens the toast sits at the top, clear of the overlay and the key bar. */
 @media (pointer: coarse) {
   .term-toast {
     top: 10px;
     bottom: auto;
+  }
+  .term-overlay .btn {
+    display: block;
+    min-height: 36px;
+    margin: 8px auto 0;
   }
 }
 .foot {

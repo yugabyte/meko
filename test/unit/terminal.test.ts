@@ -76,27 +76,42 @@ describe('terminal socket', () => {
     expect((await host.panes()).get('x')?.dead).toBe(false);
   });
 
-  it('logs which viewer takes the size and why, and caps a resize loop', async () => {
-    await host.spawn('x', home, ['/bin/sh', '-c', 'sleep 5']);
+  it('keeps a session on one screen: another waits, and Move to this screen takes it, its output and its size', async () => {
+    await host.spawn('x', home, ['/bin/sh', '-c', 'printf "ready\\n"; read line; printf "got %s\\n" "$line"; sleep 5']);
+    await waitFor(() => host.capture('x'), (t) => t.includes('ready'));
     const lines: string[] = [];
+    const core = coreFor(lines);
+    const screens = (ws: ReturnType<typeof fakeSocket>) =>
+      ws.sent.filter((m): m is string => typeof m === 'string').map((m) => JSON.parse(m)).filter((m) => m.type === 'screen');
+    const lastSize = (ws: ReturnType<typeof fakeSocket>) =>
+      ws.sent.filter((m): m is string => typeof m === 'string' && m.includes('"size"')).map((m) => JSON.parse(m)).at(-1);
+    const input = (ws: ReturnType<typeof fakeSocket>, m: object) => ws.emit('message', Buffer.from(JSON.stringify(m)), false);
     const laptop = fakeSocket();
     const phone = fakeSocket();
-    attachTerminal(coreFor(lines), laptop as unknown as WebSocket, 's1', { cols: '100', rows: '30' }, 'laptop');
-    await waitFor(() => lines.join('\n'), (t) => /pane is 100x30, this viewer's size/.test(t));
-    attachTerminal(coreFor(lines), phone as unknown as WebSocket, 's1', { cols: '40', rows: '20' }, 'phone');
+    attachTerminal(core, laptop as unknown as WebSocket, 's1', { cols: '100', rows: '30', screen: 'lap', browser: 'b1', claim: '1' }, { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' });
     try {
-      // The newest viewer took the size; a mouse report from the laptop takes it back.
-      await waitFor(() => lines.join('\n'), (t) => /pane is 40x20, another viewer's size/.test(t));
-      laptop.emit('message', Buffer.from(JSON.stringify({ type: 'input', data: '\x1b[<35;10;5M' })), false);
-      await waitFor(() => lines.join('\n'), (t) => /a mouse report while another viewer has the size[\s\S]*pane is 100x30, this viewer's size/.test(t));
-      expect(lines.join('\n')).toMatch(/terminal \d+ \(session s1\): attached at 40x20 from phone/);
-      // A browser that keeps resizing logs a bounded number of lines, then how many it left out.
-      const before = lines.length;
-      for (let i = 0; i < 100; i++) laptop.emit('message', Buffer.from(JSON.stringify({ type: 'resize', cols: 100, rows: 30 + (i % 2) })), false);
-      await waitFor(() => lines.length, (n) => n > before);
-      laptop.close();
-      expect(lines.length - before).toBeLessThan(30);
-      expect(lines.slice(-2).join('\n')).toMatch(/more sizing events not logged\n.*closed after \d+ s/);
+      await waitFor(() => text(laptop), (t) => t.includes('ready'));
+      input(laptop, { type: 'input', data: 'a' });
+      attachTerminal(core, phone as unknown as WebSocket, 's1', { cols: '40', rows: '20', screen: 'ph', browser: 'b2', claim: '1' }, { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1' });
+      // The laptop was just used: the phone waits, without output, and its keys and size don't reach Claude.
+      expect(screens(phone).at(-1)).toMatchObject({ state: 'waiting', other: { name: 'Chrome on macOS', sameBrowser: false } });
+      expect(screens(laptop).at(-1)).toEqual({ type: 'screen', state: 'here', waiting: { name: 'Safari on iPhone', sameBrowser: false } });
+      input(phone, { type: 'input', data: 'z' });
+      input(phone, { type: 'active' });
+      expect(lastSize(laptop)).toEqual({ type: 'size', cols: 100, rows: 30, active: true });
+      expect(phone.sent.some((m) => m instanceof Buffer)).toBe(false);
+
+      input(phone, { type: 'move' });
+      expect(screens(laptop).at(-1)).toEqual({ type: 'screen', state: 'elsewhere', other: { name: 'Safari on iPhone', sameBrowser: false } });
+      await waitFor(() => lastSize(phone), (m) => m?.active === true);
+      expect(lastSize(phone)).toEqual({ type: 'size', cols: 40, rows: 20, active: true });
+      const laptopSent = laptop.sent.length;
+      input(laptop, { type: 'input', data: 'x' });
+      input(phone, { type: 'input', data: 'hello\r' });
+      await waitFor(() => text(phone), (t) => t.includes('got ahello'));
+      // The laptop shows its last picture: no more output, and its keys were dropped.
+      expect(laptop.sent.length).toBe(laptopSent);
+      expect(lines.join('\n')).toMatch(/terminal \d+ \(session s1\): the session moved here from terminal \d+ \(Move to this screen\)/);
     } finally {
       laptop.close();
       phone.close();
