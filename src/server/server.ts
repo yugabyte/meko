@@ -28,7 +28,7 @@ import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from '
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
-import { attachTerminal } from './terminal.js';
+import { attachTerminal, type TermQuery } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
 import type { Updater } from './updater.js';
 import { usageOverview } from './usage.js';
@@ -687,10 +687,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     socket.on('close', () => clients.delete(socket));
   });
 
-  app.get<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>('/ws/term/:id', { websocket: true },
-    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: { cols?: string; rows?: string } }>) => {
+  app.get<{ Params: { id: string }; Querystring: TermQuery }>('/ws/term/:id', { websocket: true },
+    (socket: WebSocket, req: FastifyRequest<{ Params: { id: string }; Querystring: TermQuery }>) => {
     if (!wsGuard(socket, req)) return;
-    attachTerminal(core, socket, req.params.id, req.query);
+    attachTerminal(core, socket, req.params.id, req.query, { ip: req.ip, userAgent: req.headers['user-agent'] });
   });
 
   // ---- web app ----

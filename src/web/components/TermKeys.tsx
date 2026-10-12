@@ -24,8 +24,6 @@ function saveDraft(id: string, text: string) {
   }
 }
 
-const NOT_CONNECTED = 'Not connected to the session. Try again once it reconnects.';
-
 /** A bar key that sends its bytes to the terminal. */
 function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKey; label: string; title: string }; disabled: boolean }) {
   return (
@@ -37,7 +35,7 @@ function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKe
       onPointerDown={keepFocus}
       onMouseDown={keepFocus}
       onClick={() => {
-        if (!term.sendKey(k.key)) term.showNotice(NOT_CONNECTED, 3000);
+        if (!term.sendKey(k.key)) term.showNotice(term.cantType(), 3000);
       }}
     >
       {k.label}
@@ -76,8 +74,8 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
    */
   const send = () => {
     if (!canSend) return false;
-    if (term.conn !== 'open') {
-      term.showNotice('Not connected to the session. Your message is kept; send it again once it reconnects.', 4000);
+    if (!term.canType) {
+      term.showNotice(term.cantType(true), 4000);
       return false;
     }
     const sent = text.trim() ? text : '';
@@ -236,9 +234,9 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
             const ch = term.ctrl ? insertedChar(text, next) : null;
             if (ch !== null) {
               if (term.typeCtrl(ch)) return;
-              // Meant as Ctrl+letter but not connected: say so rather than type the letter.
-              if (term.conn !== 'open') {
-                term.showNotice(NOT_CONNECTED, 3000);
+              // Meant as Ctrl+letter but it can't reach Claude: say so rather than type the letter.
+              if (!term.canType) {
+                term.showNotice(term.cantType(), 3000);
                 return;
               }
             }

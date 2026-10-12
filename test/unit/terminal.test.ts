@@ -37,7 +37,8 @@ describe('terminal socket', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  const coreFor = () => ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }) }, host }) as unknown as Core;
+  const coreFor = (lines: string[] = []) =>
+    ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }) }, host, log: { info: (m: string) => lines.push(m), warn: () => {}, error: () => {} } }) as unknown as Core;
   const text = (ws: ReturnType<typeof fakeSocket>) => ws.sent.filter((m): m is Buffer => m instanceof Buffer).map((b) => b.toString('utf8')).join('');
   const sizeMessage = (ws: ReturnType<typeof fakeSocket>) => ws.sent.find((m): m is string => typeof m === 'string' && m.includes('"size"'));
 
@@ -46,13 +47,14 @@ describe('terminal socket', () => {
     const ws = fakeSocket();
     attachTerminal(coreFor(), ws as unknown as WebSocket, 's1', { cols: '100', rows: '30' });
     try {
+      // The browser that opened it sets the size.
+      await waitFor(() => sizeMessage(ws), (m) => !!m);
+      expect(JSON.parse(sizeMessage(ws)!)).toEqual({ type: 'size', cols: 100, rows: 30, active: true });
       for (const m of ['null', '5', '"x"', '[]', '{"type":"resize","cols":"a","rows":null}', '{"type":"input","data":7}', '{not json']) {
         expect(() => ws.emit('message', Buffer.from(m), false)).not.toThrow();
       }
       expect(() => ws.emit('message', Buffer.from('{"type":"resize","cols":90,"rows":20}'), false)).not.toThrow();
-      // The browser that opened it sets the size.
-      await waitFor(() => sizeMessage(ws), (m) => !!m);
-      expect(JSON.parse(sizeMessage(ws)!)).toEqual({ type: 'size', cols: 100, rows: 30, active: true });
+      await waitFor(() => ws.sent.filter((m) => typeof m === 'string' && m.includes('"cols":90')).length, (n) => n > 0);
     } finally {
       ws.close();
     }
@@ -73,6 +75,74 @@ describe('terminal socket', () => {
     }
     // Closing the viewer leaves the program running.
     expect((await host.panes()).get('x')?.dead).toBe(false);
+  });
+
+  it('keeps a session on one screen: another waits, and Move to this screen takes it, its output and its size', async () => {
+    await host.spawn('x', home, ['/bin/sh', '-c', 'printf "ready\\n"; read line; printf "got %s\\n" "$line"; sleep 5']);
+    await waitFor(() => host.capture('x'), (t) => t.includes('ready'));
+    const lines: string[] = [];
+    const core = coreFor(lines);
+    // Host streams opened and closed, by width; `onAttach` runs as an attach starts.
+    const streams: string[] = [];
+    let onAttach: (() => void) | null = null;
+    Object.assign(core, {
+      host: Object.assign(Object.create(host) as SessionHost, {
+        attach: async (pane: string, size: { cols?: number; rows?: number }) => {
+          streams.push(`attach ${size.cols}`);
+          onAttach?.();
+          const s = await host.attach(pane, size);
+          const close = s.close.bind(s);
+          return Object.assign(s, { close: () => (streams.push(`close ${size.cols}`), close()) });
+        },
+      }),
+    });
+    const screens = (ws: ReturnType<typeof fakeSocket>) =>
+      ws.sent.filter((m): m is string => typeof m === 'string').map((m) => JSON.parse(m)).filter((m) => m.type === 'screen');
+    const lastSize = (ws: ReturnType<typeof fakeSocket>) =>
+      ws.sent.filter((m): m is string => typeof m === 'string' && m.includes('"size"')).map((m) => JSON.parse(m)).at(-1);
+    const input = (ws: ReturnType<typeof fakeSocket>, m: object) => ws.emit('message', Buffer.from(JSON.stringify(m)), false);
+    const laptop = fakeSocket();
+    const phone = fakeSocket();
+    attachTerminal(core, laptop as unknown as WebSocket, 's1', { cols: '100', rows: '30', screen: 'lap', browser: 'b1', claim: '1' }, { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' });
+    try {
+      await waitFor(() => text(laptop), (t) => t.includes('ready'));
+      input(laptop, { type: 'input', data: 'a' });
+      attachTerminal(core, phone as unknown as WebSocket, 's1', { cols: '40', rows: '20', screen: 'ph', browser: 'b2', claim: '1' }, { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1' });
+      // The laptop was just used: the phone waits, without output, and its keys and size don't reach Claude.
+      expect(screens(phone).at(-1)).toMatchObject({ state: 'waiting', other: { name: 'Chrome on macOS', sameBrowser: false } });
+      expect(screens(laptop).at(-1)).toEqual({ type: 'screen', state: 'here', waiting: { name: 'Safari on iPhone', sameBrowser: false } });
+      input(phone, { type: 'input', data: 'z' });
+      input(phone, { type: 'active' });
+      expect(lastSize(laptop)).toEqual({ type: 'size', cols: 100, rows: 30, active: true });
+      expect(phone.sent.some((m) => m instanceof Buffer)).toBe(false);
+
+      input(phone, { type: 'move' });
+      expect(screens(laptop).at(-1)).toEqual({ type: 'screen', state: 'elsewhere', other: { name: 'Safari on iPhone', sameBrowser: false } });
+      await waitFor(() => lastSize(phone), (m) => m?.active === true);
+      expect(lastSize(phone)).toEqual({ type: 'size', cols: 40, rows: 20, active: true });
+      const laptopSent = laptop.sent.length;
+      input(laptop, { type: 'input', data: 'x' });
+      input(phone, { type: 'input', data: 'hello\r' });
+      await waitFor(() => text(phone), (t) => t.includes('got ahello'));
+      // The laptop shows its last picture: no more output, and its keys were dropped.
+      expect(laptop.sent.length).toBe(laptopSent);
+      expect(lines.join('\n')).toMatch(/terminal \d+ \(session s1\): the session moved here from terminal \d+ \(Move to this screen\)/);
+
+      // Moved back to the laptop and away again while the laptop's attach is in flight: its stream
+      // closes before the phone's opens, so the pane ends at the phone's size.
+      streams.length = 0;
+      onAttach = () => {
+        onAttach = null;
+        input(phone, { type: 'move' });
+      };
+      input(laptop, { type: 'move' });
+      await waitFor(() => streams.length, (n) => n >= 4);
+      expect(streams).toEqual(['close 40', 'attach 100', 'close 100', 'attach 40']);
+      await waitFor(() => lastSize(phone), (m) => m?.cols === 40 && m.active === true);
+    } finally {
+      laptop.close();
+      phone.close();
+    }
   });
 
   it('stops reading terminal output while the browser has a backlog, and resumes once it drains', async () => {

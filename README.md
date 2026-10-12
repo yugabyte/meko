@@ -140,6 +140,9 @@ your phone can connect.
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
   `agent-k-local attach <session>` (`Ctrl+\` detaches).
+- **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
+  another and that screen offers **Move to this screen**; it moves there by itself once the first
+  screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next
   session on the same repo (from any project on it) with its ignored build outputs intact, so
   repos that take long to build start incremental. Each repo keeps up to 3 idle worktrees, and one
