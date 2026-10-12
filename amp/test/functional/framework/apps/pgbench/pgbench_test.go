@@ -2,6 +2,7 @@ package pgbench_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -54,6 +55,21 @@ func (s *scriptExec) recorded() []string {
 	return out
 }
 
+// detached answers runDetached's start, probe and collect so the run's
+// command returns res.
+func (s *scriptExec) detached(res exec.Result) *scriptExec {
+	s.rules = append([]rule{
+		{"nohup sh -c", exec.Result{Stdout: "4242\n"}},
+		{"kill -0", exec.Result{Stdout: strconv.Itoa(res.ExitCode) + "\n"}},
+		{"/err >&2", exec.Result{Stdout: res.Stdout + "\nampqa-pgbench-collected rc=" + strconv.Itoa(res.ExitCode) + "\n", Stderr: res.Stderr}},
+	}, s.rules...)
+	return s
+}
+
+// unquoted undoes shellQuote's nesting so a test can read the command a
+// detached wrapper carries.
+func unquoted(cmd string) string { return strings.ReplaceAll(cmd, `'\''`, `'`) }
+
 // available scripts "command -v pgbench" as found.
 func available() *scriptExec {
 	s := &scriptExec{}
@@ -89,7 +105,7 @@ func TestInitCommandConstruction(t *testing.T) {
 
 func TestRunCommandConstruction(t *testing.T) {
 	ex := available()
-	ex.on("pgbench -c", exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"})
+	ex.detached(exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"})
 	conn := pg.ConnInfo{Host: "endpoint", Port: 5432, User: "cloud_admin", Database: "postgres"}
 	_, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{
 		Conn: conn, Clients: 10, Jobs: 2, Duration: 30 * time.Second,
@@ -97,7 +113,7 @@ func TestRunCommandConstruction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	got := ex.recorded()[1]
+	got := unquoted(ex.recorded()[1])
 	for _, want := range []string{"-c 10", "-j 2", "-T 30", "-h 'endpoint'"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("run command missing %q:\n%s", want, got)
@@ -127,7 +143,7 @@ func TestMissingBinaryDetection(t *testing.T) {
 
 func TestRunExitNonZeroIncludesRawOutput(t *testing.T) {
 	ex := available()
-	ex.on("pgbench -c", exec.Result{ExitCode: 2, Stdout: "starting vacuum...end.\n", Stderr: "connection to server failed\n"})
+	ex.detached(exec.Result{ExitCode: 2, Stdout: "starting vacuum...end.\n", Stderr: "connection to server failed\n"})
 	res, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{Clients: 1})
 	if err == nil {
 		t.Fatal("want an error on non-zero exit")
@@ -170,7 +186,7 @@ tps = 610.442198 (excluding connections establishing)
 
 func TestParseOutputModernSample(t *testing.T) {
 	ex := available()
-	ex.on("pgbench -c", exec.Result{ExitCode: 0, Stdout: pgbenchModernOutput})
+	ex.detached(exec.Result{ExitCode: 0, Stdout: pgbenchModernOutput})
 	res, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{Clients: 10})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -188,7 +204,7 @@ func TestParseOutputModernSample(t *testing.T) {
 
 func TestParseOutputLegacyTwoTPSLinesPrefersExcluding(t *testing.T) {
 	ex := available()
-	ex.on("pgbench -c", exec.Result{ExitCode: 0, Stdout: pgbenchLegacyOutput})
+	ex.detached(exec.Result{ExitCode: 0, Stdout: pgbenchLegacyOutput})
 	res, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{Clients: 10})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -206,7 +222,7 @@ func TestParseOutputLegacyTwoTPSLinesPrefersExcluding(t *testing.T) {
 // report a healthy tenant as 0.00 tps and fail a whole multitenant gate.
 func TestSummarylessOutputIsAnErrorNotAZero(t *testing.T) {
 	ex := available()
-	ex.on("pgbench -c", exec.Result{ExitCode: 0, Stdout: "starting vacuum...end.\nsome unrelated output\n"})
+	ex.detached(exec.Result{ExitCode: 0, Stdout: "starting vacuum...end.\nsome unrelated output\n"})
 	res, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{Clients: 1})
 	if err == nil {
 		t.Fatal("a summary-less output parsed as a measurement instead of erroring")

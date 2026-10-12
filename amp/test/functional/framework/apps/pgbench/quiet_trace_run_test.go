@@ -17,7 +17,8 @@ import (
 func TestBothInitAndRunSuppressTheTrace(t *testing.T) {
 	ex := (&scriptExec{}).
 		on("command -v pgbench", exec.Result{Stdout: "probe-rc=0\n"}).
-		on("pgbench", exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"})
+		on("pgbench", exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"}).
+		detached(exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"})
 	conn := pg.ConnInfo{Host: "h", Port: 5433, User: "u", Password: "p", Database: "d"}
 
 	if err := pgbench.Init(context.Background(), ex, pgbench.InitOptions{Conn: conn, Scale: 1}); err != nil {
@@ -29,10 +30,10 @@ func TestBothInitAndRunSuppressTheTrace(t *testing.T) {
 
 	var invocations []string
 	for _, c := range ex.commands {
-		if strings.Contains(c, "command -v pgbench") {
-			continue // the availability probe, not a pgbench invocation
+		if !strings.Contains(c, "pgbench -") {
+			continue // the availability probe and the detached run's polls
 		}
-		invocations = append(invocations, c)
+		invocations = append(invocations, unquoted(c))
 	}
 	if len(invocations) != 2 {
 		t.Fatalf("ran %d pgbench commands, want 2 (init + run): %v", len(invocations), invocations)

@@ -71,7 +71,7 @@ func pageserverFaultMetrics() (metrics.Source, []faultMetricSpec) {
 		Tag: "pageserver", Selector: endpointPodSelector, Container: computeContainer,
 		Port: pageserverMetricsPort, Path: "/metrics",
 		Collect: []metrics.Entry{
-			{Match: `^yb_client_errors_total$`, Title: "YB client errors", Kind: metrics.KindCounter},
+			{Match: `^yb_thin_client_errors_total$`, Title: "YB thin-client errors", Kind: metrics.KindCounter},
 			{
 				Match: `^pageserver_yb_store_op_seconds_(count|sum)$`,
 				Title: "YB store ops", Kind: metrics.KindLatency,
@@ -80,8 +80,10 @@ func pageserverFaultMetrics() (metrics.Source, []faultMetricSpec) {
 		},
 	}
 	return src, []faultMetricSpec{
-		{Title: "YB client errors", Raw: "yb_client_errors_total", Labelled: true,
-			Means: "YugabyteDB client errors the pageserver classified and retried while the node was unreachable"},
+		// Not yb_client_errors_total: that is ysql_client's, and page reads and
+		// writes go over the thin client, so a partition may never move it.
+		{Title: "YB thin-client errors", Raw: "yb_thin_client_errors_total", Labelled: true,
+			Means: "failed PageStore requests to YugabyteDB, retried or not, while the node was unreachable"},
 		{Title: "YB store op latency", Raw: "pageserver_yb_store_op_seconds",
 			Means: "how long a PageStore round trip to YugabyteDB takes"},
 	}

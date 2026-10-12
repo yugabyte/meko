@@ -90,7 +90,7 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 	args = append(args, opts.ExtraArgs...)
 	args = append(args, connArgs(opts.Conn)...)
 
-	res, err := ex.Run(ctx, quietTrace(envPrefix(opts.Conn)+strings.Join(args, " ")))
+	res, err := runDetached(ctx, ex, quietTrace(envPrefix(opts.Conn)+strings.Join(args, " ")))
 	if err != nil {
 		return Result{}, fmt.Errorf("pgbench run: %w", err)
 	}
@@ -108,6 +108,95 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 		return Result{Raw: out}, fmt.Errorf("pgbench exited 0 but its summary is not in the captured output (%d bytes captured; the stream broke or the capture cap evicted it)", len(out))
 	}
 	return parsed, nil
+}
+
+const (
+	detachedPollInterval      = 5 * time.Second
+	maxConsecutivePollErrors  = 24
+	detachedCollectAttempts   = 3
+	detachedCollectRetryDelay = 2 * time.Second
+	// A dropped stream returns err == nil with kubectl's exit code, so only
+	// this line, printed last, proves the collect ran to the end.
+	collectedMarker = "ampqa-pgbench-collected rc="
+)
+
+// A run held on a live kubectl exec stream dies when the stream drops
+// (`websocket: close 1006`), so only short polls cross it.
+func runDetached(ctx context.Context, ex exec.RemoteExecutor, cmd string) (exec.Result, error) {
+	dir := fmt.Sprintf("/tmp/ampqa-pgbench-run-%d", time.Now().UnixNano())
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		_, _ = ex.Run(cctx, "rm -rf "+dir)
+		cancel()
+	}()
+	inner := "echo $$ >" + dir + "/pid; (" + cmd + ") >" + dir + "/out 2>" + dir + "/err; " +
+		"echo $? >" + dir + "/exit.tmp && mv " + dir + "/exit.tmp " + dir + "/exit"
+	res, err := ex.Run(ctx, "mkdir -p "+dir+"; nohup sh -c "+shellQuote(inner)+" >/dev/null 2>/dev/null & echo $!")
+	pid := strings.TrimSpace(res.Stdout)
+	if err != nil || res.ExitCode != 0 || pid == "" {
+		// The stream can drop after nohup launched; then the pid file names the run.
+		r, perr := ex.Run(ctx, "cat "+dir+"/pid 2>/dev/null")
+		if pid = strings.TrimSpace(r.Stdout); perr != nil || pid == "" {
+			return exec.Result{}, fmt.Errorf("start: exit %d: %v %s", res.ExitCode, err, strings.TrimSpace(res.Stdout+res.Stderr))
+		}
+	}
+
+	probe := "cat " + dir + "/exit 2>/dev/null || (kill -0 " + pid + " 2>/dev/null && echo RUNNING || echo GONE)"
+	pollErrs, gone, last := 0, false, ""
+poll:
+	for {
+		res, err := ex.Run(ctx, probe)
+		switch out := strings.TrimSpace(res.Stdout); {
+		case ctx.Err() != nil:
+		case err != nil || res.ExitCode != 0:
+			last = fmt.Sprintf("exit %d: %v %s", res.ExitCode, err, strings.TrimSpace(res.Stderr))
+			if pollErrs++; pollErrs >= maxConsecutivePollErrors {
+				return exec.Result{}, fmt.Errorf("pgbench (pid %s) unwatchable after %d consecutive poll failures, last: %s", pid, pollErrs, last)
+			}
+		case out == "RUNNING":
+			pollErrs, gone = 0, false
+		case out == "GONE":
+			// One grace poll: the exit-file write can race the pid check.
+			if gone {
+				return exec.Result{}, fmt.Errorf("pgbench (pid %s) disappeared without writing %s/exit", pid, dir)
+			}
+			pollErrs, gone = 0, true
+		default:
+			if _, cerr := strconv.Atoi(out); cerr != nil {
+				return exec.Result{}, fmt.Errorf("%s/exit holds %q, not an exit code", dir, out)
+			}
+			break poll
+		}
+		select {
+		case <-ctx.Done():
+			// pgbench is the wrapper's grandchild, under the ( ) subshell.
+			kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			_, _ = ex.Run(kctx, "for c in $(pgrep -P "+pid+"); do pkill -9 -P $c; done 2>/dev/null; pkill -9 -P "+pid+" 2>/dev/null; kill -9 "+pid+" 2>/dev/null")
+			cancel()
+			return exec.Result{}, fmt.Errorf("pgbench run abandoned: %w", ctx.Err())
+		case <-time.After(detachedPollInterval):
+		}
+	}
+
+	collect := "cat " + dir + "/out; cat " + dir + "/err >&2; printf '\\n%s%s\\n' '" + collectedMarker + "' \"$(cat " + dir + "/exit)\""
+	for attempt := 1; ; attempt++ {
+		res, err = ex.Run(ctx, collect)
+		if i := strings.LastIndex(res.Stdout, "\n"+collectedMarker); err == nil && i >= 0 {
+			rc, cerr := strconv.Atoi(strings.TrimSpace(res.Stdout[i+1+len(collectedMarker):]))
+			if cerr != nil {
+				return exec.Result{}, fmt.Errorf("collect: unreadable exit code after %q", collectedMarker)
+			}
+			return exec.Result{Stdout: res.Stdout[:i], Stderr: res.Stderr, ExitCode: rc}, nil
+		}
+		if attempt >= detachedCollectAttempts {
+			return exec.Result{}, fmt.Errorf("collect did not complete in %d attempts, last: exit %d: %v %s", attempt, res.ExitCode, err, strings.TrimSpace(res.Stderr))
+		}
+		select {
+		case <-ctx.Done():
+			return exec.Result{}, fmt.Errorf("collect abandoned: %w", ctx.Err())
+		case <-time.After(detachedCollectRetryDelay):
+		}
+	}
 }
 
 // quietTrace keeps pgbench's summary safe from ysql_bench's per-statement
