@@ -169,9 +169,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(lastEvent(s.id, 'cleanup')).toBe('Cleaned up: branch ak_me/fix-the-thing removed; worktree kept for the next session');
     const branches = execFileSync('git', ['branch', '--list', 'ak_me/*'], { cwd: env.repo, encoding: 'utf8' });
     expect(branches.trim()).toBe(''); // cleanup deletes the local branch
-    const memory = env.meko.calls.find((c) => c.name === 'addMemory');
-    expect(String(memory?.args[0])).toMatch(/Shipped in Demo: "Fix the thing" \(PR #7/);
-    expect(memory?.args[2]).toBe(sessionAgentId(row));
+    expect(env.meko.calls.some((c) => c.name === 'addMemory')).toBe(false); // what shipped is in git, not Meko
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
     // The PR's size, for the usage stats: extensions only, never the paths.
     const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
@@ -199,7 +197,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   const learns = (id: string) => all<{ trigger: string; path: string; outcome: string }>(env.core.db,
     'SELECT trigger, path, outcome FROM meko_learns WHERE session_id = ? ORDER BY started_at', id);
   const stages = (id: string) => all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => r.stage);
-  const shipped = () => env.meko.calls.filter((c) => c.name === 'addMemory').length;
+  const cleanups = (id: string) => all(env.core.db, "SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'cleanup'", id).length;
 
   it("closes a session whose PR was merged on GitHub once when polls overlap, even without the PR's size", async () => {
     const s = await inReview('Merged elsewhere');
@@ -209,7 +207,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await Promise.all([env.core.lifecycle.pollReview(row), env.core.lifecycle.pollReview(row)]);
     await closed(s.id);
     expect(stages(s.id)).toEqual(['code', 'pr', 'review', 'merge', 'done']);
-    expect(shipped()).toBe(1);
+    expect(cleanups(s.id)).toBe(1);
     const merged = dbGet<{ payload_json: string }>(env.core.db, "SELECT payload_json FROM session_events WHERE session_id = ? AND kind = 'merged'", s.id);
     expect(JSON.parse(merged!.payload_json)).toEqual({ url: 'https://github.com/acme/demo/pull/7' });
   });
@@ -221,7 +219,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     await closed(s.id);
-    expect(shipped()).toBe(1);
+    expect(cleanups(s.id)).toBe(1);
   });
 
   it('surfaces an AgentK refusal and allows forcing a review', async () => {
@@ -340,23 +338,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id)); // announced once
     await waitFor(() => env.core.sessions.row(s.id), (r) => r.stage === 'done', 10000, 'closed at turn end');
     expect(all(env.core.db, `SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'merged'`, s.id)).toHaveLength(1);
-    expect(shipped()).toBe(1);
+    expect(cleanups(s.id)).toBe(1);
   });
 
-  it('finishes a cleanup cut short after archiving, without a second summary', async () => {
-    const s = await inReview('Cut short');
-    env.core.sessions.setStage(s.id, 'merge', 'you');
-    // Cleanup saves the summary (and marks it) before archiving; the restart came after that.
-    env.core.sessions.event(s.id, 'shipped', 'Saved what shipped');
-    await env.core.sessions.archive(env.core.sessions.row(s.id), { keepBranch: true });
-    gh.status = { ...gh.status!, state: 'MERGED' };
-    (env.core.lifecycle as unknown as { lastPoll: Map<string, number> }).lastPoll.clear(); // as after the restart
-    await pollAll();
-    expect(env.core.sessions.row(s.id).stage).toBe('done');
-    expect(shipped()).toBe(0);
-  });
-
-  it('still saves what shipped when the session was archived by hand while cleanup waited', async () => {
+  it('finishes Merge & Close when the session was archived by hand while cleanup waited', async () => {
     const s = await inReview('Archived by hand');
     env.core.sessions.setStage(s.id, 'merge', 'you');
     await env.core.sessions.archive(env.core.sessions.row(s.id), { keepBranch: true });
@@ -365,7 +350,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     (env.core.lifecycle as unknown as { lastPoll: Map<string, number> }).lastPoll.clear();
     await pollAll();
     expect(env.core.sessions.row(s.id).stage).toBe('done');
-    expect(shipped()).toBe(1);
+    expect(cleanups(s.id)).toBe(1);
     // Archiving again keeps the first archive time and adds no second "Archived" event.
     expect(env.core.sessions.row(s.id).archived_at).toBe(archivedAt);
     expect(dbGet<{ n: number }>(env.core.db, "SELECT COUNT(*) AS n FROM session_events WHERE session_id = ? AND kind = 'archived'", s.id)!.n).toBe(1);
@@ -419,11 +404,11 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const added = env.meko.calls.filter((c) => c.name === 'addMemory');
     expect(added[0].args.slice(0, 3)).toEqual(['Gotcha (src/server/db.ts): Migrations are append-only: never edit a shipped one.', 'dp-1', sessionAgentId(row)]);
     expect(added[0].args[4]).toMatchObject({ source: 'agent-k-local', kind: 'learned', fact: 'gotcha', component: 'src/server/db.ts', session: s.id });
-    expect(String(added[1].args[0])).toMatch(/^Shipped in Demo/); // then what shipped, as before
+    expect(added).toHaveLength(1);
     const updated = env.meko.calls.find((c) => c.name === 'updateMemory');
     expect(updated?.args.slice(0, 4)).toEqual(['m1', 'Decision: polls run in one queue per session.', 'dp-1', 'claude_code:other-1']);
     // Each of these calls is the session's, for its Meko call log.
-    expect([...similarScopes, ...added.map((c) => c.scope), updated?.scope]).toEqual([s.id, s.id, s.id, s.id, s.id]);
+    expect([...similarScopes, ...added.map((c) => c.scope), updated?.scope]).toEqual([s.id, s.id, s.id, s.id]);
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'done' }]);
     expect(dbGet(env.core.db, 'SELECT candidates, saves, updates, skips FROM meko_learns WHERE session_id = ?', s.id))
       .toEqual({ candidates: 2, saves: 1, updates: 1, skips: 0 });
@@ -499,7 +484,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).stage).toBe('merge'); // waiting for the step
     await closed(s.id);
     expect(learns(s.id)).toEqual([{ trigger: 'manual', path: 'mod', outcome: 'done' }]);
-    expect(shipped()).toBe(1);
+    expect(cleanups(s.id)).toBe(1);
   });
 
   it("records a fork's usage that comes after AgentK gave up on its step", async () => {
@@ -542,7 +527,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'failed' }]);
     // At Merge & Close there's nothing to try again: the session is closing.
     expect(lastEvent(s.id, 'learned')).toBe("AgentK couldn't save what this session learned: AgentK's mod in Claude didn't answer in time.");
-    expect(shipped()).toBe(1);
+    expect(cleanups(s.id)).toBe(1);
   });
 
   it('saves learnings when asked, from the session menu or /agentk_learn', async () => {
@@ -585,7 +570,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(learns(s.id)).toEqual([]);
     expect(modLearn()).toEqual([]);
     expect(lastEvent(s.id, 'learn-skipped')).toBe(SKIPPED_TEXT);
-    expect(shipped()).toBe(1); // what shipped is still saved
+    expect(cleanups(s.id)).toBe(1);
   });
 
   it("forgets Don't save learnings for a merge that doesn't happen, so a merge on GitHub runs the step", async () => {

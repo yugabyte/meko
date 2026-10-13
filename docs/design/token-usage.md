@@ -161,5 +161,3 @@ only move when a session gets a reply, so the rail says when they were last repo
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The
   cost is an estimate at API list prices, not a bill.
-- **In Meko.** When a task is cleaned up, its token totals are included in the "shipped" summary
-  written to the project's dedicated datapack.

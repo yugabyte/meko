@@ -387,7 +387,7 @@ export interface CallHomeMeko {
   sentByTool?: Partial<Record<CallHomeMekoTool, number>>;
   /** Learn steps (src/server/learn.ts) begun then; left out when there were none. */
   learn?: CallHomeLearn;
-  /** The Meko calls AgentK made itself (searches at start, what shipped, designs, the learn step's); left out when there were none. */
+  /** The Meko calls AgentK made itself (searches at start, designs, the learn step's); left out when there were none. */
   agentk?: CallHomeAgentkMeko;
   /** The Meko plugin's transcript captures AgentK ran; left out when there were none. */
   capture?: { runs: number; failures: number; ms: number };

@@ -41,7 +41,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > The agent id doesn't name the project: Meko reads memories across agents within a datapack, so
 > it only says which session wrote a memory, and every session of a project, and the project
 > opened again after a close, sees them all. AgentK's own writes for a session (designs, the
-> shipped summary) go under the session's Meko conversation with the agent id the session runs
+> learn step's facts) go under the session's Meko conversation with the agent id the session runs
 > with (`launchedAgentId()`, recorded in `sessions.meko_agent_id`); the project's conversation
 > and its searches (the project home's, and the search at session start) use `agent-k-local`. A session launched before sessions had their own agent id keeps
 > `claude_code:<project id>` for all of that until it's launched again. A pin stays for a day after
@@ -67,8 +67,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > that still runs; with capture on, the launcher clears any inherited `MEKO_CHECKPOINT_INTERVAL`.
 > The plugin's MCP server is configured apart from it (`~/.claude.json`), so Meko's tools stay.
 > (With capture on, a server that is stopping waits up to 5 seconds for captures still running.)
-> The shipped summary written at Merge & Close and the learn step's facts are memories, not
-> transcripts, and are still sent.
+> The learn step's facts are memories, not transcripts, and are still sent.
 
 > **The system prompt gives the conversation_id.** Meko's tools require a `conversation_id`, which
 > only the plugin's SessionStart context gave before. Every launch now creates (or finds) the
@@ -138,7 +137,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   from the project's home.
 > - **At session start:** every session gets `MEKO_AGENT_ID`, and `MEKO_DATAPACK_ID` when the
 >   project has a dedicated datapack. A project without one starts sessions like any other; design
->   saves, the shipped summary and search skip Meko for it, and while Meko is off, for every project.
+>   saves, the learn step and search skip Meko for it, and while Meko is off, for every project.
 > - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare. An
 >   action that needs Meko (creating a datapack, sharing, answering an invite, adding a key) shows
 >   Meko's error, the project home shows no datapack counts, and background syncs log a warning and

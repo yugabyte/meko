@@ -1840,32 +1840,11 @@ export class Lifecycle {
   }
 
   /**
-   * Records what shipped in the datapack, then lets go of the worktree (idle for the next session,
-   * or removed) and removes the branches. Branches with commits the merged PR lacks are kept.
+   * Lets go of the worktree (idle for the next session, or removed) and removes the branches.
+   * Branches with commits the merged PR lacks are kept.
    */
   async cleanup(row: SessionRow, st: github.PrStatus): Promise<void> {
     const p = projectRow(this.db, row.project_id);
-    const dp = sessionDatapack(this.db, row);
-    // Once per session: a cleanup a restart cut short, or one that waited for Claude's turn while
-    // the user archived by hand, may run again.
-    const shipped = !!get(this.db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'shipped'", row.id);
-    if (p && dp && !shipped && this.core.mekoStatus.configured) {
-      try {
-        const conv = await this.sessions.conversationId(row, dp);
-        const body = st.body.trim().slice(0, 4000);
-        this.sessions.ingestUsage(row.id);
-        const u = this.sessions.runtime(row.id).usage;
-        const tokens = `Token usage: ${u.output} output, ${u.input} input, ${u.cacheWrite} cache write, ${u.cacheRead} cache read tokens over ${u.messages} responses.`;
-        await withMekoScope(row, () => this.core.meko.addMemory(
-          `Shipped in ${p.name}: "${st.title}" (PR #${st.number}, ${st.url}), branch ${row.branch}. ${tokens}${body ? `\n\n${body}` : ''}`,
-          dp.id, launchedAgentId(row), conv,
-          { source: 'agent-k-local', kind: 'shipped', pr: st.url, session: row.id },
-        ));
-        this.sessions.event(row.id, 'shipped', `Saved what shipped to ${dp.name}`);
-      } catch (e) {
-        this.core.log.warn(`saving the shipped summary to Meko failed for ${row.id}`, errMsg(e));
-      }
-    }
     const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
     const keep = !!repo && (await lacksLocalCommits(repo, row.branch, st));
     const { worktreeFreed, worktree } = await this.sessions.archive(row, { keepBranch: true });

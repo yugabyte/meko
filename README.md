@@ -3,7 +3,7 @@
 # AgentK Local
 
 The agentic coder for ADLC. AgentK Local lets you manage many projects and [Claude Code](https://claude.com/claude-code) sessions at 
-once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and shipped work flow into 
+once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
 datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
@@ -201,10 +201,9 @@ your phone can connect.
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
-  keeps every Meko call it makes for each session (recall at start, design uploads, the learn step,
-  the "Shipped in…" memory) with what it sent and what came back, in a file in the session's
-  folder that's deleted with the session. **View calls** opens them, a session at a time, with
-  filters for the tool and failed calls.
+  keeps every Meko call it makes for each session (recall at start, design uploads, the learn step)
+  with what it sent and what came back, in a file in the session's folder that's deleted with the
+  session. **View calls** opens them, a session at a time, with filters for the tool and failed calls.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home

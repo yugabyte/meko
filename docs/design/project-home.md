@@ -30,8 +30,8 @@ dialog warns how many of the project's sessions are running (starting, working, 
 recovered): they keep the datapack they were launched with, and so keep writing to the old one until
 they're restarted. That covers Claude's own Meko calls (its prompt names the old one), capture (the
 Meko hook keeps the datapack in the session's watermark once the session has started) and AgentK's
-writes for the session: designs, the PR's Meko lines and what shipped go to the datapack recorded on
-the session at launch (`sessions.meko_datapack_id`), under the session's own Meko conversation there
+writes for the session: designs, the PR's Meko lines and the learn step's facts go to the datapack
+recorded on the session at launch (`sessions.meko_datapack_id`), under the session's own Meko conversation there
 (AgentK's writes for a session always go under its own conversation). New and resumed sessions get the new one
 (a resumed session's Meko conversation is keyed by datapack, so its earlier turns stay in the old
 one). The request names the datapack it replaces
@@ -45,9 +45,9 @@ the project so it can be turned off) keeps, for each of the project's sessions, 
 AgentK makes for it, with what it sent and what came back, in
 `~/.agent-k-local/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
 (the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
-conversation (created and renamed), design uploads, the learn step's searches and writes, and the
-"Shipped in…" memory: the call sites wrap their work in `withMekoScope(session)`, an
-AsyncLocalStorage that `MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). The
+conversation (created and renamed), design uploads, and the learn step's searches and writes:
+the call sites wrap their work in `withMekoScope(session)`, an AsyncLocalStorage that
+`MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). The
 scope names the session's id and when that start of it was made: Try again reuses a failed start's
 id, and a call the failed start still had in flight is dropped rather than logged as the new
 start's. Calls
