@@ -27,6 +27,25 @@ func NewPromoteMemoriesHandler(
 	return &PromoteMemoriesHandler{svc: svc, dpLookup: dpLookup}
 }
 
+// firstInvalidUUID returns the first id that is not a canonical 36-char UUID. The
+// mem0 fetch casts ids to uuid, so a bad id would surface the Postgres cast error
+// as a 500 with raw SQL text (MEKO-834); callers refuse it with 400 first.
+// uuid.Parse alone is too lenient — it also accepts the urn:uuid:, {braces} and
+// hyphenless-32 forms (its own doc says not to use it to validate), and the uuid
+// cast rejects urn:uuid:, so those would still reach SQL. The length guard pins
+// every accepted id to the one form the cast takes.
+func firstInvalidUUID(ids []string) (string, bool) {
+	for _, id := range ids {
+		if len(id) != 36 {
+			return id, true
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // Promote handles POST /api/v1/promote-memories.
 //
 //	@Summary	Promote mem0 memories into the tenant knowledge base
@@ -50,6 +69,10 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 	if _, err := RequireDatapackOwnerOrMaintainer(c, h.dpLookup, req.DatapackID); err != nil {
 		return err
 	}
+	if bad, found := firstInvalidUUID(req.MemoryIDs); found {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
+			"memory id "+strconv.Quote(bad)+" is not a valid UUID")
+	}
 
 	result, err := h.svc.Promote(c.Request().Context(), req)
 	if err != nil {
@@ -71,6 +94,10 @@ func (h *PromoteMemoriesHandler) KeepAsMemory(c echo.Context) error {
 	}
 	if _, err := RequireDatapackAccess(c, h.dpLookup, req.DatapackID); err != nil {
 		return err
+	}
+	if bad, found := firstInvalidUUID(req.MemoryIDs); found {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
+			"memory id "+strconv.Quote(bad)+" is not a valid UUID")
 	}
 	result, err := h.svc.KeepAsMemory(c.Request().Context(), req)
 	if err != nil {
