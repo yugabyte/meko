@@ -8,7 +8,9 @@ screen, use **Move up** / **Move down** in the project home's settings. The top 
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
 diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking
 the branch copies the full path of the session's worktree (its tooltip shows the path, and the label
-reads `path copied` for a moment). The foot of the rail
+reads `path copied` for a moment), once a start has made the worktree. A copy the browser blocks shows
+the path in a toast, which stays while the pointer is on it and doesn't close on a click that selects
+its text. The foot of the rail
 shows the user and the server (`hari@dev-box`) with the version, so windows on different machines
 are easy to tell apart. The server name is `[server] name` (set in Settings), else the machine's
 host name up to its first dot; the tooltip adds the full host name. When space is short, the

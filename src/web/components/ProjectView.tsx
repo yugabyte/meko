@@ -108,8 +108,9 @@ export function ProjectView({
   const [sharing, setSharing] = useState(false);
   // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
   const [asking, setAsking] = useState(false);
-  // The session whose worktree path was just copied from the footer, for 2 s.
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  // The session whose worktree path was just copied from the footer, for 2 s from the last copy
+  // (each copy is a new object, so another click restarts the timer).
+  const [copiedPath, setCopiedPath] = useState<{ id: string } | null>(null);
   useEffect(() => {
     if (!copiedPath) return;
     const t = setTimeout(() => setCopiedPath(null), 2000);
@@ -197,16 +198,17 @@ export function ProjectView({
     <span title={session.repoPath !== project.repoPath ? session.repoPath : undefined}>{branchLabel}</span>
   );
   // On a desktop, clicking the branch copies the worktree's path; the label says so for a moment.
+  // Not while a start is still making the worktree: the path doesn't exist yet.
   const copyPath = async () => {
     if (!session) return;
-    if (await copyText(session.worktreePath)) setCopiedPath(session.id);
+    if (await copyText(session.worktreePath)) setCopiedPath({ id: session.id });
     else onError(`Couldn't copy the path. It is ${session.worktreePath}`);
   };
-  const branchButton = session && (
+  const branchButton = session && (session.startup?.step === 'worktree' ? branchText : (
     <button className="foot-btn" onClick={() => void copyPath()} title={`${session.worktreePath}\nClick to copy this path`}>
-      {copiedPath === session.id ? 'path copied' : branchLabel}
+      {copiedPath?.id === session.id ? 'path copied' : branchLabel}
     </button>
-  );
+  ));
   const tokensText = session && (
     <span title={usageTitle(session.usage)}>
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
