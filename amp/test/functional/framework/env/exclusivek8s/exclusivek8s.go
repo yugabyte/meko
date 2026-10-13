@@ -26,6 +26,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -51,19 +52,20 @@ const (
 
 // Config is the env.exclusivek8s.* configuration.
 type Config struct {
-	Context           string
-	NamespacePrefix   string
-	PullSecretB64     string // dockerconfigjson (base64); "" → skip the pull secret
-	PullSecretName    string
-	YBImage           string
-	YBStorage         string
-	HelmChart         string // helm chart ref/path; set → deploy via helm
-	HelmRelease       string
-	HelmValues        []string // extra --set key=value entries
-	ControllerImage   string   // convenience full image ref; optional
-	ManifestPath      string   // controller manifest applied when HelmChart is unset
-	ControllerService string
-	ControllerPort    int
+	Context             string
+	NamespacePrefix     string
+	PullSecretB64       string // dockerconfigjson (base64); "" → skip the pull secret
+	PullSecretName      string
+	YBImage             string
+	YBStorage           string
+	YBStreamCompression string
+	HelmChart           string // helm chart ref/path; set → deploy via helm
+	HelmRelease         string
+	HelmValues          []string // extra --set key=value entries
+	ControllerImage     string   // convenience full image ref; optional
+	ManifestPath        string   // controller manifest applied when HelmChart is unset
+	ControllerService   string
+	ControllerPort      int
 	// ControllerReach selects how the per-namespace controller is reached; see
 	// apps/ampstack.ControllerReachMode. "" (the default) inherits ampstack's own
 	// default (tailnet: the direct cluster-internal address when it is reachable,
@@ -91,24 +93,25 @@ func ybImage(c *core.Config) string {
 // FromConfig reads env.exclusivek8s.* from a framework Config.
 func FromConfig(c *core.Config) Config {
 	return Config{
-		Context:           c.GetString("env.exclusivek8s.context", ""),
-		NamespacePrefix:   c.GetString("env.exclusivek8s.namespace_prefix", DefaultNamespacePrefix),
-		PullSecretB64:     c.GetString("env.exclusivek8s.pull_secret_b64", ""),
-		PullSecretName:    c.GetString("env.exclusivek8s.pull_secret_name", DefaultPullSecretName),
-		YBImage:           ybImage(c),
-		YBStorage:         c.GetString("env.exclusivek8s.yb_storage", DefaultYBStorage),
-		HelmChart:         c.GetString("env.exclusivek8s.helm_chart", ""),
-		HelmRelease:       c.GetString("env.exclusivek8s.helm_release", DefaultHelmRelease),
-		HelmValues:        c.GetStringSlice("env.exclusivek8s.helm_values", nil),
-		ControllerImage:   c.GetString("env.exclusivek8s.controller_image", ""),
-		ManifestPath:      c.GetString("env.exclusivek8s.controller_manifest", ""),
-		ControllerService: c.GetString("env.exclusivek8s.controller_service", DefaultControllerService),
-		ControllerPort:    c.GetInt("env.exclusivek8s.controller_port", DefaultControllerPort),
-		ControllerReach:   ampstack.ControllerReachMode(c.GetString("env.exclusivek8s.controller_reach", "")),
-		LocalPortBase:     c.GetInt("env.exclusivek8s.local_port_base", DefaultLocalPortBase),
-		YBReadyTimeout:    c.GetDuration("env.exclusivek8s.yb_ready_timeout", ampstack.DefaultYBReadyTimeout),
-		ReadyTimeout:      c.GetDuration("env.exclusivek8s.controller_ready_timeout", ampstack.DefaultControllerReadyTimeout),
-		Product:           c.GetString("versions.product", ""),
+		Context:             c.GetString("env.exclusivek8s.context", ""),
+		NamespacePrefix:     c.GetString("env.exclusivek8s.namespace_prefix", DefaultNamespacePrefix),
+		PullSecretB64:       c.GetString("env.exclusivek8s.pull_secret_b64", ""),
+		PullSecretName:      c.GetString("env.exclusivek8s.pull_secret_name", DefaultPullSecretName),
+		YBImage:             ybImage(c),
+		YBStorage:           c.GetString("env.exclusivek8s.yb_storage", DefaultYBStorage),
+		YBStreamCompression: ybgflags.StreamCompressionMode(c),
+		HelmChart:           c.GetString("env.exclusivek8s.helm_chart", ""),
+		HelmRelease:         c.GetString("env.exclusivek8s.helm_release", DefaultHelmRelease),
+		HelmValues:          c.GetStringSlice("env.exclusivek8s.helm_values", nil),
+		ControllerImage:     c.GetString("env.exclusivek8s.controller_image", ""),
+		ManifestPath:        c.GetString("env.exclusivek8s.controller_manifest", ""),
+		ControllerService:   c.GetString("env.exclusivek8s.controller_service", DefaultControllerService),
+		ControllerPort:      c.GetInt("env.exclusivek8s.controller_port", DefaultControllerPort),
+		ControllerReach:     ampstack.ControllerReachMode(c.GetString("env.exclusivek8s.controller_reach", "")),
+		LocalPortBase:       c.GetInt("env.exclusivek8s.local_port_base", DefaultLocalPortBase),
+		YBReadyTimeout:      c.GetDuration("env.exclusivek8s.yb_ready_timeout", ampstack.DefaultYBReadyTimeout),
+		ReadyTimeout:        c.GetDuration("env.exclusivek8s.controller_ready_timeout", ampstack.DefaultControllerReadyTimeout),
+		Product:             c.GetString("versions.product", ""),
 	}
 }
 
@@ -314,6 +317,7 @@ func (p *Provider) ampstackConfig(ns string) (ampstack.Config, error) {
 		ExtraHelmSet:              p.cfg.HelmValues,
 		YBImage:                   p.cfg.YBImage,
 		YBStorage:                 p.cfg.YBStorage,
+		YBStreamCompression:       p.cfg.YBStreamCompression,
 		HelmShim:                  false,
 		ECRRegistry:               "", // exclusivek8s uses a pre-encoded secret, never mints via ECR
 		PullSecretName:            p.cfg.PullSecretName,

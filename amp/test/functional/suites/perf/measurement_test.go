@@ -516,3 +516,17 @@ func TestBranchSlicesAreDisjointAndCover(t *testing.T) {
 		}
 	}
 }
+
+func TestGzipStartsItsOwnSeries(t *testing.T) {
+	load := LoadFields{Scale: 10, Harness: benchHarnessRev}
+	sig := func(mode string) Identity {
+		return identityFromConfig(core.NewConfig().Derive(map[string]string{"env.yb_stream_compression": mode}), "", "abc", load)
+	}
+	gzip, none := sig("gzip"), sig("none")
+	if gzip.LoadSignature == none.LoadSignature || gzip.LoadShape == none.LoadShape {
+		t.Error("gzip and uncompressed numbers must not share a series or fall back to one by shape")
+	}
+	if none.LoadSignature != LoadSignature(load) {
+		t.Error("none is YB's default and must keep the series that predates the knob")
+	}
+}

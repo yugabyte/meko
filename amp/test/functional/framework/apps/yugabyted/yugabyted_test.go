@@ -622,3 +622,23 @@ func indexOfContains(cmds []string, sub string) int {
 	}
 	return -1
 }
+
+func TestStartPassesServerFlags(t *testing.T) {
+	nodes, execs := threeNodes()
+	app := New(nodes, Spec{
+		MasterFlags:  map[string]string{"stream_compression_algo": "0"},
+		TServerFlags: map[string]string{"stream_compression_algo": "1", "enable_stream_compression": "true"},
+	})
+	if err := app.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	for i, ex := range execs {
+		cmds := ex.recorded()
+		start := cmds[indexOfContains(cmds, "yugabyted start")]
+		for _, want := range []string{"--master_flags='stream_compression_algo=0'", "--tserver_flags='enable_stream_compression=true,stream_compression_algo=1'"} {
+			if !strings.Contains(start, want) {
+				t.Errorf("node %d start %q is missing %s", i, start, want)
+			}
+		}
+	}
+}

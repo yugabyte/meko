@@ -161,13 +161,12 @@ func ampStackConfigOn(amp ampstack.Config, kubeContext string, backing ampstack.
 // still reclaimed — and because td is LIFO and the backing was pushed first, the
 // control plane always goes down before the cluster it sits on.
 func provisionAmpEndpoint(ctx context.Context, t *core.T, amp ampstack.Config, ybCfg ybk8s.Config, info ybk8s.Info, suffix string, sink apps.ArtifactSink, td *teardownStack, logf func(string, ...any)) (ampEndpoint, error) {
-	return provisionAmpEndpointOn(ctx, t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, ampBacking(info), suffix, nil, sink, td, logf)
+	return provisionAmpEndpointOn(ctx, t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, ampBacking(info), suffix, perfEndpointSpec{}, sink, td, logf)
 }
 
 // provisionAmpEndpointOn is provisionAmpEndpoint over an already-resolved
 // backing, for a store that is not a co-located ybk8s deploy.
-// pgSettings are extra Postgres settings for the endpoint; nil keeps the derived ones.
-func provisionAmpEndpointOn(ctx context.Context, t *core.T, amp ampstack.Config, kubeContext, kubeconfig string, backing ampstack.Backing, suffix string, pgSettings map[string]string, sink apps.ArtifactSink, td *teardownStack, logf func(string, ...any)) (ampEndpoint, error) {
+func provisionAmpEndpointOn(ctx context.Context, t *core.T, amp ampstack.Config, kubeContext, kubeconfig string, backing ampstack.Backing, suffix string, spec perfEndpointSpec, sink apps.ArtifactSink, td *teardownStack, logf func(string, ...any)) (ampEndpoint, error) {
 	cfg := ampStackConfigOn(amp, kubeContext, backing, suffix)
 	app := ampstack.New(cfg).WithLogf(logf)
 	if kubeconfig != "" {
@@ -193,7 +192,7 @@ func provisionAmpEndpointOn(ctx context.Context, t *core.T, amp ampstack.Config,
 	}
 	logf("perf: amp control plane ready in %s (controller %s, backing %s)", cfg.Namespace, url, cfg.Backing.HostPorts)
 
-	ep, err := createPerfEndpoint(ctx, cl, suffix, pgSettings)
+	ep, err := createPerfEndpoint(ctx, cl, suffix, spec)
 	if err != nil {
 		return fail("%w", err)
 	}
@@ -208,11 +207,18 @@ func provisionAmpEndpointOn(ctx context.Context, t *core.T, amp ampstack.Config,
 	return out, nil
 }
 
+// perfEndpointSpec is what a perf endpoint is created with. The zero value takes
+// the derived Postgres settings and the control plane's default size.
+type perfEndpointSpec struct {
+	PgSettings map[string]string
+	Resources  *controller.EndpointResources
+}
+
 // createPerfEndpoint carves the one user/pool/cluster/endpoint this run needs
 // out of a freshly deployed control plane. Nothing else uses it, so there is no
 // name contention to tolerate — unlike sharedk8s, which serves every parallel
 // test off one control plane.
-func createPerfEndpoint(ctx context.Context, cl *controller.Client, suffix string, pgSettings map[string]string) (controller.Endpoint, error) {
+func createPerfEndpoint(ctx context.Context, cl *controller.Client, suffix string, spec perfEndpointSpec) (controller.Endpoint, error) {
 	user, err := cl.CreateUser(ctx, controller.CreateUserRequest{})
 	if err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create user: %w", err)
@@ -221,12 +227,12 @@ func createPerfEndpoint(ctx context.Context, cl *controller.Client, suffix strin
 	if err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create storage pool %s: %w", perfPoolName, err)
 	}
-	return createPerfEndpointInPool(ctx, cl, pool.ID, suffix, pgSettings)
+	return createPerfEndpointInPool(ctx, cl, pool.ID, suffix, spec)
 }
 
 // createPerfEndpointInPool carves the cluster + endpoint into a pool the caller
 // already owns — the live-arm path, whose pool exists since provisioning.
-func createPerfEndpointInPool(ctx context.Context, cl *controller.Client, poolID, suffix string, pgSettings map[string]string) (controller.Endpoint, error) {
+func createPerfEndpointInPool(ctx context.Context, cl *controller.Client, poolID, suffix string, spec perfEndpointSpec) (controller.Endpoint, error) {
 	name := perfClusterPrefix + suffix
 	if _, err := cl.CreateClusterAndWait(ctx, poolID, controller.CreateClusterRequest{Name: name}); err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create cluster %s: %w", name, err)
@@ -236,7 +242,7 @@ func createPerfEndpointInPool(ctx context.Context, cl *controller.Client, poolID
 		return controller.Endpoint{}, err
 	}
 	branchID := proj.DefaultBranch.BranchID
-	if _, err := cl.CreateEndpointAndWait(ctx, poolID, proj.ID, branchID, controller.CreateEndpointRequest{Role: "read_write", PgSettings: pgSettings}); err != nil {
+	if _, err := cl.CreateEndpointAndWait(ctx, poolID, proj.ID, branchID, controller.CreateEndpointRequest{Role: "read_write", PgSettings: spec.PgSettings, Resources: spec.Resources}); err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create endpoint: %w", err)
 	}
 	eps, err := cl.ListAllEndpoints(ctx, poolID, proj.ID, branchID)

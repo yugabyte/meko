@@ -47,6 +47,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/clientpod"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyted"
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -139,6 +140,8 @@ type Config struct {
 	ServiceName  string
 	YSQLPort     int
 	ReadyTimeout time.Duration
+	// StreamCompression is env.yb_stream_compression (apps/ybgflags).
+	StreamCompression string
 
 	// ExtraNamespaceLabels are merged onto the namespace (e.g. a reaper stamp).
 	ExtraNamespaceLabels map[string]string
@@ -177,6 +180,7 @@ func FromConfig(get Getter) Config {
 		ServiceName:         get.GetString("apps.ybpod.service_name", DefaultServiceName),
 		YSQLPort:            get.GetInt("apps.ybpod.ysql_port", DefaultYSQLPort),
 		ReadyTimeout:        get.GetDuration("apps.ybpod.ready_timeout", DefaultReadyTimeout),
+		StreamCompression:   ybgflags.StreamCompressionMode(get),
 	}
 }
 
@@ -424,7 +428,13 @@ func (d *Deployer) newYugabyted(podIP string) (*yugabyted.App, error) {
 		}
 		secretVal = v
 	}
+	masterFlags, tserverFlags, err := ybgflags.StreamCompression(d.cfg.StreamCompression)
+	if err != nil {
+		return nil, fmt.Errorf("ybpod: %w", err)
+	}
 	spec := yugabyted.Spec{
+		MasterFlags:  masterFlags,
+		TServerFlags: tserverFlags,
 		InstallDir:   d.ybInstallDir(),
 		BaseDir:      d.cfg.BaseDir,
 		RF:           1,

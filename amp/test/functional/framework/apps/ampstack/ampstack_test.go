@@ -1598,3 +1598,30 @@ func TestEndpointNodeSelectorPairs(t *testing.T) {
 		}
 	}
 }
+
+func TestDeployBuiltinYugabytedCarriesStreamCompression(t *testing.T) {
+	rec := newRecorder()
+	a := testApp(Config{YBStreamCompression: "gzip", YBTserverGflags: "stream_compression_algo=2"}, rec)
+	if _, err := a.Deploy(context.Background()); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	var sts string
+	for _, m := range appliedManifests(rec.snapshot()) {
+		if strings.Contains(m, "kind: StatefulSet") {
+			sts = m
+		}
+	}
+	if !strings.Contains(sts, `--master_flags="enable_stream_compression=true,stream_compression_algo=0"`) {
+		t.Errorf("yugabyted master flags lack compression:\n%s", sts)
+	}
+	if !strings.Contains(sts, "gzip_stream_compression_level=1,stream_compression_algo=1,stream_compression_algo=2") {
+		t.Errorf("an explicit tserver gflag must come after the compression default:\n%s", sts)
+	}
+}
+
+func TestDeployRejectsAnUnknownStreamCompression(t *testing.T) {
+	a := testApp(Config{YBStreamCompression: "lz4"}, newRecorder())
+	if _, err := a.Deploy(context.Background()); err == nil || !strings.Contains(err.Error(), "env.yb_stream_compression") {
+		t.Fatalf("Deploy = %v, want the unknown mode named", err)
+	}
+}

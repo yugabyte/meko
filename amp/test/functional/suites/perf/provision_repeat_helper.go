@@ -350,9 +350,9 @@ func (r *benchProvision) provisionEndpoint(ctx context.Context) error {
 	var ep ampEndpoint
 	var err error
 	if r.ampBacking != nil {
-		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, *r.ampBacking, r.sfx, r.spec.endpointPgSettings, r.sink, r.td, r.logf)
+		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, *r.ampBacking, r.sfx, perfEndpointSpec{PgSettings: r.spec.endpointPgSettings}, r.sink, r.td, r.logf)
 	} else {
-		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, ampBacking(r.info), r.sfx, r.spec.endpointPgSettings, r.sink, r.td, r.logf)
+		ep, err = provisionAmpEndpointOn(ctx, r.t, amp, ybCfg.KubeContext, ybCfg.Kubeconfig, ampBacking(r.info), r.sfx, perfEndpointSpec{PgSettings: r.spec.endpointPgSettings}, r.sink, r.td, r.logf)
 	}
 	if err != nil {
 		return err

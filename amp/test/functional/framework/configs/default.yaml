@@ -113,6 +113,16 @@ env:
   # itself for that branch. A framework-wide yba_provisioned default is wrong
   # here — it would force a doomed YBA attempt on runs that carry no YBA creds.
   yb_deploy: ""
+  # yb_stream_compression: the RPC stream compression every YugabyteDB the run
+  # creates starts with, whichever backing deploys it (apps/ybgflags). "gzip" is
+  # what BYOC deploys run on AWS and GCP (meko#1859): gzip level 1 on the
+  # tservers, compression off on the masters. "none" is Azure's setting and YB's
+  # own default. "" sets no compression gflags at all. Set at create, since
+  # changing it is a rolling restart; a backing the run attaches to keeps its
+  # own, and so does a yba_universe made from functional.yba.create_spec. Perf
+  # series measured under gzip carry a "+gzip" load signature, so they never mix
+  # with uncompressed history.
+  yb_stream_compression: "gzip"
   # stack: move every control-plane test between the two stack shapes for one
   # run — "dedicated" gives each test its own backing and control plane,
   # "shared" packs them onto the run-scoped one. Empty keeps what each test
@@ -2613,6 +2623,37 @@ perf:
     jobs: 2
     shared_buffers: "128MB"
     file_cache_size_limit: "128MB"
+  # stream_compression is perf/stream_compression: one RF3 backing per mode,
+  # each created with that env.yb_stream_compression, running the same phases in
+  # step (meko#1856, meko#1857, meko#1859). seed_rows rows of row_bytes each, random_pct
+  # of every row md5 hex and the rest repeated text, inserted batch_rows per
+  # statement by seed_clients; ANALYZE VERBOSE at each analyze_targets entry
+  # analyze_reps times; read_clients random primary-key reads for read_duration
+  # under the cache caps below; then batched inserts for ramp_step at each
+  # ramp_clients count. The default seed is about 2 GB, roughly 285k pages, so
+  # target 1000 samples nearly every page.
+  stream_compression:
+    modes: ["gzip", "none"]
+    row_bytes: 1000
+    random_pct: 25
+    batch_rows: 100
+    seed_rows: 2000000
+    seed_clients: 4
+    ramp_clients: ["2", "4", "8", "16"]
+    ramp_step: "60s"
+    analyze_targets: ["100", "1000"]
+    analyze_reps: 2
+    read_clients: 8
+    read_duration: "60s"
+    shared_buffers: "128MB"
+    file_cache_size_limit: "128MB"
+    # Each arm's yb-in-k8s volume size: the seed and the ramp land on all three
+    # tservers at RF3.
+    backing_storage_size: "50Gi"
+    # At the fleet's 2/4Gi the co-located pageserver's ingest memory OOM-killed
+    # both arms in the insert ramp (runs 558579ca, ed9773ce, meko#1846).
+    endpoint_cpu: "2"
+    endpoint_memory: "8Gi"
   # sysbench is the perf/sysbench load shape: sysbench's bundled oltp_* lua
   # workloads over the pgsql driver. sysbench is a distro package — the test
   # apt-installs it into the (Debian/Ubuntu-family) client pod at deploy, no

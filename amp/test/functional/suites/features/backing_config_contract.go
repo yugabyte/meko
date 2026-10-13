@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -42,7 +43,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Assert the backing YugabyteDB carries the settings AMP's storage schema depends on: the cost-based optimizer and pg_hint_plan on (pg_settings on the amp storage database) and the auto analyze service on (a tserver's /varz).",
+		Description: "Assert the backing YugabyteDB carries the settings AMP's storage schema depends on: the cost-based optimizer and pg_hint_plan on (pg_settings on the amp storage database), plus the auto analyze service and the env.yb_stream_compression gflags the run created it with (a tserver's /varz).",
 		Params:      []string{"functional.backing_contract", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runBackingConfigContract,
 	})
@@ -65,6 +66,11 @@ func (a *ampFeatureRun) backingConfigContract(ctx context.Context) error {
 	}
 	defer db.Close()
 	want := a.f.t.Options.GetStringSlice("functional.backing_contract.settings", defaultBackingContract)
+	compression, err := streamCompressionContract(a.f.t.Options)
+	if err != nil {
+		return err
+	}
+	want = append(want, compression...)
 	var wrong []string
 	var flags map[string]string
 	for _, entry := range want {
@@ -110,9 +116,48 @@ func (a *ampFeatureRun) backingConfigContract(ctx context.Context) error {
 		}
 	}
 	if len(wrong) > 0 {
-		return fmt.Errorf("the backing YugabyteDB is not configured the way AMP depends on (meko#970: auto analyze off left amp_storage.pages unanalyzed and GC deletes planned as 20-minute SeqScans): %s", strings.Join(wrong, "; "))
+		return fmt.Errorf("the backing YugabyteDB is not configured the way AMP depends on (meko#970: auto analyze off left amp_storage.pages unanalyzed and GC deletes planned as 20-minute SeqScans) or the run asked for (%s=%q, meko#1859): %s",
+			ybgflags.StreamCompressionKey, ybgflags.StreamCompressionMode(a.f.t.Options), strings.Join(wrong, "; "))
 	}
 	return nil
+}
+
+// streamCompressionContract is the tserver gflags the run's
+// env.yb_stream_compression asked every backing it creates for. A backing the
+// run attaches to was configured by someone else, so it is not held to them,
+// and a flag the run set explicitly wins over the mode, so it is not either.
+func streamCompressionContract(c *core.Config) ([]string, error) {
+	switch c.GetString("env.yb_deploy", "") {
+	case "external", "yba_universe":
+		return nil, nil
+	}
+	_, tserver, err := ybgflags.FromConfig(c)
+	if err != nil || len(tserver) == 0 {
+		return nil, err
+	}
+	explicit := explicitTServerGflags(c)
+	var out []string
+	for _, kv := range strings.Split(ybgflags.CSV(tserver), ",") {
+		if k, _, _ := strings.Cut(kv, "="); !explicit[k] {
+			out = append(out, "gflag:"+kv)
+		}
+	}
+	return out, nil
+}
+
+func explicitTServerGflags(c *core.Config) map[string]bool {
+	keys := map[string]bool{}
+	for k := range c.GetMap("apps.yba.universe.tserver_gflags", nil) {
+		keys[k] = true
+	}
+	for _, key := range []string{"env.ampstack.yb_gflags", "env.ampstack.yb_tserver_gflags"} {
+		for _, kv := range strings.Split(c.GetString(key, ""), ",") {
+			if k, _, _ := strings.Cut(strings.TrimSpace(kv), "="); k != "" {
+				keys[strings.TrimPrefix(k, "--")] = true
+			}
+		}
+	}
+	return keys
 }
 
 // tserverFlags reads one tserver's effective gflags from its /varz page.

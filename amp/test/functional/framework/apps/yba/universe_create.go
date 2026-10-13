@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 )
 
 // Universe creation from a typed spec, via YBA's two-call configure-then-create
@@ -150,6 +152,15 @@ var DefaultTServerGFlags = map[string]string{
 // DefaultMasterGFlags is empty: nothing AMP depends on is a master flag.
 var DefaultMasterGFlags = map[string]string{}
 
+// serverGFlags is the defaults plus the run's stream compression, with the
+// apps.yba.universe.<role>_gflags maps applied on top. An unknown compression
+// mode adds nothing here; env/universe rejects it before a create.
+func serverGFlags(c ConfigGetter) (master, tserver map[string]string) {
+	cm, ct, _ := ybgflags.FromConfig(c)
+	return gflagsFromConfig(c, "apps.yba.universe.master_gflags", ybgflags.Merge(DefaultMasterGFlags, cm)),
+		gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", ybgflags.Merge(DefaultTServerGFlags, ct))
+}
+
 // gflagsFromConfig merges the apps.yba.universe.<role>_gflags map over def
 // (config wins). A configured value of "" drops the flag, which is how a run
 // opts out of one of the defaults without replacing the whole map.
@@ -193,6 +204,7 @@ func applyGFlags(userIntent map[string]any, s UniverseSpec) {
 // caller resolves them against the live provider and fills them in.
 func BuildUniverseSpec(c ConfigGetter) UniverseSpec {
 	version := DBVersion(c, "apps.yba.universe.yb_version")
+	master, tserver := serverGFlags(c)
 	return UniverseSpec{
 		NamePrefix:        c.GetString("apps.yba.universe.name_prefix", DefaultUniverseNamePrefix),
 		Region:            c.GetString("apps.yba.universe.region", DefaultUniverseRegion),
@@ -210,8 +222,8 @@ func BuildUniverseSpec(c ConfigGetter) UniverseSpec {
 		Throughput:        c.GetInt("apps.yba.universe.throughput", DefaultThroughput),
 		InstanceTags:      instanceTagsFromConfig(c),
 		EnableYbc:         c.GetBool("apps.yba.universe.enable_ybc", false),
-		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
-		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
+		MasterGFlags:      master,
+		TServerGFlags:     tserver,
 	}
 }
 

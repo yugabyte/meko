@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/baseline"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -172,6 +173,7 @@ func buildIdentity(variant string, ybCfg ybk8s.Config, ampCtrl, ampEndpoint, com
 // image/version of the backing, the amp controller/endpoint images the run
 // measures through, and both signatures of the load it drives.
 func identityFromConfig(c *core.Config, variant, commit string, load LoadFields) Identity {
+	load.Harness += ybgflags.Signature(ybgflags.StreamCompressionMode(c))
 	amp := ampstack.FromConfig(c)
 	id := buildIdentity(variant, ybk8s.FromConfig(c), amp.ControllerImage, amp.EndpointImage, commit,
 		LoadSignature(load), LoadShapeSignature(load))

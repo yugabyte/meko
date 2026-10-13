@@ -854,3 +854,41 @@ func TestHelmSetsGuaranteedQoS(t *testing.T) {
 		t.Error("without GuaranteedQoS the chart's own limits must stand")
 	}
 }
+
+func TestHelmSetsCarryStreamCompression(t *testing.T) {
+	sets := (&Deployer{cfg: Config{StreamCompression: "gzip"}}).helmSets()
+	for k, want := range map[string]string{
+		"gflags.master.enable_stream_compression":      "true",
+		"gflags.master.stream_compression_algo":        "0",
+		"gflags.tserver.enable_stream_compression":     "true",
+		"gflags.tserver.stream_compression_algo":       "1",
+		"gflags.tserver.gzip_stream_compression_level": "1",
+	} {
+		if sets[k] != want {
+			t.Errorf("%s = %q, want %q", k, sets[k], want)
+		}
+	}
+	if _, ok := (&Deployer{cfg: Config{}}).helmSets()["gflags.tserver.stream_compression_algo"]; ok {
+		t.Error("an unset mode must leave the chart's own gflags")
+	}
+}
+
+func TestFromConfigDefaultsStreamCompressionToGzip(t *testing.T) {
+	if got := FromConfig(fakeGet{m: map[string]any{}}).StreamCompression; got != "gzip" {
+		t.Errorf("StreamCompression = %q, want gzip", got)
+	}
+}
+
+func TestDeployRejectsAnUnknownStreamCompression(t *testing.T) {
+	rr := &recordRunner{}
+	d := New(Config{ChartVersion: "2025.2.1.0-b141", StreamCompression: "lz4"}, "run7").
+		WithKube(k8s.New(k8s.Config{}).WithRunner(rr.run)).
+		WithHelmRunner(rr.run).
+		WithLogf(nil)
+	if _, err := d.Deploy(context.Background()); err == nil || !strings.Contains(err.Error(), "env.yb_stream_compression") {
+		t.Fatalf("Deploy = %v, want the unknown mode named", err)
+	}
+	if len(rr.calls) != 0 {
+		t.Errorf("Deploy ran %d commands before rejecting the mode", len(rr.calls))
+	}
+}

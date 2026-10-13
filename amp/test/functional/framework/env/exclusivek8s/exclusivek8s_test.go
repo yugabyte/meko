@@ -229,6 +229,28 @@ func TestConfigured(t *testing.T) {
 	}
 }
 
+func TestAmpstackConfigCarriesStreamCompression(t *testing.T) {
+	for override, want := range map[string]string{"": "gzip", "env.yb_stream_compression=none": "none"} {
+		var overrides []string
+		if override != "" {
+			overrides = []string{override}
+		}
+		c, err := core.LoadConfig(nil, nil, overrides)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := FromConfig(c)
+		cfg.Context = "x"
+		ac, err := New(cfg).ampstackConfig("ns")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ac.YBStreamCompression != want {
+			t.Errorf("%q: YBStreamCompression = %q, want %q", override, ac.YBStreamCompression, want)
+		}
+	}
+}
+
 func assertOrder(t *testing.T, got []string, want ...string) {
 	t.Helper()
 	idx := 0

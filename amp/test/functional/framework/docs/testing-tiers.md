@@ -198,6 +198,11 @@ tests need (a single run would demand every cloud credential at once):
   the tservers' and the endpoint's network namespaces so the sites are the
   configured round trips apart (multi-AZ, multi-region, the endpoint remote
   from its universe), every round trip verified with ping first.
+  `stream_compression` stands one RF3 stack per `perf.stream_compression.modes`
+  entry (gzip and none), each backing created with that mode, and runs a
+  compressible seed, ANALYZE at each statistics target, cache-capped
+  primary-key reads and an insert ramp on all of them in step. It gates every
+  arm's numbers on history and reports gzip's ratio to none (meko#1856, #1857).
 
 What one run can resolve, measured on the portal before the stacks were
 isolated (40 runs per series, 50 or so live-arm pairs; 80% power, one-sided 5%):

@@ -30,6 +30,7 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
@@ -107,6 +108,10 @@ type Spec struct {
 	Deploy *DeploySpec
 	// ReadyTimeout bounds Wait. 0 → DefaultReadyWait.
 	ReadyTimeout time.Duration
+	// MasterFlags / TServerFlags go to --master_flags / --tserver_flags, so a
+	// value must not contain a comma.
+	MasterFlags  map[string]string
+	TServerFlags map[string]string
 }
 
 // artifactDeployer is the subset of *artifact.Deployer the app uses; injectable
@@ -395,6 +400,12 @@ func (a *App) startNode(ctx context.Context, n Node, joinHost string) error {
 	}
 	if a.spec.DataDir != "" {
 		fmt.Fprintf(&b, " --data_dir=%s", shellQuote(a.spec.DataDir))
+	}
+	if len(a.spec.MasterFlags) > 0 {
+		fmt.Fprintf(&b, " --master_flags=%s", shellQuote(ybgflags.CSV(a.spec.MasterFlags)))
+	}
+	if len(a.spec.TServerFlags) > 0 {
+		fmt.Fprintf(&b, " --tserver_flags=%s", shellQuote(ybgflags.CSV(a.spec.TServerFlags)))
 	}
 	return a.runOK(ctx, n.Exec, b.String())
 }

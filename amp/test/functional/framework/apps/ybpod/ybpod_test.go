@@ -137,7 +137,7 @@ func TestDeployStartsPodDeploysTarballStartsYugabyted(t *testing.T) {
 	if start == "" {
 		t.Fatalf("no `yugabyted start` exec into the pod; exec cmds: %v", rr.execCmds())
 	}
-	for _, want := range []string{"--advertise_address='10.1.2.3'", "/root/yb-software/yugabyte-2025.2.1.0/bin/yugabyted"} {
+	for _, want := range []string{"--advertise_address='10.1.2.3'", "/root/yb-software/yugabyte-2025.2.1.0/bin/yugabyted", "stream_compression_algo=1"} {
 		if !strings.Contains(start, want) {
 			t.Errorf("yugabyted start missing %q in: %s", want, start)
 		}

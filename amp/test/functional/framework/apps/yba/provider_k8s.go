@@ -215,6 +215,7 @@ func readK8sZones(c ConfigGetter) []K8sZoneSpec {
 // ProviderCode is kubernetes so BuildConfigureRequest emits the k8s userIntent.
 func BuildK8sUniverseSpec(c ConfigGetter) UniverseSpec {
 	version := DBVersion(c, "apps.yba.universe.yb_version")
+	master, tserver := serverGFlags(c)
 	return UniverseSpec{
 		NamePrefix:        c.GetString("apps.yba.universe.name_prefix", DefaultUniverseNamePrefix),
 		ProviderCode:      "kubernetes",
@@ -230,8 +231,8 @@ func BuildK8sUniverseSpec(c ConfigGetter) UniverseSpec {
 		TServerCPUCores:   c.GetInt("apps.yba.k8s.tserver_cpu", DefaultK8sTServerCPUCores),
 		TServerMemGiB:     c.GetInt("apps.yba.k8s.tserver_mem_gib", DefaultK8sTServerMemGiB),
 		EnableYbc:         c.GetBool("apps.yba.k8s.enable_ybc", DefaultK8sEnableYbc),
-		MasterGFlags:      gflagsFromConfig(c, "apps.yba.universe.master_gflags", DefaultMasterGFlags),
-		TServerGFlags:     gflagsFromConfig(c, "apps.yba.universe.tserver_gflags", DefaultTServerGFlags),
+		MasterGFlags:      master,
+		TServerGFlags:     tserver,
 
 		// The gflags TLS needs (client certificates on RPC, the cert HBA) go
 		// through the universe gflag keys above like any other, rather than a

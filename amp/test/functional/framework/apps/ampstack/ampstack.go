@@ -57,6 +57,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
@@ -281,8 +282,11 @@ type Config struct {
 	// env.ampstack.yb_gflags knob feeds both sides.
 	YBMasterGflags  string
 	YBTserverGflags string
-	StorageClass    string // endpoint /data PVC class; "" → emptyDir
-	DBName          string
+	// YBStreamCompression is env.yb_stream_compression (apps/ybgflags); the
+	// gflags above are applied after it, so they win.
+	YBStreamCompression string
+	StorageClass        string // endpoint /data PVC class; "" → emptyDir
+	DBName              string
 
 	// Backing selects the control-plane YugabyteDB. Zero value → the built-in
 	// single-node yugabyted (current behaviour); external mode wires the
@@ -449,7 +453,8 @@ func FromConfig(get Getter) Config {
 			get.GetString("env.ampstack.yb_master_gflags", "")),
 		YBTserverGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
 			get.GetString("env.ampstack.yb_tserver_gflags", "")),
-		StorageClass: get.GetString("env.ampstack.storage_class", ""),
+		YBStreamCompression: ybgflags.StreamCompressionMode(get),
+		StorageClass:        get.GetString("env.ampstack.storage_class", ""),
 		// 2, not the product's 8: these clusters pack many small endpoints, and
 		// the shapes the perf and scale suites were built around predate the
 		// floor. Raise it to exercise the product's own shape, at the cost of
@@ -790,7 +795,13 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 			return StackInfo{}, err
 		}
 	} else {
-		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.YBStorageClass, a.cfg.YBMasterGflags, a.cfg.YBTserverGflags, pullSecretNameIf(pullSecretApplied, a.cfg.PullSecretName))); err != nil {
+		cm, ct, err := ybgflags.StreamCompression(a.cfg.YBStreamCompression)
+		if err != nil {
+			return StackInfo{}, fmt.Errorf("ampstack: %w", err)
+		}
+		masterFlags := joinGflags(ybgflags.CSV(cm), a.cfg.YBMasterGflags)
+		tserverFlags := joinGflags(ybgflags.CSV(ct), a.cfg.YBTserverGflags)
+		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.YBStorageClass, masterFlags, tserverFlags, pullSecretNameIf(pullSecretApplied, a.cfg.PullSecretName))); err != nil {
 			return StackInfo{}, fmt.Errorf("apply yugabyted: %w", err)
 		}
 		if err := a.kube.WaitFor(ctx, "statefulset/"+yugabytedStatefulSet, "jsonpath={.status.readyReplicas}=1", a.cfg.YBReadyTimeout); err != nil {

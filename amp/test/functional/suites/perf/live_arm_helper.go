@@ -126,7 +126,7 @@ func (a *liveArm) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (
 // endpointClient carves the arm's perf endpoint into the pool provisioning
 // already created and connects to it.
 func (a *liveArm) endpointClient(ctx context.Context) (*pg.Client, error) {
-	ep, err := createPerfEndpointInPool(ctx, a.cl, a.poolID, a.sfx, nil)
+	ep, err := createPerfEndpointInPool(ctx, a.cl, a.poolID, a.sfx, perfEndpointSpec{})
 	if err != nil {
 		return nil, err
 	}

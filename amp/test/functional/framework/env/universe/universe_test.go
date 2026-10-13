@@ -1322,3 +1322,38 @@ func countOf(got []string, want string) int {
 	}
 	return n
 }
+
+func TestProvisionYugabytedPassesStreamCompression(t *testing.T) {
+	var node *scriptExec
+	p := New(Config{Mode: ModeProvisionYugabyted, Hosts: []string{"10.0.0.1"}, InstallDir: "/opt/yb", RF: 1, StreamCompression: "gzip"})
+	p.dial = func(_ context.Context, _ Config, host string) (transport, error) {
+		node = &scriptExec{host: host, status: "Status: Running"}
+		return node, nil
+	}
+	p.waitPG = func(context.Context, pg.ConnInfo, time.Duration) error { return nil }
+	p.detectVer = func(context.Context, pg.ConnInfo) string { return "2.99.0.0-test" }
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	start := findContains(node.recorded(), "--tserver_flags=")
+	if !strings.Contains(start, "stream_compression_algo=1") || !strings.Contains(findContains(node.recorded(), "--master_flags="), "stream_compression_algo=0") {
+		t.Errorf("start command lacks the gzip flags: %v", node.recorded())
+	}
+
+	bad := New(Config{Mode: ModeProvisionYugabyted, Hosts: []string{"10.0.0.1"}, StreamCompression: "lz4"})
+	if _, err := bad.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil); err == nil || !strings.Contains(err.Error(), "lz4") {
+		t.Errorf("an unknown mode provisioned: %v", err)
+	}
+}
+
+func TestBuildYBASpecsRejectsUnknownStreamCompression(t *testing.T) {
+	c, err := core.LoadConfig(nil, nil, []string{"env.yb_stream_compression=lz4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := provisionYBAProvider(&fakeStack{}, &fakeProvisioner{})
+	p.provisionCfg = c
+	if _, err := p.buildYBASpecs(); err == nil || !strings.Contains(err.Error(), "lz4") {
+		t.Errorf("buildYBASpecs = %v, want the unknown mode rejected", err)
+	}
+}

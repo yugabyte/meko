@@ -487,6 +487,29 @@ func TestBuildUniverseSpecCarriesBackingContractGFlags(t *testing.T) {
 	}
 }
 
+func TestBuildUniverseSpecCarriesStreamCompression(t *testing.T) {
+	c := fakeConfig{m: map[string]any{"versions.yugabytedb": "2025.2.1.0-b141"}}
+	for name, s := range map[string]UniverseSpec{
+		"aws": BuildUniverseSpec(c),
+		"gcp": BuildGCPUniverseSpec(c),
+		"k8s": BuildK8sUniverseSpec(c),
+	} {
+		if s.TServerGFlags["stream_compression_algo"] != "1" || s.MasterGFlags["stream_compression_algo"] != "0" {
+			t.Errorf("%s: master %v / tserver %v, want gzip on the tservers only", name, s.MasterGFlags, s.TServerGFlags)
+		}
+		if s.TServerGFlags["ysql_enable_auto_analyze"] != "true" {
+			t.Errorf("%s: compression replaced the backing contract flags: %v", name, s.TServerGFlags)
+		}
+	}
+	off := BuildK8sUniverseSpec(fakeConfig{m: map[string]any{
+		"env.yb_stream_compression":        "none",
+		"apps.yba.universe.tserver_gflags": map[string]any{"enable_stream_compression": "false"},
+	}})
+	if off.TServerGFlags["stream_compression_algo"] != "0" || off.TServerGFlags["enable_stream_compression"] != "false" {
+		t.Errorf("none plus an explicit override: tserver %v", off.TServerGFlags)
+	}
+}
+
 func TestBuildConfigureRequestK8sPodsAreNotEvictable(t *testing.T) {
 	ui := BuildConfigureRequest(sampleK8sUniverseSpec())["clusters"].([]any)[0].(map[string]any)["userIntent"].(map[string]any)
 	raw, ok := ui["universeOverrides"].(string)

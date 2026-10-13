@@ -49,6 +49,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 	"github.com/yugabyte/amp/test/functional/framework/kubemeta"
@@ -185,6 +186,9 @@ type Config struct {
 	// needs both to tell "never configured" from "configured but unreadable".
 	TLSRootCAFile string
 	TLSRootCAErr  error
+
+	// StreamCompression is the env.yb_stream_compression mode (apps/ybgflags).
+	StreamCompression string
 }
 
 // Getter is the minimal typed-config surface FromConfig needs (structurally
@@ -259,6 +263,8 @@ func FromConfig(get Getter) Config {
 		TLSIssuerGroup: get.GetString("apps.ybk8s.tls.issuer_group", DefaultTLSIssuerGroup),
 		TLSPermissive:  get.GetBool("apps.ybk8s.tls.permissive", DefaultTLSPermissive),
 		TLSStorageRole: get.GetString("apps.ybk8s.tls.storage_role", DefaultTLSStorageRole),
+
+		StreamCompression: ybgflags.StreamCompressionMode(get),
 	}
 	cfg.TLSRootCAFile = get.GetString("apps.ybk8s.tls.root_ca_file", "")
 	cfg.TLSRootCAPEM, cfg.TLSRootCAErr = readOptionalFile(cfg.TLSRootCAFile)
@@ -582,6 +588,10 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 			"waitRolloutAndYSQL and the suites that use this backing connect with sslmode=disable")
 	}
 
+	if _, _, err := ybgflags.StreamCompression(d.cfg.StreamCompression); err != nil {
+		return Info{}, fmt.Errorf("ybk8s: %w", err)
+	}
+
 	// 1. namespace (labelled so Teardown/reaper recognizes it).
 	if err := d.kube.CreateNamespace(ctx, d.ns, namespaceLabels(d.cfg.ExtraNamespaceLabels)); err != nil {
 		return Info{}, fmt.Errorf("create namespace %s: %w", d.ns, err)
@@ -832,6 +842,13 @@ func (d *Deployer) helmSets() map[string]string {
 	}
 	for k, v := range ParseNodeSelector(d.cfg.NodeSelector) {
 		sets["nodeSelector."+helmEscapeKey(k)] = v
+	}
+	master, tserver, _ := ybgflags.StreamCompression(d.cfg.StreamCompression)
+	for k, v := range master {
+		sets["gflags.master."+k] = v
+	}
+	for k, v := range tserver {
+		sets["gflags.tserver."+k] = v
 	}
 	if d.cfg.TLS {
 		maps.Copy(sets, d.cfg.tlsHelmSets())

@@ -52,6 +52,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybgflags"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyted"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
@@ -147,6 +148,8 @@ type Config struct {
 	BaseDir    string
 	DataDir    string
 	RF         int
+	// StreamCompression is env.yb_stream_compression (apps/ybgflags).
+	StreamCompression string
 
 	YSQLPort int
 	Product  string // fallback product version label
@@ -174,6 +177,8 @@ func FromConfig(c *core.Config) Config {
 		BaseDir:    c.GetString("env.universe.yugabyted.base_dir", ""),
 		DataDir:    c.GetString("env.universe.yugabyted.data_dir", ""),
 		RF:         c.GetInt("env.universe.yugabyted.rf", 0),
+
+		StreamCompression: ybgflags.StreamCompressionMode(c),
 
 		YSQLPort: c.GetInt("env.universe.ysql_port", DefaultYSQLPort),
 		Product:  c.GetString("versions.product", ""),
@@ -535,6 +540,10 @@ func (p *Provider) provisionYugabyted(ctx context.Context) (core.Environment, er
 	if len(p.cfg.Hosts) == 0 {
 		return nil, fmt.Errorf("provision_yugabyted: env.universe.yugabyted.hosts is required")
 	}
+	masterFlags, tserverFlags, err := ybgflags.StreamCompression(p.cfg.StreamCompression)
+	if err != nil {
+		return nil, fmt.Errorf("provision_yugabyted: %w", err)
+	}
 	var transports []transport
 	fail := func(e error) (core.Environment, error) {
 		for _, tr := range transports {
@@ -552,11 +561,13 @@ func (p *Provider) provisionYugabyted(ctx context.Context) (core.Environment, er
 		nodes = append(nodes, yugabyted.Node{Exec: tr, Advertise: host})
 	}
 	app := yugabyted.New(nodes, yugabyted.Spec{
-		InstallDir: p.cfg.InstallDir,
-		BaseDir:    p.cfg.BaseDir,
-		DataDir:    p.cfg.DataDir,
-		RF:         p.cfg.RF,
-		YSQLPort:   p.cfg.ysqlPort(),
+		InstallDir:   p.cfg.InstallDir,
+		BaseDir:      p.cfg.BaseDir,
+		DataDir:      p.cfg.DataDir,
+		RF:           p.cfg.RF,
+		YSQLPort:     p.cfg.ysqlPort(),
+		MasterFlags:  masterFlags,
+		TServerFlags: tserverFlags,
 	}, yugabyted.WithLogf(p.logf), yugabyted.WithWaitPG(p.waitPG))
 
 	if err := app.Start(ctx); err != nil {
@@ -619,6 +630,11 @@ type ybaSpecs struct {
 func (p *Provider) buildYBASpecs() (ybaSpecs, error) {
 	sp := ybaSpecs{isK8s: p.providerType == "kubernetes", gcp: p.providerType == "gcp"}
 	var err error
+	if p.provisionCfg != nil {
+		if _, _, err := ybgflags.FromConfig(p.provisionCfg); err != nil {
+			return sp, fmt.Errorf("provision_yba: %w", err)
+		}
+	}
 	switch {
 	case sp.isK8s:
 		if sp.k8sProv, err = p.buildK8sProviderSpec(); err != nil {
