@@ -91,6 +91,8 @@ func TestSchedulingReasonMatchesCapacityFailures(t *testing.T) {
 		{"tservers not Ready before workload: exit 1", "readiness wait timed out"},
 		{`waiting for every Deployment and StatefulSet to be Ready: api-server migrations wedged on a dirty version (golang-migrate postgres driver on YugabyteDB): level=ERROR msg="migration failed" purpose=data error="Dirty database version 1. Fix and force version."`,
 			"api-server migrations wedged (golang-migrate postgres driver on YB)"},
+		{`waiting for every Deployment and StatefulSet to be Ready: api-server data migration 1 keeps failing after its dirty version was cleared and rerun: level=ERROR msg="migration failed" purpose=data error="boom"`,
+			"api-server data migration 1 failing after a rerun"},
 	}
 	for _, c := range cases {
 		got, ok := core.SchedulingReason(c.msg)

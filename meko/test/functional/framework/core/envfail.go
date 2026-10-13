@@ -80,6 +80,8 @@ var schedulingSignals = []struct {
 	// A product bug (#1709), retried because a fresh stack usually gets past it: the
 	// RETRY line names it, so it stays visible rather than absorbed.
 	{"api-server migrations wedged (golang-migrate postgres driver on YB)", []string{"api-server migrations wedged on a dirty version"}},
+	// The same product bug on a build that clears a dirty version 1 itself: the rerun fails again.
+	{"api-server data migration 1 failing after a rerun", []string{"api-server data migration 1 keeps failing"}},
 	{"readiness wait timed out", []string{"not ready before"}},
 }
 

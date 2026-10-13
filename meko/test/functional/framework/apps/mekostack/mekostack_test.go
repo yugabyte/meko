@@ -1001,6 +1001,41 @@ func TestWaitWorkloadsStopsOnWedgedMigrations(t *testing.T) {
 	}
 }
 
+// A build that clears a dirty version 1 never prints "Dirty database version" again, so a
+// migration 1 that fails after the rerun has to stop the wait by the warning plus failure.
+func migrateLogCluster(migrateLog string) *cluster {
+	return &cluster{handle: func(line string, _ call) (execpkg.Result, bool) {
+		switch {
+		case strings.Contains(line, "get deployments"):
+			return out("meko-api-server\t3\t0\n")
+		case strings.Contains(line, "get statefulsets"):
+			return out("yb-tserver\t1\t1\n")
+		case strings.Contains(line, "logs deployment/meko-api-server -c migrate"):
+			return out(migrateLog)
+		}
+		return execpkg.Result{}, false
+	}}
+}
+
+func TestMigrationsWedgedWhenMigration1KeepsFailingAfterTheRecovery(t *testing.T) {
+	log := `level=WARN msg="data migration 1 was interrupted on an earlier start; rerunning it" purpose=data` + "\n" +
+		`level=ERROR msg="migration failed" purpose=data error="boom"` + "\n"
+	a := New(testConfig(t)).WithRunner(migrateLogCluster(log).run).WithLogf(nil).WithPollInterval(time.Millisecond)
+	err := a.migrationsWedged(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "api-server data migration 1 keeps failing") {
+		t.Fatalf("migrationsWedged = %v, want the data-migration-1 error", err)
+	}
+}
+
+func TestMigrationsNotWedgedWhenTheRecoveryWorked(t *testing.T) {
+	log := `level=WARN msg="data migration 1 was interrupted on an earlier start; rerunning it" purpose=data` + "\n" +
+		`level=INFO msg="schema migrated" purpose=data version=5` + "\n"
+	a := New(testConfig(t)).WithRunner(migrateLogCluster(log).run).WithLogf(nil).WithPollInterval(time.Millisecond)
+	if err := a.migrationsWedged(context.Background()); err != nil {
+		t.Fatalf("migrationsWedged = %v, want nil for a recovery that worked", err)
+	}
+}
+
 func TestClusterURLs(t *testing.T) {
 	api, mcp := ClusterURLs("mekoqa-ds-ab12-1")
 	if api != "http://meko-api-server-service.mekoqa-ds-ab12-1.svc:80" || mcp != "http://meko-mcp-server.mekoqa-ds-ab12-1.svc:80/mcp" {

@@ -379,10 +379,15 @@ Re-applying from there is safe: every statement in the set is guarded (`IF NOT
 EXISTS`, and the state CHECK is added only when absent), so the versions that did
 land are no-ops the second time.
 
-A data plane wedges the same way, but do not copy the statement above verbatim: only
+A data plane can wedge the same way, but do not copy the statement above verbatim: only
 the control-plane set tracks inside `meko_system`. The system set uses
 `schema_migrations_system` and the data set plain `schema_migrations`, both wherever
 the search path puts them (`getPostgresConfig` in `internal/db/connect.go`).
+
+The data set recovers one case by itself: a dirty **version 1** is cleared at the next
+start and migration 1 is rerun, since 000001 is written to tolerate that (MEKO-831). A
+dirty version above 1, and the system and control-plane sets, still need the manual
+reset above, with the table and version that apply.
 
 **`ycp-postgres-0` stuck `Pending`** — the storage class does not exist. The install
 now refuses up front when the class is missing and lists the ones the cluster has, so

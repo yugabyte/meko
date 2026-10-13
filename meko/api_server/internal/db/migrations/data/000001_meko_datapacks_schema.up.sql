@@ -6,6 +6,11 @@ CREATE SCHEMA IF NOT EXISTS datapacks;
 
 /*
 As we are manually creating the vector index `datapacks.knowledge_bases`, we need to insert an entry in the dist_rag.vector_indexes table.
+
+This file is not applied atomically, so a container killed partway through is rerun from
+the top: every statement below must tolerate having already run. ON CONFLICT DO NOTHING
+(no target, so it covers whichever unique index dist_rag defines) is what makes this one
+safe to repeat.
 */
 
 INSERT INTO dist_rag.vector_indexes
@@ -21,6 +26,7 @@ VALUES
    'INIT'::dist_rag.index_build_status,
    'OPENAI'::dist_rag.ai_provider_enum,
    '{"model": "text-embedding-3-large", "dimensions": 1536}'::jsonb)
+ON CONFLICT DO NOTHING
 RETURNING id;
 
 /*
@@ -84,7 +90,15 @@ mem0 tables
 -- When a memory is promoted to knowledge base, we need to update the meko_promoted_to_kb_at field
     -- When the same memory is modified, we need to reset the meko_created_at field, so it becomes visible again.
 
-CREATE TYPE datapacks.meko_promotion_user_action AS ENUM ('promoted', 'keep_as_memory');
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname = 'datapacks' AND t.typname = 'meko_promotion_user_action'
+    ) THEN
+        CREATE TYPE datapacks.meko_promotion_user_action AS ENUM ('promoted', 'keep_as_memory');
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS datapacks.meko_mem0_collection (
                     meko_datapack_id UUID NOT NULL,
@@ -218,43 +232,9 @@ CREATE INDEX IF NOT EXISTS meko_mem0_promoted_graph_vertex_embeddings_hnsw_idx
                     USING hnsw (embeddings vector_cosine_ops)
                     WITH (m = 32, ef_construction = 64);
 
--- Need to pre-create the graph tables used for multi-tenancy storage. or prime the mem0 to create these tables as part of platform initialization.
--- Create a graph name called "meko_multi_tenant_graph"
--- This will create a schema called "meko_multi_tenant_graph"
-
--- Following mem0 tables will be created in the "meko_multi_tenant_graph" schema
-    -- Entity
-    -- CONNECTED_TO
-    -- _ag_label_vertex
-    -- _ag_label_label
-
-SET search_path = mag_catalog, datapacks, public;
-
--- Meko multi-teant Agent Private Graph:
-SELECT * FROM mag_catalog.create_graph('meko_multi_tenant_graph');
-
-SELECT * FROM mag_catalog.create_vlabel('meko_multi_tenant_graph','Entity');
-
-SELECT * FROM mag_catalog.create_elabel('meko_multi_tenant_graph','CONNECTED_TO');
-
--- Meko multi-tenant global promoted to KB graph:
-SELECT * FROM mag_catalog.create_graph('meko_promoted_graph');
-
-SELECT * FROM mag_catalog.create_vlabel('meko_promoted_graph','Entity');
-
-SELECT * FROM mag_catalog.create_elabel('meko_promoted_graph','CONNECTED_TO');
-
-
--- TODO: Remove the need for meko_mem0_graph_vertex_embeddings table and use a vector coloum in the Entity tables.
--- TODO: After April 30th release as this will require complete re-write of the Apache age mem0 Connector.
--- ALTER TABLE meko_multi_tenant_graph."Entity" ADD COLUMN embeddings VECTOR(1536) NOT NULL;
-
-
--- Add below columns to the above tables (taken care of in mem0/Apache AGE extension):
-                -- meko_datapack_id UUID NOT NULL,
-                -- meko_user_id UUID NOT NULL,
-                -- meko_agent_id TEXT NOT NULL,
-                -- meko_conversation_id UUID NOT NULL,
-    -- REVIEW: Alternatively, we can move these columns as fields of properties column in these tables.
-        -- This will help keep the Apache AGE schema independent of the meko requirements
-        -- What will be the performance impact of this? We do support indexes on jsonb columns.
+-- No Apache AGE / MAGE graphs are created by this migration: mem0 moved to the entity
+-- store (000004). An install that predates this change keeps the meko_multi_tenant_graph /
+-- meko_promoted_graph schemas it already has, and the api-server still reads them when they
+-- exist; the two *_graph_vertex_embeddings tables above are ordinary tables and stay.
+-- cli_app's per-agent helper creates its own database and MAGE graph there, which needs the
+-- server's ysql_yb_enable_mage gflag but not an extension created in this database.

@@ -45,17 +45,17 @@ spec:
         {{- /* Create the database extensions the data-plane migrations depend on,
                BEFORE migrate runs. Ordering matters more than it looks.
 
-               The first data migration does `INSERT INTO dist_rag.vector_indexes`
-               and calls `mag_catalog.create_graph`. Those schemas come from the
-               pg_dist_rag and mage extensions — present in the ybdb-meko-release
-               image, but not created in a fresh database. A migrate that starts
-               first does not merely fail: it fails PARTWAY, and golang-migrate then
-               marks the schema dirty, which no retry recovers from —
+               The first data migration does `INSERT INTO dist_rag.vector_indexes`.
+               That schema comes from the pg_dist_rag extension — present in the
+               ybdb-meko-release image, but not created in a fresh database. (It no
+               longer calls `mag_catalog.create_graph`; MAGE is not needed to migrate.)
+               A migrate that starts first does not merely fail: it fails PARTWAY, and
+               golang-migrate then marks the schema dirty and refuses to run again —
 
                  Dirty database version 1. Fix and force version.
 
-               — so the pod crash-loops forever over a database that only needed one
-               statement. An init container rather than a Helm hook because hooks
+               — which the api-server now clears for migration 1 and reruns, but
+               creating the extensions first avoids the failed attempt altogether. An init container rather than a Helm hook because hooks
                cannot be ordered against another resource's init container; this one
                is ordered by the pod itself.
 

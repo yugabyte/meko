@@ -3,6 +3,7 @@ package repository
 import (
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,4 +314,75 @@ func TestAttachConversationChunks(t *testing.T) {
 			t.Fatalf("steps = %+v", steps)
 		}
 	})
+}
+
+// A new install has no meko_multi_tenant_graph, so the shared tail must still define
+// every CTE the SELECTs read without touching a table that is not there.
+func TestTraceMemoryAggregationCTEsWithoutTheGraph(t *testing.T) {
+	q := traceMemoryAggregationCTEs(4, 5, false)
+	if strings.Contains(q, "meko_multi_tenant_graph") {
+		t.Error("the graph-less query still reads meko_multi_tenant_graph")
+	}
+	if !strings.Contains(q, "edges AS (") || !strings.Contains(q, "nodes AS (") {
+		t.Errorf("the SELECTs read both nodes and edges, but the tail lacks one:\n%s", q)
+	}
+	if strings.Contains(q, "$4") || strings.Contains(q, "$5") {
+		t.Error("the graph-less query references the tenant patterns, which are not passed in that case")
+	}
+}
+
+func TestTraceMemoryAggregationCTEsWithTheGraph(t *testing.T) {
+	q := traceMemoryAggregationCTEs(4, 5, true)
+	if !strings.Contains(q, "meko_multi_tenant_graph") {
+		t.Error("the graph query does not read meko_multi_tenant_graph")
+	}
+	if !strings.Contains(q, "$4") || !strings.Contains(q, "$5") {
+		t.Errorf("the tenant pattern positions were not substituted:\n%s", q)
+	}
+}
+
+func TestLegacyGraphPresent(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("sqlmock.New: %v", err)
+		}
+		mock.ExpectQuery("to_regclass").WillReturnRows(sqlmock.NewRows([]string{"present"}).AddRow(want))
+
+		got, err := NewLangfuseRepo(nil, db, nil).legacyGraphPresent()
+		if err != nil || got != want {
+			t.Errorf("legacyGraphPresent = %v, %v, want %v", got, err, want)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Error(err)
+		}
+		_ = db.Close()
+	}
+}
+
+// With no graph the lookup must still answer, and must pass exactly the parameters the
+// graph-less statement references: the driver rejects an extra one.
+func TestBatchLookupTraceMemoryMetricsByIDsWithoutTheGraph(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const conv = "11111111-1111-4111-8111-111111111111"
+	mock.ExpectQuery(regexp.QuoteMeta("NULL::text AS relation_name")).
+		WithArgs("dp-1", conv, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "vector", "entities", "relations", "entity_names", "relation_names"}).
+			AddRow("mem-1", 1, 0, 0, "{}", "{}"))
+
+	got, err := NewLangfuseRepo(nil, db, nil).batchLookupTraceMemoryMetricsByIDs("dp-1", conv, []string{"mem-1"}, false)
+	if err != nil {
+		t.Fatalf("batchLookupTraceMemoryMetricsByIDs: %v", err)
+	}
+	if m := got["mem-1"]; m == nil || m.Vector != 1 || m.Relations != 0 {
+		t.Errorf("metrics = %+v", got["mem-1"])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
 }

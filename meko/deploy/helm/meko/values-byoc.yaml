@@ -152,9 +152,11 @@ apiServer:
     # The database's own image, for a ysqlsh matching the server — from Quay for the
     # same reason as everything else here.
     extensionsImage: quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2
-    # Create pg_dist_rag / mage / vector before migrating. Without this the first
-    # data migration dies partway on `dist_rag.vector_indexes`, and golang-migrate
-    # then marks the schema dirty — which no restart recovers from.
+    # Create pg_dist_rag / vector (and mage, which the migrations no longer need) before
+    # migrating. Without pg_dist_rag the first data migration dies partway on
+    # `dist_rag.vector_indexes` and golang-migrate marks the schema dirty; the api-server
+    # clears a dirty version 1 and reruns it on the next start, but creating the
+    # extensions first avoids the failed attempt.
     ensureExtensions: true
   cognito:
     # No IdP in a BYOC bring-up. api_server then treats every request as its dev

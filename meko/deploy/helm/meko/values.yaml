@@ -297,9 +297,15 @@ apiServer:
     # and harmless where they already exist (CREATE EXTENSION IF NOT EXISTS). Off by
     # default: an existing shared YugabyteDB had these created when it was provisioned.
     ensureExtensions: false
-    # pg_dist_rag provides dist_rag.vector_indexes; mage provides mag_catalog (the
-    # multi-tenant Apache-AGE graph catalog); vector is pgvector. All three ship in
-    # the ybdb-meko-release image and none are created by default.
+    # pg_dist_rag provides dist_rag.vector_indexes; vector is pgvector; mage provides
+    # mag_catalog (the Apache-AGE graph catalog) and is no longer needed by the data
+    # migrations. An install that predates that change already has mage (the old 000001
+    # could not apply without it), so on those this list changes nothing, and on a new
+    # install nothing in the api-server's database uses the mage it creates: cli_app's
+    # per-agent helper makes its own database and runs CREATE EXTENSION mage there. What
+    # that does need is the server-wide ysql_yb_enable_mage gflag below, so the gflag
+    # stays while cli_app creates graphs and this list entry can go whenever you like.
+    # All three ship in the ybdb-meko-release image and none are created by default.
     extensions: [vector, pg_dist_rag, mage]
     # Image with ysqlsh in it — the database's own image is the reliable place to
     # find a client that matches the server.
@@ -381,9 +387,8 @@ yugabyte:
   # NOT the public yugabytedb/yugabyte image.
   #
   # The data plane's migrations use YugabyteDB features that only the Meko build
-  # ships — `dist_rag.vector_indexes` (the distributed-RAG vector index catalog) and
-  # `mag_catalog` (the multi-tenant Apache-AGE graph catalog mem0 builds on). Against
-  # stock YugabyteDB the very first data migration dies with
+  # ships — `dist_rag.vector_indexes`, the distributed-RAG vector index catalog.
+  # Against stock YugabyteDB the very first data migration dies with
   #
   #   relation "dist_rag.vector_indexes" does not exist
   #
@@ -397,10 +402,11 @@ yugabyte:
     # (the same ecr-registry-creds the rest of the chart uses on GKE).
     pullSecretName: ""
   # Without ysql_yb_enable_mage the `mage` extension is present on disk and still
-  # refuses to install — `CREATE EXTENSION mage` answers "extension is not available"
-  # — and the data-plane migration then dies on mag_catalog.create_graph(). It is a
-  # server gflag, so it cannot be fixed from the client side afterwards. This is the
-  # same flag the shared dev universe runs with.
+  # refuses to install — `CREATE EXTENSION mage` answers "extension is not available",
+  # which fails apiServer.migrate.ensureExtensions while `mage` is in its list. The
+  # data migrations themselves no longer need MAGE. It is a server gflag, so it cannot
+  # be fixed from the client side afterwards. This is the same flag the shared dev
+  # universe runs with.
   gflags:
     tserver:
       ysql_yb_enable_mage: "true"

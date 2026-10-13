@@ -147,6 +147,9 @@ func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope, hashPartition
 			return nil, err
 		}
 		defer dataM.Close()
+		if _, err := recoverInterruptedFirstDataMigration(context.Background(), dataDB); err != nil {
+			return nil, err
+		}
 		d, err := applyMigrator(dataM, DBPurposeData)
 		if err != nil {
 			return nil, err
@@ -183,6 +186,61 @@ func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope, hashPartition
 	}
 
 	return details, nil
+}
+
+// recoverInterruptedFirstDataMigration lets a first install survive its migrate
+// container being killed during data migration 1. golang-migrate marks a version
+// dirty before running it and refuses to run anything while that mark is set, so
+// without this every restart fails with "Dirty database version 1" until someone
+// forces the version by hand (MEKO-831).
+//
+// Clearing the row is what `migrate force` to the nil version does; migration 1 is
+// then rerun from the top, which 000001 is written to tolerate.
+//
+// This runs BEFORE golang-migrate takes its advisory lock, so it is not ordered behind
+// another replica that is genuinely midway through migration 1: it clears that
+// replica's in-flight dirty mark too. That is harmless rather than prevented. The
+// replica keeps running and rewrites the row at each step, and this process's own
+// m.Up() then blocks on the lock and finds the finished state (or, if the other replica
+// died, reruns a migration 1 that is safe to rerun).
+//
+// Only version 1, on purpose. Later migrations have not been audited for being safe
+// to rerun, so a dirty version past 1 is still left for a person to look at. The table
+// comes from the same config the data migrator is built with, so it cannot drift from it.
+func recoverInterruptedFirstDataMigration(ctx context.Context, db *sql.DB) (bool, error) {
+	res, err := db.ExecContext(ctx,
+		fmt.Sprintf("DELETE FROM %s WHERE version = 1 AND dirty", migrationsTableRef(getPostgresConfig(DBPurposeData))))
+	if err != nil {
+		return false, fmt.Errorf("failed to check %s migration 1 for an interrupted run: %w", DBPurposeData, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to check %s migration 1 for an interrupted run: %w", DBPurposeData, err)
+	}
+	if n > 0 {
+		slog.Warn("data migration 1 was interrupted on an earlier start; rerunning it",
+			"purpose", DBPurposeData)
+	}
+	return n > 0, nil
+}
+
+// migrationsTableRef is the quoted, schema-qualified name of the table golang-migrate
+// keeps its version in for cfg, mirroring how the postgres driver resolves it: an empty
+// MigrationsTable means the default, and an empty SchemaName means the search path.
+func migrationsTableRef(cfg *postgres.Config) string {
+	table := cfg.MigrationsTable
+	if table == "" {
+		table = postgres.DefaultMigrationsTable
+	}
+	ref := quoteIdentifier(table)
+	if cfg.SchemaName != "" {
+		ref = quoteIdentifier(cfg.SchemaName) + "." + ref
+	}
+	return ref
+}
+
+func quoteIdentifier(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 func getMigrator(conn *sql.DB, purpose DBPurpose, fs embed.FS, rootFs string) (*migrate.Migrate, error) {

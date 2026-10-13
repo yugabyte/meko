@@ -181,7 +181,9 @@ migrations running as DDL on YugabyteDB. Three choices in the install are delibe
 - It runs in two Helm passes. The first holds the api-server at 0 replicas until Langfuse's
   schema init finishes. A Langfuse DDL landing on golang-migrate's `schema_migrations` write
   makes YugabyteDB refuse it with a catalog version mismatch, and the database stays at
-  `Dirty database version 1`. The framework detects that state and rebuilds once.
+  `Dirty database version 1`. The framework detects that state and rebuilds once. An api-server
+  with the MEKO-831 recovery clears a dirty version 1 itself, but not a later one, and older
+  builds do not, so the ordering stays.
 - Helm runs without `--wait`. The migrations in init containers outlast the Deployments' 600s
   progress deadline, which Helm reads as a failed install. The framework waits for every
   workload itself.

@@ -588,8 +588,10 @@ func (a *App) writeValuesAs(values map[string]any, name string) (string, error) 
 // for langfuse's schema init before the api-server migrates. Run together, a
 // langfuse DDL bumps the catalog version under golang-migrate's version write
 // (TRUNCATE + INSERT into schema_migrations), YB refuses the INSERT with a
-// catalog version mismatch, the next pod re-runs data migration 1, which is not
-// idempotent, and the database stays at "Dirty database version 1" for good.
+// catalog version mismatch, and the database is left at "Dirty database version 1".
+// An api-server with the MEKO-831 recovery clears that and reruns migration 1, which is
+// now retry-safe; an older one stays wedged, and a dirty version above 1 is never
+// cleared, so the staging stays.
 func (a *App) installLangfuseFirst(ctx context.Context, values map[string]any) error {
 	staged, err := withAPIReplicas(values, 0)
 	if err != nil {
@@ -611,7 +613,9 @@ func (a *App) installLangfuseFirst(ctx context.Context, values map[string]any) e
 // migrateWithOneReplica brings a fresh stack's api-server up as one pod before
 // scaling it, so a single migrator runs. With several pods migrating at once the
 // first fresh install wedged at "Dirty database version 1" on most attempts, a
-// product bug a bring-up has to step around but an upgrade test must not.
+// product bug a bring-up has to step around but an upgrade test must not. Builds with
+// the MEKO-831 recovery clear that version, but not a dirty one above 1, so the single
+// migrator stays.
 func (a *App) migrateWithOneReplica(ctx context.Context, values map[string]any) error {
 	if a.cfg.APIReplicas <= 1 {
 		return nil
@@ -1018,20 +1022,34 @@ func (a *App) waitWorkloads(ctx context.Context) error {
 	})
 }
 
-// migrationsWedged reports the api-server's migrator refusing a dirty version,
-// which no amount of waiting clears. On a fresh stack that is golang-migrate's
-// postgres driver on YB: its version write TRUNCATEs schema_migrations, which YB
-// commits outside the transaction, then the INSERT fails with a catalog version
-// mismatch, the table is left empty, and the next pod re-runs an applied
-// migration that is not idempotent.
+// migrationsWedged reports the api-server's migrator unable to get past a migration,
+// which no amount of waiting clears. Two shapes:
+//
+//   - It refuses a dirty version. On a fresh stack that is golang-migrate's postgres
+//     driver on YB: its version write TRUNCATEs schema_migrations, which YB commits
+//     outside the transaction, then the INSERT fails with a catalog version mismatch and
+//     the table is left empty.
+//   - A build with the MEKO-831 recovery clears a dirty version 1 itself, so that string
+//     never appears; a migration 1 that then fails again shows instead as the "was
+//     interrupted" warning followed by "migration failed" in the same log. A warning
+//     followed by a success is a recovery that worked and is not reported.
 func (a *App) migrationsWedged(ctx context.Context) error {
 	logs, err := a.kube.Logs(ctx, "deployment/"+apiDeployment, "migrate", 50)
 	if err != nil {
 		return nil
 	}
+	rerun := false
 	for _, line := range strings.Split(logs, "\n") {
 		if strings.Contains(line, "Dirty database version") {
-			return fmt.Errorf("api-server migrations wedged on a dirty version (golang-migrate postgres driver on YugabyteDB): %s", strings.TrimSpace(line))
+			return fmt.Errorf("api-server migrations wedged on a dirty version "+
+				"(golang-migrate postgres driver on YugabyteDB): %s", strings.TrimSpace(line))
+		}
+		if strings.Contains(line, "data migration 1 was interrupted") {
+			rerun = true
+		}
+		if rerun && strings.Contains(line, `msg="migration failed"`) {
+			return fmt.Errorf("api-server data migration 1 keeps failing after its dirty version "+
+				"was cleared and rerun: %s", strings.TrimSpace(line))
 		}
 	}
 	return nil

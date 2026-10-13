@@ -1,13 +1,16 @@
 package db
 
 import (
+	"context"
 	"embed"
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
 )
 
 // golang-migrate builds its version table while constructing the driver, so by the
@@ -295,5 +298,175 @@ func TestDataPartitionLoopsReadHashPartitions(t *testing.T) {
 		if !strings.Contains(sql, "current_setting('"+hashPartitionsSetting+"', true)") {
 			t.Errorf("%s: partition loop does not read %s", e.Name(), hashPartitionsSetting)
 		}
+	}
+}
+
+// A container killed during data migration 1 leaves version 1 dirty, and golang-migrate
+// then refuses to run anything. The recovery has to clear exactly that row and say
+// whether it did, so the retry is visible in the log.
+func TestRecoverInterruptedFirstDataMigration(t *testing.T) {
+	const stmt = `DELETE FROM "schema_migrations" WHERE version = 1 AND dirty`
+	for name, tc := range map[string]struct {
+		affected int64
+		want     bool
+	}{
+		"dirty at version 1 is cleared":           {affected: 1, want: true},
+		"clean, or past version 1, is left alone": {affected: 0, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock.New: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+			mock.ExpectExec(stmt).WillReturnResult(sqlmock.NewResult(0, tc.affected))
+
+			got, err := recoverInterruptedFirstDataMigration(context.Background(), conn)
+			if err != nil {
+				t.Fatalf("recoverInterruptedFirstDataMigration: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("recovered = %v, want %v", got, tc.want)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+func TestRecoverInterruptedFirstDataMigrationSurfacesErrors(t *testing.T) {
+	conn, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	mock.ExpectExec(`DELETE FROM "schema_migrations"`).WillReturnError(fmt.Errorf("connection reset"))
+
+	if _, err := recoverInterruptedFirstDataMigration(context.Background(), conn); err == nil {
+		t.Error("want the database error, got nil")
+	}
+}
+
+// Migration 1 is rerun from the top after an interrupted first install, so every
+// statement that cannot be repeated is a statement that wedges that install again.
+// retryUnsafe returns the statements in sql that would fail or duplicate on a second
+// run: DDL without IF NOT EXISTS, an ALTER or DROP without IF [NOT] EXISTS, an INSERT
+// without ON CONFLICT, a CREATE TYPE with no existence check, and any MAGE call (a
+// graph cannot be created twice, and the extension is no longer required).
+func retryUnsafe(sql string) []string {
+	sql = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(sql, "")
+	sql = regexp.MustCompile(`(?m)--.*$`).ReplaceAllString(sql, "")
+
+	// The text of the statement starting at m, up to its terminating semicolon.
+	stmt := func(m []int) string {
+		end := strings.Index(sql[m[0]:], ";")
+		if end < 0 {
+			return sql[m[0]:]
+		}
+		return sql[m[0] : m[0]+end]
+	}
+
+	var bad []string
+	createDDL := regexp.MustCompile(`(?i)\bCREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|SCHEMA|EXTENSION|VIEW)\b`)
+	for _, m := range createDDL.FindAllStringIndex(sql, -1) {
+		if !regexp.MustCompile(`(?i)^CREATE\s+(?:UNIQUE\s+)?\w+\s+IF\s+NOT\s+EXISTS\b`).MatchString(sql[m[0]:]) {
+			bad = append(bad, "no IF NOT EXISTS: "+strings.TrimSpace(stmt(m)))
+		}
+	}
+	alterDrop := regexp.MustCompile(`(?i)\b(?:ALTER\s+TABLE|DROP\s+(?:TABLE|INDEX|SCHEMA|TYPE|COLUMN))\b`)
+	for _, m := range alterDrop.FindAllStringIndex(sql, -1) {
+		if !regexp.MustCompile(`(?i)\bIF\s+(?:NOT\s+)?EXISTS\b`).MatchString(stmt(m)) {
+			bad = append(bad, "no IF [NOT] EXISTS: "+strings.TrimSpace(stmt(m)))
+		}
+	}
+	for _, m := range regexp.MustCompile(`(?i)\bINSERT\s+INTO\b`).FindAllStringIndex(sql, -1) {
+		if !regexp.MustCompile(`(?i)\bON\s+CONFLICT\b`).MatchString(stmt(m)) {
+			bad = append(bad, "INSERT without ON CONFLICT: "+strings.TrimSpace(stmt(m)))
+		}
+	}
+	for _, m := range regexp.MustCompile(`(?i)\bCREATE\s+TYPE\s+(\S+)`).FindAllStringSubmatch(sql, -1) {
+		// A schema-qualified type is guarded by a pg_type lookup on its bare name.
+		_, name, qualified := strings.Cut(m[1], ".")
+		if !qualified {
+			bad = append(bad, "CREATE TYPE "+m[1]+" is not schema-qualified, so its guard cannot be checked")
+			continue
+		}
+		if !strings.Contains(sql, "typname = '"+name+"'") {
+			bad = append(bad, "CREATE TYPE "+m[1]+" has no existence check")
+		}
+	}
+	if strings.Contains(sql, "mag_catalog") {
+		bad = append(bad, "calls mag_catalog")
+	}
+	return bad
+}
+
+func TestFirstDataMigrationIsRetrySafe(t *testing.T) {
+	body, err := dataMigrationsFS.ReadFile("migrations/data/000001_meko_datapacks_schema.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range retryUnsafe(string(body)) {
+		t.Errorf("000001 is not safe to rerun after an interrupted first install: %s", s)
+	}
+}
+
+// The detector is only worth trusting if it catches each shape of statement it claims
+// to, so pin one bad and one good example of each.
+func TestRetryUnsafeDetector(t *testing.T) {
+	for name, tc := range map[string]struct {
+		sql string
+		bad bool
+	}{
+		"create table":         {"CREATE TABLE a.b (x int);", true},
+		"create table guarded": {"CREATE TABLE IF NOT EXISTS a.b (x int);", false},
+		"unique index":         {"CREATE UNIQUE INDEX i ON a.b (x);", true},
+		"unique index guarded": {"CREATE UNIQUE INDEX IF NOT EXISTS i ON a.b (x);", false},
+		"alter table":          {"ALTER TABLE a.b ADD COLUMN c int;", true},
+		"alter table guarded":  {"ALTER TABLE a.b ADD COLUMN IF NOT EXISTS c int;", false},
+		"drop":                 {"DROP TABLE a.b;", true},
+		"drop guarded":         {"DROP TABLE IF EXISTS a.b;", false},
+		"insert":               {"INSERT INTO a.b VALUES (1);", true},
+		"insert guarded":       {"INSERT INTO a.b VALUES (1) ON CONFLICT DO NOTHING;", false},
+		"type unguarded":       {"CREATE TYPE a.t AS ENUM ('x');", true},
+		"type guarded": {
+			"IF NOT EXISTS (SELECT 1 WHERE t.typname = 't') THEN CREATE TYPE a.t AS ENUM ('x');", false,
+		},
+		"unqualified type":           {"CREATE TYPE t AS ENUM ('x');", true},
+		"mage":                       {"SELECT mag_catalog.create_graph('g');", true},
+		"commented out is ignored":   {"-- CREATE TABLE a.b (x int);\n/* INSERT INTO a.b VALUES (1); */", false},
+		"format string in a DO body": {"EXECUTE format('CREATE TABLE IF NOT EXISTS a.b_%s (x int)', 1);", false},
+	} {
+		if got := len(retryUnsafe(tc.sql)) > 0; got != tc.bad {
+			t.Errorf("%s: flagged = %v, want %v (%v)", name, got, tc.bad, retryUnsafe(tc.sql))
+		}
+	}
+}
+
+// The recovery DELETE must hit the table the data migrator actually writes. Both come
+// from getPostgresConfig, so a table or schema added to the data config reaches the
+// DELETE too; this pins the shape for each way a config can name it.
+func TestMigrationsTableRef(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  *postgres.Config
+		want string
+	}{
+		"default table, search path": {&postgres.Config{}, `"schema_migrations"`},
+		"named table": {
+			&postgres.Config{MigrationsTable: "schema_migrations_system"}, `"schema_migrations_system"`,
+		},
+		"named table and schema": {
+			&postgres.Config{MigrationsTable: "schema_migrations_controlplane", SchemaName: "meko_system"},
+			`"meko_system"."schema_migrations_controlplane"`,
+		},
+		"identifier is quoted": {&postgres.Config{MigrationsTable: `a"b`}, `"a""b"`},
+	} {
+		if got := migrationsTableRef(tc.cfg); got != tc.want {
+			t.Errorf("%s: migrationsTableRef = %s, want %s", name, got, tc.want)
+		}
+	}
+	if got := migrationsTableRef(getPostgresConfig(DBPurposeData)); got != `"schema_migrations"` {
+		t.Errorf("data set tracks in %s, but the recovery statement is written for the default table", got)
 	}
 }

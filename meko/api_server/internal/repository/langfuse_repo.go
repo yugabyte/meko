@@ -2924,13 +2924,25 @@ func (r *LangfuseRepo) EnrichTraceMemoryItems(
 		perSpanItems[i] = items
 	}
 
+	// Whether the legacy graph exists is a property of the install, so ask once for both
+	// lookups. Without it only the relations are empty: entities and entity names are read
+	// from each memory's own payload, not from the graph, and the memory id, vector flag
+	// and Promoted-to-KB tag still resolve.
+	graphPresent := false
+	if len(refsByID) > 0 || len(textRefs) > 0 {
+		var err error
+		if graphPresent, err = r.legacyGraphPresent(); err != nil {
+			return spans, err
+		}
+	}
+
 	// Pass 2a — one batched query for every mem0 row id we saw.
 	if len(refsByID) > 0 {
 		ids := make([]string, 0, len(refsByID))
 		for id := range refsByID {
 			ids = append(ids, id)
 		}
-		metricsByID, err := r.batchLookupTraceMemoryMetricsByIDs(datapackID, convID, ids)
+		metricsByID, err := r.batchLookupTraceMemoryMetricsByIDs(datapackID, convID, ids, graphPresent)
 		if err != nil {
 			return spans, err
 		}
@@ -2971,7 +2983,7 @@ func (r *LangfuseRepo) EnrichTraceMemoryItems(
 			keys[i] = t.key
 			offsets[i] = t.offset
 		}
-		metricsByText, err := r.batchLookupTraceMemoryMetricsByTexts(datapackID, convID, keys, offsets)
+		metricsByText, err := r.batchLookupTraceMemoryMetricsByTexts(datapackID, convID, keys, offsets, graphPresent)
 		if err != nil {
 			return spans, err
 		}
@@ -3063,8 +3075,9 @@ type traceMemoryTextRefKey struct {
 	Offset int
 }
 
-// traceMemoryAggregationCTEs is the shared aggregation tail used by every
-// batched memory-metrics query. Callers prepend their own `matched` CTE that
+// traceMemoryNodesCTE and the edges CTE below make up the shared aggregation
+// tail used by every batched memory-metrics query (see traceMemoryAggregationCTEs).
+// Callers prepend their own `matched` CTE that
 // exposes `(id, payload, vector, ...)` and append a SELECT that pulls per-
 // memory counts and sample names off of it. The two `%d` placeholders are
 // the parameter positions of the tenant `ILIKE` patterns (datapack_id and
@@ -3072,7 +3085,7 @@ type traceMemoryTextRefKey struct {
 // can keep its own parameter numbering. Everything is grouped on
 // `nodes.memory_id` / `edges.memory_id` so a single query handles many
 // memories at once.
-const traceMemoryAggregationCTEs = `,
+const traceMemoryNodesCTE = `,
 nodes AS (
     SELECT DISTINCT
            m.id AS memory_id,
@@ -3096,7 +3109,11 @@ nodes AS (
     -- the bigint cast above can't fail the whole trace query.
     WHERE  (n->>'node_graphid') ~ '^\d+$'
 ),
-edges AS (
+`
+
+// traceMemoryEdgesCTE reads the legacy Apache-AGE graph. Its two %d placeholders
+// are the parameter positions of the tenant ILIKE patterns.
+const traceMemoryEdgesCTE = `edges AS (
     SELECT DISTINCT
            ns.memory_id,
            e.id AS edge_id,
@@ -3147,6 +3164,38 @@ edges AS (
       AND  e.properties::text ILIKE $%d
 )`
 
+// traceMemoryNoEdgesCTE stands in for traceMemoryEdgesCTE on a database with no legacy
+// graph: the same columns and no rows, so every query that reads `edges` still runs and
+// reports zero relations. The `nodes` CTE is unaffected: it reads the memory table.
+const traceMemoryNoEdgesCTE = `edges AS (
+    SELECT NULL::uuid AS memory_id, NULL::bigint AS edge_id, NULL::text AS relation_name
+    WHERE  false
+)`
+
+// traceMemoryAggregationCTEs assembles the shared tail. graphPresent says whether the
+// legacy meko_multi_tenant_graph tables exist: a new install no longer creates them
+// (data migration 000001), and without this the by-id and by-text queries fail with
+// `relation does not exist` and EnrichTraceMemoryItems drops every memory item.
+func traceMemoryAggregationCTEs(datapackPos, conversationPos int, graphPresent bool) string {
+	if !graphPresent {
+		return traceMemoryNodesCTE + traceMemoryNoEdgesCTE
+	}
+	return traceMemoryNodesCTE + fmt.Sprintf(traceMemoryEdgesCTE, datapackPos, conversationPos)
+}
+
+// legacyGraphPresent reports whether the legacy memory graph tables exist.
+func (r *LangfuseRepo) legacyGraphPresent() (bool, error) {
+	var present bool
+	err := r.dataDB.QueryRow(
+		`SELECT to_regclass('meko_multi_tenant_graph."CONNECTED_TO"') IS NOT NULL
+		    AND to_regclass('meko_multi_tenant_graph."Entity"') IS NOT NULL`,
+	).Scan(&present)
+	if err != nil {
+		return false, fmt.Errorf("meta db: check legacy memory graph: %w", err)
+	}
+	return present, nil
+}
+
 // traceMemoryAggregationSelectByID is the SELECT half of the by-id batched
 // query. One row per memory in `matched`. Sample name arrays are capped at
 // six entries via an inner subquery so a single noisy memory can't blow up
@@ -3193,6 +3242,7 @@ const traceMemoryAggregationSelectByText = traceMemoryAggregationSelectByID + `,
 func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
 	datapackID, conversationID string,
 	ids []string,
+	graphPresent bool,
 ) (map[string]*traceMemoryMetrics, error) {
 	out := make(map[string]*traceMemoryMetrics, len(ids))
 	// $2 is matched as a plain uuid so the planner can use an index instead
@@ -3214,11 +3264,17 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
 )`
 
 	// Tenant ILIKE patterns occupy $4 and $5.
-	q := matchedCTE + fmt.Sprintf(traceMemoryAggregationCTEs, 4, 5) + traceMemoryAggregationSelectByID
+	q := matchedCTE + traceMemoryAggregationCTEs(4, 5, graphPresent) + traceMemoryAggregationSelectByID
 	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
 	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
 
-	rows, err := r.dataDB.Query(q, datapackID, convUUID, pq.Array(ids), datapackPattern, conversationPattern)
+	args := []any{datapackID, convUUID, pq.Array(ids)}
+	if graphPresent {
+		// Only the edges CTE reads these; the driver rejects a parameter the statement
+		// never references.
+		args = append(args, datapackPattern, conversationPattern)
+	}
+	rows, err := r.dataDB.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by id: %w", err)
 	}
@@ -3255,6 +3311,7 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByTexts(
 	datapackID, conversationID string,
 	keys []string,
 	offsets []int,
+	graphPresent bool,
 ) (map[traceMemoryTextRefKey]*traceMemoryMetrics, error) {
 	out := make(map[traceMemoryTextRefKey]*traceMemoryMetrics, len(keys))
 	// See batchLookupTraceMemoryMetricsByIDs: $2 is a sargable uuid compare;
@@ -3305,11 +3362,15 @@ matched AS (
 )`
 
 	// Tenant ILIKE patterns occupy $5 and $6.
-	q := matchedCTE + fmt.Sprintf(traceMemoryAggregationCTEs, 5, 6) + traceMemoryAggregationSelectByText
+	q := matchedCTE + traceMemoryAggregationCTEs(5, 6, graphPresent) + traceMemoryAggregationSelectByText
 	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
 	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
 
-	rows, err := r.dataDB.Query(q, dpUUID, convUUID, pq.Array(keys), pq.Array(offsets), datapackPattern, conversationPattern)
+	args := []any{dpUUID, convUUID, pq.Array(keys), pq.Array(offsets)}
+	if graphPresent {
+		args = append(args, datapackPattern, conversationPattern)
+	}
+	rows, err := r.dataDB.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by text: %w", err)
 	}

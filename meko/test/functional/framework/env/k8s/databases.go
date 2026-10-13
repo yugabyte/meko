@@ -141,8 +141,9 @@ func forMeko(s universe.Spec, image string) universe.Spec {
 		s.MasterGflags["tablet_replicas_per_gib_limit"] = "0"
 	}
 	// yugabyted turns read committed on and YBA leaves it off. Off, mage's
-	// create_vlabel segfaults in data migration 000001 and the stack never comes
-	// up; functional/mage_graph_ddl keeps that failure in sight.
+	// create_vlabel segfaulted in data migration 000001 and the stack never came up.
+	// That call is gone from the migration, but cli_app still creates graphs through
+	// mage and nothing has shown that safe with read committed off, so it stays on.
 	if _, ok := s.TServerGflags[readCommitted]; !ok {
 		s.TServerGflags[readCommitted] = "true"
 	}
