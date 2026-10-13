@@ -61,21 +61,27 @@ describe('flattenPastedEmails', () => {
 
 describe('picking a suggested address', () => {
   it.each([
-    ['', '', 'jane@x.com, '],
-    ['ja', 'ja', 'jane@x.com, '],
-    ['a@x.com, ja', 'ja', 'a@x.com, jane@x.com, '],
-    ['a@x.com;ja', 'ja', 'a@x.com; jane@x.com, '],
-    ['a@x.com ja', 'ja', 'a@x.com jane@x.com, '],
-    // A complete address, or a Name <address> entry, isn't being typed: the pick goes after it.
-    ['a@x.com', '', 'a@x.com, jane@x.com, '],
-    ['Ann <a@x.com>', '', 'Ann <a@x.com>, jane@x.com, '],
-    ['a@x.com,', '', 'a@x.com, jane@x.com, '],
-    ['a@x.com, ', '', 'a@x.com, jane@x.com, '],
-  ])('%j: the query is %j, and picking gives %j', (value, query, picked) => {
+    ['', '', 'jane@x.com', 'jane@x.com, '],
+    ['ja', 'ja', 'jane@x.com', 'jane@x.com, '],
+    ['a@x.com, ja', 'ja', 'jane@x.com', 'a@x.com, jane@x.com, '],
+    ['a@x.com;ja', 'ja', 'jane@x.com', 'a@x.com; jane@x.com, '],
+    ['a@x.com ja', 'ja', 'jane@x.com', 'a@x.com jane@x.com, '],
+    // A name of several words is all replaced, not just its last word.
+    ['Jane D', 'Jane D', 'jane@x.com', 'jane@x.com, '],
+    ['a@x.com, Jane  D', 'Jane  D', 'jane@x.com', 'a@x.com, jane@x.com, '],
+    ['a@x.com Jane ', 'Jane', 'jane@x.com', 'a@x.com jane@x.com, '],
+    // An address with nothing after it may be half typed, though it looks complete: it's replaced.
+    ['a@x.com, bob@yugabyte.c', 'bob@yugabyte.c', 'bob@yugabyte.com', 'a@x.com, bob@yugabyte.com, '],
+    // After an address and a separator, or a Name <address> entry, the pick goes at the end.
+    ['a@x.com ', '', 'jane@x.com', 'a@x.com jane@x.com, '],
+    ['a@x.com,', '', 'jane@x.com', 'a@x.com, jane@x.com, '],
+    ['a@x.com, ', '', 'jane@x.com', 'a@x.com, jane@x.com, '],
+    ['Ann <a@x.com>', '', 'jane@x.com', 'Ann <a@x.com>, jane@x.com, '],
+  ])('%j: the query is %j, and picking %s gives %j', (value, query, email, picked) => {
     expect(typedEntry(value).query).toBe(query);
-    expect(pickEmail(value, 'jane@x.com')).toBe(picked);
-    // What's picked reads back as the addresses before it plus the new one.
-    expect(parseEmails(picked).emails.at(-1)).toBe('jane@x.com');
+    expect(pickEmail(value, email)).toBe(picked);
+    // What's picked parses with nothing left over.
+    expect(parseEmails(picked)).toEqual({ emails: expect.arrayContaining([email]), invalid: [] });
   });
 
   it('suggests in the order given, leaving out excluded addresses and matching an address or a word of a name', () => {
@@ -92,6 +98,8 @@ describe('picking a suggested address', () => {
     // Anywhere in the address (Raj, kira), or the start of a name's word (Rana, Ray), ignoring case.
     expect(emails('RA')).toEqual(['Raj@x.com', 'rp@x.com', 'kira@x.com', 'bob@x.com']);
     expect(emails('jo')).toEqual(['kira@x.com']);
+    expect(emails('kira  j')).toEqual(['kira@x.com']);
+    expect(emails('ira j')).toEqual([]);
     expect(emails('atel')).toEqual([]);
     expect(emails('ra', ['raj@x.com'])).toEqual(['rp@x.com', 'kira@x.com', 'bob@x.com']);
     expect(emails('zed')).toEqual([]);

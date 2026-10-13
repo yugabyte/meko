@@ -325,7 +325,12 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!invited.length && first) throw first;
     // Shared with a PR's reviewer: their email comes up for them next time.
     if (login != null) core.prReview.rememberEmail(login, emails[0]);
-    recordShares(db, invited);
+    // Saving the suggestions must never make invites that went through look failed (and be sent again).
+    try {
+      recordShares(db, invited);
+    } catch (e) {
+      core.log.warn("couldn't save the people invited for the Share dialog's suggestions", errMsg(e));
+    }
     return { ...(await peopleAfter(req.params.id)), invited, failed };
   });
   app.post<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId/resend', async (req): Promise<DatapackPeople> =>

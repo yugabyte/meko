@@ -9,7 +9,7 @@ import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
-import { listContacts } from '../../src/server/contacts.js';
+import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
 import { shortHost } from '../../src/server/core.js';
 import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
@@ -241,14 +241,18 @@ describe('config and db', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     let db = openDb(file);
     const version = schemaVersion(db);
-    run(db, "INSERT INTO kv(key, value) VALUES ('reviewer-email:bob', 'Bob@x.com'), ('reviewer-email:bob-2', 'bob@x.com'), ('reviewer-email:ann', 'ann@x.com'), ('other', 'c@x.com')");
+    run(db, "INSERT INTO kv(key, value) VALUES ('reviewer-email:bob', 'Bob@x.com'), ('reviewer-email:bob-2', 'bob@x.com'), ('reviewer-email:ann', 'ann@x.com'), ('reviewer-email:unal', 'Ünal@x.com'), ('other', 'c@x.com')");
     undoMigrations(db, 33);
     db.exec('PRAGMA user_version = 32');
     db.close();
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
     expect(listContacts(db).map(({ email, shares }) => ({ email, shares })).sort((a, b) => a.email.localeCompare(b.email)))
-      .toEqual([{ email: 'ann@x.com', shares: 1 }, { email: expect.stringMatching(/^bob@x\.com$/i), shares: 1 }]);
+      .toEqual([{ email: 'ann@x.com', shares: 1 }, { email: expect.stringMatching(/^bob@x\.com$/i), shares: 1 }, { email: 'Ünal@x.com', shares: 1 }]);
+    // Keyed as contacts.ts keys them: found again, not added twice.
+    recordShares(db, ['Ünal@x.com']);
+    expect(listContacts(db).find((c) => c.email === 'Ünal@x.com')?.shares).toBe(2);
+    expect(forgetContact(db, 'Ünal@x.com')).toBe(true);
     db.close();
   });
 
@@ -497,11 +501,12 @@ describe('config and db', () => {
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
-/** Undoes migration 32 (Ask AgentK's asks), for tests that rewind the schema. */
+/** Undoes migration 33 (the share contacts), for tests that rewind the schema. */
 function dropV33(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE share_contacts');
 }
 
+/** Undoes migration 32 (Ask AgentK's asks), for tests that rewind the schema. */
 function dropV32(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE agentk_asks');
 }
@@ -608,7 +613,7 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 32 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 33 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
   const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33];
   for (let v = 33; v >= oldest; v--) undo[v - 12](db);

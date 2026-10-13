@@ -37,13 +37,20 @@ table with the emails remembered for reviewers, once each. `GET /api/share-conta
 project's people, ranked by `shares / (1 + days since the latest / 30)` (often and lately first;
 a share last month counts half as much as one today), the most recent first among equals; the
 table keeps the 200 ranked highest. Under the Emails field, the Share dialog
-(`ShareSuggestions.tsx`) shows up to six as chips: **Frequent** while nothing is being typed, and
-**Matches** for the entry being typed after the last comma, semicolon or space (anywhere in the
-address, or the start of a word of the name). People with access or a pending invite, and
-addresses already in the field, aren't offered. A chip's name (the address beside it, but not on
-a phone) puts the address in the field in place of that entry, followed by `, `; its **×** stops
-suggesting them (`DELETE /api/share-contacts/:email`). The list stays on this machine: it's not
-in the usage report or Meko. When it can't be read, the dialog shows no suggestions.
+(`ShareSuggestions.tsx`) shows up to six as chips once its people lists are in: **Frequent** while
+nothing is being typed, and **Matches** for the entry being typed (`typedEntry()` in
+`src/shared/emails.ts`). That entry is what follows the last comma or semicolon: an address with
+no space or separator after it yet (so a half-typed `bob@x.c`, though it looks complete, is still
+being typed), or the words of a name. An address matches when it holds the entry anywhere, a name
+when the entry starts at one of its words (`Jane D` finds Jane Doe). People with access or a
+pending invite, and addresses already in the field, aren't offered; until the lists are in (or
+when they can't be read) there are no suggestions, since those people couldn't be left out. A
+chip's name (the address beside it, but not on a phone) puts the address in the field in place of
+the whole entry, all of a name's words included, followed by `, `; its **×** stops suggesting them
+(`DELETE /api/share-contacts/:email`). The table's key lowers ASCII letters only, as SQLite's
+`lower()` did when migration 33 seeded it. Saving to it never fails an invite that went through:
+an error is logged. The list stays on this machine: it's not in the usage report or Meko. When it
+can't be read, the dialog shows no suggestions.
 
 **Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
 reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko

@@ -500,7 +500,8 @@ const MIGRATIONS: string[] = [
   `,
   // 33: the people the Share dialog has invited (contacts.ts), suggested in it next time: the
   // address as last typed, keyed in lower case, the name from Meko's member lists, how many invites
-  // went through and when the latest did. Starts with the emails remembered for PR reviewers.
+  // went through and when the latest did. Starts with the emails remembered for PR reviewers. The
+  // key is SQLite's lower() (ASCII letters only): emailKey() in contacts.ts builds it the same way.
   `
   CREATE TABLE share_contacts (
     email_key TEXT PRIMARY KEY,

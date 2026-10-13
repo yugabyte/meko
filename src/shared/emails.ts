@@ -71,15 +71,23 @@ export function spliceEmails(value: string, start: number, end: number, flat: st
 }
 
 /**
- * The entry being typed at the end of the Emails field (after its last comma, semicolon or space),
- * as `query`, and where it starts. A complete address, or a `Name <address>` entry, is done being
- * typed: the query is empty and a pick goes after it.
+ * The entry being typed at the end of the Emails field, as `query`, and where it starts: what
+ * follows the last comma or semicolon, from its last address, or from the words of a name before
+ * it. An address still has no space or separator after it, so a half-typed `bob@x.c` (which looks
+ * complete) is still the query. After an address and a separator, or a `Name <address>` entry,
+ * nothing is being typed: the query is empty and a pick goes at the end.
  */
 export function typedEntry(value: string): { start: number; query: string } {
-  const start = value.search(/[^\s,;]*$/);
-  const entry = value.slice(start);
-  if (!entry || EMAIL_RE.test(entry) || /[<>"]/.test(entry)) return { start: value.length, query: '' };
-  return { start, query: entry };
+  const from = Math.max(value.lastIndexOf(','), value.lastIndexOf(';')) + 1;
+  const words = [...value.slice(from).matchAll(/\S+/g)].map((m) => ({ text: m[0], at: from + m.index }));
+  const none = { start: value.length, query: '' };
+  const last = words.at(-1);
+  if (!last || /[<>"]/.test(last.text)) return none;
+  if (last.text.includes('@')) return /\s$/.test(value) ? none : { start: last.at, query: last.text };
+  // Words that aren't addresses: the name being typed, all of them.
+  let first = words.length - 1;
+  while (first > 0 && !/[@<>"]/.test(words[first - 1].text)) first--;
+  return { start: words[first].at, query: value.slice(words[first].at).trim() };
 }
 
 /** The field after picking a suggested address: it replaces the entry being typed, and `, ` follows, ready for the next. */
@@ -92,14 +100,15 @@ export function pickEmail(value: string, email: string): string {
 
 /**
  * The people to suggest, in the order given: not in `exclude` (lower-case addresses), and, with a
- * query, those whose address holds it or a word of whose name starts with it, ignoring case.
+ * query, those whose address holds it or whose name has it at the start of a word (`Jane D` finds
+ * Jane Doe), ignoring case.
  */
 export function suggestContacts<T extends { email: string; name: string | null }>(
   contacts: T[],
   { exclude, query, limit }: { exclude: Set<string>; query: string; limit: number },
 ): T[] {
-  const q = query.trim().toLowerCase();
+  const q = query.trim().replace(/\s+/g, ' ').toLowerCase();
   const matches = (c: T) =>
-    !q || c.email.toLowerCase().includes(q) || (c.name ?? '').toLowerCase().split(/\s+/).some((w) => w.startsWith(q));
+    !q || c.email.toLowerCase().includes(q) || ` ${(c.name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()}`.includes(` ${q}`);
   return contacts.filter((c) => !exclude.has(c.email.toLowerCase()) && matches(c)).slice(0, limit);
 }

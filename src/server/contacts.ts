@@ -7,6 +7,14 @@ export const MAX_CONTACTS = 200;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * An address's key in `share_contacts`: ASCII letters lowered, like SQLite's `lower()`, which
+ * migration 33 seeded the table with. Every lookup goes through this, so the two always agree.
+ */
+function emailKey(email: string): string {
+  return email.replace(/[A-Z]+/g, (s) => s.toLowerCase());
+}
+
 interface ContactRow {
   email_key: string;
   email: string;
@@ -44,7 +52,7 @@ export function recordShares(db: Db, emails: string[], now = Date.now()): void {
     for (const email of emails) {
       run(db, `INSERT INTO share_contacts(email_key, email, shares, last_at) VALUES (?, ?, 1, ?)
                ON CONFLICT(email_key) DO UPDATE SET email = excluded.email, shares = shares + 1, last_at = excluded.last_at`,
-        email.toLowerCase(), email, now);
+        emailKey(email), email, now);
     }
     for (const c of listContacts(db, now).slice(MAX_CONTACTS)) forgetContact(db, c.email);
   });
@@ -54,11 +62,11 @@ export function recordShares(db: Db, emails: string[], now = Date.now()): void {
 export function learnNames(db: Db, members: DatapackMember[]): void {
   for (const m of members) {
     if (!m.name || !m.email) continue;
-    run(db, 'UPDATE share_contacts SET name = ? WHERE email_key = ? AND name IS NOT ?', m.name, m.email.toLowerCase(), m.name);
+    run(db, 'UPDATE share_contacts SET name = ? WHERE email_key = ? AND name IS NOT ?', m.name, emailKey(m.email), m.name);
   }
 }
 
 /** Stops suggesting someone; false when they weren't kept. */
 export function forgetContact(db: Db, email: string): boolean {
-  return run(db, 'DELETE FROM share_contacts WHERE email_key = ?', email.toLowerCase()).changes > 0;
+  return run(db, 'DELETE FROM share_contacts WHERE email_key = ?', emailKey(email)).changes > 0;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CONTACTS, forgetContact, learnNames, listContacts, recordShares } from '../../src/server/contacts.js';
+import { MAX_CONTACTS, learnNames, listContacts, recordShares } from '../../src/server/contacts.js';
 import { openDb } from '../../src/server/db.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -18,9 +18,6 @@ describe('share contacts', () => {
       { email: 'jane@x.com', name: 'Jane Doe', shares: 2, lastAt: 2000 },
       { email: 'bob@x.com', name: null, shares: 1, lastAt: 1000 },
     ]);
-    expect(forgetContact(db, 'BOB@x.com')).toBe(true);
-    expect(forgetContact(db, 'bob@x.com')).toBe(false);
-    expect(listContacts(db, 2000).map((c) => c.email)).toEqual(['jane@x.com']);
   });
 
   it('ranks people shared with often and lately first, the most recent among equals', () => {

@@ -109,14 +109,19 @@ export function ShareDialog({
     requestAnimationFrame(() => el.setSelectionRange(next.length, next.length));
   };
 
-  /** Stops suggesting someone: gone from the row at once, and back with the error if the server refuses. */
+  /**
+   * Stops suggesting someone: gone from the row at once. If the server refuses, the list is read
+   * again (not put back as it was, which could bring back someone another × removed meanwhile).
+   */
   const forgetSuggestion = (to: string) => {
-    const before = contacts;
     setContacts((c) => c?.filter((x) => x.email !== to) ?? c);
     api.forgetShareContact(to).catch((e) => {
       if (e instanceof ApiError && e.status === 404) return;
-      setContacts(before);
       setError(`Couldn't stop suggesting ${to}: ${errorMessage(e)}`);
+      api
+        .shareContacts()
+        .then(setContacts)
+        .catch(() => {});
     });
   };
 
@@ -203,7 +208,8 @@ export function ShareDialog({
           />
           <span className="hint">Several at once: separate them with commas, semicolons or spaces.</span>
         </label>
-        {contacts && (
+        {/* Only once the lists are in: until then, people with access can't be left out. */}
+        {contacts && people && (
           <ShareSuggestions value={email} contacts={contacts} exclude={notSuggested} onPick={pickSuggestion} onForget={forgetSuggestion} />
         )}
         <div className="field" role="radiogroup" aria-label="Access">

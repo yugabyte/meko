@@ -4914,8 +4914,10 @@ div[id^='dak-mermaid-'] .label {
   .share-chip button {
     min-height: 36px;
   }
+  /* An icon button: 40 px. */
   .share-chip .share-chip-forget {
-    min-width: 36px;
+    min-width: 40px;
+    min-height: 40px;
     padding: 0 10px 0 6px;
   }
 }
