@@ -28,8 +28,8 @@ func (d *recordingDeleter) Delete(_, datapackID string) error {
 	return nil
 }
 
-// projectDeleteMocks sets up the three reads scopeFor performs: the project,
-// the caller's datapacks, and their placements.
+// projectDeleteMocks sets up the reads scopeFor performs for an owner: the
+// project, its placements, and which of those datapacks the caller can see.
 func projectDeleteMocks(mock sqlmock.Sqlmock, dpIDs []string) {
 	now := time.Now()
 	mock.ExpectQuery("FROM +meko_system.projects").
@@ -39,23 +39,19 @@ func projectDeleteMocks(mock sqlmock.Sqlmock, dpIDs []string) {
 				"description", "created_at", "updated_at"}).
 			AddRow("proj-1", "me", "adlc", "adlc", "1.0", "", now, now))
 
-	dpRows := sqlmock.NewRows([]string{
-		"datapack_id", "user_id", "datapack_name", "created_by_agent_id", "universe_id",
-		"conn", "mcp_user", "created_at", "updated_at", "description",
-		"owner_name", "owner_email", "grant",
-	})
-	for _, id := range dpIDs {
-		dpRows.AddRow(id, "me", id, "", "u", "", "", now, now, "", "", "", "owner")
-	}
-	mock.ExpectQuery("FROM meko_system.datapacks").WithArgs("me").WillReturnRows(dpRows)
-
-	plRows := sqlmock.NewRows([]string{"datapack_id", "project_id", "folder_id", "placed_at", "updated_at"})
+	plRows := placementRows()
 	for _, id := range dpIDs {
 		plRows.AddRow(id, "proj-1", "f1", now, now)
 	}
 	mock.ExpectQuery("FROM +meko_system.datapack_placements").
-		WithArgs(pq.Array(dpIDs)).
+		WithArgs("proj-1").
 		WillReturnRows(plRows)
+
+	owned := map[string]string{}
+	for _, id := range dpIDs {
+		owned[id] = "me"
+	}
+	expectVisibleByIDs(mock, "me", dpIDs, datapackRows(owned, "me"), datapackRows(nil, "me"), len(dpIDs) > 0)
 }
 
 // Deleting a project destroys the datapacks filed in it. This is the most
@@ -112,18 +108,11 @@ func TestDeleteProject_RecipientCannotDelete(t *testing.T) {
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WithArgs("proj-1", "me").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("FROM meko_system.datapacks").
-		WithArgs("me").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"datapack_id", "user_id", "datapack_name", "created_by_agent_id", "universe_id",
-			"conn", "mcp_user", "created_at", "updated_at", "description",
-			"owner_name", "owner_email", "grant",
-		}).AddRow("dp-a", "someone-else", "dp", "", "u", "", "", now, now, "", "", "", "read"))
 	mock.ExpectQuery("FROM +meko_system.datapack_placements").
-		WithArgs(pq.Array([]string{"dp-a"})).
-		WillReturnRows(sqlmock.NewRows(
-			[]string{"datapack_id", "project_id", "folder_id", "placed_at", "updated_at"}).
-			AddRow("dp-a", "proj-1", "f1", now, now))
+		WithArgs("proj-1").
+		WillReturnRows(placementRows().AddRow("dp-a", "proj-1", "f1", now, now))
+	expectVisibleByIDs(mock, "me", []string{"dp-a"}, datapackRows(nil, "me"),
+		datapackRows(map[string]string{"dp-a": "someone-else"}, "me"), false)
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WithArgs(pq.Array([]string{"proj-1"})).
 		WillReturnRows(sqlmock.NewRows(

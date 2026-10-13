@@ -169,15 +169,20 @@ type MemoryCountResponse struct {
 
 // TokenSavingsSummary is the response for both GET
 // /datapacks/{datapack_id}/token-savings (ByDatapack has exactly one entry,
-// for the requested datapack) and GET /me/token-savings (ByDatapack has one
-// entry per datapack the caller's account can access). Sourced from
-// meko_system.token_savings_log, written by meko-mcp-server's
+// for the requested datapack) and GET /me/token-savings. The account view's
+// ByDatapack lists only datapacks that have savings, most saved first, at
+// most 100. ByDatapackTruncated is set when more exist. The totals cover
+// every datapack the account can access, including ones with no savings.
+// Sourced from meko_system.token_savings_summary, written by meko-mcp-server's
 // contextual_prominence_search tool.
 type TokenSavingsSummary struct {
 	TotalRequests    int                    `json:"total_requests"`
 	TotalTokensSaved int                    `json:"total_tokens_saved"`
 	BySource         map[string]int         `json:"tokens_saved_by_source"`
 	ByDatapack       []DatapackTokenSavings `json:"by_datapack"`
+	// ByDatapackTruncated is set on the account view when more datapacks have
+	// savings than ByDatapack lists. The totals always cover all of them.
+	ByDatapackTruncated bool `json:"by_datapack_truncated,omitempty"`
 }
 
 // DatapackTokenSavings is one datapack's contribution to a TokenSavingsSummary.

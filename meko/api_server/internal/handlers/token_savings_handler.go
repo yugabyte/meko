@@ -48,7 +48,11 @@ func (h *TokenSavingsHandler) GetForDatapack(c echo.Context) error {
 // GetForAccount handles GET /api/v1/me/token-savings.
 //
 //	@Summary	Get token savings across every datapack the caller can access
-//	@Description	Lifetime rollup of token savings recorded by contextual_prominence_search across every datapack the caller's account owns or has shared access to, broken down by datapack. Backed by running counters (meko_system.token_savings_summary), not a per-request aggregation.
+//	@Description	Lifetime rollup of token savings recorded by contextual_prominence_search across every
+//	@Description	datapack the caller's account owns or has shared access to. Totals cover all of them;
+//	@Description	by_datapack lists only datapacks with savings, most first, at most 100, and
+//	@Description	by_datapack_truncated is true when more exist. Backed by running counters
+//	@Description	(meko_system.token_savings_summary), not a per-request aggregation.
 //	@Tags		token-savings
 //	@Produce	json
 //	@Success	200	{object}	APIResponse

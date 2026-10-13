@@ -5231,7 +5231,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lifetime rollup of token savings recorded by contextual_prominence_search across every datapack the caller's account owns or has shared access to, broken down by datapack. Backed by running counters (meko_system.token_savings_summary), not a per-request aggregation.",
+                "description": "Lifetime rollup of token savings recorded by contextual_prominence_search across every\ndatapack the caller's account owns or has shared access to. Totals cover all of them;\nby_datapack lists only datapacks with savings, most first, at most 100, and\nby_datapack_truncated is true when more exist. Backed by running counters\n(meko_system.token_savings_summary), not a per-request aggregation.",
                 "produces": [
                     "application/json"
                 ],
@@ -5537,9 +5537,23 @@ const docTemplate = `{
                     "projects"
                 ],
                 "summary": "Map every filed datapack to its path",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated datapack ids to limit the map to (max 1000)",
+                        "name": "datapack_ids",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }

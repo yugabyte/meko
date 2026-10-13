@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/db"
 	"meko/api_server/internal/models"
@@ -423,6 +424,91 @@ func TestDatapackList(t *testing.T) {
 		}
 		if len(shared) != 7 {
 			t.Fatalf("shared ids = %d, want 7", len(shared))
+		}
+	})
+
+	t.Run("account token savings cover visible datapacks only", func(t *testing.T) {
+		var owned, shared string
+		for id, d := range f.visible {
+			if d.UserID == f.owner && owned == "" {
+				owned = id
+			}
+			if d.Name == "shared-plain" {
+				shared = id
+			}
+		}
+		for _, r := range []struct {
+			id     string
+			tokens int
+		}{{owned, 100}, {shared, 40}, {f.hidden[0], 9999}} {
+			listExec(t, f.db, `INSERT INTO meko_system.token_savings_summary
+			    (datapack_id, source, request_count, tokens_saved_total) VALUES ($1, 'memory', 1, $2)`, r.id, r.tokens)
+		}
+		t.Cleanup(func() {
+			if _, err := f.db.Exec(`DELETE FROM meko_system.token_savings_summary WHERE datapack_id = ANY($1::uuid[])`,
+				pq.Array([]string{owned, shared, f.hidden[0]})); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		})
+		s, err := NewTokenSavingsRepo(f.db).GetAccountSummary(ctx, f.owner, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.TotalTokensSaved != 140 || len(s.ByDatapack) != 2 || s.ByDatapack[0].DatapackID != owned {
+			t.Fatalf("summary = %+v", s)
+		}
+	})
+
+	t.Run("placements by project and by owner", func(t *testing.T) {
+		var mine, shared string
+		for id, d := range f.visible {
+			if d.UserID == f.owner && mine == "" {
+				mine = id
+			}
+			if d.Name == "shared-plain" {
+				shared = id
+			}
+		}
+		var myProject, myFolder, herProject, herFolder string
+		mk := func(user, name string) (string, string) {
+			var c, fo string
+			if err := f.db.QueryRow(`INSERT INTO meko_system.projects (user_id, project_name, theme_key, theme_version)
+			    VALUES ($1, $2, 'blank', '1') RETURNING project_id`, user, name).Scan(&c); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.db.QueryRow(`INSERT INTO meko_system.project_folders (project_id, folder_name)
+			    VALUES ($1, 'f') RETURNING folder_id`, c).Scan(&fo); err != nil {
+				t.Fatal(err)
+			}
+			return c, fo
+		}
+		myProject, myFolder = mk(f.owner, "mine")
+		herProject, herFolder = mk(f.sharer, "hers")
+		t.Cleanup(func() {
+			if _, err := f.db.Exec(`DELETE FROM meko_system.projects WHERE project_id = ANY($1::uuid[])`,
+				pq.Array([]string{myProject, herProject})); err != nil {
+				t.Logf("cleanup: %v", err)
+			}
+		})
+		pr := NewPlacementRepo(f.db)
+		if err := pr.Place(mine, myProject, myFolder); err != nil {
+			t.Fatal(err)
+		}
+		if err := pr.Place(shared, herProject, herFolder); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := pr.OwnedByUser(f.owner, nil)
+		if err != nil || len(got) != 1 || got[0].DatapackID != mine {
+			t.Fatalf("OwnedByUser = %+v, %v", got, err)
+		}
+		got, err = pr.OwnedByUser(f.owner, []string{shared})
+		if err != nil || len(got) != 0 {
+			t.Fatalf("OwnedByUser filtered to a shared id = %+v, %v", got, err)
+		}
+		got, err = pr.InProject(herProject)
+		if err != nil || len(got) != 1 || got[0].DatapackID != shared {
+			t.Fatalf("InProject = %+v, %v", got, err)
 		}
 	})
 

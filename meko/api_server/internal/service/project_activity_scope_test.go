@@ -45,28 +45,18 @@ func TestProjectActivityLog_RecipientSeesOnlyTheSharedDatapacks(t *testing.T) {
 		WithArgs("proj-1", "bob").
 		WillReturnError(sql.ErrNoRows)
 
-	// His datapack list is already grant-checked: it holds the two Alice
-	// shared and one of his own. The other two in Alice's project never
-	// appear here, which is what makes the rest of this safe.
-	mock.ExpectQuery("FROM meko_system.datapacks").
-		WithArgs("bob").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"datapack_id", "user_id", "datapack_name", "created_by_agent_id", "universe_id",
-			"conn", "mcp_user", "created_at", "updated_at", "description",
-			"owner_name", "owner_email", "grant",
-		}).
-			AddRow("shared-1", "alice", "perf", "", "u", "", "", now, now, "", "Alice", "", "read").
-			AddRow("shared-2", "alice", "wal", "", "u", "", "", now, now, "", "Alice", "", "read").
-			AddRow("bobs-own", "bob", "mine", "", "u", "", "", now, now, "", "", "", "owner"))
-
-	// Placements for those three. Bob's own datapack sits elsewhere.
+	// The project holds four datapacks. Access is checked on those ids, and
+	// only the two shared with Bob come back.
+	all := []string{"shared-1", "shared-2", "secret-1", "secret-2"}
+	pl := placementRows()
+	for _, id := range all {
+		pl.AddRow(id, "proj-1", "f1", now, now)
+	}
 	mock.ExpectQuery("FROM +meko_system.datapack_placements").
-		WithArgs(pq.Array([]string{"shared-1", "shared-2", "bobs-own"})).
-		WillReturnRows(sqlmock.NewRows(
-			[]string{"datapack_id", "project_id", "folder_id", "placed_at", "updated_at"}).
-			AddRow("shared-1", "proj-1", "f1", now, now).
-			AddRow("shared-2", "proj-1", "f1", now, now).
-			AddRow("bobs-own", "proj-other", "f9", now, now))
+		WithArgs("proj-1").
+		WillReturnRows(pl)
+	expectVisibleByIDs(mock, "bob", all, datapackRows(nil, "bob"),
+		datapackRows(map[string]string{"shared-1": "alice", "shared-2": "alice"}, "bob"), false)
 
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WithArgs(pq.Array([]string{"proj-1"})).
@@ -75,9 +65,9 @@ func TestProjectActivityLog_RecipientSeesOnlyTheSharedDatapacks(t *testing.T) {
 				"description", "owner_name", "created_at", "updated_at"}).
 			AddRow("proj-1", "alice", "adlc", "adlc", "1.0", "", "Alice", now, now))
 
-	// The structural sides. Bob is not the owner, so folders come from his
-	// OWN placements: f1 only. f9 is his other project's, and Alice's
-	// other folders never enter the query at all.
+	// The structural sides. Bob is not the owner, so folders come from the
+	// placements he can see: f1 only. Alice's other folders never enter the
+	// query.
 	mock.ExpectQuery("FROM +meko_system.project_folders").
 		WithArgs(pq.Array([]string{"f1"}), 11).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at", "folder_id", "folder_name"}).

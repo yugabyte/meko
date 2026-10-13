@@ -80,3 +80,34 @@ func TestTokenSavingsRepo_GetSummary_IncludesDatapacksWithNoSavings(t *testing.T
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+// The account view lists only datapacks with savings, most first, capped, and
+// the totals still cover every row.
+func TestGetAccountSummary_TopDatapacksAndFullTotals(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewTokenSavingsRepo(db)
+
+	mock.ExpectQuery(`WITH shared AS .*visible AS .*JOIN meko_system.token_savings_summary`).
+		WithArgs("me").
+		WillReturnRows(sqlmock.NewRows([]string{"datapack_id", "source", "request_count", "tokens_saved_total"}).
+			AddRow("dp-small", "kb", 1, 10).
+			AddRow("dp-big", "kb", 2, 500).
+			AddRow("dp-big", "memory", 3, 300).
+			AddRow("dp-mid", "memory", 4, 200))
+
+	s, err := repo.GetAccountSummary(context.Background(), "me", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TotalRequests != 10 || s.TotalTokensSaved != 1010 || s.BySource["kb"] != 510 || s.BySource["memory"] != 500 {
+		t.Fatalf("totals = %+v", s)
+	}
+	if len(s.ByDatapack) != 2 || s.ByDatapack[0].DatapackID != "dp-big" || s.ByDatapack[0].TotalTokensSaved != 800 ||
+		s.ByDatapack[1].DatapackID != "dp-mid" || !s.ByDatapackTruncated {
+		t.Fatalf("by_datapack = %+v truncated=%v", s.ByDatapack, s.ByDatapackTruncated)
+	}
+}

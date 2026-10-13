@@ -457,14 +457,6 @@ func (s *DatapackService) rollbackCreate(userID, datapackID string) error {
 	return nil
 }
 
-// List returns datapacks belonging to the given user.
-func (s *DatapackService) List(userID string) ([]models.Datapack, error) {
-	if userID == "" {
-		return nil, fmt.Errorf("user_id is required")
-	}
-	return s.repo.List(userID)
-}
-
 // Describe returns details for a single datapack by user and name.
 func (s *DatapackService) Describe(userID, name string) (*models.Datapack, error) {
 	if name == "" {

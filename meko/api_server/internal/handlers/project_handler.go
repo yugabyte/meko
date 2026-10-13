@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/auth"
@@ -120,6 +121,9 @@ const (
 	activityLogDefaultLimit = 10
 	activityLogMaxLimit     = 50
 )
+
+// placementsMaxIDs caps datapack_ids on GET /projects/placements.
+const placementsMaxIDs = 1000
 
 // ActivityLog handles GET /api/v1/projects/:project_id/activity-log.
 //
@@ -397,10 +401,15 @@ func (h *ProjectHandler) DeleteFolder(c echo.Context) error {
 // One call labels the whole Datapacks page. A datapack missing from the map is
 // unfiled, so the client needs no second request to tell the two apart.
 //
+// datapack_ids (comma-separated, at most 1000) limits the map to those
+// datapacks, for a client showing a page of a very large account.
+//
 //	@Summary	Map every filed datapack to its path
 //	@Tags		projects
 //	@Produce	json
+//	@Param		datapack_ids	query		string	false	"Comma-separated datapack ids to limit the map to (max 1000)"
 //	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
 //	@Failure	401	{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/projects/placements [get]
@@ -409,7 +418,28 @@ func (h *ProjectHandler) DatapackPaths(c echo.Context) error {
 	if err != nil {
 		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
 	}
-	paths, err := h.svc.DatapackPaths(userID)
+	var ids []string
+	if c.QueryParams().Has("datapack_ids") {
+		ids = []string{}
+		for _, raw := range strings.Split(c.QueryParam("datapack_ids"), ",") {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			parsed, pErr := uuid.Parse(id)
+			if pErr != nil {
+				return apiError(c, http.StatusBadRequest, "INVALID_DATAPACK_IDS", "datapack_ids must be UUIDs")
+			}
+			// String() is the lowercase form SharedIDs returns. The raw
+			// value can be uppercase, which ::uuid accepts and a string
+			// compare does not.
+			ids = append(ids, parsed.String())
+		}
+		if len(ids) > placementsMaxIDs {
+			return apiError(c, http.StatusBadRequest, "INVALID_DATAPACK_IDS", "at most 1000 datapack_ids")
+		}
+	}
+	paths, err := h.svc.DatapackPaths(userID, ids)
 	if err != nil {
 		return h.fail(c, err)
 	}

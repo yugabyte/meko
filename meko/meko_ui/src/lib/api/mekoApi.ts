@@ -991,8 +991,10 @@ export async function getCurrentUserUsage(options: { signal?: AbortSignal } = {}
  * meko-mcp-server's contextual_prominence_search; `tokens_saved_by_source`
  * breaks it down by retrieval tier. Lifetime counters (no time range).
  *
- *  - GET /me/token-savings           → account-wide; `by_datapack` has one
- *    entry per datapack the caller can access.
+ *  - GET /me/token-savings           → account-wide. `by_datapack` lists
+ *    datapacks that have savings, most saved first, at most 100.
+ *    `by_datapack_truncated` is true when more exist. The totals cover every
+ *    datapack the caller can access, including ones with no savings.
  *  - GET /datapacks/{id}/token-savings → single datapack; `by_datapack` has
  *    exactly one entry.
  */
@@ -1007,6 +1009,7 @@ export type TokenSavingsSummary = {
   total_tokens_saved: number;
   tokens_saved_by_source: Record<string, number>;
   by_datapack: DatapackTokenSavings[];
+  by_datapack_truncated?: boolean;
 };
 
 // Token savings for a single datapack (by UUID).

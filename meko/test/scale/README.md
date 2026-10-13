@@ -76,7 +76,7 @@ over that datapack's vectors.
 | KB search | `meko-mcp-server` `hybrid_search._SEMANTIC_SQL` | 5 queries on each of 90 small and 10 large datapacks |
 | Memory search | `meko-mem0` `PGVector.search`, with the filters `memory_search` passes (datapack + user, no agent) | the same 5 x 100 |
 | Access check | `meko-mcp-server` `_has_datapack_access` | 50 |
-| Datapack list | `api_server` `DatapackRepo.List` (unpaginated) | 1, with `--list` |
+| Datapack list | the query `DatapackRepo.List` used to run. Production pages or streams instead | 1, with `--list` |
 
 `variants.py` runs rewrites of the two searches on 10 small and 5 large datapacks,
 5 queries each: with and without the agent filter, exact ranking through a

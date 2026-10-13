@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
@@ -145,13 +148,12 @@ func NewProjectService(
 }
 
 // projectScope is what a caller may see inside one project: the project row,
-// the datapacks of theirs that sit in it, and every datapack they can see
-// keyed by id.
+// the placements in it they can see, and those datapacks keyed by id.
 //
 // Extracted so the detail page and the activity feed cannot drift on who is
-// allowed to see what. Both start from the grant-checked datapack list and
-// narrow by placement, which is why neither can reach a datapack that was
-// not shared.
+// allowed to see what. Both start from the project's placements and then
+// check access on those ids, which is why neither can reach a datapack that
+// was not shared.
 type projectScope struct {
 	project *models.Project
 	// owned is nil when the caller does not own the project.
@@ -169,25 +171,29 @@ func (s *ProjectService) scopeFor(userID, projectID string) (*projectScope, erro
 		return nil, err
 	}
 
-	visible, err := s.datapacks.List(userID)
+	// Placements first, then only those datapacks' access: the caller may see
+	// far more datapacks than one project holds.
+	all, err := s.placements.InProject(projectID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(all))
+	for _, pl := range all {
+		ids = append(ids, pl.DatapackID)
+	}
+	visible, err := s.datapacks.VisibleByIDs(context.Background(), userID, ids)
 	if err != nil {
 		return nil, err
 	}
 	byID := make(map[string]models.Datapack, len(visible))
-	visibleIDs := make([]string, 0, len(visible))
 	for _, dp := range visible {
 		byID[dp.ID] = dp
-		visibleIDs = append(visibleIDs, dp.ID)
 	}
 
-	all, err := s.placements.ForDatapacks(visibleIDs)
-	if err != nil {
-		return nil, err
-	}
 	inProject := make([]models.DatapackPlacement, 0, len(all))
 	byFolder := map[string]int{}
 	for _, pl := range all {
-		if pl.ProjectID != projectID {
+		if _, found := byID[pl.DatapackID]; !found {
 			continue
 		}
 		inProject = append(inProject, pl)
@@ -334,24 +340,6 @@ func (s *ProjectService) visibleFolderIDs(scope *projectScope) []string {
 		out = append(out, pl.FolderID)
 	}
 	return out
-}
-
-// visibleDatapackIDs returns the ids of every datapack the caller can see,
-// split by whether they own it. The shared half is the access boundary for
-// every "Shared projects" read below.
-func (s *ProjectService) visibleDatapackIDs(userID string) (owned, shared []string, err error) {
-	list, err := s.datapacks.List(userID)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, dp := range list {
-		if dp.UserID == userID {
-			owned = append(owned, dp.ID)
-			continue
-		}
-		shared = append(shared, dp.ID)
-	}
-	return owned, shared, nil
 }
 
 // CreateProjectRequest is the body of POST /projects.
@@ -533,15 +521,14 @@ type ProjectDatapackNode struct {
 
 // Detail returns one project, its folders, and the datapacks inside it.
 //
-// A FIXED number of queries whatever the project holds: the project row, the
-// caller's datapack list, their placements, the folders, three grouped
+// A fixed number of queries whatever the project holds: the project's
+// placements, an access check on those ids, the folders, three grouped
 // rollups and one member count. Nothing here runs per datapack.
 //
-// Two paths share that body. The caller's OWN project comes back whole. A
-// project merely SHARED with them is pruned to the folders and datapacks they
-// can reach, because the datapack list it starts from is already grant
-// checked, so opening a shared project never reveals work that was not
-// shared. A project that is neither resolves to not-found rather than
+// Two paths share that body. The caller's own project comes back whole. A
+// project merely shared with them is pruned to the folders and datapacks
+// VisibleByIDs kept, so opening a shared project never reveals work that was
+// not shared. A project that is neither resolves to not-found rather than
 // forbidden, so project ids cannot be probed.
 func (s *ProjectService) Detail(userID, projectID string) (*ProjectDetail, error) {
 	scope, err := s.scopeFor(userID, projectID)
@@ -819,7 +806,7 @@ func (s *ProjectService) requireDatapackOwner(userID, datapackID string) error {
 // So sharing one datapack out of a twenty-datapack project reveals one
 // datapack and one folder, not the shape of the owner's whole tree.
 func (s *ProjectService) ListSharedWithCounts(userID string) ([]models.Project, error) {
-	_, sharedIDs, err := s.visibleDatapackIDs(userID)
+	sharedIDs, err := s.datapacks.SharedIDs(context.Background(), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -901,25 +888,33 @@ func (s *ProjectService) ListSharedWithCounts(userID string) ([]models.Project, 
 // Includes shared datapacks, resolved against their OWNER's project, because
 // that is the one place they live. Datapacks absent from the map are unfiled,
 // which is why the response is a map rather than a list.
-func (s *ProjectService) DatapackPaths(userID string) (map[string]models.DatapackPath, error) {
-	owned, shared, err := s.visibleDatapackIDs(userID)
-	if err != nil {
-		return nil, err
-	}
-	// A fresh slice, not append(owned, shared...): appending to `owned` can
-	// write into its backing array, which visibleDatapackIDs' caller still
-	// holds.
-	visible := make([]string, 0, len(owned)+len(shared))
-	visible = append(visible, owned...)
-	visible = append(visible, shared...)
-	out := make(map[string]models.DatapackPath, len(visible))
-	if len(visible) == 0 {
+//
+// datapackIDs, when non-nil, limits the answer to those datapacks, so a page
+// showing some rows of a very large account need not fetch every path.
+func (s *ProjectService) DatapackPaths(userID string, datapackIDs []string) (map[string]models.DatapackPath, error) {
+	ctx := context.Background()
+	out := map[string]models.DatapackPath{}
+	if datapackIDs != nil && len(datapackIDs) == 0 {
 		return out, nil
 	}
-
-	placements, err := s.placements.ForDatapacks(visible)
+	datapackIDs = canonicalDatapackIDs(datapackIDs)
+	placements, err := s.placements.OwnedByUser(userID, datapackIDs)
 	if err != nil {
 		return nil, err
+	}
+	shared, err := s.datapacks.SharedIDs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if datapackIDs != nil {
+		shared = intersect(shared, datapackIDs)
+	}
+	if len(shared) > 0 {
+		sharedPlacements, sErr := s.placements.ForDatapacks(shared)
+		if sErr != nil {
+			return nil, sErr
+		}
+		placements = append(placements, sharedPlacements...)
 	}
 	if len(placements) == 0 {
 		return out, nil
@@ -992,4 +987,40 @@ func (s *ProjectService) Stats(userID, projectID string) (repository.ProjectStat
 		datapackIDs = append(datapackIDs, pl.DatapackID)
 	}
 	return s.stats.Stats(datapackIDs, DatapackIndexSchema, DatapackIndexName)
+}
+
+// canonicalDatapackIDs rewrites UUID ids to the lowercase form the database
+// returns. SharedIDs comes back that way. OwnedByUser compares with ::uuid,
+// which ignores case, so without this an uppercase id matches an owned
+// datapack and then intersect drops the same id from the shared half.
+// A value that is not a UUID is left as given.
+func canonicalDatapackIDs(ids []string) []string {
+	if ids == nil {
+		return nil
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			out[i] = id
+			continue
+		}
+		out[i] = parsed.String()
+	}
+	return out
+}
+
+// intersect returns the members of a that are also in b, in a's order.
+func intersect(a, b []string) []string {
+	in := make(map[string]bool, len(b))
+	for _, v := range b {
+		in[v] = true
+	}
+	out := make([]string, 0, len(a))
+	for _, v := range a {
+		if in[v] {
+			out = append(out, v)
+		}
+	}
+	return out
 }

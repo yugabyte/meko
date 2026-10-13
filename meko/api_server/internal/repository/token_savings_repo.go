@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 
 	"github.com/lib/pq"
 
@@ -29,10 +30,10 @@ func NewTokenSavingsRepo(db *sql.DB) *TokenSavingsRepo {
 }
 
 // GetSummary reads meko_system.token_savings_summary for the given
-// datapack_ids — a single-element slice for the per-datapack view, or every
-// datapack the caller's account can access for the account view — and
-// aggregates totals / by-source / by-datapack breakdowns in Go from the
-// (datapack_id, source) rows. A plain indexed lookup, no SUM/COUNT pushdown.
+// datapack_ids and aggregates totals, by-source, and by-datapack in Go from
+// the (datapack_id, source) rows. The per-datapack route passes one id.
+// The account view is GetAccountSummary, which does not call this. A plain
+// indexed lookup, no SUM/COUNT pushdown.
 func (r *TokenSavingsRepo) GetSummary(ctx context.Context, datapackIDs []string) (*models.TokenSavingsSummary, error) {
 	summary := &models.TokenSavingsSummary{
 		BySource:   map[string]int{},
@@ -91,5 +92,77 @@ func (r *TokenSavingsRepo) GetSummary(ctx context.Context, datapackIDs []string)
 		summary.ByDatapack = append(summary.ByDatapack, *byDatapack[id])
 	}
 
+	return summary, nil
+}
+
+// GetAccountSummary is GetSummary over every datapack userID can see (owned,
+// plus shared by the datapack list's definition), resolved in SQL rather than
+// from an id list the caller would have to load first.
+//
+// ByDatapack lists only datapacks with savings, most tokens saved first, at
+// most topN of them; ByDatapackTruncated says whether more exist. The totals
+// cover every visible datapack.
+func (r *TokenSavingsRepo) GetAccountSummary(
+	ctx context.Context, userID string, topN int,
+) (*models.TokenSavingsSummary, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`WITH `+sharedInvitesCTE+`,
+		 visible AS (
+		     SELECT d.datapack_id FROM meko_system.datapacks d WHERE d.user_id = $1
+		     UNION ALL
+		     SELECT d.datapack_id FROM shared s
+		     JOIN meko_system.datapacks d ON d.datapack_id = s.datapack_id
+		     WHERE d.user_id <> $1
+		 )
+		 SELECT t.datapack_id, t.source, t.request_count, t.tokens_saved_total
+		 FROM visible v
+		 JOIN meko_system.token_savings_summary t ON t.datapack_id = v.datapack_id`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read account token savings: %w", err)
+	}
+	defer rows.Close()
+
+	summary := &models.TokenSavingsSummary{
+		BySource:   map[string]int{},
+		ByDatapack: []models.DatapackTokenSavings{},
+	}
+	byDatapack := map[string]*models.DatapackTokenSavings{}
+	for rows.Next() {
+		var datapackID, source string
+		var requestCount, tokensSaved int
+		if err := rows.Scan(&datapackID, &source, &requestCount, &tokensSaved); err != nil {
+			return nil, fmt.Errorf("failed to scan token savings summary row: %w", err)
+		}
+		summary.TotalRequests += requestCount
+		summary.TotalTokensSaved += tokensSaved
+		summary.BySource[source] += tokensSaved
+		entry, found := byDatapack[datapackID]
+		if !found {
+			entry = &models.DatapackTokenSavings{DatapackID: datapackID}
+			byDatapack[datapackID] = entry
+		}
+		entry.TotalRequests += requestCount
+		entry.TotalTokensSaved += tokensSaved
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate token savings summary: %w", err)
+	}
+
+	for _, e := range byDatapack {
+		summary.ByDatapack = append(summary.ByDatapack, *e)
+	}
+	sort.Slice(summary.ByDatapack, func(i, j int) bool {
+		a, b := summary.ByDatapack[i], summary.ByDatapack[j]
+		if a.TotalTokensSaved != b.TotalTokensSaved {
+			return a.TotalTokensSaved > b.TotalTokensSaved
+		}
+		return a.DatapackID < b.DatapackID
+	})
+	if len(summary.ByDatapack) > topN {
+		summary.ByDatapack = summary.ByDatapack[:topN]
+		summary.ByDatapackTruncated = true
+	}
 	return summary, nil
 }

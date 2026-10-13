@@ -5,7 +5,9 @@ Runs the production SQL verbatim against a fixed set of probe datapacks:
 - KB search: meko-mcp-server src/hybrid_search.py _SEMANTIC_SQL
 - memory search: meko-mem0 mem0/vector_stores/pgvector.py PGVector.search, with the
   filters meko-mcp-server's memory_search passes (datapack + user, agent_id=None)
-- metadata: api_server DatapackRepo.List, and meko-mcp-server _has_datapack_access
+- metadata: the datapack list query DatapackRepo.List used to run, and
+  meko-mcp-server _has_datapack_access. List is gone. Production pages or
+  streams instead, so --list times the old query and is not a production path.
 
 Recall@k is measured against an exact brute-force search over the datapack's vectors,
 recomputed from workload.py rather than read back, so a wrong answer from the database
@@ -44,7 +46,8 @@ ORDER BY distance
 LIMIT %s
 """
 
-# api_server internal/repository/datapack_repo.go List, verbatim.
+# The query DatapackRepo.List ran before it was removed. Production no longer
+# executes it. --list keeps it so older probe runs stay comparable.
 LIST_SQL = """
 SELECT d.datapack_id, d.user_id, d.datapack_name,
        COALESCE(d.created_by_agent_id, ''),
@@ -141,7 +144,7 @@ def main() -> None:
     ap.add_argument("--queries", type=int, default=5)
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--ef-search", type=int, nargs="*", default=[0], help="0 = server default")
-    ap.add_argument("--list", action="store_true", help="also time the unpaginated datapack list")
+    ap.add_argument("--list", action="store_true", help="also time the old unpaginated list query")
     ap.add_argument(
         "--list-big",
         action="store_true",

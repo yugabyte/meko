@@ -461,8 +461,8 @@ type ProjectMembers struct {
 // an index on datapack_id (agent_access_pkey, idx_invites_datapack_id) rather
 // than scanning.
 //
-// "Can reach" is defined exactly as DatapackRepo.List defines it for a
-// non-owner: an agent_access row AND an accepted invite. Counting accepted
+// "Can reach" is the same rule as sharedInvitesCTE for a non-owner: an
+// agent_access row AND an accepted invite. Counting accepted
 // invites alone would be wrong, because unlinking an agent removes the access
 // but leaves the invite behind — that person would keep being counted after
 // the datapack had stopped appearing in their list.

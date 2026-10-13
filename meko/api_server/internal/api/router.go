@@ -299,7 +299,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	artifactSvc := service.NewArtifactService(artifactRepo, s3Svc)
 
 	tokenSavingsRepo := repository.NewTokenSavingsRepo(cfg.SystemDB)
-	tokenSavingsSvc := service.NewTokenSavingsService(tokenSavingsRepo, dpRepo)
+	tokenSavingsSvc := service.NewTokenSavingsService(tokenSavingsRepo)
 	datapackMetricsRepo := repository.NewDatapackMetricsRepo(cfg.SystemDB, cfg.DB)
 
 	// AWS Marketplace: nil until AWS_MARKETPLACE_PRODUCT_CODE is set on

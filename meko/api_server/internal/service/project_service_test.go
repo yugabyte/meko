@@ -2,7 +2,9 @@ package service
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,7 +277,7 @@ func TestValidateNewDatapackFolder_AcceptsAnOwnedFolder(t *testing.T) {
 	}
 }
 
-// datapackRows builds the row set DatapackRepo.List scans, so the access
+// datapackRows builds the row set the datapack list queries scan, so an access
 // query can be stubbed without restating 13 column names per test.
 func datapackRows(owned map[string]string, sharedWith string) *sqlmock.Rows {
 	cols := []string{
@@ -293,6 +295,42 @@ func datapackRows(owned map[string]string, sharedWith string) *sqlmock.Rows {
 		rows.AddRow(id, owner, id, "", "u", "", "", now, now, "", "", "", grant)
 	}
 	return rows
+}
+
+func placementRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"datapack_id", "project_id", "folder_id", "placed_at", "updated_at"})
+}
+
+// expectVisibleByIDs stubs DatapackRepo.VisibleByIDs: the owned query, the
+// owner lookup when anything is owned, then the shared query.
+func expectVisibleByIDs(mock sqlmock.Sqlmock, userID string, ids []string, owned, shared *sqlmock.Rows, anyOwned bool) {
+	mock.ExpectQuery(`FROM meko_system.datapacks d\s+WHERE d.user_id = \$1 AND d.datapack_id = ANY`).
+		WithArgs(userID, pq.Array(ids)).
+		WillReturnRows(owned)
+	if anyOwned {
+		mock.ExpectQuery("FROM meko_system.users WHERE user_id").
+			WithArgs(userID).
+			WillReturnRows(sqlmock.NewRows([]string{"name", "email"}).AddRow("Me", "me@example.com"))
+	}
+	mock.ExpectQuery(`WITH shared AS`).
+		WithArgs(userID, pq.Array(ids)).
+		WillReturnRows(shared)
+}
+
+// expectSharedIDs stubs DatapackRepo.SharedIDs.
+func expectSharedIDs(mock sqlmock.Sqlmock, userID string, ids ...string) {
+	rows := sqlmock.NewRows([]string{"datapack_id"})
+	for _, id := range ids {
+		rows.AddRow(id)
+	}
+	mock.ExpectQuery(`WITH shared AS`).WithArgs(userID).WillReturnRows(rows)
+}
+
+// expectOwnedPlacements stubs PlacementRepo.OwnedByUser.
+func expectOwnedPlacements(mock sqlmock.Sqlmock, rows *sqlmock.Rows, args ...driver.Value) {
+	mock.ExpectQuery(`FROM +meko_system.projects p\s+JOIN +meko_system.datapack_placements`).
+		WithArgs(args...).
+		WillReturnRows(rows)
 }
 
 func folderRows() *sqlmock.Rows {
@@ -314,16 +352,11 @@ func TestDatapackPaths_ResolvesProjectAndFolderNames(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	// Every read starts from what the caller may see.
-	mock.ExpectQuery("FROM +meko_system.datapacks").
-		WithArgs("me").
-		WillReturnRows(datapackRows(map[string]string{"dp-root": "me", "dp-child": "me"}, "me"))
-
-	mock.ExpectQuery("FROM +meko_system.datapack_placements").
-		WillReturnRows(sqlmock.NewRows(
-			[]string{"datapack_id", "project_id", "folder_id", "placed_at", "updated_at"}).
-			AddRow("dp-root", "proj-1", "folder-root", now, now).
-			AddRow("dp-child", "proj-1", "folder-child", now, now))
+	// The caller's own placements, via their projects, then what is shared.
+	expectOwnedPlacements(mock, placementRows().
+		AddRow("dp-root", "proj-1", "folder-root", now, now).
+		AddRow("dp-child", "proj-1", "folder-child", now, now), "me")
+	expectSharedIDs(mock, "me")
 
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WillReturnRows(projectRows().
@@ -334,7 +367,7 @@ func TestDatapackPaths_ResolvesProjectAndFolderNames(t *testing.T) {
 			AddRow("folder-root", "proj-1", "coding_standards", "", now, now).
 			AddRow("folder-child", "proj-1", "features", "", now, now))
 
-	paths, err := svc.DatapackPaths("me")
+	paths, err := svc.DatapackPaths("me", nil)
 	if err != nil {
 		t.Fatalf("DatapackPaths: %v", err)
 	}
@@ -350,16 +383,16 @@ func TestDatapackPaths_ResolvesProjectAndFolderNames(t *testing.T) {
 	}
 }
 
-// A caller who can see nothing pays for the access query and nothing else.
+// A caller with nothing filed and nothing shared pays for the two access
+// queries and nothing else.
 func TestDatapackPaths_SkipsFollowUpQueriesWhenNothingIsVisible(t *testing.T) {
 	svc, mock, db := newProjectService(t)
 	defer db.Close()
 
-	mock.ExpectQuery("FROM +meko_system.datapacks").
-		WithArgs("me").
-		WillReturnRows(datapackRows(nil, "me"))
+	expectOwnedPlacements(mock, placementRows(), "me")
+	expectSharedIDs(mock, "me")
 
-	paths, err := svc.DatapackPaths("me")
+	paths, err := svc.DatapackPaths("me", nil)
 	if err != nil {
 		t.Fatalf("DatapackPaths: %v", err)
 	}
@@ -368,6 +401,88 @@ func TestDatapackPaths_SkipsFollowUpQueriesWhenNothingIsVisible(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unexpected follow-up queries: %v", err)
+	}
+}
+
+// datapack_ids narrows both halves: the owned placements in SQL, the shared ids
+// before their placements are read. A shared datapack outside the filter is
+// never looked up.
+func TestDatapackPaths_FiltersToTheRequestedDatapacks(t *testing.T) {
+	svc, mock, db := newProjectService(t)
+	defer db.Close()
+
+	now := time.Now()
+	want := []string{"dp-mine", "dp-shared"}
+	expectOwnedPlacements(mock, placementRows().AddRow("dp-mine", "proj-1", "f1", now, now),
+		"me", pq.Array(want))
+	expectSharedIDs(mock, "me", "dp-shared", "dp-shared-other")
+	mock.ExpectQuery("FROM +meko_system.datapack_placements").
+		WithArgs(pq.Array([]string{"dp-shared"})).
+		WillReturnRows(placementRows().AddRow("dp-shared", "proj-2", "f2", now, now))
+	mock.ExpectQuery("FROM +meko_system.projects").
+		WillReturnRows(projectRows().
+			AddRow("proj-1", "me", "Mine", "adlc", "1.0", "", "Me", now, now).
+			AddRow("proj-2", "alice", "Hers", "adlc", "1.0", "", "Alice", now, now))
+	mock.ExpectQuery("FROM +meko_system.project_folders").
+		WillReturnRows(folderRows().
+			AddRow("f1", "proj-1", "a", "", now, now).
+			AddRow("f2", "proj-2", "b", "", now, now))
+
+	paths, err := svc.DatapackPaths("me", want)
+	if err != nil {
+		t.Fatalf("DatapackPaths: %v", err)
+	}
+	if len(paths) != 2 || paths["dp-mine"].Path != "Mine/a" || paths["dp-shared"].Path != "Hers/b" {
+		t.Errorf("paths = %+v", paths)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// SharedIDs returns lowercase UUIDs. An uppercase filter must still select
+// that shared datapack. ::uuid would match it on the owned half either way.
+func TestDatapackPaths_UppercaseIDStillMatchesShared(t *testing.T) {
+	svc, mock, db := newProjectService(t)
+	defer db.Close()
+
+	id := "aaaaaaaa-0000-0000-0000-000000000001"
+	now := time.Now()
+	expectOwnedPlacements(mock, placementRows(), "me", pq.Array([]string{id}))
+	expectSharedIDs(mock, "me", id)
+	mock.ExpectQuery("FROM +meko_system.datapack_placements").
+		WithArgs(pq.Array([]string{id})).
+		WillReturnRows(placementRows().AddRow(id, "proj-2", "f2", now, now))
+	mock.ExpectQuery("FROM +meko_system.projects").
+		WillReturnRows(projectRows().
+			AddRow("proj-2", "alice", "Hers", "adlc", "1.0", "", "Alice", now, now))
+	mock.ExpectQuery("FROM +meko_system.project_folders").
+		WillReturnRows(folderRows().
+			AddRow("f2", "proj-2", "b", "", now, now))
+
+	paths, err := svc.DatapackPaths("me", []string{strings.ToUpper(id)})
+	if err != nil {
+		t.Fatalf("DatapackPaths: %v", err)
+	}
+	if len(paths) != 1 || paths[id].Path != "Hers/b" {
+		t.Errorf("paths = %+v", paths)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// An empty datapack_ids asks about nothing, so nothing is queried.
+func TestDatapackPaths_EmptyFilterQueriesNothing(t *testing.T) {
+	svc, mock, db := newProjectService(t)
+	defer db.Close()
+
+	paths, err := svc.DatapackPaths("me", []string{})
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("paths = %v, err = %v", paths, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unexpected queries: %v", err)
 	}
 }
 
@@ -383,9 +498,7 @@ func TestListSharedWithCounts_ScopesToWhatTheRecipientCanSee(t *testing.T) {
 
 	now := time.Now()
 	// Bob can see exactly one datapack, owned by Alice.
-	mock.ExpectQuery("FROM +meko_system.datapacks").
-		WithArgs("bob").
-		WillReturnRows(datapackRows(map[string]string{"dp-shared": "alice"}, "bob"))
+	expectSharedIDs(mock, "bob", "dp-shared")
 
 	// Only that datapack's placement comes back — "dp-secret" is never asked for.
 	mock.ExpectQuery("FROM +meko_system.datapack_placements").
@@ -428,11 +541,9 @@ func TestListSharedWithCounts_ExcludesTheCallersOwnProjects(t *testing.T) {
 	svc, mock, db := newProjectService(t)
 	defer db.Close()
 
-	mock.ExpectQuery("FROM +meko_system.datapacks").
-		WithArgs("me").
-		WillReturnRows(datapackRows(map[string]string{"dp-mine": "me"}, "me"))
-
 	// Owned datapacks are not in the shared set, so nothing else is queried.
+	expectSharedIDs(mock, "me")
+
 	shared, err := svc.ListSharedWithCounts("me")
 	if err != nil {
 		t.Fatalf("ListSharedWithCounts: %v", err)

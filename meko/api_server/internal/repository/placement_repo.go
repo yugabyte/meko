@@ -151,3 +151,56 @@ func (r *PlacementRepo) ForDatapacks(datapackIDs []string) ([]models.DatapackPla
 	}
 	return out, nil
 }
+
+// InProject returns every placement in one project, via idx_placements_project.
+// It does no access scoping: callers narrow the result to the datapacks the
+// user can see.
+func (r *PlacementRepo) InProject(projectID string) ([]models.DatapackPlacement, error) {
+	return r.query(
+		`SELECT datapack_id, project_id, folder_id, placed_at, updated_at
+		 FROM   meko_system.datapack_placements
+		 WHERE  project_id = $1`,
+		projectID,
+	)
+}
+
+// OwnedByUser returns the placements of userID's own datapacks, optionally
+// only those among datapackIDs.
+//
+// A datapack can only be filed into its owner's project (Place checks both),
+// so this walks the owner's projects rather than all of their datapacks, and
+// the datapacks join is the second lock.
+func (r *PlacementRepo) OwnedByUser(userID string, datapackIDs []string) ([]models.DatapackPlacement, error) {
+	q := `SELECT dp.datapack_id, dp.project_id, dp.folder_id, dp.placed_at, dp.updated_at
+		 FROM   meko_system.projects p
+		 JOIN   meko_system.datapack_placements dp ON dp.project_id = p.project_id
+		 JOIN   meko_system.datapacks d ON d.datapack_id = dp.datapack_id AND d.user_id = $1
+		 WHERE  p.user_id = $1`
+	if datapackIDs != nil {
+		return r.query(q+` AND dp.datapack_id = ANY($2::uuid[])`, userID, pq.Array(datapackIDs))
+	}
+	return r.query(q, userID)
+}
+
+func (r *PlacementRepo) query(q string, args ...any) ([]models.DatapackPlacement, error) {
+	rows, err := r.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("datapack_placements: query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []models.DatapackPlacement
+	for rows.Next() {
+		var p models.DatapackPlacement
+		if sErr := rows.Scan(
+			&p.DatapackID, &p.ProjectID, &p.FolderID, &p.PlacedAt, &p.UpdatedAt,
+		); sErr != nil {
+			return nil, fmt.Errorf("datapack_placements: scan: %w", sErr)
+		}
+		out = append(out, p)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("datapack_placements: iterate: %w", err)
+	}
+	return out, nil
+}
