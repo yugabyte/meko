@@ -79,10 +79,13 @@ of adding the endpoint, not a follow-up. Pick the tightest scope:
   its logic/SQL live in the isolated `internal/service/admin` +
   `internal/repository/admin` packages (handlers as `internal/handlers/admin_*.go`).
   Don't surface admin/console data on a user group, and don't have meko_admin
-  hit user routes. The exception is YCP's `/admin/environments/{id}/desired/*`
-  version routes: they reuse `EnvironmentService`
-  (`{service,handlers}/environment_admin_versions.go`, a name the `meko_ycp_cp` CI
-  filter matches) and are registered only in control-plane mode.
+  hit user routes. **Every internal amp API goes here too**, meaning any route customers
+  must not reach through YBM. YCP's `/admin/environments/{id}/desired/*` routes are
+  built this way. They reuse `EnvironmentService`
+  (`{service,handlers}/environment_admin_*.go`, a name the `meko_ycp_cp` CI filter
+  matches) and are registered only in control-plane mode. The route is half of the
+  rule: the public routes must also refuse and hide the desired-state kind it writes.
+  The checklist is in [`ycp/ARCHITECTURE.md`](../../ycp/ARCHITECTURE.md#an-internal-amp-api-goes-on-the-admin-tier).
 - **Service-to-service** — the `/internal` group behind `RequireInternalSecret`
   (e.g. meko-mcp-server → api_server).
 

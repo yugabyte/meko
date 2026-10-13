@@ -323,7 +323,9 @@ available today for anyone who wants to stage a roll by hand.
 
 ## 9. Later kinds
 
-The same shape — a singleton kind, `spec.version`, actual read back, converge:
+The same shape — a singleton admin-only kind
+([the rule](../ARCHITECTURE.md#an-internal-amp-api-goes-on-the-admin-tier)),
+`spec.version`, actual read back, converge:
 
 - `reconciler` — only if it ever leaves the controller chart (§6). Until then it
   moves with `controller`, and the escape hatch when a release breaks it is a human

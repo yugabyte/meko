@@ -164,7 +164,8 @@ cluster.
    desired-state POST, registration's `desired` and `PATCH /environments/resources`
    refuse either kind (400); a POST that omits them leaves them in place, and the
    public reads of desired state omit them. `/agent/desired-state` returns them with
-   everything else.
+   everything else. Every internal amp setting follows this pattern
+   ([below](#an-internal-amp-api-goes-on-the-admin-tier)).
 5. **Report** — the agent `POST`s `/agent/status` with real facts, the workload health it
    read from its own namespace (`components`: one row per Deployment and StatefulSet,
    healthy-of-total plus the image tag — the only way the console can say what is up,
@@ -404,6 +405,60 @@ check-in confirmed, and the kind it confirmed it as — environment names are un
 only within a kind, so the name alone cannot tell a resumed identity from a
 same-named environment of the other kind. The remaining gap — CA pinning — is
 tracked in [meko#401](https://github.com/yugabyte/meko/issues/401).
+
+### An internal amp API goes on the admin tier
+
+An amp setting that Yugabyte operates and customers must neither see nor change is
+reached only through `/api/v1/admin/*`. Today those settings are the controller version
+and the fleet version. The admin tier takes the same `X-Meko-Admin-Secret` as the fleet
+routes. What keeps customers off it is that YBM's customer pass-through must not forward
+`/api/v1/admin/*` ([`byoc_upgrades.md` §0](architecture/byoc_upgrades.md#0-pre-requisite-an-sre-path-into-ycp)).
+
+An admin route is only half of the rule, because the public desired-state routes write
+any kind they are handed. The desired state behind an internal API is therefore an
+**admin-only kind**, which must meet every point below. The `controller` and
+`fleet-version` routes are the template.
+
+- **It is its own kind**, never a field inside a kind the public routes write. The gate
+  works per kind. A public `POST .../desired` also replaces a spec whole, so a field
+  hidden from the public read would be erased by the next client that reads the set
+  and posts it back.
+- **Only the admin tier writes it.** The write is `PUT /api/v1/admin/environments/{id}/desired/<kind>`,
+  registered on `adminEnv` in `router.go`, and is a single-row upsert through
+  `UpsertAdminDesired`. A `GET` on the same path answers `{desired, observed}`.
+  Handlers and service live in `environment_admin_*.go` files, a name the `meko_ycp_cp`
+  CI filter matches.
+- **Every public write refuses it with a 400**, whatever the request does with it: the
+  desired-state `POST`, registration's `desired`, and `PATCH /environments/resources`,
+  deletes included. Listing the kind in `adminOnlyKinds` (`environment_repo.go`) is
+  what does this.
+- **Public reads hide it.** `GET .../desired` and both lists of `/environments/resources`
+  leave it out, so a client that reads the set and posts it back round-trips cleanly.
+  `adminOnlyKinds` hides it too. The agent-reported inventory on `GET /environments/{id}`
+  is not filtered.
+- **No public write removes its declarations.** A full-replace `POST` that omits them
+  and the region `PATCH`'s cascade delete both leave alone the rows the agent converges.
+  This is not automatic: add those rows to `IsAdminDeclaration` and to
+  `deleteDesiredSubtree`'s exclusion. Any other row of the kind, which the agent would
+  reject as drift, is still pruned.
+- **No route withdraws a declaration the agent cannot delete**, the admin tier
+  included. Both versions are such declarations: the agent reports them `Preexisting`
+  and never deletes them. Only a delete the agent performs clears its engine's cached
+  generation. A row withdrawn at generation N and declared again at 0 is therefore
+  skipped until the agent restarts, which is why the admin routes have no `DELETE`.
+- **The agent still receives it.** `/agent/desired-state` reads `DesiredForAgent`, which
+  does not filter. List the kind in `resourceKinds[KindAmp]`, as for any kind the agent
+  converges.
+- **The contract says so.** In `meko/design/ycp-openapi.yaml` its paths sit under the
+  `adminSecret` scheme. The kind stays in the shared `DesiredResource.kind` enum
+  because `/agent/desired-state` returns it, and that schema's comment says every public
+  write refuses it. The enums used only by public routes, `ResourcePatch.kind` and the
+  `kind` filter on `GET /environments/resources`, leave it out.
+
+Moving a setting that customers can already write breaks its public callers, so the PR
+carries the rollout order. For the versions,
+[#1863](https://github.com/yugabyte/meko/pull/1863) tied that order to the YCP build YBM
+pins.
 
 ### The meko api-server has one caller
 

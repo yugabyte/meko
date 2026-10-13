@@ -32,6 +32,14 @@ are layering and access control:
   `internal/service/admin` + `internal/repository/admin` + `handlers/admin_*.go`
   — don't surface admin data on a user group, and don't have meko_admin hit user
   routes.
+- **An internal amp API stays on the admin tier end to end.** A route customers must
+  not reach goes under `/admin`. The desired-state kind behind it is admin-only: every
+  public write refuses it (400), the public desired-state reads and the
+  `/environments/resources` lists hide it, and the public prune and cascade spare its
+  declarations ([`ycp/ARCHITECTURE.md`](../ycp/ARCHITECTURE.md#an-internal-amp-api-goes-on-the-admin-tier)).
+  Each of these is a finding: an admin route whose kind the public `/desired` still
+  accepts or returns, or an internal setting added as a field of a public kind's
+  spec.
 - **Right DB, right pool.** Control-plane tables (`meko_system.*`, `SystemDB`) vs
   data-plane (`datapacks.*`, `dist_rag.*`, `DB`) — a table on the wrong side or a
   query on the wrong pool is a bug.
