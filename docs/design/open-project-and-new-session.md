@@ -105,7 +105,10 @@ from when another repo is picked. The close dialog and **Close project** confirm
 reopening only for a project with a dedicated datapack.
 
 Once the project is open, the New session dialog opens for it, so you go straight on to its
-first task. The UI keeps the project the create reply returned and lists it (`withOpened()` in
+first task. Its name starts as the project's, selected so typing replaces it, and the branch is
+named from it as usual (`startingSessionName()` in `src/web/util.ts`); a PR picked there still
+renames it. Opened any other way, the dialog starts with no name.
+The UI keeps the project the create reply returned and lists it (`withOpened()` in
 `src/web/util.ts`) until a state push brings it, so the route, the rail and the dialog never wait
 on the events socket, which may be slow or reconnecting. A push without it may be an older
 snapshot, or mean it was closed meanwhile: the UI asks `GET /api/projects/:id`, and a 404 drops it

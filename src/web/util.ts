@@ -205,6 +205,11 @@ export function slugify(s: string): string {
     .slice(0, 60);
 }
 
+/** New session's starting name: a retry's, else the project's for its first session after Open project. */
+export function startingSessionName(retryName: string | undefined, fresh: boolean, projectName: string): string {
+  return retryName ?? (fresh ? projectName : '');
+}
+
 /** A datapack's page in the Meko web app, or null when the web app's address is unknown. */
 export function mekoDatapackUrl(webUrl: string | null, datapackId: string): string | null {
   return webUrl ? `${webUrl}/datapacks/${encodeURIComponent(datapackId)}` : null;

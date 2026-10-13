@@ -4,7 +4,7 @@ import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
-import { cx, repoFolder, slugify } from '../util';
+import { cx, repoFolder, slugify, startingSessionName } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
 import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { HeldImages } from './HeldImages';
@@ -39,8 +39,14 @@ export function NewSessionDialog({
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
-  const [name, setName] = useState(initial?.name ?? '');
+  const [name, setName] = useState(() => startingSessionName(initial?.name, fresh, project.name));
   const [nameEdited, setNameEdited] = useState(!!initial?.name);
+  const nameInput = useRef<HTMLInputElement>(null);
+  // The project's name, filled in for its first session, starts selected so typing replaces it.
+  const selectName = useRef(fresh && !initial?.name);
+  useEffect(() => {
+    if (selectName.current) nameInput.current?.select();
+  }, []);
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   const [start, setStart] = useState<StartChoice>(initial?.kind === 'review-pr' ? 'review-pr' : (initial?.start ?? 'design'));
   // A retry starts where the failed start asked to.
@@ -322,6 +328,7 @@ export function NewSessionDialog({
       >
         <Field label="Name">
           <input
+            ref={nameInput}
             id="ns-name"
             className="input"
             placeholder={START_EXAMPLES[start].name}
