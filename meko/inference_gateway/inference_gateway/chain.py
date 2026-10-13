@@ -288,7 +288,13 @@ Rules, in order:
     this question. Do not re-run memory_search or knowledgebase_search for
     the same query; only call tools for intents that context cannot satisfy
     (e.g. "list ALL my memories" -> memory_get_all, "show my datapacks" ->
-    datapack_list, "describe datapack X" -> datapack_describe).
+    datapack_list, "find a datapack by name" -> datapack_search,
+    "describe datapack X" -> datapack_describe).
+  - Datapacks: datapack_search(query=<part of the name>) finds a datapack
+    by name; use name=<exact name> for an exact match and pass its
+    next_cursor to get the next page. datapack_list returns every datapack
+    and suits small accounts only; if it returns too_many_datapacks, use
+    datapack_search instead.
   - memory_add: call it ONLY when the user explicitly asks to save
     something ("remember this", "save this as a memory") — pass their
     words verbatim, one fact per call. Facts the user merely states in
@@ -924,6 +930,10 @@ async def _agentic_llm_invoke(
                     out = await tool.ainvoke(merged)
                     content = out if isinstance(out, str) else json.dumps(out, default=str)
                     status, note = "ok", f"{len(content)} chars"
+                    capped = _cap_tool_output(content, cfg.max_tool_output_chars)
+                    if capped is not content:
+                        note += f", truncated to {cfg.max_tool_output_chars}"
+                        content = capped
                 except Exception as exc:  # noqa: BLE001 — surface to the model, don't crash the turn
                     logger.warning("agent tool %s failed: %s", name, exc)
                     content = json.dumps({"error": "tool_failed", "detail": str(exc)})
@@ -2592,6 +2602,22 @@ def _format_memory_context(payload: object) -> str:
 
 def _format_knowledge_context(payload: object) -> str:
     return _kb_hits_to_bullets(_extract_kb_hits(payload))
+
+
+def _cap_tool_output(content: str, limit: int) -> str:
+    """Cut a tool result to `limit` chars before it goes into the prompt.
+
+    The marker is appended after the cut so the model knows the result is
+    partial and can narrow the call (a filter, a smaller page) instead of
+    answering as if it had seen everything. `limit <= 0` disables the cap.
+    """
+    if limit <= 0 or len(content) <= limit:
+        return content
+    return (
+        content[:limit] + f"\n[truncated: tool output was {len(content)} chars, showing the "
+        f"first {limit}. Narrow the request, for example with a filter or a "
+        "smaller page, to see the rest.]"
+    )
 
 
 def _truncate(s: str, n: int) -> str:

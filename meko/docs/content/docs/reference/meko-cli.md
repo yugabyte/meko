@@ -51,7 +51,7 @@ To install Meko CLI on macOS (Apple Silicon), do the following:
 | [`meko logout`](#logout) | Remove locally stored tokens. |
 | [`meko help`](#help) | Help with Meko CLI command or sub-command. |
 | [`meko datapack create`](#datapack-create) | Create a new datapack. |
-| [`meko datapack list`](#datapack-list) | List all datapacks. |
+| [`meko datapack list`](#datapack-list) | List datapacks, one page at a time. |
 | [`meko datapack status`](#datapack-status) | View datapack summary. |
 | [`meko datapack delete`](#datapack-delete) | Permanently delete a datapack. |
 
@@ -179,13 +179,24 @@ Example JSON output:
 
 #### datapack list
 
-Display a table of all datapacks, including their name, ID, and creation date:
+Display a table of your datapacks, newest first, with their name, ID, and creation date. The list includes datapacks shared with you. By default it prints one page of 50 and the command that prints the next page:
 
 ```bash
 meko datapack list
 ```
 
-For machine-readable output, use the `--json` flag:
+| Flag | Description |
+| :--- | :---------- |
+| `--search <text>` | Only datapacks whose name contains the text (case-insensitive). |
+| `--limit <n>` | Datapacks per page (default `50`, at most `1000`). |
+| `--cursor <cursor>` | Start after this cursor, from the previous page's next-page command. |
+| `--all` | Print every page. |
+
+```bash
+meko datapack list --search research --all
+```
+
+For machine-readable output, use the `--json` flag. It prints a JSON array of datapacks, with or without `--all`. Each item is a full datapack; connection fields stay redacted. When more pages exist, the next-page command is printed on stderr, so a script can read the array from stdout.
 
 ```bash
 meko datapack list --json

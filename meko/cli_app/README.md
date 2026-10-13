@@ -136,11 +136,23 @@ Example JSON output:
 meko datapack list
 ```
 
-Displays a table of all datapacks with name, ID, and creation date.
+Displays a table of your datapacks, newest first, with name, ID, and creation
+date. It prints one page (50 by default) and the command that prints the next
+page. Flags:
+
+- `--search <text>`: only datapacks whose name contains the text (case-insensitive).
+- `--limit <n>`: datapacks per page. The server caps it at 1000.
+- `--cursor <cursor>`: start after this cursor, from the previous page.
+- `--all`: print every page.
 
 ```bash
 meko datapack list --json
 ```
+
+`--json` prints a JSON array of datapacks, with or without `--all`. Each item
+is a full datapack; connection fields stay redacted. When more pages exist,
+the next-page command is printed on stderr, so a script can read the array
+from stdout.
 
 ### Delete a datapack
 

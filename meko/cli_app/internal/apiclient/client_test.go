@@ -138,3 +138,25 @@ func TestClient_LoginError(t *testing.T) {
 		t.Errorf("Code = %q, want UNAUTHORIZED", apiErr.Code)
 	}
 }
+
+func TestDecodeDatapackPage(t *testing.T) {
+	legacy, err := decodeDatapackPage(json.RawMessage(`[{"datapack_id":"a"}]`))
+	if err != nil || !legacy.Complete || len(legacy.Items) != 1 {
+		t.Fatalf("bare array = %+v, %v", legacy, err)
+	}
+	page, err := decodeDatapackPage(json.RawMessage(`{"items":[],"has_more":true,"next_cursor":"c"}`))
+	if err != nil || page.Complete || !page.HasMore || page.NextCursor != "c" {
+		t.Fatalf("page = %+v, %v", page, err)
+	}
+	for _, bad := range []string{
+		`{"has_more":false}`,
+		`{"items":[],"has_more":true,"next_cursor":""}`,
+		`"x"`,
+		`null`,
+		``,
+	} {
+		if _, err := decodeDatapackPage(json.RawMessage(bad)); err == nil {
+			t.Errorf("decodeDatapackPage(%q) succeeded, want an error", bad)
+		}
+	}
+}

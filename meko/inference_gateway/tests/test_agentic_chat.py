@@ -1122,3 +1122,69 @@ async def test_cache_hit_turn_clears_stored_pending_action() -> None:
 
     assert out.assistant_text == "prior answer summary"
     assert await store.pop_pending_action("s1", "old-1") is None  # cleared
+
+
+# ---------------------------------------------------------------------------
+# Tool output cap (MEKO-781) and datapack_search wiring
+# ---------------------------------------------------------------------------
+
+
+async def test_oversized_tool_output_is_truncated_with_marker() -> None:
+    cfg = _make_cfg(agent_tools=("datapack_list",), max_tool_output_chars=100)
+    big = json.dumps([{"datapack_id": f"id-{i}", "datapack_name": f"dp-{i}"} for i in range(50)])
+    tool = _agent_tool("datapack_list", big, ("conversation_id",))
+    llm = _ScriptedAgentLLM(
+        [
+            AIMessage(content="", tool_calls=[_tool_call("datapack_list", {})]),
+            AIMessage(content="done"),
+        ]
+    )
+    steps: list[ProcessingStep] = []
+
+    await _agentic_llm_invoke(
+        cfg=cfg,
+        llm=llm,
+        tools_by_name={"datapack_list": tool},
+        messages=[HumanMessage(content="show my datapacks")],
+        steps=steps,
+        conversation_id="conv-1",
+        datapack_id="dp-1",
+    )
+
+    fed_back = llm.calls[1][-1]
+    assert isinstance(fed_back, ToolMessage)
+    head, marker = fed_back.content.split("\n", 1)
+    assert head == big[:100]
+    assert marker.startswith(f"[truncated: tool output was {len(big)} chars")
+    assert "truncated to 100" in steps[0].detail
+
+
+async def test_small_tool_output_and_disabled_cap_pass_through() -> None:
+    for limit, payload in ((20000, '{"ok": true}'), (0, "x" * 50000)):
+        cfg = _make_cfg(agent_tools=("datapack_list",), max_tool_output_chars=limit)
+        tool = _agent_tool("datapack_list", payload, ())
+        llm = _ScriptedAgentLLM(
+            [
+                AIMessage(content="", tool_calls=[_tool_call("datapack_list", {})]),
+                AIMessage(content="done"),
+            ]
+        )
+        await _agentic_llm_invoke(
+            cfg=cfg,
+            llm=llm,
+            tools_by_name={"datapack_list": tool},
+            messages=[HumanMessage(content="show my datapacks")],
+            steps=[],
+            conversation_id="conv-1",
+            datapack_id="dp-1",
+        )
+        assert llm.calls[1][-1].content == payload
+
+
+def test_datapack_search_is_a_default_auto_tool_with_guidance() -> None:
+    from inference_gateway.chain import AGENT_GUIDANCE
+    from inference_gateway.config import DEFAULT_AGENT_TOOLS
+
+    assert "datapack_search" in DEFAULT_AGENT_TOOLS
+    assert "datapack_search" in AGENT_GUIDANCE
+    assert "too_many_datapacks" in AGENT_GUIDANCE

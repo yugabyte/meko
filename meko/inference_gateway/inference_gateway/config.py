@@ -96,6 +96,7 @@ DEFAULT_AGENT_TOOLS: tuple[str, ...] = (
     "conversation_get",
     "conversation_list",
     "datapack_list",
+    "datapack_search",
     "datapack_describe",
 )
 
@@ -143,6 +144,13 @@ AMP_AGENT_CONFIRM_TOOLS: tuple[str, ...] = (
 # answer with whatever it has.
 DEFAULT_MAX_TOOL_ROUNDS = 3
 
+# Characters kept from one tool result before a truncation marker is appended,
+# so the prompt can run a little past this number. A safety net for a result
+# the MCP tool did not page or cap itself (an MCP server that predates
+# datapack_search, a huge memory), which would otherwise go into the model
+# context whole. ~20k chars is ~5k tokens.
+DEFAULT_MAX_TOOL_OUTPUT_CHARS = 20000
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -177,3 +185,4 @@ class AppConfig:
     agent_tools: tuple[str, ...] = DEFAULT_AGENT_TOOLS
     agent_confirm_tools: tuple[str, ...] = DEFAULT_AGENT_CONFIRM_TOOLS
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS
+    max_tool_output_chars: int = DEFAULT_MAX_TOOL_OUTPUT_CHARS

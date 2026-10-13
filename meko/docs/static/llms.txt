@@ -43,7 +43,8 @@ OAuth (URL only, no API key) works for clients with a custom-connector flow; tha
 
 ### Suggested first tools
 
-- List workspaces → `datapack_list`
+- List workspaces → `datapack_list` (returns a `too_many_datapacks` error above 1,000 datapacks)
+- Find a workspace by name, or page through many → `datapack_search`
 - Remember a fact → `memory_add` (or ask the user to say "remember this")
 - Search memory → `memory_search`
 - Search uploaded docs → `knowledgebase_search`

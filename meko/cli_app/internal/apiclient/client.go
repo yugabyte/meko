@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -145,9 +147,88 @@ func (c *Client) CreateDatapack(name string) (json.RawMessage, error) {
 	return c.do(http.MethodPost, "/datapacks", body)
 }
 
-// ListDatapacks returns all datapacks.
-func (c *Client) ListDatapacks() (json.RawMessage, error) {
-	return c.do(http.MethodGet, "/datapacks", nil)
+// DatapackListParams selects one page of GET /datapacks. Limit must be at least
+// 1: sending limit is what puts the API server in paged mode. Fields is
+// "summary" or "full"; empty leaves the server default (summary).
+type DatapackListParams struct {
+	Cursor string
+	Search string
+	Fields string
+	Limit  int
+}
+
+// DatapackPage is one page of datapacks. Complete is true when the server
+// answered with a bare array, which is the whole list: an API server that
+// predates paged mode ignores limit and returns every datapack.
+type DatapackPage struct {
+	NextCursor string
+	Items      []map[string]any
+	// Raw is the response's data field as received.
+	Raw      json.RawMessage
+	HasMore  bool
+	Complete bool
+}
+
+// ListDatapacksPage requests one page of datapacks and decodes either response
+// shape.
+func (c *Client) ListDatapacksPage(p DatapackListParams) (*DatapackPage, error) {
+	if p.Limit < 1 {
+		return nil, fmt.Errorf("limit must be at least 1, got %d", p.Limit)
+	}
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(p.Limit))
+	if p.Cursor != "" {
+		q.Set("cursor", p.Cursor)
+	}
+	if p.Fields != "" {
+		q.Set("fields", p.Fields)
+	}
+	if p.Search != "" {
+		q.Set("q", p.Search)
+	}
+	data, err := c.do(http.MethodGet, "/datapacks?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	return decodeDatapackPage(data)
+}
+
+func decodeDatapackPage(data json.RawMessage) (*DatapackPage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("response carried no data")
+	}
+	switch trimmed[0] {
+	case '[':
+		var items []map[string]any
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, fmt.Errorf("decode datapack list: %w", err)
+		}
+		return &DatapackPage{Items: items, Complete: true, Raw: data}, nil
+	case '{':
+		var page struct {
+			Items      *[]map[string]any `json:"items"`
+			NextCursor string            `json:"next_cursor"`
+			HasMore    bool              `json:"has_more"`
+		}
+		if err := json.Unmarshal(trimmed, &page); err != nil {
+			return nil, fmt.Errorf("decode datapack page: %w", err)
+		}
+		if page.Items == nil {
+			return nil, fmt.Errorf("datapack page carried no items")
+		}
+		if page.HasMore && page.NextCursor == "" {
+			return nil, fmt.Errorf("datapack page has more rows but no next_cursor")
+		}
+		return &DatapackPage{
+			Items:      *page.Items,
+			HasMore:    page.HasMore,
+			NextCursor: page.NextCursor,
+			Raw:        data,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unexpected datapack list response: %s", string(data))
+	}
 }
 
 // DescribeDatapack returns details about a specific datapack.

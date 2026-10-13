@@ -171,6 +171,7 @@ deep-links.
 | `--agent-confirm-tools` | `INFERENCE_AGENT_CONFIRM_TOOLS` (comma-sep) | `memory_delete_by_id`, `memory_promote`, `datapack_update` | propose-only; user must approve via `POST /chat/confirm-action` |
 | `--show-pg-amp` | `SHOW_PG_AMP` | off | appends the AMP cluster/branch/compute tool sets to both tiers (same env var as meko-ui / api-server / MCP) |
 | `--max-tool-rounds` | `INFERENCE_MAX_TOOL_ROUNDS` | `3` | tool-execution rounds per agentic turn; after the cap a final no-tools answer is forced |
+| `--max-tool-output-chars` | `INFERENCE_MAX_TOOL_OUTPUT_CHARS` | `20000` | characters kept from one agent tool result before a truncation marker is appended, so the prompt can run a little past this. `0` disables the cap |
 | `--log-level` | `INFERENCE_LOG_LEVEL` | `INFO` | |
 | — | `MEKO_METRICS_PORT` | `9464` | Prometheus `/metrics` (HTTP requests by route, LLM calls and tokens by model) on its own port; `0` disables |
 

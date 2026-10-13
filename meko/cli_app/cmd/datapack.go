@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -111,6 +112,10 @@ func numVal(m map[string]any, key string) float64 {
 
 // printRawJSON prints indented JSON from a raw message.
 func printRawJSON(data json.RawMessage) error {
+	return printRawJSONTo(os.Stdout, data)
+}
+
+func printRawJSONTo(w io.Writer, data json.RawMessage) error {
 	var pretty json.RawMessage
 	if err := json.Unmarshal(data, &pretty); err != nil {
 		return err
@@ -119,7 +124,7 @@ func printRawJSON(data json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(out))
+	fmt.Fprintln(w, string(out))
 	return nil
 }
 
@@ -291,42 +296,169 @@ var datapackCreateCmd = &cobra.Command{
 	},
 }
 
+// Page sizes for datapack list. --all reads with the largest page the API
+// server serves unless --limit says otherwise, so reading a large account
+// takes as few requests as possible.
+const (
+	defaultListLimit = 50
+	allListLimit     = 1000
+)
+
+var (
+	listSearch string
+	listLimit  int
+	listCursor string
+	listAll    bool
+)
+
 var datapackListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all datapacks",
-	RunE: func(_ *cobra.Command, _ []string) error {
-		data, err := newAPIClient().ListDatapacks()
+	Short: "List datapacks, one page at a time",
+	Long: `List the datapacks you own or that are shared with you, newest first.
+
+By default this prints one page of --limit rows and the command that prints the
+next page. Use --all to print every page.`,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		opts := datapackListOptions{
+			Search: listSearch,
+			Limit:  listLimit,
+			Cursor: listCursor,
+			All:    listAll,
+			JSON:   jsonOutput,
+		}
+		if listAll && !cmd.Flags().Changed("limit") {
+			opts.Limit = allListLimit
+		}
+		return runDatapackList(newAPIClient(), opts, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
+type datapackListOptions struct {
+	Search string
+	Cursor string
+	Limit  int
+	All    bool
+	JSON   bool
+}
+
+// runDatapackList prints one page, or every page with All. An API server that
+// predates paged mode answers with a bare array: that is the complete list, so
+// it is printed whole, with --search applied here because that server ignores q.
+//
+// --json always prints a JSON array on w. fields=full keeps the item fields
+// the old bare array had (connection fields stay redacted). The next-page
+// command goes to errW so a script can read the array from stdout.
+func runDatapackList(c *apiclient.Client, opts datapackListOptions, w, errW io.Writer) error {
+	if opts.Limit < 1 {
+		return fmt.Errorf("--limit must be at least 1")
+	}
+	if errW == nil {
+		errW = os.Stderr
+	}
+	params := apiclient.DatapackListParams{
+		Limit: opts.Limit, Cursor: opts.Cursor, Search: opts.Search, Fields: "full",
+	}
+
+	var rows []map[string]any
+	var last *apiclient.DatapackPage
+	for {
+		page, err := c.ListDatapacksPage(params)
 		if err != nil {
 			return fmt.Errorf("failed to list datapacks: %w", err)
 		}
-
-		if jsonOutput {
-			return printRawJSON(data)
+		last = page
+		if page.Complete {
+			// A bare array is the whole list, so it replaces any pages read
+			// before it (an old replica answering mid-rollout).
+			rows = filterByName(page.Items, opts.Search)
+			break
 		}
-
-		var datapacks []map[string]any
-		if err := json.Unmarshal(data, &datapacks); err != nil {
-			return fmt.Errorf("unexpected response: %w", err)
+		if !opts.All {
+			rows = page.Items
+			break
 		}
-
-		if len(datapacks) == 0 {
-			fmt.Println("No datapacks found.")
-			return nil
+		rows = append(rows, page.Items...)
+		if !page.HasMore {
+			break
 		}
+		if page.NextCursor == params.Cursor {
+			return fmt.Errorf("failed to list datapacks: the server repeated cursor %q", page.NextCursor)
+		}
+		params.Cursor = page.NextCursor
+	}
 
-		fmt.Printf("%-30s %-36s %-20s\n", "NAME", "ID", "CREATED")
-		for _, dp := range datapacks {
+	if opts.JSON {
+		if rows == nil {
+			rows = []map[string]any{}
+		}
+		out, err := json.MarshalIndent(rows, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(w, string(out))
+	} else if len(rows) == 0 {
+		fmt.Fprintln(w, "No datapacks found.")
+	} else {
+		fmt.Fprintf(w, "%-30s %-36s %-20s\n", "NAME", "ID", "CREATED")
+		for _, dp := range rows {
 			created := strVal(dp, "created_at")
 			if len(created) > 19 {
 				created = created[:19]
 			}
-			fmt.Printf("%-30s %-36s %-20s\n",
-				strVal(dp, "name"),
-				strVal(dp, "id"),
+			fmt.Fprintf(w, "%-30s %-36s %-20s\n",
+				strVal(dp, "datapack_name"),
+				strVal(dp, "datapack_id"),
 				created)
 		}
-		return nil
-	},
+	}
+	if !opts.All && !last.Complete && last.HasMore {
+		hint := fmt.Sprintf("\nMore datapacks exist. Next page:\n  %s\nOr use --all to list every page.\n",
+			nextPageCommand(opts, last.NextCursor))
+		if opts.JSON {
+			fmt.Fprint(errW, hint)
+		} else {
+			fmt.Fprint(w, hint)
+		}
+	}
+	return nil
+}
+
+// nextPageCommand repeats the flags that shape the listing, because the cursor
+// is only valid for the same search.
+func nextPageCommand(opts datapackListOptions, cursor string) string {
+	parts := []string{"meko datapack list"}
+	if opts.Search != "" {
+		parts = append(parts, "--search "+shellQuote(opts.Search))
+	}
+	if opts.Limit != defaultListLimit {
+		parts = append(parts, fmt.Sprintf("--limit %d", opts.Limit))
+	}
+	if opts.JSON {
+		parts = append(parts, "--json")
+	}
+	parts = append(parts, "--cursor "+shellQuote(cursor))
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// filterByName applies --search to an old server's full list the way the API
+// server's q does: a case-insensitive substring of datapack_name.
+func filterByName(rows []map[string]any, search string) []map[string]any {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return rows
+	}
+	needle := strings.ToLower(search)
+	var out []map[string]any
+	for _, dp := range rows {
+		if strings.Contains(strings.ToLower(strVal(dp, "datapack_name")), needle) {
+			out = append(out, dp)
+		}
+	}
+	return out
 }
 
 var datapackDeleteCmd = &cobra.Command{
@@ -464,6 +596,15 @@ func init() {
 	// datapackCreateCmd.Flags().StringVar(
 	// 	&datapackKbase, "seed_knowledge_base", "",
 	// 	"knowledge base URL (required)")
+
+	datapackListCmd.Flags().StringVar(
+		&listSearch, "search", "", "only datapacks whose name contains this text (case-insensitive)")
+	datapackListCmd.Flags().IntVar(
+		&listLimit, "limit", defaultListLimit, "datapacks per page (the server caps it at 1000)")
+	datapackListCmd.Flags().StringVar(
+		&listCursor, "cursor", "", "start after this cursor, from a previous page")
+	datapackListCmd.Flags().BoolVar(
+		&listAll, "all", false, "list every page")
 
 	datapackDeleteCmd.Flags().BoolVarP(
 		&forceDelete, "force", "f", false, "Skip confirmation prompt")

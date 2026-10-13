@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -90,5 +91,184 @@ func TestVerbsWithNoPayloadSucceedOnAnEmptyEnvelope(t *testing.T) {
 	}
 	if err := c.DeleteDatapack(t.Context(), "id-1"); err != nil {
 		t.Errorf("DeleteDatapack: %v", err)
+	}
+}
+
+// The legacy request (no limit) is what ListDatapacks sends, and a bare array is
+// the complete set.
+func TestListDatapacksSendsTheLegacyRequest(t *testing.T) {
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			t.Errorf("first request query = %q, want none", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"datapack_id":"a","datapack_name":"one"},{"datapack_id":"b","datapack_name":"two"}]}`))
+	})
+	got, err := c.ListDatapacks(t.Context())
+	if err != nil {
+		t.Fatalf("ListDatapacks: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("ListDatapacks = %+v", got)
+	}
+}
+
+// pagedServer answers the first request and every cursor with the page the
+// handler returns for it.
+func pagedServer(t *testing.T, pages map[string]string) (*Client, *[]string) {
+	t.Helper()
+	var queries []string
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		cur := r.URL.Query().Get("cursor")
+		if cur != "" {
+			q := r.URL.Query()
+			if q.Get("limit") != "1000" || q.Get("fields") != "full" || q.Get("sort") != "created" {
+				t.Errorf("page query = %q", r.URL.RawQuery)
+			}
+		}
+		body, ok := pages[cur]
+		if !ok {
+			t.Errorf("unexpected cursor %q", cur)
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":"INVALID_CURSOR","message":"bad"}}`))
+			return
+		}
+		if strings.HasPrefix(body, "status:") {
+			w.WriteHeader(http.StatusInternalServerError)
+			body = strings.TrimPrefix(body, "status:")
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	return c, &queries
+}
+
+// A server that pages the response is followed to the end, in order.
+func TestListDatapacksFollowsThreePages(t *testing.T) {
+	c, queries := pagedServer(t, map[string]string{
+		"":     `{"data":{"items":[{"datapack_id":"1"},{"datapack_id":"2"}],"has_more":true,"next_cursor":"c1","limit":2}}`,
+		"c1":   `{"data":{"items":[{"datapack_id":"3"},{"datapack_id":"4"}],"has_more":true,"next_cursor":"c/2+","limit":2}}`,
+		"c/2+": `{"data":{"items":[{"datapack_id":"5"}],"has_more":false,"next_cursor":"","limit":2}}`,
+	})
+	got, err := c.ListDatapacks(t.Context())
+	if err != nil {
+		t.Fatalf("ListDatapacks: %v", err)
+	}
+	var ids []string
+	for _, d := range got {
+		ids = append(ids, d.ID)
+	}
+	if strings.Join(ids, ",") != "1,2,3,4,5" {
+		t.Fatalf("ids = %v", ids)
+	}
+	if len(*queries) != 3 {
+		t.Fatalf("requests = %v, want 3", *queries)
+	}
+}
+
+// A failed page fails the whole list. Returning the pages before it would read
+// as a complete inventory and the backend would collect everything after them.
+func TestListDatapacksFailsOnAPageErrorInTheMiddle(t *testing.T) {
+	c, _ := pagedServer(t, map[string]string{
+		"":   `{"data":{"items":[{"datapack_id":"1"}],"has_more":true,"next_cursor":"c1","limit":1}}`,
+		"c1": `status:{"error":{"code":"INTERNAL_ERROR","message":"db down"}}`,
+		"c2": `{"data":{"items":[{"datapack_id":"3"}],"has_more":false,"next_cursor":"","limit":1}}`,
+	})
+	got, err := c.ListDatapacks(t.Context())
+	if err == nil {
+		t.Fatalf("ListDatapacks = %+v, want an error", got)
+	}
+	if got != nil {
+		t.Errorf("partial result returned with the error: %+v", got)
+	}
+}
+
+// An old replica mid-rollout ignores limit and answers with the bare array; that
+// is the complete set and replaces whatever earlier pages returned.
+func TestListDatapacksTreatsABareArrayMidLoopAsComplete(t *testing.T) {
+	c, _ := pagedServer(t, map[string]string{
+		"":   `{"data":{"items":[{"datapack_id":"1"}],"has_more":true,"next_cursor":"c1","limit":1}}`,
+		"c1": `{"data":[{"datapack_id":"1"},{"datapack_id":"2"}]}`,
+	})
+	got, err := c.ListDatapacks(t.Context())
+	if err != nil {
+		t.Fatalf("ListDatapacks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListDatapacks = %+v, want the 2-row array", got)
+	}
+}
+
+// Cursor bugs must fail rather than loop or stop early.
+func TestListDatapacksRejectsABrokenCursorChain(t *testing.T) {
+	for name, pages := range map[string]map[string]string{
+		"empty cursor with has_more": {
+			"": `{"data":{"items":[{"datapack_id":"1"}],"has_more":true,"next_cursor":""}}`,
+		},
+		"repeated cursor": {
+			"":   `{"data":{"items":[{"datapack_id":"1"}],"has_more":true,"next_cursor":"c1"}}`,
+			"c1": `{"data":{"items":[{"datapack_id":"2"}],"has_more":true,"next_cursor":"c1"}}`,
+		},
+		"object without items": {
+			"": `{"data":{"has_more":false}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := pagedServer(t, pages)
+			if got, err := c.ListDatapacks(t.Context()); err == nil {
+				t.Fatalf("ListDatapacks = %+v, want an error", got)
+			}
+		})
+	}
+}
+
+// A streamed list that fails mid-way reaches the client as a truncated body. It
+// must be an error, never the rows that arrived before the cut.
+func TestListDatapacksTruncatedBodyIsAnError(t *testing.T) {
+	for name, body := range map[string]string{
+		"cut mid-row":   `{"data":[{"datapack_id":"a","datapack_name":"one"},{"datapack_id":"b","datap`,
+		"cut after row": `{"data":[{"datapack_id":"a","datapack_name":"one"},`,
+		"no closer":     `{"data":[{"datapack_id":"a","datapack_name":"one"}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := client(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			})
+			if got, err := c.ListDatapacks(t.Context()); err == nil {
+				t.Fatalf("ListDatapacks = %+v, want an error", got)
+			}
+		})
+	}
+}
+
+// The api-server closes the connection when a stream fails after the first
+// byte. With chunked encoding the client then sees an unexpected EOF.
+func TestListDatapacksConnectionCutMidStreamIsAnError(t *testing.T) {
+	var setupErr string
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			setupErr = "response has no flusher"
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"datapack_id":"a","datapack_name":"one"},`))
+		flusher.Flush()
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			setupErr = "response has no hijacker"
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			setupErr = "hijack: " + err.Error()
+			return
+		}
+		_ = conn.Close()
+	})
+	if got, err := c.ListDatapacks(t.Context()); err == nil {
+		t.Fatalf("ListDatapacks = %+v, want an error", got)
+	}
+	if setupErr != "" {
+		t.Fatal(setupErr)
 	}
 }

@@ -28,6 +28,7 @@ from .config import (
     DEFAULT_CONV_SUMMARY_BEDROCK_MODEL,
     DEFAULT_CORS_ORIGINS,
     DEFAULT_MAX_HISTORY_MESSAGES,
+    DEFAULT_MAX_TOOL_OUTPUT_CHARS,
     DEFAULT_MAX_TOOL_ROUNDS,
     DEFAULT_MCP_ENDPOINT,
     DEFAULT_LLM_MAX_TOKENS,
@@ -158,6 +159,16 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         help="Max tool-execution rounds per turn in agentic-chat mode (each round "
         "is one extra LLM call).",
     )
+    p.add_argument(
+        "--max-tool-output-chars",
+        type=int,
+        default=int(
+            os.getenv("INFERENCE_MAX_TOOL_OUTPUT_CHARS", str(DEFAULT_MAX_TOOL_OUTPUT_CHARS))
+        ),
+        help="Characters kept from one agent tool result before a truncation "
+        "marker is appended, so the prompt can run a little past this. "
+        "0 disables the cap.",
+    )
     args = p.parse_args(argv)
 
     # Pick a sensible default model per provider when the user didn't set one.
@@ -219,6 +230,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         agent_tools=agent_tools,
         agent_confirm_tools=agent_confirm_tools,
         max_tool_rounds=args.max_tool_rounds,
+        max_tool_output_chars=args.max_tool_output_chars,
     )
     return cfg, args.log_level
 

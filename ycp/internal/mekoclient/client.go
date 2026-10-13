@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -125,14 +126,84 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("meko api: %d: %s", e.StatusCode, e.Message)
 }
 
+// datapackPageQuery is what each follow-up page request asks for: the largest page
+// the api-server serves, the legacy row shape, and a fixed order so the cursor
+// stays valid across pages.
+const datapackPageQuery = "/datapacks?limit=1000&fields=full&sort=created"
+
+// datapackPage is GET /datapacks in paged mode. Items is a pointer so that an
+// object without an items key is rejected rather than read as an empty page.
+type datapackPage struct {
+	Items      *[]Datapack `json:"items"`
+	HasMore    bool        `json:"has_more"`
+	NextCursor string      `json:"next_cursor"`
+}
+
 // ListDatapacks returns every datapack the caller's account owns or has been
 // granted, each carrying the agent id it was created by.
+//
+// It sends the legacy request (no limit), which the api-server streams as one
+// bare array. That is deliberate: paging a large account at 1000 rows a page
+// would spend the per-PAT rate limit, while the streamed array costs one request.
+// A server that answers with a page envelope instead is followed through
+// next_cursor to the end. A bare array at any point is the complete set, which is
+// what an old replica answers mid-rollout because it ignores limit.
+//
+// Any failed page fails the whole call. The backend garbage-collects whatever the
+// list does not report, so a partial inventory must never be returned as complete.
 func (c *Client) ListDatapacks(ctx context.Context) ([]Datapack, error) {
 	var out []Datapack
-	if err := c.do(ctx, http.MethodGet, "/datapacks", nil, &out); err != nil {
-		return nil, err
+	path := "/datapacks"
+	seen := map[string]bool{}
+	for {
+		var raw json.RawMessage
+		if err := c.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+		switch firstByte(raw) {
+		case '[':
+			var all []Datapack
+			if err := json.Unmarshal(raw, &all); err != nil {
+				return nil, fmt.Errorf("decode GET %s: %w", path, err)
+			}
+			return all, nil
+		case '{':
+		default:
+			return nil, fmt.Errorf("GET %s: data is neither an array nor a page: %s", path, truncate(string(raw)))
+		}
+		var page datapackPage
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, fmt.Errorf("decode GET %s: %w", path, err)
+		}
+		if page.Items == nil {
+			return nil, fmt.Errorf("GET %s: page carried no items", path)
+		}
+		out = append(out, *page.Items...)
+		if !page.HasMore {
+			return out, nil
+		}
+		// A repeated or missing cursor would loop forever or stop early; both
+		// would hand the backend an inventory it cannot trust.
+		if page.NextCursor == "" {
+			return nil, fmt.Errorf("GET %s: has_more is true but next_cursor is empty", path)
+		}
+		if seen[page.NextCursor] {
+			return nil, fmt.Errorf("GET %s: next_cursor repeated", path)
+		}
+		seen[page.NextCursor] = true
+		path = datapackPageQuery + "&cursor=" + url.QueryEscape(page.NextCursor)
 	}
-	return out, nil
+}
+
+func firstByte(b []byte) byte {
+	for _, c := range b {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		}
+		return c
+	}
+	return 0
 }
 
 // CreateAgent registers a user-scoped agent under the given id. The api-server

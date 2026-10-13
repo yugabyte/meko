@@ -104,6 +104,25 @@ func TestListErrorIsReturned(t *testing.T) {
 	}
 }
 
+// A datapack page that fails after an earlier one succeeded must abort the tick
+// too. Reporting the first page alone would garbage-collect everything after it.
+func TestListErrorOnALaterDatapackPageIsReturned(t *testing.T) {
+	b := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/agents":
+			_, _ = w.Write([]byte(`{"data":[` + agentYCP + `]}`))
+		case r.URL.Query().Get("cursor") == "":
+			_, _ = w.Write([]byte(`{"data":{"items":[` + packSmoke + `],"has_more":true,"next_cursor":"c1"}}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"code":"INTERNAL_ERROR","message":"db down"}}`))
+		}
+	})
+	if got, err := b.List(t.Context()); err == nil {
+		t.Fatalf("List = %v, want the page failure", got)
+	}
+}
+
 // The agent id is the resource's name, so a create is exactly that and nothing
 // else — there is no server-assigned identity to reconcile against.
 func TestCreateAgentUsesTheResourceName(t *testing.T) {

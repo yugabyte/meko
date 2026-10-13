@@ -141,6 +141,8 @@ For API key generation, revocation, and limits, see [API keys](../reference/api-
 
     It should call the `datapack_list` tool and return the names you see in the portal. If it doesn't, see [Troubleshooting](../troubleshooting/).
 
+    If you can see more than 1,000 datapacks, `datapack_list` returns an error that tells the agent to use `datapack_search`, which returns one page at a time.
+
 ## Connect your AI app
 
 _Under development._ Programmatic integration patterns for agent frameworks (LangChain, LlamaIndex, custom Python or TypeScript agents) are coming. See [Connect programmatically](../integrations/connect-programmatically/) for the current state and what's planned.
