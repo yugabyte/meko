@@ -2160,6 +2160,58 @@ div[id^='dak-mermaid-'] .label {
   display: flex;
   gap: 6px;
 }
+/* The people invited before, suggested under the Emails field (ShareSuggestions.tsx). */
+.share-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+}
+.share-suggest-head {
+  font-size: 12px;
+  color: var(--muted);
+}
+.share-chip {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--sunk);
+  font-size: 12.5px;
+}
+.share-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.share-chip-add {
+  min-width: 0;
+  padding: 3px 4px 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px 0 0 999px;
+}
+.share-chip-email {
+  color: var(--muted);
+}
+.share-chip .share-chip-forget {
+  flex: none;
+  padding: 3px 9px 3px 5px;
+  color: var(--muted);
+  border-radius: 0 999px 999px 0;
+}
+.share-chip button:hover,
+.share-chip button:focus-visible {
+  background: var(--accent-soft);
+}
+.share-chip .share-chip-forget:hover {
+  color: var(--bad);
+}
 
 /* Settings, Meko tab: connection, sharing and Claude Code status */
 .meko-status {
@@ -4849,8 +4901,23 @@ div[id^='dak-mermaid-'] .label {
     font-size: 16px;
   }
 }
+@media (max-width: 760px) {
+  /* The name is enough on a phone; the address goes into the field when it's picked. */
+  .share-chip-email {
+    display: none;
+  }
+}
 @media (pointer: coarse) {
   .share-reviewer .input.small {
     min-height: 36px;
+  }
+  .share-chip button {
+    min-height: 36px;
+  }
+  /* An icon button: 40 px. */
+  .share-chip .share-chip-forget {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0 10px 0 6px;
   }
 }

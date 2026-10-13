@@ -498,6 +498,23 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX agentk_asks_at ON agentk_asks(at);
   `,
+  // 33: the people the Share dialog has invited (contacts.ts), suggested in it next time: the
+  // address as last typed, keyed in lower case, the name from Meko's member lists, how many invites
+  // went through and when the latest did. Starts with the emails remembered for PR reviewers. The
+  // key is SQLite's lower() (ASCII letters only): emailKey() in contacts.ts builds it the same way.
+  `
+  CREATE TABLE share_contacts (
+    email_key TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    name TEXT,
+    shares INTEGER NOT NULL,
+    last_at INTEGER NOT NULL
+  );
+  INSERT INTO share_contacts(email_key, email, shares, last_at)
+    SELECT lower(value), value, 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    FROM kv WHERE key LIKE 'reviewer-email:%'
+    ON CONFLICT(email_key) DO NOTHING;
+  `,
 ];
 
 export function openDb(path: string): Db {

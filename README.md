@@ -115,7 +115,8 @@ your phone can connect.
   projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko;
   AgentK never changes Claude Code's setup unless you ask.
   Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
-  (in every repo its sessions work in) with their emails, to share with in one click.
+  (in every repo its sessions work in) with their emails, to share with in one click. The Share
+  dialog suggests the people you share with most, in any project, to add with a tap.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
   of a project shared with you, checks one out on a branch a plain `git push` refuses, and has AgentK sum
   it up for you, with the author's design (named in the PR, fetched from Meko, with its questions and
