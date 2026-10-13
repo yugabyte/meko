@@ -107,7 +107,8 @@ reopening only for a project with a dedicated datapack.
 Once the project is open, the New session dialog opens for it, so you go straight on to its
 first task. Its name starts as the project's, selected so typing replaces it, and the branch is
 named from it as usual (`startingSessionName()` in `src/web/util.ts`); a PR picked there still
-renames it. Opened any other way, the dialog starts with no name.
+renames it. Opened from the **New session** button, the command palette or the close-project
+dialog, it starts with no name; Try again and editing a task Ask AgentK proposed bring their own.
 The UI keeps the project the create reply returned and lists it (`withOpened()` in
 `src/web/util.ts`) until a state push brings it, so the route, the rail and the dialog never wait
 on the events socket, which may be slow or reconnecting. A push without it may be an older

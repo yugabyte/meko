@@ -205,9 +205,9 @@ export function slugify(s: string): string {
     .slice(0, 60);
 }
 
-/** New session's starting name: a retry's, else the project's for its first session after Open project. */
-export function startingSessionName(retryName: string | undefined, fresh: boolean, projectName: string): string {
-  return retryName ?? (fresh ? projectName : '');
+/** New session's starting name: the one it was opened with (Try again, Ask AgentK's edit), else the project's after Open project. */
+export function startingSessionName(initialName: string | undefined, fresh: boolean, projectName: string): string {
+  return initialName ?? (fresh ? projectName : '');
 }
 
 /** A datapack's page in the Meko web app, or null when the web app's address is unknown. */
