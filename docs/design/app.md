@@ -6,7 +6,11 @@ The left rail holds projects, each with its repo's folder name in small type und
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
 screen, use **Move up** / **Move down** in the project home's settings. The top tabs hold that project's sessions. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
-diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. The foot of the rail
+diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking
+the branch copies the full path of the session's worktree (its tooltip shows the path, and the label
+reads `path copied` for a moment), once a start has made the worktree. A copy the browser blocks shows
+the path in a toast, which stays while the pointer is on it and doesn't close on a click that selects
+its text. The foot of the rail
 shows the user and the server (`hari@dev-box`) with the version, so windows on different machines
 are easy to tell apart. The server name is `[server] name` (set in Settings), else the machine's
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
