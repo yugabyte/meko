@@ -1,7 +1,6 @@
 import { defineConfig } from 'eslint/config';
 import js from '@eslint/js';
 import importPlugin from 'eslint-plugin-import';
-import stylistic from '@stylistic/eslint-plugin';
 import globals from 'globals';
 
 export default defineConfig([
@@ -25,7 +24,6 @@ export default defineConfig([
 
     plugins: {
       import: importPlugin,
-      '@stylistic': stylistic,
     },
 
     settings: {
@@ -36,6 +34,7 @@ export default defineConfig([
       },
     },
 
+    // Formatting (quotes, semicolons, indentation) is Prettier's, via .prettierrc.
     rules: {
       // Override / extend recommended rules
       'no-console': 'warn',
@@ -51,11 +50,22 @@ export default defineConfig([
         },
       ],
       'import/no-unresolved': 'error',
+    },
+  },
 
-      // Stylistic rules
-      '@stylistic/semi': ['warn', 'always'],
-      '@stylistic/quotes': ['warn', 'double'],
-      '@stylistic/indent': ['warn', 2],
+  {
+    files: ['*.js', '*.mjs', 'netlify/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+
+  {
+    files: ['webpack.config.js'],
+    languageOptions: {
+      sourceType: 'commonjs',
     },
   },
 

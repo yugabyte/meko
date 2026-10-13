@@ -36,7 +36,6 @@
     "@babel/plugin-proposal-decorators": "7.29.0",
     "@babel/preset-env": "7.29.2",
     "@eslint/js": "9.39.2",
-    "@stylistic/eslint-plugin": "5.10.0",
     "autoprefixer": "10.4.27",
     "babel-loader": "10.1.1",
     "detect-external-link": "2.0.1",

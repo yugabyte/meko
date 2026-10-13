@@ -2,8 +2,8 @@
 // turns and a streaming assistant turn, collects source citations, and
 // exposes methods for callers to update and focus the chat.
 
-import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 
 const INTERRUPTED_MESSAGE = 'Answer interrupted.';
 

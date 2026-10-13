@@ -3,8 +3,8 @@
 // chat UI the hero uses. Shares streamChat + createChatUI so answers
 // stream exactly like the landing experience.
 
-import { streamChat } from './client.js';
 import { createChatUI } from './chat-ui.js';
+import { streamChat } from './client.js';
 import { clearThread, loadThread, saveThread, threadIdFromFrame } from './thread-store.js';
 
 export function initNavSearch() {

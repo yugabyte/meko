@@ -1,5 +1,5 @@
-import { streamChat } from './kapa/client.js';
 import { createChatUI } from './kapa/chat-ui.js';
+import { streamChat } from './kapa/client.js';
 import { initNavSearch } from './kapa/nav-search.js';
 import { clearThread, loadThread, saveThread, threadIdFromFrame } from './kapa/thread-store.js';
 
