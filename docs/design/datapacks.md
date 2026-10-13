@@ -41,8 +41,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > The agent id doesn't name the project: Meko reads memories across agents within a datapack, so
 > it only says which session wrote a memory, and every session of a project, and the project
 > opened again after a close, sees them all. AgentK's own writes for a session (designs, the
-> learn step's facts) go under the session's Meko conversation with the agent id the session runs
-> with (`launchedAgentId()`, recorded in `sessions.meko_agent_id`); the project's conversation
+> learn step's new facts) go under the session's Meko conversation with the agent id the session
+> runs with (`launchedAgentId()`, recorded in `sessions.meko_agent_id`); a learn step's correction
+> keeps the agent id of the memory it corrects (its original writer); the project's conversation
 > and its searches (the project home's, and the search at session start) use `agent-k-local`. A session launched before sessions had their own agent id keeps
 > `claude_code:<project id>` for all of that until it's launched again. A pin stays for a day after
 > its session is archived (the plugin's SessionEnd hook may still read it), then it's removed at
