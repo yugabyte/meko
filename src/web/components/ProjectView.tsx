@@ -12,6 +12,7 @@ import {
 } from '../../shared/types';
 import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
+import { copyText } from '../clipboard';
 import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
@@ -107,6 +108,13 @@ export function ProjectView({
   const [sharing, setSharing] = useState(false);
   // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
   const [asking, setAsking] = useState(false);
+  // The session whose worktree path was just copied from the footer, for 2 s.
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!copiedPath) return;
+    const t = setTimeout(() => setCopiedPath(null), 2000);
+    return () => clearTimeout(t);
+  }, [copiedPath]);
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPanel(null);
@@ -180,10 +188,24 @@ export function ProjectView({
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
-  const branchText = session && (
-    <span title={session.repoPath !== project.repoPath ? session.repoPath : undefined}>
+  const branchLabel = session && (
+    <>
       {session.repoPath && session.repoPath !== project.repoPath ? `${repoFolder(session.repoPath)} · ` : ''}branch {session.branch}
-    </span>
+    </>
+  );
+  const branchText = session && (
+    <span title={session.repoPath !== project.repoPath ? session.repoPath : undefined}>{branchLabel}</span>
+  );
+  // On a desktop, clicking the branch copies the worktree's path; the label says so for a moment.
+  const copyPath = async () => {
+    if (!session) return;
+    if (await copyText(session.worktreePath)) setCopiedPath(session.id);
+    else onError(`Couldn't copy the path. It is ${session.worktreePath}`);
+  };
+  const branchButton = session && (
+    <button className="foot-btn" onClick={() => void copyPath()} title={`${session.worktreePath}\nClick to copy this path`}>
+      {copiedPath === session.id ? 'path copied' : branchLabel}
+    </button>
   );
   const tokensText = session && (
     <span title={usageTitle(session.usage)}>
@@ -370,7 +392,7 @@ export function ProjectView({
 
       {session && (
         <footer className="foot">
-          {!mobile && branchText}
+          {!mobile && branchButton}
           {session.diffStat && (
             <button
               className={cx('foot-btn', panel === 'changes' && 'on')}
