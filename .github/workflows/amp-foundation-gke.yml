@@ -25,8 +25,9 @@ name: Amp foundation GKE (itest-dev)
 #                copy the CA into the Secret the YBCertificate names; stand up
 #                an ephemeral YCP control plane; apply the Foundation and wait
 #                for Ready; read the address off its status and hand that to
-#                up-gke.sh (FOUNDATION=external); run the agent-driven reconcile
-#                smoke; then DELETE the object and assert it left nothing behind.
+#                up-gke.sh (FOUNDATION=external) with the endpoint user split on;
+#                run the agent-driven reconcile smoke and the user-split smoke;
+#                then DELETE the object and assert it left nothing behind.
 #
 # Deleting the Foundation runs as its own step rather than only in teardown: the
 # teardown path deletes the namespace, which would hide a broken teardown
@@ -481,13 +482,22 @@ jobs:
           YCP_BYOC_METRICS_URL="$YCP_BYOC_METRICS_URL" \
           YCP_BYOC_PASSWORD="$YCP_BYOC_PASSWORD" \
           YCP_DATADOG_API_KEY="$YCP_DATADOG_API_KEY" \
+          EXTRA_HELM_SET="controller.endpoint.userSplit=true" \
           amp/deploy/up-gke.sh
 
       # What the foundation is FOR: the agent declares desired state through YCP
       # and the controller builds it on the operator-managed universe. This is
       # the existing smoke, unchanged — the foundation is the variable.
       - name: Reconcile smoke (agent-driven)
-        run: NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" amp/deploy/ycp-reconcile-smoke.sh
+        # This lane deploys endpoints with the storage/compute user split
+        # (AMP-84), since it has the client-certificate auth the split relies
+        # on; amp_deploy_gke keeps single-user mode covered. The reconcile smoke
+        # proves split endpoints serve, and runs user-split-smoke.sh on them
+        # before it withdraws them.
+        run: |
+          NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" \
+          BEFORE_WITHDRAW=amp/deploy/user-split-smoke.sh \
+          amp/deploy/ycp-reconcile-smoke.sh
 
       # One ClusterIP carries BOTH client ports, and both compute lanes come off
       # it: the YSQL pool connects to 5433 as given, and the direct-RPC lane

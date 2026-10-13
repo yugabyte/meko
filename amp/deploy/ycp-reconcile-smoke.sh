@@ -755,6 +755,19 @@ else
     bad "$LB_EP state='$st' after the allowlist change, want ready"
 fi
 
+# --- caller's checks on the live endpoints, before the withdrawal deletes them ---
+# BEFORE_WITHDRAW names a script to run here (with NS in its environment); a
+# non-zero exit fails this smoke. The foundation lane checks the user split this
+# way, since nothing else leaves an endpoint standing.
+if [ -n "${BEFORE_WITHDRAW:-}" ]; then
+  hdr "$BEFORE_WITHDRAW (live endpoints)"
+  if NS="$NS" "$BEFORE_WITHDRAW"; then
+    ok "$BEFORE_WITHDRAW passed"
+  else
+    bad "$BEFORE_WITHDRAW failed"
+  fi
+fi
+
 # --- authoritative GC: withdraw the cluster subtree, keep the pool ---
 hdr "withdraw cluster from desired -> agent deletes it (cascade)"
 KEEP_POOL=$(jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" \
