@@ -119,6 +119,9 @@ export function useDeleteEndpoint() {
       qc.invalidateQueries({
         queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
       });
+      // The branch's password_required, so the next writer's form asks for a
+      // password only if the cluster still has none.
+      qc.invalidateQueries({ queryKey: qk.branches(input.poolId, input.clusterId) });
     },
   });
 }

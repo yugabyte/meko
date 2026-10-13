@@ -33,7 +33,10 @@ const endpoint: Endpoint = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
-function renderSection(endpoints: Endpoint[] = []) {
+function renderSection(
+  endpoints: Endpoint[] = [],
+  { passwordRequired = true, isDefaultBranch = true } = {},
+) {
   const qc = new QueryClient();
   return render(
     <QueryClientProvider client={qc}>
@@ -43,7 +46,8 @@ function renderSection(endpoints: Endpoint[] = []) {
         branchId="branch-1"
         endpoints={endpoints}
         loading={false}
-        isDefaultBranch
+        isDefaultBranch={isDefaultBranch}
+        passwordRequired={passwordRequired}
       />
     </QueryClientProvider>,
   );
@@ -100,5 +104,31 @@ describe("EndpointsSection", () => {
     renderSection([endpoint]);
     expect(screen.queryByLabelText(/^password$/i)).toBeNull();
     expect(provisionBtn().disabled).toBe(false);
+  });
+
+  // A fork uses its parent's password, and a later writer the one already set,
+  // so the branch says none is needed and the form sends none.
+  it("asks no password of a writer on a fork", async () => {
+    createEndpoint.mockResolvedValueOnce(endpoint);
+    renderSection([], { passwordRequired: false, isDefaultBranch: false });
+    expect(screen.queryByLabelText(/^password$/i)).toBeNull();
+    expect(screen.getByText(/uses its parent branch's password/i)).toBeTruthy();
+    expect(provisionBtn().disabled).toBe(false);
+
+    fireEvent.click(provisionBtn());
+    await waitFor(() => expect(createEndpoint).toHaveBeenCalled());
+    expect(createEndpoint.mock.calls.at(-1)![3].password).toBeUndefined();
+  });
+
+  it("says a recreated writer keeps the cluster's password", async () => {
+    createEndpoint.mockResolvedValueOnce(endpoint);
+    renderSection([], { passwordRequired: false, isDefaultBranch: true });
+    expect(screen.queryByLabelText(/^password$/i)).toBeNull();
+    expect(screen.getByText(/cluster already has a password/i)).toBeTruthy();
+    expect(provisionBtn().disabled).toBe(false);
+
+    fireEvent.click(provisionBtn());
+    await waitFor(() => expect(createEndpoint).toHaveBeenCalled());
+    expect(createEndpoint.mock.calls.at(-1)![3].password).toBeUndefined();
   });
 });

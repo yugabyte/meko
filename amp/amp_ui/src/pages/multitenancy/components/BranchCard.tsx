@@ -152,6 +152,7 @@ export function BranchCard({
         endpoints={endpoints}
         loading={endpointsLoading}
         isDefaultBranch={isRoot}
+        passwordRequired={branch.password_required ?? true}
       />
 
       <AlertDialog

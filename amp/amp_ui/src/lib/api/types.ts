@@ -37,6 +37,11 @@ export type Branch = {
   /** Externalized extensions enabled on this branch, by catalog name. Every
    *  endpoint on the branch mounts them and a fork inherits the set. */
   extensions?: string[];
+  /** Whether a read-write compute created here must carry a password: true
+   *  only on a root branch whose cluster has none yet. A fork uses its parent's
+   *  password as of the fork point. Absent from controllers that predate it,
+   *  which required one on every writer. */
+  password_required?: boolean;
   created_at: string;
 };
 
@@ -98,6 +103,9 @@ export type Cluster = {
   engine?: string;
   /** The default branch's extension set, surfaced as the cluster's. */
   extensions?: string[];
+  /** Whether the cluster still needs its password, which its default branch's
+   *  first read-write compute sets. */
+  password_required?: boolean;
   created_at: string;
 };
 

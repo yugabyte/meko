@@ -21,10 +21,13 @@ export const dataBranchingMessages = {
     "This branch already has a read-write compute — additional compute must be read-only.",
 
   // Per-endpoint credentials. The caller supplies the password; nothing
-  // generates or stores one, so it is never shown back.
+  // generates one or keeps the plaintext, so it is never shown back.
   passwordHint:
-    "Required, for the compute's cloud_admin user. 8-128 characters. Not stored — keep your own copy.",
+    "Required, for the compute's cloud_admin user. 8-128 characters, or a SCRAM-SHA-256 verifier. The password is not stored — keep your own copy.",
   passwordRequired: "A password is required for read-write compute.",
+  // Only the first writer on a cluster's root branch sets the password.
+  passwordInherited: "This fork uses its parent branch's password as of the fork point.",
+  passwordAlreadySet: "This cluster already has a password; new compute uses it.",
 
   // Resize
   resizeCompleted: (size: string) => `Resized in place to ${size}`,
