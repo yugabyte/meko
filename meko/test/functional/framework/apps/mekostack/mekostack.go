@@ -548,8 +548,11 @@ func (a *App) setupMinIO(ctx context.Context) (MinIO, error) {
 		return MinIO{}, err
 	}
 	ip, err := a.kube.Get(ctx, "service", minioName, "{.spec.clusterIP}")
-	if err != nil || ip == "" || ip == "None" {
-		return MinIO{}, fmt.Errorf("minio Service has no ClusterIP: %v", err)
+	if err != nil {
+		return MinIO{}, fmt.Errorf("minio Service has no ClusterIP: %w", err)
+	}
+	if ip == "" || ip == "None" {
+		return MinIO{}, fmt.Errorf("minio Service has no ClusterIP: %q", ip)
 	}
 	return MinIO{
 		AccessKey: minio.AccessKey, SecretKey: minio.SecretKey,

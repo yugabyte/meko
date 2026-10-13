@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -653,5 +654,57 @@ func TestForwardLostItsPod(t *testing.T) {
 		if got := forwardLostItsPod(tc.line); got != tc.want {
 			t.Errorf("forwardLostItsPod(%q) = %v, want %v", tc.line, got, tc.want)
 		}
+	}
+}
+
+func TestExecRetriesOnlyWhenKubectlNeverDialed(t *testing.T) {
+	defer func(p time.Duration) { transientRetryPause = p }(transientRetryPause)
+	transientRetryPause = 0
+	const neverDialed = "Unable to connect to the server: dial tcp 136.67.250.101:443: i/o timeout"
+	cases := []struct {
+		name        string
+		stderr      []string
+		wantCalls   int
+		wantErr     bool
+		unreachable bool
+	}{
+		{"recovers", []string{neverDialed, ""}, 2, false, false},
+		{"stays down", []string{neverDialed, neverDialed, neverDialed, ""}, transientAttempts, true, true},
+		{"refused", []string{"The connection to the server 10.0.0.1:443 was refused - did you specify the right host or port?", ""}, 2, false, false},
+		{"reached the server", []string{"Unable to connect to the server: EOF", ""}, 1, true, false},
+		{"product error", []string{"NotFound", ""}, 1, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var calls int
+			var stdins []string
+			run := func(_ context.Context, in io.Reader, _ []string) (execpkg.Result, error) {
+				b, _ := io.ReadAll(in)
+				stdins = append(stdins, string(b))
+				e := c.stderr[calls]
+				calls++
+				if e == "" {
+					return execpkg.Result{Stdout: "ok"}, nil
+				}
+				return execpkg.Result{ExitCode: 1, Stderr: e}, nil
+			}
+			k := New(Config{Namespace: "mekoqa-x"}).WithRunner(run)
+			err := k.Apply(context.Background(), "kind: Service")
+			if calls != c.wantCalls {
+				t.Errorf("calls = %d, want %d", calls, c.wantCalls)
+			}
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, want error %t", err, c.wantErr)
+			}
+			var ae *APIServerUnreachableError
+			if errors.As(err, &ae) != c.unreachable {
+				t.Errorf("APIServerUnreachableError = %t, want %t: %v", !c.unreachable, c.unreachable, err)
+			}
+			for i, s := range stdins {
+				if s != "kind: Service" {
+					t.Errorf("attempt %d got stdin %q", i+1, s)
+				}
+			}
+		})
 	}
 }

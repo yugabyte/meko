@@ -224,8 +224,11 @@ func Deploy(ctx context.Context, kube *k8s.Kubectl, s Spec, m Material) (Deploye
 
 func ClusterIP(ctx context.Context, kube *k8s.Kubectl) (string, error) {
 	ip, err := kube.Get(ctx, "service", Name, "{.spec.clusterIP}")
-	if err != nil || ip == "" || ip == "None" {
-		return "", fmt.Errorf("cognito mock: Service has no ClusterIP: %v", err)
+	if err != nil {
+		return "", fmt.Errorf("cognito mock: Service has no ClusterIP: %w", err)
+	}
+	if ip == "" || ip == "None" {
+		return "", fmt.Errorf("cognito mock: Service has no ClusterIP: %q", ip)
 	}
 	return ip, nil
 }

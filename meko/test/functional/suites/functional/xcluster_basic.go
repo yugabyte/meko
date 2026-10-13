@@ -24,16 +24,19 @@ func xclusterBasic(t *core.T) error {
 	if err != nil {
 		return finish(t, err)
 	}
-	if b, ok := x.(universe.XClusterBootstrap); ok {
+	b, bootstraps := x.(universe.XClusterBootstrap)
+	if bootstraps {
 		b.BootstrapXClusterVia(stackS3(t))
 	}
 
 	if err := step(t, "source_database", func(*core.StepHandle) error {
-		if _, err := src.SQL(t, "", "", "CREATE DATABASE app"); err != nil {
+		if _, err := src.SQL(t, "", "", "CREATE DATABASE app"); err != nil || !bootstraps {
 			return err
 		}
-		// YBA finds a database to replicate through its tables. kv, the table
-		// read on the target, is created after setup so DDL replication is tested.
+		// YBA finds a database to replicate through its tables. yugabyted's
+		// automatic mode needs the source empty, its target is not bootstrapped.
+		// kv, the table read on the target, is created after setup so DDL
+		// replication is tested.
 		_, err := src.SQL(t, "", "app", "CREATE TABLE seed(k int primary key)")
 		return err
 	}); err != nil {

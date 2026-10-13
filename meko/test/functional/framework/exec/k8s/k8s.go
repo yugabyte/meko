@@ -150,20 +150,54 @@ func (k *Kubectl) base() []string {
 // its result, erroring on a non-zero exit.
 func (k *Kubectl) exec(ctx context.Context, stdin io.Reader, extra ...string) (execpkg.Result, error) {
 	argv := append(k.base(), extra...)
-	if k.logf != nil {
-		k.logf("exec: %s", CmdString(argv))
+	var body []byte
+	if stdin != nil {
+		var err error
+		if body, err = io.ReadAll(stdin); err != nil {
+			return execpkg.Result{}, fmt.Errorf("kubectl %s: read stdin: %w", strings.Join(extra, " "), err)
+		}
 	}
-	res, err := k.run(ctx, stdin, argv)
-	if k.logf != nil {
-		k.logf("exec done (exit %d):%s%s", res.ExitCode, LogTail("out", res.Stdout), LogTail("err", res.Stderr))
+	var res execpkg.Result
+	var err error
+	for attempt := 1; ; attempt++ {
+		if k.logf != nil {
+			k.logf("exec: %s", CmdString(argv))
+		}
+		var in io.Reader
+		if stdin != nil {
+			in = bytes.NewReader(body)
+		}
+		res, err = k.run(ctx, in, argv)
+		if k.logf != nil {
+			k.logf("exec done (exit %d):%s%s", res.ExitCode, LogTail("out", res.Stdout), LogTail("err", res.Stderr))
+		}
+		// A kubectl that never dialed the API server sent nothing, so any verb is safe to repeat.
+		if err != nil || res.ExitCode == 0 || !kubectlNeverDialed(res.Stderr) || attempt == transientAttempts || !pause(ctx, transientRetryPause) {
+			break
+		}
 	}
 	if err != nil {
 		return res, fmt.Errorf("kubectl %s: %w", strings.Join(extra, " "), err)
 	}
 	if res.ExitCode != 0 {
-		return res, fmt.Errorf("kubectl %s exited %d: %s", strings.Join(extra, " "), res.ExitCode, strings.TrimSpace(res.Stderr))
+		werr := fmt.Errorf("kubectl %s exited %d: %s", strings.Join(extra, " "), res.ExitCode, strings.TrimSpace(res.Stderr))
+		if kubectlNeverDialed(res.Stderr) {
+			return res, &APIServerUnreachableError{Err: werr}
+		}
+		return res, werr
 	}
 	return res, nil
+}
+
+func pause(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // --- exec.RemoteExecutor (pod-bound) ---

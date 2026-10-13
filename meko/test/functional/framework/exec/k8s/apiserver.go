@@ -20,10 +20,14 @@ func apiServerUnreachable(out string) bool {
 // Only these prove the request never left the host.
 func apiServerNeverDialed(out string) bool {
 	low := strings.ToLower(out)
-	for _, m := range []string{"dial tcp", "connection refused", "no such host", "tls handshake timeout"} {
+	for _, m := range []string{"dial tcp", "connection refused", "was refused", "no such host", "tls handshake timeout"} {
 		if strings.Contains(low, m) {
 			return true
 		}
 	}
 	return false
+}
+
+func kubectlNeverDialed(out string) bool {
+	return apiServerUnreachable(out) && apiServerNeverDialed(out)
 }
