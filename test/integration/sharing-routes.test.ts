@@ -86,6 +86,8 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect((await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'bob@example.com', grant: 'contributor', login: 'Bob-1' })).statusCode).toBe(200);
     expect((await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'eve@example.com', grant: 'contributor', login: '../x' })).statusCode).toBe(200);
     expect(all(env.core.db, "SELECT key, value FROM kv WHERE key LIKE 'reviewer-email:%'")).toEqual([{ key: 'reviewer-email:bob-1', value: 'bob@example.com' }]);
+    // Each one went through, a reviewer's too: counted for the suggestions.
+    expect((await call('GET', '/api/share-contacts')).json()).toMatchObject([{ email: 'bob@example.com', shares: 2 }, { email: 'eve@example.com', shares: 1 }]);
     // Meko's own refusals keep their status; a server error is a 502.
     shareStatus = 409;
     const refused = await call('POST', '/api/meko/datapacks/dp-1/people', { email: 'bob@example.com', grant: 'contributor' });
@@ -126,7 +128,12 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     let refuse: Record<string, number> = {};
     env.mekoApi.handle((c: ApiCall) => {
       if (c.path === '/datapacks/incoming-shares') return { body: { data: [] } };
-      if (c.path.endsWith('/member-list')) return { body: { data: { members: [{ is_owner: true, user_name: 'Me', user_email_id: 'me@example.com', grant: 'owner' }] } } };
+      if (c.path.endsWith('/member-list')) {
+        return { body: { data: { members: [
+          { is_owner: true, user_name: 'Me', user_email_id: 'me@example.com', grant: 'owner' },
+          { is_owner: false, user_name: 'Ann', user_email_id: 'A@example.com', grant: 'viewer' },
+        ] } } };
+      }
       if (c.path.endsWith('/outgoing-shares')) return { body: { data: { pending_invites: [] } } };
       if (c.path.endsWith('/share')) {
         const to = (c.body as { recipient_email: string }).recipient_email;
@@ -147,7 +154,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     const before = lists();
     const all3 = await post({ emails: ['a@example.com', ' b@example.com ', 'c@example.com', 'A@example.com'], grant: 'maintainer' });
     expect(all3.statusCode).toBe(200);
-    expect(all3.json()).toMatchObject({ invited: ['a@example.com', 'b@example.com', 'c@example.com'], failed: [], members: [{ email: 'me@example.com' }] });
+    expect(all3.json()).toMatchObject({ invited: ['a@example.com', 'b@example.com', 'c@example.com'], failed: [], members: [{ email: 'me@example.com' }, { email: 'A@example.com' }] });
     expect(shares()).toEqual(['a', 'b', 'c'].map((n) => ({ recipient_email: `${n}@example.com`, grant: 'maintainer' })));
     expect(lists() - before).toBe(1);
 
@@ -209,6 +216,14 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect((await post({ emails: ['p@example.com', 'q@example.com'], grant: 'viewer', login: 'p' })).statusCode).toBe(400);
     expect((await post({ emails: ['p@example.com'], grant: 'owner' })).json().error).toBe('Access must be viewer, contributor or maintainer.');
     expect(shares().length).toBe(sent);
+
+    // Only the addresses invited are kept to suggest, named once Meko lists them as members; one can be forgotten.
+    const contacts = async () => (await call('GET', '/api/share-contacts')).json() as { email: string; name: string | null; shares: number }[];
+    expect((await contacts()).map((c) => c.email).sort()).toEqual(['a', 'b', 'c', 'd', 'f', 'l', 'p'].map((n) => `${n}@example.com`));
+    expect((await contacts()).find((c) => c.email === 'a@example.com')).toMatchObject({ name: 'Ann', shares: 1 });
+    expect((await call('DELETE', '/api/share-contacts/B%40example.com')).statusCode).toBe(204);
+    expect((await call('DELETE', '/api/share-contacts/b%40example.com')).statusCode).toBe(404);
+    expect((await contacts()).map((c) => c.email)).not.toContain('b@example.com');
   });
 
   it('lists invites in the state and puts one off with Later', async () => {

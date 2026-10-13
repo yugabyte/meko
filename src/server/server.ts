@@ -9,7 +9,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
-  ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
@@ -19,6 +19,7 @@ import {
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
+import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
 import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
@@ -275,11 +276,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       throw core.invites.apiFailure(e, 'Meko');
     }
   };
+  /** A datapack's lists, naming the share contacts who are members. */
+  const people = async (id: string): Promise<DatapackPeople> => {
+    const p = await core.invites.api.people(id);
+    learnNames(db, p.members);
+    return p;
+  };
   /** The lists after a change that went through; a failure to read them doesn't make the change look failed. */
   const peopleAfter = (id: string): Promise<DatapackPeople> =>
-    core.invites.api.people(id).catch((e) => ({ members: [], invites: [], refreshError: `Couldn't read the list again: ${errMsg(e)}` }));
+    people(id).catch((e) => ({ members: [], invites: [], refreshError: `Couldn't read the list again: ${errMsg(e)}` }));
   app.get<{ Params: { id: string } }>('/api/meko/datapacks/:id/people', async (req): Promise<DatapackPeople> =>
-    sharing(req.params.id, () => core.invites.api.people(req.params.id)));
+    sharing(req.params.id, () => people(req.params.id)));
   app.post<{ Params: { id: string }; Body: ShareDatapackRequest }>('/api/meko/datapacks/:id/people', async (req): Promise<ShareDatapackResult> => {
     const { email, emails: list, grant, login } = req.body ?? ({} as ShareDatapackRequest);
     if ((email === undefined) === (list === undefined)) throw new HttpError(400, 'Give either one email or a list of emails.');
@@ -318,12 +325,20 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!invited.length && first) throw first;
     // Shared with a PR's reviewer: their email comes up for them next time.
     if (login != null) core.prReview.rememberEmail(login, emails[0]);
+    recordShares(db, invited);
     return { ...(await peopleAfter(req.params.id)), invited, failed };
   });
   app.post<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId/resend', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.resend(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
   app.delete<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.revoke(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
+
+  // The people invited before, suggested in the Share dialog. Local only, so they don't need Meko.
+  app.get('/api/share-contacts', async (): Promise<ShareContact[]> => listContacts(db));
+  app.delete<{ Params: { email: string } }>('/api/share-contacts/:email', async (req, reply) => {
+    if (!forgetContact(db, req.params.email)) throw new HttpError(404, "That person isn't in the suggestions any more.");
+    return reply.code(204).send();
+  });
 
   // ---- datapacks shared with us ----
   app.post('/api/invites/check', async (): Promise<InviteCheck> => {

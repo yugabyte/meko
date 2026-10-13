@@ -48,6 +48,7 @@ import type {
   SettingsUpdate,
   SetDedicatedDatapackRequest,
   SetupRequest,
+  ShareContact,
   ShareDatapackRequest,
   ShareDatapackResult,
   StagedImage,
@@ -140,6 +141,8 @@ export const api = {
     post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}/resend`),
   revokeDatapackInvite: (id: string, inviteId: string) =>
     request<DatapackPeople>('DELETE', `/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}`),
+  shareContacts: () => get<ShareContact[]>('/api/share-contacts'),
+  forgetShareContact: (email: string) => request<void>('DELETE', `/api/share-contacts/${enc(email)}`),
   checkInvites: () => post<InviteCheck>('/api/invites/check'),
   acceptInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/accept`),
   declineInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/decline`),

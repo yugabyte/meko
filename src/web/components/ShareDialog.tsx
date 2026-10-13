@@ -1,12 +1,13 @@
-import { useEffect, useState, type ClipboardEvent, type FormEvent } from 'react';
-import type { DatapackPeople, DatapackRef, ShareGrant } from '../../shared/types';
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from 'react';
+import type { DatapackPeople, DatapackRef, ShareContact, ShareGrant } from '../../shared/types';
 import { SHARE_GRANTS } from '../../shared/types';
 import { isProjectDatapack } from '../../shared/datapacks';
 import { MAX_SHARE_EMAILS, flattenPastedEmails, parseEmails, spliceEmails } from '../../shared/emails';
-import { api, errorMessage } from '../api';
+import { ApiError, api, errorMessage } from '../api';
 import { cx } from '../util';
 import { Busy, Dialog, ErrorText } from './common';
 import { ShareReviewers } from './ShareReviewers';
+import { ShareSuggestions } from './ShareSuggestions';
 
 const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
   viewer: { title: 'Viewer', text: 'Read only. They can attach it to a project but can’t open it as one.' },
@@ -17,7 +18,7 @@ const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
 /**
  * Invite people to a project's dedicated datapack through Meko's share API, the reviewers of the
  * project's open PRs first. The Emails field takes a list; addresses the lists shown already have
- * (as members or pending invites) are left out.
+ * (as members or pending invites) are left out. Under it, the people invited before are suggested.
  */
 export function ShareDialog({
   projectId,
@@ -44,6 +45,9 @@ export function ShareDialog({
   /** The change went through, but the lists couldn't be read again: the ones shown may be out of date. */
   const [stale, setStale] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** The people invited before, to suggest; null while loading, or when they can't be read (no suggestions then). */
+  const [contacts, setContacts] = useState<ShareContact[] | null>(null);
+  const emailInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api
@@ -51,6 +55,17 @@ export function ShareDialog({
       .then(setPeople)
       .catch((e) => setLoadError(errorMessage(e)));
   }, [datapack.id]);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .shareContacts()
+      .then((c) => live && setContacts(c))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   /** Runs one change and shows the lists it returns; null when it failed (the error is shown). */
   const run = async <T extends DatapackPeople>(key: string, fn: () => Promise<T>, done?: string): Promise<T | null> => {
@@ -79,8 +94,31 @@ export function ShareDialog({
   const withAccess = new Set(
     [...(people?.members ?? []).map((m) => m.email), ...(people?.invites ?? []).map((i) => i.email)].map((a) => a.toLowerCase()),
   );
+  const typedEmails = parseEmails(email).emails;
   /** How many the Invite button would send. */
-  const toSend = parseEmails(email).emails.filter((a) => !withAccess.has(a.toLowerCase())).length;
+  const toSend = typedEmails.filter((a) => !withAccess.has(a.toLowerCase())).length;
+  /** Not suggested: with access, invited, or in the field already. */
+  const notSuggested = new Set([...withAccess, ...typedEmails.map((a) => a.toLowerCase())]);
+
+  /** A suggestion picked: the field takes its address, and typing carries on after it. */
+  const pickSuggestion = (next: string) => {
+    setEmail(next);
+    const el = emailInput.current;
+    if (!el) return;
+    el.focus();
+    requestAnimationFrame(() => el.setSelectionRange(next.length, next.length));
+  };
+
+  /** Stops suggesting someone: gone from the row at once, and back with the error if the server refuses. */
+  const forgetSuggestion = (to: string) => {
+    const before = contacts;
+    setContacts((c) => c?.filter((x) => x.email !== to) ?? c);
+    api.forgetShareContact(to).catch((e) => {
+      if (e instanceof ApiError && e.status === 404) return;
+      setContacts(before);
+      setError(`Couldn't stop suggesting ${to}: ${errorMessage(e)}`);
+    });
+  };
 
   const invite = (e: FormEvent) => {
     e.preventDefault();
@@ -151,6 +189,7 @@ export function ShareDialog({
         <label className="field">
           <span className="label">Emails</span>
           <input
+            ref={emailInput}
             id="share-email"
             className="input"
             type="text"
@@ -164,6 +203,9 @@ export function ShareDialog({
           />
           <span className="hint">Several at once: separate them with commas, semicolons or spaces.</span>
         </label>
+        {contacts && (
+          <ShareSuggestions value={email} contacts={contacts} exclude={notSuggested} onPick={pickSuggestion} onForget={forgetSuggestion} />
+        )}
         <div className="field" role="radiogroup" aria-label="Access">
           <span className="label">Access</span>
           <div className="dp-list share-grants">

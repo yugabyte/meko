@@ -28,6 +28,23 @@ or API URL changes or a sync works.
 | An invite for you | A banner (and a notification) from `incoming-shares`: **Open as project** (creating the project accepts it), **Decline**, **Later**. A viewer invite gets **Accept** instead of Open as project. |
 | A share you accepted, not yet a project here | A banner from `datapack_list`: **Open as project** and **Later** (a viewer share only explains, with **OK**). |
 
+**Frequent people.** Every address an invite goes through for (from the Emails field or a
+reviewer's row) is kept in the `share_contacts` table (`src/server/contacts.ts`): the address as
+last typed, keyed in lower case, how many invites went through and when the latest did, and the
+person's name once a datapack's member list (read by the Share dialog) shows it. Failed invites
+and addresses left out because they already had access aren't counted. Migration 33 started the
+table with the emails remembered for reviewers, once each. `GET /api/share-contacts` lists every
+project's people, ranked by `shares / (1 + days since the latest / 30)` (often and lately first;
+a share last month counts half as much as one today), the most recent first among equals; the
+table keeps the 200 ranked highest. Under the Emails field, the Share dialog
+(`ShareSuggestions.tsx`) shows up to six as chips: **Frequent** while nothing is being typed, and
+**Matches** for the entry being typed after the last comma, semicolon or space (anywhere in the
+address, or the start of a word of the name). People with access or a pending invite, and
+addresses already in the field, aren't offered. A chip's name (the address beside it, but not on
+a phone) puts the address in the field in place of that entry, followed by `, `; its **×** stops
+suggesting them (`DELETE /api/share-contacts/:email`). The list stays on this machine: it's not
+in the usage report or Meko. When it can't be read, the dialog shows no suggestions.
+
 **Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
 reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko
 is on. It opens the Share dialog with a **Reviewers on the
