@@ -1701,6 +1701,90 @@ stress:
     # getLastQueryString can run under QPG; in the YSQL provider that is NoREC.
     # The TLP oracles throw "Not supported!" on their first query (run 3ae29420).
     qpg_oracles: ["NOREC"]
+  # jepsen: the yugabyte/jepsen consistency suite driven against amp endpoints,
+  # one jepsen node and one history per tenant, while framework/chaos faults the
+  # stack (suites/stress/jepsen.go). Opt-in: it pulls a jepsen checkout at pod
+  # start and a full YSQL pass is hours long.
+  #
+  # Read this before trusting a green result: amp allows a SINGLE WRITER per
+  # branch, so jepsen runs against one node here, not a five-node cluster. The
+  # elle/bank/long-fork checkers still hold — they check the storage layer below
+  # the compute and the recovery path across a compute restart — but the
+  # multi-node linearizability story the stress framework's test tells does NOT
+  # transfer.
+  jepsen:
+    enabled: false
+    # tenants is how many endpoints run jepsen at once, each with its own runner
+    # pod and its own history. One compute saturates long before the backing
+    # does, so this, not concurrency, is what loads the backing.
+    tenants: 4
+    # workloads are substring filters against the catalog in apps/jepsen; empty
+    # → every YSQL workload. YCQL workloads have no target on amp, whose compute
+    # speaks Postgres, and are skipped even if named.
+    workloads: []
+    use_nemesis: true
+    # Two action lists, because a chaos action carries ONE process pattern for
+    # the whole loop (chaos.process_pattern is "yb-tserver",
+    # chaos.stall.pattern is "endpoint-supervisor"): a single runner over both
+    # pod sets would aim half its actions at a process that is not there. So the
+    # suite starts two runners, each with the actions its targets actually have.
+    # node_stop and node_restart are VM-only and absent from both.
+    endpoint_actions: ["pod_delete", "process_stall", "pod_freeze"]
+    # network_partition, network_slowdown and packet_loss run through a
+    # privileged helper pod on the target's node (stress.partition.helper_image),
+    # because a YB pod has no iptables, no tc and no NET_ADMIN.
+    backing_actions: ["pod_delete", "process_kill", "process_restart", "network_partition", "network_slowdown", "packet_loss"]
+    # chaos overrides the global chaos.* timing for this suite only, and runs
+    # runners_per_group loops over each pod group at once. A group's pods are
+    # split between its loops, so two loops never fault the same pod — but two
+    # backing tservers CAN be down together, which on RF3 is a lost quorum.
+    # That unavailability is intended; jepsen records it as failed ops.
+    chaos:
+      runners_per_group: 2
+      hold_min: "10s"
+      hold_max: "30s"
+      gap_min: "5s"
+      gap_max: "15s"
+    # ddl_gate is the pre-nemesis barrier. Faults start only once ALL of these
+    # hold, because a fault during a workload's schema build fails the run for a
+    # table that never got created — indistinguishable from a real finding:
+    #   1. jepsen logged "Setup successful";
+    #   2. pg_stat_activity on the endpoint shows no active DDL (apps/pg);
+    #   3. the control plane has no non-terminal task (the test runs on a
+    #      dedicated stack, so every task on it is this run's);
+    #   4. the settle grace below has elapsed on top of all three.
+    # Failing the gate is env_failed, never failed: no fault has been injected.
+    ddl_gate:
+      timeout: "10m"
+      poll_interval: "2s"
+      # settle is the quiet period after the gate opens, before the first fault.
+      # The stress framework sleeps 45s here for the same reason: the first
+      # seconds after setup are schema caches warming, not steady state.
+      settle: "45s"
+    # fault_window is how long chaos runs before the analysis wait begins. 0 →
+    # the whole workload duration minus the settle.
+    fault_window: "0s"
+    # backing_settle_timeout bounds the backing serving again, every tablet led,
+    # after a window that faulted it, before the next workload starts.
+    backing_settle_timeout: "10m"
+    # lease_race puts two computes on each tenant's branch while jepsen's
+    # clients reach both (suites/stress/jepsen_lease.go): freeze the endpoint's
+    # pod past its write lease, scale its Deployment to 2 so a second pod takes
+    # the lease, thaw the first, hold, scale back to 1. The controller allows
+    # one writer endpoint per branch, so the second compute is a second pod of
+    # the same endpoint. A fence that fails lets both acknowledge writes on the
+    # same keys, which the workload's checker reports. Endpoint chaos is off
+    # while it runs.
+    lease_race:
+      enabled: false
+      # action stalls the writer; pod_freeze stops every process in the pod.
+      action: "pod_freeze"
+      # stall must exceed the write lease (15s) plus skew grace, or the
+      # second pod cannot take it.
+      stall: "45s"
+      # hold is how long both pods stay behind the Service after the first thaws.
+      hold: "60s"
+      settle_timeout: "10m"
   # fault_metrics: the last step of wal_tail_nemesis, backing_node_partition and
   # control_plane_nemesis (suites/stress/fault_metrics_helper.go). It samples the
   # product's OWN prometheus exposition across the fault and holds each named

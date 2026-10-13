@@ -6,7 +6,7 @@ untagged and run on demand — see the Perf bullet):
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — all twenty `suites/stress` scenarios: `load_sustain` (workloadgen
+- **`stress`** — all twenty-one `suites/stress` scenarios: `load_sustain` (workloadgen
   soak), `combined_load` (four parallel workloads under chaos on a co-located YB
   backing), `backing_maintenance` (workloads through a rolling restart, a gflag
   change, a data move and a YugabyteDB upgrade), `backing_backup_restore`
@@ -23,7 +23,8 @@ untagged and run on demand — see the Perf bullet):
   `backing_disk_full` (the backing's data disks filled, every INSERT held to an
   answer and every endpoint to losing its write token, then the volumes grown
   and amp held to recovering), `sqlancer` (SQLancer's logic-bug oracles on a quiet
-  stack), plus the two `suites/features` tests below: twenty-two in all.
+  stack), `jepsen` (the yugabyte/jepsen YSQL workloads under
+  framework chaos, opt-in through `stress.jepsen.enabled`), plus the two `suites/features` tests below: twenty-three in all.
   Every `suites/stress` test that drives amp runs on a stack of its own
   (`Shape: DedicatedStack`: its own YugabyteDB and amp control plane, torn
   down with the test), so a fault one injects, or a wedge it leaves behind,
@@ -131,6 +132,12 @@ tests need (a single run would demand every cloud credential at once):
   threads each. Nothing faults the stack, because SQLancer reports a
   dropped connection as a bug. The install step records the commit the release
   was built from and the tarball's sha256. Opt-in (`stress.sqlancer.enabled`).
+  `jepsen` runs the yugabyte/jepsen YSQL workloads against 4 endpoints at once
+  (`stress.jepsen.tenants`) with jepsen's own nemesis off, while overlapping
+  framework chaos loops fault the endpoints and the backing; each history is
+  held to its own checker (elle, bank, long-fork).
+  It is opt-in (`stress.jepsen.enabled`), and one endpoint is one writer, so a
+  pass says nothing about multi-node linearizability.
   The tier also carries the two `suites/features` failed-create reclaim tests,
   which are here for their runtime rather than for any fault they inject.
   `backing_node_partition_multi_region` is `backing_node_partition` with the

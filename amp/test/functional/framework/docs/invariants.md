@@ -14,8 +14,8 @@ Fault types are the `framework/chaos` registry actions (`pod_delete`,
 full, a namespace resource quota, an unschedulable request, and backing topology
 (restart, gflag change, leader stepdown, tablet split, master leader change,
 data move, backup/restore, upgrade). `none` means the row runs under no fault.
-`node_restart`, `node_stop`, `packet_loss` and `network_slowdown` appear in no
-cell below, because nothing injects them today.
+`node_restart` and `node_stop` appear in no cell below, because nothing
+injects them today.
 
 Red-proof run id is the run in which the assertion was shown to fail once. Empty
 means nobody has broken this guarantee on purpose yet.
@@ -23,6 +23,7 @@ means nobody has broken this guarantee on purpose yet.
 | Invariant | Tests that guard it | Fault types | Time scale | Red-proof run |
 |---|---|---|---|---|
 | An acknowledged commit is durable | features/pg_transaction, features/pg_restart_compute, features/pg_ddl_survives_restart, features/pg_read_cold_cache, features/amp_compute_restart, features/workloadgen_verify; stress/commit_durability, stress/wal_tail_nemesis, stress/storage_proc_nemesis, stress/bulk_load_kill, stress/amp_nemesis, stress/backing_nemesis, stress/load_sustain, stress/combined_load | none, pod_delete, process_kill, process_restart | seconds to hours | |
+| Transactions stay consistent under faults: an external checker (elle append, bank, long-fork, single-key-acid, counter, set) finds no anomaly in the history | stress/jepsen | pod_delete, process_stall, pod_freeze, process_kill, process_restart, network_partition, network_slowdown, packet_loss | hours | |
 | Single writer per branch: no second writer, and a fenced writer cannot acknowledge | features/amp_single_writer, features/amp_branch_write_token; stress/endpoint_backing_partition, stress/fence_stall, stress/fence_stall_supervisor | none, network_partition, pod_freeze, process_stall | seconds to minutes | 63dca5d8-d49c-475b-806e-9b2c47e86923 |
 | Tenants and branches are isolated: nobody reads another's rows | features/pg_parallel_isolation_alpha, features/pg_parallel_isolation_beta, features/pg_multi_db_workload, features/amp_branch_isolation; stress/multitenant_load; perf/multitenant | none | minutes | |
 | A fork at an LSN equals the parent's state at that LSN, and never a torn set | features/amp_fork_at_lsn, features/amp_fork_under_write, features/amp_fork_after_endpoint_create, features/amp_branch_of_branch, features/amp_branch_delete, features/amp_product_health; stress/branch_churn; perf/branch_depth (every read at every depth of a 20-deep chain checks its value) | none | seconds to minutes | |
