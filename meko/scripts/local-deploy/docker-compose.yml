@@ -328,10 +328,10 @@ services:
   # one-shot init container does that before the real api_server starts so
   # the meko_system schema exists by the time anything queries it.
   meko-api-server-migrate:
+    # No build here: it reuses the image meko-api-server builds below. Two services
+    # building the same context into one tag race on the export, and Docker's
+    # containerd image store fails the loser with `image ... already exists`.
     image: meko-api-server:meko-local
-    build:
-      context: ${MEKO_API_SERVER_DIR:-../../api_server}
-      dockerfile: Dockerfile
     container_name: meko-api-server-migrate
     <<: *host-gateway
     depends_on:
