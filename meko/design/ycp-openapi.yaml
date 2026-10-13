@@ -7,12 +7,14 @@ info:
     owns the fleet registry and desired state, and federates identity + entitlements from
     YBM Aeon. It holds **no customer data and no customer cloud credentials**.
 
-    Three auth surfaces (see `securitySchemes`):
+    Four auth surfaces (see `securitySchemes`):
       * **Human / console** — OIDC relying party of YBM Aeon (`aeonOIDC`).
       * **Agent** — `meko-agent` in the customer cluster, authenticating every call
         with a YBM-minted API key (`agentAPIKey`); YBM's pass-through validates it and
         forwards the key id, which alone resolves the environment. Outbound-only; YCP
         never dials into the customer cloud.
+      * **Admin** — SRE-only writes that move an environment's software, under
+        `/api/v1/admin/*` (`adminSecret`). Kept off YBM's customer pass-through.
       * **Internal** — MCP server → api_server, shared secret header (`internalSecret`).
 
     This is a design stub: shapes are illustrative and not yet frozen.
@@ -35,6 +37,8 @@ tags:
     description: Read-only plan/caps, sourced upstream from YBM Aeon.
   - name: agent
     description: Pull-agent surface (YBM API key). Enroll, reconcile desired state, report status.
+  - name: admin
+    description: SRE surface (admin secret). Declares the software an amp environment runs.
   - name: internal
     description: MCP server → api_server calls (shared secret).
 
@@ -165,7 +169,9 @@ paths:
       tags: [environments]
       summary: Read what this environment is declared to run
       operationId: getEnvironmentDesiredState
-      description: The operator-facing read. The agent has its own route, `/api/v1/agent/desired-state`.
+      description: |
+        The operator-facing read. The agent has its own route, `/api/v1/agent/desired-state`.
+        Omits `controller` and `fleet-version`, which the admin routes read.
       security: [{ aeonOIDC: ['fleet:read'] }]
       responses:
         '200':
@@ -183,7 +189,9 @@ paths:
       operationId: setEnvironmentDesiredState
       description: |
         Replaces the set; nothing is merged, and a resource left out is garbage-collected by
-        the agent on its next tick.
+        the agent on its next tick. `controller` and `fleet-version` are outside the set: a
+        body naming either is a 400, even one matching what is stored, and a body omitting
+        them leaves them in place. They are written through the admin routes.
 
         Because omission is deletion, `resources` is required (an absent key is not an empty
         set) and an unknown field at any level is a 400 rather than silently dropped. Withdrawing
@@ -217,10 +225,13 @@ paths:
         full path (`pool-a/main-db`), while an observed row's `name` is the leaf (`main-db`) and
         the full path is in its `id` (`cluster/pool-a/main-db`). The filters below match on the
         full path in both.
+
+        The environment-wide `controller` and `fleet-version` rows are never listed, desired or
+        observed: these environments are shared across tenants.
       security: [{ aeonOIDC: ['fleet:read'] }]
       parameters:
         - { name: name, in: query, required: true, schema: { type: string }, description: A resource's full hierarchical path; its first segment is the storage pool. Exact match by default. }
-        - { name: kind, in: query, schema: { type: string, enum: [storage-pool, cluster, branch, endpoint, controller, fleet-version, extension] }, description: Keep only this resource kind. }
+        - { name: kind, in: query, schema: { type: string, enum: [storage-pool, cluster, branch, endpoint, extension] }, description: Keep only this resource kind. }
         - { name: subtree, in: query, schema: { type: boolean, default: false }, description: With `name`, also return the resource's descendants. }
       responses:
         '200':
@@ -260,7 +271,8 @@ paths:
         already used by any environment the pool is mapped to is a 409 `CLUSTER_NAME_IN_USE`.
 
         The whole call is validated first: a `storage_pool` that is not a UUID, or any invalid
-        item — a kind the environment does not serve, more than one of `create`/`update`/`delete`,
+        item — a kind the environment does not serve, `controller` or `fleet-version` (with any
+        intent, `delete` included), more than one of `create`/`update`/`delete`,
         a `delete` carrying a `spec`, a missing `kind`/`name`, a non-object `spec`, a name outside
         the pool subtree — fails with 400 and writes nothing. A create onto an existing resource is
         409 `RESOURCE_EXISTS` (409 `CLUSTER_NAME_IN_USE` for a cluster); an update on an absent one
@@ -529,7 +541,9 @@ paths:
       description: |
         Returns the components, datapack specs, and target versions the agent should reconcile
         toward. Supports long-poll via `wait`. Datapack specs reference secret *names* only —
-        never secret values.
+        never secret values. Carries every declared resource, `controller` and
+        `fleet-version` included — the only non-admin read that does — and `revision` covers
+        them.
       security: [{ agentAPIKey: [] }]
       parameters:
         - { name: since, in: query, description: Last revision the agent has applied., schema: { type: integer } }
@@ -584,6 +598,98 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
 
+  # ------------------------------------------------------------------ admin (SRE)
+  # The only writers of `controller` and `fleet-version`. Each PUT is a full replace of
+  # one singleton (the route fixes kind and name); there is no DELETE — a declaration
+  # is moved, never withdrawn. amp environments only.
+  /api/v1/admin/environments/{envId}/desired/controller:
+    parameters: [{ $ref: '#/components/parameters/EnvId' }, { $ref: '#/components/parameters/AdminAccountId' }]
+    get:
+      tags: [admin]
+      summary: Read the declared controller release beside what the agent reports
+      operationId: adminGetControllerVersion
+      security: [{ adminSecret: [] }]
+      responses:
+        '200':
+          description: |
+            `observed` is normally present even when nothing is declared: the agent reports
+            the controller on every tick.
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminVersion' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AmbiguousId' }
+    put:
+      tags: [admin]
+      summary: Declare the amp controller release an environment runs
+      operationId: adminPutControllerVersion
+      description: |
+        Writes the `controller` resource, which the agent converges with a `helm upgrade` of
+        the release it runs in. The same body again keeps the generation; a changed one
+        bumps it.
+      security: [{ adminSecret: [] }]
+      parameters: [{ $ref: '#/components/parameters/AdminActor' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ControllerVersion' } } }
+      responses:
+        '202':
+          description: Declared; the agent converges it on its next tick.
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminDesired' } } }
+        '400':
+          description: An unknown field, a missing or padded `version`, a padded `chart_version`, or a non-amp environment.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AmbiguousId' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /api/v1/admin/environments/{envId}/desired/fleet-version:
+    parameters: [{ $ref: '#/components/parameters/EnvId' }, { $ref: '#/components/parameters/AdminAccountId' }]
+    get:
+      tags: [admin]
+      summary: Read the declared fleet version beside what the agent reports
+      operationId: adminGetFleetVersion
+      security: [{ adminSecret: [] }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminVersion' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AmbiguousId' }
+    put:
+      tags: [admin]
+      summary: Declare the version every endpoint should run
+      operationId: adminPutFleetVersion
+      description: |
+        Writes the `fleet-version` resource. The agent rolls the endpoints onto it once the
+        controller deploys it, gated on the controller being Ready at its declared version —
+        so declare the controller first; the two may go back to back. The same body again
+        keeps the generation; a changed one bumps it.
+      security: [{ adminSecret: [] }]
+      parameters: [{ $ref: '#/components/parameters/AdminActor' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FleetVersion' } } }
+      responses:
+        '202':
+          description: Declared; the agent rolls on a later tick.
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminDesired' } } }
+        '400':
+          description: An unknown field, a missing or padded `version`, or a non-amp environment.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `CONTROLLER_NOT_DECLARED`: no `controller` is declared. An undeclared controller is
+            never Ready, so the roll would wait forever; declaring the version it already runs
+            is enough. Or `AMBIGUOUS_ID`, as on the GET.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
   # ------------------------------------------------------------------ internal
   /api/v1/internal/meko-tokens/validate:
     post:
@@ -616,6 +722,20 @@ components:
       in: path
       required: true
       schema: { type: string, examples: [acme-prod] }
+    AdminAccountId:
+      name: X-Meko-Account-ID
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+      description: |
+        Optional on the admin routes, whatever `--require-account-header` says. Narrows the
+        lookup to one account, which resolves an id two accounts hold. Malformed is a 400.
+    AdminActor:
+      name: X-Meko-Admin-Actor-Email
+      in: header
+      required: false
+      schema: { type: string, format: email }
+      description: Optional. The operator making the write; logged with it.
 
   securitySchemes:
     aeonOIDC:
@@ -630,6 +750,13 @@ components:
         X-Meko-Admin-Secret + X-Meko-Api-Key-ID to YCP; the key id alone resolves the
         environment (one key drives one environment). Revocable from YBM; enrollment
         is an idempotent check-in, so there is no bootstrap credential to expire.
+    adminSecret:
+      type: apiKey
+      in: header
+      name: X-Meko-Admin-Secret
+      description: |
+        The fleet-wide admin secret, on the `/api/v1/admin/*` routes. Separation from the
+        customer surface is by path: YBM's customer pass-through must not forward them.
     internalSecret:
       type: apiKey
       in: header
@@ -641,6 +768,7 @@ components:
     NotFound: { description: Not found., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     BadRequest: { description: Invalid request., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: Conflicting state., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    AmbiguousId: { description: '`AMBIGUOUS_ID`: two accounts hold this id and no `X-Meko-Account-ID` was sent.', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     UnsupportedMediaType:
       description: |
         The request did not carry `Content-Type: application/json`. Every write on
@@ -788,7 +916,8 @@ components:
           default: false
           description: |
             Confirms an empty `resources`, which withdraws everything the environment
-            declares. Required for that case and ignored otherwise. A body field rather
+            declares except `controller` and `fleet-version`. Required for that case and
+            ignored otherwise. A body field rather
             than a query parameter because YBM's pass-through forwards the JSON body and
             nothing else.
 
@@ -802,11 +931,12 @@ components:
       required: [kind, name]
       properties:
         # Constrained by the environment's kind: a meko environment serves agent and
-        # datapack, an amp one storage-pool, cluster, branch, endpoint, controller,
-        # fleet-version and extension. Declaring
-        # anything else is refused with 400 at declare time, on registration and on
-        # POST /environments/{id}/desired, rather than reaching the agent and coming
-        # back as permanent drift.
+        # datapack, an amp one storage-pool, cluster, branch, endpoint and extension.
+        # Declaring anything else is refused with 400 at declare time, on registration
+        # and on POST /environments/{id}/desired, rather than reaching the agent and
+        # coming back as permanent drift. amp's controller and fleet-version stay in the
+        # enum because /agent/desired-state returns them, but only the admin routes
+        # write them: every public write refuses them the same way.
         kind: { type: string, examples: [datapack], enum: [agent, datapack, storage-pool, cluster, branch, endpoint, controller, fleet-version, extension], description: Resource type; dispatched to a reconciler. }
         name: { type: string, examples: [alpha] }
         # spec references secret NAMES only — never secret values
@@ -832,6 +962,48 @@ components:
         state: { type: string, examples: [ready] }
         error: { type: string, description: Why the resource is not converged, when the agent can say. }
         attrs: { type: object, additionalProperties: { type: string } }
+
+    ControllerVersion:
+      type: object
+      # additionalProperties: false mirrors the server's strict bind; the agent would
+      # silently drop a misspelled key, so the API refuses it instead.
+      additionalProperties: false
+      required: [version]
+      description: The `controller` spec.
+      properties:
+        version: { type: string, examples: [0.260901.0-abc1234], description: 'The image tag for the controller, the agent and the endpoint pin. Non-empty, no surrounding whitespace; the format is not checked here.' }
+        chart_version: { type: string, examples: [0.260901.0], description: The yb-amp-controller chart version. No surrounding whitespace. }
+        values: { type: object, additionalProperties: true, description: Helm value overrides the environment carries, passed through verbatim. }
+
+    FleetVersion:
+      type: object
+      additionalProperties: false
+      required: [version]
+      description: The `fleet-version` spec.
+      properties:
+        version: { type: string, examples: [0.260901.0-abc1234], description: 'The version every endpoint should run. Non-empty, no surrounding whitespace.' }
+
+    AdminDesired:
+      type: object
+      required: [kind, name, spec, generation]
+      description: A stored `controller` or `fleet-version` declaration.
+      properties:
+        kind: { type: string, enum: [controller, fleet-version] }
+        name: { type: string, enum: [controller, fleet] }
+        spec: { type: object, additionalProperties: true }
+        # Always present, 0 included -- unlike DesiredResource, which omits a 0.
+        generation: { type: integer, format: int64, description: Bumped only when the spec changes. }
+
+    AdminVersion:
+      type: object
+      required: [desired, observed]
+      properties:
+        desired:
+          oneOf: [{ $ref: '#/components/schemas/AdminDesired' }, { type: 'null' }]
+          description: The declaration; null when none has been made.
+        observed:
+          oneOf: [{ $ref: '#/components/schemas/ResourceStatus' }, { type: 'null' }]
+          description: The agent-reported inventory row whose `id` is `<kind>/<name>`; null when there is none.
 
     StoragePoolRegionPatch:
       type: object

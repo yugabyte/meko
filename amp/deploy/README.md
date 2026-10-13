@@ -8,7 +8,7 @@ Helm chart to run it on Kubernetes. It implements
 deploy/
   up.sh             # one-shot bring-up on ECR: namespace + pull secret + YugabyteDB + controller (see below)
   up-gke.sh         # the GKE/GCR-native sibling of up.sh (no aws/ECR; see "GKE / GCR bring-up")
-  ycp-controller-upgrade-test.sh  # upgrade the controller through YCP desired state and assert the fleet survives
+  ycp-controller-upgrade-test.sh  # upgrade the controller, then roll the fleet, through YCP's admin routes and assert the endpoints survive
   endpoint/
     Dockerfile      # builds the single-container endpoint image; PID 1 is
                     # endpoint-supervisor (compute/endpoint_supervisor)
@@ -365,11 +365,14 @@ directive is opt-in only — it does **not** run nightly.
 
 [`ycp-controller-upgrade-test.sh`](ycp-controller-upgrade-test.sh) is a third
 script over the same two preconditions, run by hand rather than by CI: it moves
-the controller's own version through YCP desired state and asserts the release
+the controller's own version through YCP's admin route
+(`PUT /api/v1/admin/environments/{id}/desired/controller`) and asserts the release
 advances one helm revision, the controller, agent and endpoint pin all land on
 the new tag, the endpoints running before the upgrade survive it unchanged, and
-endpoints created afterwards come up on the new pin. The agent pulls the default
-OCI chart with the install's pull secret; `YCP_CONTROLLER_CHART` into
+endpoints created afterwards come up on the new pin. It then declares the
+`fleet-version` the same way and asserts every endpoint rolls onto the new tag. The
+control plane must serve those routes; the script checks before writing. The agent
+pulls the default OCI chart with the install's pull secret; `YCP_CONTROLLER_CHART` into
 `agent.controllerChart` overrides it, e.g. with a pair published by
 [`ycp/test/local/controller-chart-publish.sh`](../../ycp/test/local/controller-chart-publish.sh).
 

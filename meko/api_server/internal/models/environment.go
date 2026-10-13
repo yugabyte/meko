@@ -82,7 +82,7 @@ type DesiredResource struct {
 	// Generation is bumped by the control plane whenever Spec changes, so the
 	// reconcile-agent can tell an unchanged resource (skip) from a mutated one
 	// (re-apply). Starts at 0 (see ReplaceDesired: the amp backend's cache-cold
-	// NoOp depends on it); maintained by ReplaceDesired.
+	// NoOp depends on it); maintained by the repository's desired-state writes.
 	Generation int64 `json:"generation,omitempty"`
 }
 

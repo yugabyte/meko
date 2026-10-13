@@ -362,6 +362,14 @@ func (s *EnvironmentService) Get(id string, scope AccountScope) (*models.Environ
 func (s *EnvironmentService) Register(
 	req RegisterEnvironmentRequest, scope AccountScope,
 ) (e *models.Environment, err error) {
+	// First, and above all before the insert: the desired-state write below swallows
+	// its error, so a refusal left to the repository would register the environment
+	// and quietly drop its whole declaration.
+	if req.Desired != nil {
+		if rerr := refuseAdminOnlyKinds(*req.Desired); rerr != nil {
+			return nil, rerr
+		}
+	}
 	accountID := req.AccountID
 	if scope != "" {
 		accountID = string(scope)
@@ -410,7 +418,6 @@ func (s *EnvironmentService) Register(
 		if err := checkKinds(kind, *req.Desired); err != nil {
 			return nil, err
 		}
-		logFleetWithoutController(req.Name, *req.Desired)
 	}
 	placement := req.Placement
 	if placement == "" {
@@ -941,26 +948,34 @@ func (s *EnvironmentService) Entitlement() models.Entitlement {
 // storing a resource nothing converges.
 var resourceKinds = map[string][]string{
 	KindMeko: {"agent", "datapack"},
-	// "controller" and "fleet-version" are the odd ones out: they move software
-	// rather than resources — the version the amp controller release runs, and the
-	// version its endpoints are rolled onto.
-	KindAmp: {"storage-pool", "cluster", "branch", "endpoint", "controller", "fleet-version", KindExtension},
+	// The two admin-only kinds are the odd ones out: they move software rather than
+	// resources, and only the admin routes may name them (refuseAdminOnlyKinds). They
+	// are listed so those routes can ask whether an environment serves them.
+	KindAmp: {
+		"storage-pool", "cluster", "branch", "endpoint",
+		repository.KindController, repository.KindFleetVersion, KindExtension,
+	},
 }
 
-// logFleetWithoutController reports a full desired set that declares a
-// fleet-version but no controller. Not refused, because nothing real declares one:
-// the fleet can only reach a version the controller deploys, so the agent would
-// wait on a controller nobody manages, and this log is the only trace of why.
-func logFleetWithoutController(envID string, res []models.DesiredResource) {
-	fleet, ctl := false, false
-	for _, r := range res {
-		fleet = fleet || r.Kind == "fleet-version"
-		ctl = ctl || r.Kind == "controller"
+// ErrAdminOnlyKind re-exports the repository's, so a handler maps a refusal raised
+// inside a transaction without importing the storage layer.
+var ErrAdminOnlyKind = repository.ErrAdminOnlyKind
+
+// refuseAdminOnlyKinds is every public write path's 400 for an admin-only kind,
+// whatever the request does with it: there is no public way to name one, so the
+// answer does not depend on what is stored.
+func refuseAdminOnlyKinds(res []models.DesiredResource) error {
+	for i, r := range res {
+		if repository.IsAdminOnlyKind(r.Kind) {
+			return fmt.Errorf("%w: resources[%d]: kind %q is set only through the admin API", ErrValidation, i, r.Kind)
+		}
 	}
-	if fleet && !ctl {
-		slog.Error("desired state declares a fleet-version without a controller; the agent will wait on it indefinitely",
-			"env", envID)
-	}
+	return nil
+}
+
+// withoutAdminOnly drops the admin-only kinds from a public read.
+func withoutAdminOnly(res []models.DesiredResource) []models.DesiredResource {
+	return slices.DeleteFunc(res, func(d models.DesiredResource) bool { return repository.IsAdminOnlyKind(d.Kind) })
 }
 
 // checkKinds refuses a declared set naming a kind this environment's agent does not
@@ -981,15 +996,21 @@ func checkKinds(envKind string, res []models.DesiredResource) error {
 		if slices.Contains(known, r.Kind) {
 			continue
 		}
+		// Not offered: every caller is a public path, where they are refused.
+		want := slices.DeleteFunc(slices.Clone(known), repository.IsAdminOnlyKind)
 		return fmt.Errorf("%w: resources[%d] has kind %q, which a %s environment does not serve (want one of %s)",
-			ErrValidation, i, r.Kind, envKind, strings.Join(known, ", "))
+			ErrValidation, i, r.Kind, envKind, strings.Join(want, ", "))
 	}
 	return nil
 }
 
-// SetDesired replaces the desired resource set. ok=false ⇒ unknown environment,
-// or one the scope does not own.
+// SetDesired replaces the desired resource set, apart from the admin-only kinds,
+// which it neither accepts nor withdraws. ok=false ⇒ unknown environment, or one the
+// scope does not own.
 func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []models.DesiredResource) (bool, error) {
+	if err := refuseAdminOnlyKinds(res); err != nil {
+		return false, err
+	}
 	e, err := s.Get(envID, scope)
 	if err != nil || e == nil {
 		return false, err
@@ -997,13 +1018,22 @@ func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []
 	if err := checkKinds(e.Kind, res); err != nil {
 		return true, err
 	}
-	logFleetWithoutController(e.UUID, res)
 	return true, s.repo.ReplaceDesired(e.UUID, res)
 }
 
-// Desired returns the environment's desired resources, by key -- callers have
-// already resolved the environment, whether by scope or by api key id.
+// Desired returns the environment's desired resources without the admin-only kinds,
+// by key -- callers have already resolved the environment. It is what a public read
+// shows; the agent reads DesiredForAgent.
 func (s *EnvironmentService) Desired(envUUID string) ([]models.DesiredResource, error) {
+	res, err := s.repo.ListDesired(envUUID)
+	if err != nil {
+		return nil, err
+	}
+	return withoutAdminOnly(res), nil
+}
+
+// DesiredForAgent is Desired with the admin-only kinds, which the agent converges.
+func (s *EnvironmentService) DesiredForAgent(envUUID string) ([]models.DesiredResource, error) {
 	return s.repo.ListDesired(envUUID)
 }
 
@@ -1018,6 +1048,9 @@ func (s *EnvironmentService) Desired(envUUID string) ([]models.DesiredResource, 
 // path differently, which resourcePath reconciles: a desired row's Name is already
 // the full path, while an observed row's Name is only the leaf and the path lives in
 // its ID as "<kind>/<path>".
+//
+// The admin-only kinds are left out of both: these lists are a tenant's view of a
+// shared environment, and those rows are the environment's own.
 func (s *EnvironmentService) listResourcesForEnv(
 	e *models.Environment, kind, name string, subtree bool,
 ) (desired []models.DesiredResource, observed []ResourceStatus, err error) {
@@ -1026,7 +1059,7 @@ func (s *EnvironmentService) listResourcesForEnv(
 		return nil, nil, err
 	}
 	desired = []models.DesiredResource{}
-	for _, d := range all {
+	for _, d := range withoutAdminOnly(all) {
 		if matchResource(kind, name, subtree, d.Kind, d.Name) {
 			desired = append(desired, d)
 		}
@@ -1039,6 +1072,9 @@ func (s *EnvironmentService) listResourcesForEnv(
 			return desired, nil, fmt.Errorf("decode observed resources: %w", uerr)
 		}
 		for _, o := range obs {
+			if repository.IsAdminOnlyKind(o.Kind) {
+				continue
+			}
 			if matchResource(kind, name, subtree, o.Kind, resourcePath(o.Kind, o.ID)) {
 				observed = append(observed, o)
 			}
@@ -1069,15 +1105,20 @@ func matchResource(filterKind, filterName string, subtree bool, kind, path strin
 	return subtree && strings.HasPrefix(path, filterName+"/")
 }
 
-// validateResourcePatches checks a batch before any write: every spec that is not a
-// delete must be a JSON object (the shallow-merge target), and no kind may be one the
-// environment's agent does not serve. It returns ErrValidation on the first problem,
-// so a caller runs it before opening the transaction and the batch stays
-// all-or-nothing.
+// validateResourcePatches checks a batch before any write: no patch, delete included,
+// may name an admin-only kind; every spec that is not a delete must be a JSON object
+// (the shallow-merge target); and no kind may be one the environment's agent does not
+// serve. It returns ErrValidation on the first problem, so a caller runs it before
+// opening the transaction and the batch stays all-or-nothing.
 func validateResourcePatches(envKind string, patches []models.ResourcePatch) error {
 	check := make([]models.DesiredResource, len(patches))
 	for i, p := range patches {
 		check[i] = models.DesiredResource{Kind: p.Kind, Name: p.Name}
+	}
+	if err := refuseAdminOnlyKinds(check); err != nil {
+		return err
+	}
+	for i, p := range patches {
 		if !p.Delete && len(bytes.TrimSpace(p.Spec)) > 0 {
 			var probe map[string]json.RawMessage
 			if json.Unmarshal(p.Spec, &probe) != nil {

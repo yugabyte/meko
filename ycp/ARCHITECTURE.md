@@ -36,7 +36,7 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. It also converges the software the environment runs: a declared `controller` kind is a `helm upgrade` of the release the agent is itself a member of, and a declared `fleet-version` rolls the endpoints onto it. A declared `extension` is registered in the controller's extension catalog. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
+| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The one pull agent, for either kind. It enrolls, reads desired state, and drives a REST API to converge it, then reports the inventory back. It never applies a manifest — a data plane's workloads come from its chart. `ENV_KIND` picks the backend — `amp` (the default) drives the amp controller, `meko` drives meko's api_server. It also converges the software the environment runs: a declared `controller` kind is a `helm upgrade` of the release the agent is itself a member of, and a declared `fleet-version` rolls the endpoints onto it; both are declared only on the admin tier (see Reconcile, below). A declared `extension` is registered in the controller's extension catalog. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
 | `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (`reconcile/ampbackend`, `reconcile/mekobackend`). Level-triggered, so a missed tick self-heals. |
 | `reconcile/mekobackend` | — | The `Backend` for meko's tenant API: the `agent` and `datapack` kinds, converged over `api_server`'s PAT-authenticated routes. Its verbs are synchronous, so unlike amp it needs no applied-generation echo. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
@@ -157,6 +157,14 @@ cluster.
    `spec` is exempt — it is passed through opaquely, so a field only a newer agent
    knows still reaches it. Registration keeps its plain `"desired": []` (below): there
    is nothing yet to delete.
+
+   `controller` and `fleet-version` move an amp environment's software, and no public
+   route writes them: they are declared only through
+   `PUT /api/v1/admin/environments/{id}/desired/{controller,fleet-version}`. The
+   desired-state POST, registration's `desired` and `PATCH /environments/resources`
+   refuse either kind (400); a POST that omits them leaves them in place, and the
+   public reads of desired state omit them. `/agent/desired-state` returns them with
+   everything else.
 5. **Report** — the agent `POST`s `/agent/status` with real facts, the workload health it
    read from its own namespace (`components`: one row per Deployment and StatefulSet,
    healthy-of-total plus the image tag — the only way the console can say what is up,
@@ -285,8 +293,9 @@ an agent with this kind onto it — and one a branch still enables is refused by
 controller and retried until the branch goes, with the environment DEGRADED meanwhile. Mapping details: `amp/controller/architecture/ac-ycp.md`.
 
 `POST /environments` takes `"desired": [...]` to declare an environment's resources —
-including `[]`, which is simply the same as omitting it. There is no server-side seed:
-what an environment holds is what somebody declared.
+including `[]`, which is simply the same as omitting it, and refuses `controller` and
+`fleet-version` as the desired-state POST does. There is no server-side seed: what an
+environment holds is what somebody declared.
 
 ### What a meko agent converges
 
@@ -444,9 +453,9 @@ ycp/test/local/meko-reconcile.sh   # the kind=meko reconcile loop, on a kept e2e
   must be permanent rather than retried.
 - `test/e2e` — builds the control-plane image, stands it up on a throwaway kind
   cluster, and drives rollout → health → base path → auth gate → register → install
-  hint. It exercises the real image, the real migrations and RBAC over the wire. It
-  does **not** cover an agent converging anything; see the header comment for why,
-  and `test/local/meko-reconcile.sh` for where that lives.
+  hint → the admin version tier. It exercises the real image, the real migrations and
+  RBAC over the wire. It does **not** cover an agent converging anything; see the
+  header comment for why, and `test/local/meko-reconcile.sh` for where that lives.
 
 The registry's own unit tests live with the implementation, in
 `api_server/internal/service/` and `api_server/internal/repository/`.

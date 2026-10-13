@@ -11,10 +11,10 @@
 # re-issue forever or garbage-collect the endpoints it can no longer see. This
 # asserts the opposite, end to end and entirely through YCP:
 #
-#   1. desired state declares pool -> clusters -> endpoints, and the
-#      controller at CTL_V1. The controller row must report ready at V1 with no
-#      upgrade issued — a steady state that churns is a broken one.
-#   2. desired state moves the controller to CTL_V2. The row must reach ready at
+#   1. desired state declares pool -> clusters -> endpoints, and the admin route
+#      declares the controller at CTL_V1. The controller row must report ready at
+#      V1 with no upgrade issued — a steady state that churns is a broken one.
+#   2. the admin route moves the controller to CTL_V2. The row must reach ready at
 #      V2, and the release's helm revision must have advanced exactly once.
 #   3. SETTLE_SECONDS (5 minutes by default) pass. The SAME endpoints — same amp
 #      ids, same Kubernetes Deployment UIDs, so neither recreated nor collected —
@@ -23,11 +23,16 @@
 #      V2 endpoint image: that is the proof the upgrade moved the pin rather than
 #      only the controller.
 #
-#   5. desired state declares the fleet-version at CTL_V2. Every endpoint — the
+#   5. the admin route declares the fleet-version at CTL_V2. Every endpoint — the
 #      two left on V1 and the two created on V2 — must end up on the V2 image, and
 #      the fleet row must report ready.
-#   6. with CTL_V3 set, desired state moves the controller AND the fleet to CTL_V3
-#      in one write: the agent must upgrade the controller first and then roll.
+#   6. with CTL_V3 set, the controller and then the fleet move to CTL_V3 in two
+#      back-to-back admin writes: the agent must upgrade the controller first and
+#      then roll.
+#
+# The tree goes through the public POST .../desired, the two version kinds only
+# through PUT /api/v1/admin/environments/{id}/desired/{controller,fleet-version}.
+# The public write can neither set nor prune those, so the two are independent.
 #
 # Endpoints already running stay on V1 through step 4 on purpose: the controller
 # upgrade rolls nothing, and moving them is the fleet-version kind's job.
@@ -56,7 +61,9 @@
 #
 # Preconditions:
 #   - amp/deploy/ycp-up.sh stood up the control plane in $NS and registered an
-#     amp environment, emitting YCP_ENV_ID + YCP_ADMIN_KEY;
+#     amp environment, emitting YCP_ENV_ID + YCP_ADMIN_KEY, and that control
+#     plane serves the admin version routes and declares no fleet-version at
+#     $CTL_V2 (both checked before anything is written);
 #   - amp/deploy/up-gke.sh deployed the stack at TAG=$CTL_V1 with YCP_ENABLED=1
 #     and YCP_CONTROLLER_CHART pointing at a chart the agent can pull
 #     (ycp/test/local/controller-chart-publish.sh publishes one);
@@ -76,7 +83,6 @@ YCP_ADMIN_KEY="${YCP_ADMIN_KEY:?YCP_ADMIN_KEY is required}"
 CTL_V1="${CTL_V1:?CTL_V1 (the image tag deployed now) is required}"
 CTL_V2="${CTL_V2:?CTL_V2 (the image tag to upgrade to) is required}"
 CTL_V3="${CTL_V3:-}"
-FLEET_V="" # when set, desired_json also declares the fleet-version at it
 
 RELEASE="${RELEASE:-yb-amp-controller}"
 YCP_PF_PORT="${YCP_PF_PORT:-18094}"
@@ -109,6 +115,7 @@ hdr "port-forward control plane"
 kubectl -n "$NS" port-forward svc/meko-api-server "${YCP_PF_PORT}:80" >/tmp/ctlup-pf.log 2>&1 &
 PF_PID=$!
 CP="http://127.0.0.1:${YCP_PF_PORT}/api/v1"
+ADMIN="$CP/admin/environments/${YCP_ENV_ID}/desired"
 for ((i = 0; i < 30; i++)); do
   curl -sf "$CP/health" >/dev/null 2>&1 && break
   sleep 1
@@ -127,6 +134,16 @@ set_desired() {
     -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" -H 'Content-Type: application/json' \
     -d "$(jq -nc --argjson r "$1" '{resources:$r}')" >/dev/null
 }
+# put_version <controller|fleet-version> <version>: declare it on the admin tier.
+put_version() {
+  local r
+  r=$(curl -s -w '\n%{http_code}' -X PUT "$ADMIN/$1" \
+    -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg v "$2" '{version:$v}')")
+  [ "${r##*$'\n'}" = 202 ] && return 0
+  note "PUT .../desired/$1 answered ${r##*$'\n'}: ${r%$'\n'*}"
+  return 1
+}
 # The agent reports ResourceStatus.Name as the LEAF of the path, not the path.
 res_attr() { env_json | jq -r --arg k "$1" --arg n "$2" --arg a "$3" \
   '.resources[]?|select(.kind==$k and .name==$n)|.attrs[$a] // empty' 2>/dev/null | head -1; }
@@ -138,11 +155,9 @@ deploy_tag() { kubectl -n "$NS" get deploy "$1" \
   -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*://'; }
 ep_deploy() { kubectl -n "$NS" get deploy "yb-ep-$1" -o jsonpath="{$2}" 2>/dev/null; }
 
-# desired_json <controller version> <endpoint leaf...> — endpoint N gets cluster
-# cN and that cluster's default branch, both declared so neither is collected.
+# desired_json <endpoint leaf...> — endpoint N gets cluster cN and that cluster's
+# default branch, both declared so neither is collected.
 desired_json() {
-  local version="$1"
-  shift
   local tree='[]' n=0
   for e in "$@"; do
     n=$((n + 1))
@@ -153,11 +168,8 @@ desired_json() {
              {kind:"endpoint", name:($pool+"/"+$cl+"/main/"+$ep),
                spec:{role:"read_write", password:$pw}} ]')
   done
-  jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" --arg v "$version" --arg fv "$FLEET_V" --argjson tree "$tree" '
-    [ {kind:"storage-pool", name:$pool,        spec:{owner_user_id:$uid}},
-      {kind:"controller",   name:"controller", spec:{version:$v}} ]
-    + (if $fv == "" then [] else [{kind:"fleet-version", name:"fleet", spec:{version:$fv}}] end)
-    + $tree'
+  jq -nc --arg pool "$POOL_NAME" --arg uid "$UID_" --argjson tree "$tree" '
+    [ {kind:"storage-pool", name:$pool, spec:{owner_user_id:$uid}} ] + $tree'
 }
 
 # wait_ready <timeout secs> <kind> <leaf...>
@@ -186,15 +198,51 @@ CHART_REF=$(kubectl -n "$NS" get deploy amp-reconcile-agent \
 note "chart: ${CHART_REF:-<the agent default, oci://quay.io/yugabyte/charts/yb-amp-controller>}"
 REV0=$(helm_revision)
 note "helm revision now: ${REV0:-?}"
+# Before any write: against a control plane without the admin tier, the public
+# POST below would still prune a controller row declared there earlier.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$ADMIN/controller")
+[ "$code" = 200 ] && ok "the control plane serves the admin version routes" || {
+  bad "GET .../admin/environments/${YCP_ENV_ID}/desired/controller answered ${code}, want 200 — an older control plane, or no such environment"
+  exit 1
+}
+# A fleet already declared at CTL_V2, as a previous run with these tags leaves it,
+# starts the roll the moment step 3 moves the controller's pin onto it, and step 4
+# would then blame the controller upgrade. No public write clears it.
+FLEET0=$(curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$ADMIN/fleet-version" |
+  jq -r '.data.desired.spec.version // empty')
+[ "$FLEET0" != "$CTL_V2" ] && ok "fleet-version is declared at ${FLEET0:-nothing}, not ${CTL_V2}" || {
+  bad "fleet-version is already declared at ${CTL_V2}; PUT {\"version\":\"${CTL_V1}\"} to .../desired/fleet-version first"
+  exit 1
+}
 
 # --- 1. the tree plus the controller at the version already deployed ---
 hdr "desired state: pool -> 2 clusters -> 2 endpoints, controller@${CTL_V1}"
-set_desired "$(desired_json "$CTL_V1" "${FIRST[@]}")" &&
-  ok "desired state accepted (controller is a kind the control plane allows)" ||
+set_desired "$(desired_json "${FIRST[@]}")" && ok "desired state accepted" ||
   {
     bad "POST desired failed — the control plane rejected the document"
     exit 1
   }
+put_version controller "$CTL_V1" && ok "controller@${CTL_V1} declared on the admin tier" ||
+  {
+    bad "admin PUT controller@${CTL_V1} failed"
+    exit 1
+  }
+
+hdr "the version kinds are admin-only"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CP/environments/${YCP_ENV_ID}/desired" \
+  -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" -H 'Content-Type: application/json' \
+  -d "$(jq -nc --argjson r "$(desired_json "${FIRST[@]}")" --arg v "$CTL_V1" \
+    '{resources:($r + [{kind:"controller", name:"controller", spec:{version:$v}}])}')")
+[ "$code" = 400 ] && ok "a public POST naming the controller is refused" ||
+  bad "a public POST naming the controller answered ${code}, want 400"
+listed=$(curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$CP/environments/${YCP_ENV_ID}/desired" |
+  jq -r '[.data.resources[]|select(.kind=="controller" or .kind=="fleet-version")]|length')
+[ "$listed" = 0 ] && ok "the public desired-state read lists no version row" ||
+  bad "the public desired-state read lists ${listed:-?} version rows, want 0"
+declared=$(curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$ADMIN/controller" |
+  jq -r '.data.desired.spec.version // empty')
+[ "$declared" = "$CTL_V1" ] && ok "the admin read reports controller@${CTL_V1}" ||
+  bad "the admin read reports controller@'${declared}', want ${CTL_V1}"
 
 hdr "the tree converges"
 if wait_ready 900 endpoint "${FIRST[@]}"; then
@@ -237,9 +285,9 @@ done
 [ "${#EP_IDS[@]}" = 2 ] && ok "2 endpoints recorded" || bad "recorded ${#EP_IDS[@]} endpoints, want 2"
 
 # --- 3. the upgrade ---
-hdr "desired state: controller@${CTL_V2}"
-set_desired "$(desired_json "$CTL_V2" "${FIRST[@]}")" && ok "upgrade declared" ||
-  bad "POST desired (upgrade) failed"
+hdr "admin: controller@${CTL_V2}"
+put_version controller "$CTL_V2" && ok "upgrade declared" ||
+  bad "admin PUT controller@${CTL_V2} failed"
 
 hdr "the upgrade converges (the agent restarts itself doing this)"
 UP_START=$SECONDS
@@ -293,7 +341,7 @@ done
 # --- 5. two more endpoints, on the upgraded controller ---
 hdr "declare 2 more endpoints against the upgraded controller"
 ALL=("${FIRST[@]}" "${LATER[@]}")
-set_desired "$(desired_json "$CTL_V2" "${ALL[@]}")" && ok "desired state accepted" ||
+set_desired "$(desired_json "${ALL[@]}")" && ok "desired state accepted" ||
   bad "POST desired (2 more endpoints) failed"
 
 if wait_ready 900 endpoint "${ALL[@]}"; then
@@ -344,9 +392,8 @@ check_fleet_images() {
   done
 }
 
-hdr "desired state: fleet-version@${CTL_V2}"
-FLEET_V="$CTL_V2"
-set_desired "$(desired_json "$CTL_V2" "${ALL[@]}")" && ok "fleet-version declared" || bad "POST desired (fleet-version) failed — is fleet-version an allowed kind?"
+hdr "admin: fleet-version@${CTL_V2}"
+put_version fleet-version "$CTL_V2" && ok "fleet-version declared" || bad "admin PUT fleet-version@${CTL_V2} failed"
 ROLL_START=$SECONDS
 if wait_fleet "$CTL_V2" 1200; then
   ok "fleet row reports ready at ${CTL_V2} after $((SECONDS - ROLL_START))s"
@@ -362,11 +409,11 @@ else
   dump_inventory
 fi
 
-# --- 7. controller and fleet in one write: upgrade, then roll ---
+# --- 7. controller and fleet back to back: upgrade, then roll ---
 if [ -n "$CTL_V3" ]; then
-  hdr "desired state: controller@${CTL_V3} + fleet-version@${CTL_V3} in one write"
-  FLEET_V="$CTL_V3"
-  set_desired "$(desired_json "$CTL_V3" "${ALL[@]}")" && ok "declared" || bad "POST desired (V3) failed"
+  hdr "admin: controller@${CTL_V3}, then fleet-version@${CTL_V3}"
+  put_version controller "$CTL_V3" && put_version fleet-version "$CTL_V3" && ok "declared" ||
+    bad "admin PUT (V3) failed"
   UP_START=$SECONDS
   if wait_fleet "$CTL_V3" 1800; then
     ok "fleet row reports ready at ${CTL_V3} after $((SECONDS - UP_START))s"
@@ -377,7 +424,7 @@ if [ -n "$CTL_V3" ]; then
   [ "$(deploy_tag amp-controller)" = "$CTL_V3" ] && ok "controller Deployment is at ${CTL_V3}" || bad "controller Deployment is at '$(deploy_tag amp-controller)'"
   check_fleet_images "$CTL_V3"
 else
-  note "CTL_V3 unset: skipping the one-write controller + fleet upgrade"
+  note "CTL_V3 unset: skipping the back-to-back controller + fleet upgrade"
 fi
 
 hdr "result"

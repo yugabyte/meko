@@ -3,9 +3,9 @@
 **Status:** Draft
 **Last updated:** 2026-09-18
 
-An operator declares the version the amp controller release should run; the agent
-`helm upgrade`s it. Moving a BYOC controller stops being a human with a repo
-checkout and `kubectl`.
+An operator declares the version the amp controller release should run, on YCP's
+admin tier; the agent `helm upgrade`s it. Moving a BYOC controller stops being a
+human with a repo checkout and `kubectl`.
 
 This documents the reconciler side — what was added to `ycp/` and why each piece
 is there. The plan it sits under is
@@ -22,6 +22,11 @@ is there. The plan it sits under is
 
 A singleton: one reconciler is bound write-once to one
 controller, so a second name would be two declarations driving one helm release.
+
+**Declaring it.** Only `PUT /api/v1/admin/environments/{id}/desired/controller`
+writes the row, with the spec as its body; `GET` on the same path returns it beside
+the agent's observed row. The public desired-state routes refuse the kind, never
+remove it, and do not list it; `/agent/desired-state` carries it like any other row.
 
 It converges on **helm and the Kubernetes API**, not on the amp REST API. That is
 the fact everything below follows from — the thing being upgraded is the thing the
@@ -201,12 +206,13 @@ see the mismatch again and upgrade forever. The backend refuses that combination
 as `Permanent`; a chart repository reference honours `chart_version` normally.
 
 **What has run.** `amp/deploy/ycp-controller-upgrade-test.sh` drives a real
-upgrade on itest-dev entirely through YCP: it declares a fleet plus the controller
-at the version already deployed (asserting no upgrade is issued), moves the
-declaration, and asserts the release advances exactly one helm revision, the
-controller and agent pod templates carry the new tag, the endpoint pin moves with
-them, the endpoints running before the upgrade are the same Deployments five
-minutes after it, and endpoints created afterwards come up on the new pin.
+upgrade on itest-dev entirely through YCP: it declares a fleet through public desired
+state and the controller, at the version already deployed, through the admin route
+(asserting no upgrade is issued), moves the declaration, and asserts the release
+advances exactly one helm revision, the controller and agent pod templates carry the
+new tag, the endpoint pin moves with them, the endpoints running before the upgrade
+are the same Deployments five minutes after it, and endpoints created afterwards
+come up on the new pin.
 
 **Version skew across the release.** `controllerImageTagKeys` moves
 `controller.image.tag`, `agent.image.tag` and `controller.endpoint.image.tag` — the

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/lib/pq"
@@ -334,6 +335,43 @@ func (r *EnvironmentRepo) Update(e *models.Environment) error {
 	return nil
 }
 
+// The admin-only desired-state kinds. They move software rather than resources — the
+// version the amp controller release runs, and the version its endpoints are rolled
+// onto — and each is one environment-wide row under a fixed name, the only name the
+// agent accepts. UpsertAdminDesired is their only writer: every other write path
+// refuses them, and neither the prune nor the cascade delete ever removes one of the
+// two declarations (IsAdminDeclaration).
+//
+// Nothing deletes a declaration because the agent never deletes the resources behind
+// them, and only its own delete clears the generation its engine has cached: a row
+// withdrawn at generation N and re-declared at 0 would be skipped until the agent
+// restarted.
+const (
+	KindController   = "controller"
+	KindFleetVersion = "fleet-version"
+	ControllerName   = "controller"
+	FleetName        = "fleet"
+)
+
+var adminOnlyKinds = []string{KindController, KindFleetVersion}
+
+// IsAdminOnlyKind reports whether kind is written only through the admin API.
+func IsAdminOnlyKind(kind string) bool {
+	return slices.Contains(adminOnlyKinds, kind)
+}
+
+// IsAdminDeclaration reports whether a row is one of the two the agent converges. A row
+// of an admin-only kind under any other name, which earlier releases' public routes
+// accepted, is one the agent rejects as permanent drift, so the prune and the cascade
+// delete still remove it.
+func IsAdminDeclaration(kind, name string) bool {
+	return (kind == KindController && name == ControllerName) || (kind == KindFleetVersion && name == FleetName)
+}
+
+// ErrAdminOnlyKind is returned when a write path other than UpsertAdminDesired is
+// handed an admin-only kind, or UpsertAdminDesired any other.
+var ErrAdminOnlyKind = errors.New("kind is written only through the admin API")
+
 // ReplaceDesired atomically replaces the desired resource set for an environment,
 // maintaining a per-resource generation. A resource whose spec is unchanged keeps
 // its generation (so the agent skips it); a changed spec bumps it (so the agent
@@ -342,12 +380,20 @@ func (r *EnvironmentRepo) Update(e *models.Environment) error {
 // generation survives a replace. The spec comparison is JSONB `IS DISTINCT FROM`,
 // so it is semantic (key order / whitespace do not spuriously bump the generation).
 //
+// The admin-only kinds are outside the set: refused in res, and the two declarations
+// are never pruned, so a set that omits them leaves them as they are.
+//
 // New rows start at 0, not 1, on purpose: a backend that cannot echo the applied
 // generation back on List (the amp backend) relies on the engine's in-process
 // cache to skip no-op ticks, and that cache is empty after a restart. At
 // generation 0 the diff is a clean no-op cache-cold; a resource only crosses into
 // "re-apply" territory once its spec has actually changed.
 func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredResource) error {
+	for _, d := range res {
+		if IsAdminOnlyKind(d.Kind) {
+			return fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, d.Kind, d.Name)
+		}
+	}
 	tx, err := r.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -397,7 +443,7 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 		desired[key{d.Kind, d.Name}] = true
 	}
 	for k := range existing {
-		if desired[k] {
+		if desired[k] || IsAdminDeclaration(k.kind, k.name) {
 			continue
 		}
 		const prune = `DELETE FROM meko_system.environment_desired_resources
@@ -411,8 +457,23 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 
 // UpsertDesired writes one desired resource, replacing its spec whole, under
 // ReplaceDesired's generation rule, and returns the row as stored. Nothing else in
-// the set is read or pruned.
+// the set is read or pruned. An admin-only kind is refused: see UpsertAdminDesired.
 func (r *EnvironmentRepo) UpsertDesired(envUUID string, d models.DesiredResource) (models.DesiredResource, error) {
+	if IsAdminOnlyKind(d.Kind) {
+		return models.DesiredResource{}, fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, d.Kind, d.Name)
+	}
+	return r.upsertDesired(envUUID, d)
+}
+
+// UpsertAdminDesired is UpsertDesired for the admin-only kinds, and their only writer.
+func (r *EnvironmentRepo) UpsertAdminDesired(envUUID string, d models.DesiredResource) (models.DesiredResource, error) {
+	if !IsAdminOnlyKind(d.Kind) {
+		return models.DesiredResource{}, fmt.Errorf("%w: %s/%s is not admin-only", ErrAdminOnlyKind, d.Kind, d.Name)
+	}
+	return r.upsertDesired(envUUID, d)
+}
+
+func (r *EnvironmentRepo) upsertDesired(envUUID string, d models.DesiredResource) (models.DesiredResource, error) {
 	spec := d.Spec
 	if len(spec) == 0 {
 		spec = json.RawMessage("{}")
@@ -439,8 +500,12 @@ func (r *EnvironmentRepo) UpsertDesired(envUUID string, d models.DesiredResource
 // DeleteDesired removes exactly one desired resource, matched on kind AND name.
 // Not applyDesiredPatchesTx's delete, which matches a name and its descendants
 // across every kind — withdrawing extension "postgis" that way would also take a
-// storage pool called "postgis" and everything under it.
+// storage pool called "postgis" and everything under it. An admin-only kind is
+// refused: nothing deletes one.
 func (r *EnvironmentRepo) DeleteDesired(envUUID, kind, name string) error {
+	if IsAdminOnlyKind(kind) {
+		return fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, kind, name)
+	}
 	if _, err := r.db.Exec(
 		`DELETE FROM meko_system.environment_desired_resources WHERE env_uuid=$1 AND kind=$2 AND name=$3`,
 		envUUID, kind, name); err != nil {
@@ -464,19 +529,19 @@ func (r *EnvironmentRepo) DeleteDesired(envUUID, kind, name string) error {
 // does not prune: only the rows the batch names are read or written, so no unrelated
 // resource is touched. The per-item upsert reuses ReplaceDesired's spec-defaulting ({})
 // and generation rule — a generation bumps only when the merged spec is semantically
-// different.
+// different. A patch naming an admin-only kind fails the batch, and the cascade never
+// removes one.
 func applyDesiredPatchesTx(
 	tx *sql.Tx, envUUID, storagePool string, patches []models.ResourcePatch, guard UpdateGuard,
 ) error {
 	for _, p := range patches {
+		if IsAdminOnlyKind(p.Kind) {
+			return fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, p.Kind, p.Name)
+		}
+	}
+	for _, p := range patches {
 		if p.Delete {
-			// Removes the resource AND every descendant (endpoints under a branch,
-			// branches+endpoints under a cluster), mirroring the amp controller's own
-			// delete cascade. starts_with rather than LIKE so a _/% in a name is not a
-			// wildcard. Deleting an absent resource is a no-op, not an error.
-			const del = `DELETE FROM meko_system.environment_desired_resources
-				 WHERE env_uuid=$1 AND (name=$2 OR starts_with(name, $2 || '/'))`
-			if _, err := tx.Exec(del, envUUID, p.Name); err != nil {
+			if _, err := tx.Exec(deleteDesiredSubtree, envUUID, p.Name); err != nil {
 				return fmt.Errorf("delete desired subtree %s: %w", p.Name, err)
 			}
 			continue
@@ -526,6 +591,16 @@ func applyDesiredPatchesTx(
 	}
 	return nil
 }
+
+// deleteDesiredSubtree removes a resource AND every descendant (endpoints under a
+// branch, branches+endpoints under a cluster), mirroring the amp controller's own
+// delete cascade. It matches on name across kinds, so it spares the two admin
+// declarations by kind and name. starts_with rather than LIKE so a _/% in a name is
+// not a wildcard. Deleting an absent resource is a no-op, not an error.
+const deleteDesiredSubtree = `DELETE FROM meko_system.environment_desired_resources
+	 WHERE env_uuid=$1 AND (name=$2 OR starts_with(name, $2 || '/'))` +
+	` AND NOT ((kind='` + KindController + `' AND name='` + ControllerName + `')` +
+	` OR (kind='` + KindFleetVersion + `' AND name='` + FleetName + `'))`
 
 // mergeDesiredSpec reads the resource's current spec (locked FOR UPDATE) and shallow-
 // merges the patch onto it: top-level keys present in the patch replace those in the
@@ -680,6 +755,23 @@ func (r *EnvironmentRepo) ListDesired(envUUID string) ([]models.DesiredResource,
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// GetDesired returns one desired resource, or (nil, nil) when it is not declared.
+func (r *EnvironmentRepo) GetDesired(envUUID, kind, name string) (*models.DesiredResource, error) {
+	d := models.DesiredResource{Kind: kind, Name: name}
+	var spec string
+	err := r.db.QueryRow(
+		`SELECT COALESCE(spec::text, '{}'), generation FROM meko_system.environment_desired_resources
+		 WHERE env_uuid=$1 AND kind=$2 AND name=$3`, envUUID, kind, name).Scan(&spec, &d.Generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get desired %s/%s: %w", kind, name, err)
+	}
+	d.Spec = json.RawMessage(spec)
+	return &d, nil
 }
 
 func nullStr(s string) any {

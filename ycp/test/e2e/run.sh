@@ -18,6 +18,9 @@
 #      the YBM pass-through base a registration gave, which is stored for it,
 #   4d. a name stays claimed after deregistration, so re-registering it is a 409
 #      naming the collision rather than a 500,
+#   4e. an amp environment's controller and fleet-version are declared and read only
+#      through the admin tier; every public desired-state write refuses them (400)
+#      and none removes them, the public read omits them, the agent's carries them,
 #   5. the agent surface refuses a non-JSON content type (415), an empty body (400)
 #      and a blank state (400) -- and leaves the environment's state untouched
 #      when it does.
@@ -470,6 +473,152 @@ printf '%s' "$dup" | grep -q ENVIRONMENT_EXISTS ||
 printf '%s' "$dup" | grep -q hint-check ||
   die "the repeat registration's 409 does not name the environment that collided: $dup"
 echo "    a deregistered name stays claimed: re-registering is 409 ENVIRONMENT_EXISTS"
+
+# 4e. controller and fleet-version move an amp environment's software, so only the
+#     admin tier writes them. Every public desired-state write refuses them -- even a
+#     byte-identical copy of what is stored -- and none removes them, the public read
+#     leaves them out, and the agent's desired state still carries them. Throwaway
+#     environment; the status POST stands in for the agent's controller report.
+#     Paced like the extension block, for the rate limiter.
+log "checking the admin-only version kinds"
+sleep 2
+# Like api(), but records the status instead of failing on it.
+call() {
+  local method="$1" path="$2" r
+  shift 2
+  r="$(curl -sS -w '\n%{http_code}' -X "$method" "http://127.0.0.1:$PORT$BASE$path" \
+    -H "X-Meko-Admin-Secret: $ADMIN_KEY" "$@")"
+  CODE="${r##*$'\n'}"
+  BODY="${r%$'\n'*}"
+}
+admin_put() {
+  call PUT "/api/v1/admin/environments/$1/desired/$2" -H 'content-type: application/json' -d "$3"
+}
+public_desired() {
+  call POST /api/v1/environments/upg-check/desired -H 'content-type: application/json' -d "$1"
+}
+# The PUT's row as kind/name@generation=version. generation is a required key: the
+# admin tier sends it on a first write too, where the shared model would omit a 0.
+put_row() {
+  printf '%s' "$BODY" | python3 -c 'import json,sys; x=json.load(sys.stdin)["data"]; print("%s/%s@%d=%s" % (x["kind"], x["name"], x["generation"], x["spec"]["version"]))'
+}
+# An admin GET as desired=<row or null> observed=<id:state or null>.
+version_status() {
+  call GET "/api/v1/admin/environments/upg-check/desired/$1"
+  [ "$CODE" = "200" ] || die "admin GET $1 returned $CODE, want 200: $BODY"
+  printf '%s' "$BODY" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)["data"]
+x, o = d["desired"], d["observed"]
+print("desired=" + ("null" if x is None else "%s/%s@%d=%s" % (x["kind"], x["name"], x["generation"], x["spec"]["version"])),
+      "observed=" + ("null" if o is None else "%s:%s" % (o["id"], o["state"])))'
+}
+upg_declared() {
+  api GET /api/v1/environments/upg-check/desired |
+    python3 -c 'import json,sys; print(",".join(x["kind"]+"/"+x["name"] for x in json.load(sys.stdin)["data"]["resources"]))'
+}
+
+upg_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+call POST /api/v1/environments -H 'content-type: application/json' \
+  -d '{"name":"upg-reg","kind":"amp","account_id":"11111111-1111-1111-1111-111111111111",
+       "placement":"cloud","region":"local","api_key_id":"'"$upg_key"'",
+       "desired":[{"kind":"controller","name":"controller","spec":{"version":"v1"}}]}'
+[ "$CODE" = "400" ] || die "registering with a controller in desired returned $CODE, want 400: $BODY"
+call GET /api/v1/environments/upg-reg
+[ "$CODE" = "404" ] || die "the refused registration left upg-reg behind ($CODE)"
+api POST /api/v1/environments -H 'content-type: application/json' \
+  -d '{"name":"upg-check","kind":"amp","account_id":"11111111-1111-1111-1111-111111111111",
+       "placement":"cloud","region":"local","api_key_id":"'"$upg_key"'"}' >/dev/null ||
+  die "registering upg-check failed"
+
+# The agent reports the controller row whether or not one is declared.
+call POST /api/v1/agent/status -H "X-Meko-Api-Key-ID: $upg_key" -H 'content-type: application/json' \
+  -d '{"environment_state":"READY","resources":[{"kind":"controller","id":"controller/controller","name":"controller","state":"ready"}]}'
+case "$CODE" in 200 | 204) ;; *) die "POST /agent/status for upg-check returned $CODE: $BODY" ;; esac
+got="$(version_status controller)"
+[ "$got" = "desired=null observed=controller/controller:ready" ] ||
+  die "an undeclared controller reads as '$got'"
+admin_put upg-check fleet-version '{"version":"v2"}'
+[ "$CODE" = "409" ] || die "fleet-version with no controller declared returned $CODE, want 409: $BODY"
+case "$BODY" in *CONTROLLER_NOT_DECLARED*) ;; *) die "the 409 is not CONTROLLER_NOT_DECLARED: $BODY" ;; esac
+
+admin_put upg-check controller '{"version":"v1","chart_version":"0.1.0"}'
+[ "$CODE" = "202" ] && [ "$(put_row 2>/dev/null)" = "controller/controller@0=v1" ] ||
+  die "declaring controller@v1 returned $CODE $BODY, want 202 controller/controller@0=v1"
+admin_put upg-check controller '{"version":"v1","chart_version":"0.1.0"}'
+[ "$CODE" = "202" ] && [ "$(put_row 2>/dev/null)" = "controller/controller@0=v1" ] ||
+  die "re-declaring the same controller returned $CODE $BODY, want 202 at generation 0"
+admin_put upg-check controller '{"version":"v2"}'
+[ "$CODE" = "202" ] && [ "$(put_row 2>/dev/null)" = "controller/controller@1=v2" ] ||
+  die "moving the controller to v2 returned $CODE $BODY, want 202 controller/controller@1=v2"
+admin_put upg-check fleet-version '{"version":"v2"}'
+[ "$CODE" = "202" ] && [ "$(put_row 2>/dev/null)" = "fleet-version/fleet@0=v2" ] ||
+  die "declaring fleet-version@v2 returned $CODE $BODY, want 202 fleet-version/fleet@0=v2"
+for body in '{}' '{"version":"v3","x":1}' '{"version":" v3"}'; do
+  admin_put upg-check controller "$body"
+  [ "$CODE" = "400" ] || die "admin PUT controller $body returned $CODE, want 400"
+done
+admin_put "$ENV_NAME" controller '{"version":"v3"}'
+[ "$CODE" = "400" ] || die "declaring a controller on a meko environment returned $CODE, want 400"
+admin_put nope controller '{"version":"v3"}'
+[ "$CODE" = "404" ] || die "declaring a controller on an unknown environment returned $CODE, want 404"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+  "http://127.0.0.1:$PORT$BASE/api/v1/admin/environments/upg-check/desired/controller" \
+  -H 'content-type: application/json' -d '{"version":"v3"}')"
+[ "$code" = "401" ] || die "an admin PUT without the secret returned $code, want 401"
+call GET /api/v1/admin/environments/upg-check/desired/controller -H 'X-Meko-Account-ID: not-a-uuid'
+[ "$CODE" = "400" ] || die "an admin GET with a malformed account header returned $CODE, want 400"
+echo "    the admin tier declares, keeps the generation on a re-PUT, bumps it on a change, and refuses bad bodies"
+sleep 2
+
+got="$(version_status controller)"
+[ "$got" = "desired=controller/controller@1=v2 observed=controller/controller:ready" ] ||
+  die "the admin read of the controller is '$got'"
+got="$(version_status fleet-version)"
+[ "$got" = "desired=fleet-version/fleet@0=v2 observed=null" ] ||
+  die "the admin read of the fleet is '$got'"
+for body in '{"resources":[{"kind":"controller","name":"controller","spec":{"version":"v2"}}]}' \
+  '{"resources":[{"kind":"fleet-version","name":"fleet","spec":{"version":"v2"}}]}' \
+  '{"resources":[{"kind":"storage-pool","name":"p1","spec":{}},{"kind":"controller","name":"controller","spec":{"version":"v2"}}]}'; do
+  public_desired "$body"
+  [ "$CODE" = "400" ] || die "a public POST of $body returned $CODE, want 400"
+  case "$BODY" in *VALIDATION_ERROR*) ;; *) die "a public POST of $body was refused, but not as VALIDATION_ERROR: $BODY" ;; esac
+done
+[ -z "$(upg_declared)" ] || die "a refused public POST wrote '$(upg_declared)'"
+public_desired '{"resources":[{"kind":"storage-pool","name":"p1","spec":{}}]}'
+[ "$CODE" = "202" ] || die "a public POST of a storage pool returned $CODE, want 202: $BODY"
+[ "$(upg_declared)" = "storage-pool/p1" ] ||
+  die "the public read lists '$(upg_declared)', want storage-pool/p1 alone"
+public_desired '{"resources":[],"allow_empty":true}'
+[ "$CODE" = "202" ] || die "a public POST withdrawing everything returned $CODE, want 202: $BODY"
+[ -z "$(upg_declared)" ] || die "after withdrawing everything the public read lists '$(upg_declared)'"
+got="$(version_status controller)"
+case "$got" in "desired=controller/controller@1=v2 "*) ;; *) die "public POSTs that omit it moved the controller: '$got'" ;; esac
+got="$(version_status fleet-version)"
+case "$got" in "desired=fleet-version/fleet@0=v2 "*) ;; *) die "public POSTs that omit it moved the fleet: '$got'" ;; esac
+echo "    every public POST naming them is a 400, and none that omits them removes them"
+sleep 2
+
+# The region PATCH validates the batch before it looks for a MANAGED environment, so
+# with none registered, 400 means the kind check refused it and 404 that it got past.
+pool="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+for item in '"spec":{"version":"v1"}' '"delete":true'; do
+  call PATCH /api/v1/environments/resources -H 'content-type: application/json' \
+    -d '{"storage_pool":"'"$pool"'","regions":[{"region":"local","resources":[{"kind":"controller","name":"'"$pool"'/controller",'"$item"'}]}]}'
+  [ "$CODE" = "400" ] || die "a region PATCH naming a controller ($item) returned $CODE, want 400: $BODY"
+done
+# Generation 2, so the agent's revision -- never below 1 -- can only come from it.
+admin_put upg-check controller '{"version":"v3"}'
+[ "$CODE" = "202" ] && [ "$(put_row 2>/dev/null)" = "controller/controller@2=v3" ] ||
+  die "moving the controller to v3 returned $CODE $BODY, want 202 controller/controller@2=v3"
+call GET /api/v1/agent/desired-state -H "X-Meko-Api-Key-ID: $upg_key"
+[ "$CODE" = "200" ] || die "GET /agent/desired-state for upg-check returned $CODE: $BODY"
+agent_rows="$(printf '%s' "$BODY" | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print("%s %s" % (d["revision"], ",".join("%s/%s@%d" % (x["kind"], x["name"], x.get("generation", 0)) for x in d["resources"])))')"
+[ "$agent_rows" = "2 controller/controller@2,fleet-version/fleet@0" ] ||
+  die "the agent's desired state reads '$agent_rows', want revision 2 with controller@2 and fleet@0"
+api DELETE /api/v1/environments/upg-check >/dev/null 2>&1 || true
+echo "    the region PATCH refuses them too, and the agent's desired state still carries them"
+sleep 2
 
 # 5. The agent surface refuses a request it cannot read, and — the part that matters
 #    — refuses it without touching the environment. CLOUDGA-36984: a status POST

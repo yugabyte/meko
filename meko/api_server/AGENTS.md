@@ -79,7 +79,10 @@ of adding the endpoint, not a follow-up. Pick the tightest scope:
   its logic/SQL live in the isolated `internal/service/admin` +
   `internal/repository/admin` packages (handlers as `internal/handlers/admin_*.go`).
   Don't surface admin/console data on a user group, and don't have meko_admin
-  hit user routes.
+  hit user routes. The exception is YCP's `/admin/environments/{id}/desired/*`
+  version routes: they reuse `EnvironmentService`
+  (`{service,handlers}/environment_admin_versions.go`, a name the `meko_ycp_cp` CI
+  filter matches) and are registered only in control-plane mode.
 - **Service-to-service** — the `/internal` group behind `RequireInternalSecret`
   (e.g. meko-mcp-server → api_server).
 

@@ -23,9 +23,10 @@ func NewEnvironmentHandler(svc *service.EnvironmentService) *EnvironmentHandler 
 	return &EnvironmentHandler{svc: svc}
 }
 
-// accountScope reads the account this fleet call acts for. Empty is unscoped, and
-// only reaches here when --require-account-header is off; the group middleware
-// rejects it otherwise. See auth.AccountIDHeader.
+// accountScope reads the account this fleet call acts for. Empty is unscoped, and on
+// the fleet group only reaches here when --require-account-header is off; the group
+// middleware rejects it otherwise. The admin routes never require one. See
+// auth.AccountIDHeader.
 func accountScope(c echo.Context) service.AccountScope {
 	return service.AccountScope(strings.TrimSpace(c.Request().Header.Get(auth.AccountIDHeader)))
 }
@@ -107,7 +108,8 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 	return ok(c, http.StatusCreated, body)
 }
 
-// SetDesired replaces the environment's desired resource set.
+// SetDesired replaces the environment's desired resource set. The admin-only kinds
+// are outside it: a body naming one is a 400, and a body omitting one leaves it.
 //
 // The set is authoritative and the agent garbage-collects what it omits, so emptying
 // it deletes the environment's pool, cluster, branch and endpoint. That makes the
@@ -130,17 +132,18 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 	if body.Resources == nil {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
 			`resources is required: desired state is replaced, not merged, so send the whole set. `+
-				`To withdraw everything, send {"resources": [], "allow_empty": true}.`)
+				`To withdraw every resource, send {"resources": [], "allow_empty": true}.`)
 	}
 	if len(*body.Resources) == 0 && !body.AllowEmpty {
 		return apiError(c, http.StatusBadRequest, "EMPTY_DESIRED_STATE",
-			`an empty resources array withdraws everything this environment declares, and the `+
-				`agent deletes it on its next tick; resend with "allow_empty": true to confirm.`)
+			`an empty resources array withdraws every resource this environment declares, and the `+
+				`agent deletes them on its next tick; resend with "allow_empty": true to confirm.`)
 	}
 	found, err := h.svc.SetDesired(c.Param("id"), accountScope(c), *body.Resources)
 	if err != nil {
-		// A kind this environment's agent does not serve is the caller's mistake, so
-		// it is a 400 here rather than the 500 envLookupError would give it.
+		// A kind this environment's agent does not serve, or one only the admin API
+		// sets, is the caller's mistake, so it is a 400 here rather than the 500
+		// envLookupError would give it.
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
@@ -152,7 +155,8 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 	return c.NoContent(http.StatusAccepted)
 }
 
-// GetDesired returns the environment's desired resource set.
+// GetDesired returns the environment's desired resource set, without the admin-only
+// kinds: the admin routes read those.
 //
 // The agent-facing GET resolves the environment from a key id bound to it, which an
 // operator has no way to hold — the console can send the headers, but any key id it
@@ -294,13 +298,14 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	return ok(c, http.StatusOK, body)
 }
 
-// AgentDesiredState returns the generic desired-state resources.
+// AgentDesiredState returns the generic desired-state resources, the admin-only kinds
+// included.
 func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 	e := h.resolveAgent(c)
 	if e == nil {
 		return nil
 	}
-	res, err := h.svc.Desired(e.UUID)
+	res, err := h.svc.DesiredForAgent(e.UUID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}

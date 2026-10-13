@@ -71,13 +71,21 @@ latch them `rejected`.
 Two kinds sit outside that hierarchy and move software rather than resources. Both
 are singletons with a fixed name, so a second declaration is unambiguous drift.
 
+YCP writes them only through its admin tier,
+`PUT /api/v1/admin/environments/{id}/desired/{controller,fleet-version}` with the spec
+as the body. The public desired-state routes refuse both kinds (400), never remove
+them, and leave them out of their reads; `/agent/desired-state` carries them like any
+other row. `ycp/DEPLOY.md` has the calls.
+
 | Kind | Name | What the agent does |
 |------|------|--------------------|
 | `controller` | `controller` | `helm upgrade` of the release the agent itself is a member of, setting `controller.image.tag`, `agent.image.tag` and `controller.endpoint.image.tag` — the last is the pin new endpoints are created at, so an upgrade that skipped it would move the controller and nothing it deploys. helm runs as a Job outside the release, not in the agent: the rollout replaces the agent's pod, and a client killed while helm waits on the release's hooks leaves it `pending-upgrade`, blocking every later upgrade. The release name is read off helm's own `meta.helm.sh/release-name` annotation rather than configured, since the chart does not fix it. |
 | `fleet-version` | `fleet` | `spec.version` is the version every endpoint should run. Once the controller deploys it (its pin), `POST /endpoint-upgrades` rolls the fleet onto it; the kind converges when `GET /fleet-version` reports the fleet at `spec.version` (`ac-endpoint-upgrade.md` §6.1). A running roll's done/total is reported as progress, so a long roll is not flagged stuck. |
 
 `Parent(fleet-version)` is `controller`, so a declared controller upgrade runs
-first and the roll waits until the controller is Ready at its version.
+first and the roll waits until the controller is Ready at its version — which is why
+the two can be written back to back. An undeclared controller is never Ready, so YCP
+refuses a `fleet-version` until one is declared (409 `CONTROLLER_NOT_DECLARED`).
 
 Neither kind echoes a generation — there is nothing to stamp. They are **observable**
 instead, and `Update` returns nil only once the read agrees with the spec, because
@@ -487,7 +495,8 @@ kinds. (Ids minted before this carry an `amp-` prefix and still resolve.)
 Enrollment carries the kind and YCP rejects a mismatch (409), so an
 agent configured for one kind cannot attach to the other's environment. An amp
 environment seeds **no** desired state at registration — an operator declares its resources afterwards through
-`POST /environments/{id}/desired`.
+`POST /environments/{id}/desired`, and its software versions through the admin routes
+in [Upgrade kinds](#upgrade-kinds).
 
 ## Write-once binding
 
@@ -529,7 +538,8 @@ The controller-side unit coverage is the binding store + endpoint
 control-plane side, the kind-independent id, enroll kind-mismatch, and desired /
 `resources` round-trip (`meko/api_server/internal/service` and `.../repository`).
 The engine, backend mapping, and agent live in the `ycp` module and are tested
-there.
+there. The kind e2e (`ycp/test/e2e/run.sh`) drives the admin version routes and the
+public refusals of the upgrade kinds against a real control plane.
 
 The end-to-end guard is the opt-in **`/ci amp_deploy_gke_ycp`** directive
 ([`amp-control-plane-gke.yml`](../../../.github/workflows/amp-control-plane-gke.yml),

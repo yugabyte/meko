@@ -29,20 +29,21 @@ operator tier**: every fleet route is gated by the shared `X-Meko-Admin-Secret`,
 Aeon's apiserver forwards customer calls with that same secret plus
 `X-Meko-Account-ID` (`YcpApiControllerImp`, `YcpClientImpl`). YCP cannot tell an SRE
 from a customer. `api_server` also has an `/api/v1/admin/*` group — same secret, the
-backend `meko_admin` proxies to — with nothing about fleets in it.
+backend `meko_admin` proxies to — and the only writes that move software live there:
+`PUT /api/v1/admin/environments/{id}/desired/{controller,fleet-version}` (§4). The
+customer-facing fleet group refuses both kinds.
 
 → Pre-req, owned on the Aeon side: cloud-admin → apiserver → YCP, with SRE-only
-authorization enforced in apiserver (Teleport roles exist there), and YCP's
-upgrade-writing routes kept off the customer pass-through. Reuse YCP's existing
-admin-secret `/admin` tier as the home for those routes, so the customer-facing fleet
-group never gains a write that moves software.
+authorization enforced in apiserver (Teleport roles exist there), and
+`/api/v1/admin/*` kept off the customer pass-through. The YCP half is done.
 
 The YCP-down workflow (§3–§7) does not depend on this and is built first; until the
-pre-req lands it is driven from the YCP console or API directly.
+pre-req lands it is driven by calling YCP's admin routes directly. The console has
+no editor for them.
 
 Q: does cloud-admin call YCP through apiserver (one more pass-through, SRE-gated), or
-does YCP grow a second secret for the admin tier? Aeon's call; YCP only needs the
-routes to be separable.
+does YCP grow a second secret for the admin tier? Aeon's call; the routes are already
+separable.
 
 ## 1. Scope
 
@@ -120,12 +121,18 @@ lock). If per-cluster pinning ([meko#455](https://github.com/yugabyte/meko/issue
 path like the existing kinds — `<pool>/<cluster>` beside the environment-wide
 `fleet` — with a scope on `/fleet/version` and the roll's enumeration.
 
+Both are written only by `PUT /api/v1/admin/environments/{id}/desired/{controller,fleet-version}`:
+the body is the spec, the route implies the kind and name, and the answer is `202` with
+the stored row and its `generation`. `GET` on the same path returns the declaration beside
+the agent's observed row. There is no `DELETE`: a declaration is moved, never withdrawn.
+The public desired-state writes refuse both kinds (`400`) and never remove them, the
+public reads omit them, and `/agent/desired-state` carries them like any other row.
+
 ### 4.1 `controller`
 
-```json
-{"kind": "controller", "name": "controller",
- "spec": {"version": "0.260901.0-abc1234", "chart_version": "0.260901.0",
-          "values": {}}}
+```
+PUT /api/v1/admin/environments/{id}/desired/controller
+{"version": "0.260901.0-abc1234", "chart_version": "0.260901.0", "values": {}}
 ```
 
 - `version` is the controller image tag — a release of `software_type`
@@ -168,14 +175,17 @@ every endpoint. Measure before deciding whether the Deployment needs
 
 ### 4.2 `fleet-version`
 
-```json
-{"kind": "fleet-version", "name": "fleet", "spec": {"version": "0.260901.0-abc1234"}}
+```
+PUT /api/v1/admin/environments/{id}/desired/fleet-version
+{"version": "0.260901.0-abc1234"}
 ```
 
 The version every endpoint should run. It can only be reached once the controller
 deploys it, so the spec names the SRE's decision and the controller does the rest:
-declaring the controller and the fleet at X in one write upgrades and then rolls,
-declaring the fleet later rolls when the SRE chooses.
+declaring the controller and then the fleet at X, back to back, upgrades and then
+rolls; declaring the fleet later rolls when the SRE chooses. YCP refuses the PUT with
+`409 CONTROLLER_NOT_DECLARED` while no `controller` is declared, because the roll
+would wait forever on a parent nobody manages.
 
 - **Parent** is `controller`, so the engine orders a controller upgrade before the
   roll and gates the roll on the controller being Ready at its version.
@@ -196,16 +206,13 @@ declaring the fleet later rolls when the SRE chooses.
 - **No echo.** The spec carries the version, so each upgrade is a new generation and
   the engine's last-applied cache is correct as it stands: a fleet at X stays at X
   until a roll moves it.
-- **Withdrawing** stops managing the fleet and cancels nothing: the row is
-  Preexisting, like the controller's, and keeps reporting against the last declared
-  version until the agent restarts. **Stopping a roll takes both**: cancel it
-  (`POST /tasks/{taskId}/cancel`) and withdraw or set back the declaration. A
-  cancelled roll ends `failed`, so while the declaration stands the agent reads it as
-  a failure and re-issues it after its backoff — the declaration is still the
-  instruction.
-- **Rollback** is the controller and the fleet both set back to W: the pin moves to W,
-  the fleet version is still X, and the roll walks the fleet to W. Bounded by the
-  controller's migration floor and, across a PG major, by `Policy`
+- **Stopping a roll takes both**: cancel it (`POST /tasks/{taskId}/cancel`) and set
+  the declaration back. A cancelled roll ends `failed`, so while the declaration
+  stands the agent reads it as a failure and re-issues it after its backoff — the
+  declaration is still the instruction.
+- **Rollback** is the controller and then the fleet set back to W, two PUTs: the pin
+  moves to W, the fleet version is still X, and the roll walks the fleet to W. Bounded
+  by the controller's migration floor and, across a PG major, by `Policy`
   ([meko#1140](https://github.com/yugabyte/meko/issues/1140)).
 
 Inventory rows for both kinds carry `version`; the fleet's also carries
@@ -240,9 +247,8 @@ a time" means.
   one is reported and never collected; the controller row is listed on every tick,
   the fleet row once a declaration has reached this process. The fleet's `Update`
   goes through `applyUpdate` so the task lookup and the verdict are not
-  re-implemented. The api-server logs an error for a desired set declaring a
-  `fleet-version` with no `controller` — the roll would wait on a parent nobody
-  manages — but does not refuse it. The table-driven test
+  re-implemented. The api-server refuses a `fleet-version` while no `controller` is
+  declared (`409`, §4.2). The table-driven test
   that holds every kind to "`Permanent` on `Update`, or echoes a generation" gains a
   third category — **observable** — for these two, each with the observation that
   stands in for the echo.

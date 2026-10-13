@@ -65,9 +65,10 @@ api-server's REST API, the same shape amp's agent uses against its controller. S
 (cd ycp && go test ./...)
 
 # control-plane smoke test on kind: builds the api-server image, stands it up, and
-# asserts rollout -> health -> base path -> auth gate -> register -> install hint.
-# Needs kind + docker or podman; no registry credentials. It does NOT cover an agent
-# converging anything — every image the agent would drive is private.
+# asserts rollout -> health -> base path -> auth gate -> register -> install hint
+# -> admin version tier. Needs kind + docker or podman; no registry credentials. It
+# does NOT cover an agent converging anything — every image the agent would drive is
+# private.
 (cd ycp && ./test/e2e/run.sh)
 
 # the reconcile loop itself, on a cluster the e2e left up (YCP_E2E_KEEP=1): the

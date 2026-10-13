@@ -63,8 +63,10 @@ control plane presents against the **real thing** (`api_server
 --control-plane-mode` on a plain Postgres): every workload rolls out including the
 migrate init container, `/api/v1/health` reports both databases up, the fleet API
 rejects an unauthenticated call, registering an environment binds it to an
-`api_key_id` and seeds no desired state, and the install hint dials the
-`agent_base_url` the registration stored.
+`api_key_id` and seeds no desired state, the install hint dials the
+`agent_base_url` the registration stored, and `controller` / `fleet-version` are
+written only through the admin routes, which every public desired-state route
+refuses and hides.
 
 It does not cover an agent converging anything. The retired meko-agent could stand
 a stack up from public images alone, which is what made that assertable without
@@ -151,8 +153,10 @@ curl -H "X-Meko-Admin-Secret: $ADMIN_KEY" "$YCP/api/v1/environments/$ENV/desired
 ```
 
 The set is **replaced**, not merged: anything left out is garbage-collected on the
-next tick. **The agent is the api-server's only caller and is authoritative over it** —
-a datapack made by hand that desired state does not declare is deleted.
+next tick — except an amp environment's `controller` and `fleet-version`, which this
+call neither writes nor removes ([below](#moving-an-amp-environments-software)).
+**The agent is the api-server's only caller and is authoritative over it** — a
+datapack made by hand that desired state does not declare is deleted.
 
 Because omitting a resource deletes it, the body has to say what it means. `resources`
 is required, and an unknown field is refused at any level — beside `resources`, or
@@ -169,9 +173,11 @@ curl -X POST "$YCP/api/v1/environments/$ENV/desired" \
 
 A kind this environment's agent does not serve is refused with a 400 naming the entry
 (`resources[1] has kind "datapak", which a meko environment does not serve`), on both
-this call and `POST /environments`. Only the **kind** is checked here — name shape is
-the backend's rule, so `"<agent>/<datapack>"` is enforced a tick later as permanent
-drift rather than at declare time.
+this call and `POST /environments`. So is `controller` or `fleet-version`, on both and
+on the PATCH below, even for an amp environment and even when the spec matches what
+is stored. Only the **kind** is checked here — name shape is the backend's rule, so
+`"<agent>/<datapack>"` is enforced a tick later as permanent drift rather than at
+declare time.
 
 To change a **MANAGED** environment's storage-pool resources without resending the
 whole set, use the region-addressed, atomic batch — there is no environment id in the
@@ -182,12 +188,14 @@ environment through the sticky `(storage_pool, region)` mapping — the first ca
 READY one, later calls reuse it — and every patch across every region applies in one
 transaction: each item shallow-merges its partial `spec` into one resource by
 `kind`+`name` (an absent one is created; names must fall under the pool), or with
-`delete: true` cascade-removes it and its descendants. The `storage-pool` row is
-auto-created on first touch, with an owner derived from the pool name. There is no
-prune, and any invalid item fails the whole call with 400 and writes nothing; a region
-with no READY MANAGED amp environment is a 404. `GET /environments/resources?name=<path>`
+`delete: true` cascade-removes it and its descendants, never the `controller` or
+`fleet` declaration. The `storage-pool` row is auto-created on first touch, with an
+owner derived from the pool name. There is no prune, and any invalid item fails the
+whole call with 400 and writes nothing; a region with no READY MANAGED amp
+environment is a 404. `GET /environments/resources?name=<path>`
 reads back both the declared (`desired`) and agent-reported (`observed`) sets per
-mapped environment, filterable by `kind` and `subtree`; the PATCH response mirrors it.
+mapped environment, filterable by `kind` and `subtree`, without the environment-wide
+`controller` and `fleet-version` rows; the PATCH response mirrors it.
 
 ```bash
 curl -X PATCH "$YCP/api/v1/environments/resources" \
@@ -199,6 +207,46 @@ curl -X PATCH "$YCP/api/v1/environments/resources" \
         ]}
       ]}'
 ```
+
+### Moving an amp environment's software
+
+The controller release and the version the endpoint fleet runs are two singleton
+kinds, `controller` and `fleet-version`, and only the admin tier writes them — one PUT
+each, whose body is the spec ([`architecture/byoc_upgrades.md`](architecture/byoc_upgrades.md) §4
+has the semantics):
+
+```bash
+curl -X PUT "$YCP/api/v1/admin/environments/$ENV/desired/controller" \
+  -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+  -d '{"version":"0.260901.0-abc1234","chart_version":"0.260901.0"}'
+
+curl -X PUT "$YCP/api/v1/admin/environments/$ENV/desired/fleet-version" \
+  -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H 'content-type: application/json' \
+  -d '{"version":"0.260901.0-abc1234"}'
+
+curl -H "X-Meko-Admin-Secret: $ADMIN_KEY" \
+  "$YCP/api/v1/admin/environments/$ENV/desired/controller"   # {desired, observed}
+```
+
+- A PUT answers `202` with the stored row and its `generation`, which moves only when
+  the spec does. The body is bound strictly (an unknown field is a 400), `version` is
+  required, `values` passes through to helm, and the environment must be `amp`.
+- `fleet-version` is a 409 `CONTROLLER_NOT_DECLARED` until a controller is declared:
+  the agent rolls the fleet only once the controller is Ready at its declared version,
+  and an undeclared one never is. Declaring the version the controller already runs
+  is enough, and also releases a fleet-version an earlier release accepted without one.
+- A row of either kind under another name, which earlier releases accepted and the
+  agent rejects as permanent drift, is removed by the next full-replace POST, or with
+  its pool by the PATCH.
+- A GET returns the declaration beside the row the agent last reported for it; either
+  is `null` when absent. The agent reports the controller whether or not one is
+  declared.
+- There is no DELETE: a declaration is moved, never withdrawn.
+- `X-Meko-Admin-Actor-Email`, if sent, is logged with the write.
+
+These routes take an optional `X-Meko-Account-ID` and ignore `--require-account-header`
+([below](#which-environments-a-fleet-call-sees)). Like `/api/v1/admin/*` as a whole,
+they must not be reachable through YBM's customer pass-through.
 
 ### What a meko environment declares
 
@@ -323,9 +371,12 @@ carry no id at all — the environment is resolved from the api key they
 authenticate with.
 
 The one call that can now be ambiguous is an **unscoped** read of an id two accounts
-both hold: it answers 409 rather than picking one. Send an account to resolve it.
-That cannot happen for environments registered before the per-account index, whose
-ids were unique fleet-wide — and it cannot happen at all with the header required.
+both hold: it answers 409 `AMBIGUOUS_ID` rather than picking one. Send an account to
+resolve it. That cannot happen for environments registered before the per-account
+index, whose ids were unique fleet-wide — and on the fleet routes it cannot happen at
+all with the header required. The admin version routes
+([above](#moving-an-amp-environments-software)) are not fleet routes: the header is
+optional there whatever the flag says, so an unscoped call to one can still be a 409.
 
 Environments registered before accounts were stamped carry no account, and are
 visible only to an unscoped caller.

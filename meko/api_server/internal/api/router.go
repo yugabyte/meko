@@ -566,6 +566,15 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.PUT("/environments/:id/extensions/:name", envH.ImportExtension)
 		fleet.DELETE("/environments/:id/extensions/:name", envH.RemoveExtension)
 		fleet.GET("/entitlements", envH.Entitlements)
+		// The only writers of the admin-only desired-state kinds, which every route
+		// above refuses. On the admin group, so they are separable from the fleet
+		// routes by path, and --require-account-header does not reach them: an account
+		// is optional, sent only to resolve an id two accounts share.
+		adminEnv := adminGroup.Group("/environments", auth.ValidateAccountID())
+		adminEnv.GET("/:id/desired/controller", envH.AdminGetController)
+		adminEnv.PUT("/:id/desired/controller", envH.AdminPutController)
+		adminEnv.GET("/:id/desired/fleet-version", envH.AdminGetFleetVersion)
+		adminEnv.PUT("/:id/desired/fleet-version", envH.AdminPutFleetVersion)
 		// The agent surface has no account header — the key id names the environment
 		// on its own — so it hangs off v1 directly with its own auth pair rather
 		// than the fleet group's.

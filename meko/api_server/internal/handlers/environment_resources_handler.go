@@ -134,35 +134,45 @@ func (h *EnvironmentHandler) SetResourcesByRegion(c echo.Context) error {
 
 	envs, err := h.svc.SetResourcesByStoragePool(body.StoragePool, body.Regions)
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
-		}
-		// Refused rather than stored: the agent could only report it as drift.
-		if errors.Is(err, service.ErrCreateTimeField) {
-			return apiError(c, http.StatusBadRequest, "CREATE_TIME_FIELD", err.Error())
-		}
-		// A region with no READY MANAGED environment cannot be served — a 404, the
-		// same as naming an environment that does not exist.
-		if errors.Is(err, service.ErrNoManagedEnv) {
-			return apiError(c, http.StatusNotFound, "NOT_FOUND", err.Error())
-		}
-		// A create landing on an existing resource, or a cluster name already used
-		// elsewhere in the pool, is a 409; an update naming an absent one is a 404.
-		if errors.Is(err, service.ErrClusterNameInUse) {
-			return apiError(c, http.StatusConflict, "CLUSTER_NAME_IN_USE", err.Error())
-		}
-		if errors.Is(err, service.ErrResourceExists) {
-			return apiError(c, http.StatusConflict, "RESOURCE_EXISTS", err.Error())
-		}
-		if errors.Is(err, service.ErrResourceNotFound) {
-			return apiError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", err.Error())
-		}
-		// A lost concurrent-write race rolled the whole batch back, so the identical
-		// request is safe to retry — a 409, not a 500.
-		if errors.Is(err, service.ErrConcurrentPoolUpdate) {
-			return apiError(c, http.StatusConflict, "CONCURRENT_UPDATE", err.Error())
-		}
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return regionPatchError(c, err)
 	}
 	return ok(c, http.StatusOK, map[string]any{"environments": envs})
+}
+
+// regionPatchError answers a failed region PATCH.
+func regionPatchError(c echo.Context, err error) error {
+	if errors.Is(err, service.ErrValidation) {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+	}
+	// The service refuses these before the transaction opens; this is the
+	// repository's own refusal from inside it, which is no server fault either.
+	if errors.Is(err, service.ErrAdminOnlyKind) {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+	}
+	// Refused rather than stored: the agent could only report it as drift.
+	if errors.Is(err, service.ErrCreateTimeField) {
+		return apiError(c, http.StatusBadRequest, "CREATE_TIME_FIELD", err.Error())
+	}
+	// A region with no READY MANAGED environment cannot be served — a 404, the
+	// same as naming an environment that does not exist.
+	if errors.Is(err, service.ErrNoManagedEnv) {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", err.Error())
+	}
+	// A create landing on an existing resource, or a cluster name already used
+	// elsewhere in the pool, is a 409; an update naming an absent one is a 404.
+	if errors.Is(err, service.ErrClusterNameInUse) {
+		return apiError(c, http.StatusConflict, "CLUSTER_NAME_IN_USE", err.Error())
+	}
+	if errors.Is(err, service.ErrResourceExists) {
+		return apiError(c, http.StatusConflict, "RESOURCE_EXISTS", err.Error())
+	}
+	if errors.Is(err, service.ErrResourceNotFound) {
+		return apiError(c, http.StatusNotFound, "RESOURCE_NOT_FOUND", err.Error())
+	}
+	// A lost concurrent-write race rolled the whole batch back, so the identical
+	// request is safe to retry — a 409, not a 500.
+	if errors.Is(err, service.ErrConcurrentPoolUpdate) {
+		return apiError(c, http.StatusConflict, "CONCURRENT_UPDATE", err.Error())
+	}
+	return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 }

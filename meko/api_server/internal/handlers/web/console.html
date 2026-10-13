@@ -349,8 +349,10 @@
   the control plane already knows.
 
   Desired state is still readable (GET /environments/{id}/desired, shown under
-  Desired state) and still writable over the API for anything that genuinely needs
-  it. It is simply not something this console asks a human to hand-edit.
+  Desired state; an amp environment's controller and fleet-version are only on the
+  admin routes, /admin/environments/{id}/desired/*) and still writable over the API
+  for anything that genuinely needs it. It is simply not something this console asks
+  a human to hand-edit.
 -->
 
 <script>
