@@ -9,6 +9,12 @@ aliases:
 
 Meko uses hybrid retrieval to find personal memories by meaning while preserving useful exact matches.
 
+For open-ended recall across personal memory, shared knowledge, and past
+conversations, agents use
+[`context_search`](../../../reference/mcp-server/#context-search). Use
+`memory_search` directly when the question is specifically about personal
+memory or when you need memory result IDs and scores.
+
 ## How it works
 
 The [memory_search](../../../reference/mcp-server/#memory-tools) tool ranks stored memories using three signals:

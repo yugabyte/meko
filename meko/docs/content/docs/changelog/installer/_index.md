@@ -9,11 +9,17 @@ breadcrumb_disable: true
 notoc: true
 ---
 
-Release notes for [`@yugabytedb/meko-mcp`](https://www.npmjs.com/package/@yugabytedb/meko-mcp) and the public Meko agent skills for Claude Code, Claude Desktop, Cursor, Codex, and Kiro. The installer, public skills plugin, and Meko MCP server release independently.
+Release notes for [`@yugabytedb/meko-mcp`](https://www.npmjs.com/package/@yugabytedb/meko-mcp) and the public Meko agent skills for Claude Code, Claude Desktop, Cursor, Codex, Kiro, and OpenCode. The installer, public skills plugin, and Meko MCP server release independently.
 
 For Meko portal, API, and platform updates, see [Meko release notes](../meko/).
 
 {{< card-group >}}
+  {{< card
+    href="changelog/installer/v2.3.0/"
+    title="v2.3.0 - October 13, 2026"
+    desc="OpenCode support, capture recovery commands, broader context search, and capture reliability fixes."
+    cta="View release notes &rarr;"
+  >}}
   {{< card
     href="changelog/installer/v2.2.0/"
     title="v2.2.0 - August 31, 2026"

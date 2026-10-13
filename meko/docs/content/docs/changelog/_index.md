@@ -11,7 +11,7 @@ notoc: true
 
 Meko ships on independent release tracks:
 
-- [Meko Setup Installer](https://www.npmjs.com/package/@yugabytedb/meko-mcp) and [public agent skills](https://github.com/yugabyte/meko-skills), which configure Claude Code, Claude Desktop, Cursor, Codex, and Kiro. The installer, skills plugin, and MCP server keep separate versions.
+- [Meko Setup Installer](https://www.npmjs.com/package/@yugabytedb/meko-mcp) and [public agent skills](https://github.com/yugabyte/meko-skills), which configure Claude Code, Claude Desktop, Cursor, Codex, Kiro, and OpenCode. The installer, skills plugin, and MCP server keep separate versions.
 - [Meko Portal](https://cloud.mekodata.ai) and platform
 
 Each has its own release cadence and version numbers.

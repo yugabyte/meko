@@ -18,9 +18,9 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
     cta="View release notes &rarr;"
   >}}
   {{< card
-    href="changelog/installer/v2.2.0/"
-    title="Installer v2.2.0 - August 31, 2026"
-    desc="Kiro support, durable capture, safer memory guidance, and independent installer and skills releases."
+    href="changelog/installer/v2.3.0/"
+    title="Installer v2.3.0 - October 13, 2026"
+    desc="OpenCode support, capture recovery commands, broader context search, and capture reliability fixes."
     cta="View release notes &rarr;"
   >}}
 {{< /card-group >}}
@@ -34,17 +34,17 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
 - **Learn from production code reviews** - The [code review lab](../examples/labs/) now has four chapters, uses your datapack for cost estimates, and links to public reviews.
 - **Keep conversations and memory available** - Temporary tracing failures are now retryable, oversized traces use less memory, and entity operations search only the current datapack. See how to [work with memory](../guides/working-with-memory/) and [review conversation traces](../guides/observability/).
 
-## Installer and public skills - v2.2.0
+## Installer and public skills - v2.3.0
 
-- **Kiro IDE and CLI support** - one install configures Kiro's shared MCP and skills locations and installs durable capture hooks.
-- **Capture survives delivery failures** - Claude Code, Cursor, Codex, and Kiro keep failed exchanges in a local outbox. `npx @yugabytedb/meko-mcp@latest --capture-status` shows whether capture is healthy, catching up, retrying, or needs action.
-- **Codex transcripts now capture correctly** - Codex uses `codex:<repo>` ownership and holds incomplete turns for retry instead of advancing past them.
-- **Safer memory guidance** - agents distinguish failed searches from empty results, keep retrieval evidence bounded, verify writes, and treat `memory_get_all` as a recent window rather than an export.
-- **Independent releases** - the public skills plugin and MCP server are each now released independently from the installer and Desktop extension.
+- **Connect OpenCode 1.18.x** - one install configures the MCP server and Meko skill, migrates local sessions, and captures new conversations. Restart OpenCode after installation.
+- **Recover stuck capture** - inspect, stop, drain, resume, repair, or discard local capture work with `--capture-cleanup`. `stop` pauses retries and keeps unsent exchanges.
+- **Search all Meko context** - agents use `context_search` for open-ended recall across personal memory, shared knowledge, and past conversations.
+- **Keep project memory together** - capture and migration derive the agent ID from the repository root, so starting in `docs` or `src` no longer splits or combines unrelated project memories. A linked git worktree uses the worktree directory name.
+- **See the real capture failure** - status now distinguishes quota, authentication, missing datapack, and datapack access problems. One edge-proxy rejection no longer blocks later exchanges.
 
-> [!NOTE] Upgrade Claude Desktop's Node.js runtime
+> [!NOTE] OpenCode support
 >
-> Installer 2.2.0 requires Node.js 20.18.1 or newer and pins `mcp-remote@0.1.38`. See [Installer v2.2.0](../changelog/installer/v2.2.0/) for the full changes.
+> OpenCode support covers CLI and TUI 1.18.x. It doesn't cover OpenCode Desktop, headless or remote sessions, or tool and file capture. See [Installer v2.3.0](../changelog/installer/v2.3.0/) for the full changes.
 
 ## Keep up
 

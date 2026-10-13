@@ -1,7 +1,7 @@
 ---
 title: Connect to an AI agent
 linkTitle: AI agents
-description: Integrate Meko with Cursor, Claude Desktop, Claude Code, Codex, Kiro, and more
+description: Integrate Meko with Cursor, Claude Desktop, Claude Code, Codex, Kiro, OpenCode, and more
 weight: 3010
 type: docs
 ---
@@ -296,6 +296,8 @@ Once enabled, Claude Code refreshes the marketplace and updates installed plugin
 
 In the Meko portal, select **Connect** and follow the steps.
 
+When you provide an API key on macOS, the installer adds `MEKO_API_KEY` to the launchd environment used by apps opened from Spotlight or Alfred. Quit every running Codex process and relaunch Codex after installation. A running process keeps the environment it had when it started.
+
 ##### OAuth
 
 In Codex Desktop:
@@ -383,6 +385,62 @@ Kiro hooks expose user prompts and final assistant responses. They don't expose 
 npx @yugabytedb/meko-mcp@latest --client kiro --uninstall
 ```
 
+## OpenCode CLI and TUI
+
+The installer supports OpenCode CLI and TUI 1.18.x. Choose one installation scope:
+
+- **User scope** makes Meko available in every OpenCode project.
+- **Project scope** installs Meko only in the current project.
+
+Use only one scope for a project.
+
+##### User scope
+
+```bash
+npx @yugabytedb/meko-mcp@latest --client opencode --scope user
+```
+
+##### Project scope
+
+Run this command from the project root:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --client opencode --scope project
+```
+
+The installer prompts for your Meko API key, installs the Meko skill, and adds an installer-owned plugin. The plugin supplies the MCP configuration when OpenCode starts, so the installer doesn't rewrite `opencode.json` or `opencode.jsonc`. It stores the API key in a private file with mode `0600`.
+
+Restart OpenCode after installation, then verify the connection:
+
+```text
+List my datapacks in Meko
+```
+
+OpenCode automatically captures visible user text and the first visible assistant message for each completed turn. It doesn't capture tool calls, hidden reasoning, files, attachments, or streaming output. Check queued work with:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --capture-status
+```
+
+To preview and import existing local OpenCode sessions:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --migrate --dry-run
+npx @yugabytedb/meko-mcp@latest --migrate
+```
+
+Migration imports local root sessions returned by the OpenCode CLI. OpenCode 1.18.x doesn't expose child sessions through that interface. Installer 2.3.0 doesn't support OpenCode Desktop, V2 preview APIs, or headless or remote sessions.
+
+### Uninstall
+
+Uninstall using the same scope you used during installation. For user scope, run:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --client opencode --scope user --uninstall
+```
+
+For a project installation, run the command from the project root and replace `--scope user` with `--scope project`. Uninstall removes installer-owned configuration and credentials. It keeps queued capture data so you can recover unsent exchanges.
+
 ## VS Code
 
 1. Run the following command:
@@ -416,10 +474,9 @@ npx @yugabytedb/meko-mcp@latest --client kiro --uninstall
 
 <!-- ## Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, and others
 
-For Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, Continue, Goose, OpenCode, and Windsurf, use the "Automated Setup" described in the [Quick Start](/quick-start/#connect-your-ai-client).  
+For Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, Continue, Goose, and Windsurf, use the "Automated Setup" described in the [Quick Start](/quick-start/#connect-your-ai-client).
 
-Additional support for the below is coming soon
-* Opencode
+Additional support for the following is coming soon:
 * OpenAI chatgpt Desktop
 * Lovable
 * Replit -->

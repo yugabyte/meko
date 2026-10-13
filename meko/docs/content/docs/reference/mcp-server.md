@@ -16,7 +16,7 @@ On the **Free** tier, MCP tool calls are metered per account:
 | Metric | Limit (per month) | Example tools |
 | :----- | :--------- | :------------ |
 | Conversations | 1,000 | `conversation_add_message` |
-| Retrievals | 10,000 | `memory_search`, `knowledgebase_search` |
+| Retrievals | 10,000 | `context_search`, `memory_search`, `knowledgebase_search` |
 
 When a quota is exceeded, further calls are blocked until you upgrade. Datapack creation and knowledge-base uploads are capped separately. See [Meko pricing](https://mekodata.ai/pricing/) for the full plan table.
 
@@ -32,6 +32,7 @@ Authorization comes from the authenticated user and their datapack grants.
 
 | Use | For |
 | :--- | :--- |
+| [Context search](#context-search)<br>`context_search` | Open-ended recall across personal memory, shared knowledge, and past conversations.<br><br>Example: _What do you know about this project?_ |
 | [Conversation](#conversation-tools)<br>`conversation_*` | Full saved chat history and thread replay.<br><br>Example: _Save or retrieve this chat_ |
 | [Memory](#memory-tools)<br>`memory_*` | Durable facts, preferences, decisions, and useful outcomes you want to recall across agents.<br><br>Example: _Remember this about me or the project_ |
 | [Knowledge base](#knowledgebase-tools)<br>`knowledgebase_*` | Reusable, persistent, indexed shared documents, and collective memories that can be searched across agents.<br><br>Example: _Search this in the knowledge base_ |
@@ -41,6 +42,12 @@ Authorization comes from the authenticated user and their datapack grants.
 <!-- 
 | [Database](#database-tools)<br>`db_*` | Structured operational data you want to query or modify with SQL.<br><br>Example: _Run SQL on my data_ |
 -->
+
+### Context search
+
+| Tool | Description |
+| :--- | :---------- |
+| `context_search` | Search personal memory, the datapack knowledge base, and the past-conversation cache in parallel.<br>Use this for open-ended recall when the answer could be in more than one source. Results stay in separate `memory`, `knowledge_base`, and `conversation` buckets so one source doesn't hide another. The conversation bucket can include conversations from every user and agent on the datapack.<br>Check each bucket's source status before treating an empty result as proof that nothing is stored. Call `memory_search` or `knowledgebase_search` directly when you need one source or need to confirm a failed source.<br>`force_source` can limit the call to `conversation`, `memory`, or `knowledge_base`; the default `auto` searches all three.<br>Typical inputs: `query, conversation_id, agent_id, datapack_id, limit, force_source` |
 
 ### Conversation tools
 
@@ -90,8 +97,7 @@ Authorization comes from the authenticated user and their datapack grants.
 | :--- | :---------- |
 | `datapack_create` | Provision a new datapack.<br>Use this to set up a new isolated Meko environment.<br>Typical inputs: `name, conversation_id, datapack_id` |
 | `datapack_describe` | Return datapack details and optional status.<br>Use this to inspect an existing datapack.<br>Typical inputs: `datapack_id, include_status, conversation_id` |
-| `datapack_list` | List datapacks visible to the current user, as a JSON array.<br>Without `query` or `limit`, it returns every datapack when the account can see at most 1,000. Above that, it returns a `too_many_datapacks` error that points to `datapack_search`. A self-hosted server sets this threshold with `DATAPACK_LIST_MAX_UNFILTERED` (default `1000`).<br>`query` keeps datapacks whose name contains the text, and `limit` caps the array (at most 100).<br>Typical inputs: `conversation_id, datapack_id, query, limit` |
-| `datapack_search` | Find datapacks by name, one page at a time.<br>Use `query` to match part of a name and `name` for an exact match. `limit` sets the page size (default `20`, at most `100`). To get the next page, pass the returned `next_cursor` as `cursor`; `has_more` is `false` on the last page. `grant` keeps only datapacks you own (`owner`) or that were shared with you (`shared`). `sort` is `created` (newest first, the default) or `name`. Set `include_total` only when you need to show "N of M".<br>Returns `datapacks`, `has_more`, `next_cursor`, and `total`.<br>Typical inputs: `conversation_id, query, name, limit, cursor, grant, sort, include_total` |
+| `datapack_list` | List datapacks visible to the current user.<br>Use this to see all workspaces/environments.<br>Typical inputs: `conversation_id, datapack_id` |
 | `datapack_update` | Update a datapack's name, description, and/or conversation-search opt-out.<br>At least one of `name`, `description`, or `conversation_search_opt_out` must be provided; clearing a description with an empty string isn't supported. Conversation search is on by default — opting out (restricted to the datapack's owner or a maintainer) is also available from the portal.<br>Typical inputs: `datapack_id, name, description, conversation_search_opt_out, conversation_id` |
 | `datapack_delete` | Permanently delete a datapack.<br>This operation is irreversible and requires an explicit `datapack_id`.<br>Typical inputs: `datapack_id, conversation_id` |
 

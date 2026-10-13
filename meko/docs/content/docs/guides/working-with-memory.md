@@ -42,6 +42,23 @@ You don't have to explicitly ask your agent to "remember" something for it to be
 >
 > Conversation-driven extraction runs asynchronously after a turn is saved, and can occasionally miss an individual fact within a longer turn. For anything that must not be lost, explicitly say "remember this" (`memory_add`) rather than relying on automatic extraction alone.
 
+## Search all Meko context
+
+For an open-ended question, ask your agent what Meko knows about the subject:
+
+```text
+What does Meko know about the 2.3 release?
+```
+
+The `context_search` tool searches personal memory, shared datapack knowledge,
+and past conversations in parallel. It returns each source in a separate
+bucket, so a memory result doesn't hide a newer knowledge-base document.
+
+An empty bucket doesn't always prove that the source contains no matching
+information. Check the source status. If that source failed or wasn't queried,
+confirm with `memory_search` or `knowledgebase_search` before concluding that
+nothing is stored.
+
 ## Search memories
 
 ### Via MCP (from your coding agent)

@@ -16,7 +16,7 @@ Teams still fail when agents can't share state (36% of failures trace to inter-a
 
 {{< kapa-hero >}}
 
-**Works with**: [WorkbenchLM](guides/workbench-lm/) (in-portal chat) | <img class="docs-works-with-logo" src="/logos/integrations/claude.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Claude Code | <img class="docs-works-with-logo" src="/logos/integrations/cursor.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Cursor | <img class="docs-works-with-logo" src="/logos/integrations/codex.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Codex | <img class="docs-works-with-logo" src="/logos/integrations/claude.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Claude Desktop | Kiro | [...and more](integrations/)
+**Works with**: [WorkbenchLM](guides/workbench-lm/) (in-portal chat) | <img class="docs-works-with-logo" src="/logos/integrations/claude.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Claude Code | <img class="docs-works-with-logo" src="/logos/integrations/cursor.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Cursor | <img class="docs-works-with-logo" src="/logos/integrations/codex.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Codex | <img class="docs-works-with-logo" src="/logos/integrations/claude.svg" alt="" width="15" height="15" decoding="async" loading="lazy" /> Claude Desktop | Kiro | OpenCode | [...and more](integrations/)
 
 #### Meko offers:
 

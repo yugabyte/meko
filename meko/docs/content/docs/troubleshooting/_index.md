@@ -19,7 +19,7 @@ Ensure you pasted your API key correctly (no whitespace). Ensure the key is not 
 
 #### Node version
 
-Ensure you have Node.js 20.18.1 or newer installed. Installer 2.2.0 checks this before changing client configuration.
+Ensure you have Node.js 20.18.1 or newer installed. Installer 2.2.0 and newer check this before changing client configuration.
 
 #### Claude Desktop
 
@@ -43,13 +43,49 @@ You can always work around this by explicitly asking your agent to save ("save t
 
 #### Automatic capture is behind or reports a failure
 
-Installer 2.2.0 keeps failed exchanges in a local outbox and retries them without advancing the capture cursor. Check the current state:
+Installer 2.2.0 and newer keep failed exchanges in a local outbox and retry them without advancing the capture cursor. Check the current state:
 
 ```bash
 npx @yugabytedb/meko-mcp@latest --capture-status
 ```
 
 Add `--json` for machine-readable output. A healthy or catching-up state exits `0`; retrying exits `2`; a problem that needs action exits `3`. Resolve the reported authentication, quota, permission, or server problem, then start another session so capture can retry.
+
+#### Capture keeps retrying work that you need to stop or recover
+
+Installer 2.3.0 can inspect and clean up local capture state. First, see the affected sessions and running capture processes:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --capture-cleanup status
+```
+
+To stop retries from this machine without deleting unsent exchanges:
+
+```bash
+npx @yugabytedb/meko-mcp@latest --capture-cleanup stop
+```
+
+`stop` pauses retries for every local session that still has unsent work. It also works with capture hooks installed by version 2.2.0. After you fix the server, authentication, quota, or datapack problem, choose one recovery path.
+
+Send the unsent exchanges now with `drain --all`. Claude Code already has the connection values. For every other client, export them first:
+
+```bash
+export MEKO_MCP_URL=https://mcp.mekodata.ai/mcp
+export MEKO_API_KEY=<paste-your-api-key>
+npx @yugabytedb/meko-mcp@latest --capture-cleanup drain --all
+```
+
+Return the backlog to normal hook retries with `npx @yugabytedb/meko-mcp@latest --capture-cleanup resume`.
+
+Use `repair` when status reports a failure for a session that has no work left to send. Use `discard --session <id> --yes` only when you intend to delete that session's unsent exchanges. Every action except `status` accepts `--dry-run`.
+
+#### OpenCode doesn't show Meko or capture conversations after installation
+
+Installer 2.3.0 supports OpenCode CLI and TUI 1.18.x. Restart OpenCode so it loads the installer-owned plugin, then check `npx @yugabytedb/meko-mcp@latest --capture-status`. Installer 2.3.0 doesn't support OpenCode Desktop, V2 preview APIs, or headless or remote sessions.
+
+#### A Claude Code prompt with a pasted image isn't stored
+
+Claude Code writes the image caption as its own user entry. Capture can skip the prompt because that turn has no assistant reply. Ask the agent to remember the point you need, or send the prompt again without the image.
 
 #### Kiro doesn't capture a conversation
 

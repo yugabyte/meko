@@ -11,7 +11,7 @@ Meko has three levels of integration. Each gives you more control over how your 
 | Level | What you connect | What you get |
 | :--- | :--- | :--- |
 | 1. [WorkbenchLM](#try-meko-in-workbenchlm) | Our chat agent, in the portal | Simplest. See memory and knowledge work before installing anything. |
-| 2. [Your AI client](#connect-your-ai-client) | Cursor, Claude Code, Claude Desktop, Codex, Kiro, VS Code | Daily driver. Use your own coding tools against your datapacks. |
+| 2. [Your AI client](#connect-your-ai-client) | Cursor, Claude Code, Claude Desktop, Codex, Kiro, OpenCode, VS Code | Daily driver. Use your own coding tools against your datapacks. |
 | 3. [Your AI app](#connect-your-ai-app) | Your own agent or framework | Full control. Build Meko into the apps you ship. _Under development._ |
 
 Before you start, [sign up or sign in](https://cloud.mekodata.ai/) to the Meko portal. You land on the **Welcome to Meko** page with a default datapack already created for you.
@@ -34,7 +34,7 @@ See [WorkbenchLM](../guides/workbench-lm/) for what's loaded, when to use it ver
 
 ## Connect your AI client
 
-External AI clients (Cursor, Claude Code, Claude Desktop, Codex, Kiro, VS Code, and so on) connect to Meko through one shared MCP endpoint:
+External AI clients (Cursor, Claude Code, Claude Desktop, Codex, Kiro, OpenCode, VS Code, and so on) connect to Meko through one shared MCP endpoint:
 
 ```text
 https://mcp.mekodata.ai/mcp
@@ -47,29 +47,29 @@ There are three ways to connect. Pick the one that fits your workflow.
 {{< tabpane text=true right=false >}}
 {{% tab header="Automated install" %}}
 
-_Recommended for Cursor, Claude Code, Claude Desktop, Codex, and Kiro. Requires Node.js 20.18.1 or newer._
+_Recommended for Cursor, Claude Code, Claude Desktop, Codex, Kiro, and OpenCode. Requires Node.js 20.18.1 or newer._
 
 The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In clients that support them, the installer also configures session lifecycle hooks.
 
-> [!NOTE] Automatic capture in v2.2.0
+> [!NOTE] Automatic capture in v2.3.0
 >
-> Claude Code, Cursor, Codex, and Kiro use durable hooks. Failed exchanges stay in a local outbox and retry without being marked as captured. Kiro exposes prompts and final responses to hooks, but not tool calls or hidden reasoning. Claude Desktop has no session hooks, so its automatic capture remains model-dependent.
+> Claude Code, Cursor, Codex, Kiro, and OpenCode use durable hooks or plugins. Failed exchanges stay in a local outbox and retry without being marked as captured. Run `npx @yugabytedb/meko-mcp@latest --capture-status` to check the outbox or use `--capture-cleanup` to recover stuck work. Kiro and OpenCode expose only part of a turn to their integration, so they don't capture tool calls or hidden reasoning. Claude Desktop has no session hooks, so its automatic capture remains model-dependent.
 
-Automatic capture writes to your **pinned datapack** by default (falling back to your account's default datapack if you haven't pinned one). See [Automatic capture and datapack pinning](../architecture/core-concepts/datapacks/#automatic-capture-and-datapack-pinning) to change it.
+Automatic capture writes to your **pinned datapack** by default (falling back to your account's default datapack if you haven't pinned one). OpenCode 1.18.x uses the account's default datapack in installer 2.3.0 and doesn't read the pin. See [Automatic capture and datapack pinning](../architecture/core-concepts/datapacks/#automatic-capture-and-datapack-pinning) to change the pin for other clients.
 
 1. Generate an API key from **Settings > API Keys**. Name it for the client that will use it (for example, `laptop/claude-desktop`). The key starts with `mko_tkn_` and is shown exactly once: copy or download it before closing.
-2. Open the **Connect** dialog on any datapack, or go to the **Connect** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, Cursor, Codex, or Kiro).
+2. Open the **Connect** dialog on any datapack, or go to the **Connect** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, Cursor, Codex, or Kiro). For OpenCode, use the command in the next step with `--client opencode`.
 3. Run the install command shown. It looks like this:
 
     ```sh
     npx @yugabytedb/meko-mcp@latest --client <client> --url "https://mcp.mekodata.ai/mcp" --api-key <paste-your-api-key>
     ```
 
-    Replace `<client>` with `claude-code`, `claude-desktop`, `cursor`, `codex`, or `kiro`.
+    Replace `<client>` with `claude-code`, `claude-desktop`, `cursor`, `codex`, `kiro`, or `opencode`.
 
     On a fresh install, `--url` is optional: the installer defaults to the production endpoint shown above. Existing consistent custom or development endpoints are preserved; pass `--url` explicitly to override them or resolve conflicting client configurations.
 
-4. Restart your client if the new MCP server doesn't show up automatically.
+4. Restart your client if the new MCP server doesn't show up automatically. OpenCode always requires a restart after installation.
 
 The portal also has a **Manual MCP Install** tab for other clients, which walks through running nvm commands and adding the skills package step by step.
 
