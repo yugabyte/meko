@@ -627,6 +627,9 @@ fn run() -> Result<std::process::ExitCode> {
         render_config(&env, fence_cfg.required, &overrides)?;
     }
 
+    // Written by each lease's remote-auth run, served by the settings API.
+    let remote_auth = std::sync::Arc::new(remote_auth::Status::default());
+
     // Nothing starts before the endpoint holds its branch's write lease, and
     // losing it takes every child down. A pod that cannot get the lease is a pod
     // waiting its turn, so this loops rather than failing — it wins the lease,
@@ -645,7 +648,11 @@ fn run() -> Result<std::process::ExitCode> {
     // connection refused; on `Daemons` the compute spec is this process's to
     // re-render, so the call does what it says.
     if let Some(addr) = env.settings_api_addr() {
-        let state = std::sync::Arc::new(http::State::new(env.clone(), fence_cfg.required));
+        let state = std::sync::Arc::new(http::State::new(
+            env.clone(),
+            fence_cfg.required,
+            remote_auth.clone(),
+        ));
         match http::spawn(addr, state) {
             Ok(bound) => tracing::info!(%bound, "settings API bound"),
             Err(e) => tracing::warn!("settings API unavailable: {e:#}"),
@@ -703,7 +710,7 @@ fn run() -> Result<std::process::ExitCode> {
                 return Ok(std::process::ExitCode::SUCCESS);
             }
         }
-        let (outcome, returned) = serve_one_lease(&env, fence_cfg.required, fence)?;
+        let (outcome, returned) = serve_one_lease(&env, fence_cfg.required, fence, &remote_auth)?;
         fence = returned;
         match outcome {
             Outcome::Shutdown => {
@@ -746,6 +753,7 @@ fn serve_one_lease(
     env: &std::sync::Arc<Env>,
     fence_required: bool,
     fence: Option<fence::Fence>,
+    remote_auth: &std::sync::Arc<remote_auth::Status>,
 ) -> Result<(Outcome, Option<fence::Fence>)> {
     let l = &env.layout;
 
@@ -833,17 +841,19 @@ fn serve_one_lease(
         // blocking here would stop the monitor loop from restarting a sibling
         // that crashed meanwhile. The controller's Docker deployer treats the
         // line it logs as the endpoint's readiness signal — see
-        // remote_auth::READY_MARKER.
+        // remote_auth::READY_MARKER — and the controller polls its outcome over
+        // `GET /v1/remote-auth`.
         //
         // Skipped when the caller rendered the config: the password exists so a
         // client outside the pod can authenticate, and a `yb_amp_local` endpoint
         // is reached over loopback, by a spec that already says how its roles
-        // are set up.
+        // are set up. The route then answers `pending`, and nothing asks it.
         if !env.prerender.caller_driven() {
             remote_auth::spawn(
                 &l.pg_bin().join("psql"),
                 l.compute_port,
                 env.compute_password.as_deref(),
+                remote_auth.clone(),
             );
         }
 

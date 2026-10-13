@@ -182,6 +182,9 @@ type Branch struct {
 	ParentBranchID     *string        `json:"parent_branch_id"`
 	ForkLSN            *string        `json:"fork_lsn"`
 	WriteTokenSettings map[string]any `json:"write_token_settings"`
+	// PasswordRequired is whether this branch's next read_write endpoint must
+	// carry a password. Nil from a controller that predates it.
+	PasswordRequired *bool `json:"password_required"`
 }
 
 // CreateBranchRequest forks a branch into a new one.
@@ -199,6 +202,8 @@ type Cluster struct {
 	DefaultBranch Branch   `json:"default_branch"`
 	Engine        string   `json:"engine"`
 	Extensions    []string `json:"extensions"`
+	// PasswordRequired is DefaultBranch.PasswordRequired.
+	PasswordRequired *bool `json:"password_required"`
 }
 
 // CreateClusterRequest creates a cluster (and its default branch "main").

@@ -72,43 +72,7 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"--add-host", "host.docker.internal:host-gateway",
 		"-p", fmt.Sprintf("0:%d", endpointComputePort),
 	)
-	env := map[string]string{
-		"YB_HOST_PORTS":       spec.YB.HostPorts,
-		"YB_USER":             spec.YB.User,
-		"YB_PASSWORD":         spec.YB.Password,
-		"YB_DBNAME":           spec.YB.DBName,
-		"BRANCH_ID":           branchIDValue(spec.BranchID),
-		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
-	}
-	// TODO(extensions): spec.Extensions are mounted as Kubernetes ImageVolumes
-	// (compute/architecture/extensions.md); the Docker runtime has no equivalent,
-	// so a dev endpoint here ships only the extensions baked into the image. If
-	// dev needs externalized extensions, bind-mount each image's tree under
-	// /extensions/<name> and set the extension GUCs in COMPUTE_EXTRA_SETTINGS_JSON.
-	if spec.ControllerURL != "" {
-		// SC-coordinated: the controller reaches this endpoint's services by its
-		// container name on the shared network, at their internal ports.
-		env["CONTROLLER_URL"] = spec.ControllerURL
-		env["CONTROLLER_REACHABLE_HOST"] = spec.Name
-		env["PAGESERVER_HTTP_PUB_PORT"] = strconv.Itoa(endpointPSHTTPPort)
-		env["PAGESERVER_PG_PUB_PORT"] = strconv.Itoa(endpointPSPGPort)
-		env["SAFEKEEPER_HTTP_PUB_PORT"] = strconv.Itoa(safekeeperHTTPPort)
-		env["SAFEKEEPER_PG_PUB_PORT"] = strconv.Itoa(endpointSKPGPort)
-	}
-	// User GUCs are not passed here: the supervisor reads them from the endpoint's
-	// and its branch's `pg_settings` in amp_registry, so it needs the endpoint id
-	// rather than a copy of the settings. Without the id it would silently come up
-	// on derived defaults alone.
-	if spec.EndpointID != "" {
-		env["ENDPOINT_ID"] = spec.EndpointID
-	}
-	// The compute default user's password. Empty means the variable is absent,
-	// which the supervisor reads as "leave the role's password as the catalog has
-	// it" — a redeploy (and any pre-credentials endpoint) renders no verifier.
-	if spec.PasswordVerifier != "" {
-		env["COMPUTE_PASSWORD"] = spec.PasswordVerifier
-	}
-	for k, v := range env {
+	for k, v := range endpointEnv(spec) {
 		args = append(args, "-e", k+"="+v)
 	}
 	args = append(args, image)
@@ -134,6 +98,50 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 	}
 	d.logger.Info("endpoint ready", "endpoint", spec.Name, "address", addr, "image", image)
 	return Endpoint{ID: spec.Name, Address: addr, Version: version}, nil
+}
+
+// endpointEnv is the endpoint container's environment.
+func endpointEnv(spec EndpointSpec) map[string]string {
+	env := map[string]string{
+		"YB_HOST_PORTS":       spec.YB.HostPorts,
+		"YB_USER":             spec.YB.User,
+		"YB_PASSWORD":         spec.YB.Password,
+		"YB_DBNAME":           spec.YB.DBName,
+		"BRANCH_ID":           branchIDValue(spec.BranchID),
+		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
+	}
+	// TODO(extensions): spec.Extensions are mounted as Kubernetes ImageVolumes
+	// (compute/architecture/extensions.md); the Docker runtime has no equivalent,
+	// so a dev endpoint here ships only the extensions baked into the image. If
+	// dev needs externalized extensions, bind-mount each image's tree under
+	// /extensions/<name> and set the extension GUCs in COMPUTE_EXTRA_SETTINGS_JSON.
+	if spec.ControllerURL != "" {
+		// SC-coordinated: the controller reaches this endpoint's services by its
+		// container name on the shared network, at their internal ports.
+		env["CONTROLLER_URL"] = spec.ControllerURL
+		env["CONTROLLER_REACHABLE_HOST"] = spec.Name
+		env["PAGESERVER_HTTP_PUB_PORT"] = strconv.Itoa(endpointPSHTTPPort)
+		env["PAGESERVER_PG_PUB_PORT"] = strconv.Itoa(endpointPSPGPort)
+		env["SAFEKEEPER_HTTP_PUB_PORT"] = strconv.Itoa(safekeeperHTTPPort)
+		env["SAFEKEEPER_PG_PUB_PORT"] = strconv.Itoa(endpointSKPGPort)
+		// The API the controller calls at EndpointSupervisorURL, gated as the
+		// endpoint chart gates it.
+		env["SUPERVISOR_HTTP_PORT"] = strconv.Itoa(supervisorHTTPPort)
+	}
+	// User GUCs are not passed here: the supervisor reads them from the endpoint's
+	// and its branch's `pg_settings` in amp_registry, so it needs the endpoint id
+	// rather than a copy of the settings. Without the id it would silently come up
+	// on derived defaults alone.
+	if spec.EndpointID != "" {
+		env["ENDPOINT_ID"] = spec.EndpointID
+	}
+	// The compute default user's password. Empty means the variable is absent,
+	// which the supervisor reads as "leave the role's password as the catalog has
+	// it" — a redeploy (and any pre-credentials endpoint) renders no verifier.
+	if spec.PasswordVerifier != "" {
+		env["COMPUTE_PASSWORD"] = spec.PasswordVerifier
+	}
+	return env
 }
 
 // endpointImage resolves the image this deployer runs for an endpoint, and the

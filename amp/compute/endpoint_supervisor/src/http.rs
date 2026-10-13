@@ -32,6 +32,10 @@
 //! nothing, and changes nothing, so it is safe to call on any endpoint at any
 //! time.
 //!
+//! `GET /v1/remote-auth` reports what [`crate::remote_auth`] decided on this
+//! boot, and the LSN after the password committed — the controller records it
+//! as the lowest point a fork of the branch carries the password.
+//!
 //! Separate from [`crate::control`] rather than folded into it: that socket is
 //! a Unix socket in the run directory, deliberately unreachable from outside the
 //! pod, and the caller here is the controller.
@@ -255,7 +259,7 @@ pub fn reload_compute() -> Result<()> {
     sup.signal_one("compute_ctl", libc::SIGHUP)
 }
 
-/// Everything a request needs./// Everything a request needs. `Arc` because routerify hands it to each request
+/// Everything a request needs. `Arc` because routerify hands it to each request
 /// by reference and the server outlives any one of them.
 pub struct State {
     pub env: Arc<Env>,
@@ -264,16 +268,57 @@ pub struct State {
     /// the other's files, and both reporting a "changed" that reflects the
     /// race rather than the registry.
     reloading: tokio::sync::Mutex<()>,
+    /// Written by each lease's remote-auth run, read by `GET /v1/remote-auth`.
+    remote_auth: Arc<crate::remote_auth::Status>,
 }
 
 impl State {
-    pub fn new(env: Arc<Env>, fence_required: bool) -> Self {
+    pub fn new(
+        env: Arc<Env>,
+        fence_required: bool,
+        remote_auth: Arc<crate::remote_auth::Status>,
+    ) -> Self {
         Self {
             env,
             fence_required,
             reloading: tokio::sync::Mutex::new(()),
+            remote_auth,
         }
     }
+}
+
+/// `GET /v1/remote-auth`. `lsn` is set only for `applied`, and only when it
+/// could be read. Never the password: the route is unauthenticated.
+#[derive(Debug, serde::Serialize)]
+struct RemoteAuthResponse {
+    state: &'static str,
+    lsn: Option<String>,
+}
+
+impl From<crate::remote_auth::Outcome> for RemoteAuthResponse {
+    fn from(o: crate::remote_auth::Outcome) -> Self {
+        let lsn = match o {
+            crate::remote_auth::Outcome::Applied { lsn } => lsn.map(|l| l.to_string()),
+            _ => None,
+        };
+        Self {
+            state: o.name(),
+            lsn,
+        }
+    }
+}
+
+/// What remote auth decided on this boot. The controller polls it after
+/// creating a root branch's first writer, to learn the LSN from which a fork
+/// carries the password.
+async fn remote_auth_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    let state = request
+        .data::<Arc<State>>()
+        .expect("state is attached to the router");
+    json_response(
+        StatusCode::OK,
+        RemoteAuthResponse::from(state.remote_auth.get()),
+    )
 }
 
 async fn reload_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -422,6 +467,9 @@ pub fn make_router(state: Arc<State>) -> RouterBuilder<Body, ApiError> {
         .post("/v1/settings/check", |r| {
             endpoint::request_span(r, check_handler)
         })
+        .get("/v1/remote-auth", |r| {
+            endpoint::request_span(r, remote_auth_handler)
+        })
         // The certificate expiries this process watches. Served here rather than
         // from a listener of its own because this is the only HTTP server the
         // supervisor has, and the collector scrapes endpoint pods by explicit
@@ -500,6 +548,7 @@ mod tests {
         let state = std::sync::Arc::new(super::State::new(
             std::sync::Arc::new(crate::tests::test_env()),
             true,
+            Default::default(),
         ));
         // Port 0: the kernel picks one, and `spawn` reports which.
         let addr = super::spawn(([127, 0, 0, 1], 0).into(), state).expect("spawn the API");
@@ -553,7 +602,11 @@ mod tests {
         let mut env = crate::tests::test_env();
         env.layout.pg_distrib_dir = pg_distrib;
         env.layout.run_dir = run_dir;
-        let state = std::sync::Arc::new(super::State::new(std::sync::Arc::new(env), true));
+        let state = std::sync::Arc::new(super::State::new(
+            std::sync::Arc::new(env),
+            true,
+            Default::default(),
+        ));
         let addr = super::spawn(([127, 0, 0, 1], 0).into(), state).expect("spawn the API");
 
         let body = r#"{"pg_settings":{"work_memm":"5MB","work_mem":"64MB"}}"#;
@@ -590,6 +643,100 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         panic!("the check never answered on {addr}: {last:?}");
+    }
+
+    /// The shape the controller's client decodes: `state` always, `lsn` an
+    /// `X/Y` string only for an applied password whose LSN was read, null
+    /// otherwise.
+    #[test]
+    fn remote_auth_json_for_every_state() {
+        use crate::remote_auth::Outcome;
+        let lsn = Some("1/A0".parse().unwrap());
+        for (outcome, want) in [
+            (Outcome::Pending, r#"{"state":"pending","lsn":null}"#),
+            (
+                Outcome::Applied { lsn },
+                r#"{"state":"applied","lsn":"1/A0"}"#,
+            ),
+            (
+                Outcome::Applied { lsn: None },
+                r#"{"state":"applied","lsn":null}"#,
+            ),
+            (Outcome::AlreadySet, r#"{"state":"already_set","lsn":null}"#),
+            (Outcome::Unset, r#"{"state":"unset","lsn":null}"#),
+            (Outcome::Failed, r#"{"state":"failed","lsn":null}"#),
+        ] {
+            let got = serde_json::to_string(&super::RemoteAuthResponse::from(outcome)).unwrap();
+            assert_eq!(got, want);
+        }
+    }
+
+    /// The route is served, and reads the status a remote-auth run writes —
+    /// the same `Arc`, not a copy taken when the server was built.
+    #[test]
+    fn remote_auth_is_served_from_the_shared_status() {
+        use std::io::{Read, Write};
+
+        let status = std::sync::Arc::new(crate::remote_auth::Status::default());
+        let mut env = crate::tests::test_env();
+        // The one secret this process holds; it must not leak into the reply.
+        env.compute_password = Some("SCRAM-SHA-256$4096:secret-salt$stored:server".into());
+        let state = std::sync::Arc::new(super::State::new(
+            std::sync::Arc::new(env),
+            true,
+            status.clone(),
+        ));
+        let addr = super::spawn(([127, 0, 0, 1], 0).into(), state).expect("spawn the API");
+
+        let get = || -> Option<String> {
+            let mut sock = std::net::TcpStream::connect(addr).ok()?;
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            write!(
+                sock,
+                "GET /v1/remote-auth HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+            )
+            .ok()?;
+            let mut buf = String::new();
+            let _ = sock.read_to_string(&mut buf);
+            buf.contains("200 OK").then_some(buf)
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let first = loop {
+            if let Some(reply) = get() {
+                break reply;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the API never answered on {addr}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        assert!(
+            first.ends_with(r#"{"state":"pending","lsn":null}"#),
+            "{first}"
+        );
+
+        let run = status.begin();
+        status.finish(
+            run,
+            crate::remote_auth::Outcome::Applied {
+                lsn: Some("0/16B3748".parse().unwrap()),
+            },
+        );
+        let reply = get().expect("a second answer");
+        assert!(
+            reply.ends_with(r#"{"state":"applied","lsn":"0/16B3748"}"#),
+            "{reply}"
+        );
+        assert!(
+            reply.contains("application/json"),
+            "not served as JSON: {reply}"
+        );
+        assert!(
+            !reply.contains("secret") && !reply.contains("SCRAM"),
+            "{reply}"
+        );
     }
 
     /// Nothing changed, nothing restarts — including when there is no supervisor

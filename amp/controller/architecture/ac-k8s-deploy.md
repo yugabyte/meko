@@ -721,16 +721,20 @@ The deploy is **demo-grade**. What it currently takes for granted:
 - **No authentication.** The control-plane API + UI are unauthenticated. Mitigated only by **internal
   LoadBalancers** (private VPC IPs, GKE `…/load-balancer-type: Internal`) — not by
   any authn/authz. Do not expose publicly.
-- **`cloud_admin` is no longer well-known, but it is still shared.** An endpoint
-  created through the API comes up with `cloud_admin`'s password set to one the
-  caller supplied, delivered as `COMPUTE_PASSWORD`. There is no longer a default
-  to fall back to: a deploy that renders no verifier — a redeploy, a fleet roll,
-  a `read_only` endpoint — leaves the role's password exactly as the branch's
-  catalog has it, and an endpoint created before any of this keeps whatever it
-  was given then. What has not changed is that it is ONE superuser per
-  branch, shared by every endpoint on it and inherited by forks — there is still
-  no cluster isolation at the SQL layer, and no way for a customer to choose the
-  user's name (yugabyte/meko#1354).
+- **`cloud_admin` is no longer well-known, but it is still shared.** Its
+  password lives in the branch's catalog. A root branch's first writer sets it
+  from the `password` its caller supplied, delivered as `COMPUTE_PASSWORD`; a
+  fork inherits it with the rest of its parent's catalog, which is why a fork
+  below the parent's [floor](controller-cluster-create.md#the-fork-floor) is
+  refused. So the API requires a `password` only where `password_required` is
+  true, and drops one sent anywhere else. There is no default to fall back to: a
+  deploy that renders no verifier — a redeploy, a fleet roll, a `read_only`
+  endpoint, a writer on a fork or on a root that already has a password — leaves
+  the role's password exactly as the branch's catalog has it, and an endpoint
+  created before any of this keeps whatever it was given then. What has not
+  changed is that it is ONE superuser per branch, shared by every endpoint on it
+  and inherited by forks — there is still no cluster isolation at the SQL layer,
+  and no way for a customer to choose the user's name (yugabyte/meko#1354).
 
   **One exception: a Voyager migration target.** Its plan builds the
   create-endpoint step directly rather than through the handler that requires a
@@ -744,10 +748,10 @@ The deploy is **demo-grade**. What it currently takes for granted:
   The control plane stores no password and generates none: what travels to the
   pod (and sits in the release Secret and the create task's step row) is the
   verifier `pg_authid` itself holds — **SCRAM-SHA-256**, so it is not
-  password-equivalent and neither artifact can be used to log in. The plaintext
-  exists only in the request that set it, which is why the caller has to bring
-  one, and it must be printable ASCII (SASLprep — see `createEndpoint`'s
-  `password`).
+  password-equivalent and neither artifact can be used to log in. The caller
+  brings either the plaintext, which exists only in that request and must be
+  printable ASCII (SASLprep — see `createEndpoint`'s `password`), or a verifier
+  it computed itself, which is passed through as is.
 
   The supervisor applies that verifier only on a role that has no password yet,
   and does nothing at all when the pod carries no `COMPUTE_PASSWORD`. So a

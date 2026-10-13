@@ -136,6 +136,55 @@ Pre-fork data stays under the ancestor's `branch_id` and is served via
 lineage-aware reads; nothing is copied. As with create, the branch's recipe
 writes are synchronous today and move onto the task framework under #113.
 
+### The fork floor
+
+A fork starts from its parent's catalog as of `fork_lsn`, `cloud_admin`'s
+password included, so its writer is created without one and answers to the
+parent's ([`ac-k8s-deploy.md`](ac-k8s-deploy.md)). A fork taken before the
+parent had a password would have none (yugabyte/meko#1461), so every branch has a **floor**,
+the lowest LSN it can be forked at, held in its own `fork_lsn`:
+
+- A fork's floor is the LSN it was taken at.
+- A root's (`parent_branch_id` NULL) is NULL until its first `read_write`
+  endpoint's supervisor reports applying the password; the `create_endpoint`
+  step then records the LSN the supervisor read after that commit
+  (`GET /v1/remote-auth`,
+  [`single-container-endpoint.md`](../../compute/architecture/single-container-endpoint.md)),
+  first writer wins ([`ac-tasks.md`](ac-tasks.md)). When the supervisor reports
+  a password it cannot date (`already_set`, `applied_no_lsn`, or a `404` from an
+  older image, `unsupported`), the step records `0/0`. A backfill at controller
+  start gives `0/0` to a root whose first writer succeeded with no floor recorded
+  (it predates this, or ran on an older controller), unless that step's result
+  reported `unset`, `failed` or `unknown`: the catalog may then have no
+  password, and a floor would stop the next writer setting one.
+
+`createBranch` refuses a fork point below the parent's floor (`400`), and the
+fork inserts (`RecordBranch`, `EnsureBranch`, `CreateBranch`) refuse it again as
+`ErrForkBelowFloor`; a replayed branch id stays a no-op. `password_required`
+reads the same NULL: only a root with no floor needs a `password` on its next
+writer. Fork-vs-root is decided by `parent_branch_id` everywhere, never by
+`fork_lsn`.
+
+A root with no floor cannot be forked at all: `createBranch` answers `503` +
+`Retry-After`. That covers a root that never had a writer, one whose first
+writer is still being created (its safekeeper answers before the password
+commits, so a default fork point could land below it), and one whose writer's
+password was not seen to land. It is a `503` because the floor is normally
+moments away, and the YCP agent retries a `503` but holds a `400` as permanent —
+it can create a fork before the root's writer. First the handler runs the
+backfill for that one root, so a writer created by a controller that records no
+floors (an older replica mid-rollout) does not block forks until the next start.
+A writer whose password was not seen to land (its create's `compute_password` is
+`unset`, `failed` or `unknown`) blocks forks until it is replaced: the new
+writer's supervisor applies the password or finds it set, and either records a
+floor. Not on the local driver, which applies no password.
+
+**Gaps.** `0/0` allows every fork point, so a root whose password was set at an
+unknown LSN can be forked below it. A fork whose catalog has no
+password cannot get one through the API, because a fork's writer drops the
+`password` it is sent; set it from inside the endpoint pod over loopback
+(`ALTER ROLE cloud_admin PASSWORD ...`).
+
 ## `yb_amp_local` → Amp Controller
 
 | `yb_amp_local` | Amp Controller (cAmp) |

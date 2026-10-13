@@ -374,9 +374,10 @@ def test_create_endpoint_nests_cpu_and_memory_under_resources(wire):
 def test_create_endpoint_omits_empty_body_and_resources(wire):
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(pool_id="p1", cluster_id="pr1", branch_id="b1")
-    # No password either. The tool stays permissive — the CONTROLLER requires it
-    # and answers 400 — so the caller sees its message rather than a client-side
-    # guess at the contract that would go stale the moment the rule moves.
+    # No password either. The tool stays permissive — the CONTROLLER decides
+    # when one is required and answers 400 — so the caller sees its message
+    # rather than a client-side guess at the contract that would go stale the
+    # moment the rule moves.
     assert handler.last_json() == {}
 
 

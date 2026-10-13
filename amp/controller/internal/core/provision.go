@@ -162,18 +162,25 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, clusterID,
 	// execute gap is unbounded (worker backlog, restart, lease reclaim). A
 	// tombstoned or absent parent selects nothing, so the step fails ErrNotFound.
 	// Mirrors the same guard in the synchronous CreateBranch (pg.go).
+	//
+	// A parent whose floor is above forkLSN selects nothing too: the API refuses
+	// such a fork, and this is the backstop for a task planned before the floor
+	// was recorded.
 	tag, err := b.pool.Exec(ctx,
 		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
 		 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, p.extensions
 		   FROM amp_registry.branches p
 		  WHERE p.branch_id = $5::uuid AND p.cluster_id = $1::uuid AND p.dropped_at IS NULL
+		    AND (p.fork_lsn IS NULL OR p.fork_lsn <= $6::pg_lsn)
 		 ON CONFLICT (branch_id) DO NOTHING`,
 		clusterID.String(), branchID.String(), name, pgVersion, parentBranchID.String(), forkLSN)
 	if err != nil {
 		return mapBranchErr("insert branch", err)
 	}
-	// Zero rows is either "the parent is gone/dropped" or "this branch already
-	// exists" (the idempotent replay). Only the former is an error, so probe.
+	// Zero rows is "this branch already exists" (the idempotent replay, which
+	// stays a no-op even if the parent's floor has since risen past it), "the
+	// fork is below the parent's floor", or "the parent is gone/dropped". Probe
+	// in that order.
 	if tag.RowsAffected() == 0 {
 		var exists bool
 		if err := b.pool.QueryRow(ctx,
@@ -183,6 +190,9 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, clusterID,
 			return fmt.Errorf("classify ensure branch no-op: %w", err)
 		}
 		if !exists {
+			if err := forkBelowFloor(ctx, b.pool, clusterID, parentBranchID, forkLSN); err != nil {
+				return err
+			}
 			return ErrNotFound
 		}
 	}

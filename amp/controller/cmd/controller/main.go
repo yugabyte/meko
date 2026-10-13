@@ -439,6 +439,9 @@ func runServe(args []string) error {
 	if ingressAlloc != nil {
 		deps.Ingress = ingressAlloc
 	}
+	if prov.Node != nil {
+		deps.RemoteAuth = prov.Node
+	}
 	// Prometheus instrumentation: one registry, shared by the worker (task
 	// metrics) and the HTTP server (request + runtime metrics, and the /metrics
 	// scrape endpoint). Step 1 of the amp metrics pipeline
@@ -503,6 +506,23 @@ func runServe(args []string) error {
 	go func() {
 		defer wg.Done()
 		reaper.Run(ctx)
+	}()
+
+	// Gives a floor to roots whose first writer predates floor recording, or ran
+	// on a controller that does not record one, so the API stops requiring a
+	// password their catalog already has. Off the startup path: a failure only
+	// leaves those roots asking for a password the supervisor will not apply.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		n, err := backend.BackfillRootForkLSN(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				logger.Warn("backfill root fork floors", "error", err)
+			}
+			return
+		}
+		logger.Info("backfilled root fork floors", "roots", n)
 	}()
 
 	// Shared ingress: register the first shard of each configured family and wait

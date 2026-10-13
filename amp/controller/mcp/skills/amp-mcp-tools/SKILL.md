@@ -77,23 +77,34 @@ same branch is rejected with `conflict`. Provision additional compute as
 `network` (`local` is not yet supported and is rejected with
 `unsupported_disk_type`).
 
-## The endpoint's password is required, and you never see it again
+## The first writer sets the password, and you never see it again
 
-`create_endpoint` sets `password` on the compute's default Postgres user
-(`cloud_admin`), which is who clients connect as. **It is required — the
-controller generates none.** Ask the user for the password; do not invent one on
-their behalf, and do not echo it back in your reply.
+The password of the compute's default Postgres user (`cloud_admin`), which is
+who clients connect as, lives in the branch's catalog. **The first `read_write`
+endpoint on a root branch sets it, and that `create_endpoint` requires
+`password` — the controller generates none.** The branch's (and cluster's)
+`password_required` says whether a create is that case. Ask the user for the
+password; do not invent one on their behalf, and do not echo it back in your
+reply.
 
 Nothing stores it, and no call can recover it — a user who loses it has to reset
-the role themselves over SQL, or create a new cluster.
+the role themselves over SQL (`ALTER ROLE cloud_admin`), or create a new cluster.
 
-A `read_only` endpoint takes no password (passing one is a `400`): the user lives
-in the branch's catalog, which all of its endpoints share, so a replica already
-answers to whatever its branch's writer set — and setting a password there would
-rotate the credential the writer's clients are using.
+Everywhere else no password is needed. A fork inherits its parent's catalog, so
+its writer answers to the parent's password; a later writer on a root keeps the
+one already set. A password sent where `password_required` is false is validated
+and then ignored (a future release will refuse it), so do not send one there.
 
-`password` is 8-128 characters with no control characters. A malformed one — or
-a writer with no password at all — is a `400` before any endpoint exists.
+A `read_only` endpoint takes no password (passing one is a `400`): it shares its
+branch's catalog, so it already answers to whatever password the branch has.
+
+`password` is a plaintext of 8-128 printable ASCII characters, or a
+SCRAM-SHA-256 verifier. A malformed one — or no password where one is required —
+is a `400` before any endpoint exists.
+
+A branch with no `password_required` field at all comes from an older
+controller, which requires a password on every `read_write` endpoint and accepts
+only a plaintext. Send one there.
 
 The username is not selectable yet; that is yugabyte/meko#1354.
 
@@ -289,7 +300,7 @@ page).
 
 Failures raise an error with a stable `code` and a human message. Common ones:
 
-- `invalid_request` — bad/missing arg (e.g. resize with neither cpu nor memory; `pg_version` other than 18; a `create_branch` with no `fork_point_lsn` whose parent has no reachable writer, see the fork precondition below).
+- `invalid_request` — bad/missing arg (e.g. resize with neither cpu nor memory; `pg_version` other than 18; a `create_branch` with no `fork_point_lsn` whose parent has no reachable writer, or one below the parent's lowest forkable LSN, see the fork precondition below).
 - `unsupported_disk_type` — `disk_type: local` (only `network` is supported today).
 - `not_found` — a wrong id in the chain.
 - `conflict` — a second `read_write` on a branch, or deleting a branch that still has child branches.
@@ -336,6 +347,16 @@ safekeeper is unreachable), `create_branch` **fails synchronously with
 fork a parent with no running writer, either **provision a `read_write` endpoint
 on it first**, or **pass an explicit `fork_point_lsn`** (storage `"X/X"` form),
 which skips the live-WAL lookup entirely.
+
+An explicit `fork_point_lsn` cannot go below the lowest LSN the parent can be
+forked at: a fork's own `fork_lsn`, or for a root the point its password was set
+(before which its catalog has none). Below it is `invalid_request` naming both
+LSNs; pick a later point.
+
+A root whose `password_required` is still true cannot be forked at all, with or
+without `fork_point_lsn`: the fork would have no password and never be asked for
+one. `create_branch` answers `service_unavailable`; create the root's first
+`read_write` endpoint (with a password), wait for its task, then retry.
 
 ## End-to-end workflows
 

@@ -71,7 +71,8 @@ the cluster-scoped RBAC it creates is namespace-prefixed so the copies do not co
 
 - **RBAC** — `ServiceAccount`, `Role`+`RoleBinding` `amp-controller` (full access
   to pods/services/configmaps/secrets/pvc/endpoints/events/serviceaccounts and
-  apps deployments/replicasets/statefulsets in the release namespace), and
+  apps deployments/replicasets/statefulsets in the release namespace, plus
+  `pods/resize: patch`), and
   `ClusterRole`+`ClusterRoleBinding` `amp-controller-namespaces` (cluster-scoped
   namespaces get/list/create + nodes get/list). The controller drives endpoint
   workloads via the Kubernetes/Helm driver, so it needs this.

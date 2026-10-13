@@ -25,6 +25,10 @@ var (
 	// impossible against current state, such as a fork point below the
 	// ancestor's GC cutoff.
 	ErrInvalid = errors.New("registry: invalid request")
+	// ErrForkBelowFloor is the ErrInvalid of a fork point below the ancestor's
+	// floor, its fork_lsn (core.Branch.ForkLSN). A separate sentinel from
+	// core.ErrForkBelowFloor because core's tests import this package.
+	ErrForkBelowFloor = fmt.Errorf("%w: fork point is below the ancestor's floor", ErrInvalid)
 )
 
 // Store is the storage layer's view of the control plane's resource model: the
@@ -239,7 +243,9 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 	// is one step so that the row, the branch_state seed, and the validation below
 	// all commit or roll back together. A fork therefore selects its parent rather
 	// than naming it — the FK alone cannot check liveness, since a tombstoned
-	// parent's row is still there.
+	// parent's row is still there. Nor does it select a parent whose floor is
+	// above the fork point: the API refuses that fork, and this is the backstop
+	// for a task planned before the floor was recorded.
 	//
 	var tag pgconn.CommandTag
 	if req.AncestorBranchID != nil {
@@ -249,6 +255,7 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 			 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, $7::jsonb, $8::jsonb
 			   FROM amp_registry.branches p
 			  WHERE p.branch_id = $5::uuid AND p.cluster_id = $1::uuid AND p.dropped_at IS NULL
+			    AND (p.fork_lsn IS NULL OR p.fork_lsn <= $6::pg_lsn)
 			 ON CONFLICT (branch_id) DO NOTHING`,
 			clusterID.String(), branchID.String(), req.BranchName, req.PgVersion,
 			req.AncestorBranchID.String(), req.StartLSN, string(inheritedExts), string(inheritedSettings))
@@ -264,8 +271,10 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 	if err != nil {
 		return mapWriteErr(fmt.Sprintf("declare branch %s (%q)", branchID, req.BranchName), err)
 	}
-	// Zero rows is either an idempotent re-record (the branch already exists) or a
-	// parent that is gone or tombstoned. Only the latter is an error.
+	// Zero rows is an idempotent re-record (the branch already exists, which stays
+	// a no-op even if the parent's floor has since risen past it), a fork below
+	// the parent's floor, or a parent that is gone or tombstoned. Only the first
+	// is not an error.
 	if tag.RowsAffected() == 0 && req.AncestorBranchID != nil {
 		var exists bool
 		if err := tx.QueryRow(ctx,
@@ -275,6 +284,19 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 			return fmt.Errorf("classify branch declare no-op: %w", err)
 		}
 		if !exists {
+			var floor string
+			err := tx.QueryRow(ctx,
+				`SELECT fork_lsn::text FROM amp_registry.branches
+				  WHERE branch_id = $1::uuid AND cluster_id = $2::uuid AND dropped_at IS NULL
+				    AND fork_lsn > $3::pg_lsn`,
+				req.AncestorBranchID.String(), clusterID.String(), req.StartLSN).Scan(&floor)
+			if err == nil {
+				return fmt.Errorf("%w: %s is below %s, the lowest LSN branch %s can be forked at",
+					ErrForkBelowFloor, req.StartLSN, floor, *req.AncestorBranchID)
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("read fork ancestor %s floor: %w", *req.AncestorBranchID, err)
+			}
 			return fmt.Errorf("%w: fork parent %s is not a live branch in cluster %s",
 				ErrNotFound, *req.AncestorBranchID, clusterID)
 		}

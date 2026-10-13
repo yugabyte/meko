@@ -167,7 +167,9 @@ def create_branch(
 
     The parent defaults to the cluster's default branch; pass
     `parent_branch_id` to fork off another branch. `fork_point_lsn` (storage
-    "X/X" form) defaults to the parent's latest LSN. Returns a Task; poll
+    "X/X" form) defaults to the parent's latest LSN; one below the lowest LSN
+    the parent can be forked at (a fork's own `fork_lsn`, or where a root's
+    password was set) is a 400 naming both. Returns a Task; poll
     `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then
     call `get_branch` to read the new branch.
     """
@@ -236,12 +238,18 @@ def create_endpoint(
     and `tailnet_address`, if the endpoint
     is exposed on the tailnet).
 
-    A `read_write` endpoint comes up with `password` set on the compute's
-    default Postgres user (`cloud_admin`), and it is **required** — the
-    controller generates none. Ask the user for one rather than inventing it
-    silently, and do not echo it back in your reply. Nothing stores it and no
-    call can recover it. A `read_only` endpoint shares its branch's roles, so
-    passing a password with one is a 400.
+    `password` is the compute's default Postgres user's (`cloud_admin`), and it
+    lives in the branch's catalog. It is **required** only where the branch's
+    `password_required` is true: the first `read_write` endpoint on a root
+    branch, which sets it — the controller generates none. Ask the user for one
+    rather than inventing it, and do not echo it back in your reply. Nothing
+    stores it and no call can recover it. A fork inherits its parent's password
+    with its catalog, so a writer on a fork needs none; one sent where none is
+    required is ignored (still a 400 if malformed). It may be a plaintext or a
+    SCRAM-SHA-256 verifier. A `read_only` endpoint takes no password (a 400).
+    A branch with no `password_required` field comes from an older controller,
+    which requires a password on every `read_write` endpoint and takes only a
+    plaintext: send one there.
 
     The user is not selectable yet (yugabyte/meko#1354).
 

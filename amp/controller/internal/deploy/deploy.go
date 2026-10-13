@@ -22,9 +22,9 @@ import (
 const safekeeperHTTPPort = 7676
 
 // supervisorHTTPPort is the port an endpoint's supervisor serves its settings
-// API on (ports.supervisorHttp in deploy/helm/yb-amp-endpoint). Served only
-// where a controller exists to call it, which is exactly the case the
-// controller is in when it calls.
+// API on (ports.supervisorHttp in deploy/helm/yb-amp-endpoint). Both deployers
+// open it only when the endpoint is given a controller URL, so a caller with
+// none must not expect it.
 const supervisorHTTPPort = 9899
 
 // branchIDValue renders a branch id for a deployer's wire format. uuid.Nil must

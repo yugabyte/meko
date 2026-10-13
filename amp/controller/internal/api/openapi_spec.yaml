@@ -440,8 +440,9 @@ paths:
         `404` unknown pool); a duplicate cluster name surfaces as a `failed` task,
         not a `409`.
 
-        With `with_writer` the writer is credentialed exactly as `createEndpoint`
-        credentials one, so `password` is required alongside it.
+        With `with_writer` the writer is the new default branch's first, so
+        `password` is required alongside it wherever `createEndpoint` would
+        require it (`password_required`).
       requestBody:
         required: true
         content:
@@ -599,10 +600,15 @@ paths:
         Like create-cluster, the branch is recorded as a recipe and materialized
         lazily by the first endpoint deployed on it — no compute is started here.
         Cheap validation is synchronous (`400` bad body / bad `fork_point_lsn` /
-        no endpoint on the parent, `404` unknown pool / cluster / parent); a
+        a fork point below the parent's lowest forkable LSN / no endpoint on the
+        parent, `404` unknown pool / cluster / parent); a
         duplicate branch name surfaces as a `failed` task, not a `409`. A parent
         whose endpoint is deployed but whose safekeeper is not answering yet gets
-        `503` — the fork is valid, just not resolvable yet, so retry it.
+        `503` — the fork is valid, just not resolvable yet, so retry it. So does a
+        root whose `password_required` is still true (its first `read_write`
+        endpoint has not applied its password, or there is none yet): a fork of it
+        would have no password and never be asked for one, so retry once that
+        endpoint is up.
       requestBody:
         required: true
         content:
@@ -784,11 +790,13 @@ paths:
         (`--deploy`); returns `501` otherwise. `404` if the pool / cluster / branch
         does not exist.
 
-        A `read_write` endpoint requires a `password`: it sets the password of
-        the compute's default user (`cloud_admin`), which is who clients connect
-        to `address` as. The controller mints no credential of its own. A
-        `read_only` endpoint shares its branch's roles rather than creating any,
-        so it takes no `password`.
+        The password of the compute's default user (`cloud_admin`), which is who
+        clients connect to `address` as, lives in the branch's catalog. The first
+        `read_write` endpoint on a root branch sets it, so that create requires a
+        `password`; the branch's `password_required` says whether a create is
+        that case. A fork inherits its parent's catalog, password included, so
+        its endpoints need none. The controller mints no credential of its own.
+        A `read_only` endpoint takes no `password`.
       requestBody:
         required: false
         content:
@@ -2147,11 +2155,14 @@ components:
         password:
           type: string
           minLength: 8
-          maxLength: 128
+          maxLength: 256
           description: |
-            The writer's compute password, as `createEndpoint`'s `password`:
-            **required** whenever `with_writer` is set, and refused without it
-            for the same reason `connectivity` is.
+            The writer's compute password, in either form `createEndpoint`'s
+            `password` takes (a plaintext of 8–128 printable ASCII characters, or
+            a SCRAM-SHA-256 verifier): **required** with `with_writer` on a
+            controller whose endpoints apply a password, since that writer is the
+            new root branch's first, and refused without `with_writer` for the
+            same reason `connectivity` is.
         engine:
           type: string
           enum: [postgres, aidb, oracle, sqlserver, documentdb]
@@ -2208,6 +2219,12 @@ components:
           format: date-time
         default_branch:
           $ref: '#/components/schemas/Branch'
+        password_required:
+          type: boolean
+          description: |
+            `default_branch.password_required`: whether the first `read_write`
+            endpoint on the cluster's default branch must carry a `password`.
+            Absent from controllers that predate it.
         engine:
           type: string
           description: |
@@ -2287,7 +2304,24 @@ components:
         fork_lsn:
           type: string
           nullable: true
-          description: The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+          description: |
+            The ancestor LSN this branch was forked at (storage-layer "X/X"
+            form), or null for a root branch (one with no `parent_branch_id`). A
+            fork of this branch cannot be taken below it. Controllers that predate
+            `password_required` may report a root's own floor here (often
+            `0/0`), so tell a fork by `parent_branch_id`, not by this field.
+        password_required:
+          type: boolean
+          description: |
+            Whether a `read_write` endpoint created on this branch must carry a
+            `password`: true only for a root branch until its first writer's
+            password is seen to land. A fork inherits its parent's catalog, password included,
+            and a root's first writer sets it for good; a `password` sent where
+            this is false is ignored. Changing it later is
+            `ALTER ROLE cloud_admin` over a connection that already
+            authenticates. Always false on a controller whose endpoints do not
+            apply a password (the local driver). Absent from controllers that
+            predate it, which required a password on every writer.
         extensions:
           type: array
           items:
@@ -2343,7 +2377,10 @@ components:
           type: string
           description: |
             The ancestor LSN to branch at (storage-layer "X/X" form, e.g.
-            "0/16ABCD0"). Omit to branch at the parent's latest LSN.
+            "0/16ABCD0"). Omit to branch at the parent's latest LSN. A point
+            below the lowest LSN the parent can be forked at is a 400: a fork's
+            own `fork_lsn`, or for a root the point its password was set, before
+            which its catalog has none.
         pg_settings:
           type: object
           additionalProperties:
@@ -2751,30 +2788,38 @@ components:
         password:
           type: string
           minLength: 8
-          maxLength: 128
+          maxLength: 256
           description: |
             Password for the compute's default Postgres user (`cloud_admin`, the
             superuser `initdb` created) — who clients connect to `address` as.
-            **Required** when creating a `read_write` endpoint; the controller
-            mints none. What it keeps is the verifier Postgres itself stores
-            (SCRAM-SHA-256), never the plaintext, so a password it generated
-            could only be returned on this one response, and a caller that did
-            not read it would own an endpoint nobody can log into. Requiring it
-            means the credential only ever exists where its owner already has it.
+            Either a plaintext, or a SCRAM-SHA-256 verifier as `pg_authid` stores
+            it (`SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`, at
+            least 4096 iterations and a salt of at least 16 bytes), which sets a
+            password without the plaintext ever reaching the controller. Anything
+            starting `SCRAM-SHA-256$` is read as a verifier, so a malformed one is
+            a 400 rather than a plaintext. What the controller keeps is the
+            verifier, never the plaintext.
 
-            Printable ASCII only (U+0020–U+007E). SCRAM normalizes a password
-            with SASLprep before hashing it and the client does the same before
-            authenticating; over this range that normalization changes nothing,
-            so a verifier computed here and a proof computed by the client
-            agree. A password outside it is a 400 rather than an endpoint whose
-            password silently authenticates nobody.
+            **Required** only where the branch's `password_required` is true: the
+            first `read_write` endpoint on a root branch, which sets the password
+            in the branch's catalog. Elsewhere it is not set from here (a fork's
+            comes with its parent's catalog), so one sent is validated (a bad one
+            is a 400) and then ignored; a later release will refuse it with a
+            400. The
+            controller mints none: a password it generated could only be returned
+            on this one response, and a caller that did not read it would own an
+            endpoint nobody can log into.
 
-            Not marked `required` in this schema because a `read_only` endpoint
-            must NOT carry one: the user lives in the branch's catalog, which all
-            of its endpoints share, so a replica already answers to whatever its
-            branch's writer set — sending this with one is a 400 rather than a
-            rotation of the credential in use. Omitting it on a `read_write`
-            create is a 400 too.
+            A plaintext is 8–128 printable ASCII characters (U+0020–U+007E).
+            SCRAM normalizes a password with SASLprep before hashing it and the
+            client does the same before authenticating; over this range that
+            normalization changes nothing, so a verifier computed here and a
+            proof computed by the client agree. A password outside it is a 400
+            rather than an endpoint whose password silently authenticates nobody.
+
+            Not marked `required` in this schema because most creates need none,
+            and a `read_only` endpoint must NOT carry one: sending it with one is
+            a 400. Omitting it where `password_required` is true is a 400 too.
 
             The user itself is not selectable yet; that needs the compute's
             maintenance role to stop being hardcoded (yugabyte/meko#1354).

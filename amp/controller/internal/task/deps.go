@@ -9,6 +9,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	"github.com/yugabyte/amp/controller/internal/ingress"
+	"github.com/yugabyte/amp/controller/internal/node"
 	"github.com/yugabyte/amp/controller/internal/voyager/migration"
 )
 
@@ -61,8 +62,9 @@ type StateStore interface {
 	// from parentBranchID at forkLSN, with the given id — or no-ops if it already
 	// exists. The fork inherits the parent branch's externalized-extension set
 	// (copied onto its own row), so every endpoint on it mounts the same set. A
-	// name collision within the cluster, or a missing parent, is a real error. No
-	// pool id: a branch is scoped to its cluster.
+	// name collision within the cluster, or a missing parent, is a real error, and
+	// so is a forkLSN below the parent's floor (core.ErrForkBelowFloor). No pool
+	// id: a branch is scoped to its cluster.
 	EnsureBranch(ctx context.Context, parentBranchID, clusterID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error
 
 	// EnsureEndpointRecord records an endpoint on the (clusterID, branchID) branch
@@ -173,6 +175,16 @@ type StateStore interface {
 	// branch is skipped — nothing will reconcile it again.
 	SetBranchYCPGeneration(ctx context.Context, branchID uuid.UUID, gen int64) error
 
+	// RootForkLSNPending reports whether branchID is a live root with no floor
+	// (core.Branch.ForkLSN) yet, so a writer's applied password has one to record.
+	// False for a fork, a root whose floor is set, and an absent branch.
+	RootForkLSNPending(ctx context.Context, branchID uuid.UUID) (bool, error)
+
+	// SetRootForkLSN records a root's floor. First writer wins: a fork, a root
+	// whose floor is set, and an absent branch are left alone, so a replay cannot
+	// move a floor once written.
+	SetRootForkLSN(ctx context.Context, branchID uuid.UUID, lsn string) error
+
 	// EndpointIDsForBranch returns the ids of every endpoint on the
 	// (clusterID, branchID) branch. It is the cascade-delete enumeration the
 	// delete_branch step runs at Execute time (so a concurrently-added endpoint is
@@ -260,6 +272,13 @@ type VoyagerMigrationEndpointLookup interface {
 	EndpointAddress(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (string, error)
 }
 
+// RemoteAuthReader asks an endpoint's supervisor what it did with the
+// cloud_admin password on its current boot (node.Client). create_endpoint
+// records a root's floor from the answer.
+type RemoteAuthReader interface {
+	RemoteAuth(ctx context.Context, supervisorBaseURL string) (node.RemoteAuthStatus, error)
+}
+
 // IngressAllocator is the slice of internal/ingress the endpoint steps use.
 // Declared here, at the consumer, so the steps can be tested with a fake and so
 // this package depends on the behaviour rather than the implementation.
@@ -288,6 +307,9 @@ type Deps struct {
 	Deployer      deploy.Deployer
 	EndpointYB    deploy.YBConn
 	ControllerURL string // controller URL a launched endpoint uses to reach the controller
+	// RemoteAuth reads the supervisor's password outcome a root's floor is
+	// recorded from. Nil with no deployer; create_endpoint then records no floor.
+	RemoteAuth RemoteAuthReader
 
 	// VoyagerMigrations, VoyagerMigrationEndpoints, and VoyagerRunner are the
 	// Voyager-migration ports the launcher/target steps use. Each is nil when the

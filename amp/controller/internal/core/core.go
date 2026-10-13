@@ -25,6 +25,9 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +42,9 @@ var (
 	// ErrConflict is returned when a request collides with existing state, such
 	// as a storage-pool name that is already taken.
 	ErrConflict = errors.New("conflict")
+	// ErrForkBelowFloor is returned when a fork would be taken below its
+	// parent's floor (Branch.ForkLSN).
+	ErrForkBelowFloor = errors.New("fork point is below the parent branch's floor")
 )
 
 // User is a control-plane user. There is no authentication yet (#92); a user is
@@ -110,10 +116,14 @@ type Branch struct {
 	PgVersion int
 	IsDefault bool
 	// ParentBranchID is the in-cluster branch this one was forked from, or nil
-	// for the cluster's default branch.
+	// for a root. It, and never ForkLSN, is what says a branch is a fork.
 	ParentBranchID *uuid.UUID
-	// ForkLSN is the ancestor LSN the branch was taken at (the storage layer's
-	// "X/X" pg_lsn form), or "" for the default branch.
+	// ForkLSN is the branch's FLOOR, the lowest LSN a fork of it may be taken at
+	// (the storage layer's "X/X" pg_lsn form). For a fork it is the ancestor LSN
+	// it was taken at. For a root it is "" until its first writer's password has
+	// been applied, then the WAL position read after that: a fork below it would
+	// start from a catalog with no password. Roots that had a writer before
+	// floors were recorded are backfilled to "0/0" (BackfillRootForkLSN).
 	ForkLSN   string
 	CreatedAt time.Time
 	// Extensions is the branch's opted-in externalized extension set (beyond the
@@ -135,6 +145,44 @@ type Branch struct {
 	// when no YCP update has been applied — a resource YCP does not manage, or one
 	// it has only ever created.
 	YCPGeneration *int64
+}
+
+// PasswordRequired reports whether a read_write endpoint created on b must carry
+// a password: b is a root whose catalog has never had one applied. A fork's
+// catalog is its parent's as of the fork point, and a root with a floor already
+// has a password, which the supervisor will not replace.
+func (b Branch) PasswordRequired() bool {
+	return b.ParentBranchID == nil && b.ForkLSN == ""
+}
+
+// PasswordRequired is the cluster's default branch's, which is its root.
+func (c Cluster) PasswordRequired() bool {
+	return c.DefaultBranch.PasswordRequired()
+}
+
+// ParseLSN parses the storage layer's "X/Y" LSN form (each half 1-8 hex digits,
+// as the API's fork_point_lsn takes it) into its 64-bit position, so two LSNs
+// compare numerically.
+func ParseLSN(s string) (uint64, error) {
+	hi, lo, ok := strings.Cut(s, "/")
+	if !ok || !isLSNHalf(hi) || !isLSNHalf(lo) {
+		return 0, fmt.Errorf("invalid LSN %q: want X/Y in hex", s)
+	}
+	h, _ := strconv.ParseUint(hi, 16, 32)
+	l, _ := strconv.ParseUint(lo, 16, 32)
+	return h<<32 | l, nil
+}
+
+func isLSNHalf(s string) bool {
+	if len(s) < 1 || len(s) > 8 {
+		return false
+	}
+	for _, r := range s {
+		if !('0' <= r && r <= '9' || 'a' <= r && r <= 'f' || 'A' <= r && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // EffectivePgSettings is the settings an endpoint's compute actually runs with:
@@ -410,6 +458,9 @@ type Backend interface {
 	// validating the pool->cluster->branch chain by ids. Returns ErrNotFound if
 	// any link is missing.
 	GetBranch(ctx context.Context, poolID, clusterID, branchID uuid.UUID) (Branch, error)
+	// BackfillRootForkLSNOf is BackfillRootForkLSN for one root, and reports
+	// whether it gave that root a floor.
+	BackfillRootForkLSNOf(ctx context.Context, branchID uuid.UUID) (bool, error)
 
 	// CreateEndpoint records an endpoint on the (clusterID, branchID) branch.
 	// config is the deploy spec stored for (re)creation. The address is set

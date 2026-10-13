@@ -413,7 +413,11 @@ type Branch struct {
 	// endpoint at deploy time. Empty when none.
 	Extensions *[]string `json:"extensions,omitempty"`
 
-	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X"
+	// form), or null for a root branch (one with no `parent_branch_id`). A
+	// fork of this branch cannot be taken below it. Controllers that predate
+	// `password_required` may report a root's own floor here (often
+	// `0/0`), so tell a fork by `parent_branch_id`, not by this field.
 	ForkLsn *string `json:"fork_lsn,omitempty"`
 
 	// IsDefault True for a cluster's default (root) branch.
@@ -422,6 +426,17 @@ type Branch struct {
 
 	// ParentBranchId The branch this one was forked from, or null for a cluster's default branch. Always in the same cluster.
 	ParentBranchId *openapi_types.UUID `json:"parent_branch_id,omitempty"`
+
+	// PasswordRequired Whether a `read_write` endpoint created on this branch must carry a
+	// `password`: true only for a root branch until its first writer's
+	// password is seen to land. A fork inherits its parent's catalog, password included,
+	// and a root's first writer sets it for good; a `password` sent where
+	// this is false is ignored. Changing it later is
+	// `ALTER ROLE cloud_admin` over a connection that already
+	// authenticates. Always false on a controller whose endpoints do not
+	// apply a password (the local driver). Absent from controllers that
+	// predate it, which required a password on every writer.
+	PasswordRequired *bool `json:"password_required,omitempty"`
 
 	// PgSettings Extra PostgreSQL settings applied to every compute on this branch, as
 	// `{name: value}`. A fork inherits its ancestor's. An endpoint's own
@@ -487,6 +502,11 @@ type Cluster struct {
 	Id   openapi_types.UUID `json:"id"`
 	Name string             `json:"name"`
 
+	// PasswordRequired `default_branch.password_required`: whether the first `read_write`
+	// endpoint on the cluster's default branch must carry a `password`.
+	// Absent from controllers that predate it.
+	PasswordRequired *bool `json:"password_required,omitempty"`
+
 	// StoragePoolId The storage pool this cluster belongs to.
 	StoragePoolId openapi_types.UUID `json:"storage_pool_id"`
 
@@ -508,7 +528,10 @@ type ClusterList struct {
 // CreateBranchRequest defines model for CreateBranchRequest.
 type CreateBranchRequest struct {
 	// ForkPointLsn The ancestor LSN to branch at (storage-layer "X/X" form, e.g.
-	// "0/16ABCD0"). Omit to branch at the parent's latest LSN.
+	// "0/16ABCD0"). Omit to branch at the parent's latest LSN. A point
+	// below the lowest LSN the parent can be forked at is a 400: a fork's
+	// own `fork_lsn`, or for a root the point its password was set, before
+	// which its catalog has none.
 	ForkPointLsn *string `json:"fork_point_lsn,omitempty"`
 
 	// Name Name for the new branch; unique within the cluster.
@@ -556,9 +579,12 @@ type CreateClusterRequest struct {
 	// Name Cluster (database) name; unique within the pool. The cluster's default branch is always named "main".
 	Name string `json:"name"`
 
-	// Password The writer's compute password, as `createEndpoint`'s `password`:
-	// **required** whenever `with_writer` is set, and refused without it
-	// for the same reason `connectivity` is.
+	// Password The writer's compute password, in either form `createEndpoint`'s
+	// `password` takes (a plaintext of 8–128 printable ASCII characters, or
+	// a SCRAM-SHA-256 verifier): **required** with `with_writer` on a
+	// controller whose endpoints apply a password, since that writer is the
+	// new root branch's first, and refused without `with_writer` for the
+	// same reason `connectivity` is.
 	Password *string `json:"password,omitempty"`
 
 	// PgVersion Postgres major version for the cluster's default branch. Defaults to 18.
@@ -677,26 +703,34 @@ type CreateEndpointRequest struct {
 
 	// Password Password for the compute's default Postgres user (`cloud_admin`, the
 	// superuser `initdb` created) — who clients connect to `address` as.
-	// **Required** when creating a `read_write` endpoint; the controller
-	// mints none. What it keeps is the verifier Postgres itself stores
-	// (SCRAM-SHA-256), never the plaintext, so a password it generated
-	// could only be returned on this one response, and a caller that did
-	// not read it would own an endpoint nobody can log into. Requiring it
-	// means the credential only ever exists where its owner already has it.
+	// Either a plaintext, or a SCRAM-SHA-256 verifier as `pg_authid` stores
+	// it (`SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`, at
+	// least 4096 iterations and a salt of at least 16 bytes), which sets a
+	// password without the plaintext ever reaching the controller. Anything
+	// starting `SCRAM-SHA-256$` is read as a verifier, so a malformed one is
+	// a 400 rather than a plaintext. What the controller keeps is the
+	// verifier, never the plaintext.
 	//
-	// Printable ASCII only (U+0020–U+007E). SCRAM normalizes a password
-	// with SASLprep before hashing it and the client does the same before
-	// authenticating; over this range that normalization changes nothing,
-	// so a verifier computed here and a proof computed by the client
-	// agree. A password outside it is a 400 rather than an endpoint whose
-	// password silently authenticates nobody.
+	// **Required** only where the branch's `password_required` is true: the
+	// first `read_write` endpoint on a root branch, which sets the password
+	// in the branch's catalog. Elsewhere it is not set from here (a fork's
+	// comes with its parent's catalog), so one sent is validated (a bad one
+	// is a 400) and then ignored; a later release will refuse it with a
+	// 400. The
+	// controller mints none: a password it generated could only be returned
+	// on this one response, and a caller that did not read it would own an
+	// endpoint nobody can log into.
 	//
-	// Not marked `required` in this schema because a `read_only` endpoint
-	// must NOT carry one: the user lives in the branch's catalog, which all
-	// of its endpoints share, so a replica already answers to whatever its
-	// branch's writer set — sending this with one is a 400 rather than a
-	// rotation of the credential in use. Omitting it on a `read_write`
-	// create is a 400 too.
+	// A plaintext is 8–128 printable ASCII characters (U+0020–U+007E).
+	// SCRAM normalizes a password with SASLprep before hashing it and the
+	// client does the same before authenticating; over this range that
+	// normalization changes nothing, so a verifier computed here and a
+	// proof computed by the client agree. A password outside it is a 400
+	// rather than an endpoint whose password silently authenticates nobody.
+	//
+	// Not marked `required` in this schema because most creates need none,
+	// and a `read_only` endpoint must NOT carry one: sending it with one is
+	// a 400. Omitting it where `password_required` is true is a 400 too.
 	//
 	// The user itself is not selectable yet; that needs the compute's
 	// maintenance role to stop being hardcoded (yugabyte/meko#1354).

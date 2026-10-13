@@ -116,3 +116,20 @@ func TestLocalDeployerEchoesVersion(t *testing.T) {
 		t.Errorf("Version = %q, want empty (nothing was asked for and nothing was placed)", none.Version)
 	}
 }
+
+// The controller asks an endpoint it gave a controller URL for its remote-auth
+// outcome at EndpointSupervisorURL, so that endpoint must open the supervisor's
+// API on that port. One with no controller URL keeps it closed, as the endpoint
+// chart does.
+func TestEndpointEnvOpensTheSupervisorAPIWithAController(t *testing.T) {
+	env := endpointEnv(EndpointSpec{Name: "ep", ControllerURL: "http://sc:50051"})
+	if got, want := env["SUPERVISOR_HTTP_PORT"], "9899"; got != want {
+		t.Errorf("SUPERVISOR_HTTP_PORT = %q, want %q", got, want)
+	}
+	if got, want := new(DockerDeployer).EndpointSupervisorURL("ep"), "http://ep:"+env["SUPERVISOR_HTTP_PORT"]; got != want {
+		t.Errorf("EndpointSupervisorURL = %q, want %q", got, want)
+	}
+	if v, ok := endpointEnv(EndpointSpec{Name: "ep"})["SUPERVISOR_HTTP_PORT"]; ok {
+		t.Errorf("SUPERVISOR_HTTP_PORT = %q with no controller URL, want it absent", v)
+	}
+}

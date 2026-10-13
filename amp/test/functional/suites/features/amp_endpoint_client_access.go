@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -33,7 +34,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Endpoint credentials and client address: a writer create without a password, with one under 8 characters, a read_only create carrying one, and a with_writer cluster create without one are refused with 400. A writer answers to exactly the password it was created with (a wrong one and the old well-known cloud_admin are refused), a read_only endpoint answers to its writer's password, a fork's writer answers to the password its parent's catalog holds and not to the one its create carried (the catalog stays the authority so forking cannot mint a new login to the parent's data, meko#1648 and meko#1662), the parent is unchanged, and neither plaintext appears in the endpoint, task or pod/ConfigMap/Secret objects, and the writer stores a SCRAM-SHA-256 verifier with password_encryption scram-sha-256, which appears in no task, task detail or subtask either. GET .../endpoints/{id}/ca tells the truth: with compute TLS off it reports no bundle needed and the compute refuses TLS, with it on the bundle alone passes sslmode=verify-full against verify_name. Each cluster_ip endpoint records its Service DNS as its address, and that address and the password both survive a compute restart and an add_branch_extensions redeploy.",
+		Description: "Endpoint credentials and client address: until its first writer is up the cluster and its root branch report password_required and a fork of the root is refused with 503, and a writer create without a password, with one under 8 characters, a read_only create carrying one, and a with_writer cluster create without one are refused with 400. A writer answers to exactly the password it was created with (a wrong one and the old well-known cloud_admin are refused); afterwards the cluster and root report password_required false and no fork_lsn, and a fork of the root at fork_point_lsn 0/1, below where its password was set, is refused with 400 (meko#1461). A read_only endpoint answers to its writer's password. A fork reports password_required false, and its writer, created without a password, answers to the one its parent's catalog holds; a fork writer's create that carries a password is accepted and the password ignored (the catalog stays the authority so forking cannot mint a new login to the parent's data, meko#1648 and meko#1662). The parent is unchanged, and neither plaintext appears in the endpoint, task or pod/ConfigMap/Secret objects, and the writer stores a SCRAM-SHA-256 verifier with password_encryption scram-sha-256, which appears in no task, task detail or subtask either. GET .../endpoints/{id}/ca tells the truth: with compute TLS off it reports no bundle needed and the compute refuses TLS, with it on the bundle alone passes sslmode=verify-full against verify_name. Each cluster_ip endpoint records its Service DNS as its address, and that address and the password both survive a compute restart and an add_branch_extensions redeploy.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     50 * time.Minute,
 		Run:         runAmpEndpointClientAccess,
@@ -47,6 +48,9 @@ type clientAccessRun struct {
 	writer controller.Endpoint
 	reader controller.Endpoint
 	fork   controller.Endpoint
+	// forkPw is a fork's writer whose create carried pwFork, which the
+	// controller drops.
+	forkPw controller.Endpoint
 	pwMain string
 	pwFork string
 }
@@ -57,9 +61,11 @@ func runAmpEndpointClientAccess(t *core.T) error {
 		return []phase{
 			{"password_validation", r.validation},
 			{"writer_password", r.writerPassword},
+			{"root_fork_floor", r.rootFloor},
 			{"verifier_is_scram", r.verifierIsSCRAM},
 			{"ca_bundle", r.caBundle},
 			{"fork_inherits_parent_password", r.forkPassword},
+			{"fork_ignores_a_sent_password", r.forkIgnoresPassword},
 			{"no_plaintext_at_rest", r.noPlaintext},
 			{"address_survives_restart", r.survivesRestart},
 			{"address_survives_extension_redeploy", r.survivesExtensionRedeploy},
@@ -82,6 +88,12 @@ func (r *clientAccessRun) validation(ctx context.Context) error {
 	sfx := r.a.f.suffix()
 	r.pwMain = "Qa'm$" + sfx + "-1"
 	r.pwFork = "Qa f " + sfx + "-2"
+	if err := r.rootRequiresPassword(ctx, true, "before its first writer"); err != nil {
+		return err
+	}
+	if err := r.forkRefusedBeforeWriter(ctx); err != nil {
+		return err
+	}
 
 	proj := r.a.proj
 	epPath := "/storage-pools/" + proj.poolID + "/clusters/" + proj.projID + "/branches/" + proj.branchID + "/endpoints"
@@ -202,27 +214,134 @@ func (r *clientAccessRun) readerPassword(ctx context.Context) error {
 	return r.logsIn(ctx, ep, r.writer, r.pwMain, "the writer, reached from the reader's pod")
 }
 
-func (r *clientAccessRun) forkPassword(ctx context.Context) error {
-	name := "pw-fork-" + r.a.f.suffix()
+func checkPasswordRequired(what string, got *bool, want bool) error {
+	if got == nil {
+		return fmt.Errorf("%s reports no password_required, want %v", what, want)
+	}
+	if *got != want {
+		return fmt.Errorf("%s reports password_required %v, want %v", what, *got, want)
+	}
+	return nil
+}
+
+// rootRequiresPassword checks the cluster and its root branch both report
+// want, and that the root shows no fork_lsn: a root's floor is internal.
+func (r *clientAccessRun) rootRequiresPassword(ctx context.Context, want bool, when string) error {
+	c, err := r.cl.GetCluster(ctx, r.a.proj.poolID, r.a.proj.projID)
+	if err != nil {
+		return fmt.Errorf("read the cluster: %w", err)
+	}
+	if err := checkPasswordRequired("the cluster "+when, c.PasswordRequired, want); err != nil {
+		return err
+	}
+	if err := checkPasswordRequired("its root branch "+when, c.DefaultBranch.PasswordRequired, want); err != nil {
+		return err
+	}
+	if c.DefaultBranch.ForkLSN != nil {
+		return fmt.Errorf("the root branch reports fork_lsn %q %s: only a fork reports one", *c.DefaultBranch.ForkLSN, when)
+	}
+	return nil
+}
+
+// forkRefusedBeforeWriter checks a root with no password yet cannot be forked,
+// even at an explicit fork point: the fork would come up with none and, as a
+// fork, never be asked for one.
+func (r *clientAccessRun) forkRefusedBeforeWriter(ctx context.Context) error {
+	proj := r.a.proj
+	var task controller.Task
+	status, hdr, err := r.cl.PostRaw(ctx, "/storage-pools/"+proj.poolID+"/clusters/"+proj.projID+"/branches", map[string]any{
+		"name": "pw-no-writer-" + r.a.f.suffix(), "parent_branch_id": proj.branchID, "fork_point_lsn": "0/1",
+	}, &task)
+	if apiErrorStatus(err) == http.StatusServiceUnavailable {
+		return nil
+	}
+	if err == nil {
+		if ref := controller.TaskRef(task, hdr.Get("Location")); ref != "" {
+			_, _ = r.cl.WaitTask(ctx, ref)
+		}
+	}
+	return fmt.Errorf("forking the root before its first writer answered %d (%v), want 503: the fork would come up with no cloud_admin password and never be asked for one (meko#1461)", status, err)
+}
+
+// rootFloor checks the writer's applied password recorded the root's fork
+// floor: the root stops asking for a password, and a fork below it is refused.
+func (r *clientAccessRun) rootFloor(ctx context.Context) error {
+	if err := r.rootRequiresPassword(ctx, false, "once its writer applied the password"); err != nil {
+		return fmt.Errorf("%w: create_endpoint records the root's floor only when the supervisor's GET /v1/remote-auth reports the password applied with an lsn; the create task's compute_password result says what it saw", err)
+	}
+	proj := r.a.proj
+	var task controller.Task
+	status, hdr, err := r.cl.PostRaw(ctx, "/storage-pools/"+proj.poolID+"/clusters/"+proj.projID+"/branches", map[string]any{
+		"name": "pw-below-floor-" + r.a.f.suffix(), "parent_branch_id": proj.branchID, "fork_point_lsn": "0/1",
+	}, &task)
+	var apiErr *controller.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest {
+		if !strings.Contains(apiErr.Message, "0/1") {
+			return fmt.Errorf("the fork below the root's floor is refused, but the message does not name the fork point: %w", err)
+		}
+		return nil
+	}
+	if err == nil {
+		if ref := controller.TaskRef(task, hdr.Get("Location")); ref != "" {
+			_, _ = r.cl.WaitTask(ctx, ref)
+		}
+	}
+	return fmt.Errorf("forking the root at fork_point_lsn 0/1, below where its password was set, answered %d (%v), want 400: the fork would come up with no cloud_admin password (meko#1461)", status, err)
+}
+
+// forkRoot forks the writer's branch and checks the fork asks for no password.
+func (r *clientAccessRun) forkRoot(ctx context.Context, prefix string) (controller.Branch, error) {
+	name := prefix + r.a.f.suffix()
 	if _, err := r.cl.CreateBranchAndWait(ctx, r.a.proj.poolID, r.a.proj.projID, controller.CreateBranchRequest{
 		Name: name, ParentBranchID: r.a.proj.branchID,
 	}); err != nil {
-		return fmt.Errorf("fork the writer's branch: %w", err)
+		return controller.Branch{}, fmt.Errorf("fork the writer's branch: %w", err)
 	}
 	b, err := findBranchCtl(ctx, r.cl, r.a.proj.poolID, r.a.proj.projID, name)
+	if err != nil {
+		return controller.Branch{}, err
+	}
+	if err := checkPasswordRequired("fork "+name, b.PasswordRequired, false); err != nil {
+		return controller.Branch{}, fmt.Errorf("%w: a fork inherits its parent's password", err)
+	}
+	if b.ForkLSN == nil {
+		return controller.Branch{}, fmt.Errorf("fork %s reports no fork_lsn", name)
+	}
+	return b, nil
+}
+
+func (r *clientAccessRun) forkPassword(ctx context.Context) error {
+	b, err := r.forkRoot(ctx, "pw-fork-")
+	if err != nil {
+		return err
+	}
+	ep, err := createEndpointReq(ctx, r.cl, r.a.proj.poolID, r.a.proj.projID, b.BranchID,
+		controller.CreateEndpointRequest{Role: roleReadWrite})
+	if err != nil {
+		return fmt.Errorf("create the fork's writer without a password: %w", err)
+	}
+	r.fork = ep
+	if err := r.logsIn(ctx, r.writer, ep, r.pwMain, "the fork's writer, created without a password, with the parent's password it inherited in the catalog, from the parent writer's pod"); err != nil {
+		return err
+	}
+	return r.refused(ctx, r.writer, ep, controller.DefaultEndpointPassword, "the fork's writer with the well-known cloud_admin password")
+}
+
+func (r *clientAccessRun) forkIgnoresPassword(ctx context.Context) error {
+	b, err := r.forkRoot(ctx, "pw-fork-sent-")
 	if err != nil {
 		return err
 	}
 	ep, err := createEndpointReq(ctx, r.cl, r.a.proj.poolID, r.a.proj.projID, b.BranchID,
 		controller.CreateEndpointRequest{Role: roleReadWrite, Password: r.pwFork})
 	if err != nil {
-		return fmt.Errorf("create the fork's writer: %w", err)
+		return fmt.Errorf("create a fork's writer carrying a password, which is accepted and ignored: %w", err)
 	}
-	r.fork = ep
+	r.forkPw = ep
 	if err := r.logsIn(ctx, r.writer, ep, r.pwMain, "the fork's writer with the parent's password it inherited in the catalog, from the parent writer's pod"); err != nil {
 		return err
 	}
-	if err := r.refused(ctx, r.writer, ep, r.pwFork, "the fork's writer with the password its create carried, which the catalog's existing one outranks"); err != nil {
+	if err := r.refused(ctx, r.writer, ep, r.pwFork, "the fork's writer with the password its create carried, which the controller drops"); err != nil {
 		return err
 	}
 	if err := r.logsIn(ctx, ep, r.writer, r.pwMain, "the parent writer with its own password after the fork came up"); err != nil {
@@ -250,7 +369,7 @@ func (r *clientAccessRun) noPlaintext(ctx context.Context) error {
 		}
 		return nil
 	}
-	for _, ep := range []controller.Endpoint{r.writer, r.fork} {
+	for _, ep := range []controller.Endpoint{r.writer, r.fork, r.forkPw} {
 		var raw json.RawMessage
 		path := "/storage-pools/" + r.a.proj.poolID + "/clusters/" + r.a.proj.projID + "/branches/" + ep.BranchID + "/endpoints/" + ep.ID
 		if _, err := r.cl.GetRaw(ctx, path, nil, &raw); err != nil {

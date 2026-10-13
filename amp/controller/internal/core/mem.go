@@ -316,6 +316,9 @@ func (m *MemBackend) CreateBranch(_ context.Context, poolID, clusterID, parentBr
 	if !ok || parent.ClusterID != clusterID {
 		return Branch{}, ErrNotFound
 	}
+	if err := memForkBelowFloor(parent, forkLSN); err != nil {
+		return Branch{}, err
+	}
 	nk := branchNameKey{clusterID: clusterID, name: name}
 	if _, taken := m.branchNames[nk]; taken {
 		return Branch{}, ErrConflict
@@ -543,6 +546,9 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, clusterID, 
 	if !ok || parent.ClusterID != clusterID {
 		return ErrNotFound
 	}
+	if err := memForkBelowFloor(parent, forkLSN); err != nil {
+		return err
+	}
 	nk := branchNameKey{clusterID: clusterID, name: name}
 	if _, taken := m.branchNames[nk]; taken {
 		return ErrConflict
@@ -564,6 +570,54 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, clusterID, 
 	}
 	m.branchNames[nk] = struct{}{}
 	return nil
+}
+
+// memForkBelowFloor is the Go half of the Pg arms' `p.fork_lsn <= fork point`
+// guard. An LSN that does not parse is left to the caller, as the pg_lsn cast
+// would be.
+func memForkBelowFloor(parent Branch, forkLSN string) error {
+	if parent.ForkLSN == "" {
+		return nil
+	}
+	floor, err := ParseLSN(parent.ForkLSN)
+	if err != nil {
+		return nil
+	}
+	at, err := ParseLSN(forkLSN)
+	if err != nil || at >= floor {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is below %s, the lowest LSN branch %s can be forked at",
+		ErrForkBelowFloor, forkLSN, parent.ForkLSN, parent.BranchID)
+}
+
+// RootForkLSNPending mirrors PgBackend's: a root with no floor yet.
+func (m *MemBackend) RootForkLSNPending(_ context.Context, branchID uuid.UUID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	br, ok := m.branches[branchID]
+	return ok && br.ParentBranchID == nil && br.ForkLSN == "", nil
+}
+
+// SetRootForkLSN mirrors PgBackend's first-writer-wins UPDATE: only a root with
+// no floor takes one.
+func (m *MemBackend) SetRootForkLSN(_ context.Context, branchID uuid.UUID, lsn string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if br, ok := m.branches[branchID]; ok && br.ParentBranchID == nil && br.ForkLSN == "" {
+		br.ForkLSN = lsn
+		m.branches[branchID] = br
+	}
+	return nil
+}
+
+// BackfillRootForkLSN is a no-op: MemBackend keeps no task log to read, and no
+// root in it predates floors.
+func (m *MemBackend) BackfillRootForkLSN(context.Context) (int64, error) { return 0, nil }
+
+// BackfillRootForkLSNOf is a no-op for the same reason.
+func (m *MemBackend) BackfillRootForkLSNOf(context.Context, uuid.UUID) (bool, error) {
+	return false, nil
 }
 
 // BranchPgSettings mirrors the Pg arm: the branch's baseline settings, nil for

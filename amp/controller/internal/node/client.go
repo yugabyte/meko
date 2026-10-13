@@ -1,10 +1,11 @@
 // Package node talks to an endpoint's co-located storage nodes (its own
-// pageserver / safekeeper) over their internal HTTP APIs. The controller uses it
-// to resolve a branch's default fork point from the *ancestor's own* safekeeper,
-// which is routing-correct in the co-located topology where every endpoint has
-// its own node — unlike the controller's per-tenant describe, which
-// routes to whichever pageserver attached the tenant last and so misses the
-// parent timeline once the tenant has more than one endpoint (#133).
+// pageserver / safekeeper) and its supervisor over their internal HTTP APIs. The
+// controller uses it to resolve a branch's default fork point from the
+// *ancestor's own* safekeeper, which is routing-correct in the co-located
+// topology where every endpoint has its own node — unlike the controller's
+// per-tenant describe, which routes to whichever pageserver attached the tenant
+// last and so misses the parent timeline once the tenant has more than one
+// endpoint (#133).
 package node
 
 import (

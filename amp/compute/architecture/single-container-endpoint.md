@@ -226,11 +226,37 @@ version judging them is the one in its image, and an extension's setting does no
 exist until that extension is loaded. It applies nothing, so it is safe on an
 endpoint running prerendered config and concurrently with a reload.
 
-Served only where something calls it: the chart emits `SUPERVISOR_HTTP_PORT`
-only when `controller.url` is set, and with no port the supervisor serves
-nothing. It is unauthenticated, like the daemons' read routes the same Service
-already publishes — inherited posture rather than a new decision. (Their
-state-changing routes need the control secret; see above.)
+`GET /v1/remote-auth` reports what the supervisor did with `cloud_admin`'s
+password on this boot ([below](#bootstrapattach-run-in-the-pod)):
+
+```
+$ curl -s http://$ENDPOINT:9899/v1/remote-auth
+{"state":"applied","lsn":"0/16B3748"}
+```
+
+| `state` | Meaning |
+|---|---|
+| `pending` | Not decided yet. A caller-rendered endpoint skips remote auth and stays here. |
+| `applied` | This boot's `ALTER ROLE` committed. `lsn` is `pg_current_wal_flush_lsn()`, read by a separate statement after the commit, or `null` when that read failed. |
+| `already_set` | The catalog already had a password, so nothing was applied, whether or not one was supplied. |
+| `unset` | No `COMPUTE_PASSWORD` and no password in the catalog, so remote auth fails until one is set. |
+| `failed` | Postgres never answered, or refused the statement, within the retry budget. |
+
+The controller polls it after creating a root branch's first writer and records
+`lsn` as the branch's fork floor
+([`controller-cluster-create.md`](../../controller/architecture/controller-cluster-create.md#the-fork-floor)):
+a commit waits for the safekeepers, so a fork at that LSN carries the password.
+The state is in memory, per process — a restarted supervisor finds the password
+and says `already_set`, while a later lease in the same process keeps an earlier
+`applied` and its LSN. An image that predates the route answers `404`. Neither
+the password nor its verifier is ever in the reply.
+
+Served only where something calls it: the chart and the controller's Docker
+deployer emit `SUPERVISOR_HTTP_PORT` only when the endpoint has a controller URL,
+and with no port the supervisor serves nothing. It is unauthenticated, like the
+daemons' read routes the same Service already publishes — inherited posture rather
+than a new decision. (Their state-changing routes need the control secret; see
+above.)
 `reload` takes no body, so the most a caller can do there is make the supervisor
 re-read state it already trusts. `check` does take one, and does work
 proportional to it — a `postgres` per setting when a set is refused — so it is
@@ -376,9 +402,10 @@ The supervisor materializes the branch itself:
   redeploy, every fleet roll, every `read_only` endpoint — leaves the
   role alone rather than falling back to a default, and a role that
   already has a password keeps it, so a password its owner set with
-  `ALTER ROLE` survives a restart. The gap in the second rule is a
-  forked branch, whose first endpoint inherits the parent's password and
-  declines its own (yugabyte/meko#1461).
+  `ALTER ROLE` survives a restart. A forked branch's first endpoint
+  therefore inherits the parent's password and declines its own, which
+  is why the control plane sends one only to a root's first writer and
+  reads the outcome back from `GET /v1/remote-auth` (yugabyte/meko#1461).
 
   All three outcomes log `remote_auth::READY_MARKER`, including the two
   that change nothing: the Docker deployer waits on that line, and

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	"github.com/yugabyte/amp/controller/internal/ingress"
 	applog "github.com/yugabyte/amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/internal/node"
 )
 
 // StepCreateEndpoint is the task_step.kind for the create_endpoint step.
@@ -98,6 +101,7 @@ type createEndpointStep struct {
 	yb         deploy.YBConn
 	scURL      string
 	extensions *extensions.Service
+	remoteAuth RemoteAuthReader
 }
 
 // NewCreateEndpointStep binds create_endpoint args + its deps into an executable step.
@@ -111,6 +115,7 @@ func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
 		yb:                 deps.EndpointYB,
 		scURL:              deps.ControllerURL,
 		extensions:         deps.Extensions,
+		remoteAuth:         deps.RemoteAuth,
 	}
 }
 
@@ -229,8 +234,151 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		}
 	}
 
+	// Before success, so a replay that finds the floor set skips the wait.
+	outcome, err := s.recordRootFloor(ctx, logger, spec.Name)
+	if err != nil {
+		return Fail(fmt.Errorf("record root fork floor: %w", err))
+	}
+
 	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress, "version", deployed.Version)
-	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
+	result := map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}
+	// Read by core.BackfillRootForkLSN, which must not take an outcome that
+	// leaves the password in doubt for one the catalog has.
+	if outcome != "" {
+		result["compute_password"] = outcome
+	}
+	return Ok(mustResult(result))
+}
+
+// The step result's compute_password values, which core.BackfillRootForkLSN
+// reads: applied, applied_no_lsn, already_set, unset and failed are the
+// supervisor's answer; unknown is no answer, and unsupported an endpoint image
+// older than GET /v1/remote-auth, which applies the password but cannot say so.
+const (
+	computePasswordApplied      = "applied"
+	computePasswordAppliedNoLSN = "applied_no_lsn"
+	computePasswordAlreadySet   = "already_set"
+	computePasswordUnset        = "unset"
+	computePasswordFailed       = "failed"
+	computePasswordUnknown      = "unknown"
+	computePasswordUnsupported  = "unsupported"
+)
+
+// unknownForkFloor is the floor of a root whose catalog has a password set at
+// an LSN nothing recorded: every fork point stays allowed.
+const unknownForkFloor = "0/0"
+
+// remoteAuthPoll paces the supervisor polls and remoteAuthBudget bounds them.
+// The supervisor decides within about a minute of the compute answering
+// queries, and CreateEndpoint has already waited for the pod, so the budget is
+// slack for a slow first boot rather than for the deploy. Variables so tests
+// need not wait them out.
+var (
+	remoteAuthPoll   = 2 * time.Second
+	remoteAuthBudget = 3 * time.Minute
+)
+
+// recordRootFloor records a root branch's floor (core.Branch.ForkLSN): the LSN
+// this endpoint's supervisor reports after committing the create's password. A
+// fork below it would start from a catalog with no password, which is why the
+// API refuses one.
+//
+// applied records the LSN. already_set, unsupported and applied_no_lsn mean
+// the catalog has a password but nothing says from where, so they record 0/0,
+// as BackfillRootForkLSN would: the root stops requiring a password and every
+// fork point stays allowed. Recording "now" instead would refuse forks into
+// history that has the password.
+//
+// A floor that cannot be recorded is logged, never a failed create. The one
+// error returned is a shutdown that cut the attempt short, so the step is
+// interrupted and the controller that resumes it records the floor.
+//
+// The outcome returned goes in the step's result, and is empty when the step
+// did not ask. Any failure to find out reports unknown, so a password that may
+// not have landed never reads as one that did.
+func (s *createEndpointStep) recordRootFloor(ctx context.Context, logger *slog.Logger, name string) (string, error) {
+	// Without a controller URL neither deployer opens the supervisor's API, so
+	// asking would wait out the budget against a closed port and record unknown.
+	if s.PasswordVerifier == "" || s.remoteAuth == nil || s.scURL == "" {
+		return "", nil
+	}
+	base := s.deployer.EndpointSupervisorURL(name)
+	if base == "" {
+		return "", nil
+	}
+	logger = logger.With(applog.KeyBranchID, s.BranchID.String())
+	pending, err := s.state.RootForkLSNPending(ctx, s.BranchID)
+	if err != nil {
+		logger.Warn("read root fork floor; recording none", "error", err)
+		return computePasswordUnknown, ctx.Err()
+	}
+	if !pending {
+		return "", nil
+	}
+	status, err := s.awaitRemoteAuth(ctx, base)
+	if ctx.Err() != nil {
+		logger.Warn("interrupted waiting for the compute-password outcome; recording no fork floor", "error", ctx.Err())
+		return computePasswordUnknown, ctx.Err()
+	}
+	var floor, outcome string
+	switch status.State {
+	case node.RemoteAuthApplied:
+		if _, perr := core.ParseLSN(status.LSN); perr == nil {
+			floor, outcome = status.LSN, computePasswordApplied
+		} else {
+			logger.Warn("compute password applied but no usable lsn reported; recording fork floor 0/0", "lsn", status.LSN)
+			floor, outcome = unknownForkFloor, computePasswordAppliedNoLSN
+		}
+	case node.RemoteAuthAlreadySet:
+		logger.Info("branch catalog already had a password; recording fork floor 0/0")
+		floor, outcome = unknownForkFloor, computePasswordAlreadySet
+	case node.RemoteAuthUnsupported:
+		logger.Info("endpoint image cannot report the compute-password outcome; recording fork floor 0/0")
+		floor, outcome = unknownForkFloor, computePasswordUnsupported
+	case node.RemoteAuthUnset:
+		logger.Warn("endpoint deployed without its password; recording no fork floor")
+		return computePasswordUnset, nil
+	case node.RemoteAuthFailed:
+		logger.Warn("supervisor failed to set the compute password; recording no fork floor")
+		return computePasswordFailed, nil
+	default:
+		// Still pending at the budget, never answered, or a state this
+		// controller does not know.
+		logger.Warn("compute-password outcome unknown; recording no fork floor",
+			"state", string(status.State), "budget", remoteAuthBudget, "error", err)
+		return computePasswordUnknown, nil
+	}
+	if err := s.state.SetRootForkLSN(ctx, s.BranchID, floor); err != nil {
+		logger.Warn("record root fork floor", "fork_lsn", floor, "error", err)
+		return outcome, ctx.Err()
+	}
+	logger.Info("recorded root fork floor", "fork_lsn", floor)
+	return outcome, nil
+}
+
+// awaitRemoteAuth polls the supervisor at base until it has decided, the
+// budget passes or ctx ends. An error from one poll is retried: a fresh
+// endpoint's Service can refuse for a few seconds after the pod is Ready
+// (meko#724). Returns the last answer, pending if none, and the last poll's error.
+func (s *createEndpointStep) awaitRemoteAuth(ctx context.Context, base string) (node.RemoteAuthStatus, error) {
+	deadline := time.Now().Add(remoteAuthBudget)
+	for {
+		status, err := s.remoteAuth.RemoteAuth(ctx, base)
+		if err == nil && status.State != node.RemoteAuthPending {
+			return status, nil
+		}
+		if err != nil {
+			status = node.RemoteAuthStatus{State: node.RemoteAuthPending}
+		}
+		if !time.Now().Before(deadline) {
+			return status, err
+		}
+		select {
+		case <-ctx.Done():
+			return status, ctx.Err()
+		case <-time.After(remoteAuthPoll):
+		}
+	}
 }
 
 // ingressSlot resolves this endpoint's place on a shard.

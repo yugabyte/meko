@@ -47,6 +47,7 @@ means nobody has broken this guarantee on purpose yet.
 | The REST contract holds: validation, pagination, task ordering | features/amp_api_validation, features/amp_api_pagination, features/amp_task_feed, features/amp_mcp_tools | none | minutes | |
 | An endpoint is exposed exactly as requested, never wider | features/amp_endpoint_connectivity | none | minutes | |
 | An endpoint answers only to the password its writer was created with, and none is stored in the clear | features/amp_endpoint_client_access | none, pod_delete | minutes | |
+| A fork inherits its root's password and cannot be taken below where it was set | features/amp_endpoint_client_access | none | minutes | |
 | An endpoint's recorded address survives a reschedule and a redeploy | features/amp_endpoint_client_access | pod_delete | minutes | |
 | With the endpoint user split, Postgres holds no YugabyteDB credential and cannot change the pageserver's or safekeeper's state, and LFC prewarm still works | features/amp_endpoint_user_split | none, pod_delete | minutes | |
 | A cancelled task stops at a step boundary, ends failed as cancelled, and blocks nothing after it | features/amp_task_cancel; stress/branch_churn | none | minutes | |

@@ -15,6 +15,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/ingress"
+	"github.com/yugabyte/amp/controller/internal/node"
 	"github.com/yugabyte/amp/controller/internal/task"
 )
 
@@ -161,3 +162,40 @@ func (d *memReplayDeployer) ResizeEndpoint(_ context.Context, _ deploy.ResizeSpe
 
 func (d *memReplayDeployer) EndpointSafekeeperURL(id string) string { return "http://" + id + ":7676" }
 func (d *memReplayDeployer) EndpointSupervisorURL(id string) string { return "http://" + id + ":9899" }
+
+// appliedRemoteAuth reports every endpoint's password applied at its LSN.
+type appliedRemoteAuth string
+
+func (a appliedRemoteAuth) RemoteAuth(context.Context, string) (node.RemoteAuthStatus, error) {
+	return node.RemoteAuthStatus{State: node.RemoteAuthApplied, LSN: string(a)}, nil
+}
+
+// The floor the step records is the one the API reads back, so the root stops
+// requiring a password once its first writer applied one.
+func TestCreateEndpointStepRecordsTheRootFloorOnMemBackend(t *testing.T) {
+	be := core.NewMemBackend()
+	owner, err := be.CreateUser(t.Context(), false)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	pool, err := be.CreateStoragePool(t.Context(), owner.ID, "pool")
+	if err != nil {
+		t.Fatalf("CreateStoragePool: %v", err)
+	}
+	clusterID, branchID := uuid.New(), uuid.New()
+	be.SeedBranch(pool.ID, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	deps := task.Deps{State: be, Deployer: &memReplayDeployer{}, ControllerURL: "http://sc:50051", RemoteAuth: appliedRemoteAuth("0/3000028")}
+	args := task.CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: clusterID, BranchID: branchID,
+		Role: core.RoleReadWrite, PgVersion: 18, PasswordVerifier: "SCRAM-SHA-256$4096:c2FsdA==$c3RvcmVk:c2VydmVy"}
+	if res := task.NewCreateEndpointStep(args, deps).Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	br, err := be.GetBranch(t.Context(), pool.ID, clusterID, branchID)
+	if err != nil {
+		t.Fatalf("GetBranch: %v", err)
+	}
+	if br.ForkLSN != "0/3000028" || br.PasswordRequired() {
+		t.Errorf("root after its writer: fork_lsn %q, password required %v; want 0/3000028, false", br.ForkLSN, br.PasswordRequired())
+	}
+}

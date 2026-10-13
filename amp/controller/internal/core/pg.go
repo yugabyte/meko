@@ -394,15 +394,23 @@ func (b *PgBackend) CreateBranch(ctx context.Context, poolID, clusterID, parentB
 	// branches_name_per_cluster -> ErrConflict. forkLSN is validated to be a
 	// well-formed LSN by the caller before it reaches the pg_lsn cast. A
 	// tombstoned parent selects nothing, so forking a dropped branch 404s
-	// rather than resurrecting its lineage.
-	if _, err := b.pool.Exec(ctx,
+	// rather than resurrecting its lineage. Nor does a parent whose floor is
+	// above forkLSN, which is ErrForkBelowFloor.
+	tag, err := b.pool.Exec(ctx,
 		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
 		 SELECT $1::uuid, $2::uuid, $3, p.pg_version, false, $4::uuid, $5::pg_lsn
 		 FROM amp_registry.branches p
 		 WHERE p.cluster_id = $1::uuid AND p.branch_id = $4::uuid AND p.dropped_at IS NULL
+		   AND (p.fork_lsn IS NULL OR p.fork_lsn <= $5::pg_lsn)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		clusterID.String(), branchID.String(), name, parentBranchID.String(), forkLSN); err != nil {
+		clusterID.String(), branchID.String(), name, parentBranchID.String(), forkLSN)
+	if err != nil {
 		return Branch{}, mapBranchErr("insert branch", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if err := forkBelowFloor(ctx, b.pool, clusterID, parentBranchID, forkLSN); err != nil {
+			return Branch{}, err
+		}
 	}
 	return b.getBranchByID(ctx, clusterID, branchID)
 }

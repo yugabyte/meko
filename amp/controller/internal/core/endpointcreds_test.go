@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -171,6 +172,120 @@ func TestValidateEndpointPassword(t *testing.T) {
 	} {
 		if err := ValidateEndpointPassword(bad); err == nil {
 			t.Errorf("ValidateEndpointPassword(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+// rfc7677Verifier is the RFC 7677 vector in pg_authid's form, with each field
+// supplied so a test can vary one at a time.
+func rfc7677Verifier(iterations, salt, storedKey, serverKey string) string {
+	return fmt.Sprintf("SCRAM-SHA-256$%s:%s$%s:%s", iterations, salt, storedKey, serverKey)
+}
+
+func TestEndpointPasswordVerifierPassesAVerifierThrough(t *testing.T) {
+	vector := rfc7677Verifier("4096", rfc7677SaltB64, rfc7677StoredKey, rfc7677ServerKey)
+	ours, err := SCRAMPasswordVerifier("hunter2hunter2")
+	if err != nil {
+		t.Fatalf("SCRAMPasswordVerifier: %v", err)
+	}
+	longSalt := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	longest := rfc7677Verifier("0004096", base64.StdEncoding.EncodeToString(make([]byte, 108)), rfc7677StoredKey, rfc7677ServerKey)
+	if len(longest) != maxSCRAMVerifierLen {
+		t.Fatalf("the longest-verifier case is %d characters, want exactly %d", len(longest), maxSCRAMVerifierLen)
+	}
+	for name, v := range map[string]string{
+		"the RFC 7677 vector":        vector,
+		"one this package derived":   ours,
+		"a higher iteration count":   rfc7677Verifier("10000", rfc7677SaltB64, rfc7677StoredKey, rfc7677ServerKey),
+		"a longer salt":              rfc7677Verifier("4096", longSalt, rfc7677StoredKey, rfc7677ServerKey),
+		"leading zeros on the count": rfc7677Verifier("04096", rfc7677SaltB64, rfc7677StoredKey, rfc7677ServerKey),
+		"the longest the spec takes": longest,
+	} {
+		got, err := EndpointPasswordVerifier(v)
+		if err != nil {
+			t.Errorf("%s: EndpointPasswordVerifier = %v, want it accepted", name, err)
+			continue
+		}
+		// Hashing it again would make the verifier itself the password.
+		if got != v {
+			t.Errorf("%s: EndpointPasswordVerifier =\n  %q\nwant it unchanged\n  %q", name, got, v)
+		}
+	}
+}
+
+func TestEndpointPasswordVerifierRefusesAMalformedVerifier(t *testing.T) {
+	short := base64.StdEncoding.EncodeToString(make([]byte, 31))
+	shortSalt := base64.StdEncoding.EncodeToString(make([]byte, 15))
+	for name, v := range map[string]string{
+		"4095 iterations":         rfc7677Verifier("4095", rfc7677SaltB64, rfc7677StoredKey, rfc7677ServerKey),
+		"a signed count":          rfc7677Verifier("+4096", rfc7677SaltB64, rfc7677StoredKey, rfc7677ServerKey),
+		"a count past int32":      rfc7677Verifier("2147483648", rfc7677SaltB64, rfc7677StoredKey, rfc7677ServerKey),
+		"a 15-byte salt":          rfc7677Verifier("4096", shortSalt, rfc7677StoredKey, rfc7677ServerKey),
+		"a short StoredKey":       rfc7677Verifier("4096", rfc7677SaltB64, short, rfc7677ServerKey),
+		"a short ServerKey":       rfc7677Verifier("4096", rfc7677SaltB64, rfc7677StoredKey, short),
+		"a ServerKey not base64":  rfc7677Verifier("4096", rfc7677SaltB64, rfc7677StoredKey, strings.Repeat("!", 44)),
+		"unpadded keys":           rfc7677Verifier("4096", rfc7677SaltB64, strings.TrimRight(rfc7677StoredKey, "="), strings.TrimRight(rfc7677ServerKey, "=")),
+		"no key separator":        "SCRAM-SHA-256$4096:" + rfc7677SaltB64 + "$" + rfc7677StoredKey + rfc7677ServerKey,
+		"no parameter separator":  "SCRAM-SHA-256$4096:" + rfc7677SaltB64 + rfc7677StoredKey + ":" + rfc7677ServerKey,
+		"a line break in the key": rfc7677Verifier("4096", rfc7677SaltB64, rfc7677StoredKey[:20]+"\n"+rfc7677StoredKey[20:], rfc7677ServerKey),
+		// Past the spec's maxLength, which nothing on the wire enforces; at
+		// 100KB of salt the endpoint's pod cannot exec.
+		"a 257-character verifier": rfc7677Verifier("00004096", base64.StdEncoding.EncodeToString(make([]byte, 108)), rfc7677StoredKey, rfc7677ServerKey),
+		"a 100KB salt":             rfc7677Verifier("4096", base64.StdEncoding.EncodeToString(make([]byte, 100_000)), rfc7677StoredKey, rfc7677ServerKey),
+		// Short enough to be a valid plaintext, but sent as a verifier: taken as a
+		// plaintext, a string the caller holds as a hash would be the password.
+		"one a plaintext could be": "SCRAM-SHA-256$4096:short",
+		"just the prefix":          "SCRAM-SHA-256$" + strings.Repeat("x", 10),
+	} {
+		got, err := EndpointPasswordVerifier(v)
+		if err == nil {
+			t.Errorf("%s: EndpointPasswordVerifier = %q, want it refused", name, got)
+			continue
+		}
+		if !errors.Is(err, ErrInvalidPassword) {
+			t.Errorf("%s: error %v does not wrap ErrInvalidPassword, so the API would answer 500", name, err)
+		}
+		// Reported as a bad verifier, not as a plaintext that is too long.
+		if !strings.Contains(err.Error(), "SCRAM-SHA-256") {
+			t.Errorf("%s: error %q does not say what was wrong with the verifier", name, err)
+		}
+	}
+}
+
+func TestEndpointPasswordVerifierHashesAPlaintext(t *testing.T) {
+	for _, plain := range []string{
+		"hunter2hunter2",
+		strings.Repeat("a", MinEndpointPasswordLen),
+		strings.Repeat("z", MaxEndpointPasswordLen),
+		// The prefix alone decides, and only exactly.
+		"scram-sha-256$4096:lowercase",
+		"SCRAM-SHA-256 4096:no-dollar",
+	} {
+		got, err := EndpointPasswordVerifier(plain)
+		if err != nil {
+			t.Errorf("EndpointPasswordVerifier(%q) = %v, want it hashed", plain, err)
+			continue
+		}
+		if got == plain {
+			t.Errorf("EndpointPasswordVerifier(%q) returned the plaintext unhashed", plain)
+		}
+		if err := checkSCRAMVerifier(got); err != nil {
+			t.Errorf("EndpointPasswordVerifier(%q) = %q, which is not a well-formed verifier: %v", plain, got, err)
+		}
+	}
+}
+
+// A bad plaintext reads exactly as ValidateEndpointPassword words it, so a
+// caller sees the message it did before verifiers were accepted.
+func TestEndpointPasswordVerifierRefusesABadPlaintext(t *testing.T) {
+	for _, bad := range []string{"", "short", "pässwort-nonascii", strings.Repeat("a", MaxEndpointPasswordLen+1)} {
+		_, err := EndpointPasswordVerifier(bad)
+		if !errors.Is(err, ErrInvalidPassword) {
+			t.Errorf("EndpointPasswordVerifier(%q) = %v, want an error wrapping ErrInvalidPassword", bad, err)
+			continue
+		}
+		if want := ValidateEndpointPassword(bad).Error(); err.Error() != want {
+			t.Errorf("EndpointPasswordVerifier(%q) error = %q, want %q", bad, err, want)
 		}
 	}
 }

@@ -397,12 +397,14 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		if cpu, memory, errMsg = deploy.ResolveEndpointShape(oCPU, oMem, c.memoryFloorGiBPerVCPU()); errMsg != "" {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", errMsg))}, nil
 		}
-		// Resolved exactly as `createEndpoint` resolves it, so the one-call
-		// onboarding path's writer is credentialed like any other endpoint —
-		// including requiring a password.
+		// Resolved as `createEndpoint` resolves it for the first writer on a
+		// root, which this is: the cluster's default branch is new, so it has no
+		// floor and its catalog no password. The ids are not assigned until the
+		// task is planned, so a warning names the pool.
 		var err error
-		if verifier, apiErr, err = endpointCredentials(request.Body.Password,
-			deploy.AppliesComputePassword(c.prov.Deployer)); err != nil {
+		if verifier, apiErr, err = c.writerPassword(ctx, request.Body.Password,
+			deploy.AppliesComputePassword(c.prov.Deployer),
+			slog.String(applog.KeyStoragePoolID, request.PoolId.String())); err != nil {
 			return nil, err
 		} else if apiErr != nil {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
@@ -472,7 +474,7 @@ func (c *Controllers) ListClusters(ctx context.Context, request ListClustersRequ
 	}
 	out := make([]Cluster, 0, len(clusters))
 	for _, p := range clusters {
-		out = append(out, clusterToAPI(p))
+		out = append(out, c.clusterToAPI(p))
 	}
 	return ListClusters200JSONResponse(ClusterList{Clusters: out, Total: total, Count: len(out)}), nil
 }
@@ -485,7 +487,7 @@ func (c *Controllers) GetCluster(ctx context.Context, request GetClusterRequestO
 	case err != nil:
 		return nil, fmt.Errorf("get cluster: %w", err)
 	}
-	return GetCluster200JSONResponse(clusterToAPI(p)), nil
+	return GetCluster200JSONResponse(c.clusterToAPI(p)), nil
 }
 
 func (c *Controllers) DeleteCluster(ctx context.Context, request DeleteClusterRequestObject) (DeleteClusterResponseObject, error) {
@@ -641,10 +643,19 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 		return nil, fmt.Errorf("get parent branch: %w", err)
 	}
 
+	if errResp, err := c.parentPasswordCheck(ctx, parent); err != nil {
+		return nil, err
+	} else if errResp != nil {
+		return errResp, nil
+	}
+
 	// Resolve the fork point before mutating anything, so a bad LSN or an
 	// unmaterialized parent 400s without leaving a half-created branch behind.
 	forkLSN, errResp := c.resolveForkLSN(ctx, request.PoolId, parent, request.Body.ForkPointLsn)
 	if errResp != nil {
+		return errResp, nil
+	}
+	if errResp := forkFloorCheck(parent, forkLSN); errResp != nil {
 		return errResp, nil
 	}
 
@@ -696,7 +707,7 @@ func (c *Controllers) ListBranches(ctx context.Context, request ListBranchesRequ
 	}
 	out := make([]Branch, 0, len(branches))
 	for _, b := range branches {
-		out = append(out, branchToAPI(b))
+		out = append(out, c.branchToAPI(b))
 	}
 	return ListBranches200JSONResponse(BranchList{Branches: out, Total: total, Count: len(out)}), nil
 }
@@ -709,7 +720,7 @@ func (c *Controllers) GetBranch(ctx context.Context, request GetBranchRequestObj
 	case err != nil:
 		return nil, fmt.Errorf("get branch: %w", err)
 	}
-	return GetBranch200JSONResponse(branchToAPI(br)), nil
+	return GetBranch200JSONResponse(c.branchToAPI(br)), nil
 }
 
 func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequestObject) (DeleteBranchResponseObject, error) {
@@ -824,6 +835,61 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, pare
 	return lsn, nil
 }
 
+// parentPasswordCheck refuses a fork of a root whose password has not been
+// applied (no floor): the fork would start from a catalog with no password, and
+// as a fork it is never asked for one (yugabyte/meko#1461). That is a root that
+// never had a writer, one whose first writer is still being created (its
+// safekeeper answers before the password commits, so a default fork point can
+// land below it), or one whose writer came up without its password.
+//
+// 503 with Retry-After: the floor is normally moments away, and the YCP agent
+// retries a 503 where it holds a 400 as a permanent rejection — which matters
+// because it can create a fork before the root's writer.
+//
+// Only where floors are recorded: the local driver applies no password, and
+// without a controller URL or node client the step never asks the supervisor.
+func (c *Controllers) parentPasswordCheck(ctx context.Context, parent core.Branch) (CreateBranchResponseObject, error) {
+	if !parent.PasswordRequired() || c.prov.Deployer == nil || c.prov.Node == nil ||
+		c.prov.ControllerURL == "" || !deploy.AppliesComputePassword(c.prov.Deployer) {
+		return nil, nil
+	}
+	if filled, err := c.backend.BackfillRootForkLSNOf(ctx, parent.BranchID); err != nil {
+		return nil, fmt.Errorf("backfill the parent's fork floor: %w", err)
+	} else if filled {
+		return nil, nil
+	}
+	return CreateBranch503JSONResponse{ServiceUnavailableJSONResponse{
+		Body: apiError("service_unavailable", "the parent branch has no password yet, so a fork of it would have none: "+
+			"retry once its first read_write endpoint, created with a password, is up"),
+		Headers: ServiceUnavailableResponseHeaders{RetryAfter: retryAfterSeconds},
+	}}, nil
+}
+
+// forkFloorCheck refuses a fork below the parent's floor (core.Branch.ForkLSN):
+// a fork's is where it was taken, a root's where its password was set, so a
+// fork below it would start from a catalog with no password. A root with no
+// floor is parentPasswordCheck's, or on a controller that records none. The
+// store refuses the same fork (core.ErrForkBelowFloor), for a task planned
+// before the floor was recorded.
+func forkFloorCheck(parent core.Branch, forkLSN string) CreateBranchResponseObject {
+	if parent.ForkLSN == "" {
+		return nil
+	}
+	floor, err := core.ParseLSN(parent.ForkLSN)
+	if err != nil {
+		return nil
+	}
+	at, err := core.ParseLSN(forkLSN)
+	if err != nil || at >= floor {
+		return nil
+	}
+	msg := fmt.Sprintf("fork_point_lsn %s is below %s, the lowest LSN this branch can be forked at", forkLSN, parent.ForkLSN)
+	if parent.ParentBranchID == nil {
+		msg += " (where its password was set)"
+	}
+	return CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", msg))}
+}
+
 // parentWriterEndpoint returns the parent branch's read_write endpoint, whose
 // co-located safekeeper holds the parent timeline's durable WAL. It returns a
 // 400 response (to return as-is) when the parent has no read_write endpoint —
@@ -931,27 +997,29 @@ func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
 	return cpu, memory, ""
 }
 
-// endpointCredentials turns the caller's password into the verifier the pod
-// gets. The plaintext is used to compute that and then dropped — it is never
+// writerPassword turns a read_write create's password into the verifier its pod
+// gets. A plaintext is used to compute that and then dropped — it is never
 // persisted, and no response reports it.
 //
-// The password is REQUIRED. The controller mints none: a generated password has
-// to be handed back on the 202 to be usable at all, and that is a credential
-// delivered through a response body nobody may have read — the create-cluster
-// wizard discarded it, and a YCP-driven create has no reader at all. Making the
-// caller supply it means the credential only ever exists somewhere its owner
-// already has it.
+// required is whether this writer sets the password: it is the first on a root
+// whose catalog has none (core.Branch.PasswordRequired), on a deployer whose
+// endpoints apply it (deploy.AppliesComputePassword). The controller mints
+// none: a generated password has to be handed back on the 202 to be usable at
+// all, and that is a credential delivered through a response body nobody may
+// have read. Making the caller supply it means the credential only ever exists
+// somewhere its owner already has it.
 //
-// required says whether this deployer's endpoints actually apply it. They all do
-// except the local driver — see deploy.ComputePasswordApplier.
+// A password that is not required is validated exactly like one that is, then
+// dropped with a warning: the supervisor would not apply it over the catalog's,
+// and YCP agents still send one with every writer, so refusing it outright has
+// to wait a release. logAttrs identify the resource in that warning.
 //
 // apiErr is the caller's fault and becomes a 400; err is ours (deriving the
 // verifier needs the system CSPRNG) and becomes a 500, because answering a
 // create with 400 would tell the caller to fix a password that is fine.
-func endpointCredentials(password *string, required bool) (verifier string, apiErr *Error, err error) {
+func (c *Controllers) writerPassword(ctx context.Context, password *string, required bool, logAttrs ...slog.Attr) (verifier string, apiErr *Error, err error) {
 	if password == nil {
 		if !required {
-			// Nothing will apply it, so there is nothing to set.
 			return "", nil, nil
 		}
 		e := apiError("invalid_request", "password is required for a read_write endpoint")
@@ -959,14 +1027,18 @@ func endpointCredentials(password *string, required bool) (verifier string, apiE
 	}
 	// NOT trimmed: a password is bytes the caller chose, and quietly altering
 	// them yields a credential that does not authenticate.
-	plain := *password
-	if err := core.ValidateEndpointPassword(plain); err != nil {
+	v, err := core.EndpointPasswordVerifier(*password)
+	switch {
+	case errors.Is(err, core.ErrInvalidPassword):
 		e := apiError("invalid_argument", err.Error())
 		return "", &e, nil
-	}
-	v, err := core.SCRAMPasswordVerifier(plain)
-	if err != nil {
+	case err != nil:
 		return "", nil, fmt.Errorf("derive the password verifier: %w", err)
+	}
+	if !required {
+		c.logger.LogAttrs(ctx, slog.LevelWarn,
+			"ignoring a password on a read_write create that sets none; a later release will refuse it", logAttrs...)
+		return "", nil, nil
 	}
 	return v, nil, nil
 }
@@ -1105,8 +1177,10 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	if role == core.RoleReadWrite {
 		var apiErr *Error
 		var err error
-		if verifier, apiErr, err = endpointCredentials(reqPassword,
-			deploy.AppliesComputePassword(c.prov.Deployer)); err != nil {
+		if verifier, apiErr, err = c.writerPassword(ctx, reqPassword,
+			deploy.AppliesComputePassword(c.prov.Deployer) && br.PasswordRequired(),
+			slog.String(applog.KeyClusterID, br.ClusterID.String()),
+			slog.String(applog.KeyBranchID, br.BranchID.String())); err != nil {
 			return nil, err
 		} else if apiErr != nil {
 			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
@@ -1797,14 +1871,16 @@ func unionExtensions(base, add []string) []string {
 	return out
 }
 
-func clusterToAPI(p core.Cluster) Cluster {
+func (c *Controllers) clusterToAPI(p core.Cluster) Cluster {
+	required := deploy.AppliesComputePassword(c.prov.Deployer) && p.PasswordRequired()
 	out := Cluster{
-		Id:            p.ID,
-		StoragePoolId: p.StoragePoolID,
-		Name:          p.Name,
-		CreatedAt:     p.CreatedAt,
-		DefaultBranch: branchToAPI(p.DefaultBranch),
-		Tags:          tagsToAPI(p.Tags),
+		Id:               p.ID,
+		StoragePoolId:    p.StoragePoolID,
+		Name:             p.Name,
+		CreatedAt:        p.CreatedAt,
+		DefaultBranch:    c.branchToAPI(p.DefaultBranch),
+		PasswordRequired: &required,
+		Tags:             tagsToAPI(p.Tags),
 	}
 	if p.Engine != "" {
 		engine := p.Engine
@@ -1829,17 +1905,23 @@ func branchPgSettings(body *CreateBranchRequest) map[string]string {
 	return *body.PgSettings
 }
 
-func branchToAPI(b core.Branch) Branch {
+func (c *Controllers) branchToAPI(b core.Branch) Branch {
+	required := deploy.AppliesComputePassword(c.prov.Deployer) && b.PasswordRequired()
 	out := Branch{
-		ClusterId:      b.ClusterID,
-		BranchId:       b.BranchID,
-		Name:           b.Name,
-		PgVersion:      b.PgVersion,
-		IsDefault:      b.IsDefault,
-		ParentBranchId: b.ParentBranchID, // nil for a cluster's default branch
-		CreatedAt:      b.CreatedAt,
+		ClusterId:        b.ClusterID,
+		BranchId:         b.BranchID,
+		Name:             b.Name,
+		PgVersion:        b.PgVersion,
+		IsDefault:        b.IsDefault,
+		ParentBranchId:   b.ParentBranchID, // nil for a cluster's default branch
+		PasswordRequired: &required,
+		CreatedAt:        b.CreatedAt,
 	}
-	if b.ForkLSN != "" {
+	// A root's floor is internal: fork_lsn has only ever been reported for a
+	// fork, and clients read it as "this branch was forked". An older controller
+	// projects the column as stored, so one still serving (mid-rollout, or
+	// after a rollback) shows a root's floor.
+	if b.ParentBranchID != nil && b.ForkLSN != "" {
 		out.ForkLsn = &b.ForkLSN
 	}
 	// The branch's own externalized-extension set (inherited from its parent at

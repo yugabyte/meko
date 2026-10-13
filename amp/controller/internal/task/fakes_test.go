@@ -49,6 +49,7 @@ type fakeStateStore struct {
 	// the real GREATEST write, so a test can assert a late older task cannot regress it.
 	endpointYCPGeneration  map[uuid.UUID]int64
 	branchYCPGeneration    map[uuid.UUID]int64
+	rootForkLSN            map[uuid.UUID]string // root branch id -> floor last recorded
 	deletedEndpoints       map[uuid.UUID]struct{}
 	existingWriterBranch   map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 	endpointVersions       map[uuid.UUID]string    // endpoint id -> running version last recorded
@@ -84,6 +85,8 @@ type fakeStateStore struct {
 	errDeleteEndpoint    error
 	errDeleteBranch      error
 	errDeleteCluster     error
+	errRootForkPending   error
+	errSetRootForkLSN    error
 }
 
 func newFakeStateStore() *fakeStateStore {
@@ -511,6 +514,41 @@ func (f *fakeStateStore) SetBranchYCPGeneration(_ context.Context, branchID uuid
 	}
 	if cur, ok := f.branchYCPGeneration[branchID]; !ok || gen > cur {
 		f.branchYCPGeneration[branchID] = gen
+	}
+	return nil
+}
+
+// RootForkLSNPending is true for a branch seeded as a root (no parent) whose
+// floor nothing has set yet.
+func (f *fakeStateStore) RootForkLSNPending(_ context.Context, branchID uuid.UUID) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.errRootForkPending != nil {
+		return false, f.errRootForkPending
+	}
+	if _, fork := f.branchParent[branchID]; fork {
+		return false, nil
+	}
+	_, known := f.branchCluster[branchID]
+	_, set := f.rootForkLSN[branchID]
+	return known && !set, nil
+}
+
+// SetRootForkLSN is first writer wins, like the backends.
+func (f *fakeStateStore) SetRootForkLSN(_ context.Context, branchID uuid.UUID, lsn string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.errSetRootForkLSN != nil {
+		return f.errSetRootForkLSN
+	}
+	if _, fork := f.branchParent[branchID]; fork {
+		return nil
+	}
+	if f.rootForkLSN == nil {
+		f.rootForkLSN = map[uuid.UUID]string{}
+	}
+	if _, set := f.rootForkLSN[branchID]; !set {
+		f.rootForkLSN[branchID] = lsn
 	}
 	return nil
 }
