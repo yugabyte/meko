@@ -1050,6 +1050,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 
 	dpDirect.POST("/datapacks", dpH.Create, auth.RequireScope(auth.ScopeWrite))
 	dpDirect.GET("/datapacks", dpH.List, auth.RequireScope(auth.ScopeRead))
+	dpDirect.GET("/datapacks/count", dpH.Count, auth.RequireScope(auth.ScopeRead))
 	g.POST("/observe/session/bootstrap", observeH.BootstrapSession)
 
 	// AMP (Postgres databases) inside a datapack — only when the feature is

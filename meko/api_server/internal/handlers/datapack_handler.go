@@ -149,33 +149,6 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 	return ok(c, http.StatusCreated, resp)
 }
 
-// List handles GET /api/v1/datapacks.
-//
-//	@Summary	List all datapacks
-//	@Tags		datapacks
-//	@Produce	json
-//	@Success	200	{object}	APIResponse
-//	@Failure	401	{object}	APIResponse
-//	@Security	BearerAuth
-//	@Router		/datapacks [get]
-func (h *DatapackHandler) List(c echo.Context) error {
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
-	}
-
-	datapacks, err := h.svc.List(account.ID)
-	if err != nil {
-		return internalError(c, err, "list datapacks")
-	}
-	if datapacks == nil {
-		datapacks = []models.Datapack{}
-	}
-	redactDatapacks(datapacks)
-	return ok(c, http.StatusOK, datapacks)
-}
-
 // Describe handles GET /api/v1/datapacks/:datapack_id.
 // The datapack is resolved by RequireDatapackAccess middleware which
 // supports both owners and shared users. The Grant field is already

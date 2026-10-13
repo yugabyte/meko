@@ -470,7 +470,14 @@ A default agent (`meko_user_agent`) is automatically created and linked to the s
 
 ---
 
-#### `GET /api/v1/datapacks` — List all datapacks
+#### `GET /api/v1/datapacks` - List datapacks
+
+Lists the datapacks you own and the datapacks shared with you. Each datapack appears once, even when it is shared with you more than once. The `limit` parameter picks the mode:
+
+- Without `limit`, or with `limit` empty, the response is every visible datapack as a bare array (legacy mode).
+- With a non-empty `limit`, the response is one page with a cursor (paged mode).
+
+##### Legacy mode (no `limit`)
 
 ```bash
 curl http://localhost:25433/api/v1/datapacks
@@ -482,17 +489,101 @@ curl http://localhost:25433/api/v1/datapacks
 {
   "data": [
     {
-      "id": "uuid",
-      "name": "my-datapack",
-      "account_id": "uuid",
-      "llm_model": "gpt-4",
-      "embedding_model": "text-embedding-3-small",
+      "datapack_id": "uuid",
+      "datapack_name": "my-datapack",
+      "description": "Research notes",
+      "user_id": "uuid",
+      "created_by_agent_id": "meko_user_agent",
+      "grant": "owner",
+      "universe_id": "",
+      "datapack_ysql_connection_string": "",
+      "datapack_ysql_username": "",
+      "memory_count": 0,
+      "knowledge_count": 0,
+      "learnings_count": 0,
+      "collective_memory_count": 0,
+      "conversation_search_opt_out": false,
       "created_at": "2026-03-17T00:00:00Z",
       "updated_at": "2026-03-17T00:00:00Z"
     }
   ]
 }
 ```
+
+The connection fields are always empty, and the list doesn't fill the count fields. Rows are ordered newest first. The server streams the array, so a large account doesn't have to fit in server memory. If the server fails partway through, it closes the connection and the body isn't valid JSON; treat that as a failed request, not a shorter list. Legacy mode ignores `q`, `name`, `grant`, `sort`, `cursor`, and `fields`.
+
+##### Paged mode (`limit` set)
+
+```bash
+curl "http://localhost:25433/api/v1/datapacks?limit=50&q=research"
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `limit` | none | Page size, 1-1000. A larger value is treated as 1000. Absent or empty stays in legacy mode. `0` or a non-number returns `400 INVALID_LIMIT`. |
+| `cursor` | first page | The `next_cursor` from the previous page. Treat it as opaque. It must come from a request with the same `sort`, `q`, `name`, and `grant`; otherwise the server returns `400 INVALID_CURSOR`. |
+| `sort` | `created` | `created` (newest first) or `name` (bytewise, so uppercase sorts before lowercase). Anything else returns `400 INVALID_SORT`. |
+| `q` | none | Case-insensitive substring of `datapack_name`. Leading and trailing spaces are trimmed. More than 200 characters returns `400 INVALID_QUERY`. |
+| `name` | none | Exact `datapack_name`. Matches at most one datapack you own, plus any shared datapacks with that name. |
+| `grant` | both | `owner` or `shared`. Anything else returns `400 INVALID_GRANT`. |
+| `fields` | `summary` | `summary` or `full`. Anything else returns `400 INVALID_FIELDS`. |
+| `include_total` | `false` | `true` adds `total`, the number of datapacks that match the filters. A value that isn't a boolean returns `400 INVALID_INCLUDE_TOTAL`. |
+
+**Response (200):**
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "datapack_id": "uuid",
+        "datapack_name": "research",
+        "description": "Research notes",
+        "grant": "owner",
+        "user_id": "uuid",
+        "created_by_agent_id": "meko_user_agent",
+        "datapack_owner_name": "Jane Doe",
+        "datapack_owner_email_id": "jane@example.com",
+        "created_at": "2026-03-17T00:00:00Z",
+        "updated_at": "2026-03-17T00:00:00Z"
+      }
+    ],
+    "has_more": true,
+    "next_cursor": "eyJ2IjoxLC4uLn0",
+    "limit": 50
+  }
+}
+```
+
+- To read the next page, repeat the request with `cursor=<next_cursor>` and the same other parameters. On the last page, `has_more` is `false` and `next_cursor` is `""`.
+- `total` appears only when `include_total=true`.
+- `fields=summary` returns the fields shown above. `fields=full` returns the legacy row shape. `full` doesn't fill the count fields either; use describe for counts.
+
+A server older than paged mode ignores `limit` and returns the legacy bare array. A client that pages should accept a bare array as the complete list.
+
+Requests with a personal access token count against `PAT_RATE_LIMIT_PER_MIN` (default 60 per minute). Paging through a large account can hit that limit, so to read every datapack, use legacy mode.
+
+---
+
+#### `GET /api/v1/datapacks/count` - Count datapacks
+
+```bash
+curl http://localhost:25433/api/v1/datapacks/count
+```
+
+**Response (200):**
+
+```json
+{
+  "data": {
+    "owned": 12,
+    "shared": 3,
+    "total": 15
+  }
+}
+```
+
+`owned` counts datapacks you own, `shared` counts datapacks shared with you, and `total` is their sum. Same auth as the list.
 
 ---
 

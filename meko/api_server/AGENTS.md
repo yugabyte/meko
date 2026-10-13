@@ -140,3 +140,6 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
 
 `go build ./...`, `go vet ./...`, and `golangci-lint run ./...`. Unit tests are
 mocked (`go test ./...`); integration tests need YugabyteDB on `localhost:5433`.
+The datapack list integration test (`repository/datapack_list_integration_test.go`)
+instead needs a disposable YugabyteDB named by `MEKO_LIST_TEST_DSN`, and skips
+without it; it applies the system migrations there.

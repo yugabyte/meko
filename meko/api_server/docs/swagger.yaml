@@ -45,6 +45,44 @@ definitions:
           type: string
         type: array
     type: object
+  handlers.DatapackListPage:
+    properties:
+      has_more:
+        type: boolean
+      items:
+        items:
+          type: object
+        type: array
+      limit:
+        type: integer
+      next_cursor:
+        type: string
+      total:
+        type: integer
+    type: object
+  handlers.DatapackSummary:
+    properties:
+      created_at:
+        type: string
+      created_by_agent_id:
+        type: string
+      datapack_id:
+        type: string
+      datapack_name:
+        type: string
+      datapack_owner_email_id:
+        type: string
+      datapack_owner_name:
+        type: string
+      description:
+        type: string
+      grant:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
   handlers.artifactPutRequest:
     properties:
       content_base64:
@@ -264,6 +302,15 @@ definitions:
         type: array
       agent_id:
         type: string
+    type: object
+  service.DatapackCounts:
+    properties:
+      owned:
+        type: integer
+      shared:
+        type: integer
+      total:
+        type: integer
     type: object
   service.ForgotPasswordConfirmRequest:
     properties:
@@ -1512,11 +1559,74 @@ paths:
       - billing
   /datapacks:
     get:
+      description: |-
+        Without `limit`: every visible datapack as an array, newest first (streamed).
+        With `limit`: one page as {items, has_more, next_cursor, limit, total?}.
+        Follow next_cursor for the next page.
+      parameters:
+      - description: Page size 1-1000 (larger is clamped). A non-empty value selects
+          paged mode.
+        in: query
+        name: limit
+        type: integer
+      - description: next_cursor from the previous page, with the same sort and filters
+        in: query
+        name: cursor
+        type: string
+      - description: created (newest first, default) or name (bytewise)
+        enum:
+        - created
+        - name
+        in: query
+        name: sort
+        type: string
+      - description: Case-insensitive substring of datapack_name (max 200 chars)
+        in: query
+        name: q
+        type: string
+      - description: Exact datapack_name
+        in: query
+        name: name
+        type: string
+      - description: owner or shared (default both)
+        enum:
+        - owner
+        - shared
+        in: query
+        name: grant
+        type: string
+      - description: summary (default) or full
+        enum:
+        - summary
+        - full
+        in: query
+        name: fields
+        type: string
+      - description: Add total, the number of rows matching the filters
+        in: query
+        name: include_total
+        type: boolean
       produces:
       - application/json
       responses:
         "200":
           description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/handlers.APIResponse'
+            - properties:
+                data:
+                  allOf:
+                  - $ref: '#/definitions/handlers.DatapackListPage'
+                  - properties:
+                      items:
+                        items:
+                          $ref: '#/definitions/handlers.DatapackSummary'
+                        type: array
+                    type: object
+              type: object
+        "400":
+          description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "401":
@@ -1525,7 +1635,7 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: List all datapacks
+      summary: List datapacks
       tags:
       - datapacks
     post:
@@ -2987,6 +3097,29 @@ paths:
       summary: Get token savings for a datapack
       tags:
       - token-savings
+  /datapacks/count:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/handlers.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/service.DatapackCounts'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Count datapacks
+      tags:
+      - datapacks
   /datapacks/incoming-shares:
     get:
       produces:

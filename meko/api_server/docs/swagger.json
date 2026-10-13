@@ -1792,16 +1792,112 @@
                         "BearerAuth": []
                     }
                 ],
+                "description": "Without `limit`: every visible datapack as an array, newest first (streamed).\nWith `limit`: one page as {items, has_more, next_cursor, limit, total?}.\nFollow next_cursor for the next page.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "datapacks"
                 ],
-                "summary": "List all datapacks",
+                "summary": "List datapacks",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size 1-1000 (larger is clamped). A non-empty value selects paged mode.",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "next_cursor from the previous page, with the same sort and filters",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "created",
+                            "name"
+                        ],
+                        "type": "string",
+                        "description": "created (newest first, default) or name (bytewise)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive substring of datapack_name (max 200 chars)",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact datapack_name",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "owner",
+                            "shared"
+                        ],
+                        "type": "string",
+                        "description": "owner or shared (default both)",
+                        "name": "grant",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "summary",
+                            "full"
+                        ],
+                        "type": "string",
+                        "description": "summary (default) or full",
+                        "name": "fields",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Add total, the number of rows matching the filters",
+                        "name": "include_total",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/handlers.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "allOf": [
+                                                {
+                                                    "$ref": "#/definitions/handlers.DatapackListPage"
+                                                },
+                                                {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "items": {
+                                                            "type": "array",
+                                                            "items": {
+                                                                "$ref": "#/definitions/handlers.DatapackSummary"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1868,6 +1964,48 @@
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/count": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "datapacks"
+                ],
+                "summary": "Count datapacks",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/handlers.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/service.DatapackCounts"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -6036,6 +6174,64 @@
                 }
             }
         },
+        "handlers.DatapackListPage": {
+            "type": "object",
+            "properties": {
+                "has_more": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "next_cursor": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.DatapackSummary": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by_agent_id": {
+                    "type": "string"
+                },
+                "datapack_id": {
+                    "type": "string"
+                },
+                "datapack_name": {
+                    "type": "string"
+                },
+                "datapack_owner_email_id": {
+                    "type": "string"
+                },
+                "datapack_owner_name": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "grant": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.artifactPutRequest": {
             "type": "object",
             "properties": {
@@ -6345,6 +6541,20 @@
                 },
                 "agent_id": {
                     "type": "string"
+                }
+            }
+        },
+        "service.DatapackCounts": {
+            "type": "object",
+            "properties": {
+                "owned": {
+                    "type": "integer"
+                },
+                "shared": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
