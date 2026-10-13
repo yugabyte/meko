@@ -81,20 +81,31 @@ global:
   imageRegistry: ""
 
 yugabyte:
-  # Its own database. Requires the Meko build and the mage gflag — see values.yaml.
+  # Its own database. Needs a build that bundles pg_dist_rag and mage, and the mage gflag — see values.yaml.
   enabled: true
   # From Quay, like the rest of the stack, so the namespace needs one pull credential
-  # rather than also an ECR token that expires every ~12h. Same artifact, mirrored by
-  # meko/jenkins/scripts/mirror-database-image.sh under the same tag. That script skips
-  # a tag already present, so re-publishing an ECR tag in place would leave this one on
-  # the old manifest — bump the tag rather than moving it.
+  # rather than also an ECR token that expires every ~12h. Until a release ships this
+  # reads an integration-test build, not a release, from quay.io/yugabyte/yugabyte-itest
+  # (where unreleased -bNNN builds live, and the same place the functional tests take their
+  # database from), so the robot behind pullSecretName needs read on that repository as well
+  # as meko-*. A shipped release is published to
+  # quay.io/yugabyte/meko-yugabytedb (meko/jenkins/scripts/mirror-database-image.sh) and
+  # this moves back to it then. Bump the tag rather than re-pushing one in place: a node
+  # that already pulled it keeps the old manifest.
   Image:
-    repository: quay.io/yugabyte/meko-yugabytedb
-    tag: 2026.1.0.0-b1-meko-2
+    repository: quay.io/yugabyte/yugabyte-itest
+    tag: 2026.1.3.0-b57
     # Its own lever: global.imagePullSecrets is resolved by this chart's templates and
     # never reaches a subchart, so the database pod would get nothing from the list
     # above. Must name the same Secret.
     pullSecretName: quay-registry-creds
+  # The yugabyte-itest build runs as uid 10001, not root as the meko-yugabytedb mirror
+  # did, and a PVC is mounted root-owned unless fsGroup says otherwise: without this
+  # the master cannot write /mnt/disk0 ("Permission denied" in its post-start disk
+  # check) and crash-loops before the database ever starts. The other keys keep the
+  # subchart's defaults (uid/gid and fsGroup 10001, runAsNonRoot).
+  podSecurityContext:
+    enabled: true
   storage:
     # Use whatever this cluster puts volumes on. See the header: these are the only
     # PVCs in the release, and a customer's class names are not ours to guess. The
@@ -129,8 +140,9 @@ dataPlaneSecrets:
 # Images from Quay, not the Meko ECR. A customer's cluster cannot hold an ECR token: it
 # expires every ~12h and refreshing it means AWS keys in their namespace, which is why
 # ecrCredentialRefresh stays off below. A Quay robot credential is one static
-# docker-registry Secret, and with the database mirrored too (see `yugabyte` above) it is
-# the only one this release needs.
+# docker-registry Secret, and with the database on Quay too (see `yugabyte` above, which
+# needs read on a second repository until a release ships) it is the only one this release
+# needs.
 #
 # Set per component rather than through global.imageRegistry, so a caller who passes an
 # env preset for its other settings does not have to fight it over the registry. Quay
@@ -150,8 +162,10 @@ apiServer:
   enableByoc: true
   migrate:
     # The database's own image, for a ysqlsh matching the server — from Quay for the
-    # same reason as everything else here.
-    extensionsImage: quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2
+    # same reason as everything else here. Must be the same image as yugabyte.Image above
+    # (kept in step by hand). Besides ensure-extensions, langfuse's metadata-schema-init and
+    # tracing-schema-init run it too, so a bump moves their schema import to this ysqlsh.
+    extensionsImage: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57
     # Create pg_dist_rag / vector (and mage, which the migrations no longer need) before
     # migrating. Without pg_dist_rag the first data migration dies partway on
     # `dist_rag.vector_indexes` and golang-migrate marks the schema dirty; the api-server

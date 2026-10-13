@@ -318,7 +318,7 @@ done
 # creates in $MEKO_NS.
 
 log "writing the pull Secrets into ${STAGE_NS[*]}"
-: "${QUAY_USER:?set QUAY_USER — a robot that can read quay.io/yugabyte/meko-*}"
+: "${QUAY_USER:?set QUAY_USER — a robot that can read quay.io/yugabyte/meko-* and quay.io/yugabyte/yugabyte-itest}"
 : "${QUAY_TOKEN:?set QUAY_TOKEN}"
 ecr_token="$(aws ecr get-login-password --region "$ECR_REGION")" ||
   die "aws ecr get-login-password failed — set AWS_PROFILE to a profile with Meko ECR access"

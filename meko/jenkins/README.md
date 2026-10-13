@@ -53,7 +53,10 @@ The one to get right is the robot an operator passes as `QUAY_USER`/`QUAY_TOKEN`
 install hint creates `quay-registry-creds`. It needs read on the four repositories a BYOC
 release pulls — `meko-api-server`, `meko-mcp-server`, `meko-ui`, `meko-yugabytedb` — or the
 install fails in the customer's cluster with a green build behind it. `ampbot` has all
-four today.
+four today. Until a database release is published to `meko-yugabytedb`, the BYOC preset reads
+the database from `quay.io/yugabyte/yugabyte-itest` instead, so the robot needs read there
+too (check it with the claims described below); `ampbot`'s grant on that repository is not
+recorded here.
 
 To check what a credential is actually granted — Quay mints a token whose claims list the
 allowed actions, and `actions: []` means authenticated but not authorized:

@@ -34,7 +34,7 @@
 #                   versions every component together, so these are one value today —
 #                   kept as three because the pin may name different tags.
 #   QUAY_USER / QUAY_TOKEN
-#                   A Quay robot that can read quay.io/yugabyte/meko-*. Every stack
+#                   A Quay robot that can read quay.io/yugabyte/meko-* and quay.io/yugabyte/yugabyte-itest. Every stack
 #                   image is private, and so is the bundled database.
 #   OPENAI_API_KEY  optional; without it the MCP server fails on the first embedding.
 #                   Datapack reconciliation does not need it.
@@ -197,7 +197,7 @@ PY
 
 log "creating namespace $NS and the Quay pull secret"
 k create namespace "$NS" --dry-run=client -o yaml | k apply -f - >/dev/null
-: "${QUAY_USER:?set QUAY_USER — a robot that can read quay.io/yugabyte/meko-*}"
+: "${QUAY_USER:?set QUAY_USER — a robot that can read quay.io/yugabyte/meko-* and quay.io/yugabyte/yugabyte-itest}"
 : "${QUAY_TOKEN:?set QUAY_TOKEN}"
 k -n "$NS" create secret docker-registry "$PULL_SECRET" \
   --docker-server=quay.io --docker-username="$QUAY_USER" --docker-password="$QUAY_TOKEN" \

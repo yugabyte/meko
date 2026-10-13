@@ -386,8 +386,9 @@ yugabyte:
   enabled: false
   # NOT the public yugabytedb/yugabyte image.
   #
-  # The data plane's migrations use YugabyteDB features that only the Meko build
-  # ships — `dist_rag.vector_indexes`, the distributed-RAG vector index catalog.
+  # The data plane's migrations use YugabyteDB features that only a Meko-enabled build
+  # (ybdb-meko-release, or a yugabyte-itest build that bundles pg_dist_rag) ships —
+  # `dist_rag.vector_indexes`, the distributed-RAG vector index catalog.
   # Against stock YugabyteDB the very first data migration dies with
   #
   #   relation "dist_rag.vector_indexes" does not exist

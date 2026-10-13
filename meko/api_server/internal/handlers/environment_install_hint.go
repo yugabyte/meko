@@ -110,7 +110,7 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "# Prerequisites\n")
 	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
 	fmt.Fprintf(&b, "#   - a cluster with a default StorageClass (the bundled YugabyteDB claims it)\n")
-	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-*\n")
+	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-* and quay.io/yugabyte/yugabyte-itest\n")
 	otelOperatorPrerequisite(&b)
 
 	// The tags are one release across the stack, but printed separately anyway: the
