@@ -27,9 +27,9 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
 
 ## Meko portal and platform - v1.0.2
 
-- **[Invite a team in one step](../architecture/core-concepts/datapacks/#share-a-datapack)** - On a datapack's **Share** page, paste email addresses or upload a CSV file, choose one role, and send up to 50 invitations. Meko reports a result for each address.
-- **[Ask questions from the docs](../troubleshooting/#report-an-issue)** - Open **Ask Meko** on any documentation page. Your conversation stays open while you move between pages in the same browser tab.
-- **Find members and datapacks faster** - [Search a datapack's members](../architecture/core-concepts/datapacks/#share-a-datapack) by name, email address, domain, or role. In [WorkbenchLM](../guides/workbench-lm/#what-you-can-do), type to filter the datapack picker or scroll through a long list.
+- **[Invite a team](../architecture/core-concepts/datapacks/#share-a-datapack)** - On a datapack's **Share** page, paste email addresses or upload a CSV file and choose one role to send up to 50 invitations at a time. Meko reports a result for each address.
+- **Ask questions from the docs** - Open **Ask Meko** on any documentation page. Your conversation stays open while you move between pages in the same browser tab.
+- **Find members and datapacks faster** - [Search datapack members](../architecture/core-concepts/datapacks/#share-a-datapack) by name, email address, domain, or role. In [WorkbenchLM](../guides/workbench-lm/), filter the datapack list.
 - **[Open a datapack in WorkbenchLM](../guides/workbench-lm/#what-you-can-do)** - On a datapack page, open the actions menu (the gear next to **Share**) and choose **Open WorkbenchLM** to start with that datapack selected.
 - **Learn from production code reviews** - The [code review lab](../examples/labs/) now has four chapters, uses your datapack for cost estimates, and links to public reviews.
 - **Keep conversations and memory available** - Temporary tracing failures are now retryable, oversized traces use less memory, and entity operations search only the current datapack. See how to [work with memory](../guides/working-with-memory/) and [review conversation traces](../guides/observability/).

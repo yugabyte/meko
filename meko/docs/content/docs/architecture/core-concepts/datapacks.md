@@ -58,18 +58,28 @@ This returns the datapack's MCP server URL and API key:
 
 To share your datapack with colleagues:
 
-1. In the Meko portal, under **Datapacks**, select the datapack you want to share.
-1. Click **Share**.
+1. In the Meko portal, under **Datapacks**, select the datapack and click **Share**.
 1. Stay on **Invite humans**.
-1. Under **Email addresses**, type one address, paste a list, or click **Upload CSV**. Separate pasted addresses with commas, semicolons, or new lines. A CSV can include a header row when one column is an email column.
-1. Under **Role for everyone in this list**, choose **Viewer**, **Contributor**, or **Maintainer**. That role applies to every address in the batch.
-1. Click **Send invite** for one address. For more than one, the button reads **Send N invites**, where N is the number of addresses Meko will send.
+1. Provide one or more **Email addresses** separated by commas, spaces, semicolons, or new lines, or click **Upload CSV**. 
 
-One batch accepts up to 50 addresses. More than that shows **Too many addresses**. Split the list and send it again. Meko reports a result for each address. A row with no valid email is skipped and does not stop the others. Inviting someone who already has access does nothing.
+    A CSV can include a header row where one column is an email column. A file Meko cannot read as text shows **Could not read file**. Export it as CSV and upload it again.
 
-If **Email addresses** is empty, the button stays disabled. A file Meko cannot read as text shows **Could not read file**. Export it as CSV and upload it again.
+1. Choose a **Role for everyone in this list**: **Viewer**, **Contributor**, or **Maintainer**. The role applies to every address in the batch.
+1. Click **Send invite** (or **Send n invites** if there are more thn one).
 
-On the same page, search **Members** by name, email address, domain, or role. The box placeholder is **Search name, email, domain (@company.com), or role**. You can also filter by **All roles**, **Owner**, **Viewer**, **Contributor**, or **Maintainer**. While a filter is on, the list shows how many rows match and offers **Clear filters**.
+One batch accepts up to 50 addresses; Meko displays an error if you exceed the limit. To invite more than 50, split the job into multiple batches.
+
+Meko reports a result for each address. A row with no valid email is skipped. Inviting someone who already has access does nothing.
+
+Pending invites are listed under **Pending**, where you can resend or revoke invites that have not been accepted.
+
+### View members and change roles
+
+1. In the Meko portal, under **Datapacks**, select the datapack and click **Share**.
+
+    Members are listed under **Members**. You can search by name, email address, domain, or role. You can also filter by role.
+
+1. If you are an Owner, assign roles to members by choosing a role in the role dropdown menu for the member.
 
 ## Isolation model
 

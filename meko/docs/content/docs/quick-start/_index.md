@@ -1,7 +1,7 @@
 ---
 title: Quick start
 linkTitle: Quick start
-description: Three levels of integration — from exploring in the portal to connecting your own AI app
+description: Three levels of integration - from exploring in the portal to connecting your own AI app
 weight: 1000
 type: docs
 ---
@@ -20,7 +20,7 @@ New accounts start on the **Free** tier. See [Meko pricing](https://mekodata.ai/
 
 > [!NOTE]
 >
-> Meko itself is not an AI agent — it's the data layer (shared knowledge, collective memory, decision traces) that your agents connect to. WorkbenchLM is an embedded chat agent so you can try Meko in the portal without installing anything; it's not the daily-use surface.
+> Meko itself is not an AI agent, it's the data layer (shared knowledge, collective memory, decision traces) that your agents connect to. WorkbenchLM is an embedded chat agent so you can try Meko in the portal without installing anything; it's not the daily-use surface.
 
 ## Try Meko in WorkbenchLM
 
@@ -88,7 +88,7 @@ If your client supports adding a custom remote MCP connector, you can connect Me
 
 > [!NOTE] OAuth doesn't work for every client
 >
-> Clients that complete OAuth through a local `http://127.0.0.1` callback currently fail with an HTML `403 Forbidden`. That covers command-line clients and some IDEs — it's about the callback the client registers, not whether it has a window. Use an API key for those. Hosted connectors with an `https` callback, such as Claude Desktop's, are unaffected.
+> Clients that complete OAuth through a local `http://127.0.0.1` callback currently fail with an HTML `403 Forbidden`. That covers command-line clients and some IDEs - it's about the callback the client registers, not whether it has a window. Use an API key for those. Hosted connectors with an `https` callback, such as Claude Desktop's, are unaffected.
 
 With OAuth alone, your agent interacts with Meko _on demand_: you need to mention "Meko" in your prompt for the agent to call the tools. For example, _"save this to Meko"_, _"search my Meko knowledge base"_. The agent won't proactively save conversations or capture memories unless you ask.
 
@@ -97,7 +97,7 @@ To get automatic behavior, use the **Automated install** instead, or write your 
 {{% /tab %}}
 {{% tab header="Manual API key" %}}
 
-_For any MCP-compatible client — no npx, no installer._
+_For any MCP-compatible client - no npx, no installer._
 
 Add the Meko MCP server directly to your client's config file with your API key. This gives you the same on-demand MCP tools as OAuth, but authenticated with a long-lived key instead of a browser handshake.
 
@@ -118,7 +118,7 @@ Add the Meko MCP server directly to your client's config file with your API key.
     }
     ```
 
-    Keep the `Bearer ` prefix — `Authorization` is the only header Meko reads for
+    Keep the `Bearer ` prefix - `Authorization` is the only header Meko reads for
     authentication. Keep `User-Agent` too; Meko rejects requests without one. See
     [Choose an authentication method](../integrations/#choose-an-authentication-method).
 

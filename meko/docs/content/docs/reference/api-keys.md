@@ -26,7 +26,7 @@ On any datapack, click **Connect**. If you have no active API key, the dialog pr
 
 ## Key format
 
-All keys start with `mko_tkn_` followed by a random string. Only the prefix is shown after creation — the full key cannot be recovered. If you lose it, revoke the old key and generate a new one.
+All keys start with `mko_tkn_` followed by a random string. Only the prefix is shown after creation; the full key cannot be recovered. If you lose it, revoke the old key and generate a new one.
 
 ## How to send a key
 
@@ -45,8 +45,8 @@ The installer handles this for you. For hand-written config, see [Choose an auth
 
 - Up to **10 active keys** per account.
 - Each key expires after **one year** (365 days) from creation.
-- Keys are scoped to your account, not to a single datapack — any key can access all your datapacks.
-- A key can also share a datapack on your behalf. It can invite up to 50 people in one request, list members, and list pending invitations. It can accept or decline an invitation sent to you. Inviting someone who has no Meko account creates one for them and emails them a temporary password.
+- Keys are scoped to your account, not to a single datapack - any key can access all your datapacks.
+- A key can also be used to [share a datapack](../../architecture/core-concepts/datapacks/#share-a-datapack) on your behalf, including inviting up to 50 people in one request, listing members, and listing pending invitations. It can also be used to accept or decline an invitation sent to you. Inviting someone who has no Meko account creates one for them and emails them a temporary password.
 
 ## Revoke a key
 
@@ -54,7 +54,7 @@ The installer handles this for you. For hand-written config, see [Choose an auth
 2. Find the key and click **Revoke**.
 3. Confirm in the dialog.
 
-Revocation is **immediate and permanent** — any MCP client using that key stops working as soon as you confirm. The key remains in your list with a **REVOKED** status for your records.
+Revocation is **immediate and permanent** - any MCP client using that key stops working as soon as you confirm. The key remains in your list with a **REVOKED** status for your records.
 
 ## Best practices
 

@@ -35,8 +35,8 @@ If it is not your first time signing in, do the following:
 
 ## What you can do
 
-- Pick a datapack: Open **Select a datapack** in the header. The list includes datapacks you own and datapacks shared with you as **Maintainer** or **Contributor**. Type in **Search datapacks…** to filter by name or role. A viewer-only share is left out, because chat writes memories. If you have none, the picker says **No datapacks available**. A search with no hits says **No matching datapacks.**
-- Open from a datapack page: Open the actions menu (the gear next to **Share**) and choose **Open WorkbenchLM**. That item appears only when you can chat with the datapack, and WorkbenchLM opens with that datapack selected.
+- Pick a datapack: Select a datapack from the menu in the header. The list includes datapacks you own and datapacks shared with you as **Maintainer** or **Contributor**. (Viewer-only datapacks are not listed, because chat writes memories.) You can also search for datapacks by name or role. If you don't have any datapacks, the picker says **No datapacks available**. A search with no hits says **No matching datapacks**.
+- Open WorkbenchLM from a datapack: On any datapack page, open the actions menu (the gear next to **Share**) and choose **Open WorkbenchLM**. That item appears only when you can chat with the datapack, and WorkbenchLM opens with that datapack selected.
 - Knowledge: Upload or manage knowledge-base documents in the left panel. Chat is available after a document has finished indexing.
 - Chat: Send messages in the center panel. WorkbenchLM can call Meko tools while it answers. A read runs immediately. Saving a memory does too. Deleting a memory, promoting a memory, or updating the datapack waits until you choose **Allow**. **Deny** leaves it unchanged.
 - Live observation: The right panel shows memories, shared knowledge, and conversations, updated as you chat.
