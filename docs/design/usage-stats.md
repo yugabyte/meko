@@ -58,7 +58,7 @@ reports.
   (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
   typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
-  recorded in `MekoClient.call`: searches at start, what shipped, designs, the learn step's) with
+  recorded in `MekoClient.call`: searches at start, designs, the learn step's) with
   failures, tokens sent, time taken and the 9 most used tools (the rest as `other`); and the Meko
   plugin's transcript captures AgentK ran (`meko_capture_runs`: runs, failures, time). What a
   capture sends isn't counted: AgentK can't see it. Each goes on the day it began, and is left out
