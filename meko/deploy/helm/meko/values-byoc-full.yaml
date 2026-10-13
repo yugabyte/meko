@@ -7,6 +7,8 @@
 #     -f charts/meko/values-gcp.yaml -f charts/meko/values-dev.yaml \
 #     -f charts/meko/values-byoc.yaml -f charts/meko/values-byoc-full.yaml \
 #     --set dataPlaneSecrets.openaiApiKey=sk-... \
+#     --set-string dataPlaneSecrets.ragAwsAccessKeyId=... \
+#     --set-string dataPlaneSecrets.ragAwsSecretAccessKey=... \
 #     --set-string apiServer.image.tag=$TAG ...
 #
 # Image coordinates are NOT here — values-byoc.yaml carries them for these
@@ -18,6 +20,11 @@
 # exists to avoid. Without a key the gateway's render fails outright (it exits at
 # construction, so a running-but-broken pod would be worse) and the rag workers start
 # and fail at the point of use.
+#
+# The rag workers also need an AWS pair, for S3 only: they read uploaded files from
+# the knowledge-base bucket, whatever the embedding provider. Without it every source
+# scan fails with "Unable to locate credentials" and nothing a user uploads is
+# processed. That is a read grant on one bucket, not Bedrock.
 #
 # Still off, and not a matter of flipping a flag:
 #   langfuse    — v3 wants ClickHouse, its own Valkey release (valkey.managed: false)

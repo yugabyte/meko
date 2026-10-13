@@ -234,6 +234,99 @@ tests:
           path: stringData.YUGABYTEDB_CONNECTION_STRING
           value: postgresql://yugabyte:p%40ss%2Fword@yb-tservers.acme.svc.cluster.local.:5433/yugabyte
 
+  - it: puts the rag workers' AWS pair in rag-agent-secret when both halves are set
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: rag-agent-secret
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-full.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      ragAgent.text.image.tag: t
+      ragAgent.pdf.image.tag: t
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.openaiApiKey: sk-test
+      dataPlaneSecrets.ragAwsAccessKeyId: RAGAK
+      dataPlaneSecrets.ragAwsSecretAccessKey: RAGSK
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - equal:
+          path: stringData.AWS_ACCESS_KEY_ID
+          value: RAGAK
+      - equal:
+          path: stringData.AWS_SECRET_ACCESS_KEY
+          value: RAGSK
+
+  - it: leaves the AWS keys out of rag-agent-secret when none are set, rather than writing blanks
+    template: templates/dataplane-secrets.yaml
+    documentSelector:
+      path: metadata.name
+      value: rag-agent-secret
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-full.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      ragAgent.text.image.tag: t
+      ragAgent.pdf.image.tag: t
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.openaiApiKey: sk-test
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - isNull:
+          path: stringData.AWS_ACCESS_KEY_ID
+      - isNull:
+          path: stringData.AWS_SECRET_ACCESS_KEY
+
+  - it: refuses half of the rag workers' AWS pair
+    template: templates/dataplane-secrets.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-full.yaml
+    set:
+      apiServer.image.tag: t
+      inferenceGateway.image.tag: t
+      ragAgent.text.image.tag: t
+      ragAgent.pdf.image.tag: t
+      dataPlaneSecrets.enabled: true
+      dataPlaneSecrets.dbPassword: pw
+      dataPlaneSecrets.openaiApiKey: sk-test
+      dataPlaneSecrets.ragAwsAccessKeyId: RAGAK
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - failedTemplate:
+          errorMessage: "dataPlaneSecrets.ragAwsAccessKeyId and ragAwsSecretAccessKey must be set together: half a credential fails at the first S3 or Bedrock call, not at deploy."
+
   - it: refuses rag workers with no database to point them at
     template: templates/dataplane-secrets.yaml
     values:

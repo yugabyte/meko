@@ -281,6 +281,9 @@ and the provisioner off. Appending `-f charts/meko/values-byoc-full.yaml` —
 later `-f` wins, which is the whole mechanism — switches the gateway to **openai** and
 adds the rag text worker, so it needs `--set dataPlaneSecrets.openaiApiKey=sk-...`,
 without which the render fails rather than installing a gateway that exits at startup.
+Any install with the rag workers on also needs `dataPlaneSecrets.ragAwsAccessKeyId` /
+`.ragAwsSecretAccessKey`; without them the workers start but cannot read an uploaded
+file from S3, so nothing a user uploads is processed.
 `provisioner` renders ClusterRoles and a CRD, which is the opposite of one namespace —
 not a flag away.
 

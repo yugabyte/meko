@@ -585,13 +585,22 @@ dataPlaneSecrets:
   # in this bucket, but there is no S3-specific credential slot in their pod
   # spec — only ragAgent.secrets.existing.rag's AWS_ACCESS_KEY_ID/
   # AWS_SECRET_ACCESS_KEY (see ragAgent.config.AWS_S3_BUCKET_NAME below), the
-  # same pair already used for Bedrock. That principal needs s3:GetObject
+  # same pair already used for Bedrock, set by ragAwsAccessKeyId/
+  # ragAwsSecretAccessKey below. That principal needs s3:GetObject
   # (and, if the worker enumerates rather than being handed an exact key,
   # s3:ListBucket on the bucket ARN, same as above) added to its
   # bedrock:InvokeModel grant. Two different buckets are not supported — set
   # the same bucket name in both places.
   s3AccessKey: ""
   s3SecretKey: ""
+  # The rag workers' AWS credential → ragAgent.secrets.existing.rag (keys
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), rendered with the rest of that
+  # Secret when ragAgent is enabled. Both or neither: half a pair fails the
+  # render. With neither the workers still start, but every source scan fails with
+  # "Unable to locate credentials", so an uploaded file is never registered.
+  # Grants are described under s3AccessKey above.
+  ragAwsAccessKeyId: ""
+  ragAwsSecretAccessKey: ""
   # apiServer.secrets.existing.oidc (key `oidc-client-secret`), when the data
   # plane authenticates against an OIDC issuer with a confidential client. Empty
   # is a public client, which relies on the PKCE the server always sends.

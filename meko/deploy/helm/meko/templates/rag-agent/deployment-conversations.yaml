@@ -26,6 +26,9 @@ spec:
         app.kubernetes.io/component: worker
       annotations:
         {{- include "meko.configChecksum" (dict "root" $ "files" (list "rag-agent/configmap.yaml")) | nindent 8 }}
+        {{- with include "meko.ragAgent.secretChecksum" (dict "root" $) }}
+        {{ . }}
+        {{- end }}
     spec:
       {{- include "meko.imagePullSecrets" . }}
       {{- with $c.conversations.nodeSelector }}

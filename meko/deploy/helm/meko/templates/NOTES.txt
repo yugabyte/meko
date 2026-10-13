@@ -66,6 +66,12 @@ own feature; anything flagged !! stops a pod from starting at all.
   !! No Bedrock credentials, and the inference gateway is enabled on bedrock: its
      Secret is mounted with envFrom, so the pod never starts. Set them, or disable it.
 {{- end }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true") (not (and .Values.dataPlaneSecrets.ragAwsAccessKeyId .Values.dataPlaneSecrets.ragAwsSecretAccessKey)) }}
+
+  ! No AWS credentials for the rag workers (dataPlaneSecrets.ragAwsAccessKeyId /
+    .ragAwsSecretAccessKey): they start, but every source scan fails with "Unable to
+    locate credentials" and no uploaded file is processed.
+{{- end }}
 {{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") (not .Values.inferenceGateway.config.INFERENCE_MCP_ENDPOINT) (ne (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") }}
 
   ! The inference gateway has no MCP endpoint, and meko-mcp-server is not part of

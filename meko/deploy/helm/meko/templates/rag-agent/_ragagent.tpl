@@ -30,6 +30,29 @@ Usage: include "meko.ragAgent.envPrefix" (dict "root" $)
 {{- end -}}
 
 {{/*
+Pod-template annotation that rolls the workers when rag-agent-secret changes.
+They read it through secretKeyRef env, which the kubelet resolves once at
+container start, so a changed Secret alone restarts nothing. Hashes the rendered
+Secret document, the way meko.configChecksum hashes a ConfigMap, so a new
+database password or OpenAI key rolls them too. Only when the chart manages the
+AWS pair: an install that patches the Secret by hand renders as before.
+dataplane-secrets.yaml renders many Secrets, so only the rag document is hashed.
+Usage: include "meko.ragAgent.secretChecksum" (dict "root" $)
+*/}}
+{{- define "meko.ragAgent.secretChecksum" -}}
+{{- $root := .root -}}
+{{- $s := $root.Values.dataPlaneSecrets -}}
+{{- if and $s.enabled $s.ragAwsAccessKeyId $s.ragAwsSecretAccessKey -}}
+{{- $name := printf "\n  name: %s\n" $root.Values.ragAgent.secrets.existing.rag -}}
+{{- range splitList "\n---\n" (include (print $root.Template.BasePath "/dataplane-secrets.yaml") $root) -}}
+{{- if contains $name (printf "\n%s\n" .) -}}
+checksum/rag-secret: {{ . | sha256sum }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Env every rag-agent worker sets after its own identity vars: Langfuse tracing
 plus (prod-with-openai) OPENAI_API_KEY.
 Usage: include "meko.ragAgent.envSuffix" (dict "root" $ "langfuseKey" "TXT_LANGFUSE_HOST")
