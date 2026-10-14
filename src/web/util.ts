@@ -1,7 +1,7 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX } from '../shared/types';
-import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -371,6 +371,25 @@ export function learningText(l: MekoLearning): { learned: LearningTile; cost: Le
         `(${f(l.tokens)} tokens${l.usd !== null ? ', at Anthropic API list prices' : ', on models without a known price'}).`,
     },
   };
+}
+
+/** How a question's latest ask went, as What Meko doesn't know names it. */
+export const GAP_QUALITY_LABEL: Record<MekoGapQuality, string> = { empty: 'Found nothing', weak: 'Nothing relevant' };
+
+/** "Asked once", "Asked 3 times". */
+export function askedText(asks: number): string {
+  return asks === 1 ? 'Asked once' : `Asked ${asks.toLocaleString()} times`;
+}
+
+/**
+ * The line under the Meko stats on the project home: how many questions Meko couldn't answer, and
+ * the split (a part with none is left out); null when there are none.
+ */
+export function gapsLine(c: MekoGapCounts): { count: string; split: string } | null {
+  const total = c.empty + c.weak;
+  if (total === 0) return null;
+  const parts = [c.empty > 0 && `${c.empty.toLocaleString()} found nothing`, c.weak > 0 && `${c.weak.toLocaleString()} nothing relevant`].filter(Boolean);
+  return { count: `${total.toLocaleString()} ${total === 1 ? 'question' : 'questions'}`, split: parts.join(' · ') };
 }
 
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */

@@ -4,8 +4,11 @@ import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
 import {
-  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko, type MekoCall, type MekoKind, type MekoResult,
+  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, queryKey, sessionMeko, summarizeMeko,
+  type MekoCall, type MekoResult, type PendingCall,
 } from './mekousage.js';
+import { openGapCounts } from './mekogaps.js';
+import { readSavedReplySync } from './savedreply.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -19,6 +22,8 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 }
 
 const CHUNK = 1024 * 1024;
+/** The largest reply Claude Code saved to a file that's read for a Meko search's quality. */
+export const SAVED_REPLY_MAX = 8 * 1024 * 1024;
 
 /**
  * Transcript files for a session: the main conversation plus any subagent
@@ -180,9 +185,11 @@ export function parsePushLine(line: string, baseBranch: string): PushRow[] {
 export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: string, baseBranch?: string): boolean {
   let changed = false;
   // Meko calls still waiting for their result, which may come in a later read.
-  const pending = new Map<string, MekoKind>(
-    all<{ tool_use_id: string; kind: MekoKind }>(db, 'SELECT tool_use_id, kind FROM meko_calls WHERE session_id = ? AND outcome IS NULL', sessionId)
-      .map((r) => [r.tool_use_id, r.kind]));
+  const pending = new Map<string, PendingCall>(
+    all<{ tool_use_id: string } & PendingCall>(db, 'SELECT tool_use_id, kind, tool FROM meko_calls WHERE session_id = ? AND outcome IS NULL', sessionId)
+      .map((r) => [r.tool_use_id, { kind: r.kind, tool: r.tool }]));
+  // A search's reply too large for Claude is read from the file Claude Code saved, beside the main transcript.
+  const readSaved = (notice: string) => readSavedReplySync(notice, mainTranscript, SAVED_REPLY_MAX);
   for (const { path, agent } of transcriptFiles(mainTranscript)) {
     const prev = get<{ offset: number }>(db, 'SELECT offset FROM usage_files WHERE session_id = ? AND path = ?', sessionId, path);
     let offset = prev?.offset ?? 0;
@@ -227,9 +234,9 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
           if (baseBranch) pushes.push(...parsePushLine(line, baseBranch));
           for (const c of parseMekoCalls(line)) {
             calls.push(c);
-            pending.set(c.toolUseId, c.kind);
+            pending.set(c.toolUseId, { kind: c.kind, tool: c.tool });
           }
-          for (const res of parseMekoResults(line, pending)) {
+          for (const res of parseMekoResults(line, pending, readSaved)) {
             results.push(res);
             pending.delete(res.toolUseId);
           }
@@ -251,13 +258,14 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
             sessionId, r.messageId, agent, r.model, r.at, r.input, r.output, r.cacheRead, r.cacheWrite, r.cacheWrite1h);
         }
         for (const c of calls) {
-          run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, input_chars, model, context_tokens)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-            sessionId, c.toolUseId, agent, c.tool, c.kind, c.at, c.inputChars, c.model, c.contextTokens);
+          run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, input_chars, model, context_tokens, query, query_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+            sessionId, c.toolUseId, agent, c.tool, c.kind, c.at, c.inputChars, c.model, c.contextTokens, c.query, c.query === null ? null : queryKey(c.query));
         }
         for (const r of results) {
-          run(db, 'UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ? WHERE session_id = ? AND tool_use_id = ?',
-            r.outcome, r.results, r.resultChars, sessionId, r.toolUseId);
+          run(db, `UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ?, top_score = ?, top_raw = ?, quality = ?
+                   WHERE session_id = ? AND tool_use_id = ?`,
+            r.outcome, r.results, r.resultChars, r.topScore, r.topRaw, r.quality, sessionId, r.toolUseId);
         }
         // After this read's responses are in: a user mark needs a response before it.
         if (marks.length) setFirstTurnEnd(db, sessionId, marks);
@@ -359,8 +367,8 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
 
   const daily = dailyUsage(db, days, now, projectId);
   return {
-    total, cost, meko: summarizeMeko(calls), mekoFirstTurn: firstTurnMeko(db, projectId), mekoLearning: learningOf(learnRuns(db, projectId)),
-    byModel, bySession, daily,
+    total, cost, meko: summarizeMeko(calls), mekoGaps: openGapCounts(db, projectId), mekoFirstTurn: firstTurnMeko(db, projectId),
+    mekoLearning: learningOf(learnRuns(db, projectId)), byModel, bySession, daily,
   };
 }
 

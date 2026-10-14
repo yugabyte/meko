@@ -37,6 +37,7 @@ import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
 import { MekoCallsView } from './MekoCallsView';
+import { MekoGapsView } from './MekoGapsView';
 
 type Modal =
   | { kind: 'none' }
@@ -491,6 +492,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMenu={openDrawer}
             onError={showToast}
           />
+        ) : currentProject && route.view === 'meko-gaps' ? (
+          <MekoGapsView key={currentProject.id} project={currentProject} mekoConfigured={state.meko.configured} onMenu={openDrawer} onToast={showToast} />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}

@@ -501,6 +501,13 @@ describe('config and db', () => {
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
+/** Undoes migration 34 (What Meko doesn't know: queries and quality of searches, and the user's marks), for tests that rewind the schema. */
+function dropV34(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE meko_gap_marks; DROP INDEX meko_calls_quality');
+  for (const c of ['query', 'query_key', 'top_score', 'top_raw', 'quality']) db.exec(`ALTER TABLE meko_calls DROP COLUMN ${c}`);
+  for (const c of ['query', 'query_key', 'quality', 'top_score']) db.exec(`ALTER TABLE meko_preloads DROP COLUMN ${c}`);
+}
+
 /** Undoes migration 33 (the share contacts), for tests that rewind the schema. */
 function dropV33(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE share_contacts');
@@ -613,10 +620,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 33 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 34 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33];
-  for (let v = 33; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34];
+  for (let v = 34; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

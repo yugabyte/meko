@@ -1,9 +1,9 @@
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, toolCounts } from '../../src/server/mekousage.js';
+import { classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
 import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
@@ -64,8 +64,9 @@ describe('Meko calls in transcripts', () => {
   it('reads calls from a model response, with its model and context', () => {
     const calls = parseMekoCalls(call('m1', [['t1', 'mcp__meko__memory_search'], ['t2', 'Read'], ['t3', 'mcp__meko__memory_add']]));
     expect(calls).toEqual([
-      expect.objectContaining({ toolUseId: 't1', tool: 'memory_search', kind: 'lookup', model: 'claude-opus-5-5', contextTokens: 201_000 }),
-      expect.objectContaining({ toolUseId: 't3', tool: 'memory_add', kind: 'save' }),
+      expect.objectContaining({ toolUseId: 't1', tool: 'memory_search', kind: 'lookup', model: 'claude-opus-5-5', contextTokens: 201_000, query: 'q' }),
+      // Only a search keeps what it asked.
+      expect.objectContaining({ toolUseId: 't3', tool: 'memory_add', kind: 'save', query: null }),
     ]);
     expect(parseMekoCalls('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__meko__')).toEqual([]);
     expect(parseMekoCalls(result('t1', 'mcp__meko__memory_search'))).toEqual([]);
@@ -97,10 +98,32 @@ describe('Meko calls in transcripts', () => {
     expect(classifyResult(kind, text, isError)).toMatchObject(want);
   });
 
+  const mem = (score?: number, raw?: number) => ({ id: 'm', memory: 'x', ...(score !== undefined ? { score } : {}), ...(raw !== undefined ? { raw_similarity_score: raw } : {}) });
+  const ctx = (memory: unknown[], kb: unknown[] = [], hits: unknown[] = []) =>
+    wrapped({ results: { knowledge_base: kb, memory, conversation: { hits, thread: [] } } });
+  it.each<[string, string, string, boolean, object]>([
+    ['empty buckets', 'context_search', ctx([]), false, { quality: 'empty', topScore: null }],
+    ['memories all below the bar', 'context_search', ctx([mem(0.71, 0.48), mem(0.6, 0.52)]), false, { quality: 'weak', topScore: 0.71, topRaw: 0.52 }],
+    ['a memory at the bar', 'context_search', ctx([mem(0.75), mem(0.6)]), false, { quality: null, topScore: 0.75 }],
+    ['a knowledge-base chunk beside weak memories', 'context_search', ctx([mem(0.5)], [{ chunk: 'kb' }]), false, { quality: null, topScore: 0.5 }],
+    ['a conversation hit beside weak memories', 'context_search', ctx([mem(0.5)], [], [{ message: 'hit' }]), false, { quality: null }],
+    ['a memory without a score', 'context_search', ctx([mem(0.5), mem()]), false, { quality: null, topScore: 0.5 }],
+    ['memory_search below the bar', 'memory_search', wrapped({ results: [mem(0.7, 0.4)] }), false, { quality: 'weak', topScore: 0.7, topRaw: 0.4 }],
+    ['memory_search that found nothing', 'memory_search', wrapped({ results: [] }), false, { quality: 'empty' }],
+    // It keeps a chunk whatever its distance, so only finding nothing tells anything.
+    ['knowledgebase_search that found a chunk', 'knowledgebase_search', wrapped({ results: [{ chunk: 'kb', distance: 0.9 }] }), false, { quality: null }],
+    ['a call moved to the background', 'context_search', 'MCP tool "meko/context_search" is still running after 120s.', false, { quality: null }],
+    ['a failed search', 'context_search', 'Error: connection refused', true, { quality: null }],
+    ['a save', 'memory_add', wrapped({ message: 'ok' }), false, { quality: null, topScore: null }],
+  ])('says how poor a search was: %s', (_what, tool, text, isError, want) => {
+    const kind = tool === 'memory_add' ? 'save' : 'lookup';
+    expect(searchQuality(tool, classifyResult(kind, text, isError).outcome, text)).toMatchObject(want);
+  });
+
   it('reads results only for calls waiting for one, as text or text blocks', () => {
-    const pending = new Map([['t1', 'lookup' as const]]);
+    const pending = new Map([['t1', { kind: 'lookup' as const, tool: 'memory_search' }]]);
     expect(parseMekoResults(result('t1', [{ type: 'text', text: found }]), pending)).toEqual([
-      { toolUseId: 't1', outcome: 'found', results: 1, resultChars: found.length },
+      { toolUseId: 't1', outcome: 'found', results: 1, resultChars: found.length, topScore: null, topRaw: null, quality: null },
     ]);
     expect(parseMekoResults(result('t9', found), pending)).toEqual([]);
     expect(parseMekoResults(result('t1', found), new Map())).toEqual([]);
@@ -119,6 +142,11 @@ describe('Meko calls in transcripts', () => {
       { tool_use_id: 't1', agent: null, outcome: null }, // still waiting
       { tool_use_id: 't2', agent: 'x1', outcome: 'empty' },
     ]);
+    // What each search asked, and how poor its answer was (for What Meko doesn't know).
+    expect(all(db, 'SELECT tool_use_id, query, query_key, quality FROM meko_calls ORDER BY tool_use_id')).toEqual([
+      { tool_use_id: 't1', query: 'q', query_key: 'q', quality: null },
+      { tool_use_id: 't2', query: 'q', query_key: 'q', quality: 'empty' },
+    ]);
     // The result lands in a later read.
     appendFileSync(main, result('t1', found) + reply('m2'));
     expect(ingestSessionUsage(db, 's1', main)).toBe(true);
@@ -127,6 +155,24 @@ describe('Meko calls in transcripts', () => {
     run(db, 'DELETE FROM usage_files');
     ingestSessionUsage(db, 's1', main);
     expect(rows()).toHaveLength(2);
+  });
+
+  it("reads a search's reply too large for Claude from the file Claude Code saved, for its quality only", () => {
+    const { dir, db } = setup();
+    const main = join(dir, 'c.jsonl');
+    const reply = ctx([mem(0.74, 0.57), mem(0.7, 0.5)]);
+    const saved = join(dir, 'c', 'tool-results', 'mcp-meko-context_search-1.txt');
+    mkdirSync(dirname(saved), { recursive: true });
+    writeFileSync(saved, reply);
+    const notice = (path: string) => `Error: result (88,400 characters) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON`;
+    const searches: [string, string][] = [['t1', 'mcp__meko__context_search'], ['t3', 'mcp__meko__context_search']];
+    writeFileSync(main, call('m1', searches) + result('t1', notice(saved)) + result('t3', notice(join(dir, 'c', 'tool-results', 'gone.txt'))));
+    ingestSessionUsage(db, 's1', main);
+    // What Claude read (the notice) is still what's counted. Which folders are read is savedReplyFile's (meko-log.test.ts).
+    expect(all(db, 'SELECT tool_use_id, outcome, result_chars, top_score, quality FROM meko_calls ORDER BY tool_use_id')).toEqual([
+      { tool_use_id: 't1', outcome: 'found', result_chars: notice(saved).length, top_score: 0.74, quality: 'weak' },
+      { tool_use_id: 't3', outcome: 'found', result_chars: expect.any(Number), top_score: null, quality: null },
+    ]);
   });
 
   it('splits 1-hour cache writes out, and counts them all as 1-hour without the split', () => {
@@ -151,10 +197,10 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 34 (What Meko doesn't know: its columns go with the tables below), 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
-    db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts');
+    db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE meko_gap_marks');
     for (const c of ['queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['md_hash', 'html_hash', 'source', 'source_told', 'questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
@@ -238,7 +284,7 @@ describe('what Meko saved', () => {
   it('shows nothing saved, and no Meko use, for a project that never called Meko', () => {
     const { db } = setup();
     expect(projectUsage(db, 'p').meko).toEqual({
-      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0, savings: { searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 },
+      calls: 0, lookups: 0, found: 0, empty: 0, weak: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0, savings: { searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 },
     });
   });
 
