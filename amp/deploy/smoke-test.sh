@@ -458,6 +458,11 @@ SQL
 done
 echo "$out" | tail -1 | grep -q '^t$' && ok "pgsentinel preloaded + created, sampler recording into active session history" ||
   bad "pgsentinel not usable on a fresh endpoint (got: $(echo "$out" | tail -1))"
+# (c'') auto_explain is preloaded and off: pg_settings lists its settings only once
+#       the library is loaded, and log_min_duration must keep its default of -1.
+out=$(psql_pod "$POD" 127.0.0.1 55433 <<<"SELECT setting FROM pg_settings WHERE name = 'auto_explain.log_min_duration';" 2>&1)
+echo "$out" | grep -q '^-1$' && ok "auto_explain preloaded and off (log_min_duration -1)" ||
+  bad "auto_explain not preloaded and off on a fresh endpoint (got: $(echo "$out" | tail -1))"
 # (d) the shipped Postgres is a release build. `debug_assertions` reports whether it
 #     was configured --enable-cassert, which the image must never be: assertions plus
 #     the -O0 that comes with them are a large, silent slowdown, and nothing else here

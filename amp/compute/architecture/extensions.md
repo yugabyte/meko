@@ -68,6 +68,26 @@ the fork's `pgsentinel_ash.yb_track_query_text` is off by default, so `query` an
 `top_level_query` are NULL and `queryid` joins to `pg_stat_statements`
 ([#1448](https://github.com/yugabyte/meko/issues/1448)).
 
+### Stock contrib
+
+Contrib modules from the vendored PG18 tree are baked too, because they are part
+of Postgres itself: `postgres.mk`'s `CONTRIB_MODULES` names the ones the image
+installs. They need no catalog entry and no opt-in, since `CREATE EXTENSION`
+finds them under `$system` on every endpoint. We ship the modules that both
+Aurora PostgreSQL and YugabyteDB ship. `pg_regress.sh --all-contrib` runs each
+shipped module's upstream `REGRESS` tests in CI. sslinfo has none: its tests are
+TAP tests that start a server of their own.
+
+`auto_explain` has no control file. It is in the default
+`shared_preload_libraries` beside `pg_stat_statements` and `pgsentinel`, where
+it logs nothing, since `auto_explain.log_min_duration` defaults to -1. An
+operator turns it on by setting that in the endpoint's or branch's `pg_settings`
+(`'250ms'`, say), with `auto_explain.log_level = 'notice'` to send each plan to
+the client instead of the server log. The change applies on a reload, to the
+sessions already open too. `cloud_admin` can also `SET` them in one session. An
+operator's `shared_preload_libraries` replaces the whole list, `auto_explain`
+included, so it must repeat `SHOW shared_preload_libraries` to keep it.
+
 ## The two GUCs
 
 PostgreSQL can locate extensions outside its own install tree:
@@ -90,8 +110,8 @@ name (`pgvector` ships `vector.control`, so `CREATE EXTENSION vector`).
 
 `shared_preload_libraries` is separate: an extension that must be preloaded
 (e.g. `pg_cron`) has its library name appended to the base
-`shared_preload_libraries` (`yb_amp,pg_stat_statements,pgsentinel`, all
-image-baked). It must contain **only** libraries that are actually present, or the
+`shared_preload_libraries` (`yb_amp,pg_stat_statements,pgsentinel,auto_explain`,
+all image-baked). It must contain **only** libraries that are actually present, or the
 postmaster fails to start, so the controller/chart only add a preload entry for an
 extension it is also mounting. For the same reason the base list is the endpoint
 supervisor's `DEFAULT_SHARED_PRELOAD_LIBRARIES`, not a chart value: the controller

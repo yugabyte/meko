@@ -720,7 +720,7 @@ fi
 # A preload extension must also be added to shared_preload_libraries. This
 # setting replaces the supervisor's DEFAULT_SHARED_PRELOAD_LIBRARIES rather than
 # extending it, so the suite runs a preload extension beside yb_amp alone, without
-# the pg_stat_statements and pgsentinel every real endpoint loads (#1638). That GUC is
+# the pg_stat_statements, pgsentinel and auto_explain every real endpoint loads (#1638). That GUC is
 # comma-separated (a list of library names), unlike the path GUCs above.
 # pgvector/age need no preload; pg_cron/hexabridge do. Union the co-mounted set.
 if [[ ${#PRELOAD_LIBS[@]} -gt 0 ]]; then

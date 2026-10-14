@@ -117,7 +117,8 @@ at server start restarts the compute, and a storage daemon's settings always
 restart that daemon.
 
 `pg_settings={"work_mem": "64MB"}` are PostgreSQL GUCs (values are strings) and
-merge over the branch's, winning on a shared key.
+merge over the branch's, winning on a shared key. The map you send replaces the
+endpoint's (or branch's) whole map, so include the settings already there.
 
 `pageserver_settings` / `safekeeper_settings` configure the two storage daemons
 in the pod. **A key may be a dotted path into a nested toml table, and for the
@@ -175,6 +176,17 @@ is not even written to the config file — a file containing it does not load, s
 the compute would not start. Report the `reason`: `unrecognized parameter` is a
 typo, `invalid value` is a real setting given an unusable value. The value is
 stored and doing nothing, and a silent success is how either survives.
+
+**auto_explain is preloaded and off.** To log the plans of slow statements, set
+`auto_explain.log_min_duration` in the endpoint's `pg_settings` (`"250ms"`, say),
+and `auto_explain.log_level` to `"notice"` if the user wants each plan sent to
+their session rather than the server log. It reloads, and sessions already open
+pick it up. Drop it, or set it to `"-1"`, to stop. If the reply lists it in
+`not_applied`, either the name is misspelt or auto_explain is not loaded on that
+endpoint; `SHOW shared_preload_libraries` tells which.
+Do not add `auto_explain` to `shared_preload_libraries` or
+`session_preload_libraries`: it is already loaded, and a
+`shared_preload_libraries` value replaces the endpoint's whole list.
 
 ## Resize outcomes
 

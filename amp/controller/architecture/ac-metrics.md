@@ -439,7 +439,7 @@ The richest perf signal (per-normalized statement `calls`, total/mean/max exec
 time, rows, block hits vs reads, WAL bytes) comes from the exporter's built-in
 `stat_statements` collector, **on by default**. Three pieces hang off one list,
 the compute's base `shared_preload_libraries` — the endpoint image's own
-(`yb_amp,pg_stat_statements,pgsentinel`) unless `endpoint.sharedPreloadLibraries`
+(`yb_amp,pg_stat_statements,pgsentinel,auto_explain`) unless `endpoint.sharedPreloadLibraries`
 overrides it:
 
 1. The library is preloaded from the first boot. It is loadable only at postmaster

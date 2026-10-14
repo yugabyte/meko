@@ -18,10 +18,10 @@
 # off (see pg_tree.sh). Or --no-build to run on a build a caller already
 # produced — which is what CI does, straight after run.sh in the same job.
 #
-# This script also builds the regression C support modules (regress,
-# refint, autoinc) via PGXS and installs them into the compute's $libdir,
-# then points pg_regress at them with --dlpath, so the dynlib-gated tests
-# actually run rather than erroring on the restricted-loader path.
+# This script also builds the regression suite's C support module (regress)
+# via PGXS and installs it into the compute's $libdir, then points pg_regress
+# at $libdir with --dlpath, so the dynlib-gated tests actually run rather than
+# erroring on the restricted-loader path.
 #
 # Expected result on PG18: 230/230, matching the upstream goldens exactly.
 # The compute runs with `yb_amp.regress_test_mode=on` (see below), which is
@@ -53,9 +53,11 @@ Options:
                       module must be one postgres.mk installs, or its .so is
                       absent and every test fails to load it. A by-design amp
                       divergence is patched in from
-                      contrib_regress_patches/<name>.patch.
-  --all-contrib       --contrib for each of postgres.mk's CONTRIB_MODULES. What CI
-                      runs.
+                      contrib_regress_patches/<name>.patch. Naming a module
+                      with no REGRESS tests (sslinfo) fails, since nothing
+                      would run.
+  --all-contrib       --contrib for each of postgres.mk's CONTRIB_MODULES, skipping
+                      any with no REGRESS tests. What CI runs.
   --keep              leave the cluster + regression DB up for postmortem
                       (default: tear down on exit).
   -h, --help          show this help
@@ -79,6 +81,7 @@ PROFILE=debug
 JOBS=8
 SCHEDULE=parallel_schedule
 CONTRIB=()
+NAMED=" " # the modules --contrib named, as opposed to --all-contrib's
 ALL_CONTRIB=0
 KEEP=0
 NO_BUILD=0
@@ -97,6 +100,7 @@ while [[ $# -gt 0 ]]; do
     ;;
   --contrib)
     CONTRIB+=("$2")
+    NAMED+="$2 "
     shift
     ;;
   --all-contrib) ALL_CONTRIB=1 ;;
@@ -215,11 +219,12 @@ else
   (cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller)
 fi
 
-# 2b) Build + install the regression suite's C support modules. The core
-#     tests load helper functions/types from regress.so, and the trigger
-#     tests from contrib/spi (refint.so, autoinc.so); none of these ship in
-#     pg_install. yb-amp's loader (dfmgr.c) only accepts libraries resident
-#     in pkglib, so build them via PGXS and drop them there. pg_regress is
+# 2b) Build + install the regression suite's C support module. The core
+#     tests load helper functions/types from regress.so, which does not ship
+#     in pg_install. The trigger tests' refint.so and autoinc.so do: postgres.mk
+#     installs contrib/spi, built with the -DREFINT_VERBOSE their cascade
+#     NOTICEs need. yb-amp's loader (dfmgr.c) only accepts libraries resident
+#     in pkglib, so build regress via PGXS and drop it there. pg_regress is
 #     pointed at pkglib via --dlpath below so the suite's @libdir@/<mod>
 #     references resolve.
 PG_CONFIG="$PGINST/bin/pg_config"
@@ -228,17 +233,11 @@ export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}" # pg_config/make need 
 # symlink in worktrees and `pg_config --pkglibdir` carries a stale baked build
 # path, so derive it from the binary location — that's what the loader strips.
 PKGLIB="$(readlink -f "$PGINST/lib/postgresql")"
-echo ">>> building regression support modules (regress, refint, autoinc) -> $PKGLIB"
+echo ">>> building the regression support module (regress) -> $PKGLIB"
 tmod="$(mktemp -d)"
-cp "$REG/regress.c" \
-  "$REPO/compute/vendor/postgres-v18/contrib/spi/refint.c" \
-  "$REPO/compute/vendor/postgres-v18/contrib/spi/autoinc.c" "$tmod/"
-# -DREFINT_VERBOSE matches contrib/spi/Makefile: without it refint's
-# check_foreign_key skips the cascade NOTICEs the `triggers` test expects
-# (the cascade still runs correctly — only the NOTICE text is gated).
+cp "$REG/regress.c" "$tmod/"
 cat >"$tmod/Makefile" <<MK
-MODULES = regress refint autoinc
-PG_CPPFLAGS = -DREFINT_VERBOSE
+MODULES = regress
 PG_CONFIG = $PG_CONFIG
 PGXS := \$(shell \$(PG_CONFIG) --pgxs)
 include \$(PGXS)
@@ -251,7 +250,7 @@ if ! env -u PROFILE make -C "$tmod" >"$tmod/build.log" 2>&1; then
   rm -rf "$tmod"
   exit 1
 fi
-cp "$tmod"/regress.so "$tmod"/refint.so "$tmod"/autoinc.so "$PKGLIB/"
+cp "$tmod"/regress.so "$PKGLIB/"
 rm -rf "$tmod"
 
 # 3) Run-scoped, isolated cluster identifiers (mirrors run.sh / clean.sh).
@@ -401,8 +400,8 @@ for mod in ${CONTRIB[@]+"${CONTRIB[@]}"}; do
   [[ $ran != *" $mod "* ]] || continue
   ran+="$mod "
   src="$REPO/compute/vendor/postgres-v18/contrib/$mod"
-  [[ -d "$src/sql" ]] || {
-    echo ">>> $mod has no sql/ suite" >&2
+  [[ -d "$src" ]] || {
+    echo ">>> there is no contrib/$mod" >&2
     status=1
     continue
   }
@@ -430,7 +429,20 @@ for mod in ${CONTRIB[@]+"${CONTRIB[@]}"}; do
     status=1
     continue
   }
-  [[ -n "$tests" ]] || tests="$mod"
+  # As `make installcheck` does, run nothing for a module with no REGRESS tests:
+  # sslinfo's are the TAP tests in src/test/ssl, which need a server of their
+  # own. --all-contrib skips it; a module named with --contrib fails instead,
+  # because a run that tested nothing must not read as a pass.
+  if [[ -z $tests ]]; then
+    rm -rf "${OUTDIR:?}/contrib-$mod"
+    if [[ $NAMED == *" $mod "* ]]; then
+      echo ">>> contrib/$mod has no REGRESS tests to run" >&2
+      status=1
+    else
+      echo ">>> contrib/$mod has no REGRESS tests; skipping"
+    fi
+    continue
+  fi
 
   # Add a peer superuser role for the run, as extensions.sh does for
   # hexabridge: amp's superuser is cloud_admin, but upstream suites assume the

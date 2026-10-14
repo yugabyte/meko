@@ -24,29 +24,12 @@ use crate::db;
 /// applies on a reload and must not cost a restart.
 const PROBE: &str = "123MB";
 
-/// The port the launcher allocated for this endpoint's settings API, out of the
-/// opaque `extended` config it stored on the row.
-async fn settings_port(yb: &str, branch: &str) -> anyhow::Result<u16> {
-    let raw = db::query_text_opt(
-        yb,
-        &format!(
-            "SELECT config #>> '{{extended,settings_http_port}}' \
-             FROM amp_registry.endpoints \
-             WHERE branch_id = '{branch}' AND role = 'read_write'"
-        ),
-    )
-    .await?
-    .context("no read_write endpoint for the branch, or no settings port on it")?;
-    raw.parse()
-        .with_context(|| format!("settings_http_port {raw:?} is not a port"))
-}
-
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
     let compute = db::compute_conn(c.compute_port());
     let branch = c.branch();
 
-    let port = settings_port(&yb, branch).await?;
+    let port = c.settings_port().await?;
     let started_at = db::query_text(&compute, "SELECT pg_postmaster_start_time()::text").await?;
 
     step("Store a setting the running compute is not using");

@@ -176,7 +176,7 @@ endpoint:
   # and a fleet roll both arrive with it empty and must change nothing.
   password: ""
   # -- Override for the compute's base shared_preload_libraries. Empty uses the
-  # endpoint image's own list (`yb_amp,pg_stat_statements,pgsentinel` today),
+  # endpoint image's own list (`yb_amp,pg_stat_statements,pgsentinel,auto_explain` today),
   # which names only libraries that image ships — a name whose library is
   # missing stops the postmaster, and the controller renders this chart against
   # endpoint images of any version. Extensions with `preload: true` below are

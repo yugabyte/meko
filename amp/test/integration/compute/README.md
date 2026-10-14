@@ -212,8 +212,8 @@ test/integration/compute/pg_regress.sh -h         # full help
 
 It drives the 230-test suite straight from the vendored Postgres source
 (`compute/vendor/postgres-v18/src/test/regress`) via the stock `pg_regress`
-binary: it builds + installs the suite's C support modules (regress,
-refint, autoinc), brings up a throwaway `yb_amp_local` cluster, creates
+binary: it builds + installs the suite's C support module (regress;
+refint and autoinc ship with contrib/spi), brings up a throwaway `yb_amp_local` cluster, creates
 the `regression` database, runs the parallel schedule, and tears down on
 exit (unless `--keep`). Expect 230/230 against the upstream goldens — there
 are no yb-amp-specific expected files, because the compute runs with
@@ -224,13 +224,17 @@ defines for this suite (it lets `CREATE TABLESPACE` through, which
 `--contrib <name>` (repeatable) then runs a contrib module's own upstream
 regression tests, the ones its Makefile lists in `REGRESS` (not its `ISOLATION`
 specs), against the same compute. CI passes `--all-contrib`: every module in
-`postgres.mk`'s `CONTRIB_MODULES`, so shipping a new one also tests it.
+`postgres.mk`'s `CONTRIB_MODULES`, so shipping a new one also tests it. It skips
+a module with no `REGRESS` tests, as `make installcheck` does: `sslinfo`'s are
+TAP tests in `src/test/ssl` that start a server of their own. Naming such a
+module with `--contrib` fails instead, since nothing would run.
 `pg_stat_statements`' suite lists the server-wide view, so before it runs the
 script stops tracking the compute's own background queries (compute_ctl's
 activity monitor, pgsentinel's sampler) and restarts the endpoint. A by-design
 divergence is a patch under [`contrib_regress_patches/`](contrib_regress_patches/),
 applied to a copy of the module: `test_decoding.patch` hides the walproposer's own
-replication slot from that suite's slot listings.
+replication slot from that suite's slot listings, and `auto_explain.patch` expects
+the prefix that every compute's preload of auto_explain has already reserved.
 
 In CI it runs as a second step of the integration job (`amp-pr-build.yml`), right
 after `run.sh`, as `pg_regress.sh --no-build --all-contrib`: it builds nothing and

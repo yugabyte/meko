@@ -125,14 +125,15 @@ const (
 	// Default pins for the flat-named registries (quay/ghcr). Bumped as new
 	// builds are published, as a pair from one build: the chart in the
 	// controller image names the libraries the endpoint image must ship.
-	// custom-47c94c9fe is the first build that bakes pgsentinel (#1446),
-	// dict_int (AMP-78) and unaccent (AMP-81).
+	// custom-71f51b3106f2 is the first build that bakes the contrib modules both
+	// Aurora PostgreSQL and YugabyteDB ship and preloads auto_explain, on top of
+	// pgsentinel (#1446), dict_int (AMP-78) and unaccent (AMP-81).
 	// Tags before #280 (custom-4f1ca53, custom-0e2131d) ran the storage
 	// controller as a separate subprocess that crash-loops on "Insecure config".
 	// The ECR pins above also predate pgsentinel, so a `registry: ecr` run
 	// without an image override fails pg_extensions_matrix until they move.
-	DefaultQuayControllerImage = "amp-controller:custom-47c94c9fe"
-	DefaultQuayEndpointImage   = "amp-endpoint:custom-47c94c9fe"
+	DefaultQuayControllerImage = "amp-controller:custom-71f51b3106f2"
+	DefaultQuayEndpointImage   = "amp-endpoint:custom-71f51b3106f2"
 	DefaultEndpointServiceType = "ClusterIP"
 	DefaultControllerExpose    = "none"
 	DefaultBackingUser         = "yugabyte"

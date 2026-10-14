@@ -1,8 +1,9 @@
 //! Thin `psql` wrappers. Typed assertions go through [`crate::db`];
 //! `psql` is used only where it's load-bearing: the `.sql`/`.out` golden
 //! workloads (whose goldens capture `psql`'s exact aligned text
-//! rendering) and the background write/read loops the restart +
-//! going-away scenarios drive (which must be killable mid-flight).
+//! rendering), the background write/read loops the restart +
+//! going-away scenarios drive (which must be killable mid-flight), and a
+//! `pg_dump` then `psql -f` restore, which is the client pair under test.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -32,19 +33,60 @@ fn pg_install() -> PathBuf {
 /// emits queries for the wrong catalog shape (e.g. `pg_class.relhasoids`,
 /// dropped in PG12) and the workload errors out.
 fn base(port: u16) -> Command {
+    client("psql", port, "postgres")
+}
+
+/// `bin` (`psql`, `pg_dump`) from that same install, connected as [`base`] is,
+/// to database `dbname`.
+fn client(bin: &str, port: u16, dbname: &str) -> Command {
     let pg = pg_install();
     let lib = pg.join("lib");
     let ld_library_path = match std::env::var("LD_LIBRARY_PATH") {
         Ok(existing) if !existing.is_empty() => format!("{}:{}", lib.display(), existing),
         _ => lib.display().to_string(),
     };
-    let mut cmd = Command::new(pg.join("bin/psql"));
+    let mut cmd = Command::new(pg.join("bin").join(bin));
     cmd.env("LD_LIBRARY_PATH", ld_library_path)
         .env("PGPASSWORD", "")
         .args(["-h", "127.0.0.1", "-p"])
         .arg(port.to_string())
-        .args(["-U", "cloud_admin", "postgres"]);
+        .args(["-U", "cloud_admin", dbname]);
     cmd
+}
+
+/// `pg_dump <db>` into `file`, as plain SQL. Errors with pg_dump's stderr if it
+/// exits non-zero.
+pub fn dump(port: u16, db: &str, file: &Path) -> anyhow::Result<()> {
+    let out = client("pg_dump", port, db).arg("-f").arg(file).output()?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "pg_dump {db} exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// `psql <db> -f <file>`, the plain-SQL restore as an operator runs it: without
+/// `ON_ERROR_STOP`, so a statement that fails is reported on stderr and the
+/// restore carries on to exit 0. Returns psql's stderr, which is the only place
+/// a skipped table shows; errors, with that stderr, only if psql exits non-zero.
+pub fn restore(port: u16, db: &str, file: &Path) -> anyhow::Result<String> {
+    let out = client("psql", port, db)
+        .args(["-X", "-q", "-f"])
+        .arg(file)
+        .stdout(Stdio::null())
+        .output()?;
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        anyhow::bail!(
+            "psql {db} -f {} exited with {}: {stderr}",
+            file.display(),
+            out.status
+        );
+    }
+    Ok(stderr)
 }
 
 /// Spawn a long-running `psql -c <sql>` in the background, detached from

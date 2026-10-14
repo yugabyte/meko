@@ -109,12 +109,17 @@ $(BUILD_DIR)/%/config.status:
 # the same thing
 $(foreach pg_version,$(POSTGRES_VERSIONS),postgres-configure-$(pg_version)): postgres-configure-%: FORCE $(BUILD_DIR)/%/config.status
 
-# The contrib modules the compute ships. pg_stat_statements is preloaded by
-# default (endpoint chart + yb_amp_local), so an install without it cannot start
-# the postmaster.
+# The contrib modules the compute ships. pg_stat_statements and auto_explain are
+# preloaded by default (endpoint chart + yb_amp_local), so an install without
+# them cannot start the postmaster. The second group is what both Aurora
+# PostgreSQL and YugabyteDB YSQL ship. spi installs four extensions (autoinc,
+# insert_username, moddatetime, refint), and auto_explain is a library with no
+# control file.
 CONTRIB_MODULES := pg_prewarm pg_buffercache pg_visibility pageinspect pg_trgm \
 	btree_gin amcheck test_decoding pg_stat_statements tsm_system_rows \
-	postgres_fdw dict_int unaccent
+	postgres_fdw dict_int unaccent \
+	cube earthdistance hstore fuzzystrmatch tablefunc spi pgcrypto sslinfo \
+	auto_explain
 
 # Compile and install PostgreSQL and CONTRIB_MODULES.
 postgres-install-%: postgres-configure-% \

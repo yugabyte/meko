@@ -26,10 +26,16 @@ import (
 // control file, so the only way to exercise it is to create a logical
 // replication slot, which asserts working logical decoding over amp storage.
 // That is a separate capability with no product commitment and no other test.
+// auto_explain is absent too, having no control file either; autoExplainCanary
+// checks that it is preloaded.
+// Extensions are created in this order without CASCADE, so cube precedes
+// earthdistance, which requires it.
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
 	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements", "tsm_system_rows",
 	"postgres_fdw", "dict_int", "unaccent", "pgsentinel",
+	"cube", "earthdistance", "hstore", "fuzzystrmatch", "tablefunc",
+	"autoinc", "insert_username", "moddatetime", "refint", "pgcrypto", "sslinfo",
 }
 
 // DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
@@ -50,6 +56,11 @@ var DefaultExtensionsCatalog = []string{"pgvector:vector", "pg_cron:pg_cron", "h
 // created last.
 var preloadCatalogExts = map[string]bool{"pg_cron": true, "hexabridge": true}
 
+// How long the auto_explain settings edit may take to reach Postgres. The
+// reload is applied on compute_ctl's configurator loop, after the PATCH has
+// answered.
+const autoExplainApplyTimeout = time.Minute
+
 // Kubernetes serves ImageVolume as beta from 1.33 (the endpoint chart's volumes
 // stanza states the same bound). Below it a kubelet brings the pod up with no
 // mount and no API error, which is the one environment condition this test
@@ -67,7 +78,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a cluster opted into all of it, each created, version-matched and canary-queried, postgres_fdw over a loopback foreign server so the module is proven to connect and fetch rather than merely to install.",
+		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a cluster opted into all of it, each created, version-matched and canary-queried, postgres_fdw over a loopback foreign server so the module is proven to connect and fetch rather than merely to install, and auto_explain preloaded and off, then turned on through the endpoint's pg_settings with a reload.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     20 * time.Minute,
 		Run:         runPgExtensionsMatrix,
@@ -312,7 +323,10 @@ func extensionsMatrixSteps(ctx context.Context, cl ampCtl, proj ampCluster, bake
 		}
 	}
 
-	return extensionCanaries(ctx, c, table)
+	if err := extensionCanaries(ctx, c, table); err != nil {
+		return err
+	}
+	return autoExplainCanary(ctx, cl, proj, ep, c)
 }
 
 // availableExtensions reads pg_available_extensions into a Go map of name to
@@ -489,8 +503,98 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 	} else if plain != "Hotel creme brulee" {
 		return fmt.Errorf("unaccent('Hôtel crème brûlée') returned %q, want \"Hotel creme brulee\": the dictionary did not load unaccent.rules from share/postgresql/tsearch_data", plain)
 	}
+	if err := parityCanaries(ctx, c, table); err != nil {
+		return err
+	}
 
 	return fdwLoopbackCanary(ctx, c, table)
+}
+
+// parityCanaries covers the contrib modules amp ships because both Aurora
+// PostgreSQL and YugabyteDB YSQL do, one real call each. The call only has to
+// succeed: checking what it returns is the job of the module's upstream tests.
+func parityCanaries(ctx context.Context, c sqlConn, table string) error {
+	spi := table + "_spi"
+	for _, k := range []struct{ module, sql string }{
+		{"cube", "SELECT cube_distance(cube(array[0, 0]), cube(array[3, 4]))"},
+		{"earthdistance", "SELECT earth_distance(ll_to_earth(0, 0), ll_to_earth(0, 1))"},
+		{"hstore", "SELECT 'a=>1'::hstore -> 'a'"},
+		{"fuzzystrmatch", "SELECT levenshtein('kitten', 'sitting')"},
+		// crosstab runs its source query through SPI.
+		{"tablefunc", "SELECT * FROM crosstab($$VALUES ('r', 'a', '1')$$) AS ct(row_name text, c1 text)"},
+		// digest calls into OpenSSL, which pgcrypto is linked against.
+		{"pgcrypto", "SELECT digest('amp', 'sha256')"},
+		{"sslinfo", "SELECT ssl_is_used()"},
+		// spi's four extensions each install a trigger function, which runs only
+		// when a trigger fires; this fires insert_username's.
+		{"spi", "CREATE TABLE " + spi + " (who text)"},
+		{"spi", "CREATE TRIGGER " + spi + " BEFORE INSERT ON " + spi + " FOR EACH ROW EXECUTE FUNCTION insert_username(who)"},
+		{"spi", "INSERT INTO " + spi + " DEFAULT VALUES"},
+	} {
+		if _, err := c.Exec(ctx, k.sql); err != nil {
+			return fmt.Errorf("%s canary %q: %w", k.module, k.sql, err)
+		}
+	}
+	return nil
+}
+
+// autoExplainCanary checks that auto_explain is preloaded and off, then turns it
+// on through the endpoint's pg_settings, as an operator does. The setting must
+// apply on a reload and be reported as applied.
+func autoExplainCanary(ctx context.Context, cl ampCtl, proj ampCluster, ep controller.Endpoint, c sqlConn) error {
+	const name, value = "auto_explain.log_min_duration", "250"
+	// pg_settings lists a library's settings only once it is loaded.
+	read := func() (string, error) {
+		got, err := c.QueryString(ctx, "SELECT coalesce((SELECT setting || ' ' || vartype FROM pg_settings WHERE name = $1), '')", name)
+		if err != nil {
+			return "", fmt.Errorf("read %s from pg_settings: %w", name, err)
+		}
+		return got, nil
+	}
+	got, err := read()
+	if err != nil {
+		return err
+	}
+	if got != "-1 integer" {
+		return fmt.Errorf("pg_settings reads %s as %q, want \"-1 integer\": every endpoint must preload auto_explain and leave it off", name, got)
+	}
+
+	reply, err := cl.UpdateEndpointSettings(ctx, proj.poolID, proj.projID, proj.branchID, ep.ID, pgSettings(map[string]string{name: value}))
+	if err != nil {
+		return fmt.Errorf("set %s through the endpoint's pg_settings: %w", name, err)
+	}
+	out, err := only(reply)
+	if err != nil {
+		return fmt.Errorf("setting %s: %w", name, err)
+	}
+	if len(out.Restarted) != 0 {
+		return fmt.Errorf("%s changes on a reload, but setting it restarted %v (forced by %v)", name, out.Restarted, out.RestartForcedBy)
+	}
+	if len(out.Reloaded) == 0 {
+		return fmt.Errorf("setting %s reported neither a reload nor a restart: %+v", name, out)
+	}
+	if len(out.NotApplied) != 0 {
+		return fmt.Errorf("setting %s reported %+v as not applied, though the preloaded auto_explain defines it", name, out.NotApplied)
+	}
+
+	deadline := time.Now().Add(autoExplainApplyTimeout)
+	for {
+		got, err := read()
+		if err != nil {
+			return err
+		}
+		if got == value+" integer" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pg_settings still reads %s as %q %s after the edit: the reload did not reach Postgres", name, got, autoExplainApplyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // fdwLoopbackCanary reads the canary table back over a foreign server on the

@@ -1,0 +1,27 @@
+Every yb-amp compute preloads auto_explain, so its prefix is reserved before the
+test runs. Setting the unknown auto_explain.bogus is refused up front, and the
+LOAD has no leftover setting to remove.
+
+--- a/expected/alter_reset.out
++++ b/expected/alter_reset.out
+@@ -6,12 +6,18 @@
+ SELECT current_database() AS datname \gset
+ CREATE ROLE regress_ae_role;
+ ALTER DATABASE :"datname" SET auto_explain.bogus = 1;
++ERROR:  invalid configuration parameter name "auto_explain.bogus"
++DETAIL:  "auto_explain" is a reserved prefix.
+ ALTER ROLE regress_ae_role SET auto_explain.bogus = 1;
++ERROR:  invalid configuration parameter name "auto_explain.bogus"
++DETAIL:  "auto_explain" is a reserved prefix.
+ ALTER ROLE regress_ae_role IN DATABASE :"datname" SET auto_explain.bogus = 1;
++ERROR:  invalid configuration parameter name "auto_explain.bogus"
++DETAIL:  "auto_explain" is a reserved prefix.
+ ALTER SYSTEM SET auto_explain.bogus = 1;
++ERROR:  invalid configuration parameter name "auto_explain.bogus"
++DETAIL:  "auto_explain" is a reserved prefix.
+ LOAD 'auto_explain';
+-WARNING:  invalid configuration parameter name "auto_explain.bogus", removing it
+-DETAIL:  "auto_explain" is now a reserved prefix.
+ ALTER DATABASE :"datname" RESET auto_explain.bogus;
+ ALTER ROLE regress_ae_role RESET auto_explain.bogus;
+ ALTER ROLE regress_ae_role IN DATABASE :"datname" RESET auto_explain.bogus;

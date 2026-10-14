@@ -14,22 +14,6 @@ use serde_json::Value;
 use crate::cluster::{Cluster, step};
 use crate::db;
 
-/// The port the launcher allocated for this endpoint's settings API.
-async fn settings_port(yb: &str, branch: &str) -> anyhow::Result<u16> {
-    let raw = db::query_text_opt(
-        yb,
-        &format!(
-            "SELECT config #>> '{{extended,settings_http_port}}' \
-             FROM amp_registry.endpoints \
-             WHERE branch_id = '{branch}' AND role = 'read_write'"
-        ),
-    )
-    .await?
-    .context("no read_write endpoint for the branch, or no settings port on it")?;
-    raw.parse()
-        .with_context(|| format!("settings_http_port {raw:?} is not a port"))
-}
-
 async fn check(port: u16, body: &str) -> anyhow::Result<Value> {
     let resp = reqwest::Client::new()
         .post(format!("http://127.0.0.1:{port}/v1/settings/check"))
@@ -67,8 +51,7 @@ fn reason_for<'a>(r: &'a Value, name: &str) -> Option<&'a str> {
 }
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let port = settings_port(&yb, c.branch()).await?;
+    let port = c.settings_port().await?;
 
     step("Settings Postgres accepts are reported as acceptable");
     // Two real settings and two names Postgres treats as placeholders: a custom

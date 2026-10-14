@@ -1065,6 +1065,25 @@ impl Cluster {
         Ok(row.get(0))
     }
 
+    /// The port the launcher allocated for the branch's read_write endpoint's
+    /// settings API, out of the opaque `extended` config it stored on the row.
+    pub async fn settings_port(&self) -> anyhow::Result<u16> {
+        let conninfo = crate::db::yb_conn(&self.yb_host, self.yb_port, &self.db_name);
+        let branch = self.branch();
+        let raw = crate::db::query_text_opt(
+            &conninfo,
+            &format!(
+                "SELECT config #>> '{{extended,settings_http_port}}' \
+                 FROM amp_registry.endpoints \
+                 WHERE branch_id = '{branch}' AND role = 'read_write'"
+            ),
+        )
+        .await?
+        .context("no read_write endpoint for the branch, or no settings port on it")?;
+        raw.parse()
+            .with_context(|| format!("settings_http_port {raw:?} is not a port"))
+    }
+
     /// Run a diagnostic tool binary (built next to `yb_amp_local` in
     /// `target/<profile>/`) with this run's YB connection flags + `extra`.
     /// Returns stdout; fails on a non-zero exit. Exercises the shared

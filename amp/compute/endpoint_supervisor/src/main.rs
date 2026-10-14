@@ -86,15 +86,17 @@ use supervise::{Outcome, Policy, Supervisor};
 
 /// What a compute preloads unless `BASE_SHARED_PRELOAD_LIBRARIES` overrides it: the
 /// storage extension it cannot run without, plus `pg_stat_statements`, which feeds
-/// the postgres_exporter statement collector and compute_ctl's `/insights`, and
-/// `pgsentinel`, which samples active session history. All three can only be
-/// loaded at postmaster start.
+/// the postgres_exporter statement collector and compute_ctl's `/insights`,
+/// `pgsentinel`, which samples active session history, and `auto_explain`, which
+/// logs nothing until `auto_explain.log_min_duration` is set. The first three can
+/// only be loaded at postmaster start; loading auto_explain there makes its
+/// settings apply on a reload, to sessions already open too.
 ///
 /// The base list lives here, not in the chart, because a name whose library is
 /// missing stops the postmaster: only the image knows which libraries it ships,
 /// and the controller renders one chart against endpoint images of any version
 /// (#1572).
-const DEFAULT_SHARED_PRELOAD_LIBRARIES: &str = "yb_amp,pg_stat_statements,pgsentinel";
+const DEFAULT_SHARED_PRELOAD_LIBRARIES: &str = "yb_amp,pg_stat_statements,pgsentinel,auto_explain";
 
 /// `shared_preload_libraries`: the base list (the image's own, unless
 /// overridden) followed by the preload extensions the chart mounted, which
@@ -1477,7 +1479,7 @@ mod tests {
         // The chart's fallback for older supervisors does not shrink the base.
         assert_eq!(
             shared_preload_libraries(Some("yb_amp,pg_cron"), None, Some("pg_cron")),
-            "yb_amp,pg_stat_statements,pgsentinel,pg_cron"
+            "yb_amp,pg_stat_statements,pgsentinel,auto_explain,pg_cron"
         );
         // An override replaces the base, and the extensions still go after it.
         assert_eq!(
