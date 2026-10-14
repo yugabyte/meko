@@ -100,7 +100,8 @@ AWS_PROFILE=... eksctl create iamserviceaccount -f infra/litellm-irsa.yaml --app
 AWS_PROFILE=... eksctl create iamserviceaccount -f infra/builder-irsa.yaml --approve
 stack/build-images.sh <tag>     # Kaniko on the cluster; see its header for inputs
 stack/deploy.sh released        # or: branch (meko_mem0_memories + search routing)
-stack/seed_stack.sh             # a PAT per seeded account, a Langfuse mapping per datapack
+stack/seed_stack.sh             # a PAT per seeded account, a Langfuse mapping per datapack,
+                                # and the KB/conversation indexes pointed at OpenAI (LiteLLM)
 ./run.sh mcp surface surface-1  # every tool once, with checks
 ./run.sh mcp load load-a10 --agents 10 --minutes 10
 kubectl port-forward svc/meko-api-server 18080:80 &

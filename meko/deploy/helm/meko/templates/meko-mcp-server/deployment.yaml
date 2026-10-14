@@ -21,6 +21,11 @@ spec:
         {{- include "meko.selectorLabels" (dict "app" "meko-mcp-server") | nindent 8 }}
       annotations:
         {{- include "meko.configChecksum" (dict "root" $ "files" (list "meko-mcp-server/configmap.yaml")) | nindent 8 }}
+        {{- /* Env from a Secret is resolved once at container start, so a changed
+               Secret restarts nothing without this. Only when the chart renders it. */}}
+        {{- if and $.Values.dataPlaneSecrets.enabled $.Values.dataPlaneSecrets.mcpAwsAccessKeyId $.Values.dataPlaneSecrets.mcpAwsSecretAccessKey }}
+        checksum/mcp-aws: {{ include "meko.secretDocChecksum" (dict "root" $ "name" $s.aws) }}
+        {{- end }}
     spec:
       {{- include "meko.imagePullSecrets" . }}
       # Image runs as uid 1000 (app); enforce non-root + drop privileges.
@@ -47,6 +52,26 @@ spec:
                   # Unset rather than unstartable: memory extraction fails where it
                   # is called, instead of the whole MCP server never scheduling.
                   optional: true
+            {{- /* Bedrock credential for embedding KB and conversation search queries with
+                   the index's provider. Only when the chart renders the Secret: otherwise
+                   an install supplying its own through extraEnv, as the test stack does,
+                   would get the same env name twice, which server-side apply rejects. */}}
+            {{- if and $.Values.dataPlaneSecrets.enabled $.Values.dataPlaneSecrets.mcpAwsAccessKeyId $.Values.dataPlaneSecrets.mcpAwsSecretAccessKey }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.aws }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.aws }}
+                  key: AWS_SECRET_ACCESS_KEY
+            {{- end }}
+            {{- with $c.staticEnv.awsRegion }}
+            - name: AWS_REGION
+              value: {{ . | quote }}
+            {{- end }}
             - name: DB_HOST
               valueFrom:
                 configMapKeyRef:

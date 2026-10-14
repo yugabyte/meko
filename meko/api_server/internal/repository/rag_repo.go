@@ -249,7 +249,8 @@ func (r *RagRepo) InitVectorIndex() (string, error) {
 	err := r.db.QueryRow(`SELECT dist_rag.init_vector_index(
 		r_index_name   := $1,
 		r_sources      := ARRAY[]::UUID[],
-		r_embedding_model_params := '{"model": "text-embedding-3-large", "dimensions": 1536}',
+		r_ai_provider  := 'AWS_BEDROCK',
+		r_embedding_model_params := '{"model": "amazon.titan-embed-text-v1", "dimensions": 1536}',
 		r_chunk_params := '{"chunk_size": 1024, "chunk_overlap": 256}',
 		r_schema_name  := $2
 	)`, r.indexName, r.schemaName).Scan(&indexID)

@@ -301,9 +301,11 @@ mekoUi:
 #                 rag-worker pool); pdf runs CPU-degraded without a GPU pool
 #                 (ragAgent.gpu.enabled=false) rather than needing one. Needs
 #                 dataPlaneSecrets.ragAwsAccessKeyId / .ragAwsSecretAccessKey for
-#                 S3 reads (plus Bedrock, on an index that uses that provider):
+#                 S3 reads and Bedrock Titan embeddings (the seeded indexes' embedder):
 #                 without them every source scan fails and no uploaded file is
-#                 processed.
+#                 processed. mekoMcpServer, which stays on, needs dataPlaneSecrets.
+#                 mcpAwsAccessKeyId / .mcpAwsSecretAccessKey for the same embedder,
+#                 or KB and conversation search embed nothing.
 #   provisioner — deliberately not: it renders ClusterRoles and a CRD, and manages
 #                 per-tenant namespaces, which is the opposite of one namespace.
 #

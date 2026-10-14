@@ -10,7 +10,8 @@
 #   3. Create vector/mage/pg_dist_rag extensions in the yugabyte DB.
 #   4. `docker compose up -d --build` for everything else.
 #   5. Wait for api_server health, then rewrite the seed yb_universe row
-#      to point at host.docker.internal:5433.
+#      to point at host.docker.internal:5433, and point the vector indexes
+#      at OpenAI (this stack has no Bedrock).
 #   6. Print the URLs.
 #
 # Flags (see --help for the full list):
@@ -1184,6 +1185,13 @@ PGPASSWORD="${YB_PASSWORD}" "${MEKO_YB_HOME}/bin/ysqlsh" \
   -d yugabyte -v ON_ERROR_STOP=1 -v yb_port="${YB_PORT}" \
   -f "${SCRIPT_DIR}/init/yb-fix-universe.sql" >/dev/null
 ok "universe row repointed"
+
+info "pointing the knowledge_bases / conversation_history_search indexes at OpenAI (no Bedrock here)"
+PGPASSWORD="${YB_PASSWORD}" "${MEKO_YB_HOME}/bin/ysqlsh" \
+  -h "${YB_LISTEN_HOST}" -p "${YB_PORT}" -U "${YB_USER}" \
+  -d yugabyte -v ON_ERROR_STOP=1 \
+  -f "${SCRIPT_DIR}/init/yb-index-openai.sql" >/dev/null
+ok "vector indexes use OpenAI"
 
 # ─── Step 6: print URLs ────────────────────────────────────────────────────
 cat <<EOF

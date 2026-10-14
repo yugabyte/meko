@@ -7,6 +7,11 @@ CREATE SCHEMA IF NOT EXISTS datapacks;
 /*
 As we are manually creating the vector index `datapacks.knowledge_bases`, we need to insert an entry in the dist_rag.vector_indexes table.
 
+The row names the embedder, and it must be the one hosted dev and prod use: Bedrock Titan v1, which
+emits a fixed 1536 dimensions to match the vector(1536) columns. The rag workers embed documents from
+it and the MCP server embeds KB search queries from it, so a different model here makes the two
+disagree with an environment that already holds vectors.
+
 This file is not applied atomically, so a container killed partway through is rerun from
 the top: every statement below must tolerate having already run. ON CONFLICT DO NOTHING
 (no target, so it covers whichever unique index dist_rag defines) is what makes this one
@@ -24,8 +29,8 @@ VALUES
   ('knowledge_bases', 'datapacks',
    '{"distance_metric": "cosine", "m": 32, "ef_construction": 64}'::jsonb,
    'INIT'::dist_rag.index_build_status,
-   'OPENAI'::dist_rag.ai_provider_enum,
-   '{"model": "text-embedding-3-large", "dimensions": 1536}'::jsonb)
+   'AWS_BEDROCK'::dist_rag.ai_provider_enum,
+   '{"model": "amazon.titan-embed-text-v1", "dimensions": 1536}'::jsonb)
 ON CONFLICT DO NOTHING
 RETURNING id;
 

@@ -412,6 +412,73 @@ func TestFirstDataMigrationIsRetrySafe(t *testing.T) {
 	}
 }
 
+// The rag workers embed documents, and the MCP server embeds search queries, from the
+// embedder these rows name. Hosted dev/prod use Bedrock Titan v1 (a fixed 1536 dimensions,
+// the width of every vector column), so an install seeded with another embedder disagrees
+// with what the rest of the platform assumes. Pinned so a later edit cannot quietly put an
+// OpenAI row back.
+func TestVectorIndexRowsSeedBedrockTitan(t *testing.T) {
+	want := []string{
+		"'AWS_BEDROCK'::dist_rag.ai_provider_enum",
+		`"model": "amazon.titan-embed-text-v1"`,
+		`"dimensions": 1536`,
+	}
+
+	// knowledge_bases is a plain row.
+	file := "migrations/data/000001_meko_datapacks_schema.up.sql"
+	body, err := dataMigrationsFS.ReadFile(file)
+	if err != nil {
+		t.Fatalf("ReadFile %s: %v", file, err)
+	}
+	var row string
+	for _, stmt := range splitStatements(stripSQLComments(string(body))) {
+		if strings.Contains(stmt, "INSERT INTO dist_rag.vector_indexes") {
+			row = stmt
+		}
+	}
+	if row == "" || !strings.Contains(row, "'knowledge_bases'") {
+		t.Fatalf("%s no longer inserts the knowledge_bases dist_rag.vector_indexes row", file)
+	}
+	for _, w := range want {
+		if !strings.Contains(row, w) {
+			t.Errorf("%s: the knowledge_bases row does not contain %s", file, w)
+		}
+	}
+}
+
+// conversation_history_search must be REGISTERED, not just have a row: the conversations
+// worker only embeds a table with a column_embedding_registrations row, and
+// init_column_embedding inserts the vector_indexes row itself under a unique index_name, so
+// a bare INSERT of that row makes the registration fail. Pinned to the registration calls
+// and to the same embedder as knowledge_bases.
+func TestConversationIndexIsRegisteredNotInserted(t *testing.T) {
+	file := "migrations/data/000007_conversation_history_search_embedding_registration.up.sql"
+	body, err := dataMigrationsFS.ReadFile(file)
+	if err != nil {
+		t.Fatalf("ReadFile %s: %v", file, err)
+	}
+	sql := stripSQLComments(string(body))
+	if strings.Contains(sql, "INSERT INTO dist_rag.vector_indexes") {
+		t.Errorf("%s inserts the vector_indexes row itself; init_column_embedding creates it, and a "+
+			"row inserted first makes that call fail on index_name", file)
+	}
+	for _, want := range []string{
+		"dist_rag.create_column_embedding_mapping(",
+		"dist_rag.init_column_embedding(",
+		"r_registration_name            := 'conversation_history_search'",
+		"'AWS_BEDROCK'::dist_rag.ai_provider_enum",
+		`"model": "amazon.titan-embed-text-v1"`,
+		`"dimensions": 1536`,
+		// An install that already has the registration or the row must be left alone.
+		"dist_rag.column_embedding_registrations",
+		"dist_rag.vector_indexes",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("%s does not contain %s", file, want)
+		}
+	}
+}
+
 // The detector is only worth trusting if it catches each shape of statement it claims
 // to, so pin one bad and one good example of each.
 func TestRetryUnsafeDetector(t *testing.T) {

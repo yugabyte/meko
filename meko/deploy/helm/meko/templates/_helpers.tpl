@@ -284,6 +284,23 @@ checksum/config: {{ $sum | sha256sum }}
 {{- end -}}
 
 {{/*
+meko.secretDocChecksum — sha256 of one Secret's rendered document out of
+dataplane-secrets.yaml, which renders many. Hashing the manifest rather than the
+values keeps a pod rolling on ANY change to that Secret, the way
+meko.configChecksum does for a ConfigMap. Empty when no such document renders.
+Usage: include "meko.secretDocChecksum" (dict "root" $ "name" "rag-agent-secret")
+*/}}
+{{- define "meko.secretDocChecksum" -}}
+{{- $root := .root -}}
+{{- $name := printf "\n  name: %s\n" .name -}}
+{{- range splitList "\n---\n" (include (print $root.Template.BasePath "/dataplane-secrets.yaml") $root) -}}
+{{- if contains $name (printf "\n%s\n" .) -}}
+{{ . | sha256sum }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 meko.ns — the namespace a component's objects go in.
 
 With global.singleNamespace, every component collapses into the RELEASE namespace,

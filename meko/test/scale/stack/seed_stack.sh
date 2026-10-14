@@ -18,6 +18,20 @@ K=(kubectl --context "$CTX" -n "$NS")
 sql() { "${K[@]}" exec -i yb-tserver-0 -c yb-tserver -- ysqlsh -h yb-tserver-0.yb-tservers -v ON_ERROR_STOP=1 -q "$@"; }
 secret() { "${K[@]}" get secret stack-secrets -o jsonpath="{.data.$1}" | base64 -d; }
 
+# api_server's migrations seed the knowledge_bases and conversation_history_search indexes
+# as Bedrock Titan, like hosted dev/prod. This stack embeds through LiteLLM as OpenAI model
+# names (it maps them to Titan): the rag worker and the MCP server reach it with
+# OPENAI_BASE_URL, and the worker's AWS pair is MinIO's, so a Bedrock row fails every
+# embed. Name OpenAI instead. Only rows still on Bedrock are touched, so a rerun is a no-op.
+sql <<'SQL'
+UPDATE dist_rag.vector_indexes
+SET ai_provider = 'OPENAI'::dist_rag.ai_provider_enum,
+    embedding_model_params = '{"model": "text-embedding-3-large", "dimensions": 1536}'::jsonb
+WHERE schema_name = 'datapacks'
+  AND index_name IN ('knowledge_bases', 'conversation_history_search')
+  AND ai_provider = 'AWS_BEDROCK'::dist_rag.ai_provider_enum;
+SQL
+
 # Same shape as api_server auth.GeneratePAT: mko_tkn_ + 24 random bytes, lowercase
 # unpadded base32. Anything else fails the format check before any lookup. Only
 # accounts the seeder has created (they own a datapack) get one.

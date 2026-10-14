@@ -26,8 +26,8 @@ data:
       # mem0 extraction asks for this name; Haiku 4.5 on Bedrock answers it.
       - model_name: gpt-4.1-nano-2025-04-14
         litellm_params: { model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0, aws_region_name: us-west-2 }
-      # Titan v1 is 1536-wide, like every vector column. The KB index is registered as
-      # text-embedding-3-large, so both names map to it.
+      # Titan v1 is 1536-wide, like every vector column. seed_stack.sh points the KB and
+      # conversation indexes at text-embedding-3-large, so both names map to it.
       - model_name: text-embedding-3-small
         litellm_params: { model: bedrock/amazon.titan-embed-text-v1, aws_region_name: us-west-2 }
       - model_name: text-embedding-3-large
@@ -352,7 +352,7 @@ spec:
             - { name: ENABLE_LANGFUSE_TRACING, value: "false" }
             - { name: TASK_LEASE_DURATION, value: "600" }
             # Embeddings go to LiteLLM: LangChain reads OPENAI_API_BASE, the OpenAI SDK
-            # OPENAI_BASE_URL. The KB index is registered as OpenAI text-embedding-3-large.
+            # OPENAI_BASE_URL. seed_stack.sh sets the KB index to OpenAI text-embedding-3-large.
             - { name: OPENAI_API_KEY, value: sk-litellm-proxy }
             - { name: OPENAI_API_BASE, value: "http://litellm:4000/v1" }
             - { name: OPENAI_BASE_URL, value: "http://litellm:4000/v1" }

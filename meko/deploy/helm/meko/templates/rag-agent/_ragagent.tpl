@@ -43,12 +43,7 @@ Usage: include "meko.ragAgent.secretChecksum" (dict "root" $)
 {{- $root := .root -}}
 {{- $s := $root.Values.dataPlaneSecrets -}}
 {{- if and $s.enabled $s.ragAwsAccessKeyId $s.ragAwsSecretAccessKey -}}
-{{- $name := printf "\n  name: %s\n" $root.Values.ragAgent.secrets.existing.rag -}}
-{{- range splitList "\n---\n" (include (print $root.Template.BasePath "/dataplane-secrets.yaml") $root) -}}
-{{- if contains $name (printf "\n%s\n" .) -}}
-checksum/rag-secret: {{ . | sha256sum }}
-{{- end -}}
-{{- end -}}
+checksum/rag-secret: {{ include "meko.secretDocChecksum" (dict "root" $root "name" $root.Values.ragAgent.secrets.existing.rag) }}
 {{- end -}}
 {{- end -}}
 

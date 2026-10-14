@@ -605,9 +605,20 @@ dataPlaneSecrets:
   # Secret when ragAgent is enabled. Both or neither: half a pair fails the
   # render. With neither the workers still start, but every source scan fails with
   # "Unable to locate credentials", so an uploaded file is never registered.
-  # Grants are described under s3AccessKey above.
+  # Grants are described under s3AccessKey above, plus bedrock:InvokeModel on
+  # amazon.titan-embed-text-v1: the seeded knowledge_bases and conversation_history_search
+  # indexes embed with it.
   ragAwsAccessKeyId: ""
   ragAwsSecretAccessKey: ""
+  # The MCP server's AWS credential → mekoMcpServer.secrets.existing.aws (keys
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), rendered when mekoMcpServer is enabled.
+  # It embeds KB and conversation search queries with whatever provider the index's
+  # dist_rag.vector_indexes row names, so against the seeded Bedrock Titan rows it
+  # needs bedrock:InvokeModel on amazon.titan-embed-text-v1 and nothing else. Both or
+  # neither: the render fails on half a pair. With neither, those searches embed
+  # nothing and answer empty. Region: mekoMcpServer.staticEnv.awsRegion.
+  mcpAwsAccessKeyId: ""
+  mcpAwsSecretAccessKey: ""
   # apiServer.secrets.existing.oidc (key `oidc-client-secret`), when the data
   # plane authenticates against an OIDC issuer with a confidential client. Empty
   # is a public client, which relies on the PKCE the server always sends.
@@ -835,10 +846,16 @@ mekoMcpServer:
     # are missing, so this cannot be left on `cognito` and simply unconfigured.
     authProvider: cognito
     cognitoAwsRegion: us-east-2
+    # Region the server calls Bedrock in to embed search queries. Unset, the server
+    # falls back to us-east-1, so only set it for another region.
+    awsRegion: ""
   secrets:
     existing:
       yugabytedb: yugabytedb-credentials
       openai: openai-credentials
+      # Hosted dev's name for it. Optional at the ref, so an install that never
+      # creates it starts and only loses Bedrock query embedding.
+      aws: mcp-server-bedrock-credentials
       cognito: cognito-client-secret
       mcpInternal: meko-mcp-internal-secret
 
