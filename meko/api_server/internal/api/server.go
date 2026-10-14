@@ -258,6 +258,11 @@ type ServerConfig struct {
 	// to show the Projects nav. Off end to end means the endpoints do not
 	// exist, rather than existing and returning empty.
 	EnableProjects bool
+	// EnableLinkSharing gates datapack share links: managing a datapack's
+	// link and joining through /share/:token. Off by default; mirrors
+	// MEKO_ENABLE_LINK_SHARING, which the UI also reads. Turning it off
+	// stops links working; members who joined through one keep access.
+	EnableLinkSharing bool
 
 	// DevAuthAcceptPATs, with no identity provider configured, resolves a
 	// request carrying a Meko PAT to the PAT's own account instead of the single

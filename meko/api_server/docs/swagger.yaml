@@ -401,6 +401,18 @@ definitions:
       name:
         type: string
     type: object
+  service.UpdateShareLinkRequest:
+    properties:
+      grant:
+        type: string
+      reset:
+        description: |-
+          Reset replaces the link's token, so a leaked URL stops working; members
+          who already joined keep their access.
+        type: boolean
+      status:
+        type: string
+    type: object
   service.VerifyEmailChangeRequest:
     properties:
       code:
@@ -1940,6 +1952,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Viewers can't upload artifacts
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
       summary: Upload a file artifact to a datapack
@@ -2854,6 +2870,43 @@ paths:
       summary: List datapack members
       tags:
       - sharing
+  /datapacks/{datapack_id}/members/{user_id}:
+    delete:
+      parameters:
+      - description: Datapack ID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      - description: Member user ID
+        in: path
+        name: user_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: the owner can't be removed, or user_id isn't a UUID
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Remove an accepted member (owner or maintainer)
+      tags:
+      - sharing
   /datapacks/{datapack_id}/metrics:
     get:
       description: Returns token savings, score bands, agent/human access counts,
@@ -3000,6 +3053,75 @@ paths:
       security:
       - BearerAuth: []
       summary: Invite a person to a datapack
+      tags:
+      - sharing
+  /datapacks/{datapack_id}/share-link:
+    get:
+      parameters:
+      - description: Datapack ID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: share_link is null when the datapack has none
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get the datapack's share link (owner or maintainer)
+      tags:
+      - sharing
+    put:
+      consumes:
+      - application/json
+      description: 'reset: true replaces the token, so the old URL stops working.'
+      parameters:
+      - description: Datapack ID
+        in: path
+        name: datapack_id
+        required: true
+        type: string
+      - description: 'grant: viewer|contributor; status: active|off'
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.UpdateShareLinkRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create the datapack's share link, or change its role or status (owner
+        or maintainer)
       tags:
       - sharing
   /datapacks/{datapack_id}/share/{share_user_id}:
@@ -3846,10 +3968,6 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/handlers.APIResponse'
-        "403":
-          description: Viewers can't delete memories
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
         "404":
           description: Not Found
           schema:
@@ -4331,6 +4449,75 @@ paths:
       summary: Delete a promoted memory (owner/maintainer only)
       tags:
       - memories
+  /share/{token}:
+    get:
+      description: Only the datapack's name and description. An unknown token and
+        a link that is off are both 404.
+      parameters:
+      - description: Share link token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Preview the datapack behind a share link
+      tags:
+      - sharing
+  /share/{token}/redeem:
+    post:
+      description: |-
+        Never lowers the caller's role. A pending invite is accepted with the higher of
+        its role and the link's. Someone an owner removed is refused until invited again by email.
+      parameters:
+      - description: Share link token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: 'REMOVED_FROM_DATAPACK: the caller was removed'
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: 'SHARE_LINK_BUSY: too many concurrent joins; retry after Retry-After'
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Join the datapack behind a share link
+      tags:
+      - sharing
 securityDefinitions:
   BearerAuth:
     description: 'JWT access token from /auth/login. Format: Bearer {token}'

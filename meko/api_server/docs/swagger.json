@@ -2526,6 +2526,12 @@
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
+                    },
+                    "403": {
+                        "description": "Viewers can't upload artifacts",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
                     }
                 }
             }
@@ -3956,6 +3962,64 @@
                 }
             }
         },
+        "/datapacks/{datapack_id}/members/{user_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Remove an accepted member (owner or maintainer)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack ID",
+                        "name": "datapack_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Member user ID",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "the owner can't be removed, or user_id isn't a UUID",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/datapacks/{datapack_id}/metrics": {
             "get": {
                 "security": [
@@ -4182,6 +4246,113 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/datapacks/{datapack_id}/share-link": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Get the datapack's share link (owner or maintainer)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack ID",
+                        "name": "datapack_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "share_link is null when the datapack has none",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "reset: true replaces the token, so the old URL stops working.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Create the datapack's share link, or change its role or status (owner or maintainer)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Datapack ID",
+                        "name": "datapack_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "grant: viewer|contributor; status: active|off",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/service.UpdateShareLinkRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -5432,12 +5603,6 @@
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
-                    "403": {
-                        "description": "Viewers can't delete memories",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.APIResponse"
-                        }
-                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -6146,6 +6311,110 @@
                     }
                 }
             }
+        },
+        "/share/{token}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Only the datapack's name and description. An unknown token and a link that is off are both 404.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Preview the datapack behind a share link",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Share link token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/share/{token}/redeem": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Never lowers the caller's role. A pending invite is accepted with the higher of\nits role and the link's. Someone an owner removed is refused until invited again by email.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sharing"
+                ],
+                "summary": "Join the datapack behind a share link",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Share link token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "REMOVED_FROM_DATAPACK: the caller was removed",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "SHARE_LINK_BUSY: too many concurrent joins; retry after Retry-After",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -6722,6 +6991,21 @@
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.UpdateShareLinkRequest": {
+            "type": "object",
+            "properties": {
+                "grant": {
+                    "type": "string"
+                },
+                "reset": {
+                    "description": "Reset replaces the link's token, so a leaked URL stops working; members\nwho already joined keep their access.",
+                    "type": "boolean"
+                },
+                "status": {
                     "type": "string"
                 }
             }

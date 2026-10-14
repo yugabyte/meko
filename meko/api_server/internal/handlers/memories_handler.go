@@ -110,6 +110,9 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 // that don't match (wrong datapack, wrong user, or simply not present)
 // collapse to a single 404 so we don't reveal which case applied.
 //
+// Viewers may delete their own memories: a member demoted to viewer still owns
+// what they wrote before, and nobody else can remove it (the delete is own-rows only).
+//
 //	@Summary	Delete one of your own memories
 //	@Tags		memories
 //	@Produce	json
@@ -118,7 +121,6 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 //	@Success	200			{object}	APIResponse
 //	@Failure	400			{object}	APIResponse
 //	@Failure	401			{object}	APIResponse
-//	@Failure	403			{object}	APIResponse	"Viewers can't delete memories"
 //	@Failure	404			{object}	APIResponse
 //	@Failure	500			{object}	APIResponse
 //	@Security	BearerAuth
@@ -139,12 +141,9 @@ func (handler *MemoriesHandler) DeleteByID(c echo.Context) error {
 	// hit DELETE via the SQL `meko_user_id = caller` predicate alone.
 	// RequireDatapackAccess validates + parses the UUID, resolves the
 	// account, checks owner-then-shared access, and 404s on miss.
-	accountID, grant, err := RequireDatapackAccessWithGrant(c, handler.dpLookup, datapackID)
+	accountID, err := RequireDatapackAccess(c, handler.dpLookup, datapackID)
 	if err != nil {
 		return err
-	}
-	if models.IsViewerGrant(grant) {
-		return apiError(c, http.StatusForbidden, "FORBIDDEN", "viewers have read-only access to this datapack")
 	}
 
 	slog.Info("deleting memory",

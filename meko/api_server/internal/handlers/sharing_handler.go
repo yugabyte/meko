@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/auth"
@@ -532,4 +533,38 @@ func containsStr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// RemoveMember handles DELETE /api/v1/datapacks/:datapack_id/members/:user_id.
+//
+//	@Summary	Remove an accepted member (owner or maintainer)
+//	@Tags		sharing
+//	@Produce	json
+//	@Param		datapack_id	path		string	true	"Datapack ID"
+//	@Param		user_id		path		string	true	"Member user ID"
+//	@Success	200			{object}	APIResponse
+//	@Failure	400			{object}	APIResponse	"the owner can't be removed, or user_id isn't a UUID"
+//	@Failure	403			{object}	APIResponse
+//	@Failure	404			{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{datapack_id}/members/{user_id} [delete]
+func (h *SharingHandler) RemoveMember(c echo.Context) error {
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "datapack context missing")
+	}
+	memberUserID := c.Param("user_id")
+	if _, err := uuid.Parse(memberUserID); err != nil {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "user_id must be a UUID")
+	}
+	switch err := h.svc.RemoveMember(dp.ID, dp.UserID, memberUserID); {
+	case errors.Is(err, service.ErrCannotRemoveOwner):
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+	case errors.Is(err, repository.ErrMemberNotFound):
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "member not found")
+	case err != nil:
+		slog.Error("remove member failed", "datapack_id", dp.ID, "member_user_id", memberUserID, "error", err)
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to remove member")
+	}
+	return ok(c, http.StatusOK, map[string]string{"status": "removed", "user_id": memberUserID})
 }

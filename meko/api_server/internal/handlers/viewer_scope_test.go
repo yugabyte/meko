@@ -160,27 +160,44 @@ func TestMemoriesList_HidesOwnersFromAViewer(t *testing.T) {
 	}
 }
 
-// Viewers can't delete memories, not even ones they added before they were a
-// viewer. The service is nil: reaching it would panic.
-func TestMemoriesDelete_ViewerForbidden(t *testing.T) {
+// A viewer may delete its own memories (a demoted member must be able to clear
+// what it wrote before), and the delete is scoped to the caller: here the
+// lookup is asked for the viewer's own id, finds nothing, and answers 404.
+func TestMemoriesDelete_ViewerReachesOnlyItsOwnRows(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const memoryID = "33333333-3333-3333-3333-333333333333"
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("meko_user_id = $3::uuid")).
+		WithArgs(memoryID, viewerScopeDatapackID, ownerID).
+		WillReturnRows(sqlmock.NewRows([]string{"meko_agent_id", "meko_created_at"}))
+	mock.ExpectRollback()
+
+	svc := service.NewMemoriesService(repository.NewMemoriesRepo(db, nil, "", "", "", true), true)
 	lookup := &fakeDatapackLookup{shared: map[string]*models.Datapack{
-		"viewer-1:" + viewerScopeDatapackID: {ID: viewerScopeDatapackID, Grant: string(models.GrantViewer)},
+		ownerID + ":" + viewerScopeDatapackID: {ID: viewerScopeDatapackID, Grant: string(models.GrantViewer)},
 	}}
-	h := handlers.NewMemoriesHandler(nil, nil, lookup)
+	h := handlers.NewMemoriesHandler(svc, nil, lookup)
 
 	req := httptest.NewRequest(http.MethodDelete,
-		"/api/v1/memories/33333333-3333-3333-3333-333333333333?datapack_id="+viewerScopeDatapackID, nil)
+		"/api/v1/memories/"+memoryID+"?datapack_id="+viewerScopeDatapackID, nil)
 	rec := httptest.NewRecorder()
 	c := echo.New().NewContext(req, rec)
 	c.SetParamNames("memory_id")
-	c.SetParamValues("33333333-3333-3333-3333-333333333333")
-	c.Set(auth.ContextKeyAccount, &models.Account{ID: "viewer-1"})
+	c.SetParamValues(memoryID)
+	c.Set(auth.ContextKeyAccount, &models.Account{ID: ownerID})
 
 	if err := h.DeleteByID(c); err != nil {
 		t.Fatal(err)
 	}
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a memory that isn't the viewer's, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -203,6 +220,27 @@ func TestKeepAsMemory_ViewerForbidden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A viewer can't upload an artifact. The service is nil: reaching it would
+// panic, so a 403 proves the handler stopped first.
+func TestArtifactPut_ViewerForbidden(t *testing.T) {
+	h := handlers.NewArtifactHandler(nil, 1<<20)
+	body := `{"content_base64":"aGVsbG8=","filename":"a.txt","content_type":"text/plain"}`
+	path := "/api/v1/datapacks/" + viewerScopeDatapackID + "/artifacts"
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	c.Set(auth.ContextKeyAccount, &models.Account{ID: "viewer-1"})
+	c.Set(auth.ContextKeyDatapack, &models.Datapack{ID: viewerScopeDatapackID, Grant: string(models.GrantViewer)})
+
+	if err := h.Put(c); err != nil {
+		t.Fatal(err)
+	}
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
 	}

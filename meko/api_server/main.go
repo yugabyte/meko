@@ -166,6 +166,12 @@ func run() error {
 		envBoolOrDefault("MEKO_ENABLE_PROJECTS", false),
 		"enable the project tree (projects, folders, datapack placements)")
 
+	// Datapack share links. The SAME env var gates the UI's link controls via
+	// runtime-config.
+	enableLinkSharing := flag.Bool("enable-link-sharing",
+		envBoolOrDefault("MEKO_ENABLE_LINK_SHARING", false),
+		"enable datapack share links (/share/:token and /datapacks/:id/share-link)")
+
 	// YCP control-plane mode (BYOC). Gates the fleet registry + agent API.
 	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable YCP fleet registry + agent API (control plane)")
 
@@ -661,6 +667,7 @@ func run() error {
 		BYOCMode:                           *enableBYOC,
 		EnableProjects:                     *enableProjects,
 		DevAuthAcceptPATs:                  *devAuthAcceptPATs,
+		EnableLinkSharing:                  *enableLinkSharing,
 		ControlPlaneMode:                   *controlPlaneMode,
 		BasePath:                           *basePath,
 		AWSMarketplaceProductCode:          *awsMarketplaceProductCode,

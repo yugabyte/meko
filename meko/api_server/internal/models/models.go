@@ -390,9 +390,89 @@ func IsOwnerOrMaintainerGrant(grant string) bool {
 // IsViewerGrant reports whether a resolved datapack grant is viewer. Through
 // this API a viewer sees every conversation and memory but not who wrote them,
 // never the member roster, and never who uploaded someone else's KB file or who
-// promoted a memory. Deleting a memory and keep-as-memory are 403 to a viewer.
+// promoted a memory. A viewer writes nothing (keep-as-memory and artifact
+// uploads are 403) except deleting its own memories and KB files, so a member
+// demoted to viewer can still remove what they added before.
 func IsViewerGrant(grant string) bool {
 	return strings.EqualFold(strings.TrimSpace(grant), string(GrantViewer))
+}
+
+// GrantRank orders shared grants so a link can only raise a member's role:
+// viewer < contributor < maintainer < owner. Unknown grants rank lowest.
+func GrantRank(grant string) int {
+	switch strings.ToLower(strings.TrimSpace(grant)) {
+	case string(GrantViewer):
+		return 1
+	case string(GrantContributor):
+		return 2
+	case string(GrantMaintainer):
+		return 3
+	case GrantOwner:
+		return 4
+	}
+	return 0
+}
+
+// How an accepted member got their role, in datapack_invites.source. Only
+// InviteSourceLink members move with the link's role. A hand-set role on a
+// link member becomes InviteSourceLinkOverride, which the API still reports
+// as "link" but which link changes and redeems never touch. A member an owner
+// removed is marked InviteSourceRemoved on the revoked row, so the link can't
+// bring them back; a new email invite can.
+const (
+	InviteSourceEmail        = "email"
+	InviteSourceLink         = "link"
+	InviteSourceLinkOverride = "link_override"
+	InviteSourceRemoved      = "removed"
+)
+
+// Share link statuses. A link is never deleted; off stops new joins.
+const (
+	ShareLinkStatusActive = "active"
+	ShareLinkStatusOff    = "off"
+)
+
+// ValidShareLinkGrant reports whether a link may grant this role. Maintainer
+// is email-invite only: a maintainer link would let anyone holding the URL
+// manage the datapack and its members.
+func ValidShareLinkGrant(grant string) bool {
+	return grant == string(GrantViewer) || grant == string(GrantContributor)
+}
+
+// DatapackShareLink is a row from meko_system.datapack_share_links.
+type DatapackShareLink struct {
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	DatapackID      string     `json:"datapack_id"`
+	Token           string     `json:"token"`
+	GrantRole       string     `json:"grant"`
+	Status          string     `json:"status"`
+	CreatedByUserID string     `json:"created_by_user_id"`
+	// RedemptionCount is how many people who joined through the link are still
+	// members. Counted from the invites on read, not stored.
+	RedemptionCount int `json:"redemption_count"`
+	// MembersAtLinkRole counts people who joined through the link and still
+	// hold its role: the ones a role change moves.
+	MembersAtLinkRole int `json:"members_at_link_role"`
+}
+
+// ShareLinkPreview is what a signed-in caller who has not joined sees of a link.
+type ShareLinkPreview struct {
+	DatapackName string `json:"datapack_name"`
+	Description  string `json:"description"`
+}
+
+// ShareLinkRedemption is the outcome of joining a datapack through its link.
+type ShareLinkRedemption struct {
+	DatapackID    string `json:"datapack_id"`
+	Grant         string `json:"grant"`
+	OwnerUserID   string `json:"-"`
+	AlreadyMember bool   `json:"already_member"`
+	// NewMember: this redemption gave the caller access. Raised: it raised an
+	// existing member's role. Either one means Langfuse needs a sync.
+	NewMember bool `json:"-"`
+	Raised    bool `json:"-"`
 }
 
 // DatapackInvite represents a row from meko_system.datapack_invites.
@@ -426,6 +506,9 @@ type OutgoingShareMember struct {
 	UserName  string `json:"user_name"`
 	UserEmail string `json:"user_email_id"`
 	GrantRole string `json:"grant"`
+	// Source is how the member joined: "email" (invite) or "link". Empty on
+	// the owner row.
+	Source string `json:"source,omitempty"`
 }
 
 // OutgoingSharePendingInvite is an invite that has not been accepted yet.

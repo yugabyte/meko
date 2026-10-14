@@ -547,6 +547,18 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 	return nil
 }
 
+// RemoveSharedDatapackMembership drops a removed member from the datapack's
+// Langfuse project.
+func (s *LangfuseService) RemoveSharedDatapackMembership(
+	ownerUserID, memberUserID, memberEmail, datapackID string,
+) error {
+	if !s.Enabled() {
+		return nil
+	}
+	return s.removeProjectMembership(context.Background(), ownerUserID, datapackID,
+		langfuseLoginEmail(memberUserID, memberEmail))
+}
+
 type projectMembershipDeleteReq struct {
 	UserID string `json:"userId"`
 }

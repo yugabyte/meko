@@ -23,7 +23,7 @@ func init() {
 		Timeout:    15 * time.Minute,
 		Description: "A memory's whole life across MCP and REST, as an owner, a viewer of the shared datapack and a stranger. memory_add stores and embeds, memory_search ranks the " +
 			"matching memory first, get_by_id and get_all return it, the REST memories page, its text filter, the count and datapack_describe agree; memory_update re-embeds and " +
-			"search follows the new text; a viewer's REST memory list holds every memory but names no owner, MCP search still finds the owner's memory, and the viewer's delete is 403; a stranger learns nothing over REST or MCP; deletion by id over MCP and REST and " +
+			"search follows the new text; a viewer's REST memory list holds every memory but names no owner, MCP search still finds the owner's memory, and the viewer can't delete it (404, not its own); a stranger learns nothing over REST or MCP; deletion by id over MCP and REST and " +
 			"memory_delete_all empty every view.",
 		Run: memoryLifecycle,
 	})
@@ -293,7 +293,7 @@ func memoryLifecycle(t *core.T) error {
 			return fmt.Errorf("the viewer's memory_search answered %+v, want %s", res, ids[1])
 		}
 		return refused(t, "the viewer deletes the owner's memory over REST", viewer.api, del, "/memories/"+ids[1]+"?datapack_id="+dp.ID, nil,
-			statusForbidden, "FORBIDDEN")
+			statusNotFound, "")
 	}); err != nil {
 		errs = append(errs, err)
 	}

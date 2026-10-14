@@ -20,6 +20,9 @@ import (
 // owner themselves or a maintainer). Handlers map this to 400.
 var ErrCannotInviteOwner = errors.New("the owner already has full access to this datapack")
 
+// ErrCannotRemoveOwner: the owner isn't a member who can be removed.
+var ErrCannotRemoveOwner = errors.New("the datapack owner can't be removed")
+
 // CognitoInviter abstracts Cognito account provisioning for sharing invites.
 type CognitoInviter interface {
 	// CreateUser provisions a new Cognito account with the given temporary
@@ -777,36 +780,72 @@ func (s *SharingService) UpdateMemberGrant(
 	if err := s.repo.UpdateMemberGrant(datapackID, memberUserID, req.GrantRole, perms); err != nil {
 		return nil, err
 	}
-	if s.langfuseS != nil {
-		identity, iErr := s.repo.GetUserIdentityForShareSync(memberUserID)
-		if iErr != nil {
-			slog.Warn("langfuse share sync skipped: failed to load member identity",
-				"datapack_id", datapackID, "member_user_id", memberUserID, "error", iErr)
-		} else if identity != nil {
-			if syncErr := s.langfuseS.SyncSharedDatapackMembership(
-				ownerUserID,
-				memberUserID,
-				identity.Email,
-				identity.FirstName,
-				identity.LastName,
-				datapackID,
-				req.GrantRole,
-			); syncErr != nil {
-				slog.Warn("langfuse share sync failed on grant update (non-fatal)",
-					"datapack_id", datapackID,
-					"owner_user_id", ownerUserID,
-					"member_user_id", memberUserID,
-					"grant", req.GrantRole,
-					"error", syncErr)
-			}
-		}
-	}
+	s.SyncLangfuseMembership(ownerUserID, memberUserID, datapackID, req.GrantRole)
 
 	return &UpdateGrantResponse{
 		UserID:    memberUserID,
 		GrantRole: req.GrantRole,
 		Status:    "updated",
 	}, nil
+}
+
+// SyncLangfuseMembership brings a member's Langfuse project membership in
+// line with their grant. Best-effort: a failure is logged, never returned,
+// because Langfuse being down must not undo a sharing change.
+func (s *SharingService) SyncLangfuseMembership(ownerUserID, memberUserID, datapackID, grant string) {
+	if s.langfuseS == nil {
+		return
+	}
+	identity, err := s.repo.GetUserIdentityForShareSync(memberUserID)
+	if err != nil || identity == nil {
+		slog.Warn("langfuse share sync skipped: failed to load member identity",
+			"datapack_id", datapackID, "member_user_id", memberUserID, "error", err)
+		return
+	}
+	if err := s.langfuseS.SyncSharedDatapackMembership(
+		ownerUserID, memberUserID, identity.Email, identity.FirstName, identity.LastName, datapackID, grant,
+	); err != nil {
+		slog.Warn("langfuse share sync failed (non-fatal)",
+			"datapack_id", datapackID, "owner_user_id", ownerUserID,
+			"member_user_id", memberUserID, "grant", grant, "error", err)
+	}
+}
+
+// SyncLangfuseMembershipToCurrentGrant syncs a member against the role the
+// database holds now, rather than one passed in that may be stale.
+func (s *SharingService) SyncLangfuseMembershipToCurrentGrant(ownerUserID, memberUserID, datapackID string) {
+	grant, err := s.repo.CurrentGrant(datapackID, memberUserID)
+	if err != nil || grant == "" {
+		slog.Warn("langfuse share sync skipped: no current grant",
+			"datapack_id", datapackID, "member_user_id", memberUserID, "error", err)
+		return
+	}
+	s.SyncLangfuseMembership(ownerUserID, memberUserID, datapackID, grant)
+}
+
+// RemoveMember takes an accepted member's access to the datapack away,
+// including their Langfuse project membership.
+func (s *SharingService) RemoveMember(datapackID, ownerUserID, memberUserID string) error {
+	if memberUserID == ownerUserID {
+		return ErrCannotRemoveOwner
+	}
+	email, err := s.repo.RemoveMember(datapackID, memberUserID)
+	if err != nil {
+		return err
+	}
+	// The Langfuse user is keyed on the member's current email; the invite
+	// row keeps the address they were invited at, which may have changed.
+	identity, iErr := s.repo.GetUserIdentityForShareSync(memberUserID)
+	if iErr == nil && identity != nil && identity.Email != "" {
+		email = identity.Email
+	}
+	if s.langfuseS != nil {
+		if lfErr := s.langfuseS.RemoveSharedDatapackMembership(ownerUserID, memberUserID, email, datapackID); lfErr != nil {
+			slog.Warn("langfuse membership removal failed (non-fatal)",
+				"datapack_id", datapackID, "member_user_id", memberUserID, "error", lfErr)
+		}
+	}
+	return nil
 }
 
 // grantToPermissions maps an API grant role to the two

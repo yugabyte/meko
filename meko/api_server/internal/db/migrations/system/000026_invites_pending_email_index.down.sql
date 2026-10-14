@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS meko_system.idx_invites_datapack_lower_email_pending;

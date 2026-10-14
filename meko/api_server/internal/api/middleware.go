@@ -6,6 +6,7 @@ import (
 	"container/list"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -35,7 +36,7 @@ func RegisterMiddleware(e *echo.Echo) {
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 			attrs := []any{
 				"method", v.Method,
-				"uri", v.URI,
+				"uri", loggedURI(v.URI),
 				"status", v.Status,
 				"latency", v.Latency,
 				"error", v.Error,
@@ -200,4 +201,15 @@ func ManagementRateLimiter() echo.MiddlewareFunc {
 			})
 		},
 	})
+}
+
+// shareTokenInURI matches the segment after /share/, which in a share-link URL
+// is a token that lets anyone join the datapack.
+var shareTokenInURI = regexp.MustCompile(`(/share/)[^/?#]+`)
+
+// loggedURI is the URI the access log records, with any share token replaced.
+// It goes by the URL itself, not the matched route, so a mistyped share URL, a
+// wrong method or the routes being off (no route matches) is redacted too.
+func loggedURI(uri string) string {
+	return shareTokenInURI.ReplaceAllString(uri, "${1}:token")
 }

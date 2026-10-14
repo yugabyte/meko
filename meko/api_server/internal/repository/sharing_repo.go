@@ -237,6 +237,47 @@ func upsertPermissions(tx *sql.Tx, userID, datapackID string, perms []ObjectPerm
 	return nil
 }
 
+// permissionUpsertBatch caps how many members one statement writes, so a link
+// with tens of thousands of members doesn't send one enormous statement.
+const permissionUpsertBatch = 1000
+
+// upsertPermissionsForUsers writes the same permission rows for many members of
+// one datapack, one statement per batch rather than one per member.
+func upsertPermissionsForUsers(tx *sql.Tx, userIDs []string, datapackID string, perms []ObjectPermission) error {
+	if len(perms) == 0 || len(userIDs) == 0 {
+		return nil
+	}
+	objTypes := make([]string, len(perms))
+	permissions := make([]string, len(perms))
+	for i, p := range perms {
+		objTypes[i] = p.ObjectType
+		permissions[i] = p.Permission
+	}
+	for start := 0; start < len(userIDs); start += permissionUpsertBatch {
+		batch := userIDs[start:min(start+permissionUpsertBatch, len(userIDs))]
+		if _, err := tx.Exec(
+			`INSERT INTO meko_system.agent_access_permissions
+				(user_id, agent_id, datapack_id, object_type, permission,
+				 datapack_shared_status)
+			 SELECT u.user_id, $2, $3,
+			        p.object_type::meko_system.access_object_type,
+			        p.permission::meko_system.access_permission,
+			        'active'
+			 FROM   unnest($1::uuid[]) AS u(user_id)
+			 CROSS  JOIN unnest($4::text[], $5::text[]) AS p(object_type, permission)
+			 ON CONFLICT (user_id, agent_id, datapack_id, object_type)
+			 DO UPDATE SET permission = EXCLUDED.permission,
+			              datapack_shared_status = 'active',
+			              updated_at = NOW()`,
+			pq.Array(batch), DefaultAgentID, datapackID,
+			pq.Array(objTypes), pq.Array(permissions),
+		); err != nil {
+			return fmt.Errorf("failed to upsert permission rows: %w", err)
+		}
+	}
+	return nil
+}
+
 // ObjectPermission is a (object_type, permission) pair that maps to
 // one row in agent_access_permissions.
 type ObjectPermission struct {
@@ -290,7 +331,8 @@ func (r *SharingRepo) GetOutgoingMembers(datapackID, ownerUserID string) ([]mode
 		        u.user_id,
 		        CONCAT(u.user_first_name, ' ', u.user_last_name),
 		        u.user_email,
-		        i.grant_role
+		        i.grant_role,
+		        CASE WHEN i.source = 'link_override' THEN 'link' ELSE COALESCE(i.source, 'email') END
 		 FROM meko_system.datapack_invites i
 		 JOIN meko_system.users u ON u.user_id = i.recipient_user_id
 		 WHERE i.datapack_id = $1 AND i.status = 'accepted'
@@ -324,7 +366,7 @@ func (r *SharingRepo) GetOutgoingMembers(datapackID, ownerUserID string) ([]mode
 
 	for rows.Next() {
 		var m models.OutgoingShareMember
-		if err := rows.Scan(&m.UserID, &m.UserName, &m.UserEmail, &m.GrantRole); err != nil {
+		if err := rows.Scan(&m.UserID, &m.UserName, &m.UserEmail, &m.GrantRole, &m.Source); err != nil {
 			return nil, fmt.Errorf("failed to scan outgoing member: %w", err)
 		}
 		if m.UserID == ownerUserID {
@@ -419,20 +461,106 @@ func (r *SharingRepo) UpdateMemberGrant(
 		return fmt.Errorf("member not found for datapack")
 	}
 
-	if err = upsertPermissions(tx, memberUserID, datapackID, newPerms); err != nil {
-		return err
-	}
-
+	// The invite row before the permission rows: a link role change (ShareLinkRepo.
+	// Upsert) writes them in that order, and the opposite order deadlocks with it.
+	// A role set by hand on a link member is marked so the link's role changes
+	// and redeems leave it alone.
 	if _, err = tx.Exec(
 		`UPDATE meko_system.datapack_invites
-		 SET grant_role = $1, updated_at = NOW()
+		 SET grant_role = $1, updated_at = NOW(),
+		     source = CASE WHEN source IN ('link', 'link_override') THEN 'link_override' ELSE source END
 		 WHERE datapack_id = $2 AND recipient_user_id = $3 AND status = 'accepted'`,
 		newGrantRole, datapackID, memberUserID,
 	); err != nil {
 		return fmt.Errorf("failed to update invite grant_role: %w", err)
 	}
 
+	if err = upsertPermissions(tx, memberUserID, datapackID, newPerms); err != nil {
+		return err
+	}
+
 	return tx.Commit()
+}
+
+// CurrentGrant returns the member's grant from their accepted invite, or ""
+// when they have none.
+func (r *SharingRepo) CurrentGrant(datapackID, memberUserID string) (string, error) {
+	var grant string
+	err := r.db.QueryRow(
+		`SELECT grant_role FROM meko_system.datapack_invites
+		 WHERE datapack_id = $1 AND recipient_user_id = $2 AND status = 'accepted'
+		 ORDER BY updated_at DESC LIMIT 1`,
+		datapackID, memberUserID,
+	).Scan(&grant)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("current grant: %w", err)
+	}
+	return grant, nil
+}
+
+// ErrMemberNotFound means the user has no accepted share on the datapack.
+var ErrMemberNotFound = fmt.Errorf("member not found for datapack")
+
+// RemoveMember takes an accepted member's access away: their accepted invite
+// becomes revoked and their access and permission rows are deleted. The
+// owner has no invite row, so they can't be removed this way. Returns the
+// removed member's email.
+func (r *SharingRepo) RemoveMember(datapackID, memberUserID string) (string, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+
+	var email string
+	err = tx.QueryRow(
+		// source = 'removed' keeps a share link from letting them back in.
+		`UPDATE meko_system.datapack_invites
+		 SET status = 'revoked', source = $3, updated_at = NOW()
+		 WHERE datapack_id = $1 AND recipient_user_id = $2 AND status = 'accepted'
+		 RETURNING recipient_email`,
+		datapackID, memberUserID, models.InviteSourceRemoved,
+	).Scan(&email)
+	if err == sql.ErrNoRows {
+		return "", ErrMemberNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to revoke accepted invite: %w", err)
+	}
+	// A pending invite sent before the removal would let them back in, through
+	// the invite or a share link, so the removal cancels it. One sent afterwards
+	// is the new invite that lets them return. Two lookups so each uses an index.
+	for _, q := range []struct{ sql, arg string }{
+		{`UPDATE meko_system.datapack_invites
+		  SET status = 'revoked', updated_at = NOW()
+		  WHERE datapack_id = $1 AND status = 'pending' AND recipient_user_id = $2`, memberUserID},
+		{`UPDATE meko_system.datapack_invites
+		  SET status = 'revoked', updated_at = NOW()
+		  WHERE datapack_id = $1 AND status = 'pending' AND lower(recipient_email) = lower($2)`, email},
+	} {
+		if _, err = tx.Exec(q.sql, datapackID, q.arg); err != nil {
+			return "", fmt.Errorf("failed to cancel pending invites: %w", err)
+		}
+	}
+	if _, err = tx.Exec(
+		// agent_id makes this a primary-key delete instead of a table scan. It
+		// matches every row: upsertPermissions writes them all for DefaultAgentID.
+		`DELETE FROM meko_system.agent_access_permissions
+		 WHERE user_id = $1 AND agent_id = $2 AND datapack_id = $3`,
+		memberUserID, DefaultAgentID, datapackID,
+	); err != nil {
+		return "", fmt.Errorf("failed to delete permission rows: %w", err)
+	}
+	if _, err = tx.Exec(
+		`DELETE FROM meko_system.agent_access WHERE user_id = $1 AND datapack_id = $2`,
+		memberUserID, datapackID,
+	); err != nil {
+		return "", fmt.Errorf("failed to delete access rows: %w", err)
+	}
+	return email, tx.Commit()
 }
 
 // BackfillRecipientUserID sets recipient_user_id on all pending invites

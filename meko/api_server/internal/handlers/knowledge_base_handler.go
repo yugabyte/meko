@@ -489,10 +489,10 @@ func (h *KnowledgeBaseHandler) RequestDownloadURL(c echo.Context) error {
 //     uploader_user_id stored in document_details->meko->user_id at
 //     CreateKB time)
 //
-// Viewers and contributors fall through to 403 unless they uploaded
-// the file themselves. Legacy files (NULL document_details, e.g.
-// pre-dating the dual-write) have no recorded uploader; only
-// owner/maintainer can delete those.
+// Contributors and viewers fall through to 403 unless they uploaded the
+// file themselves. Legacy files (NULL document_details, e.g. pre-dating the
+// dual-write) have no recorded uploader; only owner/maintainer can delete
+// those.
 func canDeleteKBDocument(
 	dpGrant string,
 	callerUserID string,
@@ -501,6 +501,8 @@ func canDeleteKBDocument(
 	if models.IsOwnerOrMaintainerGrant(dpGrant) {
 		return true
 	}
+	// A viewer can't upload, but a member demoted to viewer still owns the files
+	// they uploaded before, so they may delete those and only those.
 	if fileUploaderUserID != nil &&
 		strings.TrimSpace(*fileUploaderUserID) != "" &&
 		strings.EqualFold(*fileUploaderUserID, callerUserID) {

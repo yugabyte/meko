@@ -13,6 +13,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/auth"
+	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
@@ -77,12 +78,18 @@ type artifactGetResponse struct {
 //	@Success	201			{object}	APIResponse
 //	@Failure	400			{object}	APIResponse
 //	@Failure	401			{object}	APIResponse
+//	@Failure	403			{object}	APIResponse	"Viewers can't upload artifacts"
 //	@Security	BearerAuth
 //	@Router		/datapacks/{datapack_id}/artifacts [post]
 func (h *ArtifactHandler) Put(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "datapack context missing")
+	}
+	// An upload writes to the shared datapack, and a viewer is read-only;
+	// the only writes a viewer keeps are deletes of its own data.
+	if models.IsViewerGrant(dp.Grant) {
+		return apiError(c, http.StatusForbidden, "FORBIDDEN", "viewers have read-only access to this datapack")
 	}
 	account, err := auth.GetAccount(c)
 	if err != nil {

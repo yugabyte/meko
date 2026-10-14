@@ -46,6 +46,7 @@ type serviceRegistry struct {
 	s3Svc               *service.S3Service
 	sharingRepo         *repository.SharingRepo
 	sharingSvc          *service.SharingService
+	shareLinkSvc        *service.ShareLinkService
 	feedbackRepo        *repository.FeedbackRepo
 	mcpPATRepo          *repository.MCPPATRepo
 	mcpPATAuditRepo     *repository.MCPPATAuditRepo
@@ -367,6 +368,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		s3Svc:                 s3Svc,
 		sharingRepo:           sharingRepo,
 		sharingSvc:            sharingSvc,
+		shareLinkSvc:          service.NewShareLinkService(repository.NewShareLinkRepo(cfg.SystemDB), sharingSvc),
 		feedbackRepo:          feedbackRepo,
 		mcpPATRepo:            mcpPATRepo,
 		mcpPATAuditRepo:       mcpPATAuditRepo,
@@ -689,6 +691,10 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	} else {
 		slog.Warn("project routes disabled (set --enable-projects to enable)")
 	}
+	if cfg.EnableLinkSharing {
+		registerShareLinkRoutes(datapackGroup, reg)
+		slog.Info("datapack share link routes enabled")
+	}
 	registerBillingRoutes(v1, datapackGroup, reg)
 	registerMarketplaceRoutes(v1, datapackGroup, reg)
 	registerDeploymentRoutes(datapackGroup, reg)
@@ -708,6 +714,24 @@ func devAuthGroups(v1 *echo.Group, devAuth, patAuth, patRateLimit echo.Middlewar
 		return datapackGroup, datapackGroup
 	}
 	return datapackGroup, v1.Group("", patAuth, patRateLimit)
+}
+
+// registerShareLinkRoutes wires datapack share links. Managing a link is
+// owner-or-maintainer, like invites. The preview and the join both need a
+// signed-in user: a signed-out visitor gets a generic page and is asked to
+// sign in before the datapack is named.
+func registerShareLinkRoutes(g *echo.Group, reg *serviceRegistry) {
+	h := handlers.NewShareLinkHandler(reg.shareLinkSvc)
+	g.GET("/datapacks/:datapack_id/share-link", h.Get,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+	g.PUT("/datapacks/:datapack_id/share-link", h.Update,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+	g.GET("/share/:token", h.Preview)
+	g.POST("/share/:token/redeem", h.Redeem)
 }
 
 // registerDeploymentRoutes wires the agent-deployment endpoints onto the
@@ -1376,6 +1400,10 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	// Uses RequireDatapackAccess so shared maintainers can act; dp.UserID in the handler
 	// always refers to the datapack row owner, not the caller.
 	g.PATCH("/datapacks/:datapack_id/share/:share_user_id", shareH.UpdateGrant,
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+	g.DELETE("/datapacks/:datapack_id/members/:user_id", shareH.RemoveMember,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
