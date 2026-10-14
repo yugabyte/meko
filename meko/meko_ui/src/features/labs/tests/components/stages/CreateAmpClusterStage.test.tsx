@@ -114,8 +114,10 @@ describe("CreateAmpClusterStage", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /create cluster/i }));
 
-    expect(await screen.findByText(/Upgrade to Standard to use more vCPU\./)).toBeTruthy();
-    expect(screen.getByRole("link", { name: /go to settings/i })).toBeTruthy();
+    // The shared tier-limit banner replaces the raw error: its composed copy
+    // names the AMP compute subject and carries an upgrade CTA.
+    expect(await screen.findByText(/AMP compute \(vCPU\)/i)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /talk to our team/i })).toBeTruthy();
   });
 
   it("shows a ready message once a cluster is selected", () => {

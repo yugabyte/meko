@@ -128,8 +128,10 @@ describe("BranchCompute tier budget", () => {
     await waitFor(() => expect((btn as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(btn);
 
-    // CoreLimitNotice renders the server message + a plain-anchor Settings link.
-    expect(await screen.findByText(/Upgrade to Standard to use more vCPU\./)).toBeTruthy();
-    expect(screen.getByRole("link", { name: /go to settings/i })).toBeTruthy();
+    // The shared tier-limit banner replaces the raw error on a core-cap 402:
+    // its composed copy names the AMP compute subject (the raw server message
+    // never would) and carries an upgrade CTA.
+    expect(await screen.findByText(/AMP compute \(vCPU\)/i)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /talk to our team/i })).toBeTruthy();
   });
 });

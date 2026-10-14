@@ -7,6 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ampCoreBudget,
+  ampCoreLimitMessage,
   ampCreateBranch,
   ampCreateCluster,
   ampCreateCompute,
@@ -84,6 +85,11 @@ export function useCreateCluster(datapackId: string) {
       qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) });
       qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
     },
+    onError: (e) => {
+      // A core-cap 402 means the cached budget let the request through while
+      // stale; refresh it so the limit banner's "X / Y vCPU used" line is right.
+      if (ampCoreLimitMessage(e)) qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
   });
 }
 
@@ -142,6 +148,11 @@ export function useCreateCompute(datapackId: string, clusterId: string, branchId
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) });
       qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
+    },
+    onError: (e) => {
+      // Refresh the budget on a core-cap 402 so the limit banner's vCPU metric
+      // isn't the stale numbers that let the request through.
+      if (ampCoreLimitMessage(e)) qc.invalidateQueries({ queryKey: ampKeys.coreBudget() });
     },
   });
 }

@@ -125,6 +125,10 @@ describe("tierBannerKindForError — api_server 402 mapping", () => {
       { code: "STANDARD_TIER_DATAPACK_LIMIT", kind: "datapack" },
       { code: "FREE_TIER_KB_STORAGE_LIMIT", kind: "kbStorage" },
       { code: "STANDARD_TIER_KB_STORAGE_LIMIT", kind: "kbStorage" },
+      // The per-tier AMP vCPU cap (Free/Standard/Pro) maps to the ampCompute banner.
+      { code: "FREE_TIER_CORE_LIMIT", kind: "ampCompute" },
+      { code: "STANDARD_TIER_CORE_LIMIT", kind: "ampCompute" },
+      { code: "PRO_TIER_CORE_LIMIT", kind: "ampCompute" },
     ];
     for (const c of cases) {
       const err = new MekoApiRequestError("over cap", { code: c.code, httpStatus: 402 });
@@ -132,13 +136,12 @@ describe("tierBannerKindForError — api_server 402 mapping", () => {
     }
   });
 
-  it("returns null for codes api_server does not emit (CORE_LIMIT, etc.)", () => {
-    // free_tier.go also defines *_TIER_CORE_LIMIT but no banner kind
-    // represents it today — the wizard shows the plain error message.
-    for (const code of ["FREE_TIER_CORE_LIMIT", "PRO_TIER_CORE_LIMIT"]) {
-      const err = new MekoApiRequestError("over cap", { code, httpStatus: 402 });
-      expect(tierBannerKindForError(err)).toBeNull();
-    }
+  it("returns null for a 402 code with no banner kind", () => {
+    const err = new MekoApiRequestError("over cap", {
+      code: "FREE_TIER_SOMETHING_ELSE",
+      httpStatus: 402,
+    });
+    expect(tierBannerKindForError(err)).toBeNull();
   });
 
   it("returns null for non-402 responses", () => {

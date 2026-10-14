@@ -22,11 +22,13 @@ import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { ampCoreLimitMessage } from "@/lib/api/ampApi";
 import { toast } from "@/hooks/use-toast";
-import { useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
+import { useAmpCoreBudget, useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
 import { useBudgetedCompute } from "@/features/datapacks/hooks/useBudgetedCompute";
 import { useAmpCredentials } from "@/features/datapacks/hooks/useAmpCredentials";
-import { CoreLimitNotice } from "../datapack-clusters/CoreLimitNotice";
 import { AmpCredentialsStep } from "../datapack-clusters/AmpCredentialsStep";
+import { AMP_COMPUTE_BANNER_KIND } from "@/lib/freeTier";
+import { TierLimitBanner } from "@/lib/freeTierBanner";
+import { formatVcpuMetricLine } from "@/lib/ampCoreBudget";
 import {
   DEFAULT_CPU,
   DEFAULT_MEMORY,
@@ -65,6 +67,9 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   // the prefill/validation edges live in one place (useBudgetedCompute).
   const budget = useBudgetedCompute(datapackId, { enabled: open });
   const { cpu, memory } = budget;
+  // Core budget drives the tier-limit banner's "X / Y vCPU used" line on a 402
+  // (deduped with useBudgetedCompute's own query by its shared key).
+  const { data: coreBudget } = useAmpCoreBudget(datapackId, { enabled: open });
 
   // cloud_admin credential state for the writer endpoint (generate or type;
   // required by the controller). Re-seeded on open so each cluster gets a fresh
@@ -329,12 +334,18 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
           ) : null}
         </div>
 
-        {error ? (
+        {error?.upgrade ? (
+          <TierLimitBanner
+            className="mt-3"
+            kind={AMP_COMPUTE_BANNER_KIND}
+            metricLine={formatVcpuMetricLine(coreBudget)}
+          />
+        ) : error ? (
           <div
             role="alert"
             className="mt-3 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
           >
-            {error.upgrade ? <CoreLimitNotice message={error.message} /> : error.message}
+            {error.message}
           </div>
         ) : null}
 

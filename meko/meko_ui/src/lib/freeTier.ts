@@ -226,9 +226,15 @@ export const STANDARD_TIER_ENABLED: boolean = (() => {
   return ["1", "true", "yes"].includes(raw.trim().toLowerCase());
 })();
 
+/** The banner kind for the AMP vCPU (compute) cap. Exported so call sites and
+ *  the error mapper reference the one constant, not a loose string. */
+export const AMP_COMPUTE_BANNER_KIND = "ampCompute" as const;
+
 /** Long-form banner copy shown at the top of gated pages. Keyed by
- *  (target tier × dimension) so the banner reflects which upgrade
- *  actually helps the user. */
+ *  (target tier × dimension) so the banner reflects which upgrade actually
+ *  helps the user. The ampCompute rows exist ONLY to widen TierBannerKind —
+ *  the banner composes its copy from SUBJECT_COPY / formatBannerMessage, so
+ *  these particular strings are never rendered. */
 export const TIER_BANNER_MESSAGES = {
   standard: {
     datapack:
@@ -239,6 +245,8 @@ export const TIER_BANNER_MESSAGES = {
       "You've reached the Free tier limit on conversations. Upgrade to Standard for higher limits.",
     tokenBurn:
       "You've reached the Free tier limit on WorkbenchLM token usage. Upgrade to Standard for higher limits.",
+    [AMP_COMPUTE_BANNER_KIND]:
+      "You've reached the Free tier limit on AMP compute (vCPU). Upgrade to Standard for higher limits.",
   },
   pro: {
     datapack:
@@ -249,6 +257,8 @@ export const TIER_BANNER_MESSAGES = {
       "You've reached the Standard tier limit on conversations. Upgrade to Pro for higher limits.",
     tokenBurn:
       "You've reached the Standard tier limit on WorkbenchLM token usage. Upgrade to Pro for higher limits.",
+    [AMP_COMPUTE_BANNER_KIND]:
+      "You've reached the Standard tier limit on AMP compute (vCPU). Upgrade to Pro for higher limits.",
   },
 } as const;
 

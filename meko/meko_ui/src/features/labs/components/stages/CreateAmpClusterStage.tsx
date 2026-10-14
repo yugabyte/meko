@@ -32,7 +32,9 @@ import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { isAmpEnabled } from "@/lib/amp";
 import { useAmpCoreBudget, useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
 import { DEFAULT_CPU } from "@/features/datapacks/components/datapack-detail/datapack-clusters/resize";
-import { CoreLimitNotice } from "@/features/datapacks/components/datapack-detail/datapack-clusters/CoreLimitNotice";
+import { AMP_COMPUTE_BANNER_KIND } from "@/lib/freeTier";
+import { TierLimitBanner } from "@/lib/freeTierBanner";
+import { formatVcpuMetricLine } from "@/lib/ampCoreBudget";
 
 import { LabStageNeedsDatapack } from "../lab-runner/LabStageNeedsDatapack";
 import { useValidAmpCluster } from "../../hooks/useValidAmpCluster";
@@ -152,12 +154,17 @@ function CreateAmpClusterStageContent({
               if (e.key === "Enter") void handleCreate();
             }}
           />
-          {error && (
+          {error?.upgrade ? (
+            <TierLimitBanner
+              kind={AMP_COMPUTE_BANNER_KIND}
+              metricLine={formatVcpuMetricLine(budgetQuery.data)}
+            />
+          ) : error ? (
             <p className="flex items-center gap-1.5 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
-              {error.upgrade ? <CoreLimitNotice message={error.message} /> : error.message}
+              {error.message}
             </p>
-          )}
+          ) : null}
           <div className="flex gap-2">
             {atLimit ? (
               // Radix tooltips don't fire on a disabled element, so the span

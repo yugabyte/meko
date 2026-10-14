@@ -5,10 +5,16 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { ampCoreLimitMessage } from "@/lib/api/ampApi";
-import { useCompute, useCreateCompute } from "@/features/datapacks/hooks/useAmpClusters";
+import {
+  useAmpCoreBudget,
+  useCompute,
+  useCreateCompute,
+} from "@/features/datapacks/hooks/useAmpClusters";
 import { useBudgetedCompute } from "@/features/datapacks/hooks/useBudgetedCompute";
+import { AMP_COMPUTE_BANNER_KIND } from "@/lib/freeTier";
+import { TierLimitBanner } from "@/lib/freeTierBanner";
+import { formatVcpuMetricLine } from "@/lib/ampCoreBudget";
 import { ComputeInstance } from "./ComputeInstance";
-import { CoreLimitNotice } from "./CoreLimitNotice";
 import { overBudgetMessage } from "./resize";
 
 export function BranchCompute({
@@ -33,6 +39,8 @@ export function BranchCompute({
   // CPU / memory sizing + tier-budget guard, shared with the create-cluster
   // wizard (prefill within budget, memory at AMP's ratio, blank-CPU guard).
   const budget = useBudgetedCompute(datapackId);
+  // vCPU usage for the tier-limit banner's metric line (deduped query).
+  const { data: coreBudget } = useAmpCoreBudget(datapackId);
   const { cpu, memory } = budget;
   const [provisionError, setProvisionError] = useState<{
     message: string;
@@ -90,17 +98,15 @@ export function BranchCompute({
           ))}
         </ul>
       )}
-      {provisionError || loadError ? (
+      {provisionError?.upgrade ? (
+        <TierLimitBanner
+          className="mt-1.5"
+          kind={AMP_COMPUTE_BANNER_KIND}
+          metricLine={formatVcpuMetricLine(coreBudget)}
+        />
+      ) : provisionError || loadError ? (
         <p className="mt-1.5 text-xs text-red-700 dark:text-red-300" role="alert">
-          {provisionError ? (
-            provisionError.upgrade ? (
-              <CoreLimitNotice message={provisionError.message} />
-            ) : (
-              provisionError.message
-            )
-          ) : (
-            loadError
-          )}
+          {provisionError ? provisionError.message : loadError}
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap items-center gap-2">

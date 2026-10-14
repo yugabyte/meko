@@ -26,17 +26,29 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { ROUTES } from "@/app/routes/paths";
 import { isMekoApiRequestError } from "@/lib/api/mekoApi";
 import {
+  AMP_COMPUTE_BANNER_KIND,
   SALES_CONTACT_URL,
   STANDARD_TIER_ENABLED,
   limitsFor,
   nextTierFor,
+  resolveTier,
   type TierBannerKind,
 } from "@/lib/freeTier";
 
 /** Deep-link param PricingSection reads to scroll + flash a tier card. */
 export const HIGHLIGHT_TIER_PARAM = "highlightTier";
 
-export function TierLimitBanner({ kind, className }: { kind: TierBannerKind; className?: string }) {
+export function TierLimitBanner({
+  kind,
+  className,
+  metricLine,
+}: {
+  kind: TierBannerKind;
+  className?: string;
+  /** Override the usage-derived metric line. AMP compute's vCPU usage comes from
+   *  the account-wide AMP core budget (a different endpoint from `usage`), so that surface passes it. */
+  metricLine?: string;
+}) {
   const { data: user } = useCurrentUser({ enabled: true });
   const { data: usage } = useAccountUsage();
   const target = resolveBannerTarget(user?.user_type);
@@ -47,16 +59,16 @@ export function TierLimitBanner({ kind, className }: { kind: TierBannerKind; cla
   // old TIER_BANNER_MESSAGES.pro row (which was written assuming the
   // viewer is a Standard user).
   const message = formatBannerMessage(sourceTierLabel(user?.user_type), target, kind);
-  const metricLine = usage ? formatMetricLine(kind, usage, user?.user_type) : null;
+  const metric = metricLine ?? (usage ? formatMetricLine(kind, usage, user?.user_type) : null);
 
   return (
     <WarningBanner className={className}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1 space-y-0.5">
           <p>{message}</p>
-          {metricLine ? (
+          {metric ? (
             <p className="text-xs text-amber-700/85 dark:text-amber-200/80 tabular-nums">
-              {metricLine}
+              {metric}
             </p>
           ) : null}
         </div>
@@ -106,12 +118,18 @@ function resolveBannerTarget(userType?: string | null): "standard" | "pro" {
   return next;
 }
 
-/** The user's CURRENT tier name as it should appear in the "You've
- *  reached the <X> tier limit…" lead. Infers from nextTierFor so Free
- *  and Standard are reflected correctly; Pro+ accounts shouldn't be
- *  rendering this banner at all. */
-function sourceTierLabel(userType?: string | null): "Free" | "Standard" {
-  return nextTierFor(userType) === "standard" ? "Free" : "Standard";
+/** The user's CURRENT tier name for the "You've reached the <X> tier limit…"
+ *  lead. Free/Standard/Pro are labelled from the resolved tier — AMP compute
+ *  caps gate Pro too (Pro → Enterprise), so unlike the other kinds this banner
+ *  does render for a Pro user. Enterprise and an unresolved/unknown user_type
+ *  fall back to "Standard", unchanged from the pre-AMP behaviour and matching
+ *  the Pro-target CTA resolveBannerTarget already gives them. */
+function sourceTierLabel(userType?: string | null): "Free" | "Standard" | "Pro" {
+  const t = resolveTier(userType);
+  if (t === "free") return "Free";
+  if (t === "pro") return "Pro";
+  // standard, enterprise, unknown, still-loading — same label as before AMP.
+  return "Standard";
 }
 
 const SUBJECT_COPY: Record<TierBannerKind, string> = {
@@ -119,6 +137,7 @@ const SUBJECT_COPY: Record<TierBannerKind, string> = {
   kbStorage: "knowledge-base storage",
   conversations: "conversations",
   tokenBurn: "WorkbenchLM token usage",
+  [AMP_COMPUTE_BANNER_KIND]: "AMP compute (vCPU)",
 };
 
 /** Compose banner copy from (source tier × target × kind). Replaces the
@@ -131,7 +150,7 @@ const SUBJECT_COPY: Record<TierBannerKind, string> = {
  *  (old copy said "Upgrade to Pro"; the button has always been "Talk
  *  to our team"). */
 function formatBannerMessage(
-  sourceLabel: "Free" | "Standard",
+  sourceLabel: "Free" | "Standard" | "Pro",
   target: "standard" | "pro",
   kind: TierBannerKind,
 ): string {
@@ -160,14 +179,17 @@ export function tierBannerKindForError(err: unknown): TierBannerKind | null {
   const code = err.code ?? "";
   if (code.endsWith("DATAPACK_LIMIT")) return "datapack";
   if (code.endsWith("KB_STORAGE_LIMIT")) return "kbStorage";
+  // FREE/STANDARD/PRO_TIER_CORE_LIMIT — the per-tier AMP vCPU cap.
+  if (code.endsWith("CORE_LIMIT")) return AMP_COMPUTE_BANNER_KIND;
   return null;
 }
 
-/** Compact "X / Y <unit>" formatter per banner kind. Reads the active
- *  caps from `limitsFor(userType)` so Free vs Standard numbers both
- *  render correctly without a second code path. Returns null when the
- *  cap is Infinity (Pro + above) — the banner shouldn't render on those
- *  tiers anyway, but defensive. */
+/** Compact "X / Y <unit>" formatter for the usage-backed banner kinds. Reads
+ *  the active caps from `limitsFor(userType)` so Free vs Standard numbers both
+ *  render correctly without a second code path, and returns null when a cap is
+ *  Infinity (Pro + above on those kinds). The ampCompute kind is NOT usage-backed
+ *  — its vCPU line comes from the core budget via the metricLine prop — so it
+ *  returns null here regardless of tier. */
 function formatMetricLine(
   kind: TierBannerKind,
   usage: NonNullable<ReturnType<typeof useAccountUsage>["data"]>,
@@ -192,6 +214,10 @@ function formatMetricLine(
       if (!isFinite(limits.tokenBurn)) return null;
       return `${COMPACT.format(usage.token_burn)} / ${COMPACT.format(limits.tokenBurn)} WorkbenchLM tokens used`;
     }
+    case AMP_COMPUTE_BANNER_KIND:
+      // Derived from the account-wide AMP core budget and passed via the metricLine
+      // prop, not from account usage — nothing to compute here.
+      return null;
   }
 }
 
