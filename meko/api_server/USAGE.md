@@ -60,6 +60,26 @@ The `meko_system.*` schema can live on a separate database from the data-plane. 
 | `SYSTEM_DB_NAME` | inherits `--db-name` | meko_system database name |
 | `SYSTEM_DB_SSLMODE` | inherits `--db-sslmode` | meko_system database sslmode |
 
+### Runtime config (`meko_system.runtime_config`)
+
+Operator-tunable values that a running service polls (not flags or env). One row per key, shared by every datapack on this database. Use this table when a value must change without a restart; keep boot-time settings (pool sizes, feature gates, URLs) on flags/env. Values are text: the consumer parses them and falls back if the row is missing or invalid.
+
+Current keys:
+
+| Key | Seeded default | Consumer |
+|---|---|---|
+| `memory_search_min_score` | `0.2` | meko-mcp-server (15s cache; falls back to `MEMORY_SEARCH_MIN_SCORE`) |
+
+Change a value:
+
+```sql
+UPDATE meko_system.runtime_config
+SET config_value = '0.35', updated_at = NOW()
+WHERE config_key = 'memory_search_min_score';
+```
+
+meko-mcp-server picks that up within 15 seconds.
+
 ### Langfuse
 
 | Variable | Default | Description |

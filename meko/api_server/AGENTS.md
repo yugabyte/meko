@@ -123,6 +123,14 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
   <https://github.com/yugabyte/amp/issues/400> before it. Where the statement
   alone doesn't identify the index, pin the table's unique-index inventory in a
   test, as `internal/repository/environment_unique_indexes_test.go` does.
+- `meko_system.runtime_config` holds operator-tunable values that a service must
+  pick up without a restart (today: `memory_search_min_score`, consumed by
+  meko-mcp-server). One row per key, shared by every datapack on this database.
+  Flags and env vars stay the source of truth for boot-time
+  settings: pool sizes, feature gates, URLs. Values are `VARCHAR`; each consumer
+  parses, validates, and falls back (MCP falls back to the
+  `MEMORY_SEARCH_MIN_SCORE` env default). Seed new keys in a system migration.
+  The operator `UPDATE` recipe is in `USAGE.md`.
 
 ## Conventions
 
