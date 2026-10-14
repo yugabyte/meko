@@ -24,7 +24,9 @@ import { ampCoreLimitMessage } from "@/lib/api/ampApi";
 import { toast } from "@/hooks/use-toast";
 import { useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
 import { useBudgetedCompute } from "@/features/datapacks/hooks/useBudgetedCompute";
+import { useAmpCredentials } from "@/features/datapacks/hooks/useAmpCredentials";
 import { CoreLimitNotice } from "../datapack-clusters/CoreLimitNotice";
+import { AmpCredentialsStep } from "../datapack-clusters/AmpCredentialsStep";
 import {
   DEFAULT_CPU,
   DEFAULT_MEMORY,
@@ -38,7 +40,7 @@ import {
   engineLabel,
 } from "../datapack-clusters/extensions";
 
-const STEPS = ["Cluster", "Extensions", "Compute", "Review"];
+const STEPS = ["Cluster", "Extensions", "Compute", "Credentials", "Review"];
 
 export type CreateClusterWizardProps = {
   open: boolean;
@@ -64,6 +66,11 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   const budget = useBudgetedCompute(datapackId, { enabled: open });
   const { cpu, memory } = budget;
 
+  // cloud_admin credential state for the writer endpoint (generate or type;
+  // required by the controller). Re-seeded on open so each cluster gets a fresh
+  // generated candidate.
+  const creds = useAmpCredentials();
+
   useEffect(() => {
     if (open) {
       setStep(0);
@@ -71,6 +78,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
       setName("");
       setExtensions([]);
       budget.reset();
+      creds.reset();
       setError(null);
     }
     // Reset only when the dialog opens; budget.reset re-seeds the compute fields.
@@ -86,7 +94,8 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   );
 
   const trimmedName = name.trim();
-  const stepValid = step === 0 ? Boolean(trimmedName) : step === 2 ? budget.valid : true;
+  const stepValid =
+    step === 0 ? Boolean(trimmedName) : step === 2 ? budget.valid : step === 3 ? creds.valid : true;
 
   const pickEngine = (id: string) => {
     setEngine(id);
@@ -109,6 +118,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
         name: trimmedName,
         cpu: cpu.trim(),
         memory: memory.trim(),
+        password: creds.password,
         engine,
         extensions: extensions.filter((e) => !locked.has(e)),
       });
@@ -300,7 +310,9 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
             </div>
           ) : null}
 
-          {step === 3 ? (
+          {step === 3 ? <AmpCredentialsStep creds={creds} clusterName={trimmedName} /> : null}
+
+          {step === 4 ? (
             <div className="rounded-lg border border-border">
               <ReviewRow k="Name" v={trimmedName || "—"} mono />
               <ReviewRow k="Engine" v={engineLabel(engine)} />
@@ -309,6 +321,10 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
                 v={allExtensions.length ? allExtensions.join(", ") : "None"}
               />
               <ReviewRow k="Writer compute" v={`${cpu} vCPU · ${memory}`} mono />
+              <ReviewRow
+                k="Credentials"
+                v={`cloud_admin · ${creds.mode === "generate" ? "generated" : "custom"} password`}
+              />
             </div>
           ) : null}
         </div>

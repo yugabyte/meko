@@ -76,6 +76,7 @@ export function useCreateCluster(datapackId: string) {
       name: string;
       cpu?: string;
       memory?: string;
+      password?: string;
       engine?: string;
       extensions?: string[];
     }) => ampCreateCluster(datapackId, payload),

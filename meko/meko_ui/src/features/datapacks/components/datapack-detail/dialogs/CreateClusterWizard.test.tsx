@@ -55,7 +55,9 @@ describe("CreateClusterWizard", () => {
     fireEvent.change(screen.getByLabelText("Cluster name"), { target: { value: "orders" } });
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Cluster → Extensions
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Extensions → Compute
-    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Review
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Credentials
+    enterCustomPassword("pw-abcdefgh");
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Credentials → Review
     // Create is held until the budget query resolves (loading-window guard).
     const createBtn = screen.getByRole("button", { name: "Create cluster" }) as HTMLButtonElement;
     await waitFor(() => expect(createBtn.disabled).toBe(false));
@@ -66,6 +68,7 @@ describe("CreateClusterWizard", () => {
       name: "orders",
       cpu: "0.5",
       memory: "4Gi",
+      password: "pw-abcdefgh",
       engine: "postgres",
       extensions: [],
     });
@@ -80,7 +83,9 @@ describe("CreateClusterWizard", () => {
     // hexabridge is NOT in the aidb bundle, so it's a togglable extra.
     fireEvent.click(screen.getByRole("checkbox", { name: /hexabridge(?!_mssql)/i }));
     fireEvent.click(screen.getByRole("button", { name: "Next" })); // Extensions → Compute
-    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Review
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Credentials
+    enterCustomPassword("pw-abcdefgh");
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Credentials → Review
     const createBtn = screen.getByRole("button", { name: "Create cluster" }) as HTMLButtonElement;
     await waitFor(() => expect(createBtn.disabled).toBe(false));
     fireEvent.click(createBtn);
@@ -90,8 +95,34 @@ describe("CreateClusterWizard", () => {
       name: "vec",
       cpu: "0.5",
       memory: "4Gi",
+      password: "pw-abcdefgh",
       engine: "aidb",
       extensions: ["hexabridge"],
     });
   });
+
+  // The Credentials step gates the create: the controller requires a cloud_admin
+  // password, so the wizard can't advance past it until one is set.
+  it("blocks advancing from Credentials until a password is set", () => {
+    renderWizard(<CreateClusterWizard open onOpenChange={() => {}} datapackId="dp" />);
+    fireEvent.change(screen.getByLabelText("Cluster name"), { target: { value: "orders" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Cluster → Extensions
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Extensions → Compute
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Credentials
+    // Default (generate) mode is unacknowledged, so Next is held.
+    const next = () => screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
+    expect(next().disabled).toBe(true);
+    // A short/invalid typed password keeps it blocked; a valid, confirmed one frees it.
+    enterCustomPassword("short");
+    expect(next().disabled).toBe(true);
+    enterCustomPassword("pw-abcdefgh");
+    expect(next().disabled).toBe(false);
+  });
 });
+
+// Fill the Credentials step's custom path with a known password + confirmation.
+function enterCustomPassword(pw: string) {
+  fireEvent.click(screen.getByRole("button", { name: /use my own/i }));
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: pw } });
+  fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: pw } });
+}

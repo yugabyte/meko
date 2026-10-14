@@ -101,6 +101,10 @@ export async function ampCreateCluster(
     cpu?: string;
     memory?: string;
     pg_version?: number;
+    // cloud_admin password for the writer's read_write endpoint — required by the
+    // controller (it keeps only the SCRAM verifier). Sent as-is, never trimmed:
+    // a space is a valid character.
+    password?: string;
     // Optional engine ("postgres" default, "aidb", "oracle") and catalog
     // extensions to seed on the default branch. Both are opt-in and composable;
     // sent only when set so a plain Postgres cluster keeps the same payload.
@@ -111,6 +115,7 @@ export async function ampCreateCluster(
   const body: Record<string, unknown> = { name: payload.name.trim(), with_writer: true };
   if (payload.cpu?.trim()) body.cpu = payload.cpu.trim();
   if (payload.memory?.trim()) body.memory = payload.memory.trim();
+  if (payload.password) body.password = payload.password;
   if (payload.pg_version != null) body.pg_version = payload.pg_version;
   if (payload.engine?.trim() && payload.engine.trim() !== "postgres")
     body.engine = payload.engine.trim();
