@@ -1,10 +1,21 @@
 import { costOf, priceFor } from '../shared/pricing.js';
 import type { CallHomeAgentkMeko, CallHomeLearn, CallHomeMekoTool, CallHomeTokens, MekoFirstTurn, MekoLearning, MekoUsage, SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
-import { CARRY_TURNS, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
+import { CARRY_TURNS, MIN_MEMORY_SCORE, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
+import { TOO_LARGE } from './savedreply.js';
 
 export type MekoKind = 'lookup' | 'save' | 'other';
 export type MekoOutcome = 'found' | 'empty' | 'error' | 'ok';
+/** A search Meko answered poorly: it found nothing, or nothing relevant (see searchQuality). */
+export type MekoQuality = 'empty' | 'weak';
+
+/** Longest query kept for a search, in characters. */
+export const QUERY_CHARS = 1000;
+
+/** A query as asks of the same question are grouped by: lower case, whitespace collapsed. */
+export function queryKey(query: string): string {
+  return query.replace(/\s+/g, ' ').trim().toLowerCase();
+}
 
 /** The Meko MCP server's tools, under its own name or a plugin's (`mcp__plugin_x_meko__…`). */
 const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__([a-z_]+)$/;
@@ -38,6 +49,8 @@ export interface MekoCall {
   /** Model of the response that made the call, and its context (input, cache read and write). */
   model: string | null;
   contextTokens: number | null;
+  /** What a search asked (its `query`, cut to QUERY_CHARS); null for other tools. */
+  query: string | null;
 }
 
 export interface MekoResult {
@@ -46,6 +59,16 @@ export interface MekoResult {
   /** Items a lookup returned, when the result could be read. */
   results: number | null;
   resultChars: number;
+  /** For a search: the best memory `score` and `raw_similarity_score` it returned, and how poor it was. */
+  topScore: number | null;
+  topRaw: number | null;
+  quality: MekoQuality | null;
+}
+
+/** A call still waiting for its result. */
+export interface PendingCall {
+  kind: MekoKind;
+  tool: string;
 }
 
 type Json = Record<string, unknown>;
@@ -71,6 +94,7 @@ export function parseMekoCalls(line: string): MekoCall[] {
     if (b?.type !== 'tool_use' || typeof b.id !== 'string' || typeof b.name !== 'string') continue;
     const tool = mekoTool(b.name);
     if (!tool) continue;
+    const q = (b.input as Json | undefined)?.query;
     out.push({
       toolUseId: b.id,
       tool,
@@ -79,13 +103,18 @@ export function parseMekoCalls(line: string): MekoCall[] {
       inputChars: JSON.stringify(b.input ?? {}).length,
       model: typeof m.model === 'string' && m.model !== '<synthetic>' ? m.model : null,
       contextTokens,
+      query: SEARCH_TOOLS.has(tool) && typeof q === 'string' && q.trim() ? q.trim().slice(0, QUERY_CHARS) : null,
     });
   }
   return out;
 }
 
-/** Results, in one transcript line, of the calls still waiting for one (`pending`: tool_use_id → kind). */
-export function parseMekoResults(line: string, pending: ReadonlyMap<string, MekoKind>): MekoResult[] {
+/**
+ * Results, in one transcript line, of the calls still waiting for one (`pending`, by tool_use_id).
+ * `readSaved` reads the reply Claude Code saved to a file when it was too large for Claude, for a
+ * search's scores and quality only: what Claude read (the notice) is still what's counted.
+ */
+export function parseMekoResults(line: string, pending: ReadonlyMap<string, PendingCall>, readSaved?: (notice: string) => string | null): MekoResult[] {
   if (pending.size === 0 || !line.includes('"tool_result"')) return [];
   let mentioned = false;
   for (const id of pending.keys()) {
@@ -105,9 +134,12 @@ export function parseMekoResults(line: string, pending: ReadonlyMap<string, Meko
   const out: MekoResult[] = [];
   for (const b of d.message.content as Json[]) {
     if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
-    const kind = pending.get(b.tool_use_id);
-    if (!kind) continue;
-    out.push({ toolUseId: b.tool_use_id, ...classifyResult(kind, resultText(b.content), b.is_error === true) });
+    const call = pending.get(b.tool_use_id);
+    if (!call) continue;
+    const text = resultText(b.content);
+    const res = classifyResult(call.kind, text, b.is_error === true);
+    const full = SEARCH_TOOLS.has(call.tool) && TOO_LARGE.test(text) ? readSaved?.(text) ?? null : text;
+    out.push({ toolUseId: b.tool_use_id, ...res, ...searchQuality(call.tool, res.outcome, full) });
   }
   return out;
 }
@@ -118,11 +150,6 @@ function resultText(content: unknown): string {
   return (content as Json[]).map((c) => (c?.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('');
 }
 
-/**
- * Claude Code's notice for a result too large to show, which it saved to a file instead. Only the
- * notice enters the context; reading the file is a tool call of Claude's own, counted as usual.
- */
-const TOO_LARGE = /^Error: result \(([\d,]+) characters\) exceeds maximum allowed tokens/;
 /** Claude Code's notice for a call it moved to the background: no result yet. */
 const BACKGROUND = /^MCP tool "[^"]*" is still running after/;
 /**
@@ -133,8 +160,11 @@ const ITEM_KEYS = ['results', 'memories', 'hits', 'chunks', 'documents', 'items'
 /** A plain-text reply that says nothing was found. */
 const NOTHING = /^(?:no|nothing|0)\b|\bnot found\b|\bno (?:results|memories|matches|documents)\b/i;
 
-/** Found, empty or failed, from a result's text. Meko wraps its JSON in `{"result": "<json>"}`. */
-export function classifyResult(kind: MekoKind, text: string, isError: boolean): Omit<MekoResult, 'toolUseId'> {
+/**
+ * Found, empty or failed, from a result's text. Meko wraps its JSON in `{"result": "<json>"}`. A
+ * result too large for Claude counts as found: only Claude Code's notice reached it (TOO_LARGE).
+ */
+export function classifyResult(kind: MekoKind, text: string, isError: boolean): Pick<MekoResult, 'outcome' | 'results' | 'resultChars'> {
   const chars = text.length;
   if (isError) return { outcome: 'error', results: null, resultChars: chars };
   const big = TOO_LARGE.exec(text);
@@ -194,6 +224,45 @@ function deepCount(v: unknown): number {
   return 0;
 }
 
+const NO_QUALITY = { topScore: null, topRaw: null, quality: null } as const;
+const list = (v: unknown): Json[] => (Array.isArray(v) ? (v as Json[]) : []);
+const best = (items: Json[], key: string): number | null =>
+  items.reduce<number | null>((m, it) => (typeof it?.[key] === 'number' && (m === null || (it[key] as number) > m) ? (it[key] as number) : m), null);
+
+/**
+ * How poor a search's reply was, for What Meko doesn't know. `empty`: it found nothing. `weak`: it
+ * found only memories, each with a score and all below MIN_MEMORY_SCORE; a knowledge-base chunk
+ * or a conversation hit in a `context_search` passed Meko's own distance cutoff, so it counts as a
+ * real hit. A `knowledgebase_search` keeps at least one chunk without any cutoff, so it's only ever
+ * empty. `text` is the reply Meko sent (the saved file's, for one too large for Claude), or null
+ * when it couldn't be read; then only `empty` can be told. Other tools have no quality.
+ */
+export function searchQuality(tool: string, outcome: MekoOutcome, text: string | null): Pick<MekoResult, 'topScore' | 'topRaw' | 'quality'> {
+  if (!SEARCH_TOOLS.has(tool) || text === null || BACKGROUND.test(text)) return NO_QUALITY;
+  if (outcome === 'empty') return { ...NO_QUALITY, quality: 'empty' };
+  if (outcome !== 'found') return NO_QUALITY;
+  const v = unwrap(text);
+  if (!v || typeof v !== 'object') return NO_QUALITY;
+  const o = v as Json;
+  const box = o.results && typeof o.results === 'object' && !Array.isArray(o.results) ? (o.results as Json) : o;
+  let memories: Json[];
+  let strong = 0;
+  if ('memory' in box || 'knowledge_base' in box || 'conversation' in box) {
+    memories = list(box.memory);
+    const conv = box.conversation;
+    strong = list(box.knowledge_base).length + (Array.isArray(conv) ? conv.length : list((conv as Json | undefined)?.hits).length);
+  } else if (tool === 'memory_search') {
+    memories = Array.isArray(v) ? (v as Json[]) : list(o.results ?? o.memories);
+  } else {
+    return NO_QUALITY;
+  }
+  const topScore = best(memories, 'score');
+  const topRaw = best(memories, 'raw_similarity_score');
+  const scored = memories.length > 0 && memories.every((m) => typeof m?.score === 'number');
+  const weak = strong === 0 && scored && topScore !== null && topScore < MIN_MEMORY_SCORE;
+  return { topScore, topRaw, quality: weak ? 'weak' : null };
+}
+
 interface CallRow {
   project_id: string;
   session_id: string;
@@ -210,6 +279,8 @@ interface CallRow {
   later: number | null;
   /** When the call was made, or the search at start ran. */
   at: number;
+  /** How poor a search's reply was (searchQuality); null for seeds. */
+  quality: MekoQuality | null;
 }
 
 const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
@@ -223,7 +294,7 @@ const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
 export function mekoCalls(db: Db, projectId?: string): CallRow[] {
   const where = projectId ? ' WHERE s.project_id = ?' : '';
   return all<CallRow>(db,
-    `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.input_chars, c.model, c.context_tokens, c.at,
+    `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.input_chars, c.model, c.context_tokens, c.at, c.quality,
        CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) THEN
          (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
           WHERE u.session_id = c.session_id AND u.agent IS c.agent AND u.at > c.at LIMIT ?))
@@ -231,7 +302,7 @@ export function mekoCalls(db: Db, projectId?: string): CallRow[] {
      FROM meko_calls c JOIN sessions s ON s.id = c.session_id${where}
      UNION ALL
      SELECT s.project_id, p.session_id, 'seed', 'seed', 'found', p.chars, 0, f.model,
-       MAX(0, f.input + f.cache_read + f.cache_write - ROUND(p.chars / 4.0)), p.at,
+       MAX(0, f.input + f.cache_read + f.cache_write - ROUND(p.chars / 4.0)), p.at, NULL,
        (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
         WHERE u.session_id = p.session_id AND u.agent IS NULL AND u.at > f.at LIMIT ?))
      FROM meko_preloads p JOIN sessions s ON s.id = p.session_id
@@ -247,7 +318,7 @@ const tokensOf = (chars: number | null) => Math.round((chars ?? 0) / 4);
 /** Counts and the savings estimate for a set of calls (seeds count only toward the savings). */
 export function summarizeMeko(rows: CallRow[]): MekoUsage {
   const u: MekoUsage = {
-    calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0,
+    calls: 0, lookups: 0, found: 0, empty: 0, weak: 0, errors: 0, saves: 0, foundTokens: 0, sentTokens: 0,
     savings: { searches: 0, seeds: 0, tokens: 0, usd: null, unpricedSearches: 0, unpricedSeeds: 0 },
   };
   let usd = 0;
@@ -277,6 +348,7 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
     if (r.kind !== 'lookup') continue;
     u.lookups++;
     if (r.outcome === 'empty') u.empty++;
+    if (r.quality === 'weak') u.weak++;
     if (r.outcome !== 'found') continue;
     u.found++;
     u.foundTokens += tokensOf(r.result_chars);

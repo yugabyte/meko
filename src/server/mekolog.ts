@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, rmSync, statSync } from 'node:fs';
-import { open, readFile, realpath } from 'node:fs/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { open, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { MekoCallBy, MekoCallDetail, MekoCallPage, MekoCallSummary } from '../shared/types.js';
 import { errMsg, type Logger } from './log.js';
 import type { MekoScope, MekoTrace } from './meko.js';
+import { savedReplyFile } from './savedreply.js';
 
 /** The session's Meko call log, in its folder under ~/.agent-k-local/designs. */
 export const MEKO_LOG_FILE = 'meko-calls.jsonl';
@@ -317,24 +318,15 @@ function summary(l: Line, offset: number): MekoCallSummary {
 }
 
 /**
- * Claude Code's notice for a reply too large for Claude's context, naming the file it saved the
- * reply to (`mekousage.ts` reads the same notice for the usage counts).
- */
-const SAVED_REPLY = /^Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to (\/\S+?)\.?(?:\s|$)/;
-
-/**
  * The reply of one of Claude's calls: when Claude read only Claude Code's notice that it was too
  * large, the reply Claude Code saved (`notice` the notice), else the text itself. The file is read
- * only from a session's `tool-results` folder beside the transcript (`<transcripts>/<claude
- * session>/tool-results/`), and a file that can't be read leaves the notice as the reply.
+ * only from a session's `tool-results` folder beside the transcript (`savedReplyFile`), and a file
+ * that can't be read leaves the notice as the reply.
  */
 export async function claudeReply(text: string | null, transcriptPath: string | null): Promise<{ text: string | null; notice: string | null }> {
-  const saved = text === null ? null : SAVED_REPLY.exec(text)?.[1];
-  if (!saved || !transcriptPath) return { text, notice: null };
+  const file = savedReplyFile(text, transcriptPath);
+  if (!file) return { text, notice: null };
   try {
-    const [file, dir] = await Promise.all([realpath(saved), realpath(dirname(transcriptPath))]);
-    const parts = relative(dir, file).split(sep);
-    if (parts.length !== 3 || parts[0] === '..' || parts[1] !== 'tool-results') return { text, notice: null };
     return { text: await readFile(file, 'utf8'), notice: text };
   } catch {
     return { text, notice: null };

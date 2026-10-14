@@ -2,6 +2,8 @@ import type { SearchResult } from '../shared/types.js';
 import { run, type Db } from './db.js';
 import type { IssueText } from './github.js';
 import { isDesignLine } from './design.js';
+import { MIN_MEMORY_SCORE } from './mekosavings.js';
+import { queryKey } from './mekousage.js';
 import { mekoDatapackLineId } from './prompts.js';
 
 /**
@@ -16,11 +18,6 @@ export const QUERY_MAX = 1500;
 export const MAX_ISSUES = 3;
 /** How much of each issue's body goes into the query. */
 export const ISSUE_BODY_CHARS = 600;
-/**
- * Memories scoring below this are left out. Relevant memories have scored about 0.58 to 0.71,
- * unrelated ones about 0.53.
- */
-export const MIN_MEMORY_SCORE = 0.55;
 export const MAX_ITEMS = 6;
 /**
  * Most knowledge-base items: Meko drops irrelevant ones by distance, and this keeps a few loosely
@@ -137,6 +134,8 @@ export interface RecallSource {
 export interface RecallRun {
   text: string | null;
   results: number;
+  /** What was searched for. */
+  query: string;
 }
 
 /** Searches the datapacks for the task. An issue that can't be read is left out of the query. */
@@ -144,8 +143,9 @@ export async function runRecall(name: string, task: string, src: RecallSource): 
   const refs = issueRefs(task);
   const issues = (await Promise.all(refs.map((n) => src.issue(n).then((i) => ({ number: n, ...i }), () => null))))
     .filter((i): i is { number: number } & IssueText => !!i);
-  const items = pickResults(await src.search(recallQuery(name, task, issues)));
-  return { text: formatRecall(items), results: items.length };
+  const query = recallQuery(name, task, issues);
+  const items = pickResults(await src.search(query));
+  return { text: formatRecall(items), results: items.length, query };
 }
 
 export interface PreloadRecord {
@@ -154,14 +154,20 @@ export interface PreloadRecord {
   chars: number;
   /** From the start of the search to its end. */
   ms: number;
+  /** What was searched for; null or left out when it isn't known (the search failed). */
+  query?: string | null;
 }
 
-/** Keeps the outcome of a session's search at start, for the first-turn Meko stats. */
+/**
+ * Keeps the outcome of a session's search at start, for the first-turn Meko stats, with its query
+ * for What Meko doesn't know (an empty search is listed there).
+ */
 export function recordPreload(db: Db, sessionId: string, r: PreloadRecord, at = Date.now()): void {
-  run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)
+  const query = r.query == null ? null : r.query.slice(0, QUERY_MAX);
+  run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET at = excluded.at, outcome = excluded.outcome, results = excluded.results,
-             chars = excluded.chars, ms = excluded.ms`,
-    sessionId, at, r.outcome, r.results, r.chars, r.ms);
+             chars = excluded.chars, ms = excluded.ms, query = excluded.query, query_key = excluded.query_key`,
+    sessionId, at, r.outcome, r.results, r.chars, r.ms, query, query === null ? null : queryKey(query));
 }
 
 interface Entry {
@@ -190,7 +196,9 @@ export class RecallStore {
     this.drop(sessionId);
     const e: Entry = { startedAt: Date.now(), work: Promise.resolve(), done: false, run: null, ms: 0, gaveUp: false, timer: null };
     const rec = (outcome: RecallOutcome, r: RecallRun | null) => {
-      if (this.entries.get(sessionId) === e) this.save(sessionId, { outcome, results: r?.results ?? 0, chars: r?.text?.length ?? 0, ms: e.ms });
+      if (this.entries.get(sessionId) === e) {
+        this.save(sessionId, { outcome, results: r?.results ?? 0, chars: r?.text?.length ?? 0, ms: e.ms, query: r?.query ?? null });
+      }
     };
     e.work = work.then(
       (r) => {
@@ -239,7 +247,7 @@ export class RecallStore {
       return null;
     }
     const text = e.run?.text ?? null;
-    if (text) this.save(sessionId, { outcome: 'found', results: e.run!.results, chars: text.length, ms: e.ms });
+    if (text) this.save(sessionId, { outcome: 'found', results: e.run!.results, chars: text.length, ms: e.ms, query: e.run!.query });
     this.forget(sessionId, e);
     return text;
   }

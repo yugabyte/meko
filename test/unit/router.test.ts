@@ -11,13 +11,14 @@ describe('router', () => {
     expect(parseRoute('/p/a/s/b/design')).toEqual({ view: 'design', projectId: 'a', sessionId: 'b' });
     expect(parseRoute('/p/a/meko')).toEqual({ view: 'meko', projectId: 'a', sessionId: null });
     expect(parseRoute('/p/a/meko/b')).toEqual({ view: 'meko', projectId: 'a', sessionId: 'b' });
+    expect(parseRoute('/p/a/meko-gaps')).toEqual({ view: 'meko-gaps', projectId: 'a' });
   });
 
   it('round-trips every view, ids that need encoding included', () => {
     const routes: Route[] = [
       { view: 'root' }, { view: 'usage' }, { view: 'home', projectId: 'a b' }, { view: 'design', projectId: 'a', sessionId: 's/1' },
       { view: 'project', projectId: 'my repo/x', sessionId: 'a%b' }, { view: 'project', projectId: 'a', sessionId: null },
-      { view: 'meko', projectId: 'a b', sessionId: 's/1' }, { view: 'meko', projectId: 'a', sessionId: null },
+      { view: 'meko', projectId: 'a b', sessionId: 's/1' }, { view: 'meko', projectId: 'a', sessionId: null }, { view: 'meko-gaps', projectId: 'a b' },
     ];
     for (const r of routes) expect(parseRoute(routePath(r))).toEqual(r);
   });

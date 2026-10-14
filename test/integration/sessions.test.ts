@@ -274,7 +274,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     env.meko.search = async (...args: unknown[]) => {
       env.meko.calls.push({ name: 'search', args });
       return [
-        { id: 'm1', source: 'memory', text: 'The thing lives in src/thing.ts; it breaks when the cache is cold.', score: 0.7, datapackName: 'agent-k-local/test/demo' },
+        { id: 'm1', source: 'memory', text: 'The thing lives in src/thing.ts; it breaks when the cache is cold.', score: 0.8, datapackName: 'agent-k-local/test/demo' },
         { id: 'm2', source: 'memory', text: 'Unrelated note.', score: 0.3, datapackName: 'agent-k-local/test/demo' },
       ];
     };
@@ -324,7 +324,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
       const dp = args[1] as { id: string; name: string };
       env.meko.calls.push({ name: 'search', args });
       if (down.has(dp.id)) throw new Error(`${dp.name} is down`);
-      return [{ id: 'm1', source: 'memory', text: 'A gotcha about the cold cache in src/thing.ts.', score: 0.7, datapackName: dp.name }];
+      return [{ id: 'm1', source: 'memory', text: 'A gotcha about the cold cache in src/thing.ts.', score: 0.8, datapackName: dp.name }];
     };
     const s = await env.core.sessions.create(p.id, { name: 'One down', prompt: 'the cold cache', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');

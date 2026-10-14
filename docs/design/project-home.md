@@ -98,6 +98,12 @@ a reply too large for Claude). **Copy call**, **Download** (the
 file) and **Clear** (deletes it) are there too. With the setting off, the page says so and offers
 **Turn on**.
 
+**What Meko doesn't know** (`/p/<project>/meko-gaps`) lists the project's Meko searches that found
+nothing or nothing relevant, grouped by question, with **Teach Meko**, **Copy** and **Dismiss**. The
+line under the Meko stats in the project home's Token usage section links to it while any question
+is open. How it's recorded, the rules and teaching are in [What Meko doesn't
+know](recall-and-learn.md#what-meko-doesnt-know).
+
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge
 picked up from GitHub), a dialog offers **Close project** (as on the project home; the repo and
 datapacks stay), **New session** or **Keep it open**. It asks only on the project's session view,

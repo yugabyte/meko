@@ -207,6 +207,10 @@ your phone can connect.
   what was sent and what came back, in a file in the session's folder that's deleted with the
   session. **View calls** opens them, a session at a time, with filters for the tool, who made the
   call (AgentK or Claude) and failed calls.
+- **What Meko doesn't know:** the project home says how many questions Meko couldn't answer, and
+  links to a list of the searches that found nothing, or only memories scoring below the bar,
+  grouped by question. **Teach Meko** saves your answer to the project's datapack; **Dismiss**
+  hides a question until a session asks it again.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home

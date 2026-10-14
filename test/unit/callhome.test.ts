@@ -171,6 +171,11 @@ function seeded(): Db {
   meko('s2', 'tu5', 'memory_get_by_id', 'lookup', '2026-09-28T02:00:00Z', 'error', 10, 'claude-opus-5-5', 5000);
   // Before the window, on a model with no known price.
   meko('s3', 'tu6', 'knowledgebase_search', 'lookup', '2026-01-05T10:00:00Z', 'found', 1000, null, 5000);
+  // What Meko doesn't know: a search that found nothing relevant, one question taught and one dismissed. Only counts are sent.
+  run(db, `UPDATE meko_calls SET query = 'Secret task retention', query_key = 'secret task retention', quality = 'weak' WHERE tool_use_id = 'tu1'`);
+  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, state, text, datapack_name, at) VALUES ('p1', 'secret task retention', 'taught', 'Secret task notes', 'adlc/proj/zeta', ?)`,
+    at('2026-09-28T03:00:00Z'));
+  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, state, at) VALUES ('p1', 'zeta', 'dismissed', ?)`, at('2026-09-27T15:00:00Z'));
   const preload = (s: string, iso: string, outcome: string, chars: number, ms: number) =>
     run(db, 'INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)', s, at(iso), outcome, chars ? 2 : 0, chars, ms);
   preload('s1', '2026-09-27T11:00:00Z', 'found', 800, 1200);
@@ -340,7 +345,7 @@ describe('the usage stats report', () => {
     // Credited: the found context_search, the found knowledgebase_search (no price) and s1's seed.
     expect(saved).toMatchObject({ searches: 2, seeds: 1, unpricedSearches: 1, unpricedSeeds: 0 });
     expect(r.totals.meko).toEqual({
-      calls: 6, lookups: 4, found: 2, empty: 1, errors: 1, saves: 1, foundTokens: 1250,
+      calls: 6, lookups: 4, found: 2, empty: 1, weak: 1, errors: 1, saves: 1, foundTokens: 1250,
       byTool: { context_search: 1, memory_search: 1, memory_add: 1, other: 1, memory_get_by_id: 1, knowledgebase_search: 1 },
       savings: {
         searches: 2, seeds: 1, tokens: Math.round(saved.tokens), usdCents: Math.round(saved.usd! * 100), unpricedSearches: 1, unpricedSeeds: 0,
@@ -349,22 +354,25 @@ describe('the usage stats report', () => {
       // Each call sent 40 characters; seeds send nothing.
       sentTokens: 60,
       sentByTool: { context_search: 10, memory_search: 10, memory_add: 10, other: 10, memory_get_by_id: 10, knowledgebase_search: 10 },
+      gaps: { dismissed: 1, taught: 1 },
     });
     expect(r.totals.meko.savings.usdCents).toBeGreaterThan(0);
     expect(r.totals.mekoFirstTurn).toEqual({ sessions: 1, startSearches: 1, searchedTokens: 1000, seedTokens: 200 });
 
     const day = (d: string) => r.days.find((x) => x.day === d)!;
     expect(day('2026-09-27').meko).toMatchObject({
-      calls: 4, lookups: 2, found: 1, empty: 1, errors: 0, saves: 1, foundTokens: 1000,
+      calls: 4, lookups: 2, found: 1, empty: 1, weak: 1, errors: 0, saves: 1, foundTokens: 1000,
       byTool: { context_search: 1, memory_search: 1, memory_add: 1, other: 1 },
       savings: { searches: 1, seeds: 1, unpricedSearches: 0 },
       starts: { found: 1, empty: 0, error: 0, late: 0, ms: 1200 },
+      gaps: { dismissed: 1, taught: 0 },
     });
     expect(day('2026-09-28').meko).toEqual({
-      calls: 1, lookups: 1, found: 0, empty: 0, errors: 1, saves: 0, foundTokens: 0, byTool: { memory_get_by_id: 1 },
+      calls: 1, lookups: 1, found: 0, empty: 0, weak: 0, errors: 1, saves: 0, foundTokens: 0, byTool: { memory_get_by_id: 1 },
       savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
       starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
       sentTokens: 10, sentByTool: { memory_get_by_id: 10 },
+      gaps: { dismissed: 0, taught: 1 },
     });
     expect(day('2026-09-26').meko).toMatchObject({ calls: 0, byTool: {}, starts: { late: 1, ms: 5000 } });
     // A day with no Meko activity leaves it out.
@@ -443,7 +451,7 @@ describe('the usage stats report', () => {
     const r = report(openDb(':memory:'));
     expect(r.days.some((d) => d.meko)).toBe(false);
     expect(r.totals.meko).toEqual({
-      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, byTool: {},
+      calls: 0, lookups: 0, found: 0, empty: 0, weak: 0, errors: 0, saves: 0, foundTokens: 0, byTool: {},
       savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
       starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
       sentTokens: 0, sentByTool: {},

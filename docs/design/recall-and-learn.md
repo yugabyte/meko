@@ -14,7 +14,9 @@ while it's being created share the one `conversation_create`.
 - **Query.** The session's name and task, plus the title and first 600 characters of each GitHub
   issue the task names (`#N`, at most 3, through `gh issue view`; one that can't be read is left
   out), on one line of at most 1,500 characters.
-- **Picking.** Up to 3 knowledge-base items first, then memories scoring at least 0.55, best
+- **Picking.** Up to 3 knowledge-base items first, then memories scoring at least 0.75
+  (`MIN_MEMORY_SCORE` in `mekosavings.ts`, the same bar [What Meko doesn't know](#what-meko-doesnt-know)
+  uses; it was 0.55 until off-topic memories were seen scoring 0.74–0.76), best
   first. Conversation-cache hits are left out. Duplicates (same id or same text) are dropped; at
   most 6 items, each cut at a word to 500 characters, 2,500 in all. A datapack whose search fails
   (15 seconds each) is skipped; the search fails only when every datapack's did.
@@ -28,9 +30,10 @@ while it's being created share the one `conversation_create`.
   minutes; a server restart loses it, and the session just starts without it. A session that
   fails to start, or is archived, drops its result, so a later session with the same id never
   gets it.
-- **Record.** `meko_preloads(session_id, at, outcome, results, chars, ms)` keeps each search's
+- **Record.** `meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key)` keeps each search's
   outcome for the [first-turn stats](token-usage.md): `found` (handed to Claude), `empty`, `error`,
-  or `late` (it found something after the hook gave up, or the hook never asked).
+  or `late` (it found something after the hook gave up, or the hook never asked). It keeps the
+  query too (NULL for a failed search), so an empty one shows on [What Meko doesn't know](#what-meko-doesnt-know).
 
 Nothing waits for the search: the session starts the same when it's slow, fails, or Meko is off
 (then there's no search at all).
@@ -139,3 +142,81 @@ or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko ca
 and, while the project has Log Meko calls on, in the session's Meko call log with what was sent and
 what came back (see [Project home](project-home.md)). A step at Merge & Close is deleted with the
 session moments later, so run `/agentk_learn` during the session to look at one.
+
+## What Meko doesn't know
+
+The project's Meko searches that found nothing, or nothing relevant, grouped by question, so
+someone can see what Meko is missing and teach it (`src/server/mekogaps.ts`). Stage 1 only records
+and lists them: no model judges an answer, the learn step doesn't look at them, and the list stays
+in AgentK's database (it isn't shared with the team on the datapack).
+
+**What's recorded.** The [transcript reader](token-usage.md) keeps, for each of Claude's searches
+(`context_search`, `memory_search`, `knowledgebase_search`, in the main transcript and
+subagents): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query_key` (the same
+lower-cased with its whitespace collapsed, which groups asks of one question), the best memory
+`score` and `raw_similarity_score` of the reply (`top_score`, `top_raw`), and `quality`
+(`searchQuality()` in `mekousage.ts`). AgentK's search at start keeps its query in
+`meko_preloads`. Searches from before this have NULL there: transcripts weren't read again.
+
+**What Meko's scores can tell.** A `context_search` returns three buckets. Knowledge-base chunks
+and conversation hits pass Meko's own distance cutoffs before they're returned, so one that comes
+back is a real hit. The memory bucket has no cutoff: Meko always returns its top memories, each
+with `score` (mem0's hybrid rank) and `raw_similarity_score` (cosine). `memory_search` drops
+memories below a raw floor (0.2 by default). `knowledgebase_search` keeps at least one chunk
+whatever its distance. A score far below the bar means noise, but a high one doesn't mean the
+memory was what the session needed: on 2026-10-13 a search returned ten near-duplicate,
+off-topic memories scoring 0.74–0.76 (raw about 0.57), while a relevant one scored 0.77 (raw
+0.49). So the rules flag only what the scores can show, and every search keeps its top scores so
+the bar can be tuned from real data.
+
+**The rules** (`quality`):
+
+- `empty`, *Found nothing*: the search's outcome was empty (no items in any bucket).
+- `weak`, *Nothing relevant*: it found items, but no knowledge-base chunk, no conversation hit,
+  and only memories, each with a score and all below `MIN_MEMORY_SCORE` (0.75). A memory with no
+  score, or a `knowledgebase_search` that found a chunk, is never weak.
+- NULL otherwise: found something relevant, failed (Meko down isn't Meko not knowing), moved to
+  the background, or not a search.
+
+A reply too large for Claude's context reaches the transcript only as Claude Code's notice that it
+saved the reply to a file. For a search, the reader reads that file for the scores and quality
+(`readSavedReplySync()` in `savedreply.ts`: only a file in the session's `tool-results` folder
+beside the transcript, after `realpath`, up to 8 MB; the same check the Meko call log's
+`claudeReply()` uses). `outcome`, `results` and `result_chars` still describe the notice, which is
+what the usage counts and the savings estimate count. A file it can't read leaves no quality.
+
+**The questions** (`projectGaps()`): every poor search in the project's sessions, Claude's and
+AgentK's empty searches at start, grouped by `query_key`. A question shows the query as last
+asked, how the latest ask went and with which tool (or *AgentK's search at start*), how many times
+it was asked and by which sessions, and the latest ask's item count and top scores. A question
+whose latest ask found something relevant is left out: Meko knows it now.
+
+**What the user does with one** (`meko_gap_marks(project_id, query_key, state, text,
+datapack_name, at)`): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
+(1 to 2,000 characters, as typed) as a memory in the project's dedicated datapack, as AgentK
+(`agent-k-local`) in the project's Meko conversation, with metadata `{ source: "agent-k-local",
+kind: "taught", question }` (the question cut to 300 characters), and marks it taught with the
+text and the datapack's name. Nothing checks it against what Meko has: the person wrote it on
+purpose and the dialog says where it goes. Teaching needs Meko on and a dedicated datapack (409
+otherwise, with `MEKO_OFF` or `NO_DEDICATED_DATAPACK`); a failed save is a 502 with Meko's error
+and marks nothing. **Restore** clears the mark (a taught memory stays in Meko). A mark applies
+to the asks before it: a question asked again later is open again, and a taught one shows what was
+taught, since Meko had the answer and the search still missed it.
+
+**Where it shows.** On the project home, the Meko section has a line under its stats while any
+question is open: *9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant*,
+linking to **What Meko doesn't know** (`/p/:id/meko-gaps`, `MekoGapsView.tsx`); the all-projects
+Usage page doesn't show it, and there's no command palette entry. The page lists the questions
+latest asked first, 100 at a time (`GET /api/projects/:id/meko-gaps?state=&before=`), filtered
+**Open**, **Taught**, **Dismissed** or **All**, with the searches recorded since when. Each has
+**Teach Meko** (open ones; disabled, with why, when Meko is off or there's no dedicated
+datapack), **Copy** (the query) and **Dismiss** or **Restore**; **Copy all** copies the list
+shown. The usage stats count weak searches and the questions dismissed and taught, never a query.
+
+**Why the database.** The page groups every session's asks, applies the marks and pages in one
+query, the rows are written in the same transaction that moves a transcript's read offset (a
+transcript read again upserts rather than adding asks twice), and the list outlives archived
+sessions, whose Meko call logs are deleted. The [Meko call log](project-home.md) has Claude's calls
+with their full replies too, but only while the project has Log Meko calls on, so it isn't the
+source.
+

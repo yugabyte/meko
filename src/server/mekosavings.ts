@@ -27,6 +27,14 @@ export const CARRY_TURNS = 10;
 export const SEARCH_TOOL_NAMES = ['memory_search', 'knowledgebase_search', 'context_search'] as const;
 export const SEARCH_TOOLS: ReadonlySet<string> = new Set(SEARCH_TOOL_NAMES);
 
+/**
+ * The lowest score of a memory worth giving Claude: AgentK's search at start (`recall.ts`) leaves
+ * out memories below it, and a search whose memories are all below it, with nothing from the
+ * knowledge base or the conversation cache, found nothing relevant (`mekousage.ts`). Memories
+ * Meko ranks high can still be off-topic: unrelated ones have scored 0.74–0.76 (2026-10-13).
+ */
+export const MIN_MEMORY_SCORE = 0.75;
+
 export interface FoundSearch {
   /** Input, cache read and cache write of the response that made the call. */
   contextTokens: number;

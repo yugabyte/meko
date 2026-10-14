@@ -225,6 +225,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
+- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the transcript reader and recall at
+      start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
+      typed, into the project's dedicated datapack only, as AgentK in the project's conversation,
+      and a question is marked taught only once Meko took it. Queries stay in the database: the
+      usage report gets counts only. A reply too large for Claude is read for a search's quality
+      only from the session's `tool-results` folder (`savedreply.ts`), and never changes what the
+      usage counts (the notice is what Claude read).
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
       the user asked: the installer's question (or `--install-deps`) or **Set up Claude Code with
       this Meko**. A Claude Code token is only ever sent to AgentK's server, and only when Claude
