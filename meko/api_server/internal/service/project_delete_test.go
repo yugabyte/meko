@@ -117,8 +117,8 @@ func TestDeleteProject_RecipientCannotDelete(t *testing.T) {
 		WithArgs(pq.Array([]string{"proj-1"})).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"project_id", "user_id", "project_name", "theme_key", "theme_version",
-				"description", "owner_name", "created_at", "updated_at"}).
-			AddRow("proj-1", "someone-else", "adlc", "adlc", "1.0", "", "Alice", now, now))
+				"description", "owner_name", "owner_email", "created_at", "updated_at"}).
+			AddRow("proj-1", "someone-else", "adlc", "adlc", "1.0", "", "Alice", "alice@example.com", now, now))
 
 	err := svc.Delete("me", "proj-1")
 	if !errors.Is(err, repository.ErrProjectNotFound) {

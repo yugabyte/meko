@@ -165,8 +165,8 @@ env:
     hash_partitions: 8
     # Extra api-server env, KEY=VALUE, for runtime feature flags the chart presets
     # leave off. Projects and conversation search ship in the UI, so the stack
-    # runs them.
-    api_config: ["MEKO_ENABLE_PROJECTS=true", "MEKO_ENABLE_CONVERSATION_SEARCH=true"]
+    # runs them; link sharing is on so functional/datapack_link_sharing runs.
+    api_config: ["MEKO_ENABLE_PROJECTS=true", "MEKO_ENABLE_CONVERSATION_SEARCH=true", "MEKO_ENABLE_LINK_SHARING=true"]
     # Added to api_config on the dedicated stacks perf and stress load. Their clients share a
     # few PATs across many virtual agents, and the api-server allows one PAT 60 calls a minute.
     load_api_config: ["PAT_RATE_LIMIT_PER_MIN=0"]

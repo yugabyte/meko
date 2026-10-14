@@ -177,8 +177,7 @@ Each account has its own row in the stack's database, is lifted off the free tie
 named after the test. `account.PAT("read")` mints a scoped PAT and the cleanup function
 `Accounts` returned revokes it. Tests that need accounts skip on `auth=none`.
 
-The product has no token refresh route and no route that removes an accepted member of a
-datapack, so do not write tests for either.
+The product has no token refresh route, so do not write tests for one.
 
 ### Scripting the LLM mock
 

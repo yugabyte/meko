@@ -1,8 +1,9 @@
 // Share page link card: hidden on the API's 403, retryable on any other failure,
-// and the on/off switch turns the link off without touching its role.
+// the on/off switch keeps the role, and ?highlight=link scrolls to the card.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 
 vi.mock("@/lib/api/shareLinksApi", async (o) => ({
   ...(await o<typeof import("@/lib/api/shareLinksApi")>()),
@@ -26,11 +27,13 @@ const activeLink: DatapackShareLink = {
   updated_at: "",
 };
 
-function renderSection() {
+function renderSection(url = "/") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <ShareLinkSection datapackId="dp-1" />
+      <MemoryRouter initialEntries={[url]}>
+        <ShareLinkSection datapackId="dp-1" />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -41,6 +44,14 @@ afterEach(() => {
 });
 
 describe("ShareLinkSection", () => {
+  it("scrolls to the card when opened with ?highlight=link", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    vi.mocked(getShareLink).mockResolvedValue({ ...activeLink, status: "off" });
+    renderSection("/share?highlight=link");
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+  });
+
   it("renders nothing for a caller the API refuses the link", async () => {
     vi.mocked(getShareLink).mockRejectedValue(
       new MekoApiRequestError("forbidden", { httpStatus: 403 }),

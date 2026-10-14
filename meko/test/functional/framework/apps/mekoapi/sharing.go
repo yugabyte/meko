@@ -45,6 +45,8 @@ type Member struct {
 	UserName  string `json:"user_name"`
 	UserEmail string `json:"user_email_id"`
 	Grant     string `json:"grant"`
+	// Source is how an accepted member joined: "email" or "link". Empty on the owner row.
+	Source string `json:"source"`
 }
 
 type InviteAction struct {
@@ -98,4 +100,89 @@ func (c *Client) RevokeInvite(ctx context.Context, datapackID, inviteID string) 
 func (c *Client) UpdateGrant(ctx context.Context, datapackID, memberUserID, grant string) error {
 	return c.do(ctx, http.MethodPatch, "/datapacks/"+url.PathEscape(datapackID)+"/share/"+url.PathEscape(memberUserID),
 		map[string]string{"grant": grant}, nil)
+}
+
+// RemoveMember takes an accepted member's access to the datapack away.
+func (c *Client) RemoveMember(ctx context.Context, datapackID, memberUserID string) error {
+	return c.do(ctx, http.MethodDelete, "/datapacks/"+url.PathEscape(datapackID)+"/members/"+url.PathEscape(memberUserID), nil, nil)
+}
+
+// Share link statuses.
+const (
+	ShareLinkActive = "active"
+	ShareLinkOff    = "off"
+)
+
+// ShareLink is a datapack's one share link.
+type ShareLink struct {
+	DatapackID string `json:"datapack_id"`
+	Token      string `json:"token"`
+	Grant      string `json:"grant"`
+	Status     string `json:"status"`
+	// RedemptionCount is the members who joined through the link and are still members.
+	RedemptionCount int `json:"redemption_count"`
+	// MembersAtLinkRole counts link joiners still at the link's role.
+	MembersAtLinkRole int `json:"members_at_link_role"`
+}
+
+type ShareLinkPreview struct {
+	DatapackName string `json:"datapack_name"`
+	Description  string `json:"description"`
+}
+
+type ShareLinkRedemption struct {
+	DatapackID    string `json:"datapack_id"`
+	Grant         string `json:"grant"`
+	AlreadyMember bool   `json:"already_member"`
+}
+
+// GetShareLink returns the datapack's link, or nil when it has none.
+func (c *Client) GetShareLink(ctx context.Context, datapackID string) (*ShareLink, error) {
+	var out struct {
+		ShareLink *ShareLink `json:"share_link"`
+	}
+	err := c.do(ctx, http.MethodGet, "/datapacks/"+url.PathEscape(datapackID)+"/share-link", nil, &out)
+	return out.ShareLink, err
+}
+
+// UpdateShareLink creates the link or changes its grant or status; an empty
+// argument keeps the current value.
+func (c *Client) UpdateShareLink(ctx context.Context, datapackID, grant, status string) (ShareLink, error) {
+	body := map[string]string{}
+	if grant != "" {
+		body["grant"] = grant
+	}
+	if status != "" {
+		body["status"] = status
+	}
+	var out struct {
+		ShareLink ShareLink `json:"share_link"`
+	}
+	err := c.do(ctx, http.MethodPut, "/datapacks/"+url.PathEscape(datapackID)+"/share-link", body, &out)
+	return out.ShareLink, err
+}
+
+// ResetShareLink replaces the link's token; the old URL stops working.
+func (c *Client) ResetShareLink(ctx context.Context, datapackID string) (ShareLink, error) {
+	var out struct {
+		ShareLink ShareLink `json:"share_link"`
+	}
+	err := c.do(ctx, http.MethodPut, "/datapacks/"+url.PathEscape(datapackID)+"/share-link",
+		map[string]bool{"reset": true}, &out)
+	return out.ShareLink, err
+}
+
+// PreviewShareLink is what a signed-in caller who hasn't joined sees: the
+// datapack's name and description. Signed out, the route answers 401.
+func (c *Client) PreviewShareLink(ctx context.Context, token string) (ShareLinkPreview, error) {
+	var out ShareLinkPreview
+	err := c.do(ctx, http.MethodGet, "/share/"+url.PathEscape(token), nil, &out)
+	return out, err
+}
+
+// RedeemShareLink joins the caller to the datapack behind the link.
+func (c *Client) RedeemShareLink(ctx context.Context, token string) (ShareLinkRedemption, error) {
+	var out ShareLinkRedemption
+	err := c.do(ctx, http.MethodPost, "/share/"+url.PathEscape(token)+"/redeem", nil, &out)
+	return out, err
 }

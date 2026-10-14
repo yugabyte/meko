@@ -53,6 +53,8 @@ export type Project = {
   folder_names?: string[];
   /** Only set on shared projects: whose project this is. */
   owner_name?: string;
+  /** Only set on shared projects: the owner's email, for "Shared by". */
+  owner_email?: string;
   created_at: string;
   updated_at: string;
 };

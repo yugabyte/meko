@@ -15,3 +15,8 @@ export function isLinkSharingEnabled(): boolean {
 export function shareLinkUrl(path: string): string {
   return `${window.location.origin}${path}`;
 }
+
+/** Query param that makes the share page scroll to and flash its Link sharing
+ *  card, e.g. `?highlight=link`. */
+export const SHARE_PAGE_HIGHLIGHT_PARAM = "highlight";
+export const SHARE_PAGE_HIGHLIGHT_LINK = "link";

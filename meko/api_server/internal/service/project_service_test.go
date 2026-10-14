@@ -342,7 +342,7 @@ func folderRows() *sqlmock.Rows {
 func projectRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"project_id", "user_id", "project_name", "theme_key", "theme_version",
-		"description", "owner_name", "created_at", "updated_at",
+		"description", "owner_name", "owner_email", "created_at", "updated_at",
 	})
 }
 
@@ -360,7 +360,7 @@ func TestDatapackPaths_ResolvesProjectAndFolderNames(t *testing.T) {
 
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WillReturnRows(projectRows().
-			AddRow("proj-1", "me", "ADLC", "adlc", "1.0", "", "Me", now, now))
+			AddRow("proj-1", "me", "ADLC", "adlc", "1.0", "", "Me", "me@example.com", now, now))
 
 	mock.ExpectQuery("FROM +meko_system.project_folders").
 		WillReturnRows(folderRows().
@@ -421,8 +421,8 @@ func TestDatapackPaths_FiltersToTheRequestedDatapacks(t *testing.T) {
 		WillReturnRows(placementRows().AddRow("dp-shared", "proj-2", "f2", now, now))
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WillReturnRows(projectRows().
-			AddRow("proj-1", "me", "Mine", "adlc", "1.0", "", "Me", now, now).
-			AddRow("proj-2", "alice", "Hers", "adlc", "1.0", "", "Alice", now, now))
+			AddRow("proj-1", "me", "Mine", "adlc", "1.0", "", "Me", "me@example.com", now, now).
+			AddRow("proj-2", "alice", "Hers", "adlc", "1.0", "", "Alice", "alice@example.com", now, now))
 	mock.ExpectQuery("FROM +meko_system.project_folders").
 		WillReturnRows(folderRows().
 			AddRow("f1", "proj-1", "a", "", now, now).
@@ -455,7 +455,7 @@ func TestDatapackPaths_UppercaseIDStillMatchesShared(t *testing.T) {
 		WillReturnRows(placementRows().AddRow(id, "proj-2", "f2", now, now))
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WillReturnRows(projectRows().
-			AddRow("proj-2", "alice", "Hers", "adlc", "1.0", "", "Alice", now, now))
+			AddRow("proj-2", "alice", "Hers", "adlc", "1.0", "", "Alice", "alice@example.com", now, now))
 	mock.ExpectQuery("FROM +meko_system.project_folders").
 		WillReturnRows(folderRows().
 			AddRow("f2", "proj-2", "b", "", now, now))
@@ -508,7 +508,7 @@ func TestListSharedWithCounts_ScopesToWhatTheRecipientCanSee(t *testing.T) {
 
 	mock.ExpectQuery("FROM +meko_system.projects").
 		WillReturnRows(projectRows().
-			AddRow("proj-alice", "alice", "ADLC", "adlc", "1.0", "", "Alice", now, now))
+			AddRow("proj-alice", "alice", "ADLC", "adlc", "1.0", "", "Alice", "alice@example.com", now, now))
 
 	// Alice's project really has two folders; only one holds something Bob can see.
 	mock.ExpectQuery("FROM +meko_system.project_folders").
@@ -526,6 +526,9 @@ func TestListSharedWithCounts_ScopesToWhatTheRecipientCanSee(t *testing.T) {
 	p := shared[0]
 	if p.OwnerName != "Alice" {
 		t.Errorf("owner_name = %q, want Alice so the recipient knows whose project it is", p.OwnerName)
+	}
+	if p.OwnerEmail != "alice@example.com" {
+		t.Errorf("owner_email = %q, want alice@example.com for the card's Shared by line", p.OwnerEmail)
 	}
 	if p.DatapackCount != 1 {
 		t.Errorf("datapack_count = %d, want 1 (only what Bob can see)", p.DatapackCount)

@@ -11,6 +11,7 @@ import { formatDatapackCreatedDateShorthand } from "@/lib/datapackDateFormat";
 import { isDatapackGrantEligibleToShare } from "@/lib/datapackShareGrants";
 import type { DatapackPath } from "@/lib/api/projectsApi";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SharedByStrip } from "@/components/shared-by-strip";
 import {
   ADD_TO_PROJECT_LABEL,
   MOVE_TO_PROJECT_LABEL,
@@ -118,30 +119,7 @@ export function DatapackTile({
             </div>
           </div>
 
-          {variant === SHARED ? (
-            // "Subtle in light, saturated in dark" — light mode gets a
-            // soft violet-tinted pill with darker text (matches the
-            // soft-pill family used elsewhere); dark mode keeps the
-            // original brand-art `violet-950/35` deep tint that reads
-            // well against the dark card background.
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-violet-500/30 bg-violet-100 dark:bg-violet-950/35 px-3 py-2">
-              <div className="flex min-w-0 items-center gap-2 text-xs text-violet-700 dark:text-violet-100/90">
-                <Share2
-                  className="h-3.5 w-3.5 shrink-0 text-violet-700 dark:text-violet-300/90"
-                  aria-hidden
-                />
-                <span className="min-w-0 leading-snug">
-                  <span className="text-violet-700 dark:text-violet-200/80">Shared by </span>
-                  <span
-                    className="font-medium text-fuchsia-700 dark:text-fuchsia-300/95 [overflow-wrap:anywhere]"
-                    title={sharedByLabel !== "—" ? sharedByLabel : undefined}
-                  >
-                    {sharedByLabel}
-                  </span>
-                </span>
-              </div>
-            </div>
-          ) : null}
+          {variant === SHARED ? <SharedByStrip label={sharedByLabel} /> : null}
 
           {m01Tokens > 0 && (
             <>

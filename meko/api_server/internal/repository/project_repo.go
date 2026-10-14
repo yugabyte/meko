@@ -251,7 +251,7 @@ func (r *ProjectRepo) Folders(projectID string) ([]models.ProjectFolder, error) 
 	return out, nil
 }
 
-// ByIDs returns the given projects with their owner's display name, for the
+// ByIDs returns the given projects with their owner's display name and email, for the
 // "Shared projects" section where the owner is the point.
 //
 // Takes ids rather than a user, because the caller has already worked out
@@ -265,6 +265,7 @@ func (r *ProjectRepo) ByIDs(projectIDs []string) ([]models.Project, error) {
 		`SELECT p.project_id, p.user_id, p.project_name, p.theme_key, p.theme_version,
 		        COALESCE(p.project_details->>'description', ''),
 		        COALESCE(NULLIF(TRIM(CONCAT(u.user_first_name, ' ', u.user_last_name)), ''), u.user_email, ''),
+		        COALESCE(u.user_email, ''),
 		        p.created_at, p.updated_at
 		 FROM   meko_system.projects p
 		 JOIN   meko_system.users u ON u.user_id = p.user_id
@@ -281,7 +282,7 @@ func (r *ProjectRepo) ByIDs(projectIDs []string) ([]models.Project, error) {
 		var p models.Project
 		if sErr := rows.Scan(
 			&p.ID, &p.UserID, &p.Name, &p.ThemeKey, &p.ThemeVersion,
-			&p.Description, &p.OwnerName, &p.CreatedAt, &p.UpdatedAt,
+			&p.Description, &p.OwnerName, &p.OwnerEmail, &p.CreatedAt, &p.UpdatedAt,
 		); sErr != nil {
 			return nil, fmt.Errorf("projects: scan: %w", sErr)
 		}

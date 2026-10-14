@@ -21,6 +21,9 @@ type Project struct {
 	// OwnerName is filled for shared projects so the recipient can see whose
 	// project they are looking at. Empty on the caller's own projects.
 	OwnerName string `json:"owner_name,omitempty"`
+	// OwnerEmail is filled alongside OwnerName; the card's "Shared by" line
+	// prefers it, the same as a shared datapack's.
+	OwnerEmail string `json:"owner_email,omitempty"`
 	// FolderNames lets a project card show the project's shape without a
 	// detail call per card. Carried on the list response because ListWithCounts
 	// already reads every folder to compute FolderCount.

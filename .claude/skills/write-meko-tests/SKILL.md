@@ -93,7 +93,7 @@ it provokes in `Tolerates`. A scenario that needs a stack nobody else touches us
 `DedicatedStack`. That costs about 20 minutes of provisioning, so earn it.
 
 Drop scenarios that duplicate an existing test, that target a route which does not exist
-(there is no token refresh route and no route that removes an accepted datapack member),
+(there is no token refresh route),
 or that only restate the framework's own guarantees. Say what you dropped and why.
 
 ## Step 4: write steps and assertions

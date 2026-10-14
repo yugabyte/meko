@@ -4,6 +4,7 @@
 
 import type { CurrentUser, Datapack } from "@/lib/api/mekoApi";
 import { formatDatapackShareGrantCamelCase, isDatapackShareGrant } from "@/lib/datapackShareGrants";
+import { sharedByLabel } from "@/components/shared-by-strip";
 
 /** Tile variants. `shared` tints the card and adds the "Shared by" strip. */
 export const OWNED = "owned";
@@ -36,11 +37,7 @@ export function datapackAccessFooterLabel(dp: Datapack): string {
 
 /** Who shared it: email when known, else the display name. */
 export function datapackSharedByLabel(dp: Datapack): string {
-  const email = (dp.datapack_owner_email_id ?? "").trim();
-  if (email) return email;
-  const name = (dp.datapack_owner_name ?? "").trim();
-  if (name) return name;
-  return "—";
+  return sharedByLabel(dp.datapack_owner_email_id, dp.datapack_owner_name);
 }
 
 /** Owner line for tiles: "Me" when the signed-in account owns the row. */

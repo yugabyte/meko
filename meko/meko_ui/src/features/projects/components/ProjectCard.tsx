@@ -3,6 +3,8 @@
 
 import { Database, Folder, Sparkles } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { SharedByStrip, sharedByLabel } from "@/components/shared-by-strip";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
 import { formatDatapackCreatedDateShorthand } from "@/lib/datapackDateFormat";
 import type { Project } from "@/lib/api/projectsApi";
@@ -42,12 +44,15 @@ export function ProjectCard({
   onOpen: (project: Project) => void;
 }) {
   const description = (project.description ?? "").trim();
+  const { data: currentUser = null } = useCurrentUser();
+  const shared = Boolean(currentUser && project.user_id !== currentUser.account_id);
 
   return (
     <Card
       className={cn(
         "group flex h-full flex-col gap-0 overflow-hidden border-border bg-card p-0 shadow-sm transition-colors",
         "hover:border-brand/40 hover:bg-card/90",
+        shared && "hover:border-violet-500/35",
       )}
     >
       <div
@@ -82,6 +87,10 @@ export function ProjectCard({
             </p>
           </div>
         </div>
+
+        {shared ? (
+          <SharedByStrip label={sharedByLabel(project.owner_email, project.owner_name)} />
+        ) : null}
 
         {description ? (
           <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">

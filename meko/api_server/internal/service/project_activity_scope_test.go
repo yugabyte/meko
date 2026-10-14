@@ -62,8 +62,8 @@ func TestProjectActivityLog_RecipientSeesOnlyTheSharedDatapacks(t *testing.T) {
 		WithArgs(pq.Array([]string{"proj-1"})).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"project_id", "user_id", "project_name", "theme_key", "theme_version",
-				"description", "owner_name", "created_at", "updated_at"}).
-			AddRow("proj-1", "alice", "adlc", "adlc", "1.0", "", "Alice", now, now))
+				"description", "owner_name", "owner_email", "created_at", "updated_at"}).
+			AddRow("proj-1", "alice", "adlc", "adlc", "1.0", "", "Alice", "alice@example.com", now, now))
 
 	// The structural sides. Bob is not the owner, so folders come from the
 	// placements he can see: f1 only. Alice's other folders never enter the
