@@ -8,11 +8,11 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  EventsClientMessage, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
-import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
+import { MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
@@ -431,9 +431,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
   app.get<{ Params: { id: string } }>('/api/projects/:id/meko-logs', async (req): Promise<MekoLogInfo[]> => core.sessions.mekoLogs(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; failed?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; by?: string; failed?: string } }>(
     '/api/sessions/:id/meko-calls', async (req): Promise<MekoCallPage> => {
-      const { before, limit, tool, failed } = req.query;
+      const { before, limit, tool, by, failed } = req.query;
+      if (by && !(MEKO_CALL_BY as readonly string[]).includes(by)) throw new HttpError(400, 'by must be agentk or claude.');
       const num = (v: string | undefined, what: string) => {
         if (v === undefined || v === '') return undefined;
         const n = Number(v);
@@ -441,7 +442,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
         return n;
       };
       return core.sessions.mekoCalls(req.params.id, {
-        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, failed: failed === '1' || failed === 'true',
+        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, by: (by || undefined) as MekoCallBy | undefined,
+        failed: failed === '1' || failed === 'true',
       });
     });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/meko-calls.jsonl', async (req, reply) => {

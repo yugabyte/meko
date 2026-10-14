@@ -21,7 +21,9 @@
 //                 come on polls
 //   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
 //   /mod/meko     Claude's Meko tool calls: `start` before each runs, `end` once it's over (failed or
-//                 interrupted too), for the session's dot to show while one runs
+//                 interrupted too), for the session's dot to show while one runs. While the project
+//                 keeps a Meko call log, `start` is answered `{ log: true }` and `end` carries the call:
+//                 the tool, what Claude sent, the reply as Claude read it, how it went and how long it took
 //   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: AgentK ends
 //                 the turn and sends what waited for its end
 //
@@ -31,7 +33,7 @@
 //
 // This file is compiled by Claude Code, not by the repo's tsc: `claude-code` is the engine's own
 // module, typed by the declarations Claude Code writes into .claude-plugin/types when it loads the mod.
-import type { EngineInterface, ModelForkResult, Register } from 'claude-code'
+import type { EngineInterface, ModelForkResult, Register, ToolCallInput, ToolCallResult } from 'claude-code'
 
 /**
  * The protocol the server checks, on /mod/hello and on every poll: 2 runs learn steps. AgentK loads
@@ -47,6 +49,12 @@ const QUESTIONS_FAILED = "AgentK Local didn't take the questions. Write them to 
 const LEARN_COMMAND = 'agentk_learn'
 /** Meko's tools, under its own MCP server's name or a plugin's (`mcp__plugin_x_meko__…`), as mekousage.ts reads them. */
 const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__/
+/** Keys of a `tool.call` input that aren't the tool's own arguments. */
+const RESERVED_KEYS = new Set(['tool', 'tool_use_id', 'consent', 'agentId', 'requestMeta'])
+/** The most a Meko call sent to the log may take: the hook socket drops a body over 4 MB. */
+const MAX_LOGGED_CHARS = 3.5 * 1024 * 1024
+/** The most of a call's error that's sent: a failed reply's text, a refusal or what was thrown. */
+const ERROR_CHARS = 300
 /** The most the duplicate check may write. */
 const DEDUP_MAX_TOKENS = 8000
 
@@ -127,6 +135,39 @@ async function refused($: EngineInterface, l: Link, p: Prompt, reason: string) {
   const box = await $.prompt.read().catch(() => null)
   const filled = box?.text === '' && (await $.prompt.fill({ text: p.text }).catch(() => null))?.isFilled === true
   await post($, l, '/mod/ack', { id: p.id, state: 'dropped', reason, filled })
+}
+
+/** How a tool call ended: what `next(e)` resolved to, or what it threw. */
+type Settled = { r: ToolCallResult } | { thrown: unknown }
+
+/**
+ * One of Claude's Meko calls, for the session's Meko call log: what it sent (its input without the
+ * engine's keys), the reply as Claude read it, and how it went. A call too large for the hook
+ * socket goes without its reply, then without its arguments too, so it's still logged.
+ */
+function mekoCall(e: ToolCallInput, s: Settled, ms: number) {
+  const args: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(e)) if (!RESERVED_KEYS.has(k)) args[k] = v
+  let ok = false
+  let text: string | null = null
+  let error: string | null = null
+  if (!('r' in s)) {
+    error = s.thrown instanceof Error && s.thrown.message ? s.thrown.message : 'Interrupted'
+  } else if (s.r.deny !== undefined) {
+    error = s.r.deny
+  } else {
+    const { result } = s.r
+    text = typeof s.r.text === 'string' ? s.r.text : typeof result === 'string' ? result : result === undefined ? null : JSON.stringify(result)
+    ok = !s.r.isError
+    if (!ok) error = text || 'Meko reported an error'
+  }
+  if (error !== null) error = error.slice(0, ERROR_CHARS)
+  const call = { tool: e.tool, args: args as unknown, ms, ok, text, error, subagent: !!e.agentId }
+  const size = JSON.stringify(call).length
+  if (size <= MAX_LOGGED_CHARS) return call
+  const tooLarge = `The call was too large to log (${size} characters).`
+  const lean = { ...call, text: null, error: error ? `${error} ${tooLarge}` : tooLarge }
+  return JSON.stringify(lean).length <= MAX_LOGGED_CHARS ? lean : { ...lean, args: null }
 }
 
 /** A JSON body's fields, or {} when it isn't a JSON object. */
@@ -336,7 +377,8 @@ export const register: Register = (on) => {
   }).catch(($, e, next) => next(e))
 
   // Claude's Meko calls: AgentK hears of each before it runs (awaited, so `start` always comes
-  // before `end`) and once it's over, whatever the outcome. The call itself is left alone. The
+  // before `end`) and once it's over, whatever the outcome; while the project keeps a Meko call log
+  // (`start` answered `{ log: true }`), the end carries the call. The call itself is left alone. The
   // tool is checked here rather than with a RegExp matcher, which the oldest Claude Code the mod
   // runs in (MIN_MOD_CLAUDE) may not take; every other tool goes straight on. The `.catch` replays
   // what `next(e)` settled to, so a failed call never runs twice.
@@ -344,11 +386,21 @@ export const register: Register = (on) => {
     if (!MEKO_TOOL.test(e.tool) || !e.tool_use_id) return next(e)
     const l = await linkOf($).catch(() => null)
     if (!l) return next(e)
-    await post($, l, '/mod/meko', { id: e.tool_use_id, state: 'start' }).catch(() => undefined)
+    const id = e.tool_use_id
+    const started = await post($, l, '/mod/meko', { id, state: 'start' }).catch(() => null)
+    const log = started?.status === 200 && json(started.text).log === true
+    const at = Date.now()
+    let settled: Settled = { thrown: undefined }
     try {
-      return await next(e)
+      const r = await next(e)
+      settled = { r }
+      return r
+    } catch (err) {
+      settled = { thrown: err }
+      throw err
     } finally {
-      void post($, l, '/mod/meko', { id: e.tool_use_id, state: 'end' }).catch(() => undefined)
+      const end = log ? { id, state: 'end', ...mekoCall(e, settled, Date.now() - at) } : { id, state: 'end' }
+      void post($, l, '/mod/meko', end).catch(() => undefined)
     }
   }).catch(($, e, next) => next(e))
 

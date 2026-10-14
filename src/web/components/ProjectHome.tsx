@@ -503,7 +503,7 @@ function ProjectSettingsForm({
                 <span>
                   Log Meko calls
                   <span className="muted small check-hint">
-                    What AgentK sends to Meko for each session, and what comes back. Deleted with the session.
+                    What AgentK and Claude send to Meko for each session, and what comes back. Deleted with the session.
                   </span>
                 </span>
               </label>

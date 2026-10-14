@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -18,7 +18,8 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
-import { mekoLogPath, removeMekoLog } from './mekolog.js';
+import { claudeReply, mekoLogPath, removeMekoLog } from './mekolog.js';
+import { mekoTool } from './mekousage.js';
 import {
   DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
@@ -1203,7 +1204,7 @@ export class SessionManager {
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
-   * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
+   * (`/mod/meko`), for the session's dot and, with their content, its Meko call log; and a turn you interrupted (`/mod/turn`), which fires
    * no `Stop` hook.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
@@ -1256,9 +1257,16 @@ export class SessionManager {
         return this.core.lifecycle.questionsFromTool(row, body.questions);
       case '/mod/learn':
         return this.core.learn.fromMod(row, body);
-      case '/mod/meko':
+      case '/mod/meko': {
         this.mod.mekoCall(row.id, body.id, body.state);
+        const scope = { id: row.id, createdAt: row.created_at };
+        // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
+        if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };
+        // Answered once it's written (the mod doesn't wait for the answer). The log keeps the order
+        // the ends came in, a saved reply still being read included.
+        if (body.state === 'end' && body.tool !== undefined) await this.logClaudeMeko(row, body);
         return { status: 204 };
+      }
       case '/mod/turn':
         // Only an interrupted turn is reported, and only one with a turn running counts: one report
         // per turn, but a turn the server already ended (a restart) is left alone.
@@ -1902,6 +1910,25 @@ export class SessionManager {
 
   // ---- the Meko call log (mekolog.ts) ----
 
+  /**
+   * One of Claude's Meko calls, as AgentK's mod reports its end (`/mod/meko`), into the session's
+   * Meko call log: a reply too large for Claude's context is read from the file Claude Code saved it
+   * to, the call keeping its place in the log meanwhile. Never rejects.
+   */
+  private logClaudeMeko(row: SessionRow, body: Record<string, unknown>): Promise<void> {
+    const tool = typeof body.tool === 'string' ? mekoTool(body.tool) : null;
+    const scope = { id: row.id, createdAt: row.created_at };
+    if (!tool || !this.core.mekoLog.wants(scope)) return Promise.resolve();
+    const end = Date.now();
+    const ms = typeof body.ms === 'number' && Number.isFinite(body.ms) && body.ms >= 0 ? Math.round(body.ms) : 0;
+    const str = (v: unknown) => (typeof v === 'string' ? v : null);
+    const call = claudeReply(str(body.text), row.transcript_path).then((reply) => ({
+      tool, at: end - ms, ms, ok: body.ok === true, error: str(body.error), args: body.args ?? null,
+      text: reply.text, notice: reply.notice, subagent: body.subagent === true,
+    }));
+    return this.core.mekoLog.recordClaude(scope, call);
+  }
+
   /** The project's sessions that have a Meko call log, the latest written to first. */
   mekoLogs(projectId: string): MekoLogInfo[] {
     if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
@@ -1913,7 +1940,7 @@ export class SessionManager {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean }): Promise<MekoCallPage> {
+  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; by?: MekoCallBy; failed?: boolean }): Promise<MekoCallPage> {
     return this.core.mekoLog.page(this.row(id).id, q);
   }
 

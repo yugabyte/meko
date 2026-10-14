@@ -508,16 +508,22 @@ export interface ProjectSettings {
   /** Browser notifications for this project. */
   notify: boolean;
   /**
-   * Keep each session's Meko calls (what AgentK sent and what came back) in meko-calls.jsonl in the
-   * session's folder, deleted with the session. Off by default.
+   * Keep each session's Meko calls, AgentK's and Claude's (what was sent and what came back), in
+   * meko-calls.jsonl in the session's folder, deleted with the session. Off by default.
    */
   mekoLog: boolean;
 }
 
-/** The Meko tools AgentK calls for a session: the Meko calls page's tool filter. */
+/** The Meko tools AgentK and Claude call for a session: the Meko calls page's tool filter. */
 export const MEKO_LOG_TOOLS = [
-  'context_search', 'conversation_create', 'conversation_update', 'memory_add', 'memory_update', 'artifact_put',
+  'context_search', 'memory_search', 'knowledgebase_search', 'memory_get_all', 'memory_get_by_id', 'conversation_get',
+  'artifact_get', 'memory_add', 'memory_update', 'memory_promote', 'conversation_create', 'conversation_update',
+  'conversation_add_message', 'artifact_put',
 ] as const;
+
+/** Who made a call in a session's Meko call log: AgentK, or Claude through its Meko tools. */
+export const MEKO_CALL_BY = ['agentk', 'claude'] as const;
+export type MekoCallBy = (typeof MEKO_CALL_BY)[number];
 
 /** GET /api/projects/:id/meko-logs: a session of the project that has a Meko call log. */
 export interface MekoLogInfo {
@@ -534,6 +540,9 @@ export interface MekoCallSummary {
   offset: number;
   at: number;
   tool: string;
+  by: MekoCallBy;
+  /** Claude's call, made by one of its subagents. */
+  subagent: boolean;
   /** The learn step that made it, if any. */
   learn: string | null;
   ms: number;
@@ -547,6 +556,11 @@ export interface MekoCallDetail extends MekoCallSummary {
   args: unknown;
   /** The parsed reply, its text when it isn't JSON, or null when none came. */
   result: unknown;
+  /**
+   * Claude's call whose reply was too large for its context: the notice Claude read in its place.
+   * `result` is then the reply Claude Code saved to a file, when it could be read.
+   */
+  notice: string | null;
 }
 
 /** GET /api/sessions/:id/meko-calls: a page of a session's Meko calls, newest first. */
@@ -1902,8 +1916,9 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
-// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&failed=1 → MekoCallPage   (the session's Meko call log, newest
-//        first, read backwards from the byte offset `before`; limit 1 to 200, default 50; an empty page when it has none)
+// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&by=agentk|claude&failed=1 → MekoCallPage   (the session's Meko
+//        call log, AgentK's calls and Claude's, newest first, read backwards from the byte offset `before`; limit 1 to 200,
+//        default 50; an empty page when it has none)
 // GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
 // GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
 // DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)

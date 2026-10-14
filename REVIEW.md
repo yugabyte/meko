@@ -210,7 +210,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.
       The log never holds the API key, is written only while the project has Log Meko calls on and
       the session isn't archived, and is deleted wherever the session's pastes are (archive, failed
-      start, closing the project). Writing it never fails the call.
+      start, closing the project). Writing it never fails the call. Claude's calls reach it only
+      from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
+      file Claude Code saved comes only from a `tool-results` folder beside the session's transcript.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
