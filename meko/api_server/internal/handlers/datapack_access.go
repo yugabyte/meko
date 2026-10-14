@@ -54,6 +54,20 @@ func RequireDatapackAccess(
 	return accountID, err
 }
 
+// RequireDatapackAccessWithGrant is RequireDatapackAccess that also returns the
+// caller's resolved grant, for handlers that narrow what a viewer sees.
+func RequireDatapackAccessWithGrant(
+	c echo.Context,
+	dpLookup DatapackMembershipLookup,
+	datapackID string,
+) (accountID, grant string, err error) {
+	dp, accountID, err := resolveDatapackMembership(c, dpLookup, datapackID)
+	if err != nil {
+		return "", "", err
+	}
+	return accountID, dp.Grant, nil
+}
+
 // RequireDatapackOwnerOrMaintainer is the stricter sibling of
 // RequireDatapackAccess: same membership lookup, but callers whose resolved
 // grant is viewer or contributor are rejected with 403. It's the handler-level
@@ -111,4 +125,13 @@ func resolveDatapackMembership(
 		return nil, "", writeAndFail(c, http.StatusNotFound, "NOT_FOUND", "datapack not found")
 	}
 	return dp, account.ID, nil
+}
+
+// observeProjectID hides the Langfuse project from a viewer, who is not a member
+// of it, so the UI doesn't offer an Observe link that Langfuse would refuse.
+func observeProjectID(grant, projectID string) string {
+	if models.IsViewerGrant(grant) {
+		return ""
+	}
+	return projectID
 }

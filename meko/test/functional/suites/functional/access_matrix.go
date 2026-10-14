@@ -20,7 +20,7 @@ func init() {
 		OwningTeam: core.TeamAPIServer,
 		Env:        core.EnvSpec{Sharing: core.Shared, Shape: core.SingleStack},
 		Description: "Four accounts on a stack with the Cognito mock: the owner of a datapack, a maintainer, a viewer and a stranger. Each calls the datapack routes. " +
-			"Read routes answer every member and 404 the stranger. Routes for owners and maintainers answer 403 to a viewer. Owner-only routes answer 404 to everyone else, the maintainer included. " +
+			"Read routes answer every member and 404 the stranger, except the member list, which answers 403 to a viewer. Routes for owners and maintainers answer 403 to a viewer. Owner-only routes answer 404 to everyone else, the maintainer included. " +
 			"Then PAT scopes, which a stack with no identity provider cannot test because it ignores the Bearer header: a read PAT is refused on write routes with 403 INSUFFICIENT_SCOPE and a write PAT on read routes, " +
 			"on member routes the scope check runs before the grant check, on owner-only routes the ownership check runs before the scope check, a PAT is 401 on routes that take JWTs only, and a revoked PAT is 401.",
 		Run: accessMatrix,
@@ -48,6 +48,7 @@ type route struct {
 
 var (
 	anyMember     = [4]int{200, 200, 200, 404}
+	notViewer     = [4]int{200, 200, 403, 404}
 	ownerOrMaint  = [4]int{200, 200, 403, 404}
 	ownerOnly     = [4]int{200, 404, 404, 404}
 	notOwnerOnly  = [4]int{0, 404, 404, 404}
@@ -100,7 +101,7 @@ func accessMatrix(t *core.T) error {
 	if err := t.Step("routes_by_role", func(h *core.StepHandle) error {
 		routes := []route{
 			{http.MethodGet, "/datapacks/" + id, nil, anyMember},
-			{http.MethodGet, "/datapacks/" + id + "/member-list", nil, anyMember},
+			{http.MethodGet, "/datapacks/" + id + "/member-list", nil, notViewer},
 			{http.MethodGet, "/datapacks/" + id + "/provision-status", nil, anyMember},
 			{http.MethodGet, "/datapacks/" + id + "/agents", nil, anyMember},
 			{http.MethodGet, "/datapacks/" + id + "/artifacts", nil, anyMember},

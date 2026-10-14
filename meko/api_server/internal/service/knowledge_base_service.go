@@ -303,9 +303,12 @@ type DocumentsPage struct {
 // Pulls the dist_rag schema + index name from the same constants
 // `RagService` is wired with at boot, so a future per-datapack
 // schema/index split touches the constants here, not callers.
+//
+// A viewer caller isn't told who uploaded a file, except their own.
 func (s *KnowledgeBaseService) ListDistRagDocuments(
 	dp *models.Datapack,
 	opts repository.DocumentListOpts,
+	caller *models.Account,
 ) (DocumentsPage, error) {
 	if dp == nil {
 		return DocumentsPage{}, fmt.Errorf("datapack is required")
@@ -314,6 +317,7 @@ func (s *KnowledgeBaseService) ListDistRagDocuments(
 	if err != nil {
 		return DocumentsPage{}, err
 	}
+	redactDocUploaders(docs, dp.Grant, caller)
 	page := 1
 	if opts.Limit > 0 {
 		page = opts.Offset/opts.Limit + 1
@@ -325,6 +329,21 @@ func (s *KnowledgeBaseService) ListDistRagDocuments(
 		PageSize: opts.Limit,
 		HasMore:  int64(opts.Offset+opts.Limit) < total,
 	}, nil
+}
+
+// redactDocUploaders hides who uploaded each file from a viewer, except on the
+// viewer's own uploads: the UI offers delete from uploaded_by_user_id, and an
+// uploader can still delete their own file.
+func redactDocUploaders(docs []repository.KnowledgeBaseDocument, grant string, caller *models.Account) {
+	if !models.IsViewerGrant(grant) {
+		return
+	}
+	for i := range docs {
+		if caller == nil || docs[i].UploadedByUserID == nil || *docs[i].UploadedByUserID != caller.ID {
+			docs[i].UploadedByUserID = nil
+			docs[i].UploadedByEmail = nil
+		}
+	}
 }
 
 // KnowledgeBaseSummaryResponse decorates the raw repo aggregate with
@@ -412,17 +431,38 @@ type ActivityLogResponse struct {
 // ListActivityLog returns the file-upload + memory-promotion feed for
 // the SharedKnowledge "Activity log" panel. Thin pass-through to the
 // repo (with schema/index constants) plus cursor encode/decode at the
-// wire boundary so the repo can stay strongly-typed.
+// wire boundary so the repo can stay strongly-typed. A viewer caller isn't
+// told who uploaded a file, except their own.
 func (s *KnowledgeBaseService) ListActivityLog(
 	dp *models.Datapack,
 	limit int, cursor string,
+	caller *models.Account,
 ) (ActivityLogResponse, error) {
 	if dp == nil {
 		return ActivityLogResponse{}, fmt.Errorf("datapack is required")
 	}
 	// nil structural: a single datapack's feed has no folder or placement
 	// events, those describe the project around it.
-	return s.ListActivityLogForDatapacks([]string{dp.ID}, limit, cursor, nil)
+	resp, err := s.ListActivityLogForDatapacks([]string{dp.ID}, limit, cursor, nil)
+	if err != nil || !models.IsViewerGrant(dp.Grant) {
+		return resp, err
+	}
+	callerEmail := ""
+	if caller != nil {
+		callerEmail = caller.Email
+	}
+	for i := range resp.Items {
+		redactOthersUploaderEmail(&resp.Items[i], callerEmail)
+	}
+	return resp, nil
+}
+
+// redactOthersUploaderEmail hides who uploaded a file from a viewer, unless the
+// viewer did. The feed carries only the uploader's email, so it matches on that.
+func redactOthersUploaderEmail(item *repository.ActivityLogItem, callerEmail string) {
+	if e := item.UploadedByEmail; e != nil && (callerEmail == "" || !strings.EqualFold(*e, callerEmail)) {
+		item.UploadedByEmail = nil
+	}
 }
 
 // ListActivityLogForDatapacks is the same feed over a SET of datapacks, for

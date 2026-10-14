@@ -235,7 +235,7 @@ func (s *ProjectService) scopeFor(userID, projectID string) (*projectScope, erro
 // ActivityPlacements keys on its updated_at. See
 // KnowledgeBaseService.ListActivityLogForDatapacks for the cost.
 func (s *ProjectService) ActivityLog(
-	userID, projectID string, limit int, cursor string,
+	userID, callerEmail, projectID string, limit int, cursor string,
 ) (ActivityLogResponse, error) {
 	if s.activity == nil {
 		return ActivityLogResponse{}, fmt.Errorf("activity log is unavailable")
@@ -261,6 +261,9 @@ func (s *ProjectService) ActivityLog(
 	for i := range resp.Items {
 		if dp, found := scope.byID[resp.Items[i].DatapackID]; found {
 			resp.Items[i].DatapackName = dp.Name
+			if models.IsViewerGrant(dp.Grant) {
+				redactOthersUploaderEmail(&resp.Items[i], callerEmail)
+			}
 		}
 	}
 	return resp, nil

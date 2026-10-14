@@ -354,13 +354,15 @@ func (h *SharingHandler) OutgoingShares(c echo.Context) error {
 
 // MemberList handles GET /api/v1/datapacks/:datapack_id/member-list (accepted members).
 //
-//	@Summary	List datapack members
-//	@Tags		sharing
-//	@Produce	json
-//	@Param		datapack_id	path		string	true	"Datapack ID"
-//	@Success	200		{object}	APIResponse
-//	@Failure	401		{object}	APIResponse
-//	@Failure	404		{object}	APIResponse
+//	@Summary		List datapack members
+//	@Description	Owners, maintainers and contributors only; a viewer is refused with 403.
+//	@Tags			sharing
+//	@Produce		json
+//	@Param			datapack_id	path		string	true	"Datapack ID"
+//	@Success		200		{object}	APIResponse
+//	@Failure		401		{object}	APIResponse
+//	@Failure		403		{object}	APIResponse	"the caller is a viewer"
+//	@Failure		404		{object}	APIResponse
 //	@Security	BearerAuth
 //	@Router		/datapacks/{datapack_id}/member-list [get]
 func (h *SharingHandler) MemberList(c echo.Context) error {

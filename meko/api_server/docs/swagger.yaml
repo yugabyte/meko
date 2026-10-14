@@ -2822,6 +2822,8 @@ paths:
       - datapacks
   /datapacks/{datapack_id}/member-list:
     get:
+      description: Owners, maintainers and contributors only; a viewer is refused
+        with 403.
       parameters:
       - description: Datapack ID
         in: path
@@ -2837,6 +2839,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: the caller is a viewer
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":
@@ -3763,13 +3769,15 @@ paths:
       - token-savings
   /memories:
     get:
+      description: For a viewer of the datapack, user_id is ignored and who added
+        each memory is left out.
       parameters:
       - description: Datapack ID
         in: query
         name: datapack_id
         required: true
         type: string
-      - description: User ID (optional)
+      - description: User ID (optional; ignored for a viewer)
         in: query
         name: user_id
         type: string
@@ -3836,6 +3844,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "403":
+          description: Viewers can't delete memories
           schema:
             $ref: '#/definitions/handlers.APIResponse'
         "404":

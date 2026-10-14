@@ -140,3 +140,21 @@ func TestRequireDatapackOwnerOrMaintainer_OwnerGrantsAccess(t *testing.T) {
 		t.Errorf("expected accountID acct-4, got %q", accountID)
 	}
 }
+
+func TestRequireDatapackAccessWithGrant_ReturnsSharedGrant(t *testing.T) {
+	c, _ := newAuthedContext("acct-1")
+	lookup := &fakeDatapackLookup{
+		shared: map[string]*models.Datapack{
+			"acct-1:" + otherTenantsDatapackID: {ID: otherTenantsDatapackID, Grant: string(models.GrantViewer)},
+		},
+	}
+
+	accountID, grant, err := handlers.RequireDatapackAccessWithGrant(c, lookup, otherTenantsDatapackID)
+
+	if err != nil {
+		t.Fatalf("expected nil error for a shared datapack, got %v", err)
+	}
+	if accountID != "acct-1" || grant != string(models.GrantViewer) {
+		t.Errorf("got (%q, %q), want (acct-1, viewer)", accountID, grant)
+	}
+}

@@ -22,7 +22,7 @@ func init() {
 		OwningTeam: core.TeamAPIServer,
 		Env:        core.EnvSpec{Sharing: core.Shared, Shape: core.SingleStack},
 		Description: "Three accounts on a stack with the Cognito mock. A creates a datapack and shares it with B as a viewer. The invite is pending, B sees it as an incoming share and cannot read the datapack yet. " +
-			"B accepts, reads the datapack with the viewer grant, is on A's member list, and lists it over MCP with its own PAT. B cannot share it on (403). C, who was never invited, gets 404 on REST and does not see it over MCP. " +
+			"B accepts, reads the datapack with the viewer grant, is on A's member list but cannot read it (403), and lists it over MCP with its own PAT. B cannot share it on (403). C, who was never invited, gets 404 on REST and does not see it over MCP. " +
 			"A raises B to contributor. A second invite for the same email is a 409, an invite for the owner a 400, and an invite for another user cannot be accepted by C (403). " +
 			"A pending invite that is revoked cannot be accepted (404) and grants nothing. There is no route that removes an accepted member, so the test does not cover it.",
 		Run: datapackSharing,
@@ -157,9 +157,9 @@ func datapackSharing(t *core.T) error {
 		if !viewer {
 			return fmt.Errorf("A's member list %+v lacks B as a viewer", members)
 		}
-		bMembers, err := b.API.Members(t, dp.ID)
-		if err != nil || len(bMembers) != len(members) {
-			return fmt.Errorf("B reads the member list %+v (%v), want the same %d members A sees", bMembers, err, len(members))
+		if err := refuses(t, "B reading the member list as a viewer", b.API, http.MethodGet,
+			"/datapacks/"+dp.ID+"/member-list", statusForbidden, "FORBIDDEN"); err != nil {
+			return err
 		}
 		again, err := b.API.Raw(t, http.MethodPost, "/datapacks/invite-action", map[string]string{"invite_id": invite.InviteID, "user_action": "accept"})
 		if err != nil {

@@ -78,7 +78,7 @@ func TestProjectActivityLog_RecipientSeesOnlyTheSharedDatapacks(t *testing.T) {
 			[]string{"updated_at", "datapack_id", "folder_name", "folder_id"}).
 			AddRow(now, "shared-1", "perf_baselines", "f1"))
 
-	if _, err := svc.ActivityLog("bob", "proj-1", 10, ""); err != nil {
+	if _, err := svc.ActivityLog("bob", "bob@x.com", "proj-1", 10, ""); err != nil {
 		t.Fatalf("ActivityLog: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestProjectActivityLog_OwnerSeesEveryDatapackInTheProject(t *testing.T) {
 			[]string{"updated_at", "datapack_id", "folder_name", "folder_id"}).
 			AddRow(now, "dp-a", "standards", "f1"))
 
-	if _, err := svc.ActivityLog("me", "proj-1", 10, ""); err != nil {
+	if _, err := svc.ActivityLog("me", "me@x.com", "proj-1", 10, ""); err != nil {
 		t.Fatalf("ActivityLog: %v", err)
 	}
 	if len(activity.askedFor) != 3 {

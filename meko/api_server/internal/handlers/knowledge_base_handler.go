@@ -2096,7 +2096,11 @@ func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 		StatusFilter: statusFilter,
 	}
 
-	result, err := h.knowledgeBaseSvc.ListDistRagDocuments(dp, opts)
+	caller, aErr := auth.GetAccount(c)
+	if aErr != nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+	}
+	result, err := h.knowledgeBaseSvc.ListDistRagDocuments(dp, opts, caller)
 	if err != nil {
 		slog.Error("failed to list knowledge base documents",
 			"datapack_id", dp.ID, "error", err)
@@ -2349,7 +2353,11 @@ func (h *KnowledgeBaseHandler) ActivityLog(c echo.Context) error {
 	}
 	cursor := strings.TrimSpace(c.QueryParam("cursor"))
 
-	resp, err := h.knowledgeBaseSvc.ListActivityLog(dp, limit, cursor)
+	caller, aErr := auth.GetAccount(c)
+	if aErr != nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+	}
+	resp, err := h.knowledgeBaseSvc.ListActivityLog(dp, limit, cursor, caller)
 	if err != nil {
 		slog.Error("failed to list activity log",
 			"datapack_id", dp.ID, "error", err)

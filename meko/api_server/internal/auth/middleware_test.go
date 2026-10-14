@@ -295,3 +295,31 @@ func TestRequireDatapackOwnerOrMaintainerGrant(t *testing.T) {
 		})
 	}
 }
+
+func TestRejectViewerGrant(t *testing.T) {
+	cases := []struct {
+		grant      string
+		wantStatus int
+	}{
+		{grant: models.GrantOwner, wantStatus: http.StatusOK},
+		{grant: string(models.GrantMaintainer), wantStatus: http.StatusOK},
+		{grant: string(models.GrantContributor), wantStatus: http.StatusOK},
+		{grant: string(models.GrantViewer), wantStatus: http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.grant, func(t *testing.T) {
+			e := echo.New()
+			e.GET("/protected", func(c echo.Context) error {
+				c.Set(auth.ContextKeyDatapack, &models.Datapack{ID: "dp-1", Grant: tc.grant})
+				return auth.RejectViewerGrant()(func(c echo.Context) error {
+					return c.JSON(http.StatusOK, map[string]string{"ok": "true"})
+				})(c)
+			})
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/protected", nil))
+			if rec.Code != tc.wantStatus {
+				t.Errorf("grant=%q: expected status %d, got %d", tc.grant, tc.wantStatus, rec.Code)
+			}
+		})
+	}
+}

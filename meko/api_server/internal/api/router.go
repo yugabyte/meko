@@ -1226,10 +1226,11 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
-	// Accepted members (roster): any role with datapack access.
+	// Accepted members (roster): any role except viewer.
 	dpDirect.GET("/datapacks/:datapack_id/member-list", shareH.MemberList,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RejectViewerGrant(),
 	)
 
 	// Invite / resend / revoke: owner or maintainer (not under RequireDatapackOwnership).

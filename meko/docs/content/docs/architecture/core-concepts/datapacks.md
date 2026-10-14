@@ -81,6 +81,8 @@ Pending invites are listed under **Pending**, where you can resend or revoke inv
 
 1. If you are an Owner, assign roles to members by choosing a role in the role dropdown menu for the member.
 
+A **Viewer** has read-only access. In the Meko web app and its REST API, a viewer sees the datapack's knowledge base, collective memory, conversations and memories, but not who started a conversation, added a memory, uploaded someone else's file or promoted a memory, and not the member list. Through MCP, a viewer can search the datapack but can't create or change conversations or memories.
+
 ## Isolation model
 
 Each datapack is fully isolated:

@@ -92,12 +92,16 @@ func (h *PromoteMemoriesHandler) KeepAsMemory(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	if _, err := RequireDatapackAccess(c, h.dpLookup, req.DatapackID); err != nil {
+	_, grant, err := RequireDatapackAccessWithGrant(c, h.dpLookup, req.DatapackID)
+	if err != nil {
 		return err
 	}
 	if bad, found := firstInvalidUUID(req.MemoryIDs); found {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR",
 			"memory id "+strconv.Quote(bad)+" is not a valid UUID")
+	}
+	if models.IsViewerGrant(grant) {
+		return apiError(c, http.StatusForbidden, "FORBIDDEN", "viewers have read-only access to this datapack")
 	}
 	result, err := h.svc.KeepAsMemory(c.Request().Context(), req)
 	if err != nil {
@@ -125,15 +129,17 @@ func (h *PromoteMemoriesHandler) KeepAsMemory(c echo.Context) error {
 //	@Router		/promoted-memories [get]
 func (h *PromoteMemoriesHandler) ListGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	if _, err := RequireDatapackAccess(c, h.dpLookup, datapackID); err != nil {
+	_, grant, err := RequireDatapackAccessWithGrant(c, h.dpLookup, datapackID)
+	if err != nil {
 		return err
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
 	filter := models.PromotedMemoryListFilter{
-		DatapackID: datapackID,
-		Page:       page,
-		PageSize:   pageSize,
+		DatapackID:        datapackID,
+		Page:              page,
+		PageSize:          pageSize,
+		RedactAttribution: models.IsViewerGrant(grant),
 	}
 
 	slog.Info("listing promoted memories",
@@ -148,7 +154,6 @@ func (h *PromoteMemoriesHandler) ListGET(c echo.Context) error {
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-
 	return ok(c, http.StatusOK, response)
 }
 

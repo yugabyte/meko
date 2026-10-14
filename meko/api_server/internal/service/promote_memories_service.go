@@ -117,6 +117,12 @@ func (svc *PromoteMemoriesService) List(
 	if items == nil {
 		items = []models.PromotedMemory{}
 	}
+	if filter.RedactAttribution {
+		for i := range items {
+			items[i].PromotedByName = nil
+			items[i].PromotedByEmail = nil
+		}
+	}
 
 	return models.PromotedMemoryListResponse{
 		Criteria:         filter,

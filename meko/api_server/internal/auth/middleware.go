@@ -583,6 +583,37 @@ func RequireDatapackOwnerOrMaintainerGrant() echo.MiddlewareFunc {
 	}
 }
 
+// RejectViewerGrant runs after RequireDatapackAccess and refuses callers whose
+// resolved grant is viewer with 403. Used where a viewer must not see other
+// members, e.g. the member roster.
+func RejectViewerGrant() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			dp, err := GetDatapack(c)
+			if err != nil || dp == nil {
+				slog.Error("datapack missing after access middleware", "path", c.Path())
+				return c.JSON(http.StatusInternalServerError, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "INTERNAL_ERROR",
+						"message": "datapack context missing",
+					},
+				})
+			}
+			if !models.IsViewerGrant(dp.Grant) {
+				return next(c)
+			}
+			return c.JSON(http.StatusForbidden, map[string]any{
+				"data": nil,
+				"error": map[string]any{
+					"code":    "FORBIDDEN",
+					"message": "viewers cannot see the datapack's members",
+				},
+			})
+		}
+	}
+}
+
 // RequireScope returns middleware that enforces the request bears at
 // least the given scope.
 //

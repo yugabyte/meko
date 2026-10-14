@@ -36,7 +36,7 @@ func NewMemoriesHandler(
 	}
 }
 
-func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFilter) error {
+func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFilter, grant string) error {
 	slog.Info("listing memories",
 		"layer", "handler",
 		"datapack_id", filter.DatapackID,
@@ -52,18 +52,19 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 
-	response.LangfuseProjectID = handler.langfuseSvc.GetProjectID(filter.DatapackID)
+	response.LangfuseProjectID = observeProjectID(grant, handler.langfuseSvc.GetProjectID(filter.DatapackID))
 
 	return ok(c, http.StatusOK, response)
 }
 
 // ListGET lists memories for a scope using query parameters.
 //
-//	@Summary	List memories (query)
+//	@Summary		List memories (query)
+//	@Description	For a viewer of the datapack, user_id is ignored and who added each memory is left out.
 //	@Tags		memories
 //	@Produce	json
 //	@Param		datapack_id	query	string	true	"Datapack ID"
-//	@Param		user_id		query	string	false	"User ID (optional)"
+//	@Param		user_id		query	string	false	"User ID (optional; ignored for a viewer)"
 //	@Param		user_type	query	string	false	"Account type (free|pro|enterprise). pro/enterprise enables vector ranking."
 //	@Param		page		query	integer	false	"Page number (1-based, default 1)"
 //	@Param		page_size	query	integer	false	"Items per page (default 20, max 100)"
@@ -75,21 +76,29 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 //	@Router		/memories [get]
 func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	if _, err := RequireDatapackAccess(c, handler.dpLookup, datapackID); err != nil {
+	_, grant, err := RequireDatapackAccessWithGrant(c, handler.dpLookup, datapackID)
+	if err != nil {
 		return err
+	}
+	viewer := models.IsViewerGrant(grant)
+	userID := strings.TrimSpace(c.QueryParam("user_id"))
+	if viewer {
+		// Filtering by user would tell a viewer whose memories they are.
+		userID = ""
 	}
 	page, _ := strconv.Atoi(c.QueryParam("page"))
 	pageSize, _ := strconv.Atoi(c.QueryParam("page_size"))
 	filter := models.MemoryListFilter{
 		DatapackID: datapackID,
-		UserID:     strings.TrimSpace(c.QueryParam("user_id")),
+		UserID:     userID,
 		UserType:   strings.TrimSpace(c.QueryParam("user_type")),
 		Page:       page,
 		PageSize:   pageSize,
 		Q:          strings.TrimSpace(c.QueryParam("q")),
 		Scope:      strings.TrimSpace(c.QueryParam("scope")),
+		HideOwners: viewer,
 	}
-	return handler.list(c, filter)
+	return handler.list(c, filter, grant)
 }
 
 // DeleteByID handles DELETE /api/v1/memories/:memory_id.
@@ -109,6 +118,7 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 //	@Success	200			{object}	APIResponse
 //	@Failure	400			{object}	APIResponse
 //	@Failure	401			{object}	APIResponse
+//	@Failure	403			{object}	APIResponse	"Viewers can't delete memories"
 //	@Failure	404			{object}	APIResponse
 //	@Failure	500			{object}	APIResponse
 //	@Security	BearerAuth
@@ -129,9 +139,12 @@ func (handler *MemoriesHandler) DeleteByID(c echo.Context) error {
 	// hit DELETE via the SQL `meko_user_id = caller` predicate alone.
 	// RequireDatapackAccess validates + parses the UUID, resolves the
 	// account, checks owner-then-shared access, and 404s on miss.
-	accountID, err := RequireDatapackAccess(c, handler.dpLookup, datapackID)
+	accountID, grant, err := RequireDatapackAccessWithGrant(c, handler.dpLookup, datapackID)
 	if err != nil {
 		return err
+	}
+	if models.IsViewerGrant(grant) {
+		return apiError(c, http.StatusForbidden, "FORBIDDEN", "viewers have read-only access to this datapack")
 	}
 
 	slog.Info("deleting memory",

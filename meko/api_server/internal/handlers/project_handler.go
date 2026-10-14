@@ -155,8 +155,12 @@ func (h *ProjectHandler) ActivityLog(c echo.Context) error {
 		}
 	}
 
+	callerEmail := ""
+	if account, aErr := auth.GetAccount(c); aErr == nil && account != nil {
+		callerEmail = account.Email
+	}
 	resp, err := h.svc.ActivityLog(
-		userID, c.Param("project_id"), limit, strings.TrimSpace(c.QueryParam("cursor")),
+		userID, callerEmail, c.Param("project_id"), limit, strings.TrimSpace(c.QueryParam("cursor")),
 	)
 	if err != nil {
 		return h.fail(c, err)

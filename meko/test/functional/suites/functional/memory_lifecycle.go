@@ -1,6 +1,7 @@
 package functional
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -22,7 +23,7 @@ func init() {
 		Timeout:    15 * time.Minute,
 		Description: "A memory's whole life across MCP and REST, as an owner, a viewer of the shared datapack and a stranger. memory_add stores and embeds, memory_search ranks the " +
 			"matching memory first, get_by_id and get_all return it, the REST memories page, its text filter, the count and datapack_describe agree; memory_update re-embeds and " +
-			"search follows the new text; a viewer reads but cannot delete the owner's memory; a stranger learns nothing over REST or MCP; deletion by id over MCP and REST and " +
+			"search follows the new text; a viewer's REST memory list holds every memory but names no owner, MCP search still finds the owner's memory, and the viewer's delete is 403; a stranger learns nothing over REST or MCP; deletion by id over MCP and REST and " +
 			"memory_delete_all empty every view.",
 		Run: memoryLifecycle,
 	})
@@ -257,12 +258,32 @@ func memoryLifecycle(t *core.T) error {
 	}
 
 	if err := t.Step("viewer_reads_but_cannot_delete", func(*core.StepHandle) error {
-		var page memPage
-		if err := viewer.rest(get, "/memories?datapack_id="+dp.ID, nil, httpOK, &page); err != nil {
+		var ownerPage memPage
+		if err := owner.rest(get, "/memories?datapack_id="+dp.ID, nil, httpOK, &ownerPage); err != nil {
 			return err
 		}
-		if page.Total != len(facts) {
-			return fmt.Errorf("the viewer's memories page totals %d, want the owner's %d", page.Total, len(facts))
+		path := "/memories?datapack_id=" + dp.ID
+		r, err := viewer.api.Raw(t, get, path, nil)
+		if err != nil {
+			return err
+		}
+		if err := wantStatus("the viewer's GET "+path, r, httpOK, ""); err != nil {
+			return err
+		}
+		var env struct {
+			Data memPage `json:"data"`
+		}
+		if err := json.Unmarshal(r.Body, &env); err != nil {
+			return fmt.Errorf("decode the viewer's memories page: %w", err)
+		}
+		if env.Data.Total != ownerPage.Total || env.Data.Total == 0 {
+			return fmt.Errorf("the viewer's memories page totals %d, want the owner's %d: a viewer sees every memory",
+				env.Data.Total, ownerPage.Total)
+		}
+		for _, o := range []string{owner.acct.ID, owner.acct.Email} {
+			if strings.Contains(string(r.Body), o) {
+				return fmt.Errorf("the viewer's memories page names the owner (%q): %s", o, truncateBody(r.Body))
+			}
 		}
 		res, err := search(viewer, facts[1])
 		if err != nil {
@@ -271,7 +292,8 @@ func memoryLifecycle(t *core.T) error {
 		if len(res) == 0 || res[0].ID != ids[1] {
 			return fmt.Errorf("the viewer's memory_search answered %+v, want %s", res, ids[1])
 		}
-		return refused(t, "the viewer deletes the owner's memory over REST", viewer.api, del, "/memories/"+ids[1]+"?datapack_id="+dp.ID, nil, statusNotFound, "")
+		return refused(t, "the viewer deletes the owner's memory over REST", viewer.api, del, "/memories/"+ids[1]+"?datapack_id="+dp.ID, nil,
+			statusForbidden, "FORBIDDEN")
 	}); err != nil {
 		errs = append(errs, err)
 	}

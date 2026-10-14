@@ -133,6 +133,8 @@ type MemoryListFilter struct {
 	UserType   string `json:"user_type,omitempty"`
 	Page       int    `json:"page"`
 	PageSize   int    `json:"page_size"`
+	// HideOwners drops who added each memory, for a viewer.
+	HideOwners bool `json:"-"`
 }
 
 // IsPaidUserType reports whether the account tier should run the
@@ -331,6 +333,8 @@ type PromotedMemoryListFilter struct {
 	DatapackID string `json:"datapack_id"`
 	Page       int    `json:"page"`
 	PageSize   int    `json:"page_size"`
+	// RedactAttribution drops promoted_by_* for a viewer caller.
+	RedactAttribution bool `json:"-"`
 }
 
 // PromotedMemoryListResponse is the response body for GET /promoted-memories.
@@ -381,6 +385,14 @@ const GrantOwner = "owner"
 func IsOwnerOrMaintainerGrant(grant string) bool {
 	g := strings.ToLower(strings.TrimSpace(grant))
 	return g == GrantOwner || g == string(GrantMaintainer)
+}
+
+// IsViewerGrant reports whether a resolved datapack grant is viewer. Through
+// this API a viewer sees every conversation and memory but not who wrote them,
+// never the member roster, and never who uploaded someone else's KB file or who
+// promoted a memory. Deleting a memory and keep-as-memory are 403 to a viewer.
+func IsViewerGrant(grant string) bool {
+	return strings.EqualFold(strings.TrimSpace(grant), string(GrantViewer))
 }
 
 // DatapackInvite represents a row from meko_system.datapack_invites.

@@ -3917,6 +3917,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Owners, maintainers and contributors only; a viewer is refused with 403.",
                 "produces": [
                     "application/json"
                 ],
@@ -3942,6 +3943,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "the caller is a viewer",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -5262,6 +5269,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "For a viewer of the datapack, user_id is ignored and who added each memory is left out.",
                 "produces": [
                     "application/json"
                 ],
@@ -5279,7 +5287,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "User ID (optional)",
+                        "description": "User ID (optional; ignored for a viewer)",
                         "name": "user_id",
                         "in": "query"
                     },
@@ -5426,6 +5434,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Viewers can't delete memories",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }

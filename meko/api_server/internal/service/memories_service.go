@@ -55,6 +55,11 @@ func (svc *MemoriesService) List(
 	if err != nil {
 		return models.MemoryListResponse{}, err
 	}
+	if filter.HideOwners {
+		for i := range memories {
+			memories[i].UserID, memories[i].UserName, memories[i].UserEmail = "", "", ""
+		}
+	}
 
 	topK := 5
 	if !filter.IsPaidUserType() || svc.skipVectorSort {

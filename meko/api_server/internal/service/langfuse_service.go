@@ -422,8 +422,9 @@ func grantToLangfuseProjectRole(grant string) string {
 	return role
 }
 
-// SyncSharedDatapackMembership ensures the shared recipient has Langfuse
-// org membership and the correct project membership role for the datapack.
+// SyncSharedDatapackMembership brings a shared recipient's Langfuse access in
+// line with their grant: org membership plus the matching project role for a
+// contributor or maintainer, and no project membership at all for a viewer.
 func (s *LangfuseService) SyncSharedDatapackMembership(
 	ownerUserID string,
 	recipientUserID string,
@@ -443,6 +444,11 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 	datapackID = strings.TrimSpace(datapackID)
 	if ownerUserID == "" || recipientUserID == "" || recipientEmail == "" || datapackID == "" {
 		return fmt.Errorf("owner_user_id, recipient_user_id, recipient_email, and datapack_id are required")
+	}
+	// Langfuse shows who wrote each trace, which viewers aren't told, so they
+	// are kept out of the project and a member downgraded to viewer is removed.
+	if models.IsViewerGrant(grantRole) {
+		return s.removeProjectMembership(ctx, ownerUserID, datapackID, langfuseLoginEmail(recipientUserID, recipientEmail))
 	}
 
 	org, err := s.repo.GetOrgMapping(ownerUserID)
@@ -538,6 +544,37 @@ func (s *LangfuseService) SyncSharedDatapackMembership(
 		return fmt.Errorf("upsert langfuse project membership: %w", err)
 	}
 
+	return nil
+}
+
+type projectMembershipDeleteReq struct {
+	UserID string `json:"userId"`
+}
+
+// removeProjectMembership drops loginEmail's membership of the datapack's
+// Langfuse project. A user, org or project that doesn't exist yet means
+// there is nothing to remove.
+func (s *LangfuseService) removeProjectMembership(
+	ctx context.Context, ownerUserID, datapackID, loginEmail string,
+) error {
+	org, err := s.repo.GetOrgMapping(ownerUserID)
+	if err != nil || org == nil {
+		return err
+	}
+	projectMapping, err := s.repo.GetProjectMapping(datapackID)
+	if err != nil || projectMapping == nil || strings.TrimSpace(projectMapping.ProjectID) == "" {
+		return err
+	}
+	userIDs, err := s.listOrgUserIDsByEmail(ctx, org, loginEmail)
+	if err != nil || len(userIDs) == 0 {
+		return err
+	}
+	path := "/api/public/projects/" + url.PathEscape(projectMapping.ProjectID) + "/memberships"
+	err = s.doJSONCtx(ctx, http.MethodDelete, path, basicAuth(org.PublicKey, org.SecretKey),
+		projectMembershipDeleteReq{UserID: userIDs[0]}, nil)
+	if err != nil && !strings.Contains(err.Error(), "status 404") {
+		return fmt.Errorf("delete langfuse project membership: %w", err)
+	}
 	return nil
 }
 
@@ -841,6 +878,7 @@ func (s *LangfuseService) ListConversations(
 	datapackID string,
 	limit, offset int,
 	q string,
+	hideOwners bool,
 ) (string, []Conversation, error) {
 	if s == nil || s.repo == nil {
 		return "", nil, fmt.Errorf("langfuse service is not configured")
@@ -891,6 +929,13 @@ func (s *LangfuseService) ListConversations(
 				conversations[i].MemoriesAdded = counts[conversations[i].ID]
 			}
 		}
+	}
+
+	if hideOwners {
+		for i := range conversations {
+			hideConversationOwner(&conversations[i])
+		}
+		return projectID, conversations, nil
 	}
 
 	// One batched lookup of user_email per page (deduped — shared
@@ -984,6 +1029,7 @@ func (s *LangfuseService) CountConversations(
 func (s *LangfuseService) GetConversation(
 	datapackID, conversationID string,
 	messagesLimit, messagesOffset int,
+	hideOwners bool,
 ) (string, *ConversationDetail, error) {
 	if s == nil || s.repo == nil {
 		return "", nil, fmt.Errorf("langfuse service is not configured")
@@ -1029,6 +1075,12 @@ func (s *LangfuseService) GetConversation(
 	} else {
 		detail.MemoriesAdded = counts[conversationID]
 	}
+	if hideOwners {
+		hideConversationOwner(&detail.Conversation)
+		for i := range detail.Thread {
+			hideStepOwners(detail.Thread[i].ProcessingSteps)
+		}
+	}
 
 	return projectID, detail, nil
 }
@@ -1050,6 +1102,7 @@ func (s *LangfuseService) ConversationHistoryIndexed(datapackID, conversationID 
 // is enforced upstream by RequireDatapackAccess.
 func (s *LangfuseService) GetMessageTrace(
 	datapackID, conversationID, messageID string,
+	hideOwners bool,
 ) (string, []TraceSpan, error) {
 	if s == nil || s.repo == nil {
 		return "", nil, fmt.Errorf("langfuse service is not configured")
@@ -1099,9 +1152,49 @@ func (s *LangfuseService) GetMessageTrace(
 			"message_id", messageID,
 			"error", enrichErr,
 		)
-		return projectID, spans, nil
+		enriched = spans
+	}
+	if hideOwners {
+		for i := range enriched {
+			enriched[i].Output = scrubOwnerKeys(enriched[i].Output)
+		}
 	}
 	return projectID, enriched, nil
+}
+
+// scrubOwnerKeys removes stepOwnerArgs keys at any depth from a JSON blob, such
+// as mem0's search output, which names each memory's user. A blob that isn't
+// JSON is returned as is.
+func scrubOwnerKeys(blob string) string {
+	if !strings.Contains(blob, "user_id") && !strings.Contains(blob, "email") {
+		return blob
+	}
+	var v interface{}
+	if err := json.Unmarshal([]byte(blob), &v); err != nil {
+		return blob
+	}
+	var walk func(interface{})
+	walk = func(n interface{}) {
+		switch t := n.(type) {
+		case map[string]interface{}:
+			for _, k := range stepOwnerArgs {
+				delete(t, k)
+			}
+			for _, child := range t {
+				walk(child)
+			}
+		case []interface{}:
+			for _, child := range t {
+				walk(child)
+			}
+		}
+	}
+	walk(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		return blob
+	}
+	return string(out)
 }
 
 // GetMessageDecisionTrace returns the slim Decision Trace payload for
@@ -1116,6 +1209,7 @@ func (s *LangfuseService) GetMessageTrace(
 // enforced upstream by RequireDatapackAccess.
 func (s *LangfuseService) GetMessageDecisionTrace(
 	datapackID, conversationID, messageID string,
+	hideOwners bool,
 ) (string, *MessageDecisionTrace, error) {
 	if s == nil || s.repo == nil {
 		return "", nil, fmt.Errorf("langfuse service is not configured")
@@ -1155,7 +1249,33 @@ func (s *LangfuseService) GetMessageDecisionTrace(
 	if dt == nil {
 		return projectID, nil, ErrConversationNotFound
 	}
+	if hideOwners {
+		hideStepOwners(dt.ProcessingSteps)
+	}
 	return projectID, dt, nil
+}
+
+// hideConversationOwner drops who started a conversation, for a viewer.
+func hideConversationOwner(c *Conversation) {
+	c.UserID = ""
+	c.UserEmail = ""
+}
+
+// stepOwnerArgs are the tool arguments that name the person who made the call.
+var stepOwnerArgs = []string{"user_id", "meko_user_id", "user_email", "email"}
+
+// hideStepOwners drops who is behind each step: the caller named in its tool
+// arguments, and whose conversation each retrieved excerpt came from.
+func hideStepOwners(steps []repository.ProcessingStep) {
+	for i := range steps {
+		step := &steps[i]
+		for _, k := range stepOwnerArgs {
+			delete(step.ToolArgs, k)
+		}
+		for j := range step.ConversationChunks {
+			step.ConversationChunks[j].UserID = ""
+		}
+	}
 }
 
 // normalizeSessionID strips hyphens from the input; MCP's

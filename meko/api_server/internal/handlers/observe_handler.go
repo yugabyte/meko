@@ -118,7 +118,9 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 	}
 
 	q := strings.TrimSpace(c.QueryParam("q"))
-	projectID, conversations, err := h.langfuse.ListConversations(dp.ID, limit, offset, q)
+	projectID, conversations, err := h.langfuse.ListConversations(
+		dp.ID, limit, offset, q, models.IsViewerGrant(dp.Grant),
+	)
 	if err != nil {
 		if errors.Is(err, service.ErrLangfuseDBNotConfigured) {
 			return apiError(c, http.StatusServiceUnavailable,
@@ -149,7 +151,7 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 	return ok(c, http.StatusOK, map[string]any{
 		"datapack_id":         dp.ID,
 		"datapack_name":       dp.Name,
-		"langfuse_project_id": projectID,
+		"langfuse_project_id": observeProjectID(dp.Grant, projectID),
 		"limit":               limit,
 		"offset":              offset,
 		"has_more":            hasMore,
@@ -240,7 +242,7 @@ func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
 	}
 
 	projectID, detail, err := h.langfuse.GetConversation(
-		dp.ID, conversationID, msgsLimit, msgsOffset,
+		dp.ID, conversationID, msgsLimit, msgsOffset, models.IsViewerGrant(dp.Grant),
 	)
 	if err != nil {
 		switch {
@@ -281,7 +283,7 @@ func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
 	return ok(c, http.StatusOK, map[string]any{
 		"datapack_id":         dp.ID,
 		"datapack_name":       dp.Name,
-		"langfuse_project_id": projectID,
+		"langfuse_project_id": observeProjectID(dp.Grant, projectID),
 		"conversation":        detail,
 	})
 }
@@ -316,7 +318,7 @@ func (h *ObserveHandler) MessageTrace(c echo.Context) error {
 	}
 
 	projectID, spans, err := h.langfuse.GetMessageTrace(
-		dp.ID, conversationID, messageID,
+		dp.ID, conversationID, messageID, models.IsViewerGrant(dp.Grant),
 	)
 	if err != nil {
 		switch {
@@ -340,7 +342,7 @@ func (h *ObserveHandler) MessageTrace(c echo.Context) error {
 	return ok(c, http.StatusOK, map[string]any{
 		"datapack_id":         dp.ID,
 		"datapack_name":       dp.Name,
-		"langfuse_project_id": projectID,
+		"langfuse_project_id": observeProjectID(dp.Grant, projectID),
 		"conversation_id":     conversationID,
 		"message_id":          messageID,
 		"spans":               spans,
@@ -386,7 +388,7 @@ func (h *ObserveHandler) MessageDecisionTrace(c echo.Context) error {
 	}
 
 	projectID, dt, err := h.langfuse.GetMessageDecisionTrace(
-		dp.ID, conversationID, messageID,
+		dp.ID, conversationID, messageID, models.IsViewerGrant(dp.Grant),
 	)
 	if err != nil {
 		switch {
@@ -410,7 +412,7 @@ func (h *ObserveHandler) MessageDecisionTrace(c echo.Context) error {
 	return ok(c, http.StatusOK, map[string]any{
 		"datapack_id":         dp.ID,
 		"datapack_name":       dp.Name,
-		"langfuse_project_id": projectID,
+		"langfuse_project_id": observeProjectID(dp.Grant, projectID),
 		"conversation_id":     conversationID,
 		"decision_trace":      dt,
 	})
