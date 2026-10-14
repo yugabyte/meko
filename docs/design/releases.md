@@ -66,9 +66,10 @@ minutes old, so the banner names the newest release. The channel can be *stable*
 offered again. When you click it, the server:
 
 1. checks again and takes the newest eligible release, so one click goes straight to it however
-   many versions behind you are (a click that overlaps one already running joins it), then
-   downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
-   attestation (with `gh`) when `[update] require_attestation = true`;
+   many versions behind you are (if that check fails, it takes the version the last check found;
+   a click that overlaps one already running joins it), then downloads the tarball and verifies
+   it against `SHA256SUMS`, and against its build provenance attestation (with `gh`) when
+   `[update] require_attestation = true`;
 2. unpacks it next to the current version and runs its self-test;
 3. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
    migrations on start, and points `app/current` at the new version;

@@ -485,7 +485,7 @@ export class Updater {
     }
     if (this.applying) return this.status();
     this.dropBadLatest();
-    // The remembered version can be hours old: check so the click gets the newest.
+    // The remembered version can be hours old, so check first. If the check fails, it's still the target.
     await this.check();
     const target = this.status().available ? this.latest : null;
     if (!target) return this.status();
