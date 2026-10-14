@@ -42,6 +42,21 @@ func (c *Client) ListClustersIncludingFailed(ctx context.Context, poolID string,
 	return out, err
 }
 
+// EndpointCA is GET .../endpoints/{id}/ca. DocumentDBVerifiable is nil unless
+// the endpoint reports a documentdb_address.
+type EndpointCA struct {
+	Required             bool   `json:"required"`
+	DocumentDBVerifiable *bool  `json:"documentdb_verifiable"`
+	CACrt                string `json:"ca_crt"`
+	VerifyName           string `json:"verify_name"`
+}
+
+func (c *Client) GetEndpointCA(ctx context.Context, poolID, clusterID, branchID, endpointID string) (EndpointCA, error) {
+	var out EndpointCA
+	_, err := c.GetRaw(ctx, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID+"/endpoints/"+endpointID+"/ca", nil, &out)
+	return out, err
+}
+
 func (c *Client) GetUser(ctx context.Context, userID string) (User, error) {
 	var out User
 	_, err := c.GetRaw(ctx, "/users/"+userID, nil, &out)

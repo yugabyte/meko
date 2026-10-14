@@ -204,6 +204,8 @@ type Cluster struct {
 	Extensions    []string `json:"extensions"`
 	// PasswordRequired is DefaultBranch.PasswordRequired.
 	PasswordRequired *bool `json:"password_required"`
+	// Tags as sent at create; {} when none. Nil from a controller predating them.
+	Tags map[string]string `json:"tags"`
 }
 
 // CreateClusterRequest creates a cluster (and its default branch "main").
@@ -233,6 +235,8 @@ type CreateClusterRequest struct {
 	// the caller named none.
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
+	// Tags label every Kubernetes object of the cluster's endpoints.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Endpoint connectivity modes: how clients reach the Postgres port.
@@ -284,6 +288,25 @@ type Endpoint struct {
 	// image tag). Empty on a controller predating version tracking, or for an
 	// endpoint nothing has reported one for.
 	Version string `json:"version"`
+	Name    string `json:"name"`
+	// DocumentDBAddress is the documentdb gateway's host:port, present only on a
+	// branch carrying the documentdb extension.
+	DocumentDBAddress string `json:"documentdb_address"`
+	// Tags are the endpoint's own, not merged with its cluster's.
+	Tags map[string]string `json:"tags"`
+	// Health is read live from the pod; nil when the controller cannot tell.
+	Health *EndpointHealth `json:"health"`
+}
+
+const (
+	HealthReady    = "ready"
+	HealthNotReady = "not_ready"
+)
+
+// EndpointHealth is whether the endpoint's pod is serving at request time.
+type EndpointHealth struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 // EndpointResources is a compute reservation: cpu + memory as Kubernetes
@@ -341,6 +364,9 @@ type CreateEndpointRequest struct {
 	SafekeeperSettings map[string]any `json:"safekeeper_settings,omitempty"`
 	// Connectivity selects the client reachability; nil is cluster_ip.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
+	Name         string                `json:"name,omitempty"`
+	// Tags are merged over the cluster's onto the endpoint's objects.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // UpdateSettingsRequest is the body of the two settings PATCHes. The controller

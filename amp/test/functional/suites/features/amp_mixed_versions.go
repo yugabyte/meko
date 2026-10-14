@@ -37,7 +37,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "The mixed-version window: deploy the control plane at the previous release, upgrade the controller (and its endpoint pin) so the running endpoints stay on the old image, and hold that pair for functional.mixed_versions.hold under a write load, then roll the fleet onto the current image. Writes must not stop for longer than functional.mixed_versions.max_hold_gap during the hold or max_roll_gap across the roll, the new controller must keep serving GET /tasks with every task in a state it knows, the endpoints must still be on the old image throughout the hold, and every acknowledged write must be there afterwards with the bank total unchanged.",
+		Description: "The mixed-version window: deploy the control plane at the previous release, upgrade the controller (and its endpoint pin) so the running endpoints stay on the old image, and hold that pair for functional.mixed_versions.hold under a write load, then roll the fleet onto the current image. Writes must not stop for longer than functional.mixed_versions.max_hold_gap during the hold or max_roll_gap across the roll, the new controller must keep serving GET /tasks with every task in a state it knows, the endpoints must still be on the old image throughout the hold, and every acknowledged write must be there afterwards with the bank total unchanged. A second endpoint on the old image is re-rendered by the new controller through add_branch_extensions during the window: it must stay on its old version and image and serve, so the new chart may not name a preload library the old image lacks (meko#1572).",
 		Params:      []string{"functional", "functional.upgrade", "functional.mixed_versions", "report.portal", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     80 * time.Minute,
 		Run:         runAmpMixedVersions,
@@ -54,6 +54,8 @@ type mixedRun struct {
 	rollGap  time.Duration
 	proj     ampCluster
 	ep       controller.Endpoint
+	rrProj   ampCluster
+	rrEP     controller.Endpoint
 	load     *upgradeLoad
 	listed   int
 	rollWait time.Duration
@@ -95,6 +97,7 @@ func runAmpMixedVersions(t *core.T) error {
 		{"endpoint_on_old_release", m.endpoint},
 		{"start_write_load", m.startLoad},
 		{"upgrade_controller_only", m.upgradeControllerOnly},
+		{"rerender_old_endpoint_on_new_chart", m.rerenderOld},
 		{"hold_mixed_versions", m.holdMixed},
 		{"roll_endpoints_to_current", m.rollFleet},
 		{"verify_write_load", m.verifyLoad},
@@ -118,6 +121,77 @@ func (m *mixedRun) endpoint(ctx context.Context) error {
 		return fmt.Errorf("create the endpoint the previous release deploys: %w", err)
 	}
 	m.ep = ep
+	if m.rrProj, err = setupAmpCluster(ctx, cl, "mixed-rr-"+f.suffix(), f.cfg.PgVersion, f.register); err != nil {
+		return err
+	}
+	if m.rrEP, err = createEndpoint(ctx, cl, m.rrProj.poolID, m.rrProj.projID, m.rrProj.branchID); err != nil {
+		return fmt.Errorf("create the endpoint the new controller will re-render: %w", err)
+	}
+	conn, err := f.endpointSQL(ctx, m.rrEP)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.Exec(ctx, "CREATE TABLE mixed_rr AS SELECT g AS id FROM generate_series(1, 100) g"); err != nil {
+		return fmt.Errorf("seed the re-render endpoint: %w", err)
+	}
+	return nil
+}
+
+// rerenderOld re-renders an endpoint the previous release deployed with the new
+// controller's chart at its recorded, older version. The base preload list has
+// to come from that older image, not from the chart (meko#1572).
+func (m *mixedRun) rerenderOld(ctx context.Context) error {
+	f := m.f
+	cl, err := f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	before, err := cl.GetEndpoint(ctx, m.rrProj.poolID, m.rrProj.projID, m.rrProj.branchID, m.rrEP.ID)
+	if err != nil {
+		return err
+	}
+	_, err = cl.AddBranchExtensionsAndWait(ctx, m.rrProj.poolID, m.rrProj.projID, m.rrProj.branchID, controller.AddBranchExtensionsRequest{Extensions: []string{"pgvector"}})
+	if extensionsUnavailable(err) {
+		f.logf("no extension catalog, so nothing re-renders the old endpoint on the new chart")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("add_branch_extensions on a branch whose endpoint runs the previous release's image %q, under the new controller: %w (a chart naming a preload library the old image lacks stops its postmaster, meko#1572)", m.u.fromEndpoint, err)
+	}
+	after, err := cl.GetEndpoint(ctx, m.rrProj.poolID, m.rrProj.projID, m.rrProj.branchID, m.rrEP.ID)
+	if err != nil {
+		return err
+	}
+	if before.Version != "" && after.Version != before.Version {
+		return fmt.Errorf("add_branch_extensions moved the endpoint from version %q to %q; a re-render keeps the recorded version", before.Version, after.Version)
+	}
+	if kube := f.ampKube(); kube != nil {
+		if err := ampstack.WaitEndpointWorkloadReady(ctx, kube, m.rrEP.ID, upgradePodReadTimeout); err != nil {
+			return fmt.Errorf("the endpoint re-rendered on the new chart at the old image never became ready: %w", err)
+		}
+		pod, images, err := endpointPodImages(ctx, kube, m.rrEP.ID)
+		if err != nil {
+			return err
+		}
+		if !imageMatches(images, m.u.fromEndpoint) {
+			return fmt.Errorf("the re-rendered endpoint's pod %s runs %q, want the previous release's %q", pod, images, m.u.fromEndpoint)
+		}
+	}
+	conn, err := f.endpointSQL(ctx, after)
+	if err != nil {
+		return fmt.Errorf("connect the endpoint re-rendered on the new chart: %w", err)
+	}
+	defer conn.Close()
+	n, err := conn.QueryInt(ctx, "SELECT count(*) FROM mixed_rr")
+	if err != nil || n != 100 {
+		return fmt.Errorf("the re-rendered endpoint reads %d rows of mixed_rr (%v), want 100", n, err)
+	}
+	preload, err := conn.QueryString(ctx, "SHOW shared_preload_libraries")
+	if err != nil {
+		return err
+	}
+	f.logf("re-rendered endpoint on %s preloads %q", m.u.fromEndpoint, preload)
 	return nil
 }
 

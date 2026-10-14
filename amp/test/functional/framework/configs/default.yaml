@@ -495,6 +495,10 @@ functional:
   voyager:
     source_image: "postgres:16-alpine"
     phase_timeout: "25m"
+  # documentdb: the image amp_documentdb_gateway runs mongosh from, in a client
+  # pod inside the amp namespace so the gateway's Service address resolves.
+  documentdb:
+    client_image: "mongo:8.0"
   # The extension set the release commits to shipping, pinned here rather than
   # read back from the database (a test that enumerates pg_available_extensions
   # cannot detect a missing extension).

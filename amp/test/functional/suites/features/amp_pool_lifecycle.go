@@ -10,6 +10,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
@@ -23,6 +25,11 @@ import (
 // so firing back to back is the tightest aim at it.
 var poolRaceDelays = []time.Duration{0, 300 * time.Millisecond, 1500 * time.Millisecond}
 
+const (
+	poolConcurrentDeletes = 6
+	poolDuplicateDeleters = 3
+)
+
 // poolRaceJoinBudget bounds waiting out the raced create task.
 const poolRaceJoinBudget = 3 * time.Minute
 
@@ -34,7 +41,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Storage pool rename and delete: a rename is visible on get and list and frees its old name, a name held by another live pool is refused 409, delete is refused 409 while the pool holds a live cluster and succeeds once that cluster is deleted, a deleted pool is 404 on get, gone from list, its name reusable and its id not; then race a cluster create against the pool delete and assert no live cluster ever sits under a tombstoned pool.",
+		Description: "Storage pool rename and delete: a rename is visible on get and list and frees its old name, a name held by another live pool is refused 409, delete is refused 409 while the pool holds a live cluster and succeeds once that cluster is deleted, a deleted pool is 404 on get, gone from list, its name reusable and its id not; then race a cluster create against the pool delete and assert no live cluster ever sits under a tombstoned pool; finally delete several pools at once, three callers on one of them, and assert no delete answers 500 when its transaction loses a serialization race (meko#1849) and every pool ends deleted.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     20 * time.Minute,
 		Run:         runAmpPoolLifecycle,
@@ -48,6 +55,7 @@ func runAmpPoolLifecycle(t *core.T) error {
 			{"pool_rename", p.rename},
 			{"pool_delete_gate", p.deleteGate},
 			{"pool_create_delete_race", p.createDeleteRace},
+			{"pool_concurrent_deletes", p.concurrentDeletes},
 		}
 	})
 }
@@ -334,4 +342,72 @@ func poolNameInList(ctx context.Context, cl *controller.Client, poolID string) (
 			return "", false
 		}
 	}
+}
+
+// concurrentDeletes lets pool deletes conflict with each other. A delete whose
+// transaction loses a write-write conflict is re-run, and one that keeps losing
+// answers a retryable 503; it never answers 500.
+func (p *poolLifecycle) concurrentDeletes(ctx context.Context) error {
+	if err := p.connect(ctx); err != nil {
+		return err
+	}
+	pools := make([]controller.StoragePool, 0, poolConcurrentDeletes)
+	for i := range poolConcurrentDeletes {
+		pool, err := p.newPool(ctx, fmt.Sprintf("pool-del-%s-%d", p.a.f.suffix(), i))
+		if err != nil {
+			return err
+		}
+		pools = append(pools, pool)
+	}
+	targets := make([]string, 0, poolConcurrentDeletes+poolDuplicateDeleters-1)
+	for _, pool := range pools {
+		targets = append(targets, pool.ID)
+	}
+	for range poolDuplicateDeleters - 1 {
+		targets = append(targets, pools[0].ID)
+	}
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		deleted = map[string]int{}
+		bad     []string
+	)
+	start := make(chan struct{})
+	for _, id := range targets {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			<-start
+			err := p.cl.DeleteStoragePool(ctx, id)
+			mu.Lock()
+			defer mu.Unlock()
+			switch status := apiErrorStatus(err); {
+			case err == nil:
+				deleted[id]++
+			case status == http.StatusNotFound || status == http.StatusServiceUnavailable:
+				p.a.f.logf("concurrent delete of pool %s: %v", id, err)
+			default:
+				bad = append(bad, fmt.Sprintf("pool %s: HTTP %d: %v", id, status, err))
+			}
+		}(id)
+	}
+	close(start)
+	wg.Wait()
+	if len(bad) > 0 {
+		return fmt.Errorf("%d of %d concurrent pool deletes failed with something other than 204, 404 or a retryable 503 (meko#1849): %s", len(bad), len(targets), strings.Join(bad, "; "))
+	}
+	for _, pool := range pools {
+		if deleted[pool.ID] == 0 {
+			if err := p.cl.DeleteStoragePool(ctx, pool.ID); err != nil && apiErrorStatus(err) != http.StatusNotFound {
+				return fmt.Errorf("pool %s: no concurrent delete succeeded, and a lone retry failed too: %w", pool.ID, err)
+			}
+		}
+		if _, err := p.cl.GetStoragePool(ctx, pool.ID); apiErrorStatus(err) != http.StatusNotFound {
+			return fmt.Errorf("pool %s is still readable after the concurrent deletes (%v), want 404", pool.ID, err)
+		}
+		if poolListed(ctx, p.cl, pool.ID) {
+			return fmt.Errorf("pool %s is still listed after the concurrent deletes", pool.ID)
+		}
+	}
+	return nil
 }

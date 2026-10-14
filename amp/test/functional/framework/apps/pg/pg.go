@@ -6,6 +6,7 @@ package pg
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -23,6 +24,10 @@ type ConnInfo struct {
 	Password string
 	Database string // "" → postgres
 	SSLMode  string // "" → disable
+	// MaxConns caps the pool; 0 keeps pgxpool's default of max(4, NumCPU).
+	MaxConns int
+	// ConnectTimeout bounds each new connection; 0 leaves it to the caller's ctx.
+	ConnectTimeout time.Duration
 }
 
 func (ci ConnInfo) port() int {
@@ -65,6 +70,9 @@ func (ci ConnInfo) DSN() string {
 	if ci.Password != "" {
 		kv = append(kv, [2]string{"password", ci.Password})
 	}
+	if ci.ConnectTimeout > 0 {
+		kv = append(kv, [2]string{"connect_timeout", strconv.Itoa(int(math.Ceil(ci.ConnectTimeout.Seconds())))})
+	}
 	out := ""
 	for i, p := range kv {
 		if i > 0 {
@@ -103,7 +111,14 @@ type Client struct {
 
 // Connect opens a connection pool to the endpoint described by ci.
 func Connect(ctx context.Context, ci ConnInfo) (*Client, error) {
-	pool, err := pgxpool.New(ctx, ci.DSN())
+	cfg, err := pgxpool.ParseConfig(ci.DSN())
+	if err != nil {
+		return nil, fmt.Errorf("connect %s:%d: %w", ci.Host, ci.port(), err)
+	}
+	if ci.MaxConns > 0 {
+		cfg.MaxConns = int32(ci.MaxConns)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect %s:%d: %w", ci.Host, ci.port(), err)
 	}

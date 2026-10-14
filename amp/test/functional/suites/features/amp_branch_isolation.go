@@ -142,12 +142,26 @@ func branchIsolationSteps(ctx context.Context, cl ampCtl, proj ampCluster, child
 // budget before failing. Only a run with no kubectl at all falls back to the
 // address as given.
 func (f *flow) endpointSQL(ctx context.Context, ep controller.Endpoint) (sqlConn, error) {
+	return f.endpointSQLWith(ctx, ep, nil)
+}
+
+// endpointSQLWith is endpointSQL with the ConnInfo adjusted by tweak (another
+// database, a bigger pool).
+func (f *flow) endpointSQLWith(ctx context.Context, ep controller.Endpoint, tweak func(*pg.ConnInfo)) (sqlConn, error) {
 	if f.ampEnv != nil {
+		if w, ok := f.ampEnv.(interface {
+			ConnectEndpointWith(context.Context, controller.Endpoint, func(*pg.ConnInfo)) (*pg.Client, error)
+		}); ok && tweak != nil {
+			return w.ConnectEndpointWith(ctx, ep, tweak)
+		}
 		return f.ampEnv.ConnectEndpoint(ctx, ep)
 	}
 	ci, err := f.endpointConnInfo(ep)
 	if err != nil {
 		return nil, err
+	}
+	if tweak != nil {
+		tweak(&ci)
 	}
 	kube := f.endpointKube()
 	if kube == nil {

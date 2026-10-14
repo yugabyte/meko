@@ -6,7 +6,9 @@ package features
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,7 +26,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "gapcoverage"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Request validation the spec promises: disk_type=local is refused 400 as unsupported and an unknown disk_type 400, an unsupported pg_version 400, a pool for an unknown owner 404; GET /version carries a version and commit; the user the run created is listed and readable with its admin flag; GET of the default branch returns it with is_default and an unknown branch is 404; and a cluster or branch created twice under one name leaves exactly one of it (a 409 up front or a failed second task, never two rows).",
+		Description: "Request validation the spec promises: disk_type=local is refused 400 as unsupported and an unknown disk_type 400, an unsupported pg_version 400, a pool for an unknown owner 404; GET /version carries a version and commit; GET / answers 302 to the Swagger explorer at /api/v1/docs, which serves, instead of the removed admin console (meko#1701); the user the run created is listed and readable with its admin flag; GET of the default branch returns it with is_default and an unknown branch is 404; and a cluster or branch created twice under one name leaves exactly one of it (a 409 up front or a failed second task, never two rows).",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     35 * time.Minute,
 		Run:         runAmpAPIValidation,
@@ -36,6 +38,7 @@ func runAmpAPIValidation(t *core.T) error {
 		return []phase{
 			{"request_refusals", a.requestRefusals},
 			{"version_and_users", a.versionAndUsers},
+			{"root_redirects_to_docs", a.rootRedirect},
 			{"repeated_creates", a.repeatedCreates},
 		}
 	})
@@ -251,4 +254,47 @@ func countBranches(ctx context.Context, cl ampCtl, proj ampCluster, name string)
 func mustListEndpoints(ctx context.Context, cl ampCtl, proj ampCluster) []controller.Endpoint {
 	eps, _ := cl.ListAllEndpoints(ctx, proj.poolID, proj.projID, proj.branchID)
 	return eps
+}
+
+func (a *ampFeatureRun) rootRedirect(ctx context.Context) error {
+	cl, err := a.f.controllerClient(ctx)
+	if err != nil {
+		return err
+	}
+	hc := *cl.HTTPClient()
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	get := func(u string) (*http.Response, string, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, "", err
+		}
+		resp, err := hc.Do(req)
+		if err != nil {
+			return nil, "", err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return resp, string(body), err
+	}
+	root := cl.BaseURL() + "/"
+	resp, body, err := get(root)
+	if err != nil {
+		return fmt.Errorf("GET /: %w", err)
+	}
+	if resp.StatusCode != http.StatusFound {
+		return fmt.Errorf("GET / answered %d (%.200q), want 302 to the API explorer: the removed admin console could not create a usable cluster and was taken for the product console (meko#1701)", resp.StatusCode, body)
+	}
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil || loc.Path != "/api/v1/docs" {
+		return fmt.Errorf("GET / redirects to %q (%v), want /api/v1/docs", resp.Header.Get("Location"), err)
+	}
+	base, _ := url.Parse(root)
+	resp, body, err = get(base.ResolveReference(loc).String())
+	if err != nil {
+		return fmt.Errorf("follow the redirect to %s: %w", loc, err)
+	}
+	if resp.StatusCode != http.StatusOK || !strings.Contains(strings.ToLower(body), "swagger") {
+		return fmt.Errorf("GET %s answered %d with %.200q, want the Swagger explorer", loc, resp.StatusCode, body)
+	}
+	return nil
 }

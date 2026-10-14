@@ -1649,9 +1649,18 @@ func (e *Env) EndpointCredentials() (user, database string) { return computeUser
 // starting); the wait is bounded by the caller's ctx, so a probe against a retired
 // endpoint (Service gone) fails fast rather than blocking.
 func (e *Env) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (*pg.Client, error) {
+	return e.ConnectEndpointWith(ctx, ep, nil)
+}
+
+// ConnectEndpointWith is ConnectEndpoint with the resolved ConnInfo adjusted by
+// tweak (another database, a bigger pool) before the pool is opened.
+func (e *Env) ConnectEndpointWith(ctx context.Context, ep controller.Endpoint, tweak func(*pg.ConnInfo)) (*pg.Client, error) {
 	ci, pf, err := e.prov.resolvePG(ctx, e.kube, ep)
 	if err != nil {
 		return nil, err
+	}
+	if tweak != nil {
+		tweak(&ci)
 	}
 	ok := false
 	defer func() {
