@@ -224,8 +224,15 @@ func (c *AMPClient) CreateCluster(ctx context.Context, poolID, name string, pgVe
 // writer provisions in well under a minute, so we wait (consistent with every
 // other Meko→controller call) rather than leave the caller guessing. cpu/memory
 // size the writer; omit either to take AMP's default (2 cores / 4Gi).
-func (c *AMPClient) CreateClusterWithWriter(ctx context.Context, poolID, name string, pgVersion *int, cpu, memory, engine string, extensions []string) (AMPCluster, error) {
+func (c *AMPClient) CreateClusterWithWriter(ctx context.Context, poolID, name, password string, pgVersion *int, cpu, memory, engine string, extensions []string) (AMPCluster, error) {
 	body := map[string]any{"name": name, "with_writer": true}
+	// The writer is a read_write endpoint, so the controller requires the
+	// cloud_admin password here (it stores only the SCRAM verifier, never the
+	// plaintext). The caller validates it; send it as-is (never trim — a space
+	// is a valid printable-ASCII password character).
+	if password != "" {
+		body["password"] = password
+	}
 	if pgVersion != nil {
 		body["pg_version"] = *pgVersion
 	}
@@ -358,9 +365,15 @@ func (c *AMPClient) DeleteEndpoint(ctx context.Context, poolID, clusterID, branc
 
 // CreateEndpoint provisions compute on a branch (task-based: poll, then read
 // back via target_ref).
-func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
+func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID, role, password, cpu, memory string) (AMPEndpoint, error) {
 	base := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/endpoints"
 	body := map[string]any{"role": role}
+	// A read_write endpoint requires the cloud_admin password (controller stores
+	// only the verifier); a read_only endpoint shares its branch's roles and must
+	// NOT carry one. The caller enforces that split; send it only when present.
+	if password != "" {
+		body["password"] = password
+	}
 	// AMP nests compute sizing under `resources` as Kubernetes quantities
 	// (cpu e.g. "2"/"1500m", memory e.g. "4Gi"). Only send fields we have so
 	// AMP applies its own defaults (2 cores / 4Gi) for anything omitted.

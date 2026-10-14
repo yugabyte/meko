@@ -87,6 +87,11 @@ type CreateClusterInput struct {
 	PgVersion    *int   // optional; omit to take AMP's default (18, the only supported version today)
 	CPU          string // writer sizing (Kubernetes quantity, e.g. "2"); only used with_writer
 	Memory       string // writer sizing (e.g. "4Gi"); only used with_writer
+	// Password is the cloud_admin password for the writer endpoint. The handler
+	// format-validates it when supplied and sets it only on the with_writer path
+	// (empty otherwise); the controller enforces whether one is actually required
+	// (it keeps only the SCRAM verifier, never the plaintext).
+	Password string
 	// Engine is the optional cluster engine ("postgres" default, "aidb",
 	// "oracle") — a named bundle of extensions on the controller. Extensions is
 	// the optional set of catalog extensions to seed on the default branch; it
@@ -177,7 +182,7 @@ func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClust
 	}
 
 	// Step 2 — run the composite task (cluster + main branch + writer).
-	return c.CreateClusterWithWriter(ctx, pool.ID, name, in.PgVersion, in.CPU, in.Memory, in.Engine, in.Extensions)
+	return c.CreateClusterWithWriter(ctx, pool.ID, name, in.Password, in.PgVersion, in.CPU, in.Memory, in.Engine, in.Extensions)
 }
 
 // ListClusters returns the clusters in a datapack's AMP pool. If no pool has
@@ -524,7 +529,7 @@ func (s *AMPService) DeleteCompute(ctx context.Context, datapackID, clusterID, b
 }
 
 // CreateCompute provisions a compute instance on a branch.
-func (s *AMPService) CreateCompute(ctx context.Context, datapackID, clusterID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
+func (s *AMPService) CreateCompute(ctx context.Context, datapackID, clusterID, branchID, role, password, cpu, memory string) (AMPEndpoint, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return AMPEndpoint{}, err
@@ -533,7 +538,7 @@ func (s *AMPService) CreateCompute(ctx context.Context, datapackID, clusterID, b
 	if err != nil {
 		return AMPEndpoint{}, err
 	}
-	return c.CreateEndpoint(ctx, poolID, clusterID, branchID, role, cpu, memory)
+	return c.CreateEndpoint(ctx, poolID, clusterID, branchID, role, password, cpu, memory)
 }
 
 // ResizeCompute changes a compute instance's cpu/memory in place, returning the

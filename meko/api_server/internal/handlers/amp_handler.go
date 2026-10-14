@@ -71,6 +71,26 @@ func coreLimitError(c echo.Context, userType string) error {
 	return respondTierLimit(c, service.CoreLimitResponse(userType))
 }
 
+// ampComputePasswordError validates the cloud_admin password the controller
+// requires for a read_write endpoint (and the with_writer writer): 8–128
+// printable ASCII (U+0020–U+007E). The controller keeps only the SCRAM verifier,
+// so Meko must pass the plaintext at create time; validating here returns a clean
+// 400 instead of the controller's. Returns "" when valid. Never trims — a space
+// is a valid password character.
+func ampComputePasswordError(pw string) string {
+	count := 0
+	for _, r := range pw {
+		if r < 0x20 || r > 0x7E {
+			return "password must contain only printable ASCII characters (U+0020–U+007E)"
+		}
+		count++
+	}
+	if count < 8 || count > 128 {
+		return "password must be between 8 and 128 characters"
+	}
+	return ""
+}
+
 type createClusterRequest struct {
 	Name      string `json:"name"`
 	PgVersion *int   `json:"pg_version,omitempty"`
@@ -80,6 +100,9 @@ type createClusterRequest struct {
 	WithWriter bool   `json:"with_writer,omitempty"`
 	CPU        string `json:"cpu,omitempty"`
 	Memory     string `json:"memory,omitempty"`
+	// Password is the cloud_admin password for the writer endpoint. Required when
+	// WithWriter is true (the writer is read_write); ignored otherwise.
+	Password string `json:"password,omitempty"`
 	// Engine is the optional cluster engine ("postgres" default, "aidb",
 	// "oracle"); Extensions is the optional set of catalog extensions to seed on
 	// the default branch. Both are opt-in — empty means a plain Postgres cluster.
@@ -130,6 +153,18 @@ func (h *AMPHandler) CreateCluster(c echo.Context) error {
 	// poll the task to completion and return the materialized cluster (201).
 	var cluster service.AMPCluster
 	if req.WithWriter {
+		// The writer is a read_write endpoint that needs a cloud_admin password.
+		// Validate its FORMAT when supplied, but don't require it here: whether the
+		// controller mandates one depends on its deployer (AppliesComputePassword
+		// is false for the local driver), which api_server can't see. Forward what
+		// we have and let the controller enforce, so an older client against a
+		// password-less deployer isn't newly rejected.
+		if req.Password != "" {
+			if msg := ampComputePasswordError(req.Password); msg != "" {
+				return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", msg)
+			}
+			in.Password = req.Password
+		}
 		// Only with_writer reserves compute; enforce the tier vCPU cap first
 		// (empty CPU means AMP's 2-core default, which ParseMilliCores counts).
 		if lerr := h.enforceCoreLimit(c, account.AccountType, account.ID, service.ParseMilliCores(req.CPU)); lerr != nil {
@@ -297,6 +332,9 @@ type createComputeRequest struct {
 	// straight through to AMP's endpoint `resources`. Empty = AMP defaults.
 	CPU    string `json:"cpu"`
 	Memory string `json:"memory"`
+	// Password is the cloud_admin password. Required for a read_write endpoint;
+	// a read_only endpoint shares its branch's roles and must not carry one.
+	Password string `json:"password,omitempty"`
 }
 
 // CreateCompute handles POST .../branches/:branch_id/compute.
@@ -309,6 +347,16 @@ func (h *AMPHandler) CreateCompute(c echo.Context) error {
 	if role == "" {
 		role = "read_write"
 	}
+	// Validate the cloud_admin password's FORMAT when one is supplied. Don't
+	// require it, or judge it per-role, here: the controller owns the
+	// role×password rules and whether a password is required at all (its deployer
+	// decides), and it returns a clean 400 for a missing or role-mismatched one.
+	// Forwarding keeps an older client working against a password-less deployer.
+	if req.Password != "" {
+		if msg := ampComputePasswordError(req.Password); msg != "" {
+			return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", msg)
+		}
+	}
 	account, err := auth.GetAccount(c)
 	if err != nil || account == nil {
 		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
@@ -317,7 +365,7 @@ func (h *AMPHandler) CreateCompute(c echo.Context) error {
 	if lerr := h.enforceCoreLimit(c, account.AccountType, account.ID, service.ParseMilliCores(req.CPU)); lerr != nil {
 		return lerr
 	}
-	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), role, strings.TrimSpace(req.CPU), strings.TrimSpace(req.Memory))
+	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), role, req.Password, strings.TrimSpace(req.CPU), strings.TrimSpace(req.Memory))
 	if err != nil {
 		return ampError(c, err)
 	}

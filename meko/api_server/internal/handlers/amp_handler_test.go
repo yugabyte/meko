@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,4 +205,95 @@ func TestAMPErrorMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ampComputePasswordError enforces the controller's cloud_admin password rule
+// (8–128 printable ASCII); a space is valid, control/non-ASCII and out-of-range
+// lengths are not.
+func TestAMPComputePasswordError(t *testing.T) {
+	cases := []struct {
+		name string
+		pw   string
+		ok   bool
+	}{
+		{"valid", "s3cr3t-pw", true},
+		{"space is allowed", "a b c d e", true}, // 9 printable chars incl. spaces
+		{"exactly 8", "12345678", true},
+		{"exactly 128", strings.Repeat("a", 128), true},
+		{"too short (7)", "1234567", false},
+		{"too long (129)", strings.Repeat("a", 129), false},
+		{"empty", "", false},
+		{"tab is not printable", "pass\tword", false},
+		{"non-ascii", "pÄssword", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := ampComputePasswordError(tc.pw)
+			if tc.ok && msg != "" {
+				t.Errorf("want valid, got %q", msg)
+			}
+			if !tc.ok && msg == "" {
+				t.Errorf("want invalid, got valid")
+			}
+		})
+	}
+}
+
+// ctxWithJSONBody builds a POST context carrying a JSON body + a free-tier
+// account, so a handler's Bind and pre-service validation run as in the server.
+func ctxWithJSONBody(body string, params map[string]string) (echo.Context, *httptest.ResponseRecorder) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(auth.ContextKeyAccount, &models.Account{ID: "u1", AccountType: "free"})
+	names, vals := make([]string, 0, len(params)), make([]string, 0, len(params))
+	for k, v := range params {
+		names = append(names, k)
+		vals = append(vals, v)
+	}
+	c.SetParamNames(names...)
+	c.SetParamValues(vals...)
+	return c, rec
+}
+
+func assertBadRequest(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp APIResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Error == nil || resp.Error.Code != "INVALID_REQUEST" {
+		t.Fatalf("code = %+v, want INVALID_REQUEST", resp.Error)
+	}
+}
+
+// The password guards short-circuit with a 400 before any controller/DB call, so
+// these need no sqlmock expectations.
+// A supplied writer password that violates the controller's format (8-128
+// printable ASCII) is refused with a clean 400 before any controller call. A
+// MISSING password is intentionally NOT rejected here — the controller enforces
+// that, and only when its deployer requires one (upgrade-safe for older clients).
+func TestCreateCluster_WithWriterRejectsMalformedPassword(t *testing.T) {
+	h, _, done := ampHandlerWithNoPools(t)
+	defer done()
+	c, rec := ctxWithJSONBody(`{"name":"orders","with_writer":true,"password":"short"}`,
+		map[string]string{"datapack_id": "dp1"})
+	if err := h.CreateCluster(c); err != nil {
+		t.Fatalf("CreateCluster returned raw error: %v", err)
+	}
+	assertBadRequest(t, rec)
+}
+
+func TestCreateCompute_RejectsMalformedPassword(t *testing.T) {
+	h, _, done := ampHandlerWithNoPools(t)
+	defer done()
+	c, rec := ctxWithJSONBody(`{"role":"read_write","password":"short"}`, map[string]string{
+		"datapack_id": "dp1", "cluster_id": "c1", "branch_id": "b1"})
+	if err := h.CreateCompute(c); err != nil {
+		t.Fatalf("CreateCompute returned raw error: %v", err)
+	}
+	assertBadRequest(t, rec)
 }

@@ -103,7 +103,7 @@ func TestCreateClusterWithWriter_SendsWithWriterAndPollsToCluster(t *testing.T) 
 	// Polls the task to completion and returns the materialized cluster. Default
 	// engine (postgres) and no extensions: neither key is sent, so the default
 	// path stays byte-for-byte identical to before engine/extensions existed.
-	p, err := c.CreateClusterWithWriter(context.Background(), "p", "orders", nil, "4", "8Gi", "", nil)
+	p, err := c.CreateClusterWithWriter(context.Background(), "p", "orders", "s3cr3t-pw", nil, "4", "8Gi", "", nil)
 	if err != nil {
 		t.Fatalf("CreateClusterWithWriter: %v", err)
 	}
@@ -113,6 +113,10 @@ func TestCreateClusterWithWriter_SendsWithWriterAndPollsToCluster(t *testing.T) 
 	// with_writer must be true and cpu/memory nested under `resources`.
 	if body["with_writer"] != true {
 		t.Errorf("with_writer = %v, want true", body["with_writer"])
+	}
+	// The writer is read_write, so the cloud_admin password must be in the body.
+	if body["password"] != "s3cr3t-pw" {
+		t.Errorf("password = %v, want s3cr3t-pw", body["password"])
 	}
 	res, _ := body["resources"].(map[string]any)
 	if res == nil || res["cpu"] != "4" || res["memory"] != "8Gi" {
