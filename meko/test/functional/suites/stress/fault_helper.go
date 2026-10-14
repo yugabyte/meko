@@ -41,7 +41,9 @@ func (w workload) pods(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// ready says every replica the owner wants is ready and gone is not among them.
+// ready says every replica the owner wants is ready and the pod with UID gone is
+// not among them. A StatefulSet brings a deleted pod back under its old name, so
+// only the UID tells the replacement from the victim.
 func (w workload) ready(ctx context.Context, gone string) (bool, error) {
 	kind, name, _ := strings.Cut(w.owner, "/")
 	want, err := w.kube.Get(ctx, kind, name, "{.spec.replicas}")
@@ -52,13 +54,15 @@ func (w workload) ready(ctx context.Context, gone string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	pods, err := w.pods(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, p := range pods {
-		if p == gone {
-			return false, nil
+	if gone != "" {
+		uids, err := w.kube.GetSelector(ctx, "pods", w.selector, `{range .items[*]}{.metadata.uid}{"\n"}{end}`)
+		if err != nil {
+			return false, err
+		}
+		for _, u := range strings.Fields(uids) {
+			if u == gone {
+				return false, nil
+			}
 		}
 	}
 	return strings.TrimSpace(want) != "" && strings.TrimSpace(want) == strings.TrimSpace(ready), nil
@@ -82,6 +86,7 @@ type event struct {
 }
 
 func podDelete(o *core.Config, w workload) fault {
+	var victimUID string
 	return fault{
 		name: "delete " + w.name + " pod",
 		inject: func(t *core.T, n int) (string, func(context.Context) error, error) {
@@ -93,6 +98,9 @@ func podDelete(o *core.Config, w workload) fault {
 				return "", nil, fmt.Errorf("find a %s pod (%s, %s*): %v", w.name, w.selector, w.prefix, err)
 			}
 			victim := pods[n%len(pods)]
+			if victimUID, err = w.kube.Get(t, "pod", victim, "{.metadata.uid}"); err != nil {
+				return "", nil, err
+			}
 			action, err := chaos.DefaultRegistry().Build(chaos.ActionPodDelete, chaos.FromConfig(o))
 			if err != nil {
 				return "", nil, err
@@ -101,7 +109,7 @@ func podDelete(o *core.Config, w workload) fault {
 		},
 		settled: func(t *core.T, victim string) error {
 			return t.WaitFor(fmt.Sprintf("%s to have every replica back after %s was deleted", w.owner, victim), cmp.Or(w.settle, 5*time.Minute), 3*time.Second, func() (bool, error) {
-				return w.ready(t, victim)
+				return w.ready(t, victimUID)
 			})
 		},
 	}

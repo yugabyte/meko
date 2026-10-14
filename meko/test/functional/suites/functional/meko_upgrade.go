@@ -13,6 +13,7 @@ import (
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekoapi"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekostack"
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
+	"github.com/yugabyte/meko/meko/test/functional/framework/diag"
 	k8senv "github.com/yugabyte/meko/meko/test/functional/framework/env/k8s"
 	"github.com/yugabyte/meko/meko/test/functional/suites/internal/stacktest"
 )
@@ -47,7 +48,7 @@ type seeded struct {
 	convDP    string
 }
 
-func previousRelease(t *core.T) error {
+func previousRelease(t *core.T) (rerr error) {
 	cluster := stacktest.Env(t)
 	cfg := t.Options
 	target := cfg.GetString("env.mekostack.image_version", "")
@@ -98,7 +99,16 @@ func previousRelease(t *core.T) error {
 	}); err != nil {
 		return err
 	}
-	defer func() { _ = teardown() }()
+	defer func() {
+		// The stack is the test's own, gone before the run collects diagnostics.
+		mode := cfg.GetString("report.collect_diagnostics", core.DefaultCollectDiagnostics)
+		if diag.ShouldCollect(mode, rerr != nil || t.Failed()) {
+			ctx, cancel := context.WithTimeout(context.Background(), core.ResolveCollectTimeout(cfg))
+			_ = env.Collect(ctx, resultSink{t})
+			cancel()
+		}
+		_ = teardown()
+	}()
 
 	apiFor := func() *mekoapi.Client {
 		return env.API().WithErrorHook(func(e *mekoapi.Error) {

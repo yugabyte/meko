@@ -1034,8 +1034,7 @@ stress:
     llm_slow: 8s
     recover_within: 2m
     mcp_replicas: 2
-    # Under this load a deleted yugabyted pod on 2 CPUs took over 5 min to pass its
-    # ysqlsh readiness probe, while the load recovered in 18 s.
+    # How long a deleted yugabyted pod has to be Ready again.
     db_settle_within: 10m
     recovery_error_rate: 0.2
     quiet_error_rate: 0.02
