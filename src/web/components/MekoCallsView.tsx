@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MEKO_LOG_TOOLS, type MekoCallDetail, type MekoCallSummary, type MekoLogInfo, type ProjectWithSessions } from '../../shared/types';
+import { MEKO_LOG_TOOLS, type MekoCallBy, type MekoCallDetail, type MekoCallSummary, type MekoLogInfo, type ProjectWithSessions } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import { useIsMobile } from '../hooks/useMedia';
@@ -28,10 +28,13 @@ function shown(v: unknown): string {
 
 type Opened = { state: 'loading' } | { state: 'error'; error: string } | { state: 'done'; call: MekoCallDetail };
 
+/** Who made a call, as the page names them. */
+const BY_LABEL: Record<MekoCallBy, string> = { agentk: 'AgentK', claude: 'Claude' };
+
 /**
  * The project's Meko call logs (mekolog.ts on the server): one session's at a time, newest first,
- * each call opening to what AgentK sent and what came back. `sessionId` is the session asked for
- * in the route; without one, the session written to last.
+ * AgentK's calls and Claude's, each call opening to what was sent and what came back. `sessionId`
+ * is the session asked for in the route; without one, the session written to last.
  */
 export function MekoCallsView({
   project,
@@ -47,6 +50,7 @@ export function MekoCallsView({
   const mobile = useIsMobile();
   const [logs, setLogs] = useState<MekoLogInfo[] | null>(null);
   const [tool, setTool] = useState('');
+  const [by, setBy] = useState<MekoCallBy | ''>('');
   const [failed, setFailed] = useState(false);
   const [calls, setCalls] = useState<MekoCallSummary[] | null>(null);
   const [more, setMore] = useState(false);
@@ -78,7 +82,7 @@ export function MekoCallsView({
     setLoading(true);
     setOpened({});
     api
-      .mekoCalls(sid, { tool, failed })
+      .mekoCalls(sid, { tool, by, failed })
       .then((p) => {
         if (gone) return;
         setCalls(p.calls);
@@ -90,7 +94,7 @@ export function MekoCallsView({
     return () => {
       gone = true;
     };
-  }, [sid, tool, failed, reload]);
+  }, [sid, tool, by, failed, reload]);
 
   const older = async () => {
     const last = calls?.at(-1);
@@ -98,7 +102,7 @@ export function MekoCallsView({
     const asked = view.current;
     setLoading(true);
     try {
-      const p = await api.mekoCalls(sid, { before: last.offset, tool, failed });
+      const p = await api.mekoCalls(sid, { before: last.offset, tool, by, failed });
       if (view.current !== asked) return;
       setCalls((c) => [...(c ?? []), ...p.calls]);
       setMore(p.more);
@@ -153,7 +157,7 @@ export function MekoCallsView({
           </button>
         )}
         {!mobile && <h1>Meko calls</h1>}
-        <span className="muted small">What AgentK sent to Meko for a session, and what came back. Deleted with the session.</span>
+        <span className="muted small">What AgentK and Claude sent to Meko for a session, and what came back. Deleted with the session.</span>
       </header>
       <div className="home-scroll">
         {!logging && (
@@ -184,6 +188,11 @@ export function MekoCallsView({
               {MEKO_LOG_TOOLS.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
+            </select>
+            <select id="mc-by" className="input mc-by" aria-label="Made by" value={by} onChange={(e) => setBy(e.target.value as MekoCallBy | '')}>
+              <option value="">AgentK and Claude</option>
+              <option value="agentk">AgentK</option>
+              <option value="claude">Claude</option>
             </select>
             <label className="check mc-failed">
               <input id="mc-failed" type="checkbox" checked={failed} onChange={(e) => setFailed(e.target.checked)} />
@@ -223,10 +232,10 @@ export function MekoCallsView({
             !error && <p className="muted"><Busy label="Loading" /></p>
           ) : !calls.length ? (
             <p className="muted">
-              {tool || failed
+              {tool || by || failed
                 ? 'No calls match.'
                 : logging
-                  ? 'No calls yet. Recall at session start, design uploads and learn steps show up here as AgentK makes them.'
+                  ? "No calls yet. Recall at session start, Claude's searches and saves, design uploads and learn steps show up here as they're made."
                   : 'No calls were kept for this session.'}
             </p>
           ) : (
@@ -239,6 +248,8 @@ export function MekoCallsView({
                       <time className="mc-time">{callTime(c.at)}</time>
                       <span className="mc-tool-name">
                         {c.tool}
+                        <span className={cx('mc-tag', c.by)}>{BY_LABEL[c.by]}</span>
+                        {c.subagent && <span className="mc-tag">subagent</span>}
                         {c.learn && <span className="mc-tag">learn</span>}
                       </span>
                       <span className="mc-ms">{callDuration(c.ms)}</span>
@@ -288,8 +299,16 @@ function CallDetail({ opened, summary }: { opened: Opened; summary: MekoCallSumm
         </button>
       </div>
       <pre className="mc-json">{shown(c.args)}</pre>
+      {c.notice && (
+        <>
+          <div className="mc-label">
+            <span className="label">Claude read</span>
+          </div>
+          <pre className="mc-json">{c.notice}</pre>
+        </>
+      )}
       <div className="mc-label">
-        <span className="label">Got back</span>
+        <span className="label">{c.notice ? 'Got back (the reply Claude Code saved)' : 'Got back'}</span>
       </div>
       <pre className="mc-json">{shown(c.result)}</pre>
     </div>

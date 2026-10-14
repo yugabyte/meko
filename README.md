@@ -202,9 +202,11 @@ your phone can connect.
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
-  keeps every Meko call it makes for each session (recall at start, design uploads, the learn step)
-  with what it sent and what came back, in a file in the session's folder that's deleted with the
-  session. **View calls** opens them, a session at a time, with filters for the tool and failed calls.
+  keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
+  step) and Claude's (its searches and saves, a reply too large for Claude's context included), with
+  what was sent and what came back, in a file in the session's folder that's deleted with the
+  session. **View calls** opens them, a session at a time, with filters for the tool, who made the
+  call (AgentK or Claude) and failed calls.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home

@@ -2646,6 +2646,10 @@ div[id^='dak-mermaid-'] .label {
   color: var(--accent);
   margin-left: 8px;
 }
+/* Who made the call: AgentK's own calls are the quieter tag, so Claude's stand out. */
+.mc-tag.agentk {
+  color: var(--muted);
+}
 .mc-pill {
   font: 500 11px/1 var(--mono);
   padding: 3px 7px;

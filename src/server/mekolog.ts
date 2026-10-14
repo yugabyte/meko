@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, rmSync, statSync } from 'node:fs';
-import { open } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import type { MekoCallDetail, MekoCallPage, MekoCallSummary } from '../shared/types.js';
+import { open, readFile, realpath } from 'node:fs/promises';
+import { dirname, join, relative, sep } from 'node:path';
+import type { MekoCallBy, MekoCallDetail, MekoCallPage, MekoCallSummary } from '../shared/types.js';
 import { errMsg, type Logger } from './log.js';
 import type { MekoScope, MekoTrace } from './meko.js';
 
@@ -17,19 +17,39 @@ export const MAX_PAGE = 200;
 
 /**
  * One line of the file. The keys before `args` are written first, so a page reads a call's
- * summary from the start of its line without parsing what was sent and what came back.
+ * summary from the start of its line without parsing what was sent and what came back. Lines
+ * written before Claude's calls were logged have no `by` or `subagent` (AgentK's calls).
  */
 interface Line {
   id: string;
   at: string;
   tool: string;
+  by?: MekoCallBy;
+  subagent?: boolean;
   learn: string | null;
   ms: number;
   ok: boolean;
   attempts: number;
   error: string | null;
   args: unknown;
+  /** Claude's call whose reply was too large for its context: the notice it read instead. */
+  notice?: string | null;
   result: unknown;
+}
+
+/** One of Claude's Meko calls, as AgentK's mod reports it (`/mod/meko`), its reply already read. */
+export interface ClaudeMekoCall {
+  /** The Meko tool, without its MCP server's prefix (`context_search`). */
+  tool: string;
+  at: number;
+  ms: number;
+  ok: boolean;
+  error: string | null;
+  args: unknown;
+  /** The reply's text (or the saved reply, for one too large for Claude), or null when none came. */
+  text: string | null;
+  notice: string | null;
+  subagent: boolean;
 }
 
 /** Where a line's summary ends. Inside a JSON string a quote is escaped, so this only matches the key. */
@@ -56,8 +76,10 @@ export interface MekoCallLogOptions {
 }
 
 /**
- * Each session's Meko calls, with what AgentK sent and what came back, one JSON object per line
- * of `meko-calls.jsonl` in the session's folder, for debugging. Nothing is cut and the file has no
+ * Each session's Meko calls, AgentK's (`record`) and Claude's (`recordClaude`, as AgentK's mod
+ * reports them), with what was sent and what came back, one JSON object per line of
+ * `meko-calls.jsonl` in the session's folder, for debugging. A line is written when its call ends,
+ * so the file is in the order calls ended. Nothing is cut and the file has no
  * cap: it goes when the session is archived. A page is read backwards from the end, a chunk at a
  * time without blocking the server, parsing only each line's summary: an unfiltered page reads
  * only as far back as its own calls, a filtered one as far as it takes to find them (the whole
@@ -69,24 +91,56 @@ export class MekoCallLog {
 
   constructor(private o: MekoCallLogOptions) {}
 
-  /** Appends a call made for a session whose project logs them. Never throws. */
+  /** Whether the session's calls are kept now. Never throws. */
+  wants(session: MekoScope): boolean {
+    try {
+      return this.o.enabled(session);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Appends a call AgentK made for a session whose project logs them. Never throws. */
   record(t: MekoTrace): void {
     if (!t.session) return;
-    const file = mekoLogPath(this.o.designs, t.session.id);
+    this.append(t.session, {
+      id: randomBytes(4).toString('hex'),
+      at: new Date(t.at).toISOString(),
+      tool: t.tool,
+      by: 'agentk',
+      learn: t.tag,
+      ms: t.ms,
+      ok: t.ok,
+      attempts: t.attempts,
+      error: t.error,
+      args: t.args,
+      result: t.text === null ? null : parseReply(t.text),
+    });
+  }
+
+  /** Appends one of Claude's calls in a session whose project logs them. Never throws. */
+  recordClaude(session: MekoScope, c: ClaudeMekoCall): void {
+    this.append(session, {
+      id: randomBytes(4).toString('hex'),
+      at: new Date(c.at).toISOString(),
+      tool: c.tool,
+      by: 'claude',
+      subagent: c.subagent,
+      learn: null,
+      ms: c.ms,
+      ok: c.ok,
+      attempts: 1,
+      error: c.error,
+      args: c.args,
+      notice: c.notice,
+      result: c.text === null ? null : parseReply(c.text),
+    });
+  }
+
+  private append(session: MekoScope, line: Line): void {
+    const file = mekoLogPath(this.o.designs, session.id);
     try {
-      if (!this.o.enabled(t.session)) return;
-      const line: Line = {
-        id: randomBytes(4).toString('hex'),
-        at: new Date(t.at).toISOString(),
-        tool: t.tool,
-        learn: t.tag,
-        ms: t.ms,
-        ok: t.ok,
-        attempts: t.attempts,
-        error: t.error,
-        args: t.args,
-        result: t.text === null ? null : parseReply(t.text),
-      };
+      if (!this.o.enabled(session)) return;
       mkdirSync(dirname(file), { recursive: true });
       // A line a crash cut short gets its newline first, so this one isn't joined onto it.
       const lead = this.whole.has(file) || !endsMidLine(file) ? '' : '\n';
@@ -95,7 +149,7 @@ export class MekoCallLog {
       this.whole.add(file);
     } catch (e) {
       this.whole.delete(file);
-      this.o.log.warn(`writing the Meko call log of ${t.session.id} failed`, errMsg(e));
+      this.o.log.warn(`writing the Meko call log of ${session.id} failed`, errMsg(e));
     }
   }
 
@@ -110,7 +164,7 @@ export class MekoCallLog {
   }
 
   /** Calls older than the byte offset `before` (newest first) that match the filters. */
-  async page(sessionId: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean } = {}): Promise<MekoCallPage> {
+  async page(sessionId: string, q: { before?: number; limit?: number; tool?: string; by?: MekoCallBy; failed?: boolean } = {}): Promise<MekoCallPage> {
     const limit = Math.min(MAX_PAGE, Math.max(1, q.limit ?? DEFAULT_PAGE));
     const calls: MekoCallSummary[] = [];
     let more = false;
@@ -123,7 +177,7 @@ export class MekoCallLog {
       let carry = Buffer.alloc(0);
       const take = (bytes: Buffer, offset: number): boolean => {
         const s = parseSummary(bytes, offset);
-        if (!s || (q.tool && s.tool !== q.tool) || (q.failed && s.ok)) return false;
+        if (!s || (q.tool && s.tool !== q.tool) || (q.by && s.by !== q.by) || (q.failed && s.ok)) return false;
         if (calls.length === limit) {
           more = true;
           return true;
@@ -173,7 +227,7 @@ export class MekoCallLog {
       }
       const l = parseLine(Buffer.concat(parts));
       if (!l || l.id !== id) return null;
-      return { ...summary(l, offset), args: l.args ?? null, result: l.result ?? null };
+      return { ...summary(l, offset), args: l.args ?? null, result: l.result ?? null, notice: l.notice ?? null };
     } finally {
       await fh.close();
     }
@@ -240,10 +294,37 @@ function summary(l: Line, offset: number): MekoCallSummary {
     offset,
     at: Date.parse(l.at) || 0,
     tool: l.tool,
+    by: l.by === 'claude' ? 'claude' : 'agentk',
+    subagent: l.subagent === true,
     learn: l.learn ?? null,
     ms: l.ms,
     ok: l.ok,
     attempts: l.attempts,
     error: l.error ?? null,
   };
+}
+
+/**
+ * Claude Code's notice for a reply too large for Claude's context, naming the file it saved the
+ * reply to (`mekousage.ts` reads the same notice for the usage counts).
+ */
+const SAVED_REPLY = /^Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to (\/\S+?)\.?(?:\s|$)/;
+
+/**
+ * The reply of one of Claude's calls: when Claude read only Claude Code's notice that it was too
+ * large, the reply Claude Code saved (`notice` the notice), else the text itself. The file is read
+ * only from a session's `tool-results` folder beside the transcript (`<transcripts>/<claude
+ * session>/tool-results/`), and a file that can't be read leaves the notice as the reply.
+ */
+export async function claudeReply(text: string | null, transcriptPath: string | null): Promise<{ text: string | null; notice: string | null }> {
+  const saved = text === null ? null : SAVED_REPLY.exec(text)?.[1];
+  if (!saved || !transcriptPath) return { text, notice: null };
+  try {
+    const [file, dir] = await Promise.all([realpath(saved), realpath(dirname(transcriptPath))]);
+    const parts = relative(dir, file).split(sep);
+    if (parts.length !== 3 || parts[0] === '..' || parts[1] !== 'tool-results') return { text, notice: null };
+    return { text: await readFile(file, 'utf8'), notice: text };
+  } catch {
+    return { text, notice: null };
+  }
 }
