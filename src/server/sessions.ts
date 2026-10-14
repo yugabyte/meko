@@ -1262,10 +1262,9 @@ export class SessionManager {
         const scope = { id: row.id, createdAt: row.created_at };
         // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
         if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };
-        // Answered once it's logged: the mod doesn't wait for it, and calls ended one after another stay in order.
-        if (body.state === 'end' && body.tool !== undefined) {
-          await this.logClaudeMeko(row, body).catch((e) => this.core.log.warn(`logging a Meko call of ${row.id} failed`, errMsg(e)));
-        }
+        // Answered once it's written (the mod doesn't wait for the answer). The log keeps the order
+        // the ends came in, a saved reply still being read included.
+        if (body.state === 'end' && body.tool !== undefined) await this.logClaudeMeko(row, body);
         return { status: 204 };
       }
       case '/mod/turn':
@@ -1913,20 +1912,21 @@ export class SessionManager {
 
   /**
    * One of Claude's Meko calls, as AgentK's mod reports its end (`/mod/meko`), into the session's
-   * Meko call log: a reply too large for Claude's context is read from the file Claude Code saved it to.
+   * Meko call log: a reply too large for Claude's context is read from the file Claude Code saved it
+   * to, the call keeping its place in the log meanwhile. Never rejects.
    */
-  private async logClaudeMeko(row: SessionRow, body: Record<string, unknown>): Promise<void> {
+  private logClaudeMeko(row: SessionRow, body: Record<string, unknown>): Promise<void> {
     const tool = typeof body.tool === 'string' ? mekoTool(body.tool) : null;
     const scope = { id: row.id, createdAt: row.created_at };
-    if (!tool || !this.core.mekoLog.wants(scope)) return;
+    if (!tool || !this.core.mekoLog.wants(scope)) return Promise.resolve();
     const end = Date.now();
     const ms = typeof body.ms === 'number' && Number.isFinite(body.ms) && body.ms >= 0 ? Math.round(body.ms) : 0;
     const str = (v: unknown) => (typeof v === 'string' ? v : null);
-    const reply = await claudeReply(str(body.text), row.transcript_path);
-    this.core.mekoLog.recordClaude(scope, {
+    const call = claudeReply(str(body.text), row.transcript_path).then((reply) => ({
       tool, at: end - ms, ms, ok: body.ok === true, error: str(body.error), args: body.args ?? null,
       text: reply.text, notice: reply.notice, subagent: body.subagent === true,
-    });
+    }));
+    return this.core.mekoLog.recordClaude(scope, call);
   }
 
   /** The project's sessions that have a Meko call log, the latest written to first. */

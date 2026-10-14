@@ -78,8 +78,9 @@ export interface MekoCallLogOptions {
 /**
  * Each session's Meko calls, AgentK's (`record`) and Claude's (`recordClaude`, as AgentK's mod
  * reports them), with what was sent and what came back, one JSON object per line of
- * `meko-calls.jsonl` in the session's folder, for debugging. A line is written when its call ends,
- * so the file is in the order calls ended. Nothing is cut and the file has no
+ * `meko-calls.jsonl` in the session's folder, for debugging. Lines are in the order the server
+ * heard of the calls ending: one of Claude's whose reply is still being read from the file Claude
+ * Code saved it to holds back the session's later lines (`queue`). Nothing is cut and the file has no
  * cap: it goes when the session is archived. A page is read backwards from the end, a chunk at a
  * time without blocking the server, parsing only each line's summary: an unfiltered page reads
  * only as far back as its own calls, a filtered one as far as it takes to find them (the whole
@@ -88,6 +89,8 @@ export interface MekoCallLogOptions {
 export class MekoCallLog {
   /** Files known to end with a newline: this process wrote their last line. */
   private whole = new Set<string>();
+  /** Per session, the last line still waiting to be written: later lines are written after it. */
+  private queue = new Map<string, Promise<void>>();
 
   constructor(private o: MekoCallLogOptions) {}
 
@@ -103,7 +106,7 @@ export class MekoCallLog {
   /** Appends a call AgentK made for a session whose project logs them. Never throws. */
   record(t: MekoTrace): void {
     if (!t.session) return;
-    this.append(t.session, {
+    this.write(t.session, {
       id: randomBytes(4).toString('hex'),
       at: new Date(t.at).toISOString(),
       tool: t.tool,
@@ -118,23 +121,32 @@ export class MekoCallLog {
     });
   }
 
-  /** Appends one of Claude's calls in a session whose project logs them. Never throws. */
-  recordClaude(session: MekoScope, c: ClaudeMekoCall): void {
-    this.append(session, {
-      id: randomBytes(4).toString('hex'),
-      at: new Date(c.at).toISOString(),
-      tool: c.tool,
-      by: 'claude',
-      subagent: c.subagent,
-      learn: null,
-      ms: c.ms,
-      ok: c.ok,
-      attempts: 1,
-      error: c.error,
-      args: c.args,
-      notice: c.notice,
-      result: c.text === null ? null : parseReply(c.text),
+  /**
+   * Appends one of Claude's calls in a session whose project logs them, in its place now while its
+   * reply is still being read (`call`, null when there's nothing to log). Never rejects.
+   */
+  recordClaude(session: MekoScope, call: Promise<ClaudeMekoCall | null>): Promise<void> {
+    const id = randomBytes(4).toString('hex');
+    return this.write(session, call.then((c) => c && claudeLine(id, c), () => null));
+  }
+
+  /** Writes a line now, unless an earlier one of the session's is still waiting: then after it. */
+  private write(session: MekoScope, line: Line | Promise<Line | null>): Promise<void> {
+    const before = this.queue.get(session.id);
+    if (!before && !(line instanceof Promise)) {
+      this.append(session, line);
+      return Promise.resolve();
+    }
+    const done = (async () => {
+      await before;
+      const l = await line;
+      if (l) this.append(session, l);
+    })();
+    this.queue.set(session.id, done);
+    void done.finally(() => {
+      if (this.queue.get(session.id) === done) this.queue.delete(session.id);
     });
+    return done;
   }
 
   private append(session: MekoScope, line: Line): void {
@@ -327,4 +339,23 @@ export async function claudeReply(text: string | null, transcriptPath: string | 
   } catch {
     return { text, notice: null };
   }
+}
+
+/** One of Claude's calls as a line of the file. */
+function claudeLine(id: string, c: ClaudeMekoCall): Line {
+  return {
+    id,
+    at: new Date(c.at).toISOString(),
+    tool: c.tool,
+    by: 'claude',
+    subagent: c.subagent,
+    learn: null,
+    ms: c.ms,
+    ok: c.ok,
+    attempts: 1,
+    error: c.error,
+    args: c.args,
+    notice: c.notice,
+    result: c.text === null ? null : parseReply(c.text),
+  };
 }

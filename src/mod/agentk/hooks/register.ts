@@ -53,7 +53,7 @@ const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__/
 const RESERVED_KEYS = new Set(['tool', 'tool_use_id', 'consent', 'agentId', 'requestMeta'])
 /** The most a Meko call sent to the log may take: the hook socket drops a body over 4 MB. */
 const MAX_LOGGED_CHARS = 3.5 * 1024 * 1024
-/** The most of a failed call's reply its error repeats. */
+/** The most of a call's error that's sent: a failed reply's text, a refusal or what was thrown. */
 const ERROR_CHARS = 300
 /** The most the duplicate check may write. */
 const DEDUP_MAX_TOKENS = 8000
@@ -159,8 +159,9 @@ function mekoCall(e: ToolCallInput, s: Settled, ms: number) {
     const { result } = s.r
     text = typeof s.r.text === 'string' ? s.r.text : typeof result === 'string' ? result : result === undefined ? null : JSON.stringify(result)
     ok = !s.r.isError
-    if (!ok) error = text ? text.slice(0, ERROR_CHARS) : 'Meko reported an error'
+    if (!ok) error = text || 'Meko reported an error'
   }
+  if (error !== null) error = error.slice(0, ERROR_CHARS)
   const call = { tool: e.tool, args: args as unknown, ms, ok, text, error, subagent: !!e.agentId }
   const size = JSON.stringify(call).length
   if (size <= MAX_LOGGED_CHARS) return call

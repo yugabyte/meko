@@ -14,12 +14,12 @@ function trace(over: Partial<MekoTrace> = {}): MekoTrace {
   };
 }
 
-/** One of Claude's calls, as the server has it from the mod's report. */
-function claudeCall(over: Partial<ClaudeMekoCall> = {}): ClaudeMekoCall {
-  return {
+/** One of Claude's calls, as the server has it from the mod's report once its reply is read. */
+function claudeCall(over: Partial<ClaudeMekoCall> = {}): Promise<ClaudeMekoCall> {
+  return Promise.resolve({
     tool: 'memory_search', at: Date.parse('2026-10-09T18:21:00.000Z'), ms: 900, ok: true, error: null,
     args: { query: 'login' }, text: '{"results":[]}', notice: null, subagent: false, ...over,
-  };
+  });
 }
 
 describe('Meko call log', () => {
@@ -35,12 +35,12 @@ describe('Meko call log', () => {
 
   const lines = (id = 's1') => readFileSync(mekoLogPath(designs, id), 'utf8').trimEnd().split('\n').map((l) => JSON.parse(l));
 
-  it("writes a session's calls whole, one JSON line each, readable only by the owner", () => {
+  it("writes a session's calls whole, one JSON line each, readable only by the owner", async () => {
     const big = 'x'.repeat(100_000);
     log.record(trace({ args: { text: big, content_base64: 'aGVsbG8=' }, text: JSON.stringify({ memory: big }), tag: 'L1' }));
     log.record(trace({ tool: 'memory_add', ok: false, attempts: 2, text: 'not json', error: 'boom' }));
     log.record(trace({ tool: 'memory_update', ok: false, text: null, error: 'timed out' }));
-    log.recordClaude({ id: 's1', createdAt: 5 }, claudeCall({ text: JSON.stringify({ memory: big }), notice: 'Error: result (100,013 characters) …', subagent: true }));
+    await log.recordClaude({ id: 's1', createdAt: 5 }, claudeCall({ text: JSON.stringify({ memory: big }), notice: 'Error: result (100,013 characters) …', subagent: true }));
     expect(statSync(mekoLogPath(designs, 's1')).mode & 0o777).toBe(0o600);
     expect(lines()).toEqual([
       {
@@ -62,7 +62,7 @@ describe('Meko call log', () => {
   it('keeps nothing for a call with no session, or one whose session or project has the log off', async () => {
     log.record(trace({ session: null }));
     log.record(trace({ session: { id: 's2', createdAt: 5 } }));
-    log.recordClaude({ id: 's2', createdAt: 5 }, claudeCall());
+    await log.recordClaude({ id: 's2', createdAt: 5 }, claudeCall());
     expect(log.wants({ id: 's2', createdAt: 5 })).toBe(false);
     expect(log.wants({ id: 's1', createdAt: 5 })).toBe(true);
     expect(existsSync(mekoLogPath(designs, 's2'))).toBe(false);
@@ -79,7 +79,7 @@ describe('Meko call log', () => {
       const pad = i % 7 === 0 ? 'y'.repeat(70_000 + i) : 'z'.repeat(i * 37);
       const tool = i % 3 ? 'context_search' : 'memory_add';
       if (i % 4) log.record(trace({ tool, ok: i % 5 !== 0, args: { i, pad } }));
-      else log.recordClaude({ id: 's1', createdAt: 5 }, claudeCall({ tool, ok: i % 5 !== 0, args: { i, pad } }));
+      else await log.recordClaude({ id: 's1', createdAt: 5 }, claudeCall({ tool, ok: i % 5 !== 0, args: { i, pad } }));
     }
     const all = lines() as { id: string; tool: string; by: string; ok: boolean }[];
     const read = async (q: { tool?: string; by?: 'agentk' | 'claude'; failed?: boolean; limit?: number }) => {
@@ -105,6 +105,26 @@ describe('Meko call log', () => {
       id: all.at(-1)!.id, offset: expect.any(Number), at: Date.parse('2026-10-09T18:20:01.123Z'), tool: all.at(-1)!.tool, by: 'agentk',
       subagent: false, learn: null, ms: 412, ok: all.at(-1)!.ok, attempts: 1, error: null,
     });
+  });
+
+  it("keeps the order calls came in while one of Claude's waits for its reply to be read, in that session only", async () => {
+    let read!: (c: ClaudeMekoCall) => void;
+    const slow = log.recordClaude({ id: 's1', createdAt: 5 }, new Promise<ClaudeMekoCall>((r) => { read = r; }));
+    log.record(trace({ tool: 'memory_add' }));
+    const quick = log.recordClaude({ id: 's1', createdAt: 5 }, claudeCall({ tool: 'memory_get_all' }));
+    on.add('s2');
+    log.record(trace({ tool: 'memory_update', session: { id: 's2', createdAt: 5 } }));
+    expect(lines('s2').map((l) => l.tool)).toEqual(['memory_update']);
+    expect(existsSync(mekoLogPath(designs, 's1'))).toBe(false);
+    read(await claudeCall({ tool: 'context_search' }));
+    await Promise.all([slow, quick]);
+    expect(lines().map((l) => [l.tool, l.by])).toEqual([['context_search', 'claude'], ['memory_add', 'agentk'], ['memory_get_all', 'claude']]);
+    // A reply that couldn't be read holds nothing back, and a call with nothing to log writes nothing.
+    await log.recordClaude({ id: 's1', createdAt: 5 }, Promise.reject(new Error('gone')));
+    await log.recordClaude({ id: 's1', createdAt: 5 }, Promise.resolve(null));
+    log.record(trace({ tool: 'conversation_create' }));
+    expect(lines().map((l) => l.tool).at(-1)).toBe('conversation_create');
+    expect(lines()).toHaveLength(4);
   });
 
   it('opens one call by its offset and id, and skips a line a crash cut short', async () => {

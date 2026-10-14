@@ -346,7 +346,8 @@ test("sends each of Claude's Meko calls whole while AgentK logs them, and what i
   const clock = mock.clock(on)
   const calls = routes(on, (path, body) => (path === '/mod/meko' && body.state === 'start' ? answer(200, { log: true }) : answer(204)))
   on('tool.call', { tool: 'mcp__meko__context_search' }, () => ({ result: '{"results":[]}' }))
-  on('tool.call', { tool: 'mcp__meko__memory_search' }, () => ({ deny: 'Not allowed' }))
+  // A refusal of any length is cut like a failed reply, so no error makes the call too large to send.
+  on('tool.call', { tool: 'mcp__meko__memory_search' }, () => ({ deny: `Not allowed: ${'n'.repeat(5000)}` }))
   on('tool.call', { tool: 'mcp__meko__memory_add' }, () => {
     throw new Error('Meko is down')
   })
@@ -360,7 +361,7 @@ test("sends each of Claude's Meko calls whole while AgentK logs them, and what i
   const ends = calls.filter((c) => c.body.state === 'end').map((c) => c.body)
   expect(ends).toEqual([
     { id: 'tm1', state: 'end', tool: 'mcp__meko__context_search', args: { query: 'login', datapack_id: 'd1' }, ms: expect.any(Number), ok: true, text: '{"results":[]}', error: null, subagent: false },
-    expect.objectContaining({ id: 'tm2', tool: 'mcp__meko__memory_search', args: { query: 'x' }, ok: false, text: null, error: 'Not allowed' }),
+    expect.objectContaining({ id: 'tm2', tool: 'mcp__meko__memory_search', args: { query: 'x' }, ok: false, text: null, error: `Not allowed: ${'n'.repeat(287)}` }),
     expect.objectContaining({ id: 'tm3', tool: 'mcp__meko__memory_add', args: { text: 'a fact' }, ok: false, text: null, error: expect.any(String) }),
     expect.objectContaining({ id: 'tm4', tool: 'mcp__meko__artifact_put', args: null, ok: true, text: null, error: expect.stringMatching(/^The call was too large to log/) }),
   ])

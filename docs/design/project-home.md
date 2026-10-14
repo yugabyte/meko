@@ -75,7 +75,9 @@ or `claude`; lines from before Claude's calls were logged have none and are Agen
 its reply (parsed, or its text), the error, how long it took, the tries (2 when it was sent again
 after a transport failure: a read, or a write that surely never reached Meko; always 1 for
 Claude's), the learn step that made it, and for Claude's whether a subagent made it and the notice
-Claude read. A line is written when its call ends, so the file is in the order calls ended. The
+Claude read. Lines are in the order the server heard of the calls ending: while one of Claude's
+waits for its saved reply to be read, the session's later lines, AgentK's included, wait behind it
+(a queue per session in `MekoCallLog`), so the page's newest first holds. The
 summary's keys come first, before `args`. Nothing is cut and the
 file has no cap: it's deleted when the session is archived, when its start fails and when the
 project is closed. A line a crash cut short is skipped when the file is read, and the next line
