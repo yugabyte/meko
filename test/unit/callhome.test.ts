@@ -173,9 +173,11 @@ function seeded(): Db {
   meko('s3', 'tu6', 'knowledgebase_search', 'lookup', '2026-01-05T10:00:00Z', 'found', 1000, null, 5000);
   // What Meko doesn't know: a search that found nothing relevant, one question taught and one dismissed. Only counts are sent.
   run(db, `UPDATE meko_calls SET query = 'Secret task retention', query_key = 'secret task retention', quality = 'weak' WHERE tool_use_id = 'tu1'`);
-  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, state, text, datapack_name, at) VALUES ('p1', 'secret task retention', 'taught', 'Secret task notes', 'adlc/proj/zeta', ?)`,
+  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, taught_at, taught_text, taught_datapack) VALUES ('p1', 'secret task retention', ?, 'Secret task notes', 'adlc/proj/zeta')`,
     at('2026-09-28T03:00:00Z'));
-  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, state, at) VALUES ('p1', 'zeta', 'dismissed', ?)`, at('2026-09-27T15:00:00Z'));
+  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, dismissed_at) VALUES ('p1', 'zeta', ?)`, at('2026-09-27T15:00:00Z'));
+  // Restored: its dismissal no longer counts.
+  run(db, `INSERT INTO meko_gap_marks(project_id, query_key, opened_at) VALUES ('p1', 'restored', ?)`, at('2026-09-27T16:00:00Z'));
   const preload = (s: string, iso: string, outcome: string, chars: number, ms: number) =>
     run(db, 'INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)', s, at(iso), outcome, chars ? 2 : 0, chars, ms);
   preload('s1', '2026-09-27T11:00:00Z', 'found', 800, 1200);

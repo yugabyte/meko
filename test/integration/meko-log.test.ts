@@ -139,16 +139,18 @@ describe('Meko call log', () => {
     expect(await mod({ id: 't2', state: 'start' })).toEqual({ status: 200, body: { log: true } });
     await end('t2');
     traced(s.id);
-    // Claude Code saved a reply too large for Claude in the session's tool-results folder; one
-    // named anywhere else isn't read.
+    // Claude Code saved a reply too large for Claude in the session's tool-results folder; one in
+    // another session's folder beside it isn't read.
     const transcript = row().transcript_path!;
     const results = join(dirname(transcript), row().claude_session_id!, 'tool-results');
     mkdirSync(results, { recursive: true });
     writeFileSync(join(results, 'mcp-meko-memory_get_all-1.txt'), '{"result":"all of it"}');
     const notice = (path: string) => `Error: result (95,000 characters) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON`;
     await end('t3', { tool: 'mcp__plugin_x_meko__memory_get_all', subagent: true, text: notice(join(results, 'mcp-meko-memory_get_all-1.txt')) });
-    writeFileSync(join(dirname(transcript), 'elsewhere.txt'), 'secret');
-    await end('t4', { text: notice(join(dirname(transcript), 'elsewhere.txt')) });
+    const other = join(dirname(transcript), 'another-claude-session', 'tool-results');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, 'mcp-meko-memory_search-1.txt'), 'secret');
+    await end('t4', { text: notice(join(other, 'mcp-meko-memory_search-1.txt')) });
     await end('t5', { tool: 'mcp__meko__memory_add', ok: false, text: null, error: 'Interrupted' });
     await end('t6', { tool: 'Bash' });
 

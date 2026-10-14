@@ -505,7 +505,7 @@ const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'
 function dropV34(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE meko_gap_marks; DROP INDEX meko_calls_quality');
   for (const c of ['query', 'query_key', 'top_score', 'top_raw', 'quality']) db.exec(`ALTER TABLE meko_calls DROP COLUMN ${c}`);
-  for (const c of ['query', 'query_key']) db.exec(`ALTER TABLE meko_preloads DROP COLUMN ${c}`);
+  for (const c of ['query', 'query_key', 'quality', 'top_score']) db.exec(`ALTER TABLE meko_preloads DROP COLUMN ${c}`);
 }
 
 /** Undoes migration 33 (the share contacts), for tests that rewind the schema. */

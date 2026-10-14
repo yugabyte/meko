@@ -558,13 +558,14 @@ export class ProjectService {
   }
 
   /** What Meko doesn't know: a page of the project's questions (GET /api/projects/:id/meko-gaps). */
-  mekoGaps(id: string, state: unknown, before: unknown): MekoGapPage {
+  mekoGaps(id: string, state: unknown, before: unknown, beforeKey: unknown): MekoGapPage {
     this.get(id);
     const st = state === undefined || state === '' ? 'open' : state;
     if (st !== 'open' && st !== 'dismissed' && st !== 'taught' && st !== 'all') throw new HttpError(400, 'state must be open, dismissed, taught or all.');
-    const b = before === undefined || before === '' ? undefined : Number(before);
-    if (b !== undefined && !Number.isFinite(b)) throw new HttpError(400, 'before must be a time in milliseconds.');
-    return gapPage(this.db, id, st, b);
+    if (before === undefined || before === '') return gapPage(this.db, id, st);
+    const lastAt = Number(before);
+    if (!Number.isFinite(lastAt) || typeof beforeKey !== 'string') throw new HttpError(400, "before must be the last question's lastAt, with beforeKey its key.");
+    return gapPage(this.db, id, st, { lastAt, key: beforeKey });
   }
 
   /** Dismisses one of the project's questions, or puts a dismissed or taught one back. */
@@ -572,7 +573,7 @@ export class ProjectService {
     this.get(id);
     if (body?.state !== 'dismissed' && body?.state !== null) throw new HttpError(400, 'state must be "dismissed" or null.');
     const gap = this.gapOf(id, body.key);
-    markGap(this.db, id, gap.key, body.state ? { state: body.state } : null);
+    markGap(this.db, id, gap.key, body.state ? { kind: 'dismiss' } : { kind: 'restore' });
   }
 
   /**
@@ -594,7 +595,7 @@ export class ProjectService {
     } catch (e) {
       throw new HttpError(502, `Meko couldn't save it: ${errMsg(e)}. Try again.`);
     }
-    markGap(this.db, id, gap.key, { state: 'taught', text, datapack: dp.name });
+    markGap(this.db, id, gap.key, { kind: 'teach', text, datapack: dp.name });
     return findGap(this.db, id, gap.key) ?? { ...gap, state: 'taught', markedAt: Date.now(), taught: { text, datapack: dp.name, at: Date.now() } };
   }
 

@@ -320,7 +320,7 @@ function summary(l: Line, offset: number): MekoCallSummary {
 /**
  * The reply of one of Claude's calls: when Claude read only Claude Code's notice that it was too
  * large, the reply Claude Code saved (`notice` the notice), else the text itself. The file is read
- * only from a session's `tool-results` folder beside the transcript (`savedReplyFile`), and a file
+ * only from the transcript's own session's `tool-results` folder (`savedReplyFile`), and a file
  * that can't be read leaves the notice as the reply.
  */
 export async function claudeReply(text: string | null, transcriptPath: string | null): Promise<{ text: string | null; notice: string | null }> {

@@ -386,8 +386,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.projects.setDedicatedDatapack(req.params.id, req.body));
   app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
   app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { state?: string; before?: string } }>('/api/projects/:id/meko-gaps', async (req): Promise<MekoGapPage> =>
-    core.projects.mekoGaps(req.params.id, req.query.state, req.query.before));
+  app.get<{ Params: { id: string }; Querystring: { state?: string; before?: string; beforeKey?: string } }>('/api/projects/:id/meko-gaps',
+    async (req): Promise<MekoGapPage> => core.projects.mekoGaps(req.params.id, req.query.state, req.query.before, req.query.beforeKey));
   app.post<{ Params: { id: string }; Body: MekoGapMarkRequest }>('/api/projects/:id/meko-gaps/mark', async (req, reply) => {
     core.projects.markMekoGap(req.params.id, req.body);
     return reply.code(204).send();

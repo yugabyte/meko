@@ -230,12 +230,20 @@ const best = (items: Json[], key: string): number | null =>
   items.reduce<number | null>((m, it) => (typeof it?.[key] === 'number' && (m === null || (it[key] as number) > m) ? (it[key] as number) : m), null);
 
 /**
- * How poor a search's reply was, for What Meko doesn't know. `empty`: it found nothing. `weak`: it
- * found only memories, each with a score and all below MIN_MEMORY_SCORE; a knowledge-base chunk
- * or a conversation hit in a `context_search` passed Meko's own distance cutoff, so it counts as a
- * real hit. A `knowledgebase_search` keeps at least one chunk without any cutoff, so it's only ever
- * empty. `text` is the reply Meko sent (the saved file's, for one too large for Claude), or null
- * when it couldn't be read; then only `empty` can be told. Other tools have no quality.
+ * Whether a reply found nothing relevant: some memories, each with a score and all below
+ * MIN_MEMORY_SCORE, and no `strong` items (knowledge-base chunks or conversation hits, which passed
+ * Meko's own distance cutoffs). Shared with AgentK's search at start (`recall.ts`).
+ */
+export function weakAnswer(memoryScores: (number | null)[], strong: number): boolean {
+  return strong === 0 && memoryScores.length > 0 && memoryScores.every((s) => typeof s === 'number' && s < MIN_MEMORY_SCORE);
+}
+
+/**
+ * How poor a search's reply was, for What Meko doesn't know. `empty`: it found nothing. `weak`:
+ * nothing relevant (`weakAnswer`). A `knowledgebase_search` keeps at least one chunk without any
+ * cutoff, so it's only ever empty. `text` is the reply Meko sent (the saved file's, for one too
+ * large for Claude); a null `text` (a saved reply that couldn't be read, always counted found)
+ * gives no quality, and so do other tools.
  */
 export function searchQuality(tool: string, outcome: MekoOutcome, text: string | null): Pick<MekoResult, 'topScore' | 'topRaw' | 'quality'> {
   if (!SEARCH_TOOLS.has(tool) || text === null || BACKGROUND.test(text)) return NO_QUALITY;
@@ -256,11 +264,8 @@ export function searchQuality(tool: string, outcome: MekoOutcome, text: string |
   } else {
     return NO_QUALITY;
   }
-  const topScore = best(memories, 'score');
-  const topRaw = best(memories, 'raw_similarity_score');
-  const scored = memories.length > 0 && memories.every((m) => typeof m?.score === 'number');
-  const weak = strong === 0 && scored && topScore !== null && topScore < MIN_MEMORY_SCORE;
-  return { topScore, topRaw, quality: weak ? 'weak' : null };
+  const scores = memories.map((m) => (typeof m?.score === 'number' ? m.score : null));
+  return { topScore: best(memories, 'score'), topRaw: best(memories, 'raw_similarity_score'), quality: weakAnswer(scores, strong) ? 'weak' : null };
 }
 
 interface CallRow {

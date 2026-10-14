@@ -397,7 +397,7 @@ export interface CallHomeMeko {
   capture?: { runs: number; failures: number; ms: number };
   /** Searches that found nothing relevant (`MekoUsage.weak`); left out by installs from before it. */
   weak?: number;
-  /** Questions on What Meko doesn't know dismissed or taught (and still so), by when; left out when there were none. */
+  /** Questions on What Meko doesn't know: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. Left out when there were none. */
   gaps?: { dismissed: number; taught: number };
 }
 
@@ -595,7 +595,7 @@ export interface MekoGap {
   quality: MekoGapQuality;
   source: 'claude' | 'start';
   tool: string;
-  /** The latest ask's items and best memory scores (null when not known). */
+  /** The latest ask's items, its best memory `score` and best `raw_similarity_score`, which may be different memories' (null when not known). */
   results: number | null;
   topScore: number | null;
   topRaw: number | null;
@@ -605,16 +605,16 @@ export interface MekoGap {
   firstAt: number;
   lastAt: number;
   state: MekoGapState;
-  /** When it was dismissed or taught (null when open and never marked since its last ask). */
+  /** When it was dismissed or taught (null when it's open). */
   markedAt: number | null;
-  /** What was taught for it, also for one asked again since (then it's open again). */
+  /** What was last taught for it, kept when it's asked again (open again) or dismissed after. */
   taught: { text: string; datapack: string | null; at: number } | null;
 }
 
 /** GET /api/projects/:id/meko-gaps: What Meko doesn't know, latest asked first. */
 export interface MekoGapPage {
   gaps: MekoGap[];
-  /** More match: ask again with `before` set to the last one's `lastAt`. */
+  /** More match: ask again with `before` set to the last one's `lastAt` and `beforeKey` to its `key` (questions asked at once share a `lastAt`). */
   more: boolean;
   counts: Record<MekoGapState, number>;
   /** The open ones by how their latest ask went. */
@@ -1922,9 +1922,11 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
-// GET    /api/projects/:id/meko-gaps?state=open|dismissed|taught|all&before= → MekoGapPage   (What Meko doesn't know: the
-//        project's poor Meko searches grouped by query, latest asked first, 100 at a time; `before` a lastAt; default open)
-// POST   /api/projects/:id/meko-gaps/mark  MekoGapMarkRequest → 204   (404 for a question the project doesn't have)
+// GET    /api/projects/:id/meko-gaps?state=open|dismissed|taught|all&before=&beforeKey= → MekoGapPage   (What Meko doesn't
+//        know: the project's poor Meko searches grouped by query, latest asked first (ties by key), 100 at a time, after the
+//        question `before` (its lastAt) and `beforeKey` (its key) name; default open)
+// POST   /api/projects/:id/meko-gaps/mark  MekoGapMarkRequest → 204   (dismiss, or restore: open again, what was taught kept;
+//        404 for a question the project doesn't have)
 // POST   /api/projects/:id/meko-gaps/teach MekoTeachRequest → MekoGap   (saves the text as a memory in the project's
 //        dedicated datapack and marks the question taught; 400 for empty or too long text, 404 for an unknown
 //        question, 409 when Meko is off or there's no dedicated datapack, 502 with Meko's error when the save fails)

@@ -156,7 +156,11 @@ subagents): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query
 lower-cased with its whitespace collapsed, which groups asks of one question), the best memory
 `score` and `raw_similarity_score` of the reply (`top_score`, `top_raw`), and `quality`
 (`searchQuality()` in `mekousage.ts`). AgentK's search at start keeps its query in
-`meko_preloads`. Searches from before this have NULL there: transcripts weren't read again.
+`meko_preloads`, with the quality and best memory score of what Meko returned before picking
+(`startQuality()` in `recall.ts`, by the same rules): its `empty` outcome only says that picking
+kept nothing, which also happens when Meko returned only conversation hits (a real answer) or
+only memories below the bar (*Nothing relevant*). Searches from before this have NULL there:
+transcripts weren't read again.
 
 **What Meko's scores can tell.** A `context_search` returns three buckets. Knowledge-base chunks
 and conversation hits pass Meko's own distance cutoffs before they're returned, so one that comes
@@ -180,34 +184,40 @@ the bar can be tuned from real data.
 
 A reply too large for Claude's context reaches the transcript only as Claude Code's notice that it
 saved the reply to a file. For a search, the reader reads that file for the scores and quality
-(`readSavedReplySync()` in `savedreply.ts`: only a file in the session's `tool-results` folder
-beside the transcript, after `realpath`, up to 8 MB; the same check the Meko call log's
-`claudeReply()` uses). `outcome`, `results` and `result_chars` still describe the notice, which is
+(`readSavedReplySync()` in `savedreply.ts`: only a file in the transcript's own session's
+`tool-results` folder, `<transcripts>/<claude session>/tool-results/` for
+`<transcripts>/<claude session>.jsonl`, after `realpath`, up to 8 MB; the same check the Meko
+call log's `claudeReply()` uses). `outcome`, `results` and `result_chars` still describe the notice, which is
 what the usage counts and the savings estimate count. A file it can't read leaves no quality.
 
 **The questions** (`projectGaps()`): every poor search in the project's sessions, Claude's and
-AgentK's empty searches at start, grouped by `query_key`. A question shows the query as last
-asked, how the latest ask went and with which tool (or *AgentK's search at start*), how many times
-it was asked and by which sessions, and the latest ask's item count and top scores. A question
-whose latest ask found something relevant is left out: Meko knows it now.
+AgentK's at start, grouped by `query_key`, latest asked first (ties by key). A question shows the
+query as last asked, how the latest ask went and with which tool (or *AgentK's search at start*),
+how many times it was asked and by which sessions, and the latest ask's item count, best memory
+score and best raw similarity (which may be two different memories'). A question whose latest ask
+found something relevant is left out: Meko knows it now. Pages are 100 questions, and the next
+starts after the last one's `lastAt` and key, since searches Claude makes in one response share a
+time.
 
-**What the user does with one** (`meko_gap_marks(project_id, query_key, state, text,
-datapack_name, at)`): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
+**What the user does with one** (`meko_gap_marks(project_id, query_key, dismissed_at, taught_at,
+taught_text, taught_datapack, opened_at)`, each action's latest time; the latest one at or after
+the question's last ask decides its state): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
 (1 to 2,000 characters, as typed) as a memory in the project's dedicated datapack, as AgentK
 (`agent-k-local`) in the project's Meko conversation, with metadata `{ source: "agent-k-local",
 kind: "taught", question }` (the question cut to 300 characters), and marks it taught with the
 text and the datapack's name. Nothing checks it against what Meko has: the person wrote it on
 purpose and the dialog says where it goes. Teaching needs Meko on and a dedicated datapack (409
 otherwise, with `MEKO_OFF` or `NO_DEDICATED_DATAPACK`); a failed save is a 502 with Meko's error
-and marks nothing. **Restore** clears the mark (a taught memory stays in Meko). A mark applies
-to the asks before it: a question asked again later is open again, and a taught one shows what was
-taught, since Meko had the answer and the search still missed it.
+and marks nothing. **Restore** clears a dismissal and opens the question again (what was taught,
+and the memory in Meko, stay). A mark applies to the asks before it: a question asked again later
+is open again, and a taught one shows what was taught, since Meko had the answer and the search
+still missed it; dismissing it then keeps that too.
 
 **Where it shows.** On the project home, the Meko section has a line under its stats while any
 question is open: *9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant*,
 linking to **What Meko doesn't know** (`/p/:id/meko-gaps`, `MekoGapsView.tsx`); the all-projects
 Usage page doesn't show it, and there's no command palette entry. The page lists the questions
-latest asked first, 100 at a time (`GET /api/projects/:id/meko-gaps?state=&before=`), filtered
+latest asked first, 100 at a time (`GET /api/projects/:id/meko-gaps?state=&before=&beforeKey=`), filtered
 **Open**, **Taught**, **Dismissed** or **All**, with the searches recorded since when. Each has
 **Teach Meko** (open ones; disabled, with why, when Meko is off or there's no dedicated
 datapack), **Copy** (the query) and **Dismiss** or **Restore**; **Copy all** copies the list

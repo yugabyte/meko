@@ -164,17 +164,13 @@ describe('Meko calls in transcripts', () => {
     const saved = join(dir, 'c', 'tool-results', 'mcp-meko-context_search-1.txt');
     mkdirSync(dirname(saved), { recursive: true });
     writeFileSync(saved, reply);
-    const outside = join(dir, 'elsewhere.txt');
-    writeFileSync(outside, reply);
     const notice = (path: string) => `Error: result (88,400 characters) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON`;
-    const searches: [string, string][] = [['t1', 'mcp__meko__context_search'], ['t2', 'mcp__meko__context_search'], ['t3', 'mcp__meko__context_search']];
-    writeFileSync(main, call('m1', searches) + result('t1', notice(saved)) + result('t2', notice(outside)) +
-      result('t3', notice(join(dir, 'c', 'tool-results', 'gone.txt'))));
+    const searches: [string, string][] = [['t1', 'mcp__meko__context_search'], ['t3', 'mcp__meko__context_search']];
+    writeFileSync(main, call('m1', searches) + result('t1', notice(saved)) + result('t3', notice(join(dir, 'c', 'tool-results', 'gone.txt'))));
     ingestSessionUsage(db, 's1', main);
-    // What Claude read (the notice) is still what's counted; only a file in the session's tool-results folder is read.
+    // What Claude read (the notice) is still what's counted. Which folders are read is savedReplyFile's (meko-log.test.ts).
     expect(all(db, 'SELECT tool_use_id, outcome, result_chars, top_score, quality FROM meko_calls ORDER BY tool_use_id')).toEqual([
       { tool_use_id: 't1', outcome: 'found', result_chars: notice(saved).length, top_score: 0.74, quality: 'weak' },
-      { tool_use_id: 't2', outcome: 'found', result_chars: notice(outside).length, top_score: null, quality: null },
       { tool_use_id: 't3', outcome: 'found', result_chars: expect.any(Number), top_score: null, quality: null },
     ]);
   });

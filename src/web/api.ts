@@ -230,10 +230,13 @@ export const api = {
   /** Where the browser downloads the session's Meko call log (a plain link: the login cookie goes with it). */
   mekoLogUrl: (id: string) => `/api/sessions/${enc(id)}/meko-calls.jsonl`,
   clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
-  mekoGaps: (projectId: string, q: { state?: MekoGapState | 'all'; before?: number } = {}) => {
+  mekoGaps: (projectId: string, q: { state?: MekoGapState | 'all'; after?: { lastAt: number; key: string } } = {}) => {
     const qs = new URLSearchParams();
     if (q.state) qs.set('state', q.state);
-    if (q.before !== undefined) qs.set('before', String(q.before));
+    if (q.after) {
+      qs.set('before', String(q.after.lastAt));
+      qs.set('beforeKey', q.after.key);
+    }
     const tail = qs.toString();
     return get<MekoGapPage>(`/api/projects/${enc(projectId)}/meko-gaps${tail ? `?${tail}` : ''}`);
   },

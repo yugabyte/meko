@@ -48,15 +48,19 @@ describe("What Meko doesn't know", () => {
     search('s1', 't3', 'how the mod works', 3000, 'found', null);
     search('s1', 't4', 'later answered', 1500, 'empty', 'empty');
     search('s2', 't5', 'later answered', 2500, 'found', null);
-    run(env.core.db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key) VALUES ('s2', 1800, 'empty', 0, 0, 900, ?, ?)`,
-      'Offline mode', 'offline mode');
+    // AgentK's searches at start, by what Meko returned: nothing, and (picked away, but a real answer) only a conversation hit.
+    const start = (sessionId: string, at: number, query: string, quality: 'empty' | null) =>
+      run(env.core.db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES (?, ?, 'empty', 0, 0, 900, ?, ?, ?)`,
+        sessionId, at, query, query.toLowerCase(), quality);
+    start('s2', 1800, 'Offline mode', 'empty');
+    start('s1', 1700, 'Cache hit', null);
 
     const open = await page(p.id);
     expect(open.gaps.map((g) => [g.query, g.quality, g.source, g.asks, g.sessions.map((s) => s.name)])).toEqual([
       ['release  tag retention', 'weak', 'claude', 2, ['release-cleanup', 'tags']],
       ['Offline mode', 'empty', 'start', 1, ['release-cleanup']],
     ]);
-    expect(open).toMatchObject({ counts: { open: 2, dismissed: 0, taught: 0 }, open: { empty: 1, weak: 1 }, searches: 6, since: 1000, more: false });
+    expect(open).toMatchObject({ counts: { open: 2, dismissed: 0, taught: 0 }, open: { empty: 1, weak: 1 }, searches: 7, since: 1000, more: false });
     expect(((await call('GET', `/api/projects/${p.id}/home`)).json() as ProjectHome).usage.mekoGaps).toEqual({ empty: 1, weak: 1 });
 
     const key = open.gaps[0].key;
@@ -106,7 +110,13 @@ describe("What Meko doesn't know", () => {
     ]);
     expect((await page(p.id, 'taught')).gaps).toHaveLength(1);
     // Asked again after it was taught: open again, with what was taught (Meko had it, and the search missed it).
-    search('s1', 't2', 'Release tag retention', Date.now() + 1000, 'found', 'weak');
+    search('s1', 't2', 'Release tag retention', Date.now() + 5, 'found', 'weak');
+    expect((await page(p.id)).gaps[0]).toMatchObject({ state: 'open', taught: { text: 'Releases keep the last 30 tags.' } });
+    // Dismissed then, it keeps what was taught, and a restore keeps it too.
+    await new Promise((r) => setTimeout(r, 20));
+    await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' });
+    expect((await page(p.id, 'dismissed')).gaps[0]).toMatchObject({ state: 'dismissed', taught: { text: 'Releases keep the last 30 tags.', datapack: 'team/Alpha' } });
+    await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: null });
     expect((await page(p.id)).gaps[0]).toMatchObject({ state: 'open', taught: { text: 'Releases keep the last 30 tags.' } });
 
     // No dedicated datapack, or Meko off: a 409 that says so.
@@ -118,5 +128,22 @@ describe("What Meko doesn't know", () => {
       c.meko.enabled = false;
     });
     expect((await teach(p.id, 'An answer')).json()).toMatchObject({ code: 'MEKO_OFF' });
+  });
+
+  it('pages through questions asked at once without skipping any at the page boundary', async () => {
+    const p = await project('Alpha');
+    session(p.id, 's1', 'many');
+    // Claude's parallel searches in one response share its timestamp: 99 asked earlier, then 4 at once across the boundary.
+    for (let i = 0; i < 99; i++) search('s1', `t${i}`, `question ${String(i).padStart(3, '0')}`, 1000 + i, 'empty', 'empty');
+    for (const k of ['a', 'b', 'c', 'd']) search('s1', `same-${k}`, `asked at once ${k}`, 500, 'empty', 'empty');
+    const first = await page(p.id);
+    expect(first.gaps).toHaveLength(100);
+    expect(first.more).toBe(true);
+    const last = first.gaps.at(-1)!;
+    expect(last.lastAt).toBe(500);
+    const rest = (await call('GET', `/api/projects/${p.id}/meko-gaps?before=${last.lastAt}&beforeKey=${encodeURIComponent(last.key)}`)).json() as MekoGapPage;
+    expect(rest.more).toBe(false);
+    expect(new Set([...first.gaps, ...rest.gaps].map((g) => g.key)).size).toBe(103);
+    expect((await call('GET', `/api/projects/${p.id}/meko-gaps?before=500`)).statusCode).toBe(400);
   });
 });

@@ -81,7 +81,7 @@ export function MekoGapsView({
     const asked = view.current;
     setLoading(true);
     try {
-      const p = await api.mekoGaps(project.id, { state: filter, before: last.lastAt });
+      const p = await api.mekoGaps(project.id, { state: filter, after: { lastAt: last.lastAt, key: last.key } });
       if (view.current !== asked) return;
       setGaps((g) => [...(g ?? []), ...p.gaps]);
       setPage((old) => (old ? { ...old, more: p.more } : p));
@@ -198,10 +198,13 @@ export function MekoGapsView({
                         </span>
                       ))}
                       {` · ${g.asks > 1 ? 'last ' : ''}${day(g.lastAt)} · `}
-                      {g.source === 'start' ? "AgentK's search at start" : g.tool}
-                      {g.quality === 'weak' && g.results !== null && ` · ${g.results.toLocaleString()} found`}
-                      {g.topScore !== null && `, top ${g.topScore.toFixed(2)}`}
-                      {g.topRaw !== null && ` (raw ${g.topRaw.toFixed(2)})`}
+                      {[
+                        g.source === 'start' ? "AgentK's search at start" : g.tool,
+                        g.quality === 'weak' && g.results !== null && `${g.results.toLocaleString()} found`,
+                        // The best score and the best raw similarity may be different memories'.
+                        g.topScore !== null && `best score ${g.topScore.toFixed(2)}`,
+                        g.topRaw !== null && `best raw ${g.topRaw.toFixed(2)}`,
+                      ].filter(Boolean).join(' · ')}
                     </div>
                     {g.taught && (
                       <div className="mg-taught">

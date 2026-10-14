@@ -1,5 +1,5 @@
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
-import { dirname, relative, sep } from 'node:path';
+import { basename, dirname, relative, sep } from 'node:path';
 
 /**
  * Claude Code's notice for a tool result too large for Claude's context, which it saved to a file
@@ -11,9 +11,10 @@ export const TOO_LARGE = /^Error: result \(([\d,]+) characters\) exceeds maximum
 const SAVED_REPLY = /^Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to (\/\S+?)\.?(?:\s|$)/;
 
 /**
- * The file a too-large notice names, when it's in a `tool-results` folder of a session beside the
- * transcript (`<transcripts>/<claude session>/tool-results/`, checked after `realpath`); null for any
- * other text, any other file, or one that doesn't exist.
+ * The file a too-large notice names, when it's in this transcript's own session's `tool-results`
+ * folder (`<transcripts>/<claude session>/tool-results/` for `<transcripts>/<claude session>.jsonl`,
+ * checked after `realpath`); null for any other text, any other file (another session's included),
+ * or one that doesn't exist.
  */
 export function savedReplyFile(text: string | null, transcriptPath: string | null): string | null {
   const saved = text === null ? null : SAVED_REPLY.exec(text)?.[1];
@@ -21,7 +22,8 @@ export function savedReplyFile(text: string | null, transcriptPath: string | nul
   try {
     const file = realpathSync(saved);
     const parts = relative(realpathSync(dirname(transcriptPath)), file).split(sep);
-    return parts.length === 3 && parts[0] !== '..' && parts[1] === 'tool-results' ? file : null;
+    const own = basename(transcriptPath, '.jsonl');
+    return parts.length === 3 && parts[0] === own && parts[1] === 'tool-results' ? file : null;
   } catch {
     return null;
   }

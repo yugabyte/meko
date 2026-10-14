@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/shared/types.js';
 import {
-  ITEM_CHARS, MAX_ITEMS, QUERY_MAX, RecallStore, TOTAL_CHARS, clip, formatRecall, issueRefs, pickResults, recallQuery, runRecall, withoutMekoLines,
+  ITEM_CHARS, MAX_ITEMS, QUERY_MAX, RecallStore, TOTAL_CHARS, clip, formatRecall, issueRefs, pickResults, recallQuery, runRecall, startQuality, withoutMekoLines,
   type PreloadRecord, type RecallRun,
 } from '../../src/server/recall.js';
 
@@ -100,6 +100,18 @@ describe('runRecall', () => {
     expect(queries).toEqual(['Fix #10 Fix #10 and #11 #10: Sessions rarely search Meko']);
     expect(r.results).toBe(1);
     expect(r.text).toContain('a gotcha about this');
+    expect(r).toMatchObject({ quality: null, topScore: 0.9 });
+  });
+
+  // By what Meko returned, before picking: picking drops conversation hits and memories below the bar.
+  it.each<[string, SearchResult[], object]>([
+    ['nothing back', [], { quality: 'empty', topScore: null }],
+    ['only memories below the bar', [mem('near', 0.7), mem('far', 0.5)], { quality: 'weak', topScore: 0.7 }],
+    ['only a conversation hit', [{ source: 'conversation', text: 'an old reply', score: 0.2, datapackName: null }], { quality: null }],
+    ['a knowledge-base item beside weak memories', [kb('a note'), mem('far', 0.5)], { quality: null, topScore: 0.5 }],
+    ['a memory without a score', [mem('unscored', null)], { quality: null, topScore: null }],
+  ])('says how poor a search at start was: %s', (_what, results, want) => {
+    expect(startQuality(results)).toMatchObject(want);
   });
 
   it('fails when the search does', async () => {

@@ -64,8 +64,8 @@ took (from just before it ran, a permission prompt included), and whether a suba
 call too large for the hook socket (over about 3.5 MB) is sent without its reply, then without its
 args too, and says so in its error. When Claude read only Claude Code's notice that a reply was too
 large for its context ("…Output has been saved to `<path>`"), the server reads the reply from that
-file, but only from a `tool-results` folder of a session beside the transcript
-(`<transcripts>/<claude session>/tool-results/`), and keeps the notice beside it; a file it can't
+file, but only from the transcript's own session's `tool-results` folder
+(`<transcripts>/<claude session>/tool-results/` for `<claude session>.jsonl`), and keeps the notice beside it; a file it can't
 read leaves the notice as the reply. Without a live mod (Claude Code older than the mod needs, or
 `[claude] mod = false`), Claude's calls aren't logged: there's no fallback to the `PostToolUse`
 hook, which misses failed calls.

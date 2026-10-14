@@ -515,13 +515,16 @@ const MIGRATIONS: string[] = [
     FROM kv WHERE key LIKE 'reviewer-email:%'
     ON CONFLICT(email_key) DO NOTHING;
   `,
-  // 34: What Meko doesn't know (mekousage.ts). For Claude's searches: what was asked (query, cut to
-  // 1,000 characters, and query_key, the same lower-cased with its whitespace collapsed, which
-  // groups asks), the best memory scores of the reply (score, raw_similarity_score), and quality:
-  // 'empty' (found nothing) or 'weak' (nothing relevant), NULL otherwise. For AgentK's search at
-  // start: its query. Calls and searches from before this keep NULL: transcripts aren't read again.
-  // meko_gap_marks: what the user did with a question (by query_key), dismissed it or taught Meko
-  // (text: what was saved, datapack_name: where); one asked after `at` shows as open again.
+  // 34: What Meko doesn't know (mekousage.ts, mekogaps.ts). For Claude's searches: what was asked
+  // (query, cut to 1,000 characters, and query_key, the same lower-cased with its whitespace
+  // collapsed, which groups asks), the best memory scores of the reply (score,
+  // raw_similarity_score), and quality: 'empty' (found nothing) or 'weak' (nothing relevant), NULL
+  // otherwise. For AgentK's search at start: its query, and the quality and best memory score of
+  // what Meko returned before picking. Calls and searches from before this keep NULL: transcripts
+  // aren't read again. meko_gap_marks: what the user did with a question (by query_key), each
+  // action's latest time: dismissed_at (cleared by a restore), taught_at with what was saved and
+  // where, and opened_at (a restore); the latest one at or after the question's last ask decides
+  // its state.
   `
   ALTER TABLE meko_calls ADD COLUMN query TEXT;
   ALTER TABLE meko_calls ADD COLUMN query_key TEXT;
@@ -531,13 +534,16 @@ const MIGRATIONS: string[] = [
   CREATE INDEX meko_calls_quality ON meko_calls(quality) WHERE quality IS NOT NULL;
   ALTER TABLE meko_preloads ADD COLUMN query TEXT;
   ALTER TABLE meko_preloads ADD COLUMN query_key TEXT;
+  ALTER TABLE meko_preloads ADD COLUMN quality TEXT CHECK (quality IN ('empty', 'weak'));
+  ALTER TABLE meko_preloads ADD COLUMN top_score REAL;
   CREATE TABLE meko_gap_marks (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     query_key TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('dismissed', 'taught')),
-    text TEXT,
-    datapack_name TEXT,
-    at INTEGER NOT NULL,
+    dismissed_at INTEGER,
+    taught_at INTEGER,
+    taught_text TEXT,
+    taught_datapack TEXT,
+    opened_at INTEGER,
     PRIMARY KEY (project_id, query_key)
   );
   `,
