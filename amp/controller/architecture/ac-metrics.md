@@ -437,8 +437,10 @@ gated on `SUPERVISOR_HTTP_PORT`), which a controller-driven install always sets.
 
 The richest perf signal (per-normalized statement `calls`, total/mean/max exec
 time, rows, block hits vs reads, WAL bytes) comes from the exporter's built-in
-`stat_statements` collector, **on by default**. Three pieces hang off one value,
-`endpoint.sharedPreloadLibraries` (`yb_amp,pg_stat_statements,pgsentinel`):
+`stat_statements` collector, **on by default**. Three pieces hang off one list,
+the compute's base `shared_preload_libraries` — the endpoint image's own
+(`yb_amp,pg_stat_statements,pgsentinel`) unless `endpoint.sharedPreloadLibraries`
+overrides it:
 
 1. The library is preloaded from the first boot. It is loadable only at postmaster
    start, so leaving it out costs a compute restart to add later.
@@ -446,10 +448,10 @@ time, rows, block hits vs reads, WAL bytes) comes from the exporter's built-in
    `post_apply_config` — which runs whether or not the spec sets
    `skip_pg_catalog_updates`, and every amp spec does. It is a background task, so
    the extension lands a moment after the endpoint reports ready.
-3. The chart passes `--collector.stat_statements` only when that value carries the
-   library — without it the view is absent and the collector errors every scrape.
+3. The chart passes `--collector.stat_statements` unless an override leaves the
+   library out — without it the view is absent and the collector errors every scrape.
 
-So dropping `pg_stat_statements` from that one value turns the whole path off
+So an override without `pg_stat_statements` turns the whole path off
 coherently, extension and collector included. It also gates `compute_ctl`'s
 `GET /insights` (top-100 statements by mean time).
 

@@ -91,9 +91,19 @@ name (`pgvector` ships `vector.control`, so `CREATE EXTENSION vector`).
 `shared_preload_libraries` is separate: an extension that must be preloaded
 (e.g. `pg_cron`) has its library name appended to the base
 `shared_preload_libraries` (`yb_amp,pg_stat_statements,pgsentinel`, all
-image-baked). It must contain **only** libraries that are actually mounted, or the
+image-baked). It must contain **only** libraries that are actually present, or the
 postmaster fails to start, so the controller/chart only add a preload entry for an
-extension it is also mounting.
+extension it is also mounting. For the same reason the base list is the endpoint
+supervisor's `DEFAULT_SHARED_PRELOAD_LIBRARIES`, not a chart value: the controller
+renders its one chart against endpoint images of any version, and only the image
+knows which libraries it ships (#1572). The chart passes the preload entries in
+`EXTRA_SHARED_PRELOAD_LIBRARIES`, which the supervisor appends to the base, and an
+override in `BASE_SHARED_PRELOAD_LIBRARIES`. It also sets the whole list in
+`SHARED_PRELOAD_LIBRARIES` — `yb_amp`, the one library every image ships, plus the
+entries — because that is all a supervisor older than #1572 reads; a newer one
+ignores it when either of the other two is set. So an image that old keeps its
+preload extensions but runs without `pg_stat_statements` and `pgsentinel` until
+it is upgraded.
 
 `pg_cron`'s scheduler binds to one database via `cron.database_name`, and
 `CREATE EXTENSION pg_cron` is refused in any other. It defaults to `postgres`,
@@ -370,8 +380,8 @@ image carries (`sharePath`, `libPath`, `libraryPath`, `envPaths`,
   derives `extension_control_path` / `dynamic_library_path` (prepended with
   `$system` / `$libdir`, each entry's `sharePath` / `libPath` joined onto its
   mount root), merges any `abiExtraExempt` names into
-  `yb_amp_abi_extra_exempt_libraries`, and appends any `preload` entries to
-  `SHARED_PRELOAD_LIBRARIES`. The GUCs, and each entry's `settings` as-is, are
+  `yb_amp_abi_extra_exempt_libraries`, and lists any `preload` entries in
+  `EXTRA_SHARED_PRELOAD_LIBRARIES`. The GUCs, and each entry's `settings` as-is, are
   merged into `COMPUTE_EXTRA_SETTINGS_JSON`, which the supervisor renders into
   the compute's `postgresql.conf`. `settings` come from the catalog's
   `Settings`, which mirrors the manifest's `settings:`

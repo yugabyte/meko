@@ -313,7 +313,8 @@ var reservedEnvNames = map[string]bool{
 	"REQUIRE_WRITE_TOKEN": true, "PRERENDERED_CONFIG": true,
 	"PRIVILEGED_ROLE_NAME": true, "CGROUP_ROOT": true,
 	"AUTOPREWARM": true, "OFFLOAD_LFC_INTERVAL_SECONDS": true,
-	"SHARED_PRELOAD_LIBRARIES": true,
+	"SHARED_PRELOAD_LIBRARIES": true, "EXTRA_SHARED_PRELOAD_LIBRARIES": true,
+	"BASE_SHARED_PRELOAD_LIBRARIES": true,
 }
 
 // volumeName mirrors the chart's yb-amp-endpoint.extVolumeName helper: runs of

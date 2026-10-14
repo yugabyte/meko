@@ -175,13 +175,14 @@ endpoint:
   # control plane sends this on the create and on nothing else, so a redeploy
   # and a fleet roll both arrive with it empty and must change nothing.
   password: ""
-  # -- Postgres shared_preload_libraries for the compute. Extensions with
-  # `preload: true` below are appended to this automatically.
-  # `pg_stat_statements` (contrib) and `pgsentinel` (pgxn/vendor) are preloaded by
-  # default because a preload library cannot be added later without a postmaster
-  # restart. The compute_ctl creates the matching extension after start when it sees
-  # the name here.
-  sharedPreloadLibraries: "yb_amp,pg_stat_statements,pgsentinel"
+  # -- Override for the compute's base shared_preload_libraries. Empty uses the
+  # endpoint image's own list (`yb_amp,pg_stat_statements,pgsentinel` today),
+  # which names only libraries that image ships — a name whose library is
+  # missing stops the postmaster, and the controller renders this chart against
+  # endpoint images of any version. Extensions with `preload: true` below are
+  # appended either way. Leaving `pg_stat_statements` out of an override also
+  # turns off the exporter's stat_statements collector.
+  sharedPreloadLibraries: ""
   # -- Externalized extensions to mount as read-only Kubernetes ImageVolumes
   # (built from deploy/extensions). Each mounts at /extensions/<name>, and its
   # share/ + lib/ subdirs are appended to extension_control_path /
@@ -398,8 +399,8 @@ metrics:
     # -- Database the exporter connects to.
     dbname: postgres
     # -- Extra postgres_exporter flags. The template already passes
-    # --collector.stat_statements (pg_stat_statements is preloaded by default,
-    # see endpoint.sharedPreloadLibraries) and --no-collector.database (the
+    # --collector.stat_statements (pg_stat_statements is preloaded unless
+    # endpoint.sharedPreloadLibraries leaves it out) and --no-collector.database (the
     # database collector errors on the storage layer).
     extraArgs: []
     # -- Sidecar resources. Set request == limit (cpu + memory) so the sidecar

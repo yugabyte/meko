@@ -165,6 +165,9 @@ tests:
           path: data.BRANCH_ID
           value: "deadbeef-dead-beef-dead-beefdeadbeef"
       - equal:
+          path: data.BASE_SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp,pg_stat_statements"
+      - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
           value: "yb_amp,pg_stat_statements"
       # User GUCs are NOT carried by the chart: they live on the endpoint's and
@@ -174,11 +177,14 @@ tests:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           value: "{}"
 
-  - it: leaves preload + settings untouched when no extensions are mounted
+  - it: leaves preload + settings to the image when nothing overrides them
     asserts:
-      - equal:
+      - notExists:
           path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements,pgsentinel"
+      - notExists:
+          path: data.BASE_SHARED_PRELOAD_LIBRARIES
+      - notExists:
+          path: data.EXTRA_SHARED_PRELOAD_LIBRARIES
       - equal:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           value: "{}"
@@ -192,9 +198,8 @@ tests:
             preload: false
     asserts:
       # A non-preload extension does not touch shared_preload_libraries.
-      - equal:
-          path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements,pgsentinel"
+      - notExists:
+          path: data.EXTRA_SHARED_PRELOAD_LIBRARIES
       # The two path GUCs are prepended with the PG18 defaults, then the mount.
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
@@ -219,8 +224,8 @@ tests:
               documentdb.bg_worker_database_name: documentdb
     asserts:
       - equal:
-          path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements,pgsentinel,pg_documentdb_core,pg_documentdb"
+          path: data.EXTRA_SHARED_PRELOAD_LIBRARIES
+          value: "pg_documentdb_core,pg_documentdb"
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"cron.database_name":"documentdb"'
@@ -293,7 +298,7 @@ tests:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: 'abi_extra_exempt'
 
-  - it: appends preload extensions (using library override) to shared_preload_libraries
+  - it: passes preload extensions separately from the base list
     set:
       endpoint:
         extensions:
@@ -305,11 +310,34 @@ tests:
             preload: false
     asserts:
       - equal:
+          path: data.EXTRA_SHARED_PRELOAD_LIBRARIES
+          value: "pg_cron"
+      - notExists:
+          path: data.BASE_SHARED_PRELOAD_LIBRARIES
+      # A supervisor older than #1572 reads only this, so it must carry the
+      # extensions, over a base every image ships.
+      - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
-          value: "yb_amp,pg_stat_statements,pgsentinel,pg_cron"
+          value: "yb_amp,pg_cron"
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '/extensions/pg_cron/share/postgresql:/extensions/vector/share/postgresql'
+
+  - it: puts preload extensions after an override in the list older supervisors read
+    set:
+      endpoint:
+        sharedPreloadLibraries: "yb_amp,pg_stat_statements"
+        extensions:
+          - name: pg_cron
+            image: quay.io/yugabyte/amp-ext-pg_cron:1.6
+            preload: true
+    asserts:
+      - equal:
+          path: data.BASE_SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp,pg_stat_statements"
+      - equal:
+          path: data.SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp,pg_stat_statements,pg_cron"
 
   - it: applies internal service port overrides
     set:

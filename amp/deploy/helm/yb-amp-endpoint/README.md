@@ -91,8 +91,8 @@ pod service-discovery scrapes it directly; the port stays off the Service so
 metrics aren't published on a LoadBalancer/tailnet-exposed endpoint. Built-in
 collectors cover `pg_stat_database`, bgwriter, connections, locks, and
 replication. Query-level metrics come from the `stat_statements` collector,
-which the template passes whenever `endpoint.sharedPreloadLibraries` contains
-`pg_stat_statements` — it does by default. See
+which the template passes unless an `endpoint.sharedPreloadLibraries` override
+leaves out `pg_stat_statements`. See
 [`controller/architecture/ac-metrics.md`](../../../controller/architecture/ac-metrics.md).
 
 ## Key values
@@ -121,7 +121,7 @@ which the template passes whenever `endpoint.sharedPreloadLibraries` contains
 | `endpoint.pgVersion` | `18` | compute Postgres version (the image ships v18 only) |
 | `endpoint.computePort` | `55433` | compute Postgres port (exposed by the Service) |
 | `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
-| `endpoint.sharedPreloadLibraries` | `yb_amp,pg_stat_statements,pgsentinel` | compute `shared_preload_libraries`; `pg_stat_statements` here also turns on the exporter's `stat_statements` collector and compute_ctl's `/insights` |
+| `endpoint.sharedPreloadLibraries` | _(empty)_ | override for the compute's base `shared_preload_libraries`; empty ⇒ the endpoint image's own list (`yb_amp,pg_stat_statements,pgsentinel`). `preload: true` extensions are appended either way. An override without `pg_stat_statements` also turns off the exporter's `stat_statements` collector and compute_ctl's `/insights` |
 | `endpoint.endpointId` | _(empty)_ | the endpoint's `amp_registry.endpoints` id; lets the supervisor read its own and its branch's `pg_settings` (and the pageserver/safekeeper override columns) from the registry. Empty ⇒ derived defaults only |
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `16Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS. 16Gi is the 8 GiB per vCPU the control plane holds every endpoint to — a core without the memory to feed it gives Postgres a cache it cannot keep |
 | `service.type` | `ClusterIP` | Service type |

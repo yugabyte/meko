@@ -360,7 +360,7 @@ tests:
       - contains:
           path: spec.template.spec.containers[1].args
           content: --no-collector.database
-      # pg_stat_statements is preloaded by default, so the collector is on.
+      # The image's base list preloads pg_stat_statements, so the collector is on.
       - contains:
           path: spec.template.spec.containers[1].args
           content: --collector.stat_statements
@@ -404,6 +404,15 @@ tests:
       # Without the library the view does not exist, so the collector would
       # error on every scrape.
       - notContains:
+          path: spec.template.spec.containers[1].args
+          content: --collector.stat_statements
+
+  - it: keeps the stat_statements collector when an override preloads the library
+    template: templates/deployment.yaml
+    set:
+      endpoint.sharedPreloadLibraries: "yb_amp, pg_stat_statements"
+    asserts:
+      - contains:
           path: spec.template.spec.containers[1].args
           content: --collector.stat_statements
 

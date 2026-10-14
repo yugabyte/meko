@@ -84,12 +84,45 @@ pub mod supervise;
 use resources::{Cgroup, Resources};
 use supervise::{Outcome, Policy, Supervisor};
 
-/// What a compute preloads when the chart passes nothing: the storage extension it
-/// cannot run without, plus `pg_stat_statements`, which feeds the postgres_exporter
-/// statement collector and compute_ctl's `/insights`, and `pgsentinel`, which
-/// samples active session history. All three can only be loaded at postmaster
-/// start.
+/// What a compute preloads unless `BASE_SHARED_PRELOAD_LIBRARIES` overrides it: the
+/// storage extension it cannot run without, plus `pg_stat_statements`, which feeds
+/// the postgres_exporter statement collector and compute_ctl's `/insights`, and
+/// `pgsentinel`, which samples active session history. All three can only be
+/// loaded at postmaster start.
+///
+/// The base list lives here, not in the chart, because a name whose library is
+/// missing stops the postmaster: only the image knows which libraries it ships,
+/// and the controller renders one chart against endpoint images of any version
+/// (#1572).
 const DEFAULT_SHARED_PRELOAD_LIBRARIES: &str = "yb_amp,pg_stat_statements,pgsentinel";
+
+/// `shared_preload_libraries`: the base list (the image's own, unless
+/// overridden) followed by the preload extensions the chart mounted, which
+/// arrive separately so that naming one does not replace the base.
+///
+/// `legacy` is `SHARED_PRELOAD_LIBRARIES`, the whole list, which is all a
+/// supervisor older than #1572 reads. A newer chart still sets it for those
+/// images, to a list every image ships, so it is ignored whenever the chart
+/// also sent `base` or `extra`. Alone, it is an older chart's full list.
+fn shared_preload_libraries(
+    legacy: Option<&str>,
+    base: Option<&str>,
+    extra: Option<&str>,
+) -> String {
+    let list = if base.is_none() && extra.is_none() {
+        legacy.unwrap_or(DEFAULT_SHARED_PRELOAD_LIBRARIES)
+    } else {
+        base.unwrap_or(DEFAULT_SHARED_PRELOAD_LIBRARIES)
+    };
+    let mut libs: Vec<&str> = Vec::new();
+    let names = list.split(',').chain(extra.unwrap_or_default().split(','));
+    for name in names.map(str::trim).filter(|n| !n.is_empty()) {
+        if !libs.contains(&name) {
+            libs.push(name);
+        }
+    }
+    libs.join(",")
+}
 
 pub(crate) fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -360,9 +393,10 @@ impl Env {
             compute_password: env_opt("COMPUTE_PASSWORD"),
             autoprewarm: env_bool("AUTOPREWARM"),
             offload_lfc_interval_seconds: env_u64("OFFLOAD_LFC_INTERVAL_SECONDS")?,
-            shared_preload_libraries: env_or(
-                "SHARED_PRELOAD_LIBRARIES",
-                DEFAULT_SHARED_PRELOAD_LIBRARIES,
+            shared_preload_libraries: shared_preload_libraries(
+                env_opt("SHARED_PRELOAD_LIBRARIES").as_deref(),
+                env_opt("BASE_SHARED_PRELOAD_LIBRARIES").as_deref(),
+                env_opt("EXTRA_SHARED_PRELOAD_LIBRARIES").as_deref(),
             ),
             chart_settings: chart_settings()?,
             compute_ctl_jwks: compute_ctl_jwks()?,
@@ -1432,6 +1466,38 @@ mod tests {
         unsafe { std::env::set_var("SUPERVISOR_TEST_BAD_PORT", "not-a-port") };
         assert!(env_port("SUPERVISOR_TEST_BAD_PORT", 9898).is_err());
         unsafe { std::env::remove_var("SUPERVISOR_TEST_BAD_PORT") };
+    }
+
+    #[test]
+    fn preload_extensions_extend_the_base_rather_than_replace_it() {
+        assert_eq!(
+            shared_preload_libraries(None, None, None),
+            DEFAULT_SHARED_PRELOAD_LIBRARIES
+        );
+        // The chart's fallback for older supervisors does not shrink the base.
+        assert_eq!(
+            shared_preload_libraries(Some("yb_amp,pg_cron"), None, Some("pg_cron")),
+            "yb_amp,pg_stat_statements,pgsentinel,pg_cron"
+        );
+        // An override replaces the base, and the extensions still go after it.
+        assert_eq!(
+            shared_preload_libraries(
+                Some("yb_amp,pg_documentdb_core,pg_documentdb"),
+                Some("yb_amp"),
+                Some("pg_documentdb_core,pg_documentdb")
+            ),
+            "yb_amp,pg_documentdb_core,pg_documentdb"
+        );
+        // A name in both is loaded once.
+        assert_eq!(
+            shared_preload_libraries(None, Some("yb_amp, pg_cron"), Some("pg_cron,")),
+            "yb_amp,pg_cron"
+        );
+        // An older chart sends only the whole list.
+        assert_eq!(
+            shared_preload_libraries(Some("yb_amp,pg_stat_statements"), None, None),
+            "yb_amp,pg_stat_statements"
+        );
     }
 
     /// The wait needs one host:port, but the connection string may carry several.

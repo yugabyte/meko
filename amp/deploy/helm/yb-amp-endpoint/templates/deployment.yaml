@@ -267,9 +267,11 @@ spec:
           args:
             - --web.listen-address=:{{ .Values.metrics.postgresExporter.port }}
             - --no-collector.database
-            {{- if contains "pg_stat_statements" .Values.endpoint.sharedPreloadLibraries }}
-            # Query-level metrics. Gated on the preload list: without the library
-            # the view does not exist and the collector errors every scrape.
+            {{- $spl := .Values.endpoint.sharedPreloadLibraries }}
+            {{- if or (not $spl) (has "pg_stat_statements" (splitList "," (nospace $spl))) }}
+            # Query-level metrics. The image's base list carries pg_stat_statements,
+            # so this is off only when an override leaves it out: without the
+            # library the view does not exist and the collector errors every scrape.
             - --collector.stat_statements
             {{- end }}
             {{- range .Values.metrics.postgresExporter.extraArgs }}

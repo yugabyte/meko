@@ -478,13 +478,21 @@ stops the postmaster instead of being skipped. The compute's log (the endpoint c
 server for the library; that warning is a consequence, not the cause. The supervisor restarts the
 compute within its budget, then exits so the kubelet recreates the pod, which repeats the cycle.
 
-**The base list is newer than the image.** The chart's `endpoint.sharedPreloadLibraries` ships in
-the controller image, while the `.so` files ship in the endpoint image, so a controller rendering
-an endpoint whose `spec.Version` points at an older image fails this way when a library joins the
-default list (`pgsentinel` did in [#1446]; `pg_stat_statements` before it). This happens on a
-re-render of an endpoint still recorded at the older version, and on a rollback of the endpoint
-image alone. Roll the endpoint image out before the controller, and upgrade or roll back the two
-together. Tracked in [#1572].
+Find which list named it: `kubectl -n <ns> get configmap <release> -o yaml | grep SHARED_PRELOAD`.
+
+- **The library is in `BASE_SHARED_PRELOAD_LIBRARIES`.** `endpoint.sharedPreloadLibraries`
+  overrides the image's base list with a library it does not ship. Drop the override.
+- **Only `SHARED_PRELOAD_LIBRARIES` is set.** A controller older than [#1572], whose chart set
+  the whole list on every endpoint and fails this way against an endpoint image built before a
+  library joined it (`pgsentinel` in [#1446]). Upgrade the controller.
+- **The library is in `EXTRA_SHARED_PRELOAD_LIBRARIES`.** A `preload: true` extension whose
+  ImageVolume does not carry it — check the registration's `library` against the image.
+- **Otherwise** the endpoint image's own default names a library the image does not ship:
+  a broken build.
+
+The reverse case boots: an endpoint image older than [#1572] that mounts a `preload: true`
+extension starts with `yb_amp` and its extensions only, so the exporter's `stat_statements`
+collector errors and `/insights` is empty. Upgrade the endpoint image.
 
 [#1446]: https://github.com/yugabyte/meko/issues/1446
 [#1572]: https://github.com/yugabyte/meko/issues/1572

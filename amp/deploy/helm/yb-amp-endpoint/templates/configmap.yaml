@@ -87,7 +87,8 @@ data:
   ENDPOINT_DATA_VOLUME_SIZE: {{ if .Values.persistence.storageClass }}{{ .Values.persistence.size | quote }}{{ else }}{{ .Values.runDir.sizeLimit | quote }}{{ end }}
   {{- /*
     Extensions mounted as ImageVolumes contribute:
-      * their library name to shared_preload_libraries (preload: true only),
+      * their library name to EXTRA_SHARED_PRELOAD_LIBRARIES (preload: true
+        only), which the supervisor appends to the image's base list,
       * their share/ + lib/ dirs to extension_control_path / dynamic_library_path
         (prepended with the PG18 defaults $system / $libdir so the built-in and
         remote-downloaded extensions still resolve),
@@ -107,7 +108,7 @@ data:
     which is the default; a third-party image declares its own (the CloudNativePG
     extension images are share + lib, with their bundled .so files under system).
   */ -}}
-  {{- $preload := .Values.endpoint.sharedPreloadLibraries }}
+  {{- $preload := list }}
   {{- /*
     User GUCs are NOT carried here. They live on the endpoint's and its
     branch's `pg_settings` in amp_registry, which the supervisor reads at
@@ -133,7 +134,7 @@ data:
   {{- $abiExempt = append $abiExempt . }}
   {{- end }}
   {{- if .preload }}
-  {{- $preload = printf "%s,%s" $preload (default .name .library) }}
+  {{- $preload = append $preload (default .name .library) }}
   {{- end }}
   {{- /* Settings the extension needs the compute started with (documentdb's name its database). */ -}}
   {{- range $k, $v := .settings }}
@@ -146,7 +147,25 @@ data:
   {{- $_ := set $extra "yb_amp_abi_extra_exempt_libraries" (join "," $abiExempt) }}
   {{- end }}
   {{- end }}
-  SHARED_PRELOAD_LIBRARIES: {{ $preload | quote }}
+  {{- /*
+    The base list is the endpoint image's own, because only the image knows
+    which libraries it ships (#1572); BASE_ is an override only.
+
+    SHARED_PRELOAD_LIBRARIES is for a supervisor older than #1572, which reads
+    nothing else, so without it such an image would drop its preload
+    extensions. Its base is yb_amp, the one library every image ships. A newer
+    supervisor ignores it whenever BASE_ or EXTRA_ is set.
+  */}}
+  {{- $base := .Values.endpoint.sharedPreloadLibraries }}
+  {{- with $base }}
+  BASE_SHARED_PRELOAD_LIBRARIES: {{ . | quote }}
+  {{- end }}
+  {{- if $preload }}
+  EXTRA_SHARED_PRELOAD_LIBRARIES: {{ join "," $preload | quote }}
+  {{- end }}
+  {{- if or $base $preload }}
+  SHARED_PRELOAD_LIBRARIES: {{ prepend $preload (default "yb_amp" $base) | join "," | quote }}
+  {{- end }}
   COMPUTE_EXTRA_SETTINGS_JSON: {{ $extra | toJson | quote }}
   {{- if $loaderDirs }}
   # Dirs holding system shared libraries an externalized .so links (e.g. the
