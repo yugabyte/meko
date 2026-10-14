@@ -95,8 +95,9 @@ sorts higher.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
    Tags are kept, so release notes and version numbering are unaffected.
-5. Running installs see the release on their next update check (every 6 hours) and offer it in
-   an "Update to vX" banner; one click installs it without interrupting sessions. Once a version has been healthy for 5 minutes, the
+5. Running installs see the release on their next update check (every 6 hours, and when a page
+   opens and the last check is over 10 minutes old) and offer it in an "Update to vX" banner; one
+   click installs the newest release without interrupting sessions. Once a version has been healthy for 5 minutes, the
    server deletes every installed version under `~/.agent-k-local/app/` except the running one and
    one previous version (the one it updated from) to roll back to by hand.
 

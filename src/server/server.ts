@@ -704,6 +704,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!wsGuard(socket, req)) return;
     clients.add(socket);
     socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+    void opts.updater?.freshen();
     // A page checking that its socket is still there (src/web/events.ts).
     socket.on('message', (data) => {
       let msg: EventsClientMessage | null;

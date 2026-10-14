@@ -12,6 +12,8 @@ const run = promisify(execFile);
 /** Time limits, so a stalled network call can't leave a check or an update running forever. */
 const LIST_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+/** How old the last update check may be when a page opens before it is checked again. */
+const FRESH_MS = 10 * 60_000;
 
 // ---------------------------------------------------------------------------
 // Versions
@@ -350,6 +352,7 @@ export class Updater {
   private healthyDuringApply = false;
   private justUpdatedFrom: string | null = null;
   private checking: Promise<UpdateStatus> | null = null;
+  private applyRun: Promise<UpdateStatus> | null = null;
   private readonly appDir: string | undefined;
 
   constructor(private deps: UpdaterDeps) {
@@ -437,6 +440,12 @@ export class Updater {
     return this.checking;
   }
 
+  /** Checks again when a page opens and the last check is older than FRESH_MS, so the banner names the newest release. */
+  freshen(): Promise<UpdateStatus> {
+    if (this.lastCheckedAt && Date.now() - this.lastCheckedAt < FRESH_MS) return Promise.resolve(this.status());
+    return this.check();
+  }
+
   private async doCheck(): Promise<UpdateStatus> {
     const cfg = this.deps.config();
     try {
@@ -461,14 +470,23 @@ export class Updater {
     return this.changed();
   }
 
-  async apply(): Promise<UpdateStatus> {
+  /** Installs the newest release; calls that overlap share one run. */
+  apply(): Promise<UpdateStatus> {
+    this.applyRun ??= this.doApply().finally(() => {
+      this.applyRun = null;
+    });
+    return this.applyRun;
+  }
+
+  private async doApply(): Promise<UpdateStatus> {
     if (!this.enabled) {
       this.lastError = DISABLED;
       return this.status();
     }
     if (this.applying) return this.status();
     this.dropBadLatest();
-    if (!this.status().available) await this.check();
+    // The remembered version can be hours old: check so the click gets the newest.
+    await this.check();
     const target = this.status().available ? this.latest : null;
     if (!target) return this.status();
 

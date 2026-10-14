@@ -59,12 +59,15 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #  7. prints the one-time setup link (remote access), or the address (local access)
 ```
 
-**Update loop.** The server checks the GitHub Releases API at startup and every 6 hours
-(`update.interval_hours`). The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows an
+**Update loop.** The server checks the GitHub Releases API at startup, every 6 hours
+(`update.interval_hours`), and when a page opens its events socket if the last check is over 10
+minutes old, so the banner names the newest release. The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows an
 "Update to vX" banner (and Settings an **Update** button); a version that was rolled back is never
 offered again. When you click it, the server:
 
-1. downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
+1. checks again and takes the newest eligible release, so one click goes straight to it however
+   many versions behind you are (a click that overlaps one already running joins it), then
+   downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
    attestation (with `gh`) when `[update] require_attestation = true`;
 2. unpacks it next to the current version and runs its self-test;
 3. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its

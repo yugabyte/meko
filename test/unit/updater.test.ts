@@ -340,6 +340,30 @@ describe('Updater', () => {
     expect(fx.restart).toHaveBeenCalledOnce();
   });
 
+  it('a click installs the newest release, not the one an earlier check found', async () => {
+    const releases = [rel('0.2.0')];
+    const source = fakeSource(fx.releaseDir, releases);
+    const download = vi.spyOn(source, 'download');
+    const u = fx.makeUpdater(source);
+    expect((await u.check()).latest).toBe('0.2.0');
+    releases.push(rel('0.3.0'));
+    buildRelease(fx.releaseDir, '0.3.0');
+    // Two clicks at once (the banner and Settings) share one install.
+    await Promise.all([u.apply(), u.apply()]);
+    expect(readlinkSync(join(fx.paths.app, 'current'))).toBe('0.3.0');
+    expect(JSON.parse(readFileSync(fx.paths.updatePending, 'utf8'))).toMatchObject({ from: '0.1.0', to: '0.3.0' });
+    expect(download.mock.calls.map((c) => c[2])).toEqual([tarballName('0.3.0', 'x64'), 'SHA256SUMS']);
+    expect(fx.restart).toHaveBeenCalledOnce();
+  });
+
+  it('checks again when a page opens and the last check is over 10 minutes old', async () => {
+    const source = fakeSource(fx.releaseDir, [rel('0.2.0')]);
+    fx.kv.set('update.lastCheckedAt', String(Date.now() - 5 * 60_000));
+    expect((await fx.makeUpdater(source).freshen()).latest).toBeNull();
+    fx.kv.set('update.lastCheckedAt', String(Date.now() - 11 * 60_000));
+    expect((await fx.makeUpdater(source).freshen()).latest).toBe('0.2.0');
+  });
+
   it('refuses a release whose checksum does not match', async () => {
     buildRelease(fx.releaseDir, '0.2.0', 0, true);
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, [rel('0.2.0')]));
