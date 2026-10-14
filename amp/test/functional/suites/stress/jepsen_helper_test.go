@@ -282,3 +282,77 @@ func TestEndpointActionRecoverWithoutInjectIsANoop(t *testing.T) {
 		t.Errorf("Recover = %v, want nil", err)
 	}
 }
+
+type fakeExec struct {
+	name  string
+	calls *[]string
+	fail  bool
+}
+
+func (f fakeExec) Exec(_ context.Context, sql string, _ ...any) (int64, error) {
+	*f.calls = append(*f.calls, f.name+": "+sql)
+	if f.fail {
+		return 0, errors.New("failed to receive message: unexpected EOF")
+	}
+	return 0, nil
+}
+
+// The connection a lease takeover strands never comes back, so the reset has to
+// move to a new one rather than retry the old one until the deadline.
+func TestResetReconnectsAfterAFailedAttempt(t *testing.T) {
+	var calls []string
+	cur := jepsen.SQLExecutor(fakeExec{name: "old", calls: &calls, fail: true})
+	reconnects := 0
+	err := resetReconnecting(context.Background(), 5*time.Second, 50*time.Millisecond,
+		func() jepsen.SQLExecutor { return cur },
+		func(context.Context) error {
+			reconnects++
+			cur = fakeExec{name: "new", calls: &calls}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("reset = %v, want success on the new connection", err)
+	}
+	if reconnects != 1 || calls[len(calls)-1] != "new: CREATE DATABASE jepsen OWNER jepsen" {
+		t.Errorf("%d reconnect(s), calls %v", reconnects, calls)
+	}
+}
+
+func TestResetGivesUpAtTheDeadlineWithTheLastError(t *testing.T) {
+	var calls []string
+	start := time.Now()
+	err := resetReconnecting(context.Background(), 300*time.Millisecond, 100*time.Millisecond,
+		func() jepsen.SQLExecutor { return fakeExec{name: "old", calls: &calls, fail: true} },
+		func(context.Context) error { return errors.New("endpoint not ready") })
+	if err == nil || !strings.Contains(err.Error(), "unexpected EOF") || !strings.Contains(err.Error(), "endpoint not ready") {
+		t.Errorf("reset = %v, want the exec error and the reconnect error", err)
+	}
+	// retryExec sleeps DefaultPollInterval (2s) between tries; only the
+	// per-attempt context ends that sleep in time.
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %s past a 300ms deadline", took)
+	}
+}
+
+type hangExec struct{}
+
+func (hangExec) Exec(ctx context.Context, _ string, _ ...any) (int64, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+// A forward that swallows packets hangs instead of returning EOF; the attempt
+// bound has to cut it off so the reset can reconnect.
+func TestResetReconnectsAfterAHungAttempt(t *testing.T) {
+	var calls []string
+	var cur jepsen.SQLExecutor = hangExec{}
+	err := resetReconnecting(context.Background(), 5*time.Second, 100*time.Millisecond,
+		func() jepsen.SQLExecutor { return cur },
+		func(context.Context) error {
+			cur = fakeExec{name: "new", calls: &calls}
+			return nil
+		})
+	if err != nil || len(calls) != 2 {
+		t.Errorf("reset = %v, calls %v; want success on the new connection", err, calls)
+	}
+}

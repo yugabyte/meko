@@ -421,14 +421,14 @@ func retryExec(ctx context.Context, db SQLExecutor, stmt string, timeout time.Du
 			last = err
 		}
 		if ctx.Err() != nil {
-			return fmt.Errorf("jepsen setup %q: %w", stmt, ctx.Err())
+			return fmt.Errorf("jepsen setup %q: %w (last error: %v)", stmt, ctx.Err(), last)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("jepsen setup %q did not succeed within %s: %w", stmt, timeout, last)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("jepsen setup %q: %w (last error: %v)", stmt, ctx.Err(), last)
 		case <-time.After(DefaultPollInterval):
 		}
 	}

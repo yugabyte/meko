@@ -235,7 +235,7 @@ func runOneJepsenWorkload(t *core.T, s *core.StepHandle, rigs []*jepsenRig, env 
 	}
 
 	if err := eachRig(rigs, func(i int, _ *jepsenRig) error {
-		return jepsen.ResetDatabase(t.Context, fleet.Tenants[i].Conn, 10*time.Minute)
+		return resetTenantDatabase(t.Context, env, &fleet.Tenants[i], 10*time.Minute)
 	}); err != nil {
 		return nil, core.AsEnvFailure(fmt.Errorf("reset the jepsen database before %s: %w", w, err))
 	}

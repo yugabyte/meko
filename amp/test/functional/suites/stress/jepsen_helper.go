@@ -609,6 +609,56 @@ func splitPods(pods []string, n int) [][]string {
 	return shares
 }
 
+// resetAttempt bounds one reset on one connection before the tenant reconnects.
+const resetAttempt = time.Minute
+
+// resetTenantDatabase resets jepsen's database, reconnecting when an attempt
+// fails. A lease takeover replaces the endpoint pod, and the tenant's connection
+// runs through a kubectl port-forward that stays bound to the pod it started on,
+// so retrying on that connection fails until the deadline (run c1291e18).
+func resetTenantDatabase(ctx context.Context, env ampTenantEnv, ten *tenant, timeout time.Duration) error {
+	return resetReconnecting(ctx, timeout, resetAttempt,
+		func() jepsen.SQLExecutor { return ten.Conn },
+		func(ctx context.Context) error {
+			conn, err := env.ConnectEndpoint(ctx, ten.Endpoint)
+			if err != nil {
+				return err
+			}
+			ten.Conn.Close()
+			ten.Conn = conn
+			return nil
+		})
+}
+
+func resetReconnecting(ctx context.Context, timeout, attempt time.Duration,
+	conn func() jepsen.SQLExecutor, reconnect func(context.Context) error) error {
+	deadline := time.Now().Add(timeout)
+	var last error
+	for {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return last
+		}
+		// ResetDatabase checks its timeout only between statements, so a statement
+		// hung on a stranded connection is bounded by this context instead.
+		actx, cancel := context.WithTimeout(ctx, min(attempt, left))
+		err := jepsen.ResetDatabase(actx, conn(), min(attempt, left))
+		cancel()
+		if err == nil {
+			return nil
+		}
+		last = err
+		if ctx.Err() != nil {
+			return err
+		}
+		rctx, cancel := context.WithDeadline(ctx, deadline)
+		if rerr := reconnect(rctx); rerr != nil {
+			last = fmt.Errorf("%w; reconnect: %v", err, rerr)
+		}
+		cancel()
+	}
+}
+
 // eachRig runs fn on every rig at once and joins their errors.
 func eachRig(rigs []*jepsenRig, fn func(i int, r *jepsenRig) error) error {
 	errs := make([]error, len(rigs))
