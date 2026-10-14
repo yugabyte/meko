@@ -51,6 +51,8 @@ _Recommended for Cursor, Claude Code, Claude Desktop, Codex, Kiro, and OpenCode.
 
 The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In clients that support them, the installer also configures session lifecycle hooks.
 
+On Claude Desktop, the installer builds two `.skill` files and you must import them yourself. See [Claude Desktop](../integrations/connect-to-ai-agent/#claude-desktop).
+
 > [!NOTE] Automatic capture in v2.3.0
 >
 > Claude Code, Cursor, Codex, Kiro, and OpenCode use durable hooks or plugins. Failed exchanges stay in a local outbox and retry without being marked as captured. Run `npx @yugabytedb/meko-mcp@latest --capture-status` to check the outbox or use `--capture-cleanup` to recover stuck work. Kiro and OpenCode expose only part of a turn to their integration, so they don't capture tool calls or hidden reasoning. Claude Desktop has no session hooks, so its automatic capture remains model-dependent.

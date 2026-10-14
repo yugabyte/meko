@@ -33,7 +33,7 @@ For the full workflow, see [MCP server URL](../#mcp-server-url) and [Choose an a
 
 When you connect with OAuth or using the Manual setup, your agent interacts with Meko _on demand_ only: you need to mention "Meko" in your prompt (for example, _"save this to Meko,"_ _"search my Meko knowledge base"_) for the agent to call the tools. The agent won't proactively save conversations or capture memories _unless you ask._
 
-To get automatic behavior, use the **Automated setup** instead, or write your own skills to teach your agent when to call Meko tools.
+To get automatic behavior, use the **Automated setup** instead, or write your own skills to teach your agent when to call Meko tools. Claude Desktop has no session hooks, so its automatic capture still depends on the model. See [Claude Desktop](#claude-desktop).
 
 ## Cursor Desktop
 
@@ -102,11 +102,70 @@ In Cursor Desktop:
 
 ## Claude Desktop
 
+Pick a method to connect the MCP server.
+
+| Install Method | Use when | Builds skills files |
+| --- | --- | --- |
+| 1. Automated installer | You want Claude to follow Meko guidance | Yes<br>You must still import them |
+| 2. Desktop extension | You want the MCP server without a terminal | No |
+| 3. OAuth | You want OAuth, or you want to edit the config yourself | No |
+| 4. Manual | You want to edit the config yourself | No |
+
+Only the automated installer builds the Desktop skills. The skills are `meko-mcp-tools-desktop` and `meko-select-datapack-desktop`; the second skill keeps a pinned datapack across chats. They tell Claude when to call Meko tools. Without them, Claude calls Meko only when you ask.
+
+> [!NOTE] Automatic capture
+>
+> Claude Desktop has no session hooks, so even with the skills installed, automatic capture depends on the model you are using. If Claude recalls memories but doesn't save new ones, see [Troubleshooting](../../troubleshooting/#common-problems-installing-and-connecting).
+
 ##### Automated setup
 
-In the Meko portal, select **Connect** and follow the steps.
+Remove the Desktop extension in **Settings > Extensions** before you run the installer. Otherwise you can end up with the extension and a second MCP server entry.
 
-This adds a `mcpServers.meko` entry in the `claude_desktop_config.json` configuration file of your Claude Desktop (see also Manual setup).
+The installer asks before it replaces an entry it finds in `claude_desktop_config.json`, but it doesn't remove the extension.
+
+To run the automated setup:
+
+1. In the Meko portal, select **Connect** and follow the steps.
+
+    Alternately, run the following command:
+
+    ```sh
+    npx @yugabytedb/meko-mcp@latest --client claude-desktop --url "https://mcp.mekodata.ai/mcp" --api-key <paste-your-api-key>
+    ```
+
+    Replace `<paste-your-api-key>` with the key you saved from **Settings > API Keys**.
+
+    The installer writes `mcpServers.meko` in `claude_desktop_config.json`, builds two `.skill` files, `meko-mcp-tools-desktop.skill` and `meko-select-datapack-desktop.skill`, and prints a path for each on a line that starts with `Built Meko skill bundle:`.
+    
+    Claude Desktop has no API the installer can use to import skills, so you must import both files.
+
+1. Import the skills files into Claude Desktop by dragging each file onto the Claude Desktop window, or using **Settings > Skills**.
+1. Quit and restart Claude Desktop.
+1. Ask Claude:
+
+    ```text
+    Which Meko skills do you have available?
+    ```
+
+    The reply should name `meko-mcp-tools-desktop` and `meko-select-datapack-desktop`.
+
+When upgrading the installer, run the installer again and import the new `.skill` files. Desktop keeps using the copies you already imported until you replace them.
+
+##### Desktop extension
+
+The `.mcpb` extension installs the MCP server only. It doesn't install the skills.
+
+You need Node.js 20.18.1 or newer on your `PATH`. The extension runs `npx mcp-remote`.
+
+1. Download [meko-2.3.0.mcpb](/downloads/meko-2.3.0.mcpb). This is the Desktop extension for installer 2.3.0, the same version as `npx @yugabytedb/meko-mcp@2.3.0`.
+1. In Claude Desktop, open **Settings > Extensions > Install from file** and select the file. You can also drag the file onto that pane.
+1. When prompted, paste `https://mcp.mekodata.ai/mcp` and your API key.
+1. Quit and restart Claude Desktop.
+1. Verify the connection:
+
+    ```text
+    List my datapacks in Meko
+    ```
 
 ##### OAuth
 
@@ -193,7 +252,11 @@ Run the following:
 npx @yugabytedb/meko-mcp@latest --client claude-desktop --uninstall
 ```
 
-If you installed under a non-default server name, pass `--server-name <name>`. The uninstall removes only the MCP server entry; if you also imported a Meko skill bundle, remove it manually via **Settings > Extensions**.
+If you installed under a non-default server name, pass `--server-name <name>`. The uninstall removes only that MCP server entry. If you imported the skill files, remove `meko-mcp-tools-desktop` and `meko-select-datapack-desktop` in **Settings > Skills**.
+
+##### Desktop extension
+
+In Claude Desktop, open **Settings > Extensions** and remove the Meko extension. If you imported the skill files, remove them in **Settings > Skills**.
 
 ##### OAuth
 
