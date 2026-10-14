@@ -87,7 +87,8 @@ func (g *settleGate) attestNonTarget(t *core.T, s *core.StepHandle, targets ...s
 	if err != nil {
 		return core.AsEnvFailure(fmt.Errorf("read pod states to close the fault window: %w", err))
 	}
-	var damage []string
+	drained := g.scaledDown(t)
+	var damage, drainedDamage []string
 	watched := 0
 	for _, name := range sortedKeys(g.pods) {
 		if isSettleTarget(name, targets) {
@@ -97,6 +98,8 @@ func (g *settleGate) attestNonTarget(t *core.T, s *core.StepHandle, targets ...s
 		was := g.pods[name]
 		is, ok := now[name]
 		switch {
+		case (!ok || was.UID != is.UID) && drained[name]:
+			drainedDamage = append(drainedDamage, name)
 		case !ok:
 			damage = append(damage, fmt.Sprintf("%s is gone", name))
 		case was.UID != "" && is.UID != "" && was.UID != is.UID:
@@ -106,11 +109,18 @@ func (g *settleGate) attestNonTarget(t *core.T, s *core.StepHandle, targets ...s
 				name, is.Restarts-was.Restarts, was.Restarts, is.Restarts))
 		}
 	}
+	if len(damage) == 0 && len(drainedDamage) > 0 {
+		return core.AsEnvFailure(fmt.Errorf("the cluster autoscaler deleted %d pod(s) this test never aimed at to drain their node(s) during the fault window: %s",
+			len(drainedDamage), strings.Join(drainedDamage, ", ")))
+	}
 	if len(damage) == 0 {
 		if s != nil {
 			s.Set("non_target_pods", watched)
 		}
 		return nil
+	}
+	for _, name := range drainedDamage {
+		damage = append(damage, fmt.Sprintf("%s was deleted by an autoscaler scale-down", name))
 	}
 	err = fmt.Errorf("%d pod(s) this test never aimed at went down during the fault window: %s",
 		len(damage), strings.Join(damage, "; "))
@@ -118,6 +128,22 @@ func (g *settleGate) attestNonTarget(t *core.T, s *core.StepHandle, targets ...s
 		return err
 	}
 	return core.AsEnvFailure(err)
+}
+
+// scaledDown is keyed like podSnapshot. A namespace whose events cannot be read
+// contributes nothing, so its pods still count as damage.
+func (g *settleGate) scaledDown(t *core.T) map[string]bool {
+	out := map[string]bool{}
+	for _, kube := range g.kubes {
+		names, err := kube.ScaledDownPods(t.Context)
+		if err != nil {
+			continue
+		}
+		for name := range names {
+			out[kube.Namespace()+"/"+name] = true
+		}
+	}
+	return out
 }
 
 func settleKubes(t *core.T) []*k8s.Kubectl {

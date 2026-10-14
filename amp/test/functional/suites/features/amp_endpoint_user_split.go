@@ -264,9 +264,12 @@ func runIn(ctx context.Context, k *k8s.Kubectl, what, script string) (string, er
 	return res.Stdout, nil
 }
 
+// The supervisor execs bin/compute-ctl, so compute_ctl's comm is compute-ctl.
+// The pageserver's walredo children are postgres too, and run as its own user.
 const daemonUIDsScript = `for p in /proc/[0-9]*; do
   c=$(cat "$p/comm" 2>/dev/null) || continue
-  case "$c" in pageserver|safekeeper|compute_ctl|postgres)
+  [ "$c" = postgres ] && tr '\0' ' ' <"$p/cmdline" 2>/dev/null | grep -q -- ' --wal-redo' && c=walredo
+  case "$c" in pageserver|safekeeper|compute-ctl|postgres|walredo)
     echo "$c $(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "$p/status" 2>/dev/null)";;
   esac
 done; exit 0`
@@ -274,9 +277,9 @@ done; exit 0`
 // assertUIDs requires each daemon to be running and every process of it on the
 // expected uid. Polled because the compute starts after the pod reports ready.
 func (r *splitRun) assertUIDs(ctx context.Context, split bool) error {
-	want := map[string]int{"pageserver": splitStorageUID, "safekeeper": splitStorageUID, "compute_ctl": splitStorageUID, "postgres": splitStorageUID}
+	want := map[string]int{"pageserver": splitStorageUID, "safekeeper": splitStorageUID, "compute-ctl": splitStorageUID, "postgres": splitStorageUID}
 	if split {
-		want["compute_ctl"], want["postgres"] = splitComputeUID, splitComputeUID
+		want["compute-ctl"], want["postgres"] = splitComputeUID, splitComputeUID
 	}
 	var got map[string][]int
 	err := pollUntil(ctx, 2*time.Minute, 3*time.Second, func() (bool, error) {
@@ -303,8 +306,9 @@ func (r *splitRun) assertUIDs(ctx context.Context, split bool) error {
 		return true, nil
 	})
 	if err != nil {
-		return fmt.Errorf("endpoint %s is not running all of pageserver, safekeeper, compute_ctl and postgres (saw %v): %w", r.ep.ID, got, err)
+		return fmt.Errorf("endpoint %s is not running all of pageserver, safekeeper, compute-ctl and postgres (saw %v): %w", r.ep.ID, got, err)
 	}
+	want["walredo"] = splitStorageUID
 	for comm, uid := range want {
 		if slices.ContainsFunc(got[comm], func(u int) bool { return u != uid }) {
 			return fmt.Errorf("with userSplit %t, %s runs as uid %v, want only %d", split, comm, got[comm], uid)

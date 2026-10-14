@@ -609,6 +609,21 @@ func (k *Kubectl) Events(ctx context.Context) (string, error) {
 	return res.Stdout, nil
 }
 
+// ScaledDownPods names the pods the cluster autoscaler deleted to drain a node,
+// from the namespace's ScaleDown events (kept about an hour).
+func (k *Kubectl) ScaledDownPods(ctx context.Context) (map[string]bool, error) {
+	res, err := k.exec(ctx, nil, "get", "events", "--field-selector", "reason=ScaleDown,involvedObject.kind=Pod",
+		"-o", `jsonpath={range .items[*]}{.involvedObject.name}{"\n"}{end}`)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, name := range strings.Fields(res.Stdout) {
+		out[name] = true
+	}
+	return out, nil
+}
+
 // PodState is a pod's coarse lifecycle state, enough to decide whether it is
 // worth describing (a pod that is not Running-and-Ready is the interesting one).
 //
