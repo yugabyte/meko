@@ -15,15 +15,19 @@ export function MemoryRowBody({ memory, textClassName }: Props) {
   const nowMs = useNowMs();
   const createdLabel = memory.created_at ? formatRelativeTime(memory.created_at, nowMs) : null;
   const authorName = formatMemoryAuthor(memory);
+  const hasAuthor = Boolean(memory.user_id || memory.user_name || memory.user_email);
   return (
     <div className="min-w-0 space-y-1">
       <p className={cn("text-sm text-foreground break-words", textClassName)}>
         {data || <span className="italic text-muted-foreground">(empty)</span>}
       </p>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-        <span>
-          by: <span className="text-purple-700 dark:text-purple-200">{authorName}</span>
-        </span>
+        {/* Viewers aren't told who added a memory, so there is no author. */}
+        {hasAuthor ? (
+          <span>
+            by: <span className="text-purple-700 dark:text-purple-200">{authorName}</span>
+          </span>
+        ) : null}
         {agent ? (
           <span>
             agent: <code className="text-blue-700 dark:text-blue-300">{agent}</code>

@@ -33,7 +33,7 @@ type InviteMode = "humans" | "agent";
 export default function DatapackSharePage({ datapackId, currentUser }: Props) {
   const datapackName = useDatapackName(datapackId);
   const [inviteMode, setInviteMode] = useState<InviteMode>("humans");
-  const { data, loading, error, refetch } = useDatapackOutgoingShares(datapackId);
+  const { data, loading, error, membersHidden, refetch } = useDatapackOutgoingShares(datapackId);
   const members = data?.members ?? [];
   const pendingInvites = data?.pending_invites ?? [];
 
@@ -97,68 +97,90 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
           </InlineErrorBanner>
         ) : null}
 
-        <div className="space-y-6">
-          <Card className="border-border bg-card/50 shadow-sm">
-            <Tabs value={inviteMode} onValueChange={(v) => setInviteMode(v as InviteMode)}>
-              <CardHeader className="space-y-0 px-6 pb-0 pt-6">
-                <TabsList className="grid h-auto w-full min-w-0 grid-cols-1 gap-0 rounded-none border-0 bg-transparent p-0 sm:grid-cols-2">
-                  <InviteModeTab
-                    value="humans"
-                    icon={UsersRound}
-                    primaryLabel="Invite humans"
-                    secondaryLabel="one or many"
-                    activeTone="brand"
-                    withDivider
-                  />
-                  <InviteModeTab
-                    value="agent"
-                    icon={Bot}
-                    primaryLabel="Invite an agent"
-                    secondaryLabel="by token"
-                    activeTone="violet"
-                  />
-                </TabsList>
-              </CardHeader>
-              <CardContent className="p-6 pt-6">
-                <TabsContent
-                  value="humans"
-                  className="mt-0 outline-none focus-visible:outline-none"
-                >
-                  <InviteHumansSection
-                    datapackId={datapackId}
-                    currentUserEmail={currentUser?.email}
-                    sharedByRole={sharedByRole}
-                    priorShareCount={priorShareCount}
-                    onInvitesSent={refreshShares}
-                  />
-                </TabsContent>
-                <TabsContent value="agent" className="mt-0 outline-none focus-visible:outline-none">
-                  <ShareComingSoonPlaceholder
-                    aria-label="Invite an agent by token — coming soon"
-                    blurredPreview={<InviteAgentByTokenSection />}
-                  />
-                </TabsContent>
-              </CardContent>
-            </Tabs>
+        {loading && !error ? (
+          // Until the member list answers we can't tell a viewer (refused it)
+          // from a manager, so neither the invite controls nor the notice show.
+          <Card
+            className="h-40 animate-pulse border-border bg-card/50 shadow-sm"
+            aria-busy="true"
+          />
+        ) : membersHidden ? (
+          <Card className="border-border bg-card/50 p-6 shadow-sm">
+            <p className="text-sm font-medium text-foreground">
+              You have viewer access to this datapack
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Its owners and maintainers manage who it&apos;s shared with. Members aren&apos;t
+              visible to viewers.
+            </p>
           </Card>
+        ) : (
+          <div className="space-y-6">
+            <Card className="border-border bg-card/50 shadow-sm">
+              <Tabs value={inviteMode} onValueChange={(v) => setInviteMode(v as InviteMode)}>
+                <CardHeader className="space-y-0 px-6 pb-0 pt-6">
+                  <TabsList className="grid h-auto w-full min-w-0 grid-cols-1 gap-0 rounded-none border-0 bg-transparent p-0 sm:grid-cols-2">
+                    <InviteModeTab
+                      value="humans"
+                      icon={UsersRound}
+                      primaryLabel="Invite humans"
+                      secondaryLabel="one or many"
+                      activeTone="brand"
+                      withDivider
+                    />
+                    <InviteModeTab
+                      value="agent"
+                      icon={Bot}
+                      primaryLabel="Invite an agent"
+                      secondaryLabel="by token"
+                      activeTone="violet"
+                    />
+                  </TabsList>
+                </CardHeader>
+                <CardContent className="p-6 pt-6">
+                  <TabsContent
+                    value="humans"
+                    className="mt-0 outline-none focus-visible:outline-none"
+                  >
+                    <InviteHumansSection
+                      datapackId={datapackId}
+                      currentUserEmail={currentUser?.email}
+                      sharedByRole={sharedByRole}
+                      priorShareCount={priorShareCount}
+                      onInvitesSent={refreshShares}
+                    />
+                  </TabsContent>
+                  <TabsContent
+                    value="agent"
+                    className="mt-0 outline-none focus-visible:outline-none"
+                  >
+                    <ShareComingSoonPlaceholder
+                      aria-label="Invite an agent by token — coming soon"
+                      blurredPreview={<InviteAgentByTokenSection />}
+                    />
+                  </TabsContent>
+                </CardContent>
+              </Tabs>
+            </Card>
 
-          <MembersSection
-            currentUser={currentUser}
-            datapackName={datapackName}
-            datapackId={datapackId}
-            members={members}
-            loading={loading}
-            onMembersChanged={refreshShares}
-          />
-          <PendingInvitesSection
-            datapackId={datapackId}
-            invites={pendingInvites}
-            loading={loading}
-            onChanged={refreshShares}
-          />
-          <LinkSharingSection />
-          <TransferOwnershipSection />
-        </div>
+            <MembersSection
+              currentUser={currentUser}
+              datapackName={datapackName}
+              datapackId={datapackId}
+              members={members}
+              loading={loading}
+              onMembersChanged={refreshShares}
+            />
+            <PendingInvitesSection
+              datapackId={datapackId}
+              invites={pendingInvites}
+              loading={loading}
+              onChanged={refreshShares}
+            />
+            <LinkSharingSection />
+            <TransferOwnershipSection />
+          </div>
+        )}
       </main>
     </div>
   );

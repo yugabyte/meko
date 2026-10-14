@@ -38,6 +38,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { formatFileSize } from "@/lib/fileSize";
+import { isDatapackGrantViewer } from "@/lib/datapackShareGrants";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import { KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSION_LIST } from "@/lib/knowledgeFileUploadRules";
 import {
@@ -1083,7 +1084,10 @@ function FileExpandPanel({
             />
             <KvRow label="md5" value={doc.document_checksum ?? "—"} mono />
             <KvRow label="size" value={formatFileSize(doc.size_bytes)} />
-            <KvRow label="by" value={doc.uploaded_by_email ?? "—"} />
+            {/* A viewer is sent the uploader only for their own files. */}
+            {(doc.uploaded_by_email || !isDatapackGrantViewer({ grant: datapackGrant })) && (
+              <KvRow label="by" value={doc.uploaded_by_email ?? "—"} />
+            )}
           </dl>
         </section>
       </div>

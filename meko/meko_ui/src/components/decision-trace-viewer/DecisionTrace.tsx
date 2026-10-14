@@ -69,8 +69,12 @@ export function DecisionTrace({
   // Resolve author user_id → email for conversation-search chunks. Only fetched
   // when a datapack has chunk authors to show; react-query caches by name so
   // repeated DecisionTrace instances share one request.
+  // Chunks without a user_id (a viewer isn't told whose they are) need no lookup.
   const hasConvChunks = useMemo(
-    () => (message.processing_steps ?? []).some((s) => (s.conversation_chunks?.length ?? 0) > 0),
+    () =>
+      (message.processing_steps ?? []).some((s) =>
+        (s.conversation_chunks ?? []).some((c) => Boolean(c.user_id)),
+      ),
     [message.processing_steps],
   );
 

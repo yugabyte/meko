@@ -36,6 +36,7 @@ import {
   isDatapackGrantEligibleToDelete,
   isDatapackGrantEligibleToEdit,
   isDatapackGrantEligibleToShare,
+  isDatapackGrantViewer,
 } from "@/lib/datapackShareGrants";
 import {
   DatapackOutgoingMember,
@@ -301,7 +302,18 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
     };
   }, [datapack?.datapack_id, routeDatapackId]);
 
+  const isViewer = isDatapackGrantViewer({ grant: datapackGrant });
+  // `datapack` holds the previous one until the new route's load lands, so its
+  // grant is only trusted once the ids match.
+  const routeDatapackLoaded = datapack?.datapack_id === routeDatapackId;
+
   useEffect(() => {
+    // The grant comes with the datapack; until it's known we can't tell a
+    // viewer (who is refused the member list) from anyone else.
+    if (!routeDatapackLoaded || isViewer) {
+      setMembers([]);
+      return;
+    }
     const ac = new AbortController();
     setMembersListStatus("loading");
     void listDatapackMembers(routeDatapackId, { signal: ac.signal })
@@ -318,7 +330,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
     return () => {
       ac.abort();
     };
-  }, [datapack?.datapack_id, routeDatapackId]);
+  }, [routeDatapackLoaded, isViewer, routeDatapackId]);
 
   // Fetch only what the right-rail preview tile actually renders (top
   // `KNOWLEDGE_PREVIEW_LIMIT` rows). Constant is exported from the tile
@@ -656,14 +668,19 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
             />
 
             <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch lg:gap-6">
-              <DatapackDetailMembersTile
-                datapackName={displayDatapackName}
-                datapackId={routeDatapackId}
-                currentUser={currentUser}
-                members={members}
-                canShare={isDatapackGrantEligibleToShare({ grant: datapackGrant })}
-                membersListStatus={membersListStatus}
-              />
+              {/* Hidden until the datapack (and so the caller's grant) is known:
+                  the member fetch waits on it, so a tile shown earlier, or
+                  after the datapack failed to load, would never settle. */}
+              {routeDatapackLoaded && !isViewer && (
+                <DatapackDetailMembersTile
+                  datapackName={displayDatapackName}
+                  datapackId={routeDatapackId}
+                  currentUser={currentUser}
+                  members={members}
+                  canShare={isDatapackGrantEligibleToShare({ grant: datapackGrant })}
+                  membersListStatus={membersListStatus}
+                />
+              )}
               <DatapackDetailKnowledgeTile
                 datapackId={routeDatapackId}
                 documents={knowledgeDocuments}

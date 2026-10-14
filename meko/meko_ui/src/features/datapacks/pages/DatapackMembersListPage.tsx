@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
   getCurrentUser,
+  isMekoApiRequestError,
   listDatapackMembers,
   updateDatapackMemberGrant,
   type CurrentUser,
@@ -122,7 +123,11 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
       .catch((e) => {
         if (ac.signal.aborted) return;
         if ((e as { name?: string })?.name === "CanceledError") return;
-        setError(getApiErrorMessage(e, "Could not load members."));
+        setError(
+          isMekoApiRequestError(e) && e.httpStatus === 403
+            ? "Members of this datapack aren't visible to viewers."
+            : getApiErrorMessage(e, "Could not load members."),
+        );
         setMembers([]);
       })
       .finally(() => {

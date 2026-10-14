@@ -96,5 +96,14 @@ export function isDatapackGrantEligibleForWorkbenchLM(dp: {
   );
 }
 
+/**
+ * True for a viewer: the API shows them only their own conversations and
+ * memories, refuses the member list, and omits who uploaded or promoted content
+ * except their own uploads.
+ */
+export function isDatapackGrantViewer(dp: { grant?: string | null }): boolean {
+  return (dp.grant ?? "").toLowerCase().trim() === DATAPACK_SHARE_GRANT_VIEWER;
+}
+
 /** Human-readable list for validation error copy (mock server, etc.). */
 export const DATAPACK_SHARE_GRANT_VALIDATION_MESSAGE = `grant must be ${DATAPACK_SHARE_GRANT_VIEWER}, ${DATAPACK_SHARE_GRANT_CONTRIBUTOR}, or ${DATAPACK_SHARE_GRANT_MAINTAINER}`;

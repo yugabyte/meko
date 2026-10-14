@@ -1,5 +1,5 @@
 // Fetches datapack members (GET member-list) and pending invites (GET outgoing-shares) for the share UI.
-// Viewers/contributors get member-list only; pending list returns 403 and is treated as empty.
+// Contributors get member-list only; viewers are refused both, reported as membersHidden.
 import { useCallback, useEffect, useState } from "react";
 import {
   getApiErrorMessage,
@@ -13,6 +13,9 @@ export function useDatapackOutgoingShares(datapackId: string) {
   const [data, setData] = useState<DatapackShareListsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True when the member list was refused (403): the caller is a viewer and
+  // has nothing to see or manage on the share page.
+  const [membersHidden, setMembersHidden] = useState(false);
 
   const refetch = useCallback(
     async (options: { silent?: boolean } = {}) => {
@@ -23,7 +26,17 @@ export function useDatapackOutgoingShares(datapackId: string) {
       }
       setError(null);
       try {
-        const membersRes = await listDatapackMembers(datapackId, {});
+        let members: DatapackShareListsResponse["members"] = [];
+        let hidden = false;
+        try {
+          members = (await listDatapackMembers(datapackId, {})).members ?? [];
+        } catch (err) {
+          if (!(isMekoApiRequestError(err) && err.httpStatus === 403)) {
+            throw err;
+          }
+          hidden = true;
+        }
+        setMembersHidden(hidden);
         let pendingInvites: DatapackShareListsResponse["pending_invites"] = [];
         try {
           const out = await listDatapackOutgoingShares(datapackId, {});
@@ -36,7 +49,7 @@ export function useDatapackOutgoingShares(datapackId: string) {
           }
         }
         setData({
-          members: membersRes.members ?? [],
+          members,
           pending_invites: pendingInvites,
         });
       } catch (err) {
@@ -55,5 +68,5 @@ export function useDatapackOutgoingShares(datapackId: string) {
     void refetch();
   }, [refetch]);
 
-  return { data, loading, error, refetch };
+  return { data, loading, error, membersHidden, refetch };
 }
