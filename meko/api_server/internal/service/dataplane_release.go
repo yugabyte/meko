@@ -57,14 +57,14 @@ var pinnedDataPlaneRelease = DataPlaneRelease{
 	// not this repo's, so it moves independently of the release below.
 	Database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2",
 
-	// One release, built by meko/jenkins on 2026-09-12 from 59d52fac1c. Host-qualified
+	// One release, built by meko/jenkins on 2026-10-13 from b56d9722f1. Host-qualified
 	// like the database above, so qualifyImage leaves every reference alone and the
 	// registry argument decides nothing.
-	APIServer:        "quay.io/yugabyte/meko-api-server:0.260912.0-59d52fac1",
-	MCPServer:        "quay.io/yugabyte/meko-mcp-server:0.260912.0-59d52fac1",
-	UI:               "quay.io/yugabyte/meko-ui:0.260912.0-59d52fac1",
-	RAGWorker:        "quay.io/yugabyte/meko-rag-agent:0.260912.0-59d52fac1",
-	InferenceGateway: "quay.io/yugabyte/meko-inference-gateway:0.260912.0-59d52fac1",
+	APIServer:        "quay.io/yugabyte/meko-api-server:0.261013.0-b56d9722f",
+	MCPServer:        "quay.io/yugabyte/meko-mcp-server:0.261013.0-b56d9722f",
+	UI:               "quay.io/yugabyte/meko-ui:0.261013.0-b56d9722f",
+	RAGWorker:        "quay.io/yugabyte/meko-rag-agent:0.261013.0-b56d9722f",
+	InferenceGateway: "quay.io/yugabyte/meko-inference-gateway:0.261013.0-b56d9722f",
 }
 
 // dataPlaneComponents maps the name an operator writes in --dataplane-image to the

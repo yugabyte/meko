@@ -160,6 +160,10 @@ apiServer:
   # BYOC install, so a later change to that default must not be able to turn it
   # off here silently. Must stay in step with mekoUi.env.enableByoc below.
   enableByoc: true
+  # Projects & folders are on for BYOC; datapack share links stay off for now.
+  # Must stay in step with mekoUi.env.enableProjects / enableLinkSharing below.
+  enableProjects: true
+  enableLinkSharing: false
   migrate:
     # The database's own image, for a ysqlsh matching the server — from Quay for the
     # same reason as everything else here. Must be the same image as yugabyte.Image above
@@ -273,6 +277,9 @@ mekoUi:
     # Hides the hosted-only surfaces: pricing, tier names, delete-account, the
     # password tile, Labs, Feedback, sign-out. Pairs with apiServer.enableByoc.
     enableByoc: "true"
+    # Pairs with apiServer.enableProjects / apiServer.enableLinkSharing.
+    enableProjects: "true"
+    enableLinkSharing: "false"
   ingress:
     # This was already set here and was silently ignored: the template gated only on
     # the component being enabled, so a BYOC release created an Ingress claiming

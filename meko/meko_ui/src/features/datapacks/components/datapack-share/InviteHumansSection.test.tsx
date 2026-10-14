@@ -14,6 +14,8 @@
 //      and bulk paths (in bulk, when count is left at ≥ 2 after the
 //      filter; in single, we'd fall through to the count == 1 branch).
 //   5. Submit stays disabled while there are no valid addresses.
+//   6. Inviting an existing member is not an error: the toast says so and
+//      points to Members on the page, where roles are changed.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -43,6 +45,7 @@ vi.mock("@/lib/telemetry/rudderstack", () => ({
 
 import { bulkShareDatapack, inviteDatapackShare, MekoApiRequestError } from "@/lib/api/mekoApi";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { toast } from "@/hooks/use-toast";
 import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 
 const inviteMock = vi.mocked(inviteDatapackShare);
@@ -243,5 +246,36 @@ describe("InviteHumansSection", () => {
     // One valid address → enabled.
     fireEvent.change(ta, { target: { value: "valid@example.com" } });
     expect(submit.hasAttribute("disabled")).toBe(false);
+  });
+  it("tells the owner an existing member is already in, and points to Members", async () => {
+    inviteMock.mockRejectedValue(
+      new MekoApiRequestError("recipient is already a member", {
+        code: "ALREADY_MEMBER",
+        httpStatus: 409,
+      }),
+    );
+    vi.mocked(toast).mockClear();
+
+    render(
+      <InviteHumansSection
+        datapackId="dp-1"
+        currentUserEmail="me@x.com"
+        onInvitesSent={() => Promise.resolve()}
+      />,
+    );
+    typeAndSubmit(["member@x.com"]);
+
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    const shown = vi.mocked(toast).mock.calls.at(-1)?.[0] as {
+      title?: string;
+      description?: string;
+      variant?: string;
+      action?: unknown;
+    };
+    expect(shown.title).toBe("Already a member");
+    expect(shown.description).toContain("member@x.com");
+    expect(shown.description).toContain("Members");
+    expect(shown.variant).toBeUndefined();
+    expect(shown.action).toBeTruthy();
   });
 });

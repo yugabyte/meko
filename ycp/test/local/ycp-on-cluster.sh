@@ -61,9 +61,9 @@ YCP_IMAGE="${YCP_IMAGE:-}"
 # The pinned data-plane release (meko/api_server/internal/service/dataplane_release.go).
 # One value today — meko/jenkins versions every component together — but kept as three
 # because the pin in dataplane_release.go may name different tags.
-MEKO_API_TAG="${MEKO_API_TAG:-0.260912.0-59d52fac1}"
-MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.260912.0-59d52fac1}"
-MEKO_UI_TAG="${MEKO_UI_TAG:-0.260912.0-59d52fac1}"
+MEKO_API_TAG="${MEKO_API_TAG:-0.261013.0-b56d9722f}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.261013.0-b56d9722f}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-0.261013.0-b56d9722f}"
 # Overlays applied AFTER values-byoc.yaml, which is what lets them win. Empty is the
 # base stack; --full appends values-byoc-full.yaml, which moves the gateway onto
 # openai and adds the rag workers. Free-form so a caller can pass a values file of

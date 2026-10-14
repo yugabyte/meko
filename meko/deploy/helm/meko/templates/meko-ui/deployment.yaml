@@ -41,6 +41,10 @@ spec:
               value: {{ $c.env.freeTierQuotaEnabled | quote }}
             - name: MEKO_ENABLE_BYOC
               value: {{ $c.env.enableByoc | quote }}
+            - name: MEKO_ENABLE_PROJECTS
+              value: {{ $c.env.enableProjects | default "false" | quote }}
+            - name: MEKO_ENABLE_LINK_SHARING
+              value: {{ $c.env.enableLinkSharing | default "false" | quote }}
           ports:
             - containerPort: 5000
               protocol: TCP

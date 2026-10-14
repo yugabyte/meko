@@ -77,6 +77,14 @@ byte-identically to the pre-mode chart.
        sides read MEKO_ENABLE_BYOC, so they must be set together. */}}
 - "--enable-byoc"
 {{- end }}
+{{- /* Same rule as --enable-byoc: rendered only when true. Each pairs with the
+       mekoUi.env key of the same name. */}}
+{{- if $c.enableProjects }}
+- "--enable-projects"
+{{- end }}
+{{- if $c.enableLinkSharing }}
+- "--enable-link-sharing"
+{{- end }}
 {{- if eq $mode "ycp" }}
 - "--mcp-internal-secret=$(MCP_INTERNAL_SECRET)"
 - "--control-plane-mode"

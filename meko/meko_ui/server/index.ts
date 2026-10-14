@@ -188,6 +188,10 @@ app.use((req, res, next) => {
     // be turned on per environment without a rebuild; `?projects=true|false`
     // overrides it per browser (see lib/projectsFeature.ts). Off by default.
     "MEKO_ENABLE_PROJECTS",
+    // Gates datapack share links: the link controls on the share page, the
+    // copy-link action on the details page, and the /share/:token join flow.
+    // Same var api_server reads to register the routes. Default off.
+    "MEKO_ENABLE_LINK_SHARING",
     // AWS Marketplace Standard tier UI: show/hide the tile on the pricing
     // section, and the URL the "Upgrade" button deep-links to. Runtime flags
     // so they can be flipped per-deployment (limited vs public listing, or

@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from "react-router-dom";
-import { ROUTES, isProjectsPath } from "./paths";
+import { ROUTES, isProjectsPath, shareTokenFromPath } from "./paths";
 import Sidebar from "@/features/layout/Sidebar";
 import { KbImportStatusBanner } from "@/features/layout/KbImportStatusBanner";
 import DatapacksPage from "@/features/datapacks/pages/DatapacksPage";
@@ -17,6 +17,8 @@ import { parseLabRoute } from "@/features/labs/lib/parseLabRoute";
 import { isLabsEnabled, isLabsPath } from "@/lib/labs";
 import ProjectsSection from "@/features/projects/pages/ProjectsSection";
 import { useProjectsEnabled } from "@/lib/projectsFeature";
+import ShareLinkRedeemPage from "@/features/share-link/pages/ShareLinkRedeemPage";
+import { isLinkSharingEnabled } from "@/lib/linkSharingFeature";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -44,6 +46,17 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   // the same flag.
   if (isLabsPath(pathname) && !isLabsEnabled()) {
     return <Navigate to={ROUTES.datapacks} replace />;
+  }
+
+  // A share link joins the datapack and then navigates to it, so it needs no
+  // shell. With the flag off the API has no share routes; bounce like Labs.
+  const shareToken = shareTokenFromPath(pathname);
+  if (shareToken !== null) {
+    return isLinkSharingEnabled() ? (
+      <ShareLinkRedeemPage key={shareToken} token={shareToken} />
+    ) : (
+      <Navigate to={ROUTES.datapacks} replace />
+    );
   }
 
   // The lab runner takes over the whole viewport -- no Sidebar, no shared

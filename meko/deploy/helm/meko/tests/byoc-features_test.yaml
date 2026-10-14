@@ -1,0 +1,65 @@
+# Projects is on for BYOC; link sharing is off everywhere for now. Like
+# MEKO_ENABLE_BYOC, each is one switch read on both sides: the api-server takes
+# a bare flag rendered only when true (an older image exits on an unknown flag),
+# and the UI an env var that is present in both states.
+#
+#   helm unittest charts/meko
+suite: byoc features
+templates:
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+  - templates/meko-ui/deployment.yaml
+  - templates/meko-ui/nginx-configmap.yaml
+tests:
+  - it: turns projects on and leaves link sharing off under the byoc compose
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      apiServer.image.tag: t
+      mekoUi.image.tag: t
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-projects"
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-link-sharing"
+      - template: templates/meko-ui/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_ENABLE_PROJECTS
+            value: "true"
+      - template: templates/meko-ui/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_ENABLE_LINK_SHARING
+            value: "false"
+
+  - it: leaves both off for hosted dev, flags absent rather than false
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      mekoUi.image.tag: t
+    asserts:
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-projects"
+      - template: templates/api-server/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-link-sharing"
+      - template: templates/meko-ui/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_ENABLE_LINK_SHARING
+            value: "false"

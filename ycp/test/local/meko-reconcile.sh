@@ -98,9 +98,9 @@ done
 # Defaults from meko/api_server/internal/service/dataplane_release.go. Kept in step
 # with it by hand: this script runs against a released stack, so a drifted default
 # fails loudly at pull time rather than silently testing the wrong images.
-MEKO_API_TAG="${MEKO_API_TAG:-0.260912.0-59d52fac1}"
-MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.260912.0-59d52fac1}"
-MEKO_UI_TAG="${MEKO_UI_TAG:-0.260912.0-59d52fac1}"
+MEKO_API_TAG="${MEKO_API_TAG:-0.261013.0-b56d9722f}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.261013.0-b56d9722f}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-0.261013.0-b56d9722f}"
 
 cleanup() {
   rc=$?

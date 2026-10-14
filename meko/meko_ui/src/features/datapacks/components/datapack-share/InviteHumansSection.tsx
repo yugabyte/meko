@@ -23,10 +23,13 @@ import { useMemo, useState } from "react";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
+import { scrollToShareMembers } from "@/features/datapacks/components/datapack-share/shareMembersAnchor";
 import {
   DATAPACK_BULK_SHARE_MAX_EMAILS,
   bulkShareDatapack,
   getApiErrorMessage,
+  isMekoApiRequestError,
   inviteDatapackShare,
   isApiEndpointMissingError,
   type DatapackBulkShareResult,
@@ -150,9 +153,16 @@ export function InviteHumansSection({
           ? `Invited ${rolled.invited} of ${rolled.total}`
           : "No new invites needed",
       description:
-        rolled.failed > 0
+        (rolled.failed > 0
           ? `${rolled.unchanged} already had access · ${rolled.failed} could not be processed.`
-          : `${rolled.unchanged} already had access.`,
+          : `${rolled.unchanged} already had access.`) +
+        (rolled.unchanged > 0 ? " To change a member's role, use Members on this page." : ""),
+      action:
+        rolled.unchanged > 0 ? (
+          <ToastAction altText="Go to Members" onClick={scrollToShareMembers}>
+            Go to Members
+          </ToastAction>
+        ) : undefined,
       variant: rolled.invited === 0 && rolled.failed > 0 ? "destructive" : undefined,
     });
   };
@@ -189,6 +199,18 @@ export function InviteHumansSection({
         // /bulk-share not deployed. /share was fine; only the batch
         // path degrades to the amber notice.
         setBulkUnavailable(true);
+        return;
+      }
+      if (emails.length === 1 && isMekoApiRequestError(err) && err.code === "ALREADY_MEMBER") {
+        toast({
+          title: "Already a member",
+          description: `${emails[0]} already has access. To change their role, use Members on this page.`,
+          action: (
+            <ToastAction altText="Go to Members" onClick={scrollToShareMembers}>
+              Go to Members
+            </ToastAction>
+          ),
+        });
         return;
       }
       toast({

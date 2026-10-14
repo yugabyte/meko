@@ -1,5 +1,6 @@
 // Owner-facing page to invite collaborators, review pending invites, and manage member grants for a datapack.
 // Loads member-list + outgoing-shares via useDatapackOutgoingShares; child actions use silent refetch to stay fresh.
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Bot, Share2, UsersRound } from "lucide-react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
@@ -8,6 +9,9 @@ import { InviteAgentByTokenSection } from "@/features/datapacks/components/datap
 import { InviteHumansSection } from "@/features/datapacks/components/datapack-share/InviteHumansSection";
 import { InviteModeTab } from "@/features/datapacks/components/datapack-share/InviteModeTab";
 import { LinkSharingSection } from "@/features/datapacks/components/datapack-share/LinkSharingSection";
+import { ShareLinkSection } from "@/features/datapacks/components/datapack-share/ShareLinkSection";
+import { shareLinkKey } from "@/features/datapacks/hooks/useDatapackShareLink";
+import { isLinkSharingEnabled } from "@/lib/linkSharingFeature";
 import { MembersSection } from "@/features/datapacks/components/datapack-share/MembersSection";
 import { PendingInvitesSection } from "@/features/datapacks/components/datapack-share/PendingInvitesSection";
 import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
@@ -49,7 +53,13 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
   const priorShareCount = members.filter((m) => !m.is_owner).length + pendingInvites.length;
 
   /** After invites or member mutations, refresh lists without toggling the global loading skeleton. */
+  const queryClient = useQueryClient();
   const refreshShares = () => void refetch({ silent: true });
+  // A member edit changes the link card's counts.
+  const refreshSharesAndLink = () => {
+    refreshShares();
+    void queryClient.invalidateQueries({ queryKey: shareLinkKey(datapackId) });
+  };
 
   return (
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
@@ -169,7 +179,7 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
               datapackId={datapackId}
               members={members}
               loading={loading}
-              onMembersChanged={refreshShares}
+              onMembersChanged={refreshSharesAndLink}
             />
             <PendingInvitesSection
               datapackId={datapackId}
@@ -177,7 +187,11 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
               loading={loading}
               onChanged={refreshShares}
             />
-            <LinkSharingSection />
+            {isLinkSharingEnabled() ? (
+              <ShareLinkSection datapackId={datapackId} onMembersMoved={refreshShares} />
+            ) : (
+              <LinkSharingSection />
+            )}
             <TransferOwnershipSection />
           </div>
         )}

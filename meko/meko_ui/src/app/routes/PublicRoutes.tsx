@@ -6,6 +6,8 @@ import ForgotPasswordPage from "@/features/auth/pages/ForgotPasswordPage";
 import CompleteNewPasswordPage from "@/features/auth/pages/CompleteNewPasswordPage";
 import NotFoundPage from "@/features/system/pages/NotFoundPage";
 import MarketplaceSignInBouncePage from "@/features/billing/pages/MarketplaceSignInBouncePage";
+import ShareLinkLandingPage from "@/features/share-link/pages/ShareLinkLandingPage";
+import { isLinkSharingEnabled } from "@/lib/linkSharingFeature";
 
 export default function PublicRoutes() {
   return (
@@ -21,6 +23,11 @@ export default function PublicRoutes() {
           while carrying the ?t=<token> through return_to so the
           authed side of the flow can finalize the entitlement. */}
       <Route path={ROUTES.marketplaceComplete} element={<MarketplaceSignInBouncePage />} />
+      {/* Signed-out side of a datapack share link; the signed-in side is
+          ShareLinkRedeemPage in ProtectedRoutes. */}
+      {isLinkSharingEnabled() ? (
+        <Route path={`${ROUTES.share}/:token`} element={<ShareLinkLandingPage />} />
+      ) : null}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

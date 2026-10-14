@@ -7,13 +7,20 @@
 // so the navigation feel is consistent.
 
 import { useEffect, useMemo, useState } from "react";
-import { Crown, Loader2, Users } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Users } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
+import { MemberRow } from "@/features/datapacks/components/datapack-members/MemberRow";
+import { RemoveMemberDialog } from "@/features/datapacks/components/datapack-members/RemoveMemberDialog";
+import {
+  memberDisplayName,
+  sortMembersForDisplay,
+} from "@/features/datapacks/components/datapack-members/memberDisplay";
 import { useDatapackName } from "@/features/datapacks/hooks/useDatapackName";
+import { shareLinkKey } from "@/features/datapacks/hooks/useDatapackShareLink";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
   getCurrentUser,
@@ -23,67 +30,12 @@ import {
   type CurrentUser,
   type DatapackOutgoingMember,
 } from "@/lib/api/mekoApi";
-import { shareInviteRoleRowPresentation } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
-import {
-  DATAPACK_SHARE_GRANT_CONTRIBUTOR,
-  DATAPACK_SHARE_GRANT_MAINTAINER,
-  DATAPACK_SHARE_GRANT_VIEWER,
-  isDatapackGrantEligibleToShare,
-  type DatapackShareGrant,
-  formatDatapackShareGrantCamelCase,
-  isDatapackShareGrant,
-} from "@/lib/datapackShareGrants";
-
-// Grants offered in the role-change dropdown. Owner is intentionally
-// omitted — there's exactly one and the BE doesn't allow transferring it
-// through this endpoint.
-const SELECTABLE_GRANTS: DatapackShareGrant[] = [
-  DATAPACK_SHARE_GRANT_VIEWER,
-  DATAPACK_SHARE_GRANT_CONTRIBUTOR,
-  DATAPACK_SHARE_GRANT_MAINTAINER,
-];
+import { removeDatapackMember } from "@/lib/api/shareLinksApi";
+import { isDatapackGrantEligibleToShare, type DatapackShareGrant } from "@/lib/datapackShareGrants";
 
 type Props = {
   datapackId: string;
 };
-
-// --- Local helpers (kept private to this page; the tile has its own
-// copies because the two surfaces have slightly different needs and a
-// shared file would couple them more than it's worth). ---
-
-function sortMembersForDisplay(members: DatapackOutgoingMember[]): DatapackOutgoingMember[] {
-  const owners = members.filter((m) => m.is_owner);
-  const rest = members.filter((m) => !m.is_owner);
-  rest.sort((a, b) =>
-    (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" }),
-  );
-  return [...owners, ...rest];
-}
-
-function memberDisplayName(m: DatapackOutgoingMember): string {
-  const n = m.user_name?.trim();
-  if (n) return n;
-  return m.user_email_id?.trim() || "Member";
-}
-
-function memberInitials(m: DatapackOutgoingMember): string {
-  const name = m.user_name?.trim() || "";
-  const parts = name.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return `${parts[0].charAt(0)}${parts[parts.length - 1].charAt(0)}`.toUpperCase();
-  }
-  if (parts.length === 1 && parts[0].length >= 2) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-  const e = m.user_email_id?.trim().charAt(0);
-  return e ? e.toUpperCase() : "?";
-}
-
-function resolvedGrant(m: DatapackOutgoingMember): DatapackShareGrant {
-  if (isDatapackShareGrant(m.grant)) return m.grant;
-  return DATAPACK_SHARE_GRANT_VIEWER;
-}
 
 export default function DatapackMembersListPage({ datapackId }: Props) {
   const datapackName = useDatapackName(datapackId);
@@ -95,6 +47,8 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
   // the select disabled mid-flight so a fast double-pick can't race
   // itself or skip the optimistic-then-reconcile reload below.
   const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<DatapackOutgoingMember | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   // Caller identity drives the "You" pill on the row that represents
   // the caller themselves. Best-effort: failing to resolve just means
@@ -154,6 +108,11 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
 
   // Reload members from the BE — used to reconcile after a successful
   // PATCH and as a hard rollback on failure.
+  const queryClient = useQueryClient();
+  // Role edits and removals change the link card's member counts.
+  const refreshShareLink = () =>
+    void queryClient.invalidateQueries({ queryKey: shareLinkKey(datapackId) });
+
   const reloadMembers = async (signal?: AbortSignal) => {
     try {
       const resp = await listDatapackMembers(datapackId, { signal });
@@ -176,6 +135,7 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
     try {
       await updateDatapackMemberGrant(datapackId, userID, { grant: newGrant });
       toast({ title: "Role updated" });
+      refreshShareLink();
       // Reconcile from the server in case the BE normalised the grant
       // or another change landed concurrently.
       await reloadMembers();
@@ -192,6 +152,25 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
       void reloadMembers();
     } finally {
       setUpdatingUserId(null);
+    }
+  };
+
+  const handleRemove = async (member: DatapackOutgoingMember) => {
+    setRemoving(true);
+    try {
+      await removeDatapackMember(datapackId, member.user_id);
+      setMembers((prev) => prev.filter((m) => m.user_id !== member.user_id));
+      toast({ title: `${memberDisplayName(member)} was removed` });
+      refreshShareLink();
+      setRemoveTarget(null);
+    } catch (err) {
+      toast({
+        title: "Couldn't remove member",
+        description: getApiErrorMessage(err, "Removal failed."),
+        variant: "destructive",
+      });
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -245,151 +224,24 @@ export default function DatapackMembersListPage({ datapackId }: Props) {
                   // caller themselves (no self-demotion).
                   canEditRole={canManageRoles && !m.is_owner && !isYou}
                   isUpdating={updatingUserId === m.user_id}
+                  // One change at a time: the role-change revert restores a
+                  // snapshot, which would bring back a member removed meanwhile.
+                  actionsLocked={updatingUserId !== null || removing}
                   onRoleChange={handleRoleChange}
+                  onRemove={setRemoveTarget}
                 />
               );
             })}
           </ul>
         )}
       </main>
+      <RemoveMemberDialog
+        member={removeTarget}
+        datapackName={datapackName}
+        removing={removing}
+        onCancel={() => setRemoveTarget(null)}
+        onConfirm={(m) => void handleRemove(m)}
+      />
     </div>
-  );
-}
-
-function MemberRow({
-  member,
-  isYou,
-  canEditRole,
-  isUpdating,
-  onRoleChange,
-}: {
-  member: DatapackOutgoingMember;
-  isYou: boolean;
-  canEditRole: boolean;
-  isUpdating: boolean;
-  onRoleChange: (userID: string, grant: DatapackShareGrant) => void;
-}) {
-  const primaryName = memberDisplayName(member);
-  const email = member.user_email_id?.trim() ?? "";
-  const showEmailBelow = email && primaryName.toLowerCase() !== email.toLowerCase();
-
-  if (member.is_owner) {
-    return (
-      <li
-        className={cn(
-          "flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3",
-          isYou && "ring-1 ring-border/60",
-        )}
-      >
-        <Avatar tone="emerald" label={memberInitials(member)} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="truncate text-sm font-medium text-foreground">{primaryName}</div>
-            {isYou ? <YouPill /> : null}
-          </div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Crown className="h-3 w-3 shrink-0 text-amber-500/90" aria-hidden />
-            <span>Owner</span>
-          </div>
-          {showEmailBelow ? (
-            <div className="mt-1 truncate text-[11px] text-muted-foreground/90" title={email}>
-              {email}
-            </div>
-          ) : null}
-        </div>
-      </li>
-    );
-  }
-
-  const grant = resolvedGrant(member);
-  const roleRow = shareInviteRoleRowPresentation(grant);
-  const RoleIcon = roleRow?.Icon;
-
-  return (
-    <li
-      className={cn(
-        "flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3",
-        isYou && "ring-1 ring-border/60",
-      )}
-    >
-      <Avatar tone="slate" label={memberInitials(member)} />
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="truncate text-sm font-medium text-foreground">{primaryName}</div>
-          {isYou ? <YouPill /> : null}
-        </div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-          {roleRow && RoleIcon ? (
-            <>
-              <RoleIcon className={cn("h-3 w-3 shrink-0", roleRow.iconClassName)} aria-hidden />
-              <span>{roleRow.label}</span>
-            </>
-          ) : (
-            <span>{formatDatapackShareGrantCamelCase(grant)}</span>
-          )}
-        </div>
-        {showEmailBelow ? (
-          <div className="mt-1 truncate text-[11px] text-muted-foreground/90" title={email}>
-            {email}
-          </div>
-        ) : null}
-      </div>
-      {canEditRole ? (
-        <div className="flex shrink-0 items-center gap-2">
-          <label className="sr-only" htmlFor={`role-${member.user_id}`}>
-            Change role for {primaryName}
-          </label>
-          <select
-            id={`role-${member.user_id}`}
-            value={grant}
-            onChange={(e) => {
-              const next = e.target.value;
-              if (next !== grant && isDatapackShareGrant(next)) {
-                onRoleChange(member.user_id, next);
-              }
-            }}
-            disabled={isUpdating}
-            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-          >
-            {SELECTABLE_GRANTS.map((g) => (
-              <option key={g} value={g}>
-                {formatDatapackShareGrantCamelCase(g)}
-              </option>
-            ))}
-          </select>
-          {isUpdating ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
-          ) : null}
-        </div>
-      ) : null}
-    </li>
-  );
-}
-
-/** Round avatar with role-themed background. Two tones mirror the
- *  ones on the tile rows: emerald for owners, slate for everyone else. */
-function Avatar({ tone, label }: { tone: "emerald" | "slate"; label: string }) {
-  const cls =
-    tone === "emerald"
-      ? "bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 ring-emerald-700/50"
-      : "bg-slate-100 dark:bg-slate-800/90 text-slate-700 dark:text-slate-200 ring-slate-600/40";
-  return (
-    <div
-      className={cn(
-        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ring-1",
-        cls,
-      )}
-      aria-hidden
-    >
-      {label}
-    </div>
-  );
-}
-
-function YouPill() {
-  return (
-    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-      You
-    </span>
   );
 }

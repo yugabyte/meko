@@ -28,6 +28,10 @@ export const ROUTES = {
   /** AWS Marketplace fulfillment completion landing page. Reads ?t=<token>
    *  from the URL and calls the BE to resolve the entitlement. */
   marketplaceComplete: "/marketplace/complete",
+  /** Datapack share link landing: `/share/:token`. Served signed in (joins
+   *  the datapack) and signed out (a generic page with sign in / sign up). Gated by
+   *  MEKO_ENABLE_LINK_SHARING; see `@/lib/linkSharingFeature`. */
+  share: "/share",
 } as const;
 
 /**
@@ -230,6 +234,22 @@ export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.usage,
   ROUTES.labs,
 ] as const;
+
+/** `/share/:token` — the path a datapack share link opens. */
+export function shareLinkPath(token: string): string {
+  return `${ROUTES.share}/${encodeURIComponent(token)}`;
+}
+
+/** The token from a `/share/:token` path, or null for any other path. */
+export function shareTokenFromPath(pathname: string): string | null {
+  const m = /^\/share\/([^/]+)\/?$/.exec(pathname);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
+}
 
 /** `/projects/:projectId` — one project and its folder tree. */
 export function projectDetailPath(projectId: string): string {

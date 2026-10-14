@@ -21,6 +21,7 @@ import { identifyThenTrack } from "@/lib/telemetry/rudderstack";
 import { clearPendingLoginMethod, setPendingLoginMethod } from "@/features/auth/pendingLoginMethod";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { safeReturnTo } from "@/features/auth/returnTo";
+import { pendingSharePath } from "@/lib/pendingShareLink";
 import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
@@ -57,12 +58,18 @@ const OAUTH_ERROR_REASONS: Record<string, string> = {
 const SIGNUP_RESUME_CONFIRM_QUERY = "resume" as const;
 const SIGNUP_RESUME_CONFIRM_VALUE = "1" as const;
 
-function confirmSignupResumePath(email: string): string {
+function confirmSignupResumePath(email: string, returnTo: string): string {
   const q = new URLSearchParams({
     [SIGNUP_RESUME_CONFIRM_QUERY]: SIGNUP_RESUME_CONFIRM_VALUE,
     email: email.trim(),
   });
+  if (returnTo) q.set("return_to", returnTo);
   return `${ROUTES.signup}?${q.toString()}`;
+}
+
+/** Sign-up keeps the deep link sign-in was given, so a new user still lands on it. */
+function signupPath(returnTo: string): string {
+  return returnTo ? `${ROUTES.signup}?return_to=${encodeURIComponent(returnTo)}` : ROUTES.signup;
 }
 
 export default function SignInPage() {
@@ -159,7 +166,9 @@ export default function SignInPage() {
       // flows (AWS Marketplace complete-registration, invite links,
       // etc.) can resume where they left off. safeReturnTo blocks
       // anything but a same-origin absolute path.
-      const returnTo = safeReturnTo(searchParams.get("return_to"));
+      // A share link the visitor started from resumes here too, including after
+      // the new-password step, which drops return_to.
+      const returnTo = safeReturnTo(searchParams.get("return_to")) || pendingSharePath();
       let nextPath: string = returnTo || ROUTES.onboarding;
       try {
         const user = await getCurrentUser();
@@ -380,7 +389,11 @@ export default function SignInPage() {
                 className="h-9 border-amber-500/40 bg-transparent text-amber-50 hover:bg-amber-950/40"
                 asChild
               >
-                <Link to={confirmSignupResumePath(email)}>Enter verification code</Link>
+                <Link
+                  to={confirmSignupResumePath(email, safeReturnTo(searchParams.get("return_to")))}
+                >
+                  Enter verification code
+                </Link>
               </Button>
             </div>
             {resendMessage ? (
@@ -400,7 +413,10 @@ export default function SignInPage() {
           </Link>
           <p>
             New to Meko?{" "}
-            <Link to={ROUTES.signup} className="font-medium text-brand hover:underline">
+            <Link
+              to={signupPath(safeReturnTo(searchParams.get("return_to")))}
+              className="font-medium text-brand hover:underline"
+            >
               Sign up
             </Link>
           </p>

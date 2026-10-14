@@ -58,6 +58,12 @@ export function loadTelemetry(): void {
   }
 }
 
+/** True on a share-link page, whose URL carries a token that lets anyone join the
+ *  datapack. The SDK attaches the page URL to every call, so none are sent there. */
+function onShareLinkPage(): boolean {
+  return typeof window !== "undefined" && window.location.pathname.startsWith("/share/");
+}
+
 /** Track a named event with optional properties. An optional callback runs once the
  *  SDK has captured the event — used at logout so reset() doesn't strip the event's
  *  traits before it's flushed. */
@@ -66,7 +72,7 @@ export function trackEvent(
   properties: ApiObject = {},
   callback?: () => void,
 ): void {
-  if (!analytics) {
+  if (!analytics || onShareLinkPage()) {
     callback?.();
     return;
   }
@@ -78,7 +84,7 @@ export function trackEvent(
  *  not just at sign-in, so no event goes out with empty traits. Identifies by
  *  account_id when known; otherwise by email trait alone (e.g. at signup). */
 export function identifyUser(user: TelemetryUser): void {
-  if (!analytics) return;
+  if (!analytics || onShareLinkPage()) return;
   // Merge first-touch ad attribution (UTMs + click ids) so HubSpot records the
   // source on the contact. Empty for organic/direct signups.
   const traits = {
@@ -117,6 +123,7 @@ export function identifyThenTrack(
 
 /** Record a page view. Called on every route change by <TrackPageViews />. */
 export function trackPageView(path: string): void {
+  if (onShareLinkPage()) return;
   analytics?.page(path, { path });
 }
 

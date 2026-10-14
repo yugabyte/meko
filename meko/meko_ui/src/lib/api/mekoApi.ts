@@ -299,7 +299,7 @@ export type CompleteNewPasswordPayload = {
 // shared envelope unwrap + auth-expired handling without duplicating it.
 export async function request<T>(
   path: string,
-  method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET",
   body?: unknown,
   options: { signal?: AbortSignal; headers?: Record<string, string> } = {},
 ): Promise<T> {
@@ -707,6 +707,8 @@ export type DatapackOutgoingMember = {
   user_name: string;
   user_email_id: string;
   grant: DatapackShareGrant;
+  /** How the member joined: "email" (invite) or "link". Absent on the owner row. */
+  source?: "email" | "link";
 };
 
 /** Pending invite on an outgoing share listing */

@@ -236,6 +236,13 @@ apiServer:
   # preset MUST do the same, or its signups land uncapped and its billing UI
   # disappears.
   enableByoc: true
+  # Feature flags rendered as bare --enable-projects / --enable-link-sharing,
+  # only when true. Off here; values-byoc.yaml turns projects on and keeps link
+  # sharing off. Each pairs with the
+  # mekoUi.env key of the same name, which the UI reads from the same env var
+  # (MEKO_ENABLE_PROJECTS, MEKO_ENABLE_LINK_SHARING), so set both sides together.
+  enableProjects: false
+  enableLinkSharing: false
   ses:
     fromAddress: ""
     region: us-east-2
@@ -745,6 +752,9 @@ mekoUi:
     # to create users pro instead of free, so the two must agree.
     # Default true, opted out by values-dev / values-prod; see apiServer.enableByoc.
     enableByoc: "true"
+    # Pair with apiServer.enableProjects / apiServer.enableLinkSharing.
+    enableProjects: "false"
+    enableLinkSharing: "false"
   # nginx proxy upstream server addresses (host:port), injected into default.conf.
   upstreams:
     ui: 127.0.0.1:5000

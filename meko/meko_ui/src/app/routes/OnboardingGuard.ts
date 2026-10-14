@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { resolveGuardRedirect } from "./guards";
+import { pendingSharePath } from "@/lib/pendingShareLink";
 import type { NavigateFunction } from "react-router-dom";
 
 type Args = {
@@ -20,7 +21,9 @@ export function useOnboardingGuard({
   navigate,
 }: Args) {
   useEffect(() => {
-    const returnTo = new URLSearchParams(search).get("return_to");
+    // A share link opened before an OAuth/OIDC sign-in comes back without its
+    // return_to, so it resumes from sessionStorage instead.
+    const returnTo = new URLSearchParams(search).get("return_to") ?? pendingSharePath();
     const redirect = resolveGuardRedirect({
       location,
       search,

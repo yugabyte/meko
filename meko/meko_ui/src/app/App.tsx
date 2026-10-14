@@ -21,6 +21,7 @@ import { useAuthExpiredRedirect } from "@/features/auth/hooks/useAuthExpiredRedi
 import { useOnboardingStatusSync } from "@/features/onboarding/hooks/useOnboardingStatusSync";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import { removeLocalItem, setLocalItem } from "@/lib/browserStorage";
+import { clearPendingShareToken, pendingSharePath } from "@/lib/pendingShareLink";
 import {
   AUTH_LOGIN_SUCCESS_EVENT,
   AUTH_LOGOUT_EVENT,
@@ -115,6 +116,9 @@ function AppRouter() {
       // Drop all cached queries so the next user in this tab can't see the
       // previous user's data (query keys aren't scoped per user).
       queryClient.clear();
+      // Only a real sign-out: the new-password step also fires this event
+      // mid sign-in, and the pending link must survive it.
+      if (detail?.hardRedirect === true) clearPendingShareToken();
       setAuthenticated(false);
       setHasCompletedOnboarding(false);
       setAuthLoading(false);
@@ -180,6 +184,8 @@ function AppRouter() {
   }
 
   if (isAuthRoute(location.pathname)) {
+    const resume = pendingSharePath();
+    if (resume) return <Navigate to={resume} replace />;
     return <Navigate to={hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding} replace />;
   }
 

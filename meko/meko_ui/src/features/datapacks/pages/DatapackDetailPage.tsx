@@ -38,6 +38,9 @@ import {
   isDatapackGrantEligibleToShare,
   isDatapackGrantViewer,
 } from "@/lib/datapackShareGrants";
+import { isLinkSharingEnabled } from "@/lib/linkSharingFeature";
+import { CopyShareLinkButton } from "@/features/datapacks/components/datapack-detail/CopyShareLinkButton";
+import { CopyShareLinkMenuItem } from "@/features/datapacks/components/datapack-detail/CopyShareLinkMenuItem";
 import {
   DatapackOutgoingMember,
   DatapackShareGrant,
@@ -306,6 +309,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   // `datapack` holds the previous one until the new route's load lands, so its
   // grant is only trusted once the ids match.
   const routeDatapackLoaded = datapack?.datapack_id === routeDatapackId;
+  const canCopyShareLink =
+    isLinkSharingEnabled() && isDatapackGrantEligibleToShare({ grant: datapackGrant });
 
   useEffect(() => {
     // The grant comes with the datapack; until it's known we can't tell a
@@ -472,6 +477,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                   Share
                 </Button>
               )}
+              {canCopyShareLink && <CopyShareLinkButton datapackId={routeDatapackId} />}
               <DatapackKnowledgeUploadDialog
                 datapackName={displayDatapackName}
                 datapackId={routeDatapackId}
@@ -582,6 +588,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         ) : null}
                       </DropdownMenuItem>
                     )}
+                    {canCopyShareLink && <CopyShareLinkMenuItem datapackId={routeDatapackId} />}
                     {showActionsDropdownDangerSeparator ? (
                       <DropdownMenuSeparator className="bg-border" />
                     ) : null}
