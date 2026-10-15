@@ -139,8 +139,8 @@ export type QueuedGate = 'open-pr' | 'merge';
  * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
  * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
  * only). Every other review is held for the user to send or dismiss (`HeldReview`); the user's own
- * reviews always go straight to Claude. Merge waits for AgentK only once it's active on the PR, and
- * never in `people`.
+ * reviews always go straight to Claude. Merge waits for AgentK's review only once AgentK is active
+ * on the PR, and never in `people`; in every mode it waits while a review is held.
  */
 export type ReviewerMode = 'agentk' | 'agentk-people' | 'all' | 'people';
 
@@ -1520,7 +1520,7 @@ export type HeldReviewAuthor = 'agentk' | 'person' | 'bot' | 'outsider';
 /** An inline comment of a held review. */
 export interface HeldReviewComment {
   path: string;
-  /** The line it's on; null when GitHub has none (an outdated comment). */
+  /** The line it's on in the current diff; null for an outdated comment. */
   line: number | null;
   body: string;
   url: string;

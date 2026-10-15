@@ -240,26 +240,43 @@ export async function botLogins(worktree: string, number: number, repo?: string 
 export interface ReviewDetail {
   dbId: number | null;
   url: string;
+  /** `line` is null for an outdated comment (GitHub gives only its line in an old diff). */
   comments: { path: string; line: number | null; body: string; url: string }[];
   totalComments: number;
 }
 
+/** Most node ids GitHub's `nodes(ids:)` takes in one query. */
+const NODES_MAX = 100;
+
 /**
- * Reviews' REST ids, links and first <first> inline comments, by the node ids `gh pr view` gives
- * (one GraphQL call). Ids that aren't GitHub node ids are refused, since they go into the query.
+ * The GraphQL query for reviews' details by node id, with their first <first> inline comments.
+ * Ids that aren't GitHub node ids are refused, since they go into the query.
  */
-export async function reviewDetails(cwd: string, ids: string[], first = 50): Promise<Map<string, ReviewDetail>> {
-  const out = new Map<string, ReviewDetail>();
-  if (!ids.length) return out;
+export function reviewDetailsQuery(ids: string[], first = 50): string {
   if (ids.some((id) => !/^[A-Za-z0-9_=-]+$/.test(id))) throw new Error('Not a GitHub review id.');
-  const query = `{ nodes(ids: ${JSON.stringify(ids)}) { ... on PullRequestReview { id databaseId url comments(first: ${first}) { totalCount nodes { path line originalLine body url } } } } }`;
-  const r = JSON.parse(await gh(cwd, 'api', 'graphql', '-f', `query=${query}`)) as {
-    data?: { nodes?: ({ id?: string; databaseId?: number | null; url?: string; comments?: { totalCount?: number; nodes?: { path?: string; line?: number | null; originalLine?: number | null; body?: string; url?: string }[] } } | null)[] };
+  return `{ nodes(ids: ${JSON.stringify(ids)}) { ... on PullRequestReview { id databaseId url comments(first: ${first}) { totalCount nodes { path line body url } } } } }`;
+}
+
+/** reviewDetailsQuery's answer, by node id; ids GitHub has no review for are left out. */
+export function parseReviewDetails(json: string): Map<string, ReviewDetail> {
+  const r = JSON.parse(json) as {
+    data?: { nodes?: ({ id?: string; databaseId?: number | null; url?: string; comments?: { totalCount?: number; nodes?: { path?: string; line?: number | null; body?: string; url?: string }[] } } | null)[] };
   };
+  const out = new Map<string, ReviewDetail>();
   for (const n of r.data?.nodes ?? []) {
     if (!n?.id) continue;
-    const comments = (n.comments?.nodes ?? []).map((c) => ({ path: c.path ?? '', line: c.line ?? c.originalLine ?? null, body: c.body ?? '', url: c.url ?? '' }));
+    const comments = (n.comments?.nodes ?? []).map((c) => ({ path: c.path ?? '', line: c.line ?? null, body: c.body ?? '', url: c.url ?? '' }));
     out.set(n.id, { dbId: n.databaseId ?? null, url: n.url ?? '', comments, totalComments: n.comments?.totalCount ?? comments.length });
+  }
+  return out;
+}
+
+/** Reviews' REST ids, links and first 50 inline comments, by the node ids `gh pr view` gives (a GraphQL call per 100). */
+export async function reviewDetails(cwd: string, ids: string[]): Promise<Map<string, ReviewDetail>> {
+  const out = new Map<string, ReviewDetail>();
+  for (let i = 0; i < ids.length; i += NODES_MAX) {
+    const query = reviewDetailsQuery(ids.slice(i, i + NODES_MAX));
+    for (const [id, d] of parseReviewDetails(await gh(cwd, 'api', 'graphql', '-f', `query=${query}`))) out.set(id, d);
   }
   return out;
 }

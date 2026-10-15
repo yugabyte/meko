@@ -2,6 +2,9 @@ import type { HeldReview, HeldReviewAuthor, HeldReviewComment, HeldReviewsReques
 import { all, get, run, type Db } from './db.js';
 import { HttpError } from './projects.js';
 
+/** The `kv` key migration 36 set to when reviews started being held (ms). */
+export const HELD_SINCE_KEY = 'held-reviews-since';
+
 /** Longest held review body kept, in characters; the rest is on GitHub. */
 export const HELD_BODY_MAX = 10_000;
 /** Inline comments kept per held review. */
@@ -65,12 +68,12 @@ interface HeldRow {
 const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}…` : s);
 
 /** Keeps a review for the user to decide on; one already kept (sent, dismissed or held) stays as it is. */
-export function holdReview(db: Db, sessionId: string, pr: number, r: NewHeld, d: ReviewDetails | undefined, prUrl: string): void {
-  const comments = (d?.comments ?? []).slice(0, HELD_COMMENTS_MAX).map((c) => ({ ...c, body: cut(c.body, COMMENT_BODY_MAX) }));
-  const more = Math.max(0, (d?.totalComments ?? comments.length) - comments.length);
+export function holdReview(db: Db, sessionId: string, pr: number, r: NewHeld, d: ReviewDetails, prUrl: string): void {
+  const comments = d.comments.slice(0, HELD_COMMENTS_MAX).map((c) => ({ ...c, body: cut(c.body, COMMENT_BODY_MAX) }));
+  const more = Math.max(0, d.totalComments - comments.length);
   run(db, `INSERT OR IGNORE INTO held_reviews(session_id, review_id, pr_number, db_id, author, kind, state, body, url, comments_json, more_comments, submitted_at, held_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  sessionId, r.id, pr, d?.dbId ?? null, r.author, r.kind, r.state, cut(r.body, HELD_BODY_MAX), d?.url || prUrl,
+  sessionId, r.id, pr, d.dbId, r.author, r.kind, r.state, cut(r.body, HELD_BODY_MAX), d.url || prUrl,
   JSON.stringify(comments), more, r.submittedAt, Date.now());
 }
 

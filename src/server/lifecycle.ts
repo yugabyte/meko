@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
-import { get, run } from './db.js';
+import { get, kvGet, run } from './db.js';
 import { designAnswers, type CheckedAnswers } from './answers.js';
 import {
   artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
@@ -13,7 +13,7 @@ import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
 import {
-  andList, checkHeldRequest, decideHeld, dropOtherPrs, heldBlocker, heldPromptLines, heldReviews, heldSummary, holdReview, reviewRoute,
+  andList, checkHeldRequest, decideHeld, dropOtherPrs, HELD_SINCE_KEY, heldBlocker, heldPromptLines, heldReviews, heldSummary, holdReview, reviewRoute,
   type ReviewDetails, type ReviewWho,
 } from './heldreviews.js';
 import { launchedAgentId, withMekoScope } from './meko.js';
@@ -1146,6 +1146,12 @@ export class Lifecycle {
     } else {
       this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0, conflict_head: null, conflict_fixes: 0 });
       dropOtherPrs(this.db, id, pr.number);
+      // A review-held prompt still waiting names the old PR's reviews.
+      const q = this.queue(id);
+      if (q['review-held']?.state === 'queued') {
+        delete q['review-held'];
+        this.setQueue(id, q);
+      }
       const older = by === 'you' || Date.parse(pr.createdAt) < before.created_at - github.CLOCK_SKEW_MS;
       this.sessions.event(id, 'pr', older ? `Picked up PR #${pr.number}` : `Opened PR #${pr.number}`, { url: pr.url });
     }
@@ -1210,7 +1216,7 @@ export class Lifecycle {
     const botReviews = st.reviews.filter((r) => isAgentk(r.author));
     // Reviews held for the user this poll, kept once GitHub has told their details.
     const toHold: { review: github.PrReview; kind: HeldReviewAuthor }[] = [];
-    if (mode !== 'people') {
+    if (reviewRoute(mode, 'agentk') === 'claude') {
       const fresh = botReviews.filter((r) => !seen.has(r.id));
       if (fresh.length) {
         fresh.forEach((r) => seen.add(r.id));
@@ -1238,9 +1244,11 @@ export class Lifecycle {
         }
       }
     } else {
-      // People only: AgentK's findings wait for the user. A clean review has nothing to send.
+      // AgentK's findings wait for the user. A clean review has nothing to send, and People only
+      // never marked AgentK's reviews seen before reviews were held, so its earlier rounds aren't news.
+      const since = Number(kvGet(this.db, HELD_SINCE_KEY) ?? 0);
       for (const r of botReviews.filter((b) => !seen.has(b.id))) {
-        if (cleanAgentkReview(r.body)) seen.add(r.id);
+        if (cleanAgentkReview(r.body) || Date.parse(r.submittedAt) < since) seen.add(r.id);
         else toHold.push({ review: r, kind: 'agentk' });
       }
     }
@@ -1250,7 +1258,9 @@ export class Lifecycle {
     // False when GitHub couldn't say something the reviews' route needs: they stay unseen for the next poll.
     let ready = true;
     const sendable: github.PrReview[] = [];
+    // Reviews that ask for nothing are only logged: someone's with a role on the repo, and the rest's.
     const told: github.PrReview[] = [];
+    const toldOutside: github.PrReview[] = [];
     if (others.length) {
       const bots = await this.botLogins(before, st.number);
       const isBot = (r: github.PrReview) => !!bots?.some((b) => github.isLogin(r.author, b));
@@ -1270,11 +1280,12 @@ export class Lifecycle {
           isBot(r) ? 'bot' : user && github.isLogin(r.author, user) ? 'user' : trusted(r) ? 'person' : 'outsider';
         for (const r of worded) {
           const w = who(r);
-          if (!asksForWork(r)) told.push(r);
-          else if (w === 'user' || reviewRoute(mode, w) === 'claude') {
+          if (!asksForWork(r)) (w === 'outsider' ? toldOutside : told).push(r);
+          else if (reviewRoute(mode, w) === 'claude') {
             sendable.push(r);
             told.push(r);
-          } else toHold.push({ review: r, kind: w });
+            // reviewRoute never holds the user's own.
+          } else toHold.push({ review: r, kind: w as HeldReviewAuthor });
         }
       }
     }
@@ -1283,6 +1294,7 @@ export class Lifecycle {
       others.forEach((r) => seen.add(r.id));
       toHold.forEach((h) => seen.add(h.review.id));
       if (told.length) this.sessions.event(row.id, 'review', `Review from ${loginList(told)}`);
+      if (toldOutside.length) this.sessions.event(row.id, 'review', `Review from ${loginList(toldOutside)} (not a collaborator on the repo)`);
       if (sendable.length) {
         reviewState = 'addressing';
         this.sessions.notifyUser(row.id, 'Review arrived', `From ${loginList(sendable)}.`);
@@ -1355,11 +1367,15 @@ export class Lifecycle {
   }
 
   /** Keeps reviews for the user to send to AgentK or dismiss, logs them and tells the user once. */
-  private hold(row: SessionRow, held: { review: github.PrReview; kind: HeldReviewAuthor }[], details: Map<string, ReviewDetails>): void {
+  private hold(row: SessionRow, found: { review: github.PrReview; kind: HeldReviewAuthor }[], details: Map<string, ReviewDetails>): void {
+    // One GitHub has no review for any more (deleted since the poll) has nothing to send or show.
+    const held = found.filter((h) => details.has(h.review.id));
+    if (held.length < found.length) this.core.log.warn(`GitHub no longer has ${found.length - held.length} of the reviews to hold for ${row.id}; skipped`);
+    if (!held.length) return;
     for (const { review: r, kind } of held) {
       holdReview(this.db, row.id, row.pr_number!, {
         id: r.id, author: r.author?.login ?? 'ghost', kind, state: r.state, body: r.body, submittedAt: r.submittedAt,
-      }, details.get(r.id), row.pr_url ?? '');
+      }, details.get(r.id)!, row.pr_url ?? '');
     }
     const names = (kinds: (k: HeldReviewAuthor) => boolean) => loginList(held.filter((h) => kinds(h.kind)).map((h) => h.review));
     const inside = names((k) => k !== 'outsider');
@@ -1377,8 +1393,8 @@ export class Lifecycle {
   }
 
   /**
-   * The user's decision on held reviews: send them to Claude (AgentK's with the `review` prompt,
-   * the rest with `review-held`), which only PR & Review does, or dismiss them. Then a fresh look
+   * The user's decision on held reviews: send them to Claude with the `review-held` prompt, which
+   * only PR & Review does, or dismiss them. Then a fresh look
    * at the PR, so the merge blocker they were goes.
    */
   async decideHeldReviews(id: string, body: unknown): Promise<HeldReviewsResult> {
@@ -1393,9 +1409,8 @@ export class Lifecycle {
       if (!done.length) throw new HttpError(409, 'Those reviews were already sent or dismissed.');
       const what = `the held ${done.length === 1 ? 'review' : 'reviews'} from ${andList([...new Set(done.map((r) => r.author))])}`;
       if (req.action === 'send') {
-        if (done.some((r) => r.kind === 'agentk')) this.enqueue(id, 'review');
-        const rest = done.filter((r) => r.kind !== 'agentk');
-        if (rest.length) this.enqueueHeld(id, heldPromptLines(rest));
+        // AgentK's too: `review-held` names each review, where `review` has Claude read every round.
+        this.enqueueHeld(id, heldPromptLines(done));
         this.sessions.update(id, { review_state: 'addressing' });
         this.sessions.event(id, 'review', `Sent ${what} to AgentK`);
         // Before the look at GitHub, so the prompt goes even while GitHub can't be reached.
