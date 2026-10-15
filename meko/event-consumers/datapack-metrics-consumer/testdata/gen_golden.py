@@ -5,6 +5,11 @@ meko-mcp-server (`_record_daily_activity`, `_record_token_savings`, `_submit_aud
 that code against real tables and writes the sequence and the rows it produced to
 testdata/search_completed.json, which internal/handlers/parity_test.go replays through the handler.
 
+It also records the events the producer stores for each search. It runs the MCP server's own
+`_emit_search_completed` through the real `events.emit`, flushes the queue into a scratch events table, and reads
+the stored JSON back (so envelope building, JSON normalisation and the `occurred_at` stamp are all the
+producer's), not a copy of them. That needs meko-mcp-server at or after the batching producer.
+
 Run it from a meko-mcp-server checkout with its virtualenv, against a database where it may create and
 drop a `meko_system` schema (the legacy SQL names that schema, so it cannot be renamed). It refuses to run
 if the schema already exists:
@@ -19,9 +24,11 @@ is held to.
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import types
+from unittest.mock import patch
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -78,6 +85,10 @@ SEARCHES = [
 ]
 
 
+# Events per flush: more than one, so a flush is a multi-row INSERT, and not a divisor of len(SEARCHES).
+FLUSH_BATCH = 5
+
+
 def rows(cur, query):
     cur.execute(query)
     return [
@@ -92,7 +103,11 @@ def main():
     ap.add_argument("--mcp-server", required=True, help="path to a meko-mcp-server checkout")
     args = ap.parse_args()
 
+    # The producer is off by default, and its background flusher must not race the explicit flushes below.
+    os.environ["MEKO_EVENTS_EMIT"] = "true"
+    os.environ["MEKO_EVENTS_FLUSH_INTERVAL_S"] = "60"
     sys.path.insert(0, str(pathlib.Path(args.mcp_server) / "src"))
+    import events  # noqa: E402  (the MCP server's producer)
     import tools  # noqa: E402  (needs the MCP server's virtualenv)
 
     with psycopg.connect(args.dsn, autocommit=True) as admin:
@@ -101,28 +116,66 @@ def main():
         admin.execute("CREATE SCHEMA meko_system")
         try:
             admin.execute(SCHEMA_SQL)
+            # Only the columns the producer writes; the consumer's own tests use the real table definition.
+            admin.execute(
+                "CREATE TABLE meko_system.events (shard smallint NOT NULL,"
+                " created_at timestamptz NOT NULL DEFAULT clock_timestamp(), id uuid NOT NULL, type text NOT NULL,"
+                " event_schema_version smallint NOT NULL DEFAULT 1, payload jsonb NOT NULL,"
+                " PRIMARY KEY (shard, created_at, id))"
+            )
             pool = ConnectionPool(args.dsn, min_size=1, max_size=2, open=True)
             ctx = types.SimpleNamespace(lifespan_context={"system_pool": pool})
 
-            for s in SEARCHES:
-                tools._record_daily_activity(ctx, s["datapack_id"], s["search_type"])
-                if s["tokens_sent"] > 0:
-                    tools._record_token_savings(
+            # Flushed a few at a time, so the producer's multi-row INSERT is what stores them: one at a time
+            # would only ever exercise a one-row statement.
+            for start in range(0, len(SEARCHES), FLUSH_BATCH):
+                chunk = SEARCHES[start : start + FLUSH_BATCH]
+                for s in chunk:
+                    emitted = tools._emit_search_completed(
                         ctx,
-                        s["datapack_id"],
-                        s["conversation_id"],
-                        "trace",
-                        s["user_id"],
-                        s["search_type"],
-                        s["tokens_sent"],
-                        s["tokens_if_raw"],
-                        s["hits_high"],
-                        s["hits_mid"],
-                        s["hits_low"],
+                        search_type=s["search_type"],
+                        datapack_id=s["datapack_id"],
+                        conversation_id=s["conversation_id"],
+                        user_id=s["user_id"],
+                        tokens_sent=s["tokens_sent"],
+                        tokens_if_raw=s["tokens_if_raw"],
+                        hits_high=s["hits_high"],
+                        hits_mid=s["hits_mid"],
+                        hits_low=s["hits_low"],
+                        quota_audited=s["quota_audited"],
                     )
-                if s["quota_audited"]:
-                    tools._submit_audit_log(ctx, s["user_id"], s["quota_metric"])
+                    if emitted is not True:
+                        sys.exit(f"the producer did not queue the event for {s}")
+                stored = events.flush_now()
+                if stored != len(chunk):
+                    sys.exit(f"the producer stored {stored} of {len(chunk)} events in one flush")
+                for s in chunk:
+                    tools._record_daily_activity(ctx, s["datapack_id"], s["search_type"])
+                    if s["tokens_sent"] > 0:
+                        tools._record_token_savings(
+                            ctx,
+                            s["datapack_id"],
+                            s["conversation_id"],
+                            "trace",
+                            s["user_id"],
+                            s["search_type"],
+                            s["tokens_sent"],
+                            s["tokens_if_raw"],
+                            s["hits_high"],
+                            s["hits_mid"],
+                            s["hits_low"],
+                        )
+                    if s["quota_audited"]:
+                        tools._submit_audit_log(ctx, s["user_id"], s["quota_metric"])
             tools._audit_executor.shutdown(wait=True)  # the audit write is asynchronous
+            events.shutdown(timeout=5)
+            with admin.cursor() as cur:
+                cur.execute("SELECT payload FROM meko_system.events ORDER BY created_at, id")
+                recorded = [r[0] for r in cur.fetchall()]
+            # The clock. It is fixed so the file does not change on every run; the tests that replay these
+            # payloads set a real time, because the legacy code wrote CURRENT_DATE.
+            for payload in recorded:
+                payload["occurred_at"] = "2000-01-01T00:00:00+00:00"
             pool.close()
 
             with admin.cursor() as cur:
@@ -151,7 +204,7 @@ def main():
         finally:
             admin.execute("DROP SCHEMA meko_system CASCADE")
 
-    json.dump({"searches": SEARCHES, "golden": golden}, sys.stdout, indent=2)
+    json.dump({"searches": SEARCHES, "events": recorded, "golden": golden}, sys.stdout, indent=2)
     sys.stdout.write("\n")
 
 

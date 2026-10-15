@@ -71,8 +71,10 @@ func dump(t *testing.T, d *testdb.DB, today string) map[string][][]string {
 }
 
 type fixture struct {
-	Searches []map[string]any   `json:"searches"`
-	Golden   map[string][][]any `json:"golden"`
+	Searches []map[string]any `json:"searches"`
+	// Events are the payloads the MCP server's own emit code built for those searches.
+	Events []map[string]any   `json:"events"`
+	Golden map[string][][]any `json:"golden"`
 }
 
 func loadFixture(t *testing.T) fixture {
@@ -90,17 +92,20 @@ func loadFixture(t *testing.T) fixture {
 	return f
 }
 
-// TestTheHandlerLeavesTheTablesAsTheInlineCodeDid replays the searches testdata/gen_golden.py ran through
-// the MCP server's inline bookkeeping, as one batch, and compares every table with what that code wrote.
+// TestTheHandlerLeavesTheTablesAsTheInlineCodeDid replays, as one batch, the events the MCP server's emit code
+// built for the searches testdata/gen_golden.py ran through its inline bookkeeping, and compares every table
+// with what that inline code wrote.
 func TestTheHandlerLeavesTheTablesAsTheInlineCodeDid(t *testing.T) {
 	d := testdb.New(t, testdb.BookkeepingSQL())
 	f := loadFixture(t)
 	now := time.Now().UTC()
 	var events []store.Event
-	for _, s := range f.Searches {
+	for _, s := range f.Events {
+		// The fixture's occurred_at is a placeholder. The inline code wrote CURRENT_DATE, so the searches
+		// must happen "now" for the golden rows to match.
+		s["occurred_at"] = now.Format(time.RFC3339Nano)
 		b, _ := json.Marshal(s)
 		events = append(events, store.Event{CreatedAt: now, ID: uuid.NewString(), Type: SearchCompleted, SchemaVersion: 1, Payload: b})
-
 	}
 
 	db, err := sql.Open("postgres", d.DSN)

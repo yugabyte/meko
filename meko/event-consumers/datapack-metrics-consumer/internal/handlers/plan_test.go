@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,6 +146,41 @@ func TestAnUnreadablePayloadIsTheEventsFault(t *testing.T) {
 		e.Payload = json.RawMessage(body)
 		if _, err := planBatch([]store.Event{e}); err == nil || !consumer.IsPoison(err) {
 			t.Errorf("payload %s: err = %v, poison = %v", body, err, err != nil && consumer.IsPoison(err))
+		}
+	}
+}
+
+// The producer is the MCP server's _emit_search_completed; testdata/search_completed.json holds the payloads
+// it built. These two tests keep the two sides in step: a field the producer adds that the handler does not
+// know, or a field the handler reads that the producer no longer sends, fails here rather than in production.
+
+func TestTheProducerSendsNothingTheHandlerDoesNotKnow(t *testing.T) {
+	f := loadFixture(t)
+	if len(f.Events) == 0 {
+		t.Fatal("no recorded events")
+	}
+	for i, payload := range f.Events {
+		b, _ := json.Marshal(payload)
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.DisallowUnknownFields()
+		var s searchPayload
+		if err := dec.Decode(&s); err != nil {
+			t.Fatalf("event %d: the producer sends a field the handler does not read (add it to searchPayload, or drop it from the producer): %v", i, err)
+		}
+	}
+}
+
+func TestTheProducerSendsEveryFieldTheHandlerReads(t *testing.T) {
+	var want []string
+	rt := reflect.TypeOf(searchPayload{})
+	for i := range rt.NumField() {
+		want = append(want, strings.Split(rt.Field(i).Tag.Get("json"), ",")[0])
+	}
+	for i, payload := range loadFixture(t).Events {
+		for _, name := range want {
+			if _, ok := payload[name]; !ok {
+				t.Errorf("event %d: the producer does not send %q, which the handler reads", i, name)
+			}
 		}
 	}
 }

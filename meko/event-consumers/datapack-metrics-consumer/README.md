@@ -161,7 +161,16 @@ go test ./...                  # unit tests; the DB-backed ones are skipped
 EVENTS_TEST_DSN="postgresql://postgres@127.0.0.1:5432/postgres?sslmode=disable" go test -race ./...
 ```
 
-The DB tests need a PostgreSQL-compatible server where they may create and drop a schema. Each test
+`internal/e2e` starts the real binary, as the Deployment does, against the database and checks what the four tables
+end up holding. It replays the producer's recorded payloads and compares every table and column, per datapack and
+day, with the rows the inline code wrote for the same searches (a handler that books counts to the wrong datapack or
+day, or zeroes a column, fails it): exact counts, a process killed with SIGKILL mid-run, a standby taking over, a malformed event, and
+SIGTERM releasing the leases. It builds the binary itself and takes about 15 s. The producer's payloads in
+`testdata/search_completed.json` are recorded from the MCP server's own emit code, and `internal/handlers` fails if the
+producer sends a field the handler does not read or the reverse.
+
+The DB tests need a PostgreSQL-compatible server where they may create and drop a schema (lib/pq reads `sslmode` from
+the DSN, so use `sslmode=disable` for a plain local server). Each test
 gets its own schema with the same tables as migration 000029 (without the YugabyteDB-only `ASC` in
 the key), and they cover: effects applied once across a crash, a competing offset advance rolling the
 batch back, lease expiry and takeover, poison versus environment errors, a handler panic, the safety
@@ -174,6 +183,29 @@ service container.
 offset with no record as late and applies it again, so emptying the table, or rewinding an offset
 without clearing the events' records, double-counts. To replay, delete the records for the replayed
 range in the same statement batch that moves the offset.
+
+## Checking a deployment
+
+The tests above run on a throwaway PostgreSQL. To check a real environment (dev first), with the consumer healthy
+and its lag near zero, compare what a known number of searches does to the four tables with the flag on and off:
+
+1. Pick a datapack, its user, and a second **control** datapack served by an MCP server Deployment with
+   `MEKO_EVENTS_EMIT` off. Note, for each, the starting totals:
+
+   ```sql
+   SELECT coalesce(sum(query_count), 0) FROM meko_system.datapack_daily_activity WHERE datapack_id = '<dp>';
+   SELECT coalesce(sum(request_count), 0), coalesce(sum(tokens_saved_total), 0)
+     FROM meko_system.token_savings_summary WHERE datapack_id = '<dp>';
+   SELECT count(*) FROM meko_system.token_savings_log WHERE datapack_id = '<dp>';
+   SELECT count(*) FROM meko_system.free_tier_audit_log WHERE user_id = '<user>' AND metric_name = 'context_search';
+   ```
+
+2. Run N `context_search` calls on each, including a few that return nothing, and wait until
+   `meko_events_consumer_lag_seconds` is back to a few seconds.
+3. The deltas must be the same on both: N queries, one token-savings row and one summary request per search that
+   returned something, and N audit rows. They are the same code's output, so any difference is a bug in one of the two paths.
+4. Stop one consumer pod mid-run (`kubectl delete pod`), and check the totals are still exact once lag clears and
+   that `meko_events_consumer_lease_takeovers_total` moved.
 
 ## Not yet verified on YugabyteDB
 
