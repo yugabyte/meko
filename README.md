@@ -149,9 +149,11 @@ your phone can connect.
   repos that take long to build start incremental. Each repo keeps up to 3 idle worktrees, and one
   no session has used for 14 days is removed; change both in Settings (0 idle worktrees removes
   worktrees when sessions end).
-- **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
+- **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
+  Compare with another branch (a release branch for a backport, say) from the base in its header;
+  when the branch has clearly moved onto another branch, the panel offers to switch.
 - **Paste images for Claude:** paste a screenshot into the terminal, or drop image files on it, and
   Claude gets the image with your next message, even when AgentK Local runs on another machine.
   Images pasted into the New session dialog's first prompt go with it when the session starts.
@@ -185,7 +187,7 @@ your phone can connect.
   (double-click its tab): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
-  markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each
+  markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
   takes you to them first. Once it's approved, AgentK writes the answers into the design and keeps it current
@@ -193,11 +195,12 @@ your phone can connect.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
-  and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and
-  people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
-  you turn that off in Settings → General) and CI failures to Claude. Only reviews
-  from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
-  anyone else's are shown to you and ignored.
+  and AgentK's review have passed. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
+  people's, every reviewer's, or only people's), merge conflicts with the base (unless
+  you turn that off in Settings → General) and CI failures to Claude. Every other review, and
+  any review from someone without a role on the repo, is held for you: you read it in AgentK and
+  send it to AgentK or dismiss it, and Merge & Close waits until you decide. Your own reviews
+  always go to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.

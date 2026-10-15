@@ -346,7 +346,7 @@ export function Banners({
               }
             }}
           >
-            {applying ? <Busy label="Updating" /> : `Update to v${u.latest}`}
+            {applying ? <Busy label="Updating" /> : 'Update to the latest version'}
           </button>
         </div>
       )}

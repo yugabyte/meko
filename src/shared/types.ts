@@ -136,15 +136,18 @@ export type CiState = 'none' | 'pending' | 'success' | 'failure';
 export type QueuedGate = 'open-pr' | 'merge';
 
 /**
- * Whose reviews Claude addresses: `all` (AgentK, people and other bots), `agentk-people`
- * (AgentK and people) or `people` (people only). Merge waits for AgentK only once it's
- * active on the PR, and never in `people`.
+ * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
+ * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
+ * only). Every other review is held for the user to send or dismiss (`HeldReview`); the user's own
+ * reviews always go straight to Claude. Merge waits for AgentK's review only once AgentK is active
+ * on the PR, and never in `people`; in every mode it waits while a review is held.
  */
-export type ReviewerMode = 'all' | 'agentk-people' | 'people';
+export type ReviewerMode = 'agentk' | 'agentk-people' | 'all' | 'people';
 
 export const REVIEWER_LABELS: Record<ReviewerMode, string> = {
-  all: 'All reviewers',
+  agentk: 'AgentK only',
   'agentk-people': 'AgentK + People',
+  all: 'All reviewers',
   people: 'People only',
 };
 
@@ -397,7 +400,7 @@ export interface CallHomeMeko {
   capture?: { runs: number; failures: number; ms: number };
   /** Searches that found nothing relevant (`MekoUsage.weak`); left out by installs from before it. */
   weak?: number;
-  /** Questions on What Meko doesn't know: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. Left out when there were none. */
+  /** Questions on What Meko doesn't know a person dismissed or taught: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. A learn step's marks are in `learn`. Left out when there were none. */
   gaps?: { dismissed: number; taught: number };
 }
 
@@ -416,6 +419,13 @@ export interface CallHomeLearn {
   skips: number;
   /** Steps that ended done with nothing saved or corrected. */
   empty: number;
+  /**
+   * Questions on What Meko doesn't know the steps marked taught (a fact answering them was saved)
+   * or dismissed (Meko already had the answer). Optional in the schema: reports from before lack
+   * them. How many were offered isn't sent: the report has no room left for it in 64 KB.
+   */
+  taught: number;
+  dismissed: number;
   /** The step's Meko searches, its failed Meko calls, and about how many tokens it sent to Meko. */
   lookups: number;
   errors: number;
@@ -607,8 +617,23 @@ export interface MekoGap {
   state: MekoGapState;
   /** When it was dismissed or taught (null when it's open). */
   markedAt: number | null;
-  /** What was last taught for it, kept when it's asked again (open again) or dismissed after. */
-  taught: { text: string; datapack: string | null; at: number } | null;
+  /**
+   * What was last taught for it, kept when it's asked again (open again) or dismissed after.
+   * `session`: the session whose learn step taught it (null: a person did, with Teach Meko).
+   */
+  taught: { text: string; datapack: string | null; at: number; session: MekoGapSession | null } | null;
+  /**
+   * While it's dismissed: who dismissed it (`session`: the session whose learn step found Meko
+   * already had the answer; null: a person did) and, for a learn step, the memory that already said it.
+   */
+  dismissal: { session: MekoGapSession | null; memory: string | null } | null;
+}
+
+/** The session whose learn step taught or dismissed a question. */
+export interface MekoGapSession {
+  id: string;
+  name: string;
+  archived: boolean;
 }
 
 /** GET /api/projects/:id/meko-gaps: What Meko doesn't know, latest asked first. */
@@ -715,12 +740,14 @@ export interface Session {
   hasDesign: boolean;
   /** When the design was last written or republished; null before there is one. */
   designUpdatedAt: number | null;
-  /** Lines added/removed vs. the base branch, refreshed periodically. */
-  diffStat: { added: number; removed: number } | null;
+  /** Files changed and lines added/removed vs. the base branch, refreshed periodically. */
+  diffStat: DiffStat | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
   /** How many of the design's questions are open, for the user to answer. */
   designQuestions: { open: number };
+  /** Reviews on the session's PR held for the user to send to AgentK or dismiss, and their authors. */
+  heldReviews: { count: number; authors: string[] };
   /**
    * AgentK's mod is running in the session's Claude (`[claude] mod` on, and the mod polling): answers
    * to the design can be sent and the design approved while AgentK works, and Claude's questions
@@ -1438,6 +1465,14 @@ export interface ChangedFile {
   truncated: boolean;
 }
 
+/** A session's diff size vs. its base, as the footer shows it. */
+export interface DiffStat {
+  /** Changed files, untracked ones included (the Changes panel's count). */
+  files: number;
+  added: number;
+  removed: number;
+}
+
 /** Everything changed on a session's branch vs. its base: committed, uncommitted and untracked. */
 export interface SessionChanges {
   /** What the changes are compared against, e.g. `origin/main`. */
@@ -1448,6 +1483,15 @@ export interface SessionChanges {
   removed: number;
   /** Files whose patch was left out because the whole diff hit the size cap. */
   omittedPatches: number;
+  /** Commits on the branch since it left the base. */
+  ahead: number;
+  /**
+   * A branch of origin's or upstream's much closer to the branch than its base, when the branch is
+   * far past its base (it was moved onto another branch, such as a release branch for a backport):
+   * offered as the session's base. The name is without its remote, as `Session.baseBranch` is. Null
+   * when there's none, and for a session that can't change its base (a review, or one with a PR).
+   */
+  suggestedBase: { branch: string; ahead: number } | null;
 }
 
 export type CommentSide = 'old' | 'new';
@@ -1481,6 +1525,49 @@ export interface NewComment {
   endLine: number;
   excerpt: string;
   body: string;
+}
+
+/**
+ * Who wrote a held review: AgentK (held in People only), a person with a role on the repo (held
+ * in AgentK only), a bot (held except in All reviewers), or someone with no role on the repo
+ * (held in every mode).
+ */
+export type HeldReviewAuthor = 'agentk' | 'person' | 'bot' | 'outsider';
+
+/** An inline comment of a held review. */
+export interface HeldReviewComment {
+  path: string;
+  /** The line it's on in the current diff; null for an outdated comment. */
+  line: number | null;
+  body: string;
+  url: string;
+}
+
+/** A review on the session's PR that waits for the user before it goes to Claude. */
+export interface HeldReview {
+  /** GitHub's node id for the review. */
+  id: string;
+  author: string;
+  kind: HeldReviewAuthor;
+  /** CHANGES_REQUESTED or COMMENTED. */
+  state: string;
+  body: string;
+  url: string;
+  submittedAt: string;
+  comments: HeldReviewComment[];
+  /** Inline comments beyond `comments`, left out (read them on GitHub). */
+  moreComments: number;
+}
+
+export interface HeldReviewsRequest {
+  action: 'send' | 'dismiss';
+  /** HeldReview ids; ones already sent or dismissed are skipped. */
+  ids: string[];
+}
+
+export interface HeldReviewsResult {
+  /** How many were sent or dismissed. */
+  done: number;
 }
 
 export interface SendCommentsResult {
@@ -1682,6 +1769,11 @@ export const SESSION_NAME_MAX = 100;
 export interface UpdateSessionRequest {
   /** The new name: trimmed, at most SESSION_NAME_MAX characters, no control characters. */
   name?: string;
+  /**
+   * The new base branch: a local branch, or one of origin's or upstream's, named without its remote.
+   * Not for a review or a session with a PR, whose base is the PR's.
+   */
+  baseBranch?: string;
 }
 
 export interface AttachDatapackRequest {
@@ -1965,7 +2057,11 @@ export type TermServerMessage =
 //        or when the project is closed)
 // PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in AgentK and its Meko conversation; the
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
-//        long name or one with control characters, 409 for an archived session)
+//        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
+//        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
+//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone)
+// GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
+//        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
@@ -2015,6 +2111,8 @@ export type TermServerMessage =
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
+// GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
+// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in PR & Review, or dismiss)
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
 //                                                           a `meko` change is checked against Meko before it's saved;

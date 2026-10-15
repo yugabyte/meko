@@ -435,7 +435,7 @@ export class ProjectService {
       const next = { ...toProject(this.db, r).settings, ...req.settings };
       if (!next.branchPrefix.trim()) throw new HttpError(400, 'The branch prefix can\'t be empty.');
       if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
-        throw new HttpError(400, 'Reviewer must be All reviewers, AgentK + People or People only.');
+        throw new HttpError(400, 'Reviewer must be AgentK only, AgentK + People, All reviewers or People only.');
       }
       if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);
@@ -596,7 +596,7 @@ export class ProjectService {
       throw new HttpError(502, `Meko couldn't save it: ${errMsg(e)}. Try again.`);
     }
     markGap(this.db, id, gap.key, { kind: 'teach', text, datapack: dp.name });
-    return findGap(this.db, id, gap.key) ?? { ...gap, state: 'taught', markedAt: Date.now(), taught: { text, datapack: dp.name, at: Date.now() } };
+    return findGap(this.db, id, gap.key) ?? { ...gap, state: 'taught', markedAt: Date.now(), taught: { text, datapack: dp.name, at: Date.now(), session: null }, dismissal: null };
   }
 
   /** The project's question with a key, or a 404. */

@@ -36,6 +36,9 @@ import type {
   UsageOverview,
   RepoBranches,
   ReposResponse,
+  HeldReview,
+  HeldReviewsRequest,
+  HeldReviewsResult,
   PrReviewers,
   RepoInfo,
   ReviewablePrs,
@@ -196,6 +199,7 @@ export const api = {
   openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
+  baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number) =>
     `/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}`,
@@ -210,6 +214,8 @@ export const api = {
     request<ReviewComment>('PATCH', `/api/sessions/${enc(id)}/comments/${enc(cid)}`, { body }),
   deleteComment: (id: string, cid: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/comments/${enc(cid)}`),
   sendComments: (id: string) => post<SendCommentsResult>(`/api/sessions/${enc(id)}/comments/send`),
+  heldReviews: (id: string) => get<HeldReview[]>(`/api/sessions/${enc(id)}/held-reviews`),
+  decideHeldReviews: (id: string, b: HeldReviewsRequest) => post<HeldReviewsResult>(`/api/sessions/${enc(id)}/held-reviews`, b),
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
   approveDesign: (id: string, b?: DesignAnswersRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/approve-design`, b),
   reviseDesign: (id: string, b: DesignAnswersRequest) => post<void>(`/api/sessions/${enc(id)}/design/answers`, b),

@@ -773,7 +773,7 @@ function UpdatesTab({ initial }: { initial: UpdateStatus }) {
         </button>
         {u.available && (
           <button className="btn primary" disabled={!!busy || u.applying} onClick={() => run('apply')}>
-            {busy === 'apply' || u.applying ? <Busy label="Updating" /> : `Update to v${u.latest}`}
+            {busy === 'apply' || u.applying ? <Busy label="Updating" /> : 'Update to the latest version'}
           </button>
         )}
         {u.releaseUrl && (

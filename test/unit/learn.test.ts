@@ -4,7 +4,7 @@ import { coveredText, dedupPrompt, firstJson, machineSpecific, memoryText, parse
 describe('the learn step', () => {
   it('reads the facts from a reply, whatever wraps the JSON', () => {
     const json = '{"facts":[{"kind":"gotcha","component":"src/server/db.ts","text":"Migrations are append-only."}]}';
-    const fact = { kind: 'gotcha', component: 'src/server/db.ts', text: 'Migrations are append-only.' };
+    const fact = { kind: 'gotcha', component: 'src/server/db.ts', text: 'Migrations are append-only.', answers: [] };
     expect(parseFacts(json)).toEqual([fact]);
     expect(parseFacts('Here they are:\n```json\n' + json + '\n```\nDone.')).toEqual([fact]);
     expect(parseFacts('{"facts":[]}')).toEqual([]);
@@ -13,19 +13,20 @@ describe('the learn step', () => {
     expect(parseFacts('{"notes":[]}')).toBeNull();
   });
 
-  it('keeps only facts with text, an unknown kind read as how it works, long text cut', () => {
+  it('keeps only facts with text, an unknown kind read as how it works, long text cut, and answers to questions it was offered', () => {
     const facts = parseFacts(JSON.stringify({ facts: [
-      { kind: 'trivia', text: '  The cache key includes the model.  ' },
+      // Three questions were offered: numbers outside 1-3, repeats and non-integers are dropped.
+      { kind: 'trivia', text: '  The cache key includes the model.  ', answers: [2, 0, 4, 2, 1.5, '3', 3] },
       { kind: 'gotcha', component: 'x' },
       { text: 'y'.repeat(5000) },
       'not an object',
       // Named like an object's own property: still unknown.
       ...['constructor', 'toString', '__proto__', 'hasOwnProperty'].map((kind) => ({ kind, text: 'x' })),
-    ] }));
+    ] }), 3);
     expect(facts).toEqual([
-      { kind: 'how-it-works', component: '', text: 'The cache key includes the model.' },
-      { kind: 'how-it-works', component: '', text: 'y'.repeat(2000) },
-      ...Array.from({ length: 4 }, () => ({ kind: 'how-it-works', component: '', text: 'x' })),
+      { kind: 'how-it-works', component: '', text: 'The cache key includes the model.', answers: [2, 3] },
+      { kind: 'how-it-works', component: '', text: 'y'.repeat(2000), answers: [] },
+      ...Array.from({ length: 4 }, () => ({ kind: 'how-it-works', component: '', text: 'x', answers: [] })),
     ]);
   });
 
@@ -79,10 +80,10 @@ describe('the learn step', () => {
     expect(p).toContain('{"decisions":[{"n":1,"action":"add|skip|update"');
   });
 
-  it('reads the decisions by fact number; an unknown action adds', () => {
-    const d = parseDecisions('{"decisions":[{"n":1,"action":"skip"},{"n":"2","action":"update","id":"m1","text":" New text. "},{"n":3,"action":"maybe"},{"n":0,"action":"skip"}]}');
+  it('reads the decisions by fact number, with the memory a skip or an update names; an unknown action adds', () => {
+    const d = parseDecisions('{"decisions":[{"n":1,"action":"skip","id":"m9"},{"n":"2","action":"update","id":"m1","text":" New text. "},{"n":3,"action":"maybe"},{"n":0,"action":"skip"}]}');
     expect(d && [...d]).toEqual([
-      [1, { action: 'skip', id: null, text: null }],
+      [1, { action: 'skip', id: 'm9', text: null }],
       [2, { action: 'update', id: 'm1', text: 'New text.' }],
       [3, { action: 'add', id: null, text: null }],
     ]);

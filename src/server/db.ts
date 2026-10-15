@@ -547,6 +547,51 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (project_id, query_key)
   );
   `,
+  // 35: the learn step addresses What Meko doesn't know (learn.ts). meko_gap_marks: the session
+  // whose learn step taught or dismissed a question (NULL: a person did), and for a dismissal by
+  // one, the saved memory that already said the answer; and a person's own latest dismissal and
+  // teach (person_dismissed_at, person_taught_at), which a learn step's marks don't overwrite, for
+  // the usage report (every mark so far was a person's). meko_learns: the questions a step offered
+  // the fork, and how many it marked taught or dismissed.
+  `
+  ALTER TABLE meko_gap_marks ADD COLUMN taught_session TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN dismissed_session TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN dismissed_memory TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN person_dismissed_at INTEGER;
+  ALTER TABLE meko_gap_marks ADD COLUMN person_taught_at INTEGER;
+  UPDATE meko_gap_marks SET person_dismissed_at = dismissed_at, person_taught_at = taught_at;
+  ALTER TABLE meko_learns ADD COLUMN questions INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE meko_learns ADD COLUMN taught INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE meko_learns ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;
+  `,
+  // 36: reviews held for the user to send to AgentK or dismiss (heldreviews.ts), one row per
+  // review on the session's PR: what the sheet shows (body, inline comments cut to 50) and the
+  // REST id the prompt names. Projects without a reviewer mode keep AgentK + People, the default
+  // they had: new projects default to AgentK only. `held-reviews-since`: when holding began, since
+  // People only never marked AgentK's reviews seen, so its earlier rounds aren't held all at once.
+  `
+  CREATE TABLE held_reviews (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    review_id TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    db_id INTEGER,
+    author TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    body TEXT NOT NULL,
+    url TEXT NOT NULL,
+    comments_json TEXT NOT NULL DEFAULT '[]',
+    more_comments INTEGER NOT NULL DEFAULT 0,
+    submitted_at TEXT NOT NULL,
+    held_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'held',
+    decided_at INTEGER,
+    PRIMARY KEY (session_id, review_id)
+  );
+  UPDATE projects SET settings_json = json_set(CASE WHEN json_valid(settings_json) THEN settings_json ELSE '{}' END, '$.reviewer', 'agentk-people')
+    WHERE NOT json_valid(settings_json) OR json_type(settings_json, '$.reviewer') IS NULL;
+  INSERT OR REPLACE INTO kv(key, value) VALUES ('held-reviews-since', CAST(CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS TEXT));
+  `,
 ];
 
 export function openDb(path: string): Db {

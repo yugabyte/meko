@@ -269,6 +269,48 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(() => env.core.sessions.rename(s.id, { name: 'Fourth' })).toThrow(expect.objectContaining({ status: 409 }));
   });
 
+  it("changes a session's base to a branch it can be compared with, and refuses one it can't have", async () => {
+    const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'ignore' });
+    // A release branch one file past main, and a branch with no history in common.
+    g(env.repo, 'checkout', '-q', '-b', 'rel');
+    writeFileSync(join(env.repo, 'rel.txt'), 'release\n');
+    g(env.repo, 'add', '.');
+    g(env.repo, 'commit', '-q', '-m', 'release');
+    g(env.repo, 'checkout', '-q', '--orphan', 'alone');
+    g(env.repo, 'commit', '-q', '--allow-empty', '-m', 'alone');
+    g(env.repo, 'checkout', '-q', 'main');
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Backport', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    expect(await env.core.sessions.baseBranches(s.id)).toEqual(expect.arrayContaining(['main', 'rel', 'alone']));
+    expect(await env.core.sessions.baseBranches(s.id)).not.toContain(s.branch);
+
+    // Claude moves the branch onto rel and works there: against main, rel's file shows too.
+    g(s.worktreePath, 'reset', '-q', '--hard', 'rel');
+    writeFileSync(join(s.worktreePath, 'fix.txt'), 'fix\n');
+    g(s.worktreePath, 'add', '.');
+    g(s.worktreePath, 'commit', '-q', '-m', 'fix');
+    await env.core.sessions.refreshDiff(s.id);
+    expect(env.core.sessions.get(s.id).diffStat).toEqual({ files: 2, added: 2, removed: 0 });
+
+    const moved = await env.core.sessions.edit(s.id, { baseBranch: ' rel ' });
+    expect(moved).toMatchObject({ baseBranch: 'rel', name: 'Backport', diffStat: { files: 1, added: 1, removed: 0 } });
+    expect((await env.core.projects.home(p.id)).activity.find((a) => a.kind === 'base')).toMatchObject({ text: 'Base changed from main to rel' });
+
+    const refused = async (req: Parameters<typeof env.core.sessions.edit>[1], status: number) =>
+      expect(env.core.sessions.edit(s.id, req)).rejects.toMatchObject({ status });
+    await refused({ baseBranch: 'nope' }, 400);
+    await refused({ baseBranch: '' }, 400);
+    await refused({ baseBranch: 'alone' }, 400);
+    await refused({ baseBranch: s.branch }, 400); // its own branch: Discard would think nothing is unpushed
+    await refused({ baseBranch: 'main', name: ' ' }, 400); // a bad name changes neither
+    run(env.core.db, 'UPDATE sessions SET pr_number = 7 WHERE id = ?', s.id);
+    await refused({ baseBranch: 'main' }, 409);
+    run(env.core.db, "UPDATE sessions SET pr_number = NULL, kind = 'review-pr' WHERE id = ?", s.id);
+    await refused({ baseBranch: 'main' }, 409);
+    expect(env.core.sessions.get(s.id).baseBranch).toBe('rel');
+  });
+
   it("searches Meko for the task when a session is created, and gives Claude what it found at SessionStart", async () => {
     const p = await newProject();
     env.meko.search = async (...args: unknown[]) => {
@@ -442,7 +484,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
       { path: 'draft.txt', kind: 'untracked', added: 2, uncommitted: true },
     ]);
     await env.core.sessions.refreshDiff(s.id);
-    expect(env.core.sessions.get(s.id).diffStat).toEqual({ added: 3, removed: 0 });
+    expect(env.core.sessions.get(s.id).diffStat).toEqual({ files: 2, added: 3, removed: 0 });
     expect(await env.core.sessions.discardCheck(s.id)).toEqual({ worktreeExists: true, uncommittedFiles: 1, unpushedCommits: 1 });
 
     await env.core.sessions.action(s.id, 'discard', { skipLearn: true });

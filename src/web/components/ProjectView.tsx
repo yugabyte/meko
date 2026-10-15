@@ -17,8 +17,9 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
+import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
@@ -108,6 +109,8 @@ export function ProjectView({
   const [sharing, setSharing] = useState(false);
   // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
   const [asking, setAsking] = useState(false);
+  // The reviews held for the user, opened from the stage bar's Review gate.
+  const [heldOpen, setHeldOpen] = useState(false);
   // The session whose worktree path was just copied from the footer, for 2 s from the last copy
   // (each copy is a new object, so another click restarts the timer).
   const [copiedPath, setCopiedPath] = useState<{ id: string } | null>(null);
@@ -122,6 +125,7 @@ export function ProjectView({
     setSheet(false);
     setSharing(false);
     setAsking(false);
+    setHeldOpen(false);
     setQuestionsAt(0);
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
@@ -167,6 +171,8 @@ export function ProjectView({
   };
 
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
+  const changedFiles = session?.diffStat?.files ?? 0;
+  const filesText = `${changedFiles.toLocaleString()} ${changedFiles === 1 ? 'file' : 'files'}`;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
@@ -179,12 +185,11 @@ export function ProjectView({
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.configured;
-  // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
-  const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
+  const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   const learnDisabled = acting || !!session?.busy || !!session?.learning;
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
-  const learnTo = canLearn && dedicated ? dedicated.name : null;
+  const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
@@ -319,6 +324,7 @@ export function ProjectView({
           onMove={onMove}
           onOpenPr={onOpenPr}
           onShare={canShare ? () => setSharing(true) : undefined}
+          onHeld={() => setHeldOpen(true)}
           acting={acting}
           actions={
             <>
@@ -400,8 +406,9 @@ export function ProjectView({
               className={cx('foot-btn', panel === 'changes' && 'on')}
               onClick={() => toggle('changes')}
               aria-expanded={panel === 'changes'}
-              title={`Show every file changed on this branch since ${session.baseBranch}`}
+              title={`Show the files changed on this branch since ${session.baseBranch} (${filesText})`}
             >
+              {!mobile && `${filesText} · `}
               <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>
               {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>
@@ -438,6 +445,10 @@ export function ProjectView({
                   }
                   : undefined
               }
+              onHeld={() => {
+                setSheet(false);
+                setHeldOpen(true);
+              }}
               acting={acting}
               actions={null}
               reasons
@@ -469,6 +480,7 @@ export function ProjectView({
         />
       )}
       {session && asking && <AskSheet session={session} onClose={() => setAsking(false)} />}
+      {session && heldOpen && <HeldReviewsSheet session={session} onClose={() => setHeldOpen(false)} />}
       {session && sharing && dedicated && (
         <ShareDialog
           projectId={project.id}
@@ -541,6 +553,7 @@ function StageBar({
   onMove,
   onOpenPr,
   onShare,
+  onHeld,
   learnTo = null,
   acting = false,
   actions,
@@ -556,6 +569,8 @@ function StageBar({
   onOpenPr: () => void;
   /** Opens the Share dialog at the PR's reviewers; absent when the project can't be shared from here. */
   onShare?: () => void;
+  /** Opens the reviews held for the user. */
+  onHeld: () => void;
   /** A session action is in flight. */
   acting?: boolean;
   actions: ReactNode;
@@ -657,8 +672,14 @@ function StageBar({
       break;
     case 'review': {
       const merge = mergeGate(session);
+      const held = session.heldReviews;
       gate = (
         <span className="gate-group">
+          {held.count > 0 && (
+            <button className="btn small held-btn" onClick={onHeld} title={`Held for you: ${held.authors.map((a) => `@${a}`).join(', ')}. Send to AgentK or dismiss.`}>
+              {held.count === 1 ? '1 review for you' : `${held.count} reviews for you`}
+            </button>
+          )}
           {onShare && session.prNumber && (
             <button className="btn small" onClick={onShare} title="Share this project with the PR's reviewers, so they can review it with AgentK">
               Share with reviewers

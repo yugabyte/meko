@@ -197,10 +197,10 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 34 (What Meko doesn't know: its columns go with the tables below), 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 36 (held reviews), 34 (What Meko doesn't know: its columns go with the tables below), 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
-    db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE meko_gap_marks');
+    db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE meko_gap_marks; DROP TABLE held_reviews');
     for (const c of ['queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['md_hash', 'html_hash', 'source', 'source_told', 'questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {

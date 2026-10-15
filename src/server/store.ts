@@ -1,9 +1,10 @@
 import { commentCounts } from './comments.js';
 import { all, get, run, type Db } from './db.js';
+import { heldSummary } from './heldreviews.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, CiState, DatapackRef, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, CiState, DatapackRef, DiffStat, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -17,7 +18,7 @@ export const STORED_TASK_KIND: StoredKind = 'plan';
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
-  reviewer: 'agentk-people',
+  reviewer: 'agentk',
   reviewerLogin: 'yb-agentk-dev',
   branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
@@ -134,7 +135,7 @@ export function parseSettings(json: string): ProjectSettings {
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
-  // A mode from an older version ('agentk') falls back to the default.
+  // A mode this version doesn't know (from a newer one) falls back to the default.
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
   return s;
 }
@@ -221,7 +222,7 @@ export interface SessionRuntime {
   usage: TokenUsage;
   startup: StartupState | null;
   busy: boolean;
-  diffStat: { added: number; removed: number } | null;
+  diffStat: DiffStat | null;
   canMerge: boolean;
   mergeBlockers: string[];
   mergeQueueable: boolean;
@@ -270,6 +271,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     diffStat: rt.diffStat,
     comments: commentCounts(db, r.id),
     designQuestions: { open: openQuestions },
+    heldReviews: heldSummary(db, r.id, r.pr_number),
     reviewingPr: reviewingPr(r, design ?? null),
     usage: rt.usage,
     contextPercent: rt.contextPercent,
