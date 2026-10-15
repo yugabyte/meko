@@ -482,6 +482,48 @@ jobs:
           helm unittest deploy/helm/meko-foundation
           helm unittest deploy/helm/meko-foundation-crd
 
+      # The publish path only ever runs on main, so without this a broken
+      # version derivation or a chart that will not package is found after the
+      # merge. --dry-run packages both charts and pushes nothing, which is the
+      # same code path minus the registry.
+      #
+      # This checkout is depth 1, so the derived patch is always .0 here — the
+      # day's commit count needs history, which only the publishing workflow
+      # fetches. What this proves is that the version PARSES and both charts
+      # package under it, not that the counting is right.
+      # The CRD chart's version is the only thing that makes a schema change
+      # reach consumers: publishing exits 3 on an unchanged version, and the
+      # publishing workflow tolerates exactly that. So a schema edit that
+      # forgets the bump publishes nothing and stays green, while the operator
+      # chart from the same run expects the new schema. The registry cannot be
+      # consulted from a PR, so compare against main instead.
+      - name: A CRD schema change bumps the CRD chart version
+        working-directory: ${{ github.workspace }}
+        run: |
+          base="origin/${{ github.base_ref || 'main' }}"
+          git fetch --depth=1 origin "${{ github.base_ref || 'main' }}" >/dev/null 2>&1 || true
+          crd=foundation/deploy/helm/meko-foundation-crd
+          if git diff --quiet "$base" -- "$crd/templates/"; then
+            echo "the CRD templates are unchanged; nothing to bump"
+            exit 0
+          fi
+          before=$(git show "$base:$crd/Chart.yaml" | awk '/^version:/ { print $2 }')
+          after=$(awk '/^version:/ { print $2 }' "$crd/Chart.yaml")
+          if [ "$before" = "$after" ]; then
+            echo "::error::$crd/templates changed but Chart.yaml version is still $after."
+            echo "::error::Publishing refuses an existing version, so the new schema would never"
+            echo "::error::be published while the operator chart from the same run expects it."
+            exit 1
+          fi
+          echo "CRD schema changed and the chart version moved $before -> $after"
+
+      - name: Charts package under the derived version
+        run: |
+          echo "version: $(scripts/version.sh version)"
+          echo "yba:     $(scripts/version.sh yba)"
+          deploy/helm/publish-chart.sh --dry-run deploy/helm/meko-foundation
+          deploy/helm/publish-chart.sh --dry-run deploy/helm/meko-foundation-crd
+
   meko_ycp_e2e:
     name: Meko YCP — build & deploy (kind)
     needs: changes

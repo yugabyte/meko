@@ -9,8 +9,10 @@ foundation:
 
 image:
   repository: quay.io/yugabyte/meko-foundation
-  # Defaults to the chart's appVersion, which is `latest`. Pin a `custom-<sha>`
-  # — the only other tag published — for an install that does not move.
+  # Defaults to the chart's appVersion. On a PUBLISHED chart that is the
+  # version built in the same run, so leaving this empty is correct and gets a
+  # matching image. In a checkout it is `latest`, because nothing stamps it
+  # there. Set this only to override.
   tag: ""
   pullPolicy: IfNotPresent
 # Names Secrets in this namespace, for a private registry.

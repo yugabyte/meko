@@ -222,8 +222,13 @@ jobs:
           # truncates to 12 and the deploy job pins THAT, so computing it twice
           # is how the image lands under a tag nothing references.
           TAG='${{ steps.tag.outputs.tag }}'
+          # No --release: this checkout is depth 1, so version.sh would return
+          # .0 for every build of the day, and pushing that would overwrite the
+          # <version> a published chart names through appVersion — installing
+          # the chart would then run whatever PR built last. custom-<sha> is
+          # all this lane pins.
           IMAGE="$QUAY_NS/meko-foundation" SHA="${TAG#custom-}" \
-            foundation/build-image.sh --no-latest
+            foundation/build-image.sh
 
   foundation:
     name: Amp foundation — deploy on an operator-managed universe

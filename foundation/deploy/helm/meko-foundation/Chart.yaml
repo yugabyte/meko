@@ -14,14 +14,36 @@ description: >-
 # making it a subchart would tie a shared object's lifecycle to whichever
 # foundation happened to be installed first.
 type: application
+# Both of these are PLACEHOLDERS for a checkout. publish-chart.sh stamps the
+# real pair onto the published chart — version and appVersion both set to the
+# derived `MAJOR.YYMMDD.PATCH` (scripts/version.sh), which is also the image tag
+# built in that same CI run. So a published chart's appVersion can never name an
+# image that does not exist, and the two cannot drift: one run writes both.
+#
+# The values here serve `helm install ./meko-foundation` from a checkout, and
+# each has to be a tag that EXISTS: `latest` is pushed by every main build,
+# which is why appVersion is not the chart's own version — naming that produced
+# an image nothing ever published, failing at ImagePullBackOff rather than at
+# install.
 version: 0.1.0
-# The image tag falls back to this, so it has to be a tag that EXISTS.
-# build-image.sh pushes exactly two: `custom-<sha>` for every build, and
-# `latest`, which only a build of main may move. There is no semver tag to name
-# here, and naming the chart's own version produced an image nothing ever
-# published — a default that fails at ImagePullBackOff rather than at install.
-# Pin image.tag to a `custom-<sha>` for a reproducible install.
 appVersion: "latest"
+annotations:
+  # The YBA/YugabyteDB build the shipped example pins, and therefore the one
+  # `/ci amp_deploy_gke_foundation` deploys WHEN IT RUNS. Not a constraint: the
+  # operator installs whatever `chartVersion` a Foundation names, so one image
+  # serves foundations at different YBA versions.
+  #
+  # What is guaranteed is only that this string equals the example's
+  # `chartVersion` and `ybSoftwareVersion` — TestTheAnnotationMatchesTheExample
+  # compares them. The lane is directive-gated and nightly, so publishing does
+  # NOT prove a universe came up on this build; read it as "the build this
+  # release targets", and the lane's own result for whether it worked.
+  #
+  # It is not the chart version because a Helm version must be SemVer 2 and
+  # `2026.1.3.0-b21` has four numeric parts, which helm rejects outright; an
+  # annotation has no format constraint and `helm show chart` prints
+  # annotations first.
+  meko.yugabyte.com/tested-with-yba: "2026.1.3.0-b21"
 keywords:
   - meko
   - foundation

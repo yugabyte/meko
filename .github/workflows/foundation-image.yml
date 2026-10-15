@@ -1,8 +1,15 @@
-name: Foundation image
+name: Foundation image and charts
 
 # Builds the foundation CLI image (foundation/cmd/foundation, with kubectl and
-# helm) and pushes it to Quay (quay.io/yugabyte/meko-foundation), so a cluster
-# can run the deployer without a checkout of this private repo.
+# helm) and pushes it to Quay (quay.io/yugabyte/meko-foundation), then publishes
+# both helm charts to oci://quay.io/yugabyte/charts — so a consumer can install
+# the operator without a checkout of this private repo.
+#
+# The image and the meko-foundation chart are published in ONE job on purpose.
+# That chart is installed bare, with the image tag falling back to appVersion,
+# so the two have to carry the same number and the only way to guarantee that
+# is to write both from one commit in one run. (Amp splits them, because every
+# amp deploy passes --set imageTag and its appVersion is allowed to go stale.)
 #
 # A thin wrapper around foundation/build-image.sh: the script is the source of
 # truth for how the image is built and tagged, and stays runnable locally
@@ -35,13 +42,23 @@ permissions:
 
 jobs:
   image:
-    name: Build & push foundation image
+    name: Build & push foundation image and charts
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # fetch-depth: 0 is load-bearing. scripts/version.sh derives the patch
+      # from how many foundation commits landed earlier the same day, and the
+      # default depth-1 checkout has no history to count — it would return .0
+      # for every build of the day and the second publish would collide.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v4
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.18.6
 
       # Push only when the robot credentials are present; otherwise build-only so
       # the job is still a real compile+package check on forks and before setup.
@@ -49,17 +66,50 @@ jobs:
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
         run: |
-          # Only a main build may move the floating `latest` tag, so a dispatch
-          # from a branch cannot become what a no-tag deploy pulls.
-          latest=()
-          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            latest=(--no-latest)
-            echo "::notice::not on main — tagging custom-<sha> only, leaving :latest alone"
+          # --release is what makes the version tags this job's alone to write;
+          # every other caller of build-image.sh gets custom-<sha> only. Only a
+          # main build adds --floating, so a branch dispatch cannot become what
+          # a no-tag deploy pulls.
+          tags=(--release)
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            tags+=(--floating)
+          else
+            echo "::notice::not on main — leaving :latest and :yba-* alone"
           fi
           if [ -n "${QUAY_TOKEN}" ]; then
             echo "::notice::pushing quay.io/yugabyte/meko-foundation"
-            ./foundation/build-image.sh "${latest[@]}"
+            ./foundation/build-image.sh "${tags[@]}"
           else
             echo "::warning::QUAY_AMP_TOKEN not set — building the foundation image but skipping the push"
-            ./foundation/build-image.sh --no-push "${latest[@]}"
+            ./foundation/build-image.sh --no-push "${tags[@]}"
           fi
+
+      # After the image, never before: publish-chart.sh refuses to publish a
+      # chart whose image is not in the registry, because a chart naming a
+      # missing tag installs cleanly and then sits in ImagePullBackOff.
+      - name: Publish charts
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          dry=()
+          if [ -z "${QUAY_TOKEN}" ] || [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            dry=(--dry-run)
+            echo "::warning::QUAY_AMP_TOKEN not set or not on main — packaging the charts, nothing pushed"
+          fi
+          ./foundation/deploy/helm/publish-chart.sh "${dry[@]}" foundation/deploy/helm/meko-foundation
+
+          # The CRD chart is versioned on its own Chart.yaml, so most runs have
+          # nothing to publish for it. ONLY that case may pass: exit 3 means
+          # "this exact version is already in the registry", and anything else
+          # — a missing Quay repo, an ambiguous 401, a failed push — fails the
+          # step. A bare `|| echo ::notice::` hid all of those behind the same
+          # green line.
+          set +e
+          ./foundation/deploy/helm/publish-chart.sh "${dry[@]}" foundation/deploy/helm/meko-foundation-crd
+          rc=$?
+          set -e
+          case "$rc" in
+            0) ;;
+            3) echo "::notice::meko-foundation-crd unchanged at its published version" ;;
+            *) exit "$rc" ;;
+          esac

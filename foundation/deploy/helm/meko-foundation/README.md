@@ -4,13 +4,21 @@ One pod that reads a `Foundation` object and converges a YugabyteDB universe
 onto it, through the YugabyteDB Anywhere Kubernetes operator.
 
 ```bash
+helm registry login quay.io            # the charts are private, like the images
+
 # once per cluster — the CRD is cluster-scoped and shared
-helm install meko-foundation-crd ./meko-foundation-crd
+helm install meko-foundation-crd oci://quay.io/yugabyte/charts/meko-foundation-crd
 
 # once per foundation
-helm install fdn ./meko-foundation --namespace amp --create-namespace
+helm install fdn oci://quay.io/yugabyte/charts/meko-foundation \
+  --namespace amp --create-namespace
 kubectl -n amp apply -f foundation-cr.yaml
 ```
+
+No `--set image.tag`: the chart's `appVersion` names the image built in the same
+CI run, so a bare install runs a matching one. Installing from a checkout
+(`helm install fdn ./meko-foundation`) is a developer path and resolves
+`:latest` instead — see [Versions and tags](#versions-and-tags).
 
 The chart does **not** create the `Foundation`. That object is your input, and a
 chart that owned it would revert your edits on the next `helm upgrade`. Start
@@ -109,11 +117,72 @@ the CRD chart does not delete the CRD either — it carries
 `helm.sh/resource-policy: keep`, because deleting a CRD deletes every object of
 that kind on the cluster.
 
+## Versions and tags
+
+The operator's version is **derived from the commit, not declared** —
+`MAJOR.YYMMDD.PATCH` from [`scripts/version.sh`](../../../scripts/version.sh),
+where the patch counts the foundation commits that landed earlier that UTC day.
+There is no VERSION file to bump: amp has that scheme and its file has two
+commits in its whole history, so a number that depends on somebody remembering
+to move it goes stale — and a stale number that names an image tag is the
+failure this avoids.
+
+One run of `foundation-image.yml` writes all of these from one commit:
+
+| artifact | value | |
+|---|---|---|
+| image `0.261014.3` | **pin this** | immutable; only the publishing run writes it |
+| image `0.261014.3-<sha>` | the same build, carrying the commit | immutable |
+| image `custom-<sha>` | every build, including PR lanes | immutable |
+| image `latest` | what a checkout install resolves to | floating, main only |
+| image `yba-2026.1.3.0-b21` | the newest build targeting that YBA | floating — **do not pin** |
+
+Only `.github/workflows/foundation-image.yml` passes `build-image.sh --release`,
+which is what makes the version tags its alone to write. Every other caller —
+the GKE lane builds this image on each `/ci amp_deploy_gke_foundation` run, with
+push credentials — gets `custom-<sha>` only. Ungated, those runs overwrote the
+version a published chart names through `appVersion`, so installing the chart
+ran a PR branch's code.
+| chart `meko-foundation` | `version` and `appVersion` both `0.261014.3` | the version IS the OCI tag |
+| chart `meko-foundation-crd` | its own `version`, bumped with the schema | cluster-scoped and shared, so a bump means the schema moved |
+
+```bash
+helm show chart oci://quay.io/yugabyte/charts/meko-foundation --version 0.261014.3
+helm install fdn oci://quay.io/yugabyte/charts/meko-foundation                     # newest
+helm install fdn oci://quay.io/yugabyte/charts/meko-foundation --version 0.261014.3 # pinned
+```
+
+### Which YBA is it qualified with
+
+`helm show chart` prints it first:
+
+```
+annotations:
+  meko.yugabyte.com/tested-with-yba: 2026.1.3.0-b21
+```
+
+**The build this release targets, not a constraint.** The operator installs
+whatever `chartVersion` the `Foundation` names — the YBA version is an input to
+the CR, and two foundations on one cluster can run different ones from the same
+pod image.
+
+Read it precisely: the annotation is guaranteed to equal the shipped example's
+`chartVersion` and `ybSoftwareVersion`, which a test enforces. It is **not** a
+record that a universe came up on that build — `/ci amp_deploy_gke_foundation`
+is directive-gated and nightly, and publishing does not wait on it. For whether
+it actually worked, read that lane's result.
+
+It is an annotation rather than the chart version because a Helm version must be
+SemVer 2, and `2026.1.3.0-b21` has four numeric parts — helm rejects it
+(`Error: invalid semantic version`). `2026.1.3-b21` does parse, but `-b21` makes
+it a *prerelease*, which helm skips without `--devel`, so a bare `helm install`
+would resolve nothing at all. An annotation has no format constraint.
+
 ## Values worth knowing
 
 | Key | Default | |
 |---|---|---|
-| `image.tag` | the chart's `appVersion`, `latest` | `build-image.sh` publishes only `latest` (moved by a build of main) and `custom-<sha>`; there is no semver tag. Pin a `custom-<sha>` for an install that does not move under you. |
+| `image.tag` | the chart's `appVersion` | Unset is right for a published chart — its `appVersion` is the image from the same run. Set it only to override. See [Versions and tags](#versions-and-tags). |
 | `foundation.name` | `foundation` | The object this pod watches. One pod per Foundation: two against one object would race each other's helm releases. |
 | `reconcile.poll` | 30s | How often the object is re-read. Doubles as the debounce. |
 | `reconcile.resync` | off | Re-converge a settled foundation on a timer. Off because a converge runs `helm upgrade`, which would cut a release revision every interval for nothing. |

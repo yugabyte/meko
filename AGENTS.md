@@ -146,6 +146,38 @@ The CLI also ships as **`quay.io/yugabyte/meko-foundation`**, carrying `kubectl`
 a private repo and `go install` cannot work at all — the module path `meko/foundation` is
 not a resolvable URL. CI and local development still `go run`.
 
+**The image and both charts are published from ONE run, under a version derived from the
+commit**: `MAJOR.YYMMDD.PATCH` (`foundation/scripts/version.sh`), where the patch counts
+the foundation commits that landed earlier that UTC day. There is no VERSION file — amp
+has that scheme and `amp/VERSION` has two commits in its entire history, so a number that
+needs remembering to bump goes stale, and a stale number naming an image tag is the
+failure this avoids. One run because `meko-foundation` is installed BARE: its image tag
+falls back to `appVersion`, so chart and image must carry the same string, which only a
+single run writing both can guarantee. (Amp splits them — every amp deploy passes
+`--set imageTag`, so its `appVersion` is allowed to drift.) `meko-foundation-crd` is the
+exception: cluster-scoped and shared, so it is versioned on its own `Chart.yaml` and a
+bump has to mean the schema changed.
+
+**The YBA build a release is qualified with is an ANNOTATION, not the version** —
+`meko.yugabyte.com/tested-with-yba`, which `helm show chart` prints first. It cannot be
+the chart version: helm requires SemVer 2 and `2026.1.3.0-b21` has four numeric parts
+(`Error: invalid semantic version`), while `2026.1.3-b21` parses only as a *prerelease*,
+which helm skips without `--devel` — so a bare `helm install` would resolve nothing. It
+names the build a release *targets*, not one it is restricted to: the YBA version is an
+input to the CR, so one image serves foundations at different YBA versions. What is
+guaranteed is only that the string equals the example's `chartVersion` and
+`ybSoftwareVersion` (`TestTheAnnotationMatchesTheExample`); the GKE lane is
+directive-gated and publishing does not wait on it, so it is NOT evidence a universe came
+up on that build.
+
+**Only the publishing workflow may write the version tags.** `build-image.sh` pushes
+`custom-<sha>` for every caller and gates `<version>`, `<version>-<sha>`, `latest` and
+`yba-*` behind `--release`/`--floating`. The version is derived from the commit, so any
+caller computes the same string — and the GKE lane builds this image on every
+`/ci amp_deploy_gke_foundation` run, with push credentials, at checkout depth 1. Ungated,
+that overwrote the `<version>` a published chart names through `appVersion`, so installing
+the chart ran a PR branch's code. A registry check in `build-image.sh` backs the gate up.
+
 Things a reader will otherwise re-derive the hard way:
 
 - **The Spec IS the rendered body.** The deployer writes nothing into the universe, so the
