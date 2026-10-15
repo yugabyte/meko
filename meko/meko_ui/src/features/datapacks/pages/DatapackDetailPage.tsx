@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { isWorkbenchLmEnabled } from "@/lib/byoc";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderInput, Pencil, PlayCircle, Settings, Share2, Trash2, Upload } from "lucide-react";
@@ -553,15 +554,16 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         to DO with the datapack), gated on the same grant
                         check WorkbenchLM itself uses so viewers never see
                         a link that lands them on an unusable page. */}
-                    {isDatapackGrantEligibleForWorkbenchLM({ grant: datapackGrant }) && (
-                      <DropdownMenuItem
-                        className="gap-2 cursor-pointer focus:bg-muted/20"
-                        onSelect={() => navigate(workbenchLmUrlForDatapack(routeDatapackId))}
-                      >
-                        <PlayCircle className="h-4 w-4 shrink-0" aria-hidden />
-                        Open WorkbenchLM
-                      </DropdownMenuItem>
-                    )}
+                    {isWorkbenchLmEnabled() &&
+                      isDatapackGrantEligibleForWorkbenchLM({ grant: datapackGrant }) && (
+                        <DropdownMenuItem
+                          className="gap-2 cursor-pointer focus:bg-muted/20"
+                          onSelect={() => navigate(workbenchLmUrlForDatapack(routeDatapackId))}
+                        >
+                          <PlayCircle className="h-4 w-4 shrink-0" aria-hidden />
+                          Open WorkbenchLM
+                        </DropdownMenuItem>
+                      )}
                     {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
                       // Free-tier KB-storage cap: disable the item when the
                       // user has hit the byte limit. We can't render a

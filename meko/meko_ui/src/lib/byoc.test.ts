@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isByocEnabled } from "./byoc";
+import { isByocEnabled, isWorkbenchLmEnabled } from "./byoc";
 
 declare global {
   interface Window {
@@ -38,5 +38,19 @@ describe("isByocEnabled", () => {
       withEnv(off);
       expect(isByocEnabled(), off).toBe(false);
     }
+  });
+});
+
+describe("isWorkbenchLmEnabled", () => {
+  it("keeps WorkbenchLM on a hosted deployment", () => {
+    withEnv(undefined);
+    expect(isWorkbenchLmEnabled()).toBe(true);
+    withEnv("false");
+    expect(isWorkbenchLmEnabled()).toBe(true);
+  });
+
+  it("hides WorkbenchLM on a BYOC data plane", () => {
+    withEnv("true");
+    expect(isWorkbenchLmEnabled()).toBe(false);
   });
 });

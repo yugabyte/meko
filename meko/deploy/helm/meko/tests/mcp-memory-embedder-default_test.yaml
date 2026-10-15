@@ -1,0 +1,52 @@
+# Chart defaults with no env preset: memory embedding is Bedrock Titan v1 and the
+# extraction LLM is OpenAI nano.
+suite: mcp-server memory embedder chart defaults
+templates:
+  - templates/meko-mcp-server/deployment.yaml
+  - templates/meko-mcp-server/configmap.yaml
+  - templates/dataplane-secrets.yaml
+set:
+  global.imageRegistry: quay.io/yugabyte
+  mekoMcpServer.image.tag: t
+tests:
+  - it: defaults to Titan v1 embeddings and OpenAI nano extraction
+    template: templates/meko-mcp-server/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDER_PROVIDER
+            value: aws_bedrock
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDER_MODEL
+            value: amazon.titan-embed-text-v1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_PROVIDER
+            value: openai
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_MODEL
+            value: gpt-4.1-nano-2025-04-14
+      # One region for every Bedrock call in the pod: without AWS_REGION, mem0
+      # defaults to us-west-2 and query embedding to us-east-1.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_REGION
+            value: us-east-1
+
+  - it: lets an install pick another Bedrock region for the MCP server
+    template: templates/meko-mcp-server/deployment.yaml
+    set:
+      mekoMcpServer.staticEnv.awsRegion: us-west-2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_REGION
+            value: us-west-2

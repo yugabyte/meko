@@ -24,3 +24,9 @@ export function isByocEnabled(): boolean {
     (readRuntimeEnv("MEKO_ENABLE_BYOC") ?? "").trim().toLowerCase(),
   );
 }
+
+/** WorkbenchLM is hosted-only: on BYOC its MCP calls carry the user's session
+ *  token, which a BYOC MCP server (PAT-only) rejects, so the page cannot work. */
+export function isWorkbenchLmEnabled(): boolean {
+  return !isByocEnabled();
+}

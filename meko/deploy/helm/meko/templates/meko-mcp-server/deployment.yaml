@@ -155,13 +155,18 @@ spec:
                   name: {{ $cm }}
                   key: LANGFUSE_HOST
             - name: LLM_PROVIDER
-              value: "openai"
+              value: {{ $c.staticEnv.llmProvider | quote }}
             - name: LLM_MODEL
               value: {{ $c.staticEnv.llmModel | quote }}
+            {{- /* The memory embedder mem0 uses. EMBEDDER_MODEL is the name the MCP
+                   server reads (mem0_client); the old EMBEDDING_MODEL was ignored and
+                   only worked because it matched mem0's OpenAI default. Defaults to
+                   Bedrock Titan for memory EMBEDDING, which needs dataPlaneSecrets.mcpAws*
+                   rather than an OpenAI key; extraction still follows LLM_PROVIDER. */}}
             - name: EMBEDDER_PROVIDER
-              value: "openai"
-            - name: EMBEDDING_MODEL
-              value: "text-embedding-3-small"
+              value: {{ $c.staticEnv.embedderProvider | quote }}
+            - name: EMBEDDER_MODEL
+              value: {{ $c.staticEnv.embedderModel | quote }}
             - name: MEKO_TKN_AUTH_ENABLED
               value: "true"
             - name: MEKO_MCP_INTERNAL_SECRET

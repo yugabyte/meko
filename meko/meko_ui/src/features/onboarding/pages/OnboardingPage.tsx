@@ -26,6 +26,7 @@ import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { cn } from "@/lib/utils";
+import { isWorkbenchLmEnabled } from "@/lib/byoc";
 import CompleteAccountModal from "@/features/onboarding/components/CompleteAccountModal";
 
 // "How it works" storyboard. Hoisted out of the component so the array
@@ -140,7 +141,22 @@ const STEPS: Array<{
   },
 ];
 
+/** BYOC has no WorkbenchLM, so step 1 offers only the connect-your-agent path. */
+function stepsFor(workbenchLm: boolean): typeof STEPS {
+  if (workbenchLm) return STEPS;
+  return STEPS.map((step) =>
+    step.n === 1
+      ? {
+          ...step,
+          body: "Connect Meko to your existing agentic app.",
+          chips: step.chips?.filter((chip) => chip.label !== "WorkbenchLM"),
+        }
+      : step,
+  );
+}
+
 export default function OnboardingPage() {
+  const workbenchLm = isWorkbenchLmEnabled();
   const navigate = useNavigate();
   const [action, setAction] = useState<"workbenchLm" | "datapacks" | "skip" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -321,7 +337,7 @@ export default function OnboardingPage() {
               </div>
 
               <div className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {STEPS.map((step) => (
+                {stepsFor(workbenchLm).map((step) => (
                   <div
                     key={step.n}
                     className="relative flex flex-col rounded-xl border border-border bg-card/40 p-5"
@@ -404,25 +420,32 @@ export default function OnboardingPage() {
               {/* Two primary lanes — playground (low-commitment) on the
                   left, "connect your own agent" (the real product) on the
                   right with the heavier blue treatment. */}
-              <div className="mx-auto mb-6 grid w-full max-w-3xl grid-cols-1 gap-4 md:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => void finishAndGo("workbenchLm")}
-                  disabled={busy}
-                  className="group flex items-center gap-4 rounded-xl border border-border bg-card/40 p-5 text-left transition-colors hover:border-border/60 hover:bg-card/70 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border bg-background">
-                    <Play className="h-5 w-5 text-foreground" aria-hidden />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-base font-semibold text-foreground">
-                      {action === "workbenchLm" ? "Opening…" : "Try the WorkbenchLM"}
+              <div
+                className={cn(
+                  "mx-auto mb-6 grid w-full max-w-3xl grid-cols-1 gap-4",
+                  workbenchLm && "md:grid-cols-2",
+                )}
+              >
+                {workbenchLm && (
+                  <button
+                    type="button"
+                    onClick={() => void finishAndGo("workbenchLm")}
+                    disabled={busy}
+                    className="group flex items-center gap-4 rounded-xl border border-border bg-card/40 p-5 text-left transition-colors hover:border-border/60 hover:bg-card/70 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border bg-background">
+                      <Play className="h-5 w-5 text-foreground" aria-hidden />
                     </span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">
-                      Sample dataset · no setup
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-base font-semibold text-foreground">
+                        {action === "workbenchLm" ? "Opening…" : "Try the WorkbenchLM"}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        Sample dataset · no setup
+                      </span>
                     </span>
-                  </span>
-                </button>
+                  </button>
+                )}
 
                 {/* Primary CTA. Tinted-fill treatment over the brand hue —
                     a soft orange panel in both modes (opacity does the

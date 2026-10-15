@@ -53,6 +53,15 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		"--set-string inferenceGateway.image.tag=",
 		"--set dataPlaneSecrets.awsAccessKeyId=",
 		"--set dataPlaneSecrets.awsSecretAccessKey=",
+		// The MCP server embeds KB/conversation queries and (under the BYOC preset's
+		// EMBEDDER_PROVIDER=aws_bedrock) memories with Bedrock, so the hint must carry
+		// its credential too or memory_add/search and those searches cannot embed.
+		"--set dataPlaneSecrets.mcpAwsAccessKeyId=",
+		"--set dataPlaneSecrets.mcpAwsSecretAccessKey=",
+		// One Bedrock region for memory and KB/conversation query embedding;
+		// unset, the two fall back to different regions.
+		"BEDROCK_REGION=us-east-1",
+		`--set-string mekoMcpServer.staticEnv.awsRegion="${BEDROCK_REGION}"`,
 		// values-byoc.yaml also turns langfuse on with migrate.enabled, so a
 		// fresh install needs its seven dataPlaneSecrets.langfuse* values or it
 		// fails at dataplane-secrets.yaml's own fail-fast guard.

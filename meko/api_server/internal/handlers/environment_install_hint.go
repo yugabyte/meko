@@ -132,8 +132,13 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	// feature. In the header rather than inline for the reason above: the control
 	// plane cannot know them, and a command carrying a placeholder looks pasteable
 	// and is not.
-	fmt.Fprintf(&b, "BEDROCK_KEY=<aws access key id>        # inference gateway, bedrock provider\n")
-	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>\n")
+	fmt.Fprintf(&b, "BEDROCK_KEY=<aws access key id>        # inference gateway + MCP-server embedding, bedrock\n")
+	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>  # principal needs bedrock:InvokeModel on the chat and Titan models\n")
+	// One region for every embedding call the MCP server makes. Unset, mem0
+	// (memories) and the query embedder (KB/conversation search) fall back to
+	// different regions, and Bedrock model access is enabled per region.
+	fmt.Fprintf(&b, "BEDROCK_REGION=us-east-1       # Titan v1 must be enabled here: memory, KB and conversation\n")
+	fmt.Fprintf(&b, "                               # embedding from the MCP server all call Bedrock in this region\n")
 	fmt.Fprintf(&b, "QUAY_USER=<robot name>         # e.g. yugabyte+something\n")
 	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n")
 	// The one langfuse field a chart cannot invent for itself: everything else
@@ -200,6 +205,13 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "  --set-string inferenceGateway.image.tag=\"${GW_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
+	// The MCP server embeds KB/conversation search queries AND, under values-byoc's
+	// EMBEDDER_PROVIDER=aws_bedrock, memories with Bedrock Titan. Without these its
+	// embed calls have no credentials, so KB/conversation search answer empty and
+	// memory_add / memory_search fail outright. Same Bedrock principal as the gateway.
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.mcpAwsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.mcpAwsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string mekoMcpServer.staticEnv.awsRegion=\"${BEDROCK_REGION}\" \\\n")
 	// values-byoc.yaml turns langfuse on with migrate.enabled — a fresh install
 	// fails at dataplane-secrets.yaml's own fail-fast guard without these seven
 	// crypto fields AND the S3 event store below.

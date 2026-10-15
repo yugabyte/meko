@@ -46,7 +46,7 @@ import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
-import { isByocEnabled } from "@/lib/byoc";
+import { isByocEnabled, isWorkbenchLmEnabled } from "@/lib/byoc";
 import { canSignOut, useAuthConfig } from "@/features/auth/authConfig";
 import { useProjectsEnabled } from "@/lib/projectsFeature";
 import { SidebarDatapackList } from "@/features/layout/SidebarDatapackList";
@@ -394,21 +394,23 @@ export default function Sidebar() {
             </>
           )}
 
-          <NavLink
-            to={ROUTES.workbenchLm}
-            className={cn(
-              "flex items-center rounded-md text-sm font-medium transition-colors",
-              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-              location.pathname === ROUTES.workbenchLm ||
-                location.pathname.startsWith(`${ROUTES.workbenchLm}/`)
-                ? "bg-foreground/10 text-foreground"
-                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-            )}
-            title={isCollapsed ? "WorkbenchLM" : undefined}
-          >
-            <PlayCircle className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-            {!isCollapsed && <span className="animate-in fade-in truncate">WorkbenchLM</span>}
-          </NavLink>
+          {isWorkbenchLmEnabled() && (
+            <NavLink
+              to={ROUTES.workbenchLm}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                location.pathname === ROUTES.workbenchLm ||
+                  location.pathname.startsWith(`${ROUTES.workbenchLm}/`)
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "WorkbenchLM" : undefined}
+            >
+              <PlayCircle className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">WorkbenchLM</span>}
+            </NavLink>
+          )}
 
           {showLabsNav ? (
             <NavLink

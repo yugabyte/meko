@@ -503,6 +503,8 @@ h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
   $EXTRA_VALUES \
   --set-string dataPlaneSecrets.openaiApiKey="${OPENAI_API_KEY:-}" \
+  --set-string dataPlaneSecrets.mcpAwsAccessKeyId="${BEDROCK_KEY:-${AWS_ACCESS_KEY_ID:-}}" \
+  --set-string dataPlaneSecrets.mcpAwsSecretAccessKey="${BEDROCK_SECRET:-${AWS_SECRET_ACCESS_KEY:-}}" \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \

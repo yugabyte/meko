@@ -15,6 +15,7 @@ import LabsSection from "@/features/labs/pages/LabsSection";
 import LabRunnerPage from "@/features/labs/pages/LabRunnerPage";
 import { parseLabRoute } from "@/features/labs/lib/parseLabRoute";
 import { isLabsEnabled, isLabsPath } from "@/lib/labs";
+import { isWorkbenchLmEnabled } from "@/lib/byoc";
 import ProjectsSection from "@/features/projects/pages/ProjectsSection";
 import { useProjectsEnabled } from "@/lib/projectsFeature";
 import ShareLinkRedeemPage from "@/features/share-link/pages/ShareLinkRedeemPage";
@@ -45,6 +46,13 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   // real, not render Datapacks under a /labs URL. Sidebar hides the entry on
   // the same flag.
   if (isLabsPath(pathname) && !isLabsEnabled()) {
+    return <Navigate to={ROUTES.datapacks} replace />;
+  }
+
+  if (
+    (pathname === ROUTES.workbenchLm || pathname.startsWith(`${ROUTES.workbenchLm}/`)) &&
+    !isWorkbenchLmEnabled()
+  ) {
     return <Navigate to={ROUTES.datapacks} replace />;
   }
 

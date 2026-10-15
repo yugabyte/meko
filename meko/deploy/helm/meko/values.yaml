@@ -837,6 +837,11 @@ mekoMcpServer:
   staticEnv:
     transport: http
     logLevel: DEBUG
+    # The LLM mem0 uses for memory EXTRACTION (inferring memories from conversation
+    # turns), not embedding. openai | aws_bedrock. Default OpenAI, as hosted runs; a
+    # BYOC install may set aws_bedrock (values-byoc.yaml) to drop the OpenAI key, which
+    # changes the extraction model, so set llmModel to match (e.g. a Nova model).
+    llmProvider: openai
     llmModel: gpt-4.1-nano-2025-04-14
     # Which IdP the MCP server authenticates against: cognito | oidc | auth0 |
     # azure | meko_tkn. `meko_tkn` is PAT-only — no IdP at all, callers present
@@ -846,9 +851,22 @@ mekoMcpServer:
     # are missing, so this cannot be left on `cognito` and simply unconfigured.
     authProvider: cognito
     cognitoAwsRegion: us-east-2
-    # Region the server calls Bedrock in to embed search queries. Unset, the server
-    # falls back to us-east-1, so only set it for another region.
-    awsRegion: ""
+    # AWS_REGION for every Bedrock call the MCP server makes: memory embedding (mem0)
+    # and KB/conversation query embedding. Keep it set: unset, mem0 falls back to
+    # us-west-2 while query embedding falls back to us-east-1, so one of the two
+    # lands in a region where Titan may not be enabled. Titan v1 must be enabled here.
+    awsRegion: us-east-1
+    # The embedder mem0 uses for MEMORY vectors (distinct from KB/conversation query
+    # embedding, which follows the dist_rag.vector_indexes row). Chosen here because
+    # mem0's embedder is config-driven, not seeded in the database. Default Bedrock
+    # Titan v1, so memory EMBEDDING needs no OpenAI key — but it needs the MCP server's
+    # Bedrock credential (dataPlaneSecrets.mcpAwsAccessKeyId / .mcpAwsSecretAccessKey).
+    # Memory EXTRACTION follows llmProvider (default openai). The model MUST emit
+    # 1536 dimensions to match the fixed
+    # vector(1536) memory columns (data migrations 000001/000004): text-embedding-3-small
+    # and amazon.titan-embed-text-v1 both do; Titan v2 (1024) does not fit.
+    embedderProvider: aws_bedrock
+    embedderModel: amazon.titan-embed-text-v1
   secrets:
     existing:
       yugabytedb: yugabytedb-credentials

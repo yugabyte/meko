@@ -45,13 +45,14 @@ disagree. Anything flagged ! below is read with optional=true and costs only its
 own feature; anything flagged !! stops a pod from starting at all.
 {{- if not .Values.dataPlaneSecrets.openaiApiKey }}
 
-  ! No OpenAI key, and both LLM_PROVIDER and EMBEDDER_PROVIDER default to openai:
-    memory extraction and knowledge-base embedding raise at the point of use.
+  ! No OpenAI key: memory extraction (LLM_PROVIDER, default openai) raises at the
+    point of use, as does any embedding set to the openai provider. Memory embedding
+    defaults to Bedrock Titan, which needs the MCP AWS creds below, not this key.
 {{- end }}
 {{- if and (has .Values.apiServer.staticArgs.s3AuthMode (list "iam-user" "minio")) (not (and .Values.dataPlaneSecrets.s3AccessKey .Values.dataPlaneSecrets.s3SecretKey)) }}
 
   ! No S3 credentials: knowledge-base file upload fails at the presigned URL, in
-    the browser, with the api-server healthy. (Embedding is the OpenAI key above.)
+    the browser, with the api-server healthy.
 {{- end }}
 {{- if not .Values.dataPlaneSecrets.mcpInternalSecret }}
 
@@ -66,11 +67,14 @@ own feature; anything flagged !! stops a pod from starting at all.
   !! No Bedrock credentials, and the inference gateway is enabled on bedrock: its
      Secret is mounted with envFrom, so the pod never starts. Set them, or disable it.
 {{- end }}
-{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") (not (and .Values.dataPlaneSecrets.mcpAwsAccessKeyId .Values.dataPlaneSecrets.mcpAwsSecretAccessKey)) }}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") (not (and .Values.dataPlaneSecrets.enabled .Values.dataPlaneSecrets.mcpAwsAccessKeyId .Values.dataPlaneSecrets.mcpAwsSecretAccessKey)) }}
 
-  ! No AWS credentials for the MCP server (dataPlaneSecrets.mcpAwsAccessKeyId /
-    .mcpAwsSecretAccessKey): on an index that embeds with Bedrock Titan, which a fresh
-    install seeds, KB and conversation search cannot embed a query and answer empty.
+  ! No AWS credentials for the MCP server (dataPlaneSecrets.enabled with
+    .mcpAwsAccessKeyId / .mcpAwsSecretAccessKey): the MCP server cannot embed with
+    Bedrock Titan. Memory embedding uses Bedrock by default (EMBEDDER_PROVIDER=
+    aws_bedrock), so memory_add and memory_search fail outright and nothing is
+    remembered; on a fresh install (KB/conversation indexes seeded Bedrock) KB and
+    conversation search also answer empty.
 {{- end }}
 {{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true") (not (and .Values.dataPlaneSecrets.ragAwsAccessKeyId .Values.dataPlaneSecrets.ragAwsSecretAccessKey)) }}
 

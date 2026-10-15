@@ -286,7 +286,9 @@ Any install with the rag workers on also needs `dataPlaneSecrets.ragAwsAccessKey
 file from S3 or embed it with Bedrock Titan, so nothing a user uploads is processed.
 The MCP server needs `dataPlaneSecrets.mcpAwsAccessKeyId` / `.mcpAwsSecretAccessKey` too, to
 embed KB and conversation search queries with the same model; without them those searches
-answer empty.
+answer empty, and — since memory embedding defaults to Bedrock
+(`mekoMcpServer.staticEnv.embedderProvider: aws_bedrock`) on every install — `memory_add` /
+`memory_search` fail outright. The install hint supplies these from `BEDROCK_KEY`.
 `provisioner` renders ClusterRoles and a CRD, which is the opposite of one namespace —
 not a flag away.
 

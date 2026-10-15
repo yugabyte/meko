@@ -1,0 +1,105 @@
+# mem0's MEMORY embedder is config-driven (no dist_rag row), so the chart chooses it via
+# EMBEDDER_PROVIDER / EMBEDDER_MODEL. Every preset embeds with Bedrock Titan v1 (1536,
+# matching the vector(1536) memory columns), so memory embedding needs no OpenAI key. EMBEDDER_MODEL is the name the MCP server actually reads — the old EMBEDDING_MODEL
+# was ignored.
+#
+#   helm unittest charts/meko
+suite: mcp-server memory embedder
+templates:
+  - templates/meko-mcp-server/deployment.yaml
+  - templates/meko-mcp-server/configmap.yaml
+  - templates/dataplane-secrets.yaml
+values:
+  - ../values-gcp.yaml
+  - ../values-dev.yaml
+set:
+  mekoMcpServer.image.tag: t
+  apiServer.image.tag: t
+tests:
+  - it: embeds with Titan v1 under the dev preset and uses the EMBEDDER_MODEL name the code reads
+    template: templates/meko-mcp-server/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDER_PROVIDER
+            value: aws_bedrock
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDER_MODEL
+            value: amazon.titan-embed-text-v1
+      # The old, ignored env name must be gone entirely (any value), or the model
+      # stays silently unread.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: EMBEDDING_MODEL
+      # LLM_PROVIDER is now a knob too (default openai), not hardcoded.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_PROVIDER
+            value: openai
+
+  - it: makes the memory-extraction LLM provider configurable
+    template: templates/meko-mcp-server/deployment.yaml
+    set:
+      mekoMcpServer.staticEnv.llmProvider: aws_bedrock
+      mekoMcpServer.staticEnv.llmModel: us.amazon.nova-lite-v1:0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_PROVIDER
+            value: aws_bedrock
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_MODEL
+            value: us.amazon.nova-lite-v1:0
+
+  - it: embeds memories with Bedrock Titan v1 under the BYOC preset (applied after values-dev), extraction stays OpenAI nano
+    template: templates/meko-mcp-server/deployment.yaml
+    values:
+      - ../values-byoc.yaml
+    set:
+      # values-byoc turns langfuse on, which needs these to render at all.
+      langfuse.s3AuthMode: iam-role
+      langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET: b
+      langfuse.serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/langfuse
+      dataPlaneSecrets.langfuseNextauthSecret: t
+      dataPlaneSecrets.langfuseSalt: t
+      dataPlaneSecrets.langfuseEncryptionKey: t
+      dataPlaneSecrets.langfuseAdminApiKey: t
+      dataPlaneSecrets.langfuseInitUserEmail: t@example.com
+      dataPlaneSecrets.langfuseInitUserPassword: t
+      dataPlaneSecrets.langfuseInitProjectSecretKey: t
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDER_PROVIDER
+            value: aws_bedrock
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDER_MODEL
+            value: amazon.titan-embed-text-v1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_PROVIDER
+            value: openai
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLM_MODEL
+            value: gpt-4.1-nano-2025-04-14
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_REGION
+            value: us-east-1

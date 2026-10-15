@@ -38,8 +38,13 @@
 # matter (dataPlaneSecrets, below) and reads the rest with optional=true, so an
 # unused credential costs its own feature instead of leaving a pod stuck in
 # CreateContainerConfigError. What you lose by supplying nothing:
-#   - no OpenAI key    -> no memory extraction and no RAG. Everything runs; Meko
-#                         remembers nothing. This is the one worth filling in.
+#   - no OpenAI key    -> no memory extraction (llmProvider default openai) and no
+#                         RAG. Memory EMBEDDING uses Bedrock here (mekoMcpServer.
+#                         staticEnv.embedderProvider=aws_bedrock), so it needs the MCP
+#                         Bedrock creds below, not this key.
+#   - no MCP Bedrock creds (dataPlaneSecrets.mcpAwsAccessKeyId/.mcpAwsSecretAccessKey)
+#                      -> memory_add/search and KB/conversation search cannot embed;
+#                         the install hint supplies these from BEDROCK_KEY.
 #   - no S3 creds      -> knowledge-base file uploads fail at upload time.
 #   - no Cognito       -> already off in this preset (apiServer.cognito.enabled).
 #   - no Rudderstack   -> no product analytics from the UI.
@@ -268,6 +273,18 @@ mekoMcpServer:
     # a KeyError, so this is not optional dressing — it is what makes the component
     # start without an IdP.
     authProvider: meko_tkn
+    # Embed memories with Bedrock Titan v1, not OpenAI: a BYOC data plane should need no
+    # OpenAI key for embedding. Same family as the seeded KB/conversation indexes (data
+    # migrations 000001/000007). Titan v1 emits a fixed 1536, matching the vector(1536)
+    # memory columns (000001/000004); Titan v2 (1024) would not fit. Reuses the MCP
+    # server's Bedrock credential (dataPlaneSecrets.mcpAwsAccessKeyId / .mcpAwsSecretAccessKey)
+    # and region (staticEnv.awsRegion, default us-east-1) — no new secret.
+    embedderProvider: aws_bedrock
+    embedderModel: amazon.titan-embed-text-v1
+    # Memory EXTRACTION LLM, stated so the BYOC choice is visible here. Still OpenAI,
+    # so extraction (conversation_add_message) needs the OpenAI key.
+    llmProvider: openai
+    llmModel: gpt-4.1-nano-2025-04-14
 
 mekoUi:
   image:
