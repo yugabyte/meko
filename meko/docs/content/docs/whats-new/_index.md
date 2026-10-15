@@ -12,9 +12,9 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
 
 {{< card-group variant="half" >}}
   {{< card
-    href="changelog/meko/v1.0.2/"
-    title="Meko v1.0.2 - October 5, 2026"
-    desc="Bulk sharing, Ask Meko in the docs, faster datapack navigation, and reliability fixes."
+    href="changelog/meko/v1.0.3/"
+    title="Meko v1.0.3 - October 9, 2026"
+    desc="Projects, tier-limit upgrades, read-only viewers, and safer datapack setup."
     cta="View release notes &rarr;"
   >}}
   {{< card
@@ -25,14 +25,14 @@ Highlights from recent Meko releases. For the full history, see the [Changelog](
   >}}
 {{< /card-group >}}
 
-## Meko portal and platform - v1.0.2
+## Meko portal and platform - v1.0.3
 
-- **[Invite a team](../architecture/core-concepts/datapacks/#share-a-datapack)** - On a datapack's **Share** page, paste email addresses or upload a CSV file and choose one role to send up to 50 invitations at a time. Meko reports a result for each address.
-- **Ask questions from the docs** - Open **Ask Meko** on any documentation page. Your conversation stays open while you move between pages in the same browser tab.
-- **Find members and datapacks faster** - [Search datapack members](../architecture/core-concepts/datapacks/#share-a-datapack) by name, email address, domain, or role. In [WorkbenchLM](../guides/workbench-lm/), filter the datapack list.
-- **[Open a datapack in WorkbenchLM](../guides/workbench-lm/#what-you-can-do)** - On a datapack page, open the actions menu (the gear next to **Share**) and choose **Open WorkbenchLM** to start with that datapack selected.
-- **Learn from production code reviews** - The [code review lab](../examples/labs/) now has four chapters, uses your datapack for cost estimates, and links to public reviews.
-- **Keep conversations and memory available** - Temporary tracing failures are now retryable, oversized traces use less memory, and entity operations search only the current datapack. See how to [work with memory](../guides/working-with-memory/) and [review conversation traces](../guides/observability/).
+- **[Group datapacks in a project](../architecture/core-concepts/datapacks/#group-datapacks-in-a-project)** - Open **Projects**, click **New Project**, and organize datapacks in folders.
+- **[Reach a tier limit](../architecture/core-concepts/datapacks/#reach-a-tier-limit)** - A banner now reports when you exceed your limits. To upgrade, on Free, choose **Upgrade to Standard**, and on Standard, choose **Talk to our team**.
+- **[What a viewer can do](../architecture/core-concepts/datapacks/#what-a-viewer-can-do)** - A **Viewer** can search the datapack. Creating or changing a conversation or memory returns `read_only_access`.
+- **[Create a datapack](../architecture/core-concepts/datapacks/#create-a-datapack)** - If tracing setup fails, creation stops and nothing is left behind. You can create more than one datapack at the same time, up to your plan's datapack cap.
+- **[Delete a datapack](../architecture/core-concepts/datapacks/#delete-a-datapack)** - You can now delete a datapack even when tracing is unavailable.
+- **[Agentic coding review](../examples/labs/#agentic-coding-review-adlc)** - When the review comes back as malformed JSON, the lab shows the review text. It does not show **No blocking issues found**.
 
 ## Installer and public skills - v2.3.0
 

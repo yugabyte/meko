@@ -14,7 +14,7 @@ When you create a datapack, Meko provisions isolated storage, scoped to your age
 To connect an external MCP client (Cursor, Claude Code, and so on), you need:
 
 - The **MCP server URL**, `https://mcp.mekodata.ai/mcp` (the same for every datapack and user).
-- A **user API key**: a long-lived key you generate under **Settings>API Keys** in the portal (values start with `mko_tkn_`).
+- A **user API key**: a long-lived key you generate under **Settings > API Keys** in the portal (values start with `mko_tkn_`).
 
 Agents select the datapack to connect to by passing the `datapack_id` inside each MCP tool call, not by using a different URL per datapack.
 
@@ -30,9 +30,26 @@ To create additional datapacks:
 
 If Meko can't finish setting up the datapack's tracing project, creation fails with `Could not finish setting up the datapack; nothing was created. Please retry.` Nothing is left behind, so retry with the same name.
 
+You can create more than one datapack at the same time, up to your plan's datapack cap.
+
 > [!NOTE] Free tier
 >
-> Free accounts can create up to **10 datapacks**. When you reach the limit, **Add Datapack** is disabled until you upgrade. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+> Free accounts can create up to **10 datapacks**. When you reach the limit, **Add Datapack** is disabled. See [Reach a tier limit](#reach-a-tier-limit).
+
+## Reach a tier limit
+
+The Free tier includes limits on datapack creation, knowledge base storage, number of conversations, and WorkbenchLM token usage. When you exceed a limit, Meko displays a corresponding message. Click **Upgrade to Standard** on the message banner to open **Settings > Pricing** with the Standard plan selected.
+
+Choose **AWS Marketplace** under Standard ($25 / month), then **Continue to AWS Marketplace**. After you subscribe, click **Set up your account**. If you skip that step, the plan stays on Free. Stripe is marked coming soon. See [Meko pricing](https://mekodata.ai/pricing/).
+
+You cannot upgrade from Standard using the Marketplace. To upgrade, choose **Talk to our team**.
+
+Free tier has the following limits:
+
+- 10 datapacks
+- 100 MB of knowledge base storage
+- 1,000 conversations
+- 10 million WorkbenchLM tokens
 
 <!-- Using the CLI:
 
@@ -54,6 +71,37 @@ This returns the datapack's MCP server URL and API key:
 }
 ``` -->
 
+## Group datapacks in a project
+
+A project groups datapacks that work toward one outcome. It gives related
+datapacks a visible structure without combining them into one store. Each
+datapack remains an isolated home for its conversations, memory, and knowledge.
+Deleting the project deletes those datapacks with it, along with their memories,
+knowledge, and history.
+
+Use folders to keep datapacks that do similar work together. The structure has
+three levels:
+
+- A project represents the outcome.
+- A folder represents one kind or stage of work.
+- A datapack holds the focused context for that work.
+
+A project holds folders, and a folder holds datapacks. Folders do not nest. A
+datapack can belong to only one project. Datapacks that are not in a project
+remain **Unfiled** and continue to work normally.
+
+Open **Projects** in the sidebar and click **New Project**. Enter a **Name**. **Description** is optional. Meko selects a **Layout** for you. **Create project** stays disabled until the name is filled in. If that layout starts empty, it also stays disabled until you have named the first folder.
+
+Open the project and choose **Folders**. Click **Add folder**. Enter a **Folder name**. The **Add folder** button in the dialog stays disabled until the name is filled in. In a folder, click **Add a datapack**. On **Folders**, below the folder list, **What this project holds** shows the project's totals. The **learnings** row shows memories from the datapacks in the project, including ones still waiting for a promotion decision.
+
+Choose **Activity** to see files uploaded, memories promoted, folders created, and datapacks filed.
+
+You can also file a datapack from its own page. Open the actions menu (the gear next to **Share**) and choose **Add to project**. If the datapack is already in a project, the item is **Move to project**.
+
+When you share a datapack, the recipient finds its project on **Projects**, under **Shared with me**. They see that datapack and the folder it sits in. The owner's other folders and datapacks in the same project stay hidden. **Add folder**, **Add a datapack**, and **Settings** stay with the project owner.
+
+If you own the project, open **Settings** to delete it. The confirmation says the project, its folder structure, and every datapack filed inside it are deleted for good, along with their memories, knowledge and history. Deleting a folder is separate. The folder is removed, and the datapacks inside it become **Unfiled**.
+
 ## Share a datapack
 
 To share your datapack with colleagues:
@@ -65,7 +113,7 @@ To share your datapack with colleagues:
     A CSV can include a header row where one column is an email column. A file Meko cannot read as text shows **Could not read file**. Export it as CSV and upload it again.
 
 1. Choose a **Role for everyone in this list**: **Viewer**, **Contributor**, or **Maintainer**. The role applies to every address in the batch.
-1. Click **Send invite** (or **Send n invites** if there are more thn one).
+1. Click **Send invite**. With more than one address, the button shows the count, such as **Send 2 invites**.
 
 One batch accepts up to 50 addresses; Meko displays an error if you exceed the limit. To invite more than 50, split the job into multiple batches.
 
@@ -81,7 +129,35 @@ Pending invites are listed under **Pending**, where you can resend or revoke inv
 
 1. If you are an Owner, assign roles to members by choosing a role in the role dropdown menu for the member.
 
-A **Viewer** has read-only access. In the Meko web app and its REST API, a viewer sees the datapack's knowledge base, collective memory, conversations and memories, but not who started a conversation, added a memory, uploaded someone else's file or promoted a memory, and not the member list. Through MCP, a viewer can search the datapack but can't create or change conversations or memories. A viewer can't upload artifacts or KB files, but can still delete their own memories, the conversations they started and KB files they uploaded, so a member moved down to viewer can remove what they added before.
+### What a viewer can do
+
+A **Viewer** can read the datapack.
+
+In the portal and the REST API, a viewer sees the knowledge base, collective memory, conversations, and memories.
+
+A viewer does not see who started a conversation, who added a memory, who uploaded someone else's file, or who promoted a memory.
+
+A viewer does not see the member list.
+
+Through MCP, a viewer can search the datapack.
+
+Creating or changing a conversation or memory returns `read_only_access`.
+
+A viewer can't upload artifacts or knowledge-base files.
+
+A viewer can still delete their own memories, conversations they started, and knowledge-base files they uploaded.
+
+A member moved down to **Viewer** can remove what they added before.
+
+## Delete a datapack
+
+Only the owner can delete a datapack.
+
+Open the actions menu (the gear next to **Share**) and choose **Delete** plus the datapack name, such as **Delete research**. In the **Delete datapack** dialog, click **Delete**.
+
+On a datapack's own menu, **Delete** does not open the dialog for `meko_default_datapack`, the datapack Meko created when you signed in.
+
+You can delete a datapack when tracing is unavailable.
 
 ## Isolation model
 

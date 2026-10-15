@@ -12,7 +12,7 @@ type: docs
 >
 > Free accounts are limited to **1,000 conversations** and **10M WorkbenchLM tokens**. When a cap is reached, the chat composer is disabled.
 
-To upgrade, go to **Settings > Pricing**, choose **AWS Marketplace** under Standard ($25 / month), then **Continue to AWS Marketplace**. After you subscribe, click **Set up your account**, or the plan stays on Free. Stripe is marked coming soon. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+When the composer is disabled, the banner shows the conversations or WorkbenchLM tokens you have used. On Free, choose **Upgrade to Standard**. On Standard, choose **Talk to our team**. See [Reach a tier limit](../../architecture/core-concepts/datapacks/#reach-a-tier-limit).
 
 ## When to use WorkbenchLM
 

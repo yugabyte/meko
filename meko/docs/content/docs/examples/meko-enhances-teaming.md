@@ -137,7 +137,7 @@ For example, if you use Meko in Cursor and invite someone else to the same datap
     | Contributor | Yes | Yes | No | No |
     | Maintainer | Yes | Yes | Yes | Yes |
 
-    - *View*: read knowledge-base material, memories, and conversations your deployment exposes for that datapack. A Viewer is read-only: they see conversations and memories without who wrote them, and not the member list.
+    - *View*: read knowledge-base material, memories, and conversations your deployment exposes for that datapack. A Viewer is read-only. They see conversations and memories, but not who wrote them, and they cannot view the member list. Creating or changing a conversation or memory through MCP returns `read_only_access`.
     - *Add memories*: create new memories. Contributors can do this, but cannot write to the knowledge base directly.
     - *Add/edit knowledge base*: upload or modify knowledge-base content. Requires Maintainer.
     - *Promote*: elevate memories into shared knowledge (often after review), per your product's flows. Requires Maintainer (or the datapack owner).

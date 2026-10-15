@@ -16,6 +16,12 @@ For Installer, MCP server, and agent skills updates, see [Installer release note
 
 {{< card-group >}}
   {{< card
+    href="changelog/meko/v1.0.3/"
+    title="v1.0.3 - October 9, 2026"
+    desc="Projects, tier-limit upgrades, read-only viewers, and safer datapack setup."
+    cta="View release notes &rarr;"
+  >}}
+  {{< card
     href="changelog/meko/v1.0.2/"
     title="v1.0.2 - October 5, 2026"
     desc="Bulk sharing, Ask Meko in the docs, faster datapack navigation, and reliability fixes."

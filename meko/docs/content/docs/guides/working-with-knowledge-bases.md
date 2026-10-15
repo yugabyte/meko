@@ -53,7 +53,7 @@ Currently, Meko accepts PDF, TXT, TEXT, MD, CSV, JSON, XML, HTML, and HTM files 
 > individual files capped at **5 MB**. Standard accounts get **5 GB** of total storage
 > and **50 MB** per file.
 
-To upgrade, go to **Settings > Pricing**, choose **AWS Marketplace** under Standard ($25 / month), then **Continue to AWS Marketplace**. After you subscribe, click **Set up your account**, or the plan stays on Free. Stripe is marked coming soon. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+When Free storage is full, the banner shows `100 MB / 100 MB knowledge storage used`. On Free, choose **Upgrade to Standard**. On Standard, choose **Talk to our team**. See [Reach a tier limit](../../architecture/core-concepts/datapacks/#reach-a-tier-limit).
 
 <!--
 | Source | Example URL |
