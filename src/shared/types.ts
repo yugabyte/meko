@@ -397,7 +397,7 @@ export interface CallHomeMeko {
   capture?: { runs: number; failures: number; ms: number };
   /** Searches that found nothing relevant (`MekoUsage.weak`); left out by installs from before it. */
   weak?: number;
-  /** Questions on What Meko doesn't know: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. Left out when there were none. */
+  /** Questions on What Meko doesn't know a person dismissed or taught: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. A learn step's marks are in `learn`. Left out when there were none. */
   gaps?: { dismissed: number; taught: number };
 }
 
@@ -416,6 +416,13 @@ export interface CallHomeLearn {
   skips: number;
   /** Steps that ended done with nothing saved or corrected. */
   empty: number;
+  /**
+   * Questions on What Meko doesn't know the steps marked taught (a fact answering them was saved)
+   * or dismissed (Meko already had the answer). Optional in the schema: reports from before lack
+   * them. How many were offered isn't sent: the report has no room left for it in 64 KB.
+   */
+  taught: number;
+  dismissed: number;
   /** The step's Meko searches, its failed Meko calls, and about how many tokens it sent to Meko. */
   lookups: number;
   errors: number;
@@ -607,8 +614,23 @@ export interface MekoGap {
   state: MekoGapState;
   /** When it was dismissed or taught (null when it's open). */
   markedAt: number | null;
-  /** What was last taught for it, kept when it's asked again (open again) or dismissed after. */
-  taught: { text: string; datapack: string | null; at: number } | null;
+  /**
+   * What was last taught for it, kept when it's asked again (open again) or dismissed after.
+   * `session`: the session whose learn step taught it (null: a person did, with Teach Meko).
+   */
+  taught: { text: string; datapack: string | null; at: number; session: MekoGapSession | null } | null;
+  /**
+   * While it's dismissed: who dismissed it (`session`: the session whose learn step found Meko
+   * already had the answer; null: a person did) and, for a learn step, the memory that already said it.
+   */
+  dismissal: { session: MekoGapSession | null; memory: string | null } | null;
+}
+
+/** The session whose learn step taught or dismissed a question. */
+export interface MekoGapSession {
+  id: string;
+  name: string;
+  archived: boolean;
 }
 
 /** GET /api/projects/:id/meko-gaps: What Meko doesn't know, latest asked first. */

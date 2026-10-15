@@ -596,7 +596,7 @@ export class ProjectService {
       throw new HttpError(502, `Meko couldn't save it: ${errMsg(e)}. Try again.`);
     }
     markGap(this.db, id, gap.key, { kind: 'teach', text, datapack: dp.name });
-    return findGap(this.db, id, gap.key) ?? { ...gap, state: 'taught', markedAt: Date.now(), taught: { text, datapack: dp.name, at: Date.now() } };
+    return findGap(this.db, id, gap.key) ?? { ...gap, state: 'taught', markedAt: Date.now(), taught: { text, datapack: dp.name, at: Date.now(), session: null }, dismissal: null };
   }
 
   /** The project's question with a key, or a 404. */

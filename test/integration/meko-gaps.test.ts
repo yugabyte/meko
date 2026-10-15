@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { issueSetupToken } from '../../src/server/auth.js';
 import { run } from '../../src/server/db.js';
+import { markGap } from '../../src/server/mekogaps.js';
 import type { MekoGapPage, ProjectHome } from '../../src/shared/types.js';
 import { makeEnv, type TestEnv } from '../helpers.js';
 
@@ -102,9 +103,12 @@ describe("What Meko doesn't know", () => {
     expect((await page(p.id)).counts.taught).toBe(0);
     (env.meko as { addMemory: unknown }).addMemory = add;
 
+    // A learn step taught it first: the person's teach replaces it, and says a person did it.
+    markGap(env.core.db, p.id, key, { kind: 'teach', text: 'Tags are kept.', datapack: 'team/Alpha', session: 's1' }, Date.now() - 10);
+    expect((await page(p.id, 'taught')).gaps[0].taught).toMatchObject({ text: 'Tags are kept.', session: { id: 's1', name: 'tags', archived: false } });
     const ok = await teach(p.id, '  Releases keep the last 30 tags.  ');
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ key, state: 'taught', taught: { text: 'Releases keep the last 30 tags.', datapack: 'team/Alpha' } });
+    expect(ok.json()).toMatchObject({ key, state: 'taught', taught: { text: 'Releases keep the last 30 tags.', datapack: 'team/Alpha', session: null }, dismissal: null });
     expect(env.meko.calls.filter((c) => c.name === 'addMemory').map((c) => c.args)).toEqual([
       ['Releases keep the last 30 tags.', 'dp-Alpha', 'agent-k-local', 'conv-1', { source: 'agent-k-local', kind: 'taught', question: 'Release tag retention' }],
     ]);

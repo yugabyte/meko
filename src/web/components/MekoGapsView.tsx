@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { MekoGap, MekoGapPage, MekoGapState, ProjectWithSessions } from '../../shared/types';
+import type { MekoGap, MekoGapPage, MekoGapSession, MekoGapState, ProjectWithSessions } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import { useIsMobile } from '../hooks/useMedia';
@@ -50,6 +50,17 @@ export function MekoGapsView({
   // Bumped whenever the list is loaded afresh: a Load more answer for a view that's gone is dropped.
   const view = useRef(0);
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated') ?? null;
+  /** A session named on a row: a link to it while it runs. */
+  const sessionName = (s: { id: string; name: string; archived: boolean }) =>
+    s.archived ? (
+      s.name
+    ) : (
+      <button className="link-btn" onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}>
+        {s.name}
+      </button>
+    );
+  /** " by AgentK from <session>" for a mark a session's learn step made; nothing for a person's. */
+  const byAgentK = (s: MekoGapSession | null) => s && <> by AgentK from {sessionName(s)}</>;
   const teachBlocker = !mekoConfigured
     ? "Meko is off, so it can't be taught. Add a Meko API key on the Meko tab in Settings."
     : !dedicated
@@ -188,13 +199,7 @@ export function MekoGapsView({
                       {g.sessions.map((s, i) => (
                         <span key={s.id}>
                           {i > 0 && ', '}
-                          {s.archived ? (
-                            s.name
-                          ) : (
-                            <button className="link-btn" onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}>
-                              {s.name}
-                            </button>
-                          )}
+                          {sessionName(s)}
                         </span>
                       ))}
                       {` · ${g.asks > 1 ? 'last ' : ''}${day(g.lastAt)} · `}
@@ -209,11 +214,28 @@ export function MekoGapsView({
                     {g.taught && (
                       <div className="mg-taught">
                         <span className="muted small">
-                          {g.state === 'taught'
-                            ? `Taught ${day(g.taught.at)}${g.taught.datapack ? ` in ${g.taught.datapack}` : ''}:`
-                            : `Taught on ${day(g.taught.at)}, and asked again since. Meko had this and the search still missed it:`}
+                          {g.state === 'taught' ? (
+                            <>
+                              Taught{byAgentK(g.taught.session)} {g.taught.session && 'on '}
+                              {day(g.taught.at)}
+                              {g.taught.datapack ? ` in ${g.taught.datapack}` : ''}:
+                            </>
+                          ) : (
+                            <>
+                              Taught{byAgentK(g.taught.session)} on {day(g.taught.at)}, and asked again since. Meko had this and the search still missed it:
+                            </>
+                          )}
                         </span>
                         <span className="mg-taught-text">{g.taught.text}</span>
+                      </div>
+                    )}
+                    {g.dismissal?.session && (
+                      <div className="mg-taught">
+                        <span className="muted small">
+                          Dismissed{byAgentK(g.dismissal.session)}
+                          {g.markedAt !== null && ` on ${day(g.markedAt)}`}: Meko already had this{g.dismissal.memory ? ':' : '.'}
+                        </span>
+                        {g.dismissal.memory && <span className="mg-taught-text">{g.dismissal.memory}</span>}
                       </div>
                     )}
                     <div className="mg-actions">

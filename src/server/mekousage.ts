@@ -439,6 +439,9 @@ export interface LearnRun {
   saves: number;
   updates: number;
   skips: number;
+  /** Questions on What Meko doesn't know the step marked taught or dismissed. */
+  taught: number;
+  dismissed: number;
   lookups: number;
   errors: number;
   sentChars: number;
@@ -451,8 +454,9 @@ export interface LearnRun {
  * responses while it ran.
  */
 export function learnRuns(db: Db, projectId?: string): LearnRun[] {
-  const runs = all<{ id: string; at: number; trigger: LearnRun['trigger']; path: LearnRun['path']; outcome: LearnRun['outcome']; candidates: number; saves: number; updates: number; skips: number; lookups: number; errors: number; sent_chars: number }>(db,
-    `SELECT l.id, l.started_at AS at, l.trigger, l.path, l.outcome, l.candidates, l.saves, l.updates, l.skips, l.lookups, l.errors, l.sent_chars
+  const runs = all<{ id: string; at: number; trigger: LearnRun['trigger']; path: LearnRun['path']; outcome: LearnRun['outcome']; candidates: number; saves: number; updates: number; skips: number; taught: number; dismissed: number; lookups: number; errors: number; sent_chars: number }>(db,
+    `SELECT l.id, l.started_at AS at, l.trigger, l.path, l.outcome, l.candidates, l.saves, l.updates, l.skips, l.taught, l.dismissed,
+       l.lookups, l.errors, l.sent_chars
      FROM meko_learns l JOIN sessions s ON s.id = l.session_id${projectId ? ' WHERE s.project_id = ?' : ''}`, ...(projectId ? [projectId] : []));
   if (!runs.length) return [];
   const tokens = new Map<string, LearnTokens[]>();
@@ -470,7 +474,7 @@ export function learnRuns(db: Db, projectId?: string): LearnRun[] {
   }
   return runs.map((r) => ({
     at: r.at, trigger: r.trigger, path: r.path, outcome: r.outcome, candidates: r.candidates, saves: r.saves, updates: r.updates,
-    skips: r.skips, lookups: r.lookups, errors: r.errors, sentChars: r.sent_chars, tokens: tokens.get(r.id) ?? [],
+    skips: r.skips, taught: r.taught, dismissed: r.dismissed, lookups: r.lookups, errors: r.errors, sentChars: r.sent_chars, tokens: tokens.get(r.id) ?? [],
   }));
 }
 
@@ -481,7 +485,7 @@ export function summarizeLearn(runs: LearnRun[]): CallHomeLearn {
   const l: CallHomeLearn = {
     runs: 0, byTrigger: { merge: 0, manual: 0, discard: 0 }, byPath: { mod: 0, turn: 0, none: 0 },
     byOutcome: { done: 0, failed: 0, interrupted: 0, skipped: 0 },
-    candidates: 0, saves: 0, updates: 0, skips: 0, empty: 0, lookups: 0, errors: 0, sentTokens: 0,
+    candidates: 0, saves: 0, updates: 0, skips: 0, empty: 0, taught: 0, dismissed: 0, lookups: 0, errors: 0, sentTokens: 0,
     tokens: { extract: noTokens(), dedup: noTokens(), turn: noTokens() }, usdCents: 0,
   };
   let usd = 0;
@@ -494,6 +498,8 @@ export function summarizeLearn(runs: LearnRun[]): CallHomeLearn {
     l.saves += r.saves;
     l.updates += r.updates;
     l.skips += r.skips;
+    l.taught += r.taught;
+    l.dismissed += r.dismissed;
     if (r.outcome === 'done' && r.saves + r.updates === 0) l.empty++;
     l.lookups += r.lookups;
     l.errors += r.errors;

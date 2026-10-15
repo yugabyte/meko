@@ -104,24 +104,30 @@ gets the same list. The duplicate check still runs on what comes back.
 
 **Through the mod** (its link live, protocol 2):
 
-1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll.
+1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll,
+   with the session's questions Meko couldn't answer numbered at its end (*Questions at close*, below).
 2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
    served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
-   as JSON (`extractPrompt()`), and posts the reply, the model and the usage to `/mod/learn`, which
-   answers at once.
-3. The server parses the facts (the first JSON object in the reply), drops any that name the home
+   as JSON (`extractPrompt()`), each with the questions it answers (`answers`), and posts the
+   reply, the model and the usage to `/mod/learn`, which answers at once.
+3. The server parses the facts (the first JSON object in the reply; an answer that isn't the number
+   of a question it offered is dropped), drops any that name the home
    folder, AgentK's home, the worktree or the session's repo (`sessionRepo()`), and finds the 3
    saved memories most like each (`MekoClient.similar`: `context_search`, memories only, in
    parallel). It puts a `check` part on the next poll: the duplicate check's prompt
-   (`dedupPrompt()`), each fact numbered with those memories and their ids.
+   (`dedupPrompt()`), each fact numbered with those memories and their ids; a skip or an update
+   names the memory it means.
 4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Haiku) and posts the reply.
 5. For each fact the server adds it (`memory_add`, as "Gotcha (component): …", with metadata
    `{ source, kind: "learned", fact, component, session, learn }`), skips it, or updates the memory
    it corrects (`memory_update`, as the agent that wrote it, with the check's corrected text unless
    that names a local path, then the fact's own; an update naming a memory that wasn't offered
-   becomes an add). A fact the check left out is added. One at a time.
+   becomes an add). A fact the check left out is added. One at a time. An added fact that answers
+   questions has their queries in its metadata too (`questions`), and its questions are marked
+   (*Questions at close*, below).
 6. The row closes with its counts, the session's timeline says "Saved N memories and corrected M in
-   <datapack>", and the next poll has the mod show the same as a toast.
+   <datapack>" (then "; taught Meko N questions it couldn't answer and dismissed M questions it knew
+   already", for what it marked), and the next poll has the mod show the same as a toast.
 
 The whole step, writes included, has 3 minutes (`LEARN_TIMEOUT_MS`): when they're up the step
 closes as `failed` with the part it reached (what it saved by then counted), no further fact is
@@ -134,10 +140,35 @@ session's tokens and cost include it, though it's never in the transcript.
 **Without the mod** (older Claude Code, the rollout switch off, `[claude] mod` off, or a mod from
 before protocol 2), AgentK types the `learn` stage prompt instead, and Claude searches and saves
 under the saving rule itself. The step ends with that turn (`Lifecycle.onTurnEnd`), counted from
-the Meko calls in the transcript during it.
+the Meko calls in the transcript during it. It isn't offered the session's questions: AgentK
+couldn't tell which of Claude's saves answers which, so it couldn't mark them.
+
+**Questions at close.** A session that searched Meko for something
+it then found out has the answer in its context when it closes. So a step through the mod is
+offered the session's open questions on [What Meko doesn't know](#what-meko-doesnt-know)
+(`sessionGaps()` in `mekogaps.ts`): those it asked in Claude's own searches (subagents' included;
+AgentK's search at start doesn't count, since its query is the task), the ones it asked last first
+(by its own asks: another session asking one later doesn't move it up), at most 30
+(`GAP_LEARN_MAX`), each as last asked, cut to 300 characters. Other sessions' questions aren't
+offered: the fork knows only this session. The prompt asks for a fact answering each question the
+session found the answer to, with the question numbers in its `answers` (one fact can answer
+several wordings of one question), and to leave out a question it didn't find out about, or whose
+only answer is about the task or the machine. Such a fact goes through the rule, the local-path
+filter and the duplicate check like any other, and then:
+
+- written (added, or a correction): each question it answers is marked **taught** with the text
+  written, the datapack, and the session (`meko_gap_marks.taught_session`);
+- skipped, since a saved memory already says it: each is **dismissed** as a duplicate of what Meko
+  has, with the session and the text of the memory the check named
+  (`dismissed_session`, `dismissed_memory`);
+- not written (its write failed, it was filtered out, or the step ran out of time): nothing is marked.
+
+A question is marked only while it's still open, so one a person taught or dismissed while the step
+ran keeps their mark. The step records how many it offered, taught and dismissed
+(`meko_learns.questions`, `taught`, `dismissed`).
 
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
-candidates, saves, updates, skips, lookups, errors, sent_chars)`, with `trigger` `merge`, `discard`
+candidates, saves, updates, skips, lookups, errors, sent_chars, questions, taught, dismissed)`, with `trigger` `merge`, `discard`
 or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id,
 and, while the project has Log Meko calls on, in the session's Meko call log with what was sent and
 what came back (see [Project home](project-home.md)). A step at Merge & Close is deleted with the
@@ -146,8 +177,9 @@ session moments later, so run `/agentk_learn` during the session to look at one.
 ## What Meko doesn't know
 
 The project's Meko searches that found nothing, or nothing relevant, grouped by question, so
-someone can see what Meko is missing and teach it (`src/server/mekogaps.ts`). Stage 1 only records
-and lists them: no model judges an answer, the learn step doesn't look at them, and the list stays
+someone can see what Meko is missing and teach it (`src/server/mekogaps.ts`). No model judges a
+search's answer; the [learn step](#the-learn-step) teaches Meko the answers to a closing session's
+questions it found out, and dismisses those Meko already knew (*Questions at close*). The list stays
 in AgentK's database (it isn't shared with the team on the datapack).
 
 **What's recorded.** The [transcript reader](token-usage.md) keeps, for each of Claude's searches
@@ -200,8 +232,12 @@ starts after the last one's `lastAt` and key, since searches Claude makes in one
 time.
 
 **What the user does with one** (`meko_gap_marks(project_id, query_key, dismissed_at, taught_at,
-taught_text, taught_datapack, opened_at)`, each action's latest time; the latest one at or after
-the question's last ask decides its state): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
+taught_text, taught_datapack, opened_at, taught_session, dismissed_session, dismissed_memory,
+person_dismissed_at, person_taught_at)`, each action's latest time; the latest one at or after the
+question's last ask decides its state; the `*_session` columns name the session whose learn step
+made the mark, and a person's own action clears them; `person_*_at` keep a person's latest dismissal
+and teach for the usage report, which a learn step's later mark doesn't overwrite, and a restore
+clears the person's dismissal only when it restores theirs): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
 (1 to 2,000 characters, as typed) as a memory in the project's dedicated datapack, as AgentK
 (`agent-k-local`) in the project's Meko conversation, with metadata `{ source: "agent-k-local",
 kind: "taught", question }` (the question cut to 300 characters), and marks it taught with the
@@ -221,7 +257,11 @@ latest asked first, 100 at a time (`GET /api/projects/:id/meko-gaps?state=&befor
 **Open**, **Taught**, **Dismissed** or **All**, with the searches recorded since when. Each has
 **Teach Meko** (open ones; disabled, with why, when Meko is off or there's no dedicated
 datapack), **Copy** (the query) and **Dismiss** or **Restore**; **Copy all** copies the list
-shown. The usage stats count weak searches and the questions dismissed and taught, never a query.
+shown. A mark a learn step made says so: *Taught by AgentK from <session> on Oct 14 in <datapack>:*
+with what was written, and *Dismissed by AgentK from <session> on Oct 14: Meko already had this:*
+with the memory that said it (the session a link while it runs). The usage stats count weak
+searches and the questions people dismissed and taught (`gaps`), and those learn steps taught and
+dismissed (`learn.taught`, `learn.dismissed`), never a query.
 
 **Why the database.** The page groups every session's asks, applies the marks and pages in one
 query, the rows are written in the same transaction that moves a transcript's read offset (a
