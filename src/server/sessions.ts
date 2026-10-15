@@ -2,14 +2,14 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
-import { changedImage, changes, diffStat } from './changes.js';
+import { changedImage, changes, diffBase, diffStat, suggestBase } from './changes.js';
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
-  fetchPrHead, git, gitRaw, isIdleWorktree, prLocalBranch, prRef, remoteFor, remoteOf, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
+  fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type BranchSource, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
@@ -208,7 +208,7 @@ const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<vo
 
 export class SessionManager {
   private busy = new Set<string>();
-  private diffs = new Map<string, { added: number; removed: number } | null>();
+  private diffs = new Map<string, DiffStat | null>();
   private mergeInfo = new Map<string, MergeInfo>();
   /** Until when launches don't wait for their Meko conversation (see launchConversation). */
   private conversationSlowUntil = 0;
@@ -1807,6 +1807,47 @@ export class SessionManager {
     return this.get(id);
   }
 
+  /** `PATCH /api/sessions/:id`: a new base (setBase), then a new name (rename); a bad name changes neither. */
+  async edit(id: string, req: UpdateSessionRequest): Promise<Session> {
+    if (req.name !== undefined) sessionName(req.name);
+    if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
+    return this.rename(id, { name: req.name });
+  }
+
+  /**
+   * Moves a session onto another base: the branch it's compared with from now on, by the footer and
+   * the Changes panel, and the one the PR, the prompts and the unpushed count use. For a branch that
+   * Claude put on another branch, such as a release branch for a backport. A review's base, and a
+   * session's with a PR, is its PR's.
+   */
+  async setBase(id: string, wanted: string): Promise<void> {
+    const r = this.row(id);
+    if (typeof wanted !== 'string') throw new HttpError(400, 'The base branch must be text.');
+    const base = wanted.trim();
+    if (!base) throw new HttpError(400, 'Pick a base branch.');
+    if (r.desired === 'archived') throw new HttpError(409, 'This session is archived, so its base can\'t be changed.');
+    if (r.kind === 'review-pr') throw new HttpError(409, 'A review compares with its PR\'s base, so its base can\'t be changed.');
+    if (r.pr_number) throw new HttpError(409, `This session's base is the base of PR #${r.pr_number}, ${r.base_branch}.`);
+    if (base === r.base_branch) return;
+    if (base === r.branch) throw new HttpError(400, `${base} is this session's own branch, so it can't be its base.`);
+    if (!existsSync(r.worktree_path) || !this.ownsWorktree(r)) throw new HttpError(409, 'This session\'s worktree is gone, so its base can\'t be changed.');
+    if (!(await listBaseBranches(r.worktree_path)).includes(base)) {
+      throw new HttpError(400, `There's no branch named ${base} here, on origin or on upstream. Fetch it and try again.`);
+    }
+    if (!(await diffBase(r.worktree_path, base))) throw new HttpError(400, `${r.branch} has no history in common with ${base}.`);
+    const from = r.base_branch;
+    this.update(id, { base_branch: base });
+    this.event(id, 'base', `Base changed from ${from} to ${base}`);
+    await this.refreshDiff(id).catch(() => undefined);
+  }
+
+  /** The branches a session's base can be (`GET /api/sessions/:id/base-branches`), its own left out. */
+  async baseBranches(id: string): Promise<string[]> {
+    const r = this.row(id);
+    if (!existsSync(r.worktree_path) || !this.ownsWorktree(r)) throw new HttpError(409, 'This session\'s worktree is gone, so it has no branches to compare with.');
+    return (await listBaseBranches(r.worktree_path)).filter((b) => b !== r.branch);
+  }
+
   /**
    * Renames a session. Only its name changes: the branch, worktree, pane and Meko agent id
    * were named once, at the start. The running Claude sees the new name in its system prompt at its
@@ -1892,6 +1933,8 @@ export class SessionManager {
     if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     const c = await changes(row.worktree_path, row.base_branch);
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
+    // Only a session that can change its base (setBase) is offered one.
+    if (row.kind !== 'review-pr' && !row.pr_number) c.suggestedBase = await suggestBase(row.worktree_path, row.base_branch, row.branch, c.ahead);
     return c;
   }
 

@@ -346,10 +346,12 @@ export class Updater {
   private lastCheckedAt: number | null;
   private lastError: string | null = null;
   private applying = false;
-  /** markHealthy came while an update was installing; it runs if that update fails. */
+  /** markHealthy came while an update was being checked for or installed; it runs if that installs nothing. */
   private healthyDuringApply = false;
   private justUpdatedFrom: string | null = null;
   private checking: Promise<UpdateStatus> | null = null;
+  /** The update being checked for or installed: a second click while it runs gets its result. */
+  private applyRun: Promise<UpdateStatus> | null = null;
   private readonly appDir: string | undefined;
 
   constructor(private deps: UpdaterDeps) {
@@ -461,18 +463,34 @@ export class Updater {
     return this.changed();
   }
 
-  async apply(): Promise<UpdateStatus> {
+  apply(): Promise<UpdateStatus> {
     if (!this.enabled) {
       this.lastError = DISABLED;
-      return this.status();
+      return Promise.resolve(this.status());
     }
-    if (this.applying) return this.status();
-    this.dropBadLatest();
-    if (!this.status().available) await this.check();
-    const target = this.status().available ? this.latest : null;
-    if (!target) return this.status();
+    if (this.applyRun) return this.applyRun;
+    // Installed and switched to: the restart is on its way.
+    if (this.applying) return Promise.resolve(this.status());
+    this.applyRun = this.doApply().finally(() => {
+      this.applyRun = null;
+    });
+    return this.applyRun;
+  }
 
+  /**
+   * Checks again and installs the newest release, not the one the last check found: a release cut
+   * since then would otherwise be offered right after the restart. When the check fails, the
+   * version found before is installed.
+   */
+  private async doApply(): Promise<UpdateStatus> {
+    this.dropBadLatest();
+    // Shown as installing from the click on, through the check too.
     this.applying = true;
+    this.changed();
+    await this.check();
+    const target = this.status().available ? this.latest : null;
+    if (!target) return this.endApply();
+
     this.lastError = null;
     this.changed();
     const { paths } = this.deps;
@@ -528,14 +546,19 @@ export class Updater {
       this.deps.requestRestart();
       return this.status();
     } catch (e) {
-      this.applying = false;
       this.lastError = `Update to ${target} failed: ${(e as Error).message}`;
       this.deps.log(this.lastError);
-      if (this.healthyDuringApply) this.markHealthy();
-      return this.changed();
+      return this.endApply();
     } finally {
       rmSync(staging, { recursive: true, force: true });
     }
+  }
+
+  /** An apply that installed nothing: a markHealthy that came meanwhile runs now. */
+  private endApply(): UpdateStatus {
+    this.applying = false;
+    if (this.healthyDuringApply) this.markHealthy();
+    return this.changed();
   }
 
   /** Name of the running version's directory under app/ (what the rollback wrapper switches back to). */

@@ -17,7 +17,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal, pickKnowledge } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
@@ -171,6 +171,8 @@ export function ProjectView({
   };
 
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
+  const changedFiles = session?.diffStat?.files ?? 0;
+  const filesText = `${changedFiles.toLocaleString()} ${changedFiles === 1 ? 'file' : 'files'}`;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
@@ -183,12 +185,11 @@ export function ProjectView({
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.configured;
-  // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
-  const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
+  const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   const learnDisabled = acting || !!session?.busy || !!session?.learning;
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
-  const learnTo = canLearn && dedicated ? dedicated.name : null;
+  const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
   // Files dropped on the terminal (or picked from the ⋯ sheet) go to the dedicated datapack's knowledge base.
   const knowledge: KnowledgeTarget = !meko.configured
@@ -411,8 +412,9 @@ export function ProjectView({
               className={cx('foot-btn', panel === 'changes' && 'on')}
               onClick={() => toggle('changes')}
               aria-expanded={panel === 'changes'}
-              title={`Show every file changed on this branch since ${session.baseBranch}`}
+              title={`Show the files changed on this branch since ${session.baseBranch} (${filesText})`}
             >
+              {!mobile && `${filesText} · `}
               <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>
               {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>

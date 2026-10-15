@@ -84,7 +84,8 @@ was gone or busy in.
 **Discard waits for it.** Unless skipped, Discard starts the step (trigger `discard`), sets
 `sessions.discarding` (`Session.discarding`) and answers at once with the session still running:
 the confirmation shows *Saving learnings, then discarding* with **Discard now**, which discards at
-once (`skipLearn`, interrupting the step). When the step ends, done, failed, timed out or
+once (`skipLearn`, interrupting the step). Save learnings is hidden meanwhile (`offersLearn` in
+`src/web/util.ts`), so the step isn't shown twice. When the step ends, done, failed, timed out or
 interrupted (`Lifecycle.afterLearn`, and `onTurnEnd` for a typed step, which then does nothing else
 for the session), `SessionManager.discardNow()` discards the session, once however many ask. A
 restart that cut the step short finishes the discard in `recover()`, unless the step was a typed

@@ -4,7 +4,7 @@ import { heldSummary } from './heldreviews.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, CiState, DatapackRef, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, CiState, DatapackRef, DiffStat, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -222,7 +222,7 @@ export interface SessionRuntime {
   usage: TokenUsage;
   startup: StartupState | null;
   busy: boolean;
-  diffStat: { added: number; removed: number } | null;
+  diffStat: DiffStat | null;
   canMerge: boolean;
   mergeBlockers: string[];
   mergeQueueable: boolean;

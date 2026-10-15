@@ -740,8 +740,8 @@ export interface Session {
   hasDesign: boolean;
   /** When the design was last written or republished; null before there is one. */
   designUpdatedAt: number | null;
-  /** Lines added/removed vs. the base branch, refreshed periodically. */
-  diffStat: { added: number; removed: number } | null;
+  /** Files changed and lines added/removed vs. the base branch, refreshed periodically. */
+  diffStat: DiffStat | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
   /** How many of the design's questions are open, for the user to answer. */
@@ -1488,6 +1488,14 @@ export interface ChangedFile {
   truncated: boolean;
 }
 
+/** A session's diff size vs. its base, as the footer shows it. */
+export interface DiffStat {
+  /** Changed files, untracked ones included (the Changes panel's count). */
+  files: number;
+  added: number;
+  removed: number;
+}
+
 /** Everything changed on a session's branch vs. its base: committed, uncommitted and untracked. */
 export interface SessionChanges {
   /** What the changes are compared against, e.g. `origin/main`. */
@@ -1498,6 +1506,15 @@ export interface SessionChanges {
   removed: number;
   /** Files whose patch was left out because the whole diff hit the size cap. */
   omittedPatches: number;
+  /** Commits on the branch since it left the base. */
+  ahead: number;
+  /**
+   * A branch of origin's or upstream's much closer to the branch than its base, when the branch is
+   * far past its base (it was moved onto another branch, such as a release branch for a backport):
+   * offered as the session's base. The name is without its remote, as `Session.baseBranch` is. Null
+   * when there's none, and for a session that can't change its base (a review, or one with a PR).
+   */
+  suggestedBase: { branch: string; ahead: number } | null;
 }
 
 export type CommentSide = 'old' | 'new';
@@ -1775,6 +1792,11 @@ export const SESSION_NAME_MAX = 100;
 export interface UpdateSessionRequest {
   /** The new name: trimmed, at most SESSION_NAME_MAX characters, no control characters. */
   name?: string;
+  /**
+   * The new base branch: a local branch, or one of origin's or upstream's, named without its remote.
+   * Not for a review or a session with a PR, whose base is the PR's.
+   */
+  baseBranch?: string;
 }
 
 export interface AttachDatapackRequest {
@@ -2064,7 +2086,11 @@ export type TermServerMessage =
 //        or when the project is closed)
 // PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in AgentK and its Meko conversation; the
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
-//        long name or one with control characters, 409 for an archived session)
+//        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
+//        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
+//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone)
+// GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
+//        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409

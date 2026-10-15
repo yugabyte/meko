@@ -79,7 +79,8 @@ first launch) stays. An archived session can't be renamed.
 
 ## Changes
 
-Clicking the `+N −N` numbers in the footer opens a side panel with every file changed on the
+Clicking the `N files · +N −N` numbers in the footer (`+N −N` on a phone, where the footer is
+tight) opens a side panel with every file changed on the
 branch since it left the base: committed, uncommitted and untracked (ignored files are left out).
 The base is the branch's merge base with `origin/<base>` or, in a fork, `upstream/<base>`, whichever
 is closer to the branch (a fork's own `<base>` can lag the upstream one the branch was rebased onto);
@@ -96,6 +97,32 @@ a sandboxing content policy so the bytes can never run as a page. The footer cou
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file.
+
+### Changing the base
+
+The base is the session's base branch, set when it started (or by its PR). Claude can move the
+branch onto another one, such as a release branch for a backport, and then everything since the
+old base shows as changed. The base in the panel's header is a menu of the branches the session
+can be compared with (`GET /api/sessions/:id/base-branches`: local, origin's and upstream's, by
+name, newest commit first). Picking one (`PATCH /api/sessions/:id` with `baseBranch`) makes it the
+session's base everywhere: the footer and the panel, the PR's target and the prompts that name the
+base, the unpushed count, and Claude's system prompt at its next launch. The session's activity
+notes the change (*Base changed from master to 2026.1*). The branch must be here, on origin or on
+upstream, with history in common with the session's, and not the session's own branch. A review's
+base, and a session's with a PR, is its PR's and can't be changed; there the base is plain text.
+When AgentK finds the session's PR, the PR's base becomes the session's if they differ (the base
+may have changed after the PR prompt went out). The menu says under its filter that the pick
+becomes the session's base, and the PR goes there; long branch names are cut short.
+
+AgentK also suggests a base when the branch is far past its own (`suggestBase()` in `changes.ts`,
+at least 50 commits, `SUGGEST_MIN_AHEAD`): of origin's and upstream's branches whose tips are in
+the branch's history (`git for-each-ref --merged HEAD`, the 50 newest), less the branch's own
+copies and the base itself, the one the fewest commits behind it, when that's fewer. A bar under the
+header says so (*This branch is 1,246 commits ahead of master, but only 2 commits ahead of 2026.1.
+Comparing with 2026.1 makes it this session's base, and the PR goes there.*) with **Compare with
+2026.1**; nothing changes until it's clicked. The suggestion is worked out only
+when the panel loads, never in the footer's refresh. Below the floor it's ordinary work on a branch,
+and a branch stacked on another uses the menu.
 
 ## Review comments
 

@@ -1139,6 +1139,12 @@ export class Lifecycle {
   /** The session works on this PR from now on: it goes to Review and the PR is polled right away. */
   private async adoptPr(id: string, pr: github.PrRef, by: 'you' | 'auto'): Promise<void> {
     const before = this.sessions.row(id);
+    // The PR's base is the session's from now on, whatever base the PR prompt named (it may have
+    // changed since, from the Changes panel, before the PR was found).
+    if (pr.baseRefName && pr.baseRefName !== before.base_branch) {
+      this.sessions.update(id, { base_branch: pr.baseRefName });
+      this.sessions.event(id, 'base', `Base set to ${pr.baseRefName}, the base of PR #${pr.number}`);
+    }
     if (before.pr_number === pr.number) {
       // Back on a PR it had before a move: its review state carries on, and it's not another PR for the stats.
       if (before.review_state === 'none') this.sessions.update(id, { review_state: 'waiting' });

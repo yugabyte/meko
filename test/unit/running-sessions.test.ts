@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProjectWithSessions, QueuedGate, Session, SessionStatus } from '../../src/shared/types.js';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkOffsetMs, totalUnits } from '../../src/web/blink.js';
 import { StatusDot } from '../../src/web/components/common.js';
-import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, runningSessions, type DotState } from '../../src/web/util.js';
+import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, offersLearn, runningSessions, type DotState } from '../../src/web/util.js';
 
 const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false, queued: QueuedGate | null = null) =>
   ({ id: status, status, desired, learning, mekoCall, queued, mergeBlockers: [] as string[] }) as Session;
@@ -82,5 +82,18 @@ describe('dotState', () => {
       expect(ms % BLINK_UNIT_MS).toBe(0);
       expect(ms).toBeLessThan(totalUnits(runs) * BLINK_UNIT_MS);
     }
+  });
+});
+
+describe('offersLearn', () => {
+  // A Discard waiting for its learn step says so itself, so Save learnings isn't offered beside it.
+  it.each<[string, SessionStatus, boolean, boolean, boolean, boolean]>([
+    ['offered', 'idle', false, true, true, true],
+    ['not while discarding', 'idle', true, true, true, false],
+    ['not without a datapack', 'idle', false, false, true, false],
+    ['not with Meko off', 'idle', false, true, false, false],
+    ['not while Claude has exited', 'exited', false, true, true, false],
+  ])('%s', (_, status, discarding, datapack, meko, offered) => {
+    expect(offersLearn({ status, discarding }, datapack, meko)).toBe(offered);
   });
 });

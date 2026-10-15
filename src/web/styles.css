@@ -1908,8 +1908,20 @@ div[id^='dak-mermaid-'] .label {
   color: var(--ink);
   font-size: 12px;
 }
+/* Sized to the diagram, so it grows and shrinks as − and + zoom it, up to the window less the
+   overlay's padding. Not `wide`: `.dialog.wide` comes later and would cap it at 780 px. */
 .dialog.diagram-dialog {
-  width: min(1200px, 100%);
+  width: fit-content;
+  min-width: min(520px, 100%);
+  max-width: 100%;
+}
+/* The title (the diagram's accTitle or kind) takes what the diagram leaves, never widening it. */
+.diagram-dialog .dialog-hd h2 {
+  contain: inline-size;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The image at its natural size: wider or taller ones scroll here (pinch zoom works too). */
 .diagram-dialog .dialog-body {
@@ -1918,9 +1930,14 @@ div[id^='dak-mermaid-'] .label {
 .diagram-view {
   overflow: auto;
   padding: 14px 18px;
+  /* Room for the vertical scrollbar from the start: added once a tall diagram overflows, it
+     widened the dialog but left a horizontal scrollbar behind. */
+  scrollbar-gutter: stable;
 }
+/* Centred when narrower than the dialog; a wider one starts at the left and scrolls. */
 .diagram-view img {
   max-width: none;
+  margin: 0 auto;
 }
 .diagram-view.fit img {
   max-width: 100%;
@@ -3295,6 +3312,30 @@ div[id^='dak-mermaid-'] .label {
   border-radius: 8px;
   box-shadow: var(--shadow);
   overflow: hidden;
+}
+.files-pop.left {
+  left: 0;
+  right: auto;
+}
+.chg-bar .btn {
+  margin-left: auto;
+}
+/* A branch name in a button: long ones (a stacked branch's) are cut, not widening the header. */
+.base-name {
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.files-note {
+  margin: 0;
+  padding: 0 12px 6px;
+}
+.chg-path.cur::after {
+  content: ' (current)';
+  color: var(--muted);
 }
 .files-filter {
   display: block;
@@ -4843,7 +4884,8 @@ div[id^='dak-mermaid-'] .label {
   .files-menu {
     position: static;
   }
-  .files-pop {
+  .files-pop,
+  .files-pop.left {
     left: 8px;
     right: 8px;
     width: auto;
@@ -4933,6 +4975,10 @@ div[id^='dak-mermaid-'] .label {
   /* A dialog without a footer (Settings) ends with its body, which clears the home indicator. */
   .dialog-body:last-child {
     padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  /* A full-size diagram is a full-width sheet like any dialog; it scrolls sideways inside. */
+  .dialog.diagram-dialog {
+    width: 100%;
   }
   /* Claude's questions take the whole sheet, which shrinks for the keyboard. */
   .dialog.ask-dialog {

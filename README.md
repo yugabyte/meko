@@ -149,9 +149,11 @@ your phone can connect.
   repos that take long to build start incremental. Each repo keeps up to 3 idle worktrees, and one
   no session has used for 14 days is removed; change both in Settings (0 idle worktrees removes
   worktrees when sessions end).
-- **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
+- **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
+  Compare with another branch (a release branch for a backport, say) from the base in its header;
+  when the branch has clearly moved onto another branch, the panel offers to switch.
 - **Paste images for Claude:** paste a screenshot into the terminal, or drop image files on it, and
   Claude gets the image with your next message, even when AgentK Local runs on another machine.
   Images pasted into the New session dialog's first prompt go with it when the session starts.
