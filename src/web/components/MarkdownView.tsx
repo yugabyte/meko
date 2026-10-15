@@ -129,7 +129,7 @@ function DiagramFigure({ code, ...shown }: Shown & { code: ReactNode }) {
 function DiagramDialog({ src, alt, width, height, onClose }: Shown & { onClose: () => void }) {
   const zoom = useZoom(width, 1);
   return (
-    <Dialog title={alt} wide className="diagram-dialog" aside={zoom.controls} onClose={onClose}>
+    <Dialog title={alt} className="diagram-dialog" aside={zoom.controls} onClose={onClose}>
       <div ref={zoom.box} className={cx('diagram-view', zoom.scale === null && 'fit')}>
         <img ref={zoom.img} src={src} alt={alt} width={width ?? undefined} height={height ?? undefined} style={zoom.style} />
       </div>
