@@ -1915,7 +1915,7 @@ div[id^='dak-mermaid-'] .label {
   min-width: min(520px, 100%);
   max-width: 100%;
 }
-/* The title (the diagram's labels) takes what the diagram leaves, never widening the dialog. */
+/* The title (the diagram's accTitle or kind) takes what the diagram leaves, never widening it. */
 .diagram-dialog .dialog-hd h2 {
   contain: inline-size;
   min-width: 0;
