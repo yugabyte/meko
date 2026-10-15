@@ -31,7 +31,7 @@ func TestApplyStatus_ReportWithoutVersionKeepsTheStoredOne(t *testing.T) {
 
 	stored := sqlmock.NewRows(envRowCols).AddRow(
 		envUUID, "amp-acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-		0, 400, "v1.4.2", nil, "", "", "[]", true, keyA, time.Now(), KindAmp, "[]", nil, "BYOC",
+		0, 400, "v1.4.2", nil, "", "", "[]", true, keyA, time.Now(), KindAmp, "[]", nil, "BYOC", false,
 	)
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments e WHERE e\.uuid = \$1`).
 		WithArgs(envUUID).
@@ -39,7 +39,7 @@ func TestApplyStatus_ReportWithoutVersionKeepsTheStoredOne(t *testing.T) {
 
 	// $10 is agent_version, and it must still be the stored one; $4 is the state the
 	// report did carry. Everything else is free.
-	args := make([]driver.Value, 18)
+	args := make([]driver.Value, 19)
 	for i := range args {
 		args[i] = sqlmock.AnyArg()
 	}

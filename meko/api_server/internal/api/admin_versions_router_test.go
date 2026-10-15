@@ -100,7 +100,7 @@ func TestAdminVersionRoutes_IgnoreRequireAccountHeader(t *testing.T) {
 		WithArgs("acme-prod").
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "amp", "[]", nil, "BYOC",
+			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "amp", "[]", nil, "BYOC", false,
 		))
 	mock.ExpectQuery(`INSERT INTO meko_system\.environment_desired_resources .* RETURNING generation`).
 		WithArgs(envUUID, "controller", "controller", []byte(`{"version":"2.1.0"}`)).

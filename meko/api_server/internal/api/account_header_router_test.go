@@ -30,7 +30,7 @@ var headerRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
-	"agent_base_url", "type",
+	"agent_base_url", "type", "accepts_new_pools",
 }
 
 // fleetServer stands up the real router in control-plane mode over a mocked system
@@ -113,7 +113,7 @@ func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 		WithArgs(acctA).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]", nil, "BYOC",
+			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]", nil, "BYOC", false,
 		))
 
 	resp := fleetGet(t, srv, "/api/v1/environments", acctA)
@@ -134,7 +134,7 @@ func TestFleetRoutes_AccountHeaderOptionalByDefault(t *testing.T) {
 	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]", nil, "BYOC",
+			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]", nil, "BYOC", false,
 		))
 
 	resp := fleetGet(t, srv, "/api/v1/environments", "")

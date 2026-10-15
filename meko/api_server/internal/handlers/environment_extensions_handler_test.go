@@ -29,7 +29,7 @@ func newExtensionsHandler(t *testing.T) (*EnvironmentHandler, sqlmock.Sqlmock, f
 func ampRow(id, accountID string) *sqlmock.Rows {
 	return sqlmock.NewRows(scopeRowCols).AddRow(
 		envUUID, id, accountID, "cloud", "us-east-1", "READY", "", 0, "",
-		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "BYOC",
+		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "BYOC", false,
 	)
 }
 

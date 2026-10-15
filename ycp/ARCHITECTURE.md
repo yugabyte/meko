@@ -348,6 +348,12 @@ READY → DRAINING (drain) → DEREGISTERED (deregister)
 
 - Enrollment advances an env to `ATTESTING`.
 - Agent status reports set the state directly (e.g. `READY`, `DEGRADED`).
+- A shared MANAGED amp environment goes `DEGRADED` over any one tenant's failed or stuck
+  resource, so a new storage pool may still be placed on a `DEGRADED` one — but only
+  when the agent reports `accepts_new_pools`: everything degrading it sits under one
+  storage pool, nothing is unreadable, and telemetry is healthy. Only the agent can
+  tell that apart from an unreachable controller, which also reports a fresh
+  `DEGRADED`.
 - `bootstrap-progress` (pre-agent installer) forces intermediate provisioning
   states.
 - Console lifecycle actions (`suspend`/`resume`/`drain`/`deregister`) are applied

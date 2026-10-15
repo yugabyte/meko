@@ -250,7 +250,11 @@ func TestEnrollByKey_EnrolsButDegradesAnEnvironmentThatShipsElsewhere(t *testing
 
 	mock.ExpectQuery(`FROM meko_system\.environment_api_keys WHERE api_key_id = \$1`).
 		WithArgs(keyA).
-		WillReturnRows(envRow("amp-acme-prod", KindAmp))
+		// The previous pod reported accepts_new_pools; enrolment must not write it back.
+		WillReturnRows(sqlmock.NewRows(envRowCols).AddRow(
+			envUUID, "amp-acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
+			0, 400, "", nil, "", "", "[]", false, keyA, time.Now(), KindAmp, "[]", nil, "BYOC", true,
+		))
 
 	// $4 is the state column. DEGRADED from the moment it checks in, not from its
 	// first heartbeat — an operator reading the console straight after registering
@@ -264,6 +268,7 @@ func TestEnrollByKey_EnrolsButDegradesAnEnvironmentThatShipsElsewhere(t *testing
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			false, // $19 accepts_new_pools: enrolment carries no report to stand on
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -381,11 +386,13 @@ func TestApplyStatus_DegradesAnEnvironmentThatStoppedShipping(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			false, // $19 accepts_new_pools: telemetry is environment-wide, so the agent's word is withdrawn
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	res, err := svc.ApplyStatus(envUUID, StatusReport{
 		EnvironmentState: "READY",
+		AcceptsNewPools:  true,
 		Telemetry:        &Telemetry{OtelEnabled: false},
 	})
 	if err != nil {

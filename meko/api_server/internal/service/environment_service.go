@@ -291,11 +291,14 @@ type ResourceStatus struct {
 
 // StatusReport is the agent's heartbeat + phases.
 type StatusReport struct {
-	EnvironmentState string         `json:"environment_state"`
-	AgentVersion     string         `json:"agent_version"`
-	AppliedRevision  int            `json:"applied_revision"`
-	ClusterFacts     ClusterFacts   `json:"cluster_facts"`
-	Components       []EnvComponent `json:"components"`
+	EnvironmentState string `json:"environment_state"`
+	// AcceptsNewPools: the environment can take a storage pool it does not hold yet.
+	// See api.StatusReport in ycp; absent (an older agent) reads false.
+	AcceptsNewPools bool           `json:"accepts_new_pools,omitempty"`
+	AgentVersion    string         `json:"agent_version"`
+	AppliedRevision int            `json:"applied_revision"`
+	ClusterFacts    ClusterFacts   `json:"cluster_facts"`
+	Components      []EnvComponent `json:"components"`
 	// Resources is the amp controller's observed inventory. A meko agent omits
 	// it (nil); ApplyStatus leaves the stored inventory untouched when it is nil
 	// and replaces it (including with an empty set) when it is present.
@@ -404,7 +407,7 @@ func (s *EnvironmentService) Register(
 	}
 	// MANAGED is operator-only. A scoped caller is a customer acting under its own
 	// account (and its own API key), and the region APIs pin other tenants' storage
-	// pools onto any READY MANAGED amp env with no account check -- so a customer that
+	// pools onto any eligible MANAGED amp env with no account check -- so a customer that
 	// could register MANAGED would have its own agent handed other tenants' clusters,
 	// branches and endpoints. Refuse it here so type='MANAGED' can only come from the
 	// unscoped operator path (admin secret, no account header).
@@ -512,6 +515,10 @@ func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind strin
 	}
 	mergeFacts(e, f)
 	e.State = StateAttesting
+	// Enrolment carries no agent report, so the previous pod's word does not carry
+	// over: written back, it would admit a telemetry-DEGRADED environment to placement
+	// while the old heartbeat is still fresh.
+	e.AcceptsNewPools = false
 	if degraded != "" {
 		// Degraded from the moment it checks in, not from its first heartbeat: an
 		// operator reading the console straight after registering should see the
@@ -617,6 +624,9 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 	if degraded != "" {
 		e.State = StateDegraded
 	}
+	// Written every tick, so it never outlives the report that set it. A telemetry
+	// failure is environment-wide, so it withdraws the agent's word.
+	e.AcceptsNewPools = r.AcceptsNewPools && degraded == ""
 	// nil means the agent could not collect (no RBAC, a transient API error) — not
 	// that the environment has no workloads, so the stored list is left alone. Marshal
 	// would write `null`, which is not empty, so the repo's len==0 default never
@@ -1152,10 +1162,13 @@ func createOnlyDefault(regions []models.RegionResources) []models.RegionResource
 	return out
 }
 
-// ErrNoManagedEnv re-exports the repository's, so handlers map it to a 404 without
-// importing the storage layer. Raised when a region names no READY MANAGED
-// environment for a storage pool to pin to.
-var ErrNoManagedEnv = repository.ErrNoEligibleEnvironment
+// ErrNoManagedEnv and ErrManagedEnvUnavailable re-export the repository's, so handlers
+// map them to 404 and 503 without importing the storage layer: a region with no
+// MANAGED environment, and one whose environments cannot take a new pool right now.
+var (
+	ErrNoManagedEnv          = repository.ErrNoEligibleEnvironment
+	ErrManagedEnvUnavailable = repository.ErrEnvironmentUnavailable
+)
 
 // ErrResourceExists, ErrResourceNotFound and ErrClusterNameInUse re-export the
 // repository's create/update guard sentinels so handlers map them to 409/404 without
@@ -1184,7 +1197,7 @@ type EnvironmentResources struct {
 
 // SetResourcesByStoragePool applies desired-state changes to a storage pool addressed
 // by region, never by environment id. Each region resolves to one MANAGED environment
-// through the sticky mapping (first call pins a READY one, later calls reuse it), and
+// through the sticky mapping (first call pins an eligible one, later calls reuse it), and
 // every patch across every region is applied in ONE transaction — all-or-nothing.
 //
 // The whole call is validated before the transaction opens: the storage pool must be a

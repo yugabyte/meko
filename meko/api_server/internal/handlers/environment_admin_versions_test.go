@@ -24,7 +24,7 @@ func sharedIDRows() *sqlmock.Rows {
 	rows := sqlmock.NewRows(scopeRowCols)
 	for _, acct := range []string{acctA, acctB} {
 		rows.AddRow(envUUID, "acme-prod", acct, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "BYOC")
+			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "BYOC", false)
 	}
 	return rows
 }

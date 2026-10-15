@@ -24,7 +24,7 @@ var poolTaskCols = []string{
 func poolEnvRow(uuid, id, region, resourcesJSON string) *sqlmock.Rows {
 	return sqlmock.NewRows(envRowCols).AddRow(
 		uuid, id, acctA, "cloud", region, "READY", "", 0, "",
-		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), KindAmp, resourcesJSON, nil, "MANAGED",
+		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), KindAmp, resourcesJSON, nil, "MANAGED", false,
 	)
 }
 

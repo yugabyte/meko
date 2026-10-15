@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -749,5 +751,76 @@ func TestRunCallsOnTickWithEachResult(t *testing.T) {
 	e.Run(ctx, src, nil, time.Hour, nil)
 	if len(got) != 1 || got[0].Created != 1 {
 		t.Fatalf("OnTick saw %+v, want one tick that created the pool", got)
+	}
+}
+
+// Every condition that degrades the environment names its resource in the log: the
+// agent's metric counts them but carries no key (CLOUDGA-37501).
+func TestRunLogsTheResourcesThatDegrade(t *testing.T) {
+	f := newFake()
+	pool := key("pool", "p")
+	ep := key("endpoint", "p/c/main/rw")
+	f.failCall[pool] = 1
+	f.actual = []Actual{{Key: ep, Ready: false, State: "provisioning"}}
+
+	now := time.Unix(0, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := 0
+	e := New(f, Options{
+		Now:        func() time.Time { now = now.Add(2 * time.Minute); return now },
+		StuckAfter: time.Minute,
+		OnTick: func(Result, error, time.Duration) {
+			if ticks++; ticks == 2 {
+				cancel()
+			}
+		},
+	})
+	src := oneShotSource{api.DesiredState{Resources: []api.DesiredResource{
+		{Kind: "pool", Name: "p", Generation: 1}, d("endpoint", "p/c/main/rw", 0),
+	}}}
+	var logs []string
+	e.Run(ctx, src, nil, time.Millisecond, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	all := strings.Join(logs, "\n")
+	for _, want := range []string{pool.String() + " failed:", ep.String() + " is stuck:"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("log lacks %q:\n%s", want, all)
+		}
+	}
+}
+
+// Failing keeps a resource that is waiting out its backoff, which Failed drops on
+// every tick its retry does not land on (CLOUDGA-37501), and lets it go on success.
+func TestReconcileFailingSpansBackoff(t *testing.T) {
+	f := newFake()
+	pool := key("pool", "p")
+	f.failCall[pool] = 1
+	desired := []api.DesiredResource{{Kind: "pool", Name: "p", Generation: 1}}
+
+	now := time.Unix(0, 0)
+	e := New(f, Options{Now: func() time.Time { return now }, BaseBackoff: time.Minute, MaxBackoff: time.Minute})
+
+	res, _ := e.Reconcile(context.Background(), desired, true)
+	if _, ok := res.Failed[pool]; !ok {
+		t.Fatalf("tick1: failed=%v, want the pool", res.Failed)
+	}
+	if _, ok := res.Failing[pool]; !ok {
+		t.Fatalf("tick1: failing=%v, want the pool", res.Failing)
+	}
+	// Inside the backoff window: not retried, so not Failed, but still Failing.
+	now = now.Add(time.Second)
+	res, _ = e.Reconcile(context.Background(), desired, true)
+	if len(res.Failed) != 0 {
+		t.Fatalf("tick2: failed=%v, want nothing retried inside the backoff", res.Failed)
+	}
+	if _, ok := res.Failing[pool]; !ok {
+		t.Fatalf("tick2: failing=%v, want the pool still failing", res.Failing)
+	}
+	// Past it: the retry succeeds and the pool is no longer failing.
+	now = now.Add(2 * time.Minute)
+	if res, _ = e.Reconcile(context.Background(), desired, true); len(res.Failing) != 0 {
+		t.Fatalf("tick3: failing=%v, want none after the retry succeeded", res.Failing)
 	}
 }

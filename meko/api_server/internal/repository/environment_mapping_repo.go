@@ -11,10 +11,17 @@ import (
 	"meko/api_server/internal/models"
 )
 
-// ErrNoEligibleEnvironment is returned when a region has no READY MANAGED amp
-// environment for a storage pool to pin to. It is the region-addressed equivalent of a
-// 404: the caller named a region nothing can serve.
+// ErrNoEligibleEnvironment is returned when a region has no MANAGED amp environment
+// at all for a storage pool to pin to. It is the region-addressed equivalent of a 404:
+// the caller named a region nothing serves.
 var ErrNoEligibleEnvironment = errors.New("no eligible MANAGED environment for region")
+
+// ErrEnvironmentUnavailable is returned when a region has MANAGED amp environments but
+// none can take a new storage pool right now (still enrolling, suspended, a stale
+// heartbeat, or DEGRADED by more than one tenant's resources). Unlike
+// ErrNoEligibleEnvironment the same call can succeed later, so it is a retryable
+// status, not a 404.
+var ErrEnvironmentUnavailable = errors.New("MANAGED environment temporarily unavailable for region")
 
 // ErrConcurrentPoolUpdate is returned when a region PATCH lost a Postgres deadlock
 // (SQLSTATE 40P01) to a concurrent write. The transaction rolled back whole, so the
@@ -168,14 +175,14 @@ func (r *EnvironmentRepo) ListStoragePoolEnvs(storagePool string) ([]StoragePool
 //
 //   - an existing pin whose environment is not DEREGISTERED is reused (kept alive
 //     through SUSPENDED/DRAINING/etc — only a withdrawn environment fails over);
-//   - a pin to a DEREGISTERED environment fails over to a READY one and re-pins;
-//   - no pin picks a READY MANAGED amp environment and records it.
+//   - a pin to a DEREGISTERED environment fails over to an eligible one and re-pins;
+//   - no pin picks an eligible MANAGED amp environment and records it.
 //
-// Assignments (new or re-pin) require a READY MANAGED amp environment (see
-// pickManagedEnvTx); ErrNoEligibleEnvironment when the region offers none. The ON
-// CONFLICT re-read handles two callers racing the first assignment: the deterministic
-// pick makes them choose the same environment, and the unique (storage_pool_name,
-// region) index makes exactly one row win.
+// Assignments (new or re-pin) require an eligible MANAGED amp environment (see
+// pickManagedEnvTx); ErrNoEligibleEnvironment or ErrEnvironmentUnavailable when the
+// region offers none. The ON CONFLICT re-read handles two callers racing the first
+// assignment: the deterministic pick makes them choose the same environment, and the
+// unique (storage_pool_name, region) index makes exactly one row win.
 func assignStoragePoolEnvTx(tx *sql.Tx, storagePool, region string) (string, error) {
 	var envUUID, state string
 	err := tx.QueryRow(
@@ -221,9 +228,21 @@ func assignStoragePoolEnvTx(tx *sql.Tx, storagePool, region string) (string, err
 	}
 }
 
-// pickManagedEnvTx deterministically chooses one READY MANAGED amp environment in a
-// region: the oldest, with uuid as a stable tiebreak so the choice never depends on
-// scan order. ErrNoEligibleEnvironment when the region offers none.
+// pickManagedEnvTx deterministically chooses one eligible MANAGED amp environment in a
+// region: READY before DEGRADED, then the oldest, with uuid as a stable tiebreak so the
+// choice never depends on scan order.
+//
+// Either state needs a heartbeat under 90s old, the console's stale threshold: the row
+// keeps its last reported state when the agent stops reporting, so READY alone says
+// nothing about now. DEGRADED is eligible only when the agent also reported
+// accepts_new_pools (CLOUDGA-37501): the agent degrades the whole environment over any
+// one resource, and one tenant's stuck resize must not turn every new tenant away, but
+// a degradation that is the environment's own — its controller unreachable, telemetry
+// failing — must. The agent decides which, since only it can tell them apart.
+//
+// No row: ErrEnvironmentUnavailable when the region has an environment that could
+// become eligible, ErrNoEligibleEnvironment when it has none. DRAINING counts as none,
+// since it is being withdrawn and a retry would not land on it.
 //
 // kind = 'amp' as well as type = 'MANAGED': the two columns are independent, and these
 // resources are amp kinds (storage-pool/cluster/branch/endpoint). Pinning them to a
@@ -234,9 +253,21 @@ func pickManagedEnvTx(tx *sql.Tx, region string) (string, error) {
 	var envUUID string
 	err := tx.QueryRow(
 		`SELECT uuid FROM meko_system.environments
-		  WHERE type = 'MANAGED' AND COALESCE(kind, 'meko') = 'amp' AND state = 'READY' AND region = $1
-		  ORDER BY created_at ASC, uuid ASC LIMIT 1`, region).Scan(&envUUID)
+		  WHERE type = 'MANAGED' AND COALESCE(kind, 'meko') = 'amp' AND region = $1
+		    AND last_heartbeat_at > NOW() - interval '90 seconds'
+		    AND (state = 'READY' OR (state = 'DEGRADED' AND accepts_new_pools))
+		  ORDER BY (state = 'READY') DESC, created_at ASC, uuid ASC LIMIT 1`, region).Scan(&envUUID)
 	if errors.Is(err, sql.ErrNoRows) {
+		var served bool
+		if qerr := tx.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM meko_system.environments
+			  WHERE type = 'MANAGED' AND COALESCE(kind, 'meko') = 'amp' AND region = $1
+			    AND state NOT IN ('DEREGISTERED', 'DRAINING'))`, region).Scan(&served); qerr != nil {
+			return "", fmt.Errorf("check managed environments for %s: %w", region, qerr)
+		}
+		if served {
+			return "", fmt.Errorf("%w: %s", ErrEnvironmentUnavailable, region)
+		}
 		return "", fmt.Errorf("%w: %s", ErrNoEligibleEnvironment, region)
 	}
 	if err != nil {

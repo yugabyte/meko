@@ -554,7 +554,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		// The per-environment routes above resolve against the caller's account, but a
 		// MANAGED amp environment is Yugabyte-operated fleet infrastructure shared
 		// across accounts -- it carries no per-customer account_id (pickManagedEnvTx
-		// chooses any READY MANAGED amp env in the region), so there is no account to
+		// chooses any eligible MANAGED amp env in the region), so there is no account to
 		// scope by. The tenant key here is the storage-pool UUID in the request, a
 		// separate id space from X-Meko-Account-ID. An account header would therefore
 		// be validated and then ignored, and under --require-account-header the fleet

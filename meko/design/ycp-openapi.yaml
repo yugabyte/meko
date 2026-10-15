@@ -250,7 +250,7 @@ paths:
       description: |
         Region-addressed: the body names the storage pool once and a batch of changes per region.
         Each region resolves to ONE MANAGED amp environment via the sticky `(storage_pool, region)`
-        mapping — the first call for a pair pins a READY environment, later calls reuse it — so a
+        mapping — the first call for a pair pins an eligible environment, later calls reuse it — so a
         pool's resources never scatter across environments.
 
         Every resource across every region is applied in one ATOMIC transaction. Each item names
@@ -276,8 +276,10 @@ paths:
         a `delete` carrying a `spec`, a missing `kind`/`name`, a non-object `spec`, a name outside
         the pool subtree — fails with 400 and writes nothing. A create onto an existing resource is
         409 `RESOURCE_EXISTS` (409 `CLUSTER_NAME_IN_USE` for a cluster); an update on an absent one
-        is 404 `RESOURCE_NOT_FOUND`. A region with no READY MANAGED amp environment is a 404. The
-        batch is capped at 100 items across all regions.
+        is 404 `RESOURCE_NOT_FOUND`. A region with no MANAGED amp environment is a 404; one whose
+        environments cannot take a new storage pool right now is a retryable 503
+        `ENVIRONMENT_UNAVAILABLE`. A new pool pins to an environment whose heartbeat is under 90s
+        old and which is READY, or DEGRADED with `accepts_new_pools` reported. The batch is capped at 100 items across all regions.
 
         An update that changes an endpoint field amp fixes at create — `connectivity.mode`,
         `role`, `tags`, `extended_config` — is 400 `CREATE_TIME_FIELD` once the agent reports the
@@ -305,6 +307,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /api/v1/environments/resources/tasks:
     get:
@@ -768,6 +771,7 @@ components:
     NotFound: { description: Not found., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     BadRequest: { description: Invalid request., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: Conflicting state., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    ServiceUnavailable: { description: Temporarily unavailable; retry., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     AmbiguousId: { description: '`AMBIGUOUS_ID`: two accounts hold this id and no `X-Meko-Account-ID` was sent.', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     UnsupportedMediaType:
       description: |
@@ -1112,6 +1116,12 @@ components:
       required: [environment_state]
       properties:
         environment_state: { $ref: '#/components/schemas/EnvState' }
+        accepts_new_pools:
+          type: boolean
+          description: |
+            The environment can take a storage pool it does not hold yet: true when READY, and when
+            DEGRADED only by resources under one storage pool. A DEGRADED environment is eligible for
+            a new pool only with this set; absent reads false.
         agent_version: { type: string }
         applied_revision: { type: integer }
         components: { type: array, items: { $ref: '#/components/schemas/Component' } }

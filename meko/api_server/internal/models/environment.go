@@ -50,6 +50,10 @@ type Environment struct {
 	NodeCount    int             `json:"node_count,omitempty"`
 	MaxDatapacks int             `json:"max_datapacks,omitempty"`
 	Live         bool            `json:"live"`
+	// AcceptsNewPools is the agent's word that the environment can take a storage
+	// pool it does not hold yet. Placement reads it only for a DEGRADED environment
+	// (CLOUDGA-37501); false from an agent that predates it.
+	AcceptsNewPools bool `json:"accepts_new_pools"`
 
 	// AgentBaseURL is the YBM pass-through base this environment's agent dials, as
 	// the registration gave it. Stored only to render the install hint again later;
@@ -124,7 +128,7 @@ type RegionResources struct {
 // AeonAccountMapping is one sticky assignment pinning a storage pool, in one region,
 // to the MANAGED environment that serves it. It is what makes the region-addressed
 // resource APIs deterministic: the first PATCH for a (storage_pool, region) picks a
-// READY MANAGED environment and records it here, and every later call for that pair
+// eligible MANAGED environment and records it here, and every later call for that pair
 // reuses the same environment instead of re-choosing. Unique on
 // (storage_pool_name, region); environment_id references environments(uuid).
 type AeonAccountMapping struct {

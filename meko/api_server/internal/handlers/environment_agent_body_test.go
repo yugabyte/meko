@@ -168,7 +168,7 @@ func TestAgentStatus_NormalizesStateCase(t *testing.T) {
 	// The state argument is pinned; the rest of the full-row overwrite is not what
 	// this test is about.
 	args := []driver.Value{envUUID, "cloud", "us-east-1", "READY"}
-	for len(args) < 18 {
+	for len(args) < 19 {
 		args = append(args, sqlmock.AnyArg())
 	}
 	mock.ExpectExec(`UPDATE meko_system\.environments SET`).

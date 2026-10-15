@@ -75,7 +75,7 @@ const envColumns = `e.uuid, e.id, e.account_id, e.placement, e.region, e.state, 
 	(SELECT api_key_id FROM meko_system.environment_api_keys
 	   WHERE env_uuid = e.uuid AND status = 'active'),
 	e.created_at, COALESCE(e.kind, 'meko'), COALESCE(e.resources::text, '[]'), e.agent_base_url,
-	COALESCE(e.type, 'BYOC')`
+	COALESCE(e.type, 'BYOC'), e.accepts_new_pools`
 
 func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, error) {
 	var e models.Environment
@@ -86,7 +86,7 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 	if err := row.Scan(&e.UUID, &e.ID, &e.AccountID, &e.Placement, &region, &e.State, &k8sVersion,
 		&e.NodeCount, &provider, &e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat,
 		&mcpBaseURL, &certFingerprint, &componentsText, &e.Live, &apiKeyID,
-		&e.CreatedAt, &e.Kind, &resourcesText, &agentBaseURL, &e.Type); err != nil {
+		&e.CreatedAt, &e.Kind, &resourcesText, &agentBaseURL, &e.Type, &e.AcceptsNewPools); err != nil {
 		return nil, err
 	}
 	e.AccountID = accountFromStore(e.AccountID)
@@ -322,12 +322,12 @@ func (r *EnvironmentRepo) Update(e *models.Environment) error {
 			placement=$2, region=$3, state=$4, k8s_version=$5, node_count=$6,
 			provider=$7, datapacks=$8, max_datapacks=$9, agent_version=$10, last_heartbeat_at=$11,
 			mcp_base_url=$12, cert_fingerprint=$13, components=$14, live=$15,
-			kind=$16, resources=$17, type=$18
+			kind=$16, resources=$17, type=$18, accepts_new_pools=$19
 		WHERE uuid = $1`,
 		e.UUID, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
-		kind, []byte(resources), typ)
+		kind, resources, typ, e.AcceptsNewPools)
 	if err != nil {
 		slog.Error("update environment", "uuid", e.UUID, "err", err)
 		return fmt.Errorf("update environment: %w", err)

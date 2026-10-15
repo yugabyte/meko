@@ -23,7 +23,7 @@ const poolUUID = "aaaaaaaa-1111-2222-3333-444444444444"
 func ampResourceRow(resources string) *sqlmock.Rows {
 	return sqlmock.NewRows(scopeRowCols).AddRow(
 		envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", resources, nil, "MANAGED",
+		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", resources, nil, "MANAGED", false,
 	)
 }
 
@@ -113,31 +113,46 @@ func TestSetResourcesByRegion_FirstTouch(t *testing.T) {
 	}
 }
 
-// A region with no READY MANAGED environment is a 404, and the batch writes nothing.
-func TestSetResourcesByRegion_NoManagedEnvIs404(t *testing.T) {
-	h, mock, done := newScopeHandler(t)
-	defer done()
+// A region with no MANAGED environment is a 404; one whose environments cannot take a
+// pool right now is a retryable 503, so a degraded region does not read as an absent
+// one (CLOUDGA-37501). Either way the batch writes nothing.
+func TestSetResourcesByRegion_NoManagedEnv(t *testing.T) {
+	for _, tc := range []struct {
+		code   string
+		status int
+		served bool
+	}{
+		{"NOT_FOUND", http.StatusNotFound, false},
+		{"ENVIRONMENT_UNAVAILABLE", http.StatusServiceUnavailable, true},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			h, mock, done := newScopeHandler(t)
+			defer done()
 
-	mock.ExpectBegin()
-	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
-		WithArgs(poolUUID, "us-east-1").
-		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp'`).
-		WithArgs("us-east-1").
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}))
-	mock.ExpectRollback()
+			mock.ExpectBegin()
+			mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(poolUUID).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+				WithArgs(poolUUID, "us-east-1").
+				WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
+			mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+` +
+				`WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp'`).
+				WithArgs("us-east-1").
+				WillReturnRows(sqlmock.NewRows([]string{"uuid"}))
+			mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM meko_system\.environments`).
+				WithArgs("us-east-1").
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(tc.served))
+			mock.ExpectRollback()
 
-	body := `{"storage_pool":"` + poolUUID + `","regions":[` +
-		`{"region":"us-east-1","resources":[{"kind":"cluster","name":"` + poolUUID + `/main-db","spec":{}}]}]}`
-	rec := fleetRequest(t, h.SetResourcesByRegion, http.MethodPatch,
-		"/api/v1/environments/resources", "", body, "")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unmet expectations: %v", err)
+			body := `{"storage_pool":"` + poolUUID + `","regions":[` +
+				`{"region":"us-east-1","resources":[{"kind":"cluster","name":"` + poolUUID + `/main-db","spec":{}}]}]}`
+			rec := fleetRequest(t, h.SetResourcesByRegion, http.MethodPatch,
+				"/api/v1/environments/resources", "", body, "")
+			wantCode(t, rec, tc.status, tc.code)
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectations: %v", err)
+			}
+		})
 	}
 }
 

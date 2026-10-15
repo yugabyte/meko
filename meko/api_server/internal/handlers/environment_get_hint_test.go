@@ -19,7 +19,7 @@ func hintRow(id, kind, agentBaseURL string) *sqlmock.Rows {
 	}
 	return sqlmock.NewRows(scopeRowCols).AddRow(
 		envUUID, id, acctA, "cloud", "us-east-1", "PENDING", "", 0, "",
-		0, 400, "", nil, "", "", "[]", false, keyA, time.Now(), kind, "[]", stored, "BYOC",
+		0, 400, "", nil, "", "", "[]", false, keyA, time.Now(), kind, "[]", stored, "BYOC", false,
 	)
 }
 

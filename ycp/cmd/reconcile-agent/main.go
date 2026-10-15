@@ -432,6 +432,50 @@ func (a *agent) fallback(err error) (api.DesiredState, bool, error) {
 	return api.DesiredState{}, false, err
 }
 
+// poolKinds are the kinds that belong to one storage pool, named under it.
+var poolKinds = map[string]bool{
+	ampbackend.KindPool: true, ampbackend.KindCluster: true,
+	ampbackend.KindBranch: true, ampbackend.KindEndpoint: true,
+}
+
+// acceptsNewPools reports whether the environment can take a storage pool it does
+// not hold yet, which is what placement asks of a DEGRADED one (CLOUDGA-37501). Any
+// one failed or stuck resource degrades a shared environment, and one tenant's stuck
+// resize must not turn every new tenant away. So it holds when everything keeping
+// the environment out of READY sits under a single storage pool. Anything
+// unreadable (amp reports the whole tree so when its controller's API is down), an
+// environment-wide kind (controller, fleet-version, extension), or failures across
+// several pools (a controller refusing every write) say the environment is unwell.
+// Failures are read from Failing, not Failed: each resource retries on its own
+// backoff, so Failed rarely holds two pools' retries on the same tick.
+func acceptsNewPools(res reconcile.Result) bool {
+	if len(res.Unreadable) > 0 {
+		return false
+	}
+	pool := ""
+	oneTenant := func(k reconcile.ResourceKey) bool {
+		if !poolKinds[k.Kind] {
+			return false
+		}
+		p, _, _ := strings.Cut(k.Name, "/")
+		if pool == "" {
+			pool = p
+		}
+		return p == pool
+	}
+	for k := range res.Failing {
+		if !oneTenant(k) {
+			return false
+		}
+	}
+	for k := range res.Stuck {
+		if !oneTenant(k) {
+			return false
+		}
+	}
+	return true
+}
+
 // Report implements reconcile.Reporter: post a status heartbeat with the
 // reconciled inventory and applied revision. A retryable failure, a stuck
 // resource, or a resource the backend could not read makes the environment
@@ -459,6 +503,7 @@ func (a *agent) Report(ctx context.Context, ds api.DesiredState, res reconcile.R
 
 	report := api.StatusReport{
 		EnvironmentState: stateStr,
+		AcceptsNewPools:  acceptsNewPools(res),
 		AgentVersion:     a.agentVer,
 		AppliedRevision:  ds.Revision,
 		Resources:        inventory(res),

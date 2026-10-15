@@ -184,15 +184,18 @@ whole set, use the region-addressed, atomic batch — there is no environment id
 path. `PATCH /environments/resources` takes
 `{"storage_pool": "<pool>", "regions": [{"region": "...", "resources": [...]}]}`
 (capped at 100 patches across all regions). Each region resolves to one MANAGED amp
-environment through the sticky `(storage_pool, region)` mapping — the first call pins a
-READY one, later calls reuse it — and every patch across every region applies in one
+environment through the sticky `(storage_pool, region)` mapping — the first call pins one
+with a heartbeat under 90s old that is READY, or DEGRADED with the agent reporting
+`accepts_new_pools`, and later calls reuse it — and every patch across every region
+applies in one
 transaction: each item shallow-merges its partial `spec` into one resource by
 `kind`+`name` (an absent one is created; names must fall under the pool), or with
 `delete: true` cascade-removes it and its descendants, never the `controller` or
 `fleet` declaration. The `storage-pool` row is auto-created on first touch, with an
 owner derived from the pool name. There is no prune, and any invalid item fails the
-whole call with 400 and writes nothing; a region with no READY MANAGED amp
-environment is a 404. `GET /environments/resources?name=<path>`
+whole call with 400 and writes nothing; a region with no MANAGED amp environment is a
+404, and one whose environments cannot take a new pool right now is a retryable 503.
+`GET /environments/resources?name=<path>`
 reads back both the declared (`desired`) and agent-reported (`observed`) sets per
 mapped environment, filterable by `kind` and `subtree`, without the environment-wide
 `controller` and `fleet-version` rows; the PATCH response mirrors it.

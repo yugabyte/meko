@@ -69,7 +69,7 @@ func (h *EnvironmentHandler) ListResourcesByName(c echo.Context) error {
 //	{ "storage_pool": "<pool>", "regions": [ { "region": "...", "resources": [ ... ] } ] }
 //
 // Each region resolves to one MANAGED environment via the sticky mapping (the first
-// call for a (storage_pool, region) pins a READY environment, later calls reuse it).
+// call for a (storage_pool, region) pins an eligible environment, later calls reuse it).
 // Every resource across every region is applied in ONE transaction: any invalid item
 // fails the whole call with 400 and writes nothing. The response mirrors the LIST:
 // the pool's desired and observed resources per environment touched.
@@ -153,10 +153,14 @@ func regionPatchError(c echo.Context, err error) error {
 	if errors.Is(err, service.ErrCreateTimeField) {
 		return apiError(c, http.StatusBadRequest, "CREATE_TIME_FIELD", err.Error())
 	}
-	// A region with no READY MANAGED environment cannot be served — a 404, the
-	// same as naming an environment that does not exist.
+	// A region with no MANAGED environment cannot be served — a 404, the same as
+	// naming an environment that does not exist. One whose environments cannot take
+	// a new pool right now is a 503, so a caller retries rather than gives up.
 	if errors.Is(err, service.ErrNoManagedEnv) {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", err.Error())
+	}
+	if errors.Is(err, service.ErrManagedEnvUnavailable) {
+		return apiError(c, http.StatusServiceUnavailable, "ENVIRONMENT_UNAVAILABLE", err.Error())
 	}
 	// A create landing on an existing resource, or a cluster name already used
 	// elsewhere in the pool, is a 409; an update naming an absent one is a 404.

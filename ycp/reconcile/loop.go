@@ -128,6 +128,11 @@ type Result struct {
 	Deferred int // eligible next tick (parent not ready, or backing off)
 	// Failed maps a resource to the retryable error from its attempt this tick.
 	Failed map[ResourceKey]error
+	// Failing maps every resource whose last attempt failed and has not succeeded
+	// since to that error: Failed plus those waiting out their backoff, which this
+	// tick did not retry. Failed alone sees a resource only on the ticks its retry
+	// lands on, so it cannot say how many are failing.
+	Failing map[ResourceKey]error
 	// Unreadable maps a resource the backend could not read this tick
 	// (Actual.DiscoveryError) to why. Nothing was issued for it — not a create,
 	// which would duplicate whatever is really there; not an update, which would
@@ -200,6 +205,7 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 
 	res := Result{
 		Failed:     map[ResourceKey]error{},
+		Failing:    map[ResourceKey]error{},
 		Permanent:  map[ResourceKey]error{},
 		Updating:   map[ResourceKey]error{},
 		Unreadable: map[ResourceKey]error{},
@@ -297,6 +303,11 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 		res.Deferred = 0
 	}
 	e.dispatch(ctx, eligible, &res)
+	e.mu.Lock()
+	for k, f := range e.failures {
+		res.Failing[k] = f.lastErr
+	}
+	e.mu.Unlock()
 	return res, nil
 }
 
@@ -572,6 +583,15 @@ func (e *Engine) Run(ctx context.Context, src Source, rep Reporter, interval tim
 			// own error, so this is the local copy rather than the only record.
 			for k, uerr := range res.Unreadable {
 				logf("reconcile: %s could not be read, so nothing was issued for it: %v", k, uerr)
+			}
+			// The other two conditions that degrade the environment. Without these
+			// the metric says one resource is stuck and nothing says which
+			// (CLOUDGA-37501).
+			for k, d := range res.Stuck {
+				logf("reconcile: %s is stuck: no progress for %s", k, d.Round(time.Second))
+			}
+			for k, ferr := range res.Failed {
+				logf("reconcile: %s failed: %v", k, ferr)
 			}
 		}
 		if rerr == nil && rep != nil {

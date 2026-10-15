@@ -11,10 +11,10 @@ import (
 	"meko/api_server/internal/repository"
 )
 
-// anyEnvUpdateArgs matches the 18 columns of the environments UPDATE, none of which
+// anyEnvUpdateArgs matches the 19 columns of the environments UPDATE, none of which
 // these tests care about — they are about what happens to the TASK table after it.
 func anyEnvUpdateArgs() []driver.Value {
-	args := make([]driver.Value, 18)
+	args := make([]driver.Value, 19)
 	for i := range args {
 		args[i] = sqlmock.AnyArg()
 	}

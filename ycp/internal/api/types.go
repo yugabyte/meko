@@ -231,12 +231,17 @@ type DesiredResource struct {
 
 // StatusReport is the agent's heartbeat + phases (drives the fleet registry).
 type StatusReport struct {
-	EnvironmentState EnvState         `json:"environment_state"`
-	AgentVersion     string           `json:"agent_version"`
-	AppliedRevision  int              `json:"applied_revision"`
-	ClusterFacts     ClusterFacts     `json:"cluster_facts"`
-	Components       []Component      `json:"components"`
-	Resources        []ResourceStatus `json:"resources,omitempty"` // amp controller's inventory; meko omits it
+	EnvironmentState EnvState `json:"environment_state"`
+	// AcceptsNewPools says the environment can take a storage pool it does not hold
+	// yet: true when READY, and when DEGRADED only by resources of one storage pool.
+	// Placement admits a DEGRADED environment only with it set, so an agent that
+	// predates it (absent reads false) leaves placement READY-only.
+	AcceptsNewPools bool             `json:"accepts_new_pools,omitempty"`
+	AgentVersion    string           `json:"agent_version"`
+	AppliedRevision int              `json:"applied_revision"`
+	ClusterFacts    ClusterFacts     `json:"cluster_facts"`
+	Components      []Component      `json:"components"`
+	Resources       []ResourceStatus `json:"resources,omitempty"` // amp controller's inventory; meko omits it
 	// Tasks is a DELTA of the amp controller's task log -- every task whose status
 	// moved since the previous report -- not the whole log and not a snapshot. An
 	// amp agent sends it; a meko agent omits it.

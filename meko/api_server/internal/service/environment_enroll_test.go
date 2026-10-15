@@ -34,6 +34,7 @@ func TestEnrollByKey_ChecksIn(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(),
 			true,                                                 // $15 live
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), // $16 kind, $17 resources, $18 type
+			sqlmock.AnyArg(), // $19 accepts_new_pools
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

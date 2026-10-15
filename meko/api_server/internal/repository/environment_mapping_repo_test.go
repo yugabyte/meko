@@ -37,7 +37,7 @@ func TestApplyStoragePoolPatches_FirstTouchAssignsAndSynthesizes(t *testing.T) {
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
 	// Pick a READY MANAGED environment in the region.
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp'`).
+	mock.ExpectQuery(pickQuery).
 		WithArgs(poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 	// Record the mapping, then re-read the winner.
@@ -125,38 +125,62 @@ func TestApplyStoragePoolPatches_ReusesPinNoSynthesis(t *testing.T) {
 	}
 }
 
-// A region with no READY MANAGED environment fails with ErrNoEligibleEnvironment and
-// rolls the whole call back.
+// pickQuery is the eligibility query: a fresh heartbeat, and READY or a DEGRADED
+// environment the agent says can take new pools (CLOUDGA-37501), READY preferred.
+const pickQuery = `SELECT uuid FROM meko_system\.environments\s+` +
+	`WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp' AND region = \$1\s+` +
+	`AND last_heartbeat_at > NOW\(\) - interval '90 seconds'\s+` +
+	`AND \(state = 'READY' OR \(state = 'DEGRADED' AND accepts_new_pools\)\)\s+` +
+	`ORDER BY \(state = 'READY'\) DESC`
+
+// A region with no eligible environment rolls the whole call back. It is a 404's
+// ErrNoEligibleEnvironment when the region has no environment at all, and a
+// retryable ErrEnvironmentUnavailable when it has one that cannot take a pool now.
 func TestApplyStoragePoolPatches_NoEligibleEnvIsError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	repo := NewEnvironmentRepo(db)
+	for _, tc := range []struct {
+		want   error
+		name   string
+		served bool
+	}{
+		{ErrNoEligibleEnvironment, "region has no environment", false},
+		{ErrEnvironmentUnavailable, "region's environments unavailable", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			repo := NewEnvironmentRepo(db)
 
-	mock.ExpectBegin()
-	expectPoolLock(mock)
-	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
-		WithArgs("acct-1", poolRegion).
-		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp'`).
-		WithArgs(poolRegion).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"})) // none
-	mock.ExpectRollback()
+			mock.ExpectBegin()
+			expectPoolLock(mock)
+			mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+				WithArgs("acct-1", poolRegion).
+				WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}))
+			mock.ExpectQuery(pickQuery).
+				WithArgs(poolRegion).
+				WillReturnRows(sqlmock.NewRows([]string{"uuid"})) // none
+			mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM meko_system\.environments` +
+				`[\s\S]+state NOT IN \('DEREGISTERED', 'DRAINING'\)`).
+				WithArgs(poolRegion).
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(tc.served))
+			mock.ExpectRollback()
 
-	_, err = repo.ApplyStoragePoolPatches("acct-1",
-		[]models.RegionResources{{
-			Region:    poolRegion,
-			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{}`)}},
-		}},
-		[]byte(`{"owner":"x"}`), nil,
-	)
-	if err == nil {
-		t.Fatal("err = nil, want ErrNoEligibleEnvironment")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unmet expectations: %v", err)
+			_, err = repo.ApplyStoragePoolPatches("acct-1",
+				[]models.RegionResources{{
+					Region:    poolRegion,
+					Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{}`)}},
+				}},
+				[]byte(`{"owner":"x"}`), nil,
+			)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectations: %v", err)
+			}
+		})
 	}
 }
 
@@ -177,7 +201,7 @@ func TestApplyStoragePoolPatches_DeregisteredPinFailsOverAndRepins(t *testing.T)
 	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
 		WithArgs("acct-1", poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(oldEnv, "DEREGISTERED"))
-	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp'`).
+	mock.ExpectQuery(pickQuery).
 		WithArgs(poolRegion).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 	// Re-pin the mapping to the new environment.

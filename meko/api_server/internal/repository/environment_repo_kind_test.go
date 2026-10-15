@@ -18,7 +18,7 @@ var envRowColsK = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "api_key_id", "created_at", "kind", "resources",
-	"agent_base_url", "type",
+	"agent_base_url", "type", "accepts_new_pools",
 }
 
 // Get reads the kind and the reported inventory back off the row.
@@ -35,7 +35,7 @@ func TestEnvironmentRepo_Get_ScansKindAndResources(t *testing.T) {
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows(envRowColsK).AddRow(
 			envUUID, "amp-acme", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", inventory, nil, "BYOC",
+			0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", inventory, nil, "BYOC", false,
 		))
 
 	e, err := repo.GetByUUID(envUUID)

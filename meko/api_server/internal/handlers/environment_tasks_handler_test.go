@@ -416,7 +416,7 @@ func TestTasks_ReportsTheHeartbeat(t *testing.T) {
 	beat := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
 	row := sqlmock.NewRows(scopeRowCols).AddRow(
 		envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
-		0, 400, "", beat, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "BYOC",
+		0, 400, "", beat, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "BYOC", false,
 	)
 	mock.ExpectQuery(`WHERE e\.account_id = \$1 AND e\.id = \$2`).
 		WithArgs(acctA, "acme-prod").WillReturnRows(row)

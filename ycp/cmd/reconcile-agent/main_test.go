@@ -341,3 +341,43 @@ func TestInventoryCarriesBackendDetail(t *testing.T) {
 		t.Errorf("stuck row error = %q, want the no-progress message ending in %q", got.Error, why)
 	}
 }
+
+// A DEGRADED environment takes new pools only when what degrades it sits under one
+// storage pool (CLOUDGA-37501).
+func TestAcceptsNewPools(t *testing.T) {
+	ep := func(name string) reconcile.ResourceKey { return reconcile.ResourceKey{Kind: "endpoint", Name: name} }
+	boom := errors.New("boom")
+	for _, tc := range []struct {
+		name string
+		res  reconcile.Result
+		want bool
+	}{
+		{"converged", reconcile.Result{}, true},
+		{"one pool stuck and failing", reconcile.Result{
+			Stuck:   map[reconcile.ResourceKey]time.Duration{ep("a/c/main/rw"): time.Hour},
+			Failing: map[reconcile.ResourceKey]error{{Kind: "cluster", Name: "a/c"}: boom},
+		}, true},
+		{"two pools failing", reconcile.Result{
+			Failing: map[reconcile.ResourceKey]error{ep("a/c/main/rw"): boom, ep("b/c/main/rw"): boom},
+		}, false},
+		// The devcloud case: one pool permanently stuck, another's create refused and
+		// waiting out its backoff, so this tick retried nothing.
+		{"one pool stuck, another backing off", reconcile.Result{
+			Stuck:   map[reconcile.ResourceKey]time.Duration{ep("a/c/main/rw"): time.Hour},
+			Failing: map[reconcile.ResourceKey]error{{Kind: "cluster", Name: "b/c"}: boom},
+		}, false},
+		{"anything unreadable", reconcile.Result{
+			Unreadable: map[reconcile.ResourceKey]error{ep("a/c/main/rw"): boom},
+		}, false},
+		{"controller stuck", reconcile.Result{
+			Stuck: map[reconcile.ResourceKey]time.Duration{{Kind: "controller", Name: "controller"}: time.Hour},
+		}, false},
+		{"extension failing", reconcile.Result{
+			Failing: map[reconcile.ResourceKey]error{{Kind: "extension", Name: "pgvector"}: boom},
+		}, false},
+	} {
+		if got := acceptsNewPools(tc.res); got != tc.want {
+			t.Errorf("%s: acceptsNewPools = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
