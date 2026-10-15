@@ -155,6 +155,14 @@ export const STATUS_TEXT: Record<DotState, string> = {
 /** A learning dot's tooltip. */
 export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
 
+/**
+ * Whether Save learnings is offered: AgentK saves to the project's datapack, so it needs one, Meko and
+ * Claude there. Not while a Discard waits for its learn step: the Discard row already says so.
+ */
+export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack: boolean, mekoConfigured: boolean): boolean {
+  return datapack && mekoConfigured && s.status !== 'exited' && !s.discarding;
+}
+
 /** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;

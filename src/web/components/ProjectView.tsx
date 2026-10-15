@@ -17,7 +17,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
@@ -185,12 +185,11 @@ export function ProjectView({
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.configured;
-  // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
-  const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
+  const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   const learnDisabled = acting || !!session?.busy || !!session?.learning;
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
-  const learnTo = canLearn && dedicated ? dedicated.name : null;
+  const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
