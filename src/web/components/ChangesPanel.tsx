@@ -24,7 +24,7 @@ const STATE_LABEL: Record<CommentState, string> = { draft: 'draft', queued: 'que
 /** Diffs start collapsed once this many lines are already shown, so big branches open fast. */
 const OPEN_LINE_BUDGET = 2000;
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
 /** A comment being written (id null) or edited, and the lines it's about. */
 interface Editor {
@@ -84,7 +84,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     return () => {
       cancelled = true;
     };
-  }, [session.id, session.diffStat?.added, session.diffStat?.removed, tick]);
+  }, [session.id, session.baseBranch, session.diffStat?.files, session.diffStat?.added, session.diffStat?.removed, tick]);
 
   // Comments move between draft, queued and sent on the server; the counts in state say when.
   useEffect(() => {
@@ -274,6 +274,14 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   };
 
   const exited = session.status === 'exited';
+  /** A review's base, and a session's with a PR, is its PR's (the server refuses a change). */
+  const fixedBase = session.kind === 'review-pr' ? 'A review compares with its PR\'s base.' : session.prNumber ? `The base of PR #${session.prNumber}.` : null;
+  const changeBase = (branch: string) => {
+    setNote(null);
+    // The state push with the new base refetches the diff.
+    api.updateSession(session.id, { baseBranch: branch }).catch((e) => setNote(errorMessage(e)));
+  };
+  const suggested = !fixedBase ? data?.suggestedBase : null;
   /** Comment cards: `away` for comments not placed on a row, `row` for the row the others follow. */
   const thread = (cs: ReviewComment[] | undefined, opts: { away?: boolean; withPath?: boolean; row?: DiffLine } = {}) =>
     cs?.map((c) =>
@@ -298,7 +306,13 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         <b>Changes</b>
         {data && (
           <span className="muted small">
-            vs <span className="mono">{data.base}</span> · {plural(files.length, 'file')} ·{' '}
+            vs{' '}
+            {fixedBase ? (
+              <span className="mono" title={fixedBase}>{data.base}</span>
+            ) : (
+              <BaseMenu session={session} base={data.base} onPick={changeBase} />
+            )}{' '}
+            · {plural(files.length, 'file')} ·{' '}
             <span className="add">+{data.added}</span> <span className="del">−{data.removed}</span>
           </span>
         )}
@@ -331,6 +345,21 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <span className="mobile-only">← Back</span>
         </button>
       </div>
+      {data && suggested && (
+        <div className="chg-bar" role="status">
+          <span>
+            This branch is {plural(data.ahead, 'commit')} ahead of {session.baseBranch}, but only {plural(suggested.ahead, 'commit')} ahead
+            of {suggested.branch}.
+          </span>
+          <button
+            className="btn small"
+            title={`Make ${suggested.branch} this session's base: the footer, this panel and the PR use it`}
+            onClick={() => changeBase(suggested.branch)}
+          >
+            Compare with {suggested.branch}
+          </button>
+        </div>
+      )}
       {session.kind === 'review-pr' && drafts > 0 && !queued && !note && !exited && (
         <div className="chg-bar">AgentK drafts these as your review comments on the PR, and posts nothing until you say.</div>
       )}
@@ -440,6 +469,82 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
 }
 
 function FilesMenu({ files, counts, onJump }: { files: ChangedFile[]; counts: Map<string, number>; onJump: (path: string) => void }) {
+  return (
+    <FilterMenu
+      label="Files ▾"
+      title="Jump to a changed file"
+      name="Changed files"
+      listName="Files"
+      placeholder="Filter files"
+      items={files}
+      itemKey={(f) => f.path}
+      matches={(f, needle) => `${f.oldPath ?? ''} ${f.path}`.toLowerCase().includes(needle)}
+      none={(q) => `No changed files match “${q}”.`}
+      onChoose={(f) => onJump(f.path)}
+      renderItem={(f) => (
+        <>
+          <KindBadge kind={f.kind} />
+          <FilePath file={f} />
+          <Counts file={f} comments={counts.get(f.path) ?? 0} />
+        </>
+      )}
+    />
+  );
+}
+
+/** The header's base: a menu of the branches the session can be compared with, which makes the picked one its base. */
+function BaseMenu({ session, base, onPick }: { session: Session; base: string; onPick: (branch: string) => void }) {
+  const [branches, setBranches] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => {
+    setBranches(null);
+    setError(null);
+    api
+      .baseBranches(session.id)
+      .then(setBranches)
+      .catch((e) => setError(errorMessage(e)));
+  };
+  return (
+    <FilterMenu
+      label={<span className="mono">{base} ▾</span>}
+      title={`Compare with another branch. It becomes this session's base, which the PR goes to.`}
+      name="Base branches"
+      listName="Branches"
+      placeholder="Filter branches"
+      align="left"
+      items={branches}
+      error={error}
+      itemKey={(b) => b}
+      matches={(b, needle) => b.toLowerCase().includes(needle)}
+      none={(q) => `No branch matches “${q}”.`}
+      onOpen={load}
+      onChoose={(b) => b !== session.baseBranch && onPick(b)}
+      renderItem={(b) => <span className={cx('chg-path mono', b === session.baseBranch && 'cur')}>{b}</span>}
+    />
+  );
+}
+
+/**
+ * A button that opens a filterable list: type to filter, arrows and Enter to pick, Escape or a click
+ * outside to close. `items` null while they load.
+ */
+function FilterMenu<T>(props: {
+  label: ReactNode;
+  title: string;
+  name: string;
+  listName: string;
+  placeholder: string;
+  items: T[] | null;
+  error?: string | null;
+  itemKey: (item: T) => string;
+  matches: (item: T, needle: string) => boolean;
+  none: (q: string) => string;
+  renderItem: (item: T) => ReactNode;
+  onChoose: (item: T) => void;
+  onOpen?: () => void;
+  align?: 'left' | 'right';
+}) {
+  const { items, itemKey, matches, renderItem, onChoose } = props;
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
@@ -456,17 +561,17 @@ function FilesMenu({ files, counts, onJump }: { files: ChangedFile[]; counts: Ma
   }, [open]);
 
   const needle = q.trim().toLowerCase();
-  const shown = needle ? files.filter((f) => `${f.oldPath ?? ''} ${f.path}`.toLowerCase().includes(needle)) : files;
+  const shown = !items ? [] : needle ? items.filter((it) => matches(it, needle)) : items;
   const cur = Math.min(sel, Math.max(0, shown.length - 1));
 
   useEffect(() => {
     list.current?.children[cur]?.scrollIntoView({ block: 'nearest' });
   }, [cur, open]);
 
-  const choose = (f: ChangedFile | undefined) => {
-    if (!f) return;
+  const choose = (it: T | undefined) => {
+    if (it === undefined) return;
     setOpen(false);
-    onJump(f.path);
+    onChoose(it);
   };
 
   const keys = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -488,22 +593,22 @@ function FilesMenu({ files, counts, onJump }: { files: ChangedFile[]; counts: Ma
         className={cx('btn small', open && 'on')}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title="Jump to a changed file"
+        title={props.title}
         onClick={() => {
+          if (!open) props.onOpen?.();
           setOpen((o) => !o);
           setQ('');
           setSel(0);
         }}
       >
-        Files ▾
+        {props.label}
       </button>
       {open && (
-        <div className="files-pop" role="dialog" aria-label="Changed files">
+        <div className={cx('files-pop', props.align === 'left' && 'left')} role="dialog" aria-label={props.name}>
           <input
-            id="changes-file-filter"
             className="files-filter mono"
-            placeholder="Filter files"
-            aria-label="Filter files"
+            placeholder={props.placeholder}
+            aria-label={props.placeholder}
             autoFocus
             value={q}
             onChange={(e) => {
@@ -512,25 +617,27 @@ function FilesMenu({ files, counts, onJump }: { files: ChangedFile[]; counts: Ma
             }}
             onKeyDown={keys}
           />
-          {shown.length ? (
-            <ul className="files-list" role="listbox" ref={list} aria-label="Files">
-              {shown.map((f, i) => (
-                <li key={f.path} role="option" aria-selected={i === cur}>
+          {props.error ? (
+            <p className="error-text small files-none">{props.error}</p>
+          ) : !items ? (
+            <p className="muted small files-none"><Busy label="Loading" /></p>
+          ) : shown.length ? (
+            <ul className="files-list" role="listbox" ref={list} aria-label={props.listName}>
+              {shown.map((it, i) => (
+                <li key={itemKey(it)} role="option" aria-selected={i === cur}>
                   <button
                     className={cx('chg-row', i === cur && 'sel')}
                     tabIndex={-1}
                     onMouseEnter={() => setSel(i)}
-                    onClick={() => choose(f)}
+                    onClick={() => choose(it)}
                   >
-                    <KindBadge kind={f.kind} />
-                    <FilePath file={f} />
-                    <Counts file={f} comments={counts.get(f.path) ?? 0} />
+                    {renderItem(it)}
                   </button>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="muted small files-none">No changed files match “{q}”.</p>
+            <p className="muted small files-none">{props.none(q)}</p>
           )}
         </div>
       )}

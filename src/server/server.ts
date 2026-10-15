@@ -435,7 +435,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return core.sessions.action(req.params.id, action, req.body);
   });
   app.patch<{ Params: { id: string }; Body: UpdateSessionRequest | null }>('/api/sessions/:id', async (req) =>
-    core.sessions.rename(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
+    core.sessions.edit(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/base-branches', async (req) => core.sessions.baseBranches(req.params.id));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
   app.get<{ Params: { id: string } }>('/api/projects/:id/meko-logs', async (req): Promise<MekoLogInfo[]> => core.sessions.mekoLogs(req.params.id));

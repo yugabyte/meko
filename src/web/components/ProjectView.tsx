@@ -171,6 +171,8 @@ export function ProjectView({
   };
 
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
+  const changedFiles = session?.diffStat?.files ?? 0;
+  const filesText = `${changedFiles.toLocaleString()} ${changedFiles === 1 ? 'file' : 'files'}`;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
@@ -405,8 +407,9 @@ export function ProjectView({
               className={cx('foot-btn', panel === 'changes' && 'on')}
               onClick={() => toggle('changes')}
               aria-expanded={panel === 'changes'}
-              title={`Show every file changed on this branch since ${session.baseBranch}`}
+              title={`Show the files changed on this branch since ${session.baseBranch} (${filesText})`}
             >
+              {!mobile && `${filesText} · `}
               <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>
               {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>

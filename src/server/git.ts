@@ -163,6 +163,17 @@ export async function listBranches(repo: string): Promise<string[]> {
   return local.split('\n').filter(Boolean);
 }
 
+/** The branches a session's base can be: local, origin's and upstream's, by name, newest commit first. */
+export async function listBaseBranches(repo: string): Promise<string[]> {
+  const out = (await tryGit(repo, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin', 'refs/remotes/upstream')) ?? '';
+  const names = new Set<string>();
+  for (const ref of out.split('\n')) {
+    const name = /^refs\/(?:heads|remotes\/(?:origin|upstream))\/(.+)$/.exec(ref)?.[1];
+    if (name && name !== 'HEAD') names.add(name);
+  }
+  return [...names];
+}
+
 /** What happened to the local base branch before a new session branched from it. */
 export type SyncResult =
   | { kind: 'updated' | 'current' | 'no-upstream' }

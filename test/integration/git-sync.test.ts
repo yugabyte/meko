@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 import { BranchGoneError, addWorktree, checkBranchName, restoreWorktree } from '../../src/server/git.js';
-import { changedImage, changes, diffStat } from '../../src/server/changes.js';
+import { SUGGEST_MIN_AHEAD, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 /** git refuses to fetch into a branch being rebased or bisected from 2.38 on. */
@@ -219,7 +219,7 @@ describe('changes vs. the base (real git)', () => {
     expect(c.removed).toBe(1);
 
     // The footer's numbers match the panel, untracked files included.
-    expect(await diffStat(wt, 'main')).toEqual({ added: c.added, removed: c.removed });
+    expect(await diffStat(wt, 'main')).toEqual({ files: c.files.length, added: c.added, removed: c.removed });
   });
 
   it('serves both sides of a changed image, and only images inside the repo', async () => {
@@ -340,7 +340,7 @@ describe('the diff base of a fork (real git)', () => {
     const c = (await changes(wt, 'main'))!;
     expect(c.base).toBe('upstream/main');
     expect(c.files.map((f) => f.path)).toEqual(['README.md']);
-    expect(await diffStat(wt, 'main')).toEqual({ added: 1, removed: 0 });
+    expect(await diffStat(wt, 'main')).toEqual({ files: 1, added: 1, removed: 0 });
     // The Before side of an image is upstream's.
     expect((await changedImage(wt, 'main', 'logo.png', 'old'))?.data).toEqual(png(2));
   });
@@ -367,6 +367,30 @@ describe('the diff base of a fork (real git)', () => {
 
     git(repo, 'remote', 'remove', 'upstream');
     expect((await changes(wt, 'main'))!.base).toBe('origin/main');
-    expect(await diffStat(wt, 'main')).toEqual({ added: 1, removed: 0 });
+    expect(await diffStat(wt, 'main')).toEqual({ files: 1, added: 1, removed: 0 });
+  });
+
+  it('suggests the branch a branch was moved onto, once it is far past its base', async () => {
+    // Upstream's release branch, SUGGEST_MIN_AHEAD + 5 commits past main.
+    git(maint, 'checkout', '-q', '-b', 'rel');
+    for (let i = 0; i < SUGGEST_MIN_AHEAD + 5; i++) git(maint, 'commit', '-q', '--allow-empty', '-m', `rel ${i}`);
+    git(maint, 'push', '-q', 'origin', 'rel');
+    git(repo, 'fetch', '-q', 'upstream');
+    await addWorktree(repo, wt, 'ak/x', 'main');
+    // Moved onto the release branch, short of the floor: ordinary work.
+    git(wt, 'reset', '-q', '--hard', `upstream/rel~10`);
+    work();
+    const near = (await changes(wt, 'main'))!;
+    expect(near.ahead).toBe(SUGGEST_MIN_AHEAD - 4);
+    expect(await suggestBase(wt, 'main', 'ak/x', near.ahead)).toBeNull();
+
+    // Past it: the release branch is offered, and the branch's own copy on origin doesn't count.
+    git(wt, 'reset', '-q', '--hard', 'upstream/rel');
+    work();
+    git(wt, 'push', '-q', 'origin', 'ak/x');
+    const far = (await changes(wt, 'main'))!;
+    expect(far).toMatchObject({ ahead: SUGGEST_MIN_AHEAD + 6, suggestedBase: null });
+    expect(await suggestBase(wt, 'main', 'ak/x', far.ahead)).toEqual({ branch: 'rel', ahead: 1 });
+    expect(await changes(wt, 'rel')).toMatchObject({ base: 'upstream/rel', ahead: 1 });
   });
 });
