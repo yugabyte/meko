@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DIAGRAM_FONT, diagramAlt, diagramSize, mermaidConfig, mermaidLook, svgDataUrl } from '../../src/web/mermaid.js';
+import { DIAGRAM_FONT, diagramAlt, diagramSize, mermaidConfig, mermaidLook, svgDataUrl, zoomStep } from '../../src/web/mermaid.js';
 
 describe('mermaid diagrams', () => {
   it('draws in strict mode with SVG labels in a system font, themed', () => {
@@ -21,6 +21,22 @@ describe('mermaid diagrams', () => {
     expect(diagramSize('<svg viewBox="0 0 a b">')).toEqual({ width: null, height: null });
     // Only the outer <svg>'s own viewBox counts.
     expect(diagramSize('<svg><symbol viewBox="0 0 5 5"/></svg>')).toEqual({ width: null, height: null });
+  });
+
+  it.each([
+    [1, 1, 1.25],
+    [1, -1, 0.9],
+    // A fitted diagram, between steps or a hair off one.
+    [0.6, 1, 0.67],
+    [0.6, -1, 0.5],
+    [0.995, 1, 1.25],
+    [1.005, -1, 0.9],
+    [4, 1, null],
+    [0.25, -1, null],
+    [0.1, -1, null],
+    [0.1, 1, 0.25],
+  ] as const)('zooms from %s by %s to %s', (scale, dir, next) => {
+    expect(zoomStep(scale, dir)).toBe(next);
   });
 
   it('makes an image URL that keeps the SVG intact', () => {

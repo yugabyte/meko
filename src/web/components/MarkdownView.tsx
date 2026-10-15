@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import DOMPurify from 'dompurify';
 import { renderMarkdown } from '../markdown';
-import { DIAGRAM_FAILED, diagramAlt, drawDiagram, svgDataUrl, type Diagram } from '../mermaid';
+import { DIAGRAM_FAILED, diagramAlt, drawDiagram, svgDataUrl, zoomStep, type Diagram } from '../mermaid';
 import { useDarkTheme } from '../theme';
+import { cx } from '../util';
 import { Busy, Dialog } from './common';
 
 // Markdown designs render in the app's own page, so they get no forms or styles (an invisible
@@ -60,7 +61,6 @@ function Prose({ html, diagrams, dark }: { html: string; diagrams: string[]; dar
 function MermaidDiagram({ source, dark }: { source: string; dark: boolean }) {
   // The last one drawn stays up while the next is drawn (after a theme change), so nothing flickers.
   const [diagram, setDiagram] = useState<Diagram | null>(null);
-  const [full, setFull] = useState(false);
   useEffect(() => {
     let live = true;
     void drawDiagram(source, dark).then((d) => live && setDiagram(d));
@@ -96,23 +96,98 @@ function MermaidDiagram({ source, dark }: { source: string; dark: boolean }) {
       </div>
     );
   }
-  const img = <img src={src!} alt={alt} width={diagram.width ?? undefined} height={diagram.height ?? undefined} />;
+  return <DiagramFigure src={src!} alt={alt} width={diagram.width} height={diagram.height} code={code} />;
+}
+
+type Shown = { src: string; alt: string; width: number | null; height: number | null };
+
+/** A drawn diagram fitted to the column, its source under it; a click opens it full size. */
+function DiagramFigure({ code, ...shown }: Shown & { code: ReactNode }) {
+  const { src, alt, width, height } = shown;
+  const [full, setFull] = useState(false);
+  const zoom = useZoom(width, null);
   return (
     <figure className="mermaid-fig">
-      <button type="button" className="mermaid-open" onClick={() => setFull(true)} title="Open full size" aria-label={`${alt}: open full size`}>
-        {img}
-      </button>
+      <div className={cx('mermaid-view', zoom.scale !== null && 'zoomed')}>
+        <div ref={zoom.box} className="diagram-scroll">
+          <button type="button" className="mermaid-open" onClick={() => setFull(true)} title="Open full size" aria-label={`${alt}: open full size`}>
+            <img ref={zoom.img} src={src} alt={alt} width={width ?? undefined} height={height ?? undefined} style={zoom.style} />
+          </button>
+        </div>
+        {zoom.controls}
+      </div>
       <details className="mermaid-src">
         <summary>Source</summary>
         {code}
       </details>
-      {full &&
-        createPortal(
-          <Dialog title={alt} wide className="diagram-dialog" onClose={() => setFull(false)}>
-            <div className="diagram-view">{img}</div>
-          </Dialog>,
-          document.body,
-        )}
+      {full && createPortal(<DiagramDialog {...shown} onClose={() => setFull(false)} />, document.body)}
     </figure>
   );
+}
+
+/** A diagram full size: at its natural size to start, scrolling when it's bigger than the dialog. */
+function DiagramDialog({ src, alt, width, height, onClose }: Shown & { onClose: () => void }) {
+  const zoom = useZoom(width, 1);
+  return (
+    <Dialog title={alt} wide className="diagram-dialog" aside={zoom.controls} onClose={onClose}>
+      <div ref={zoom.box} className={cx('diagram-view', zoom.scale === null && 'fit')}>
+        <img ref={zoom.img} src={src} alt={alt} width={width ?? undefined} height={height ?? undefined} style={zoom.style} />
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * Zooming a diagram's image with − and + buttons, and its size between them, which fits it back to
+ * the width it has. `scale` is a share of the natural `width`, or null while fitted. For mice: the
+ * buttons are hidden on touch screens, where pinching zooms. Nothing to zoom without a width.
+ */
+function useZoom(
+  width: number | null,
+  start: number | null,
+): { scale: number | null; box: RefObject<HTMLDivElement | null>; img: RefObject<HTMLImageElement | null>; style?: CSSProperties; controls: ReactNode } {
+  const [scale, setScale] = useState(start);
+  // The box that scrolls when the diagram outgrows it.
+  const box = useRef<HTMLDivElement>(null);
+  const img = useRef<HTMLImageElement>(null);
+  // Where the middle of the view was in the diagram before a zoom, to keep it there after.
+  const centre = useRef<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    const c = centre.current;
+    centre.current = null;
+    if (!el || !c) return;
+    el.scrollLeft = c.x * el.scrollWidth - el.clientWidth / 2;
+    el.scrollTop = c.y * el.scrollHeight - el.clientHeight / 2;
+  }, [scale]);
+
+  const zoomTo = (next: number | null) => {
+    const el = box.current;
+    if (el) centre.current = { x: (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth, y: (el.scrollTop + el.clientHeight / 2) / el.scrollHeight };
+    setScale(next);
+  };
+  const step = (dir: 1 | -1) => {
+    // A fitted diagram steps from the size it's shown at.
+    const now = scale ?? (img.current && width ? img.current.getBoundingClientRect().width / width : 1);
+    const next = zoomStep(now, dir);
+    if (next !== null) zoomTo(next);
+  };
+  // A fitted diagram's size is only known once measured, so both buttons stay on while it's fitted.
+  const can = (dir: 1 | -1) => scale === null || zoomStep(scale, dir) !== null;
+
+  const controls = width ? (
+    <div className="diagram-zoom" role="group" aria-label="Zoom">
+      <button type="button" className="icon-btn" onClick={() => step(-1)} disabled={!can(-1)} title="Zoom out" aria-label="Zoom out">
+        −
+      </button>
+      <button type="button" className="icon-btn diagram-zoom-level" onClick={() => zoomTo(null)} disabled={scale === null} title="Fit to width">
+        {scale === null ? 'Fit' : `${Math.round(scale * 100)}%`}
+      </button>
+      <button type="button" className="icon-btn" onClick={() => step(1)} disabled={!can(1)} title="Zoom in" aria-label="Zoom in">
+        +
+      </button>
+    </div>
+  ) : null;
+  const style = scale !== null && width ? { width: Math.round(width * scale), maxWidth: 'none' } : undefined;
+  return { scale, box, img, style, controls };
 }

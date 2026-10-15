@@ -1794,7 +1794,7 @@ a.icon-btn {
 }
 
 /* Mermaid diagrams in markdown designs (MarkdownView.tsx): drawn as images, fit to the column;
-   a tap opens one full size. */
+   a tap opens one full size, and − and + zoom it (with a mouse; phones pinch). */
 .mermaid-slot {
   margin: 0 0 0.8em;
 }
@@ -1830,6 +1830,56 @@ div[id^='dak-mermaid-'] .label {
 .mermaid-open img {
   max-width: 100%;
 }
+/* Zoomed past the column, the diagram scrolls in its own box. */
+.mermaid-view {
+  position: relative;
+}
+.mermaid-view .diagram-scroll {
+  overflow-x: auto;
+}
+.mermaid-view.zoomed .mermaid-open {
+  max-width: none;
+}
+.diagram-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.diagram-zoom .icon-btn {
+  min-width: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.diagram-zoom .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+.diagram-zoom-level {
+  font-size: 12px;
+  min-width: 48px;
+}
+/* Over the diagram's top right corner, shown while the pointer is on it, a button has focus or
+   it's zoomed. */
+.mermaid-view .diagram-zoom {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+}
+@media (hover: hover) {
+  .mermaid-view .diagram-zoom {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .mermaid-view:hover .diagram-zoom,
+  .mermaid-view:focus-within .diagram-zoom,
+  .mermaid-view.zoomed .diagram-zoom {
+    opacity: 1;
+  }
+}
 .mermaid-src summary {
   width: fit-content;
   padding: 4px 0;
@@ -1862,7 +1912,13 @@ div[id^='dak-mermaid-'] .label {
 .diagram-view img {
   max-width: none;
 }
+.diagram-view.fit img {
+  max-width: 100%;
+}
 @media (pointer: coarse) {
+  .diagram-zoom {
+    display: none;
+  }
   .mermaid-src summary {
     display: flex;
     align-items: center;
