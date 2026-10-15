@@ -110,21 +110,10 @@ var ProTierMaxKBFileBytes = envInt64("MEKO_PRO_TIER_KB_FILE_BYTES", 60*1024*1024
 // uncapped. Tunable via MEKO_PRO_TIER_MAX_MILLICORES.
 var ProTierMaxMilliCores = envInt64("MEKO_PRO_TIER_MAX_MILLICORES", 5000)
 
-// The multipart upload route (UploadFile) reads each file fully into a Go
-// []byte before writing it to S3, so its memory use scales with concurrent
-// uploads x file size — an unbounded per-file size is an OOM vector even for
-// paying top tiers. This ceiling exists to bound that memory use; it is an
-// infrastructure guard local to this route, NOT a tier limit. It is lower
-// than maxUploadFileBytes (512 MB) below because that ceiling guards a
-// different, memory-safe route: the presigned-S3 flow streams bytes straight
-// to S3 and never holds them in api_server's memory at all.
-var MultipartMaxFileBytes = envInt64("MEKO_MULTIPART_MAX_FILE_BYTES", 50*1024*1024)
-
-// maxUploadFileBytes is the presigned-upload counterpart of
-// MultipartMaxFileBytes above — also not a tier limit, just meko's own
-// ceiling well below S3's 5 GB single-POST limit, since dist_rag never
-// processes anything near that size. A per-tier cap that's missing (<= 0)
-// or above this value is replaced by this ceiling.
+// maxUploadFileBytes is not a tier limit, just meko's own ceiling well below
+// S3's 5 GB single-POST limit, since dist_rag never processes anything near
+// that size. A per-tier cap that's missing (<= 0) or above this value is
+// replaced by this ceiling.
 const maxUploadFileBytes int64 = 512 * 1024 * 1024 // 512 MB
 
 // TierLimits is the per-tier cap set. `Unlimited` for pro / enterprise
@@ -184,9 +173,7 @@ func LimitsFor(userType string) TierLimits {
 		// Uncapped except per-file upload size (60 MB, ProTierMaxKBFileBytes)
 		// and AMP compute, which caps at ProTierMaxMilliCores (5 vCPU) across
 		// the user's datapacks — running databases are the one Pro resource
-		// still worth bounding. The multipart route additionally applies
-		// MultipartMaxFileBytes as a buffering OOM guard (route infra, not a
-		// tier limit).
+		// still worth bounding.
 		return TierLimits{
 			MaxDatapacks:      TierUnlimited,
 			MaxKBStorageBytes: TierUnlimited,
@@ -264,10 +251,6 @@ const (
 	FreeTierUpgradeMessageFileSize     = "File too large; maximum 5 MB per file. Upgrade to Standard for larger file uploads."
 	StandardTierUpgradeMessageFileSize = "File too large; maximum 50 MB per file. Upgrade to Pro for larger file uploads."
 	ProTierUpgradeMessageFileSize      = "File too large; maximum 60 MB per file."
-	// Returned by the multipart route when the requester's tier allows more
-	// than the route's buffering ceiling — names the route cap, not the tier
-	// cap, and points at the flow that can take the bigger file.
-	MultipartFileTooLargeMessage = "File too large for this endpoint; maximum 50 MB per direct upload. Use the browser upload for larger files."
 )
 
 // UpgradeMessageFileSize picks the per-tier "file too large" copy so each

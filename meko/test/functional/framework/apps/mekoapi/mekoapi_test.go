@@ -181,29 +181,96 @@ func asError(err error, target **Error) bool {
 	return ok
 }
 
-func TestUploadKBFileSendsOneMultipartFileAndReadsTheDocumentStatus(t *testing.T) {
-	c, seen := server(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/upload") {
-			reply(w, 202, `{"data":{"datapack_id":"dp1","document_key":"u/dp1/h/a.txt","filename":"a.txt","status":"uploaded"}}`)
-			return
+func TestUploadKBFilePresignsPostsToS3ConfirmsAndCreates(t *testing.T) {
+	var s3Body, s3Path string
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read s3 body: %v", err)
 		}
-		reply(w, 200, `{"data":{"document_name":"a.txt","document_status":"COMPLETED","chunks_processed":3}}`)
+		s3Body, s3Path = string(b), r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(s3.Close)
+
+	c, seen := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/upload-url"):
+			// Signed for an in-cluster host the test can't reach.
+			reply(w, 200, `{"data":{"url":"http://minio.ns.svc:9000/mekoqa","key":"u/dp1/h/a.txt",`+
+				`"fields":{"policy":"p","key":"u/dp1/h/a.txt"}}}`)
+		case strings.HasSuffix(r.URL.Path, "/upload-complete"):
+			reply(w, 200, `{"data":{"key":"u/dp1/h/a.txt"}}`)
+		case strings.HasSuffix(r.URL.Path, "/create"):
+			reply(w, 201, `{"data":{"status":"build_triggered","rejected_documents":[]}}`)
+		default:
+			reply(w, 200, `{"data":{"document_name":"a.txt","document_status":"COMPLETED","chunks_processed":3}}`)
+		}
 	})
-	up, err := c.UploadKBFile(context.Background(), "dp1", "a.txt", []byte("hello kb"))
-	if err != nil || up.DocumentKey != "u/dp1/h/a.txt" {
+	up, err := c.WithS3Endpoint(s3.URL).UploadKBFile(context.Background(), "dp1", "a.txt", []byte("hello kb"))
+	if err != nil || up.DocumentKey != "u/dp1/h/a.txt" || up.Status != "build_triggered" {
 		t.Fatalf("upload = %+v, %v", up, err)
 	}
 	doc, err := c.KBDocumentStatus(context.Background(), "dp1", up.DocumentKey)
 	if err != nil || doc.DocumentStatus != "COMPLETED" || *doc.ChunksProcessed != 3 {
 		t.Fatalf("status = %+v, %v", doc, err)
 	}
-	first, second := (*seen)[0], (*seen)[1]
-	if first.method != "POST" || first.path != "/api/v1/datapacks/dp1/knowledge-bases/upload" ||
-		!strings.Contains(first.body, `name="file"; filename="a.txt"`) || !strings.Contains(first.body, "hello kb") {
-		t.Errorf("upload request = %+v", first)
+
+	wantPaths := []string{"upload-url", "upload-complete", "create", "document-status"}
+	if len(*seen) != len(wantPaths) {
+		t.Fatalf("api requests = %+v", *seen)
 	}
-	if second.method != "GET" || second.path != "/api/v1/datapacks/dp1/knowledge-bases/document-status" {
-		t.Errorf("status request = %+v", second)
+	for i, want := range wantPaths {
+		if got := (*seen)[i]; got.method == "" || !strings.HasSuffix(got.path, "/knowledge-bases/"+want) {
+			t.Errorf("request %d = %s %s, want .../%s", i, got.method, got.path, want)
+		}
+	}
+	presign := (*seen)[0].body
+	const helloKBHash = "eaf3d26f6cbdc43e59ab57a4a5f3a217459a9e5329ccdb5849e50fec45c7450d"
+	if !strings.Contains(presign, `"size":8`) || !strings.Contains(presign, `"content_hash":"`+helloKBHash+`"`) {
+		t.Errorf("presign body = %s", presign)
+	}
+	if s3Path != "/mekoqa" {
+		t.Errorf("s3 path = %q, want the bucket path on the overridden host", s3Path)
+	}
+	policy, file := strings.Index(s3Body, `name="policy"`), strings.Index(s3Body, `name="file"; filename="a.txt"`)
+	if policy < 0 || file < 0 || policy > file || !strings.Contains(s3Body, "hello kb") {
+		t.Errorf("s3 form must carry the signed fields before the file: %s", s3Body)
+	}
+}
+
+func TestUploadKBFileSkipsS3WhenAlreadyUploaded(t *testing.T) {
+	c, seen := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/upload-url"):
+			reply(w, 200, `{"data":{"url":"","key":"u/dp1/h/old.txt","already_uploaded":true}}`)
+		case strings.HasSuffix(r.URL.Path, "/create"):
+			reply(w, 201, `{"data":{"status":"build_triggered"}}`)
+		default:
+			reply(w, 200, `{"data":{}}`)
+		}
+	})
+	up, err := c.UploadKBFile(context.Background(), "dp1", "a.txt", []byte("hello kb"))
+	if err != nil || !up.AlreadyUploaded || up.DocumentKey != "u/dp1/h/old.txt" || len(*seen) != 3 {
+		t.Fatalf("upload = %+v, %v, requests %+v", up, err, *seen)
+	}
+}
+
+func TestUploadKBFileReportsARejectedFile(t *testing.T) {
+	c, _ := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/upload-url"):
+			reply(w, 200, `{"data":{"key":"u/dp1/h/a.txt","already_uploaded":true}}`)
+		case strings.HasSuffix(r.URL.Path, "/create"):
+			reply(w, 201, `{"data":{"status":"build_triggered",`+
+				`"rejected_documents":[{"filename":"a.txt","reason":"not text"}]}}`)
+		default:
+			reply(w, 200, `{"data":{}}`)
+		}
+	})
+	if _, err := c.UploadKBFile(context.Background(), "dp1", "a.txt", []byte("hello kb")); err == nil ||
+		!strings.Contains(err.Error(), "not text") {
+		t.Fatalf("err = %v, want the rejection reason", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,10 +37,10 @@ func NewKnowledgeBaseService(
 // dist_rag document (DocumentExistsForURI, spanning every source_id, unlike
 // a single source's existingURIs). Artifacts no longer need checking here —
 // UploadArtifactObject's "artifacts/" prefix is disjoint from this space —
-// assuming meko/scripts/migrate_artifacts_prefix.py has already run.
+// assuming meko/scripts/migrate-artifacts-prefix/migrate.py has already run.
 // Errors count as "not safe": this guards an unrecoverable DELETE.
 func (s *KnowledgeBaseService) S3KeyIsSafeToDelete(dp *models.Datapack, key string) (bool, error) {
-	docURI := fmt.Sprintf("s3://%s/%s", s.bucket, key)
+	docURI := DocumentURI(s.bucket, key)
 	if tracked, err := s.DocumentExistsForURI(dp, docURI); err != nil {
 		return false, fmt.Errorf("check document registration: %w", err)
 	} else if tracked {
@@ -51,6 +52,16 @@ func (s *KnowledgeBaseService) S3KeyIsSafeToDelete(dp *models.Datapack, key stri
 // Bucket returns the configured S3 bucket name.
 func (s *KnowledgeBaseService) Bucket() string {
 	return s.bucket
+}
+
+// WithDatapackRowLock runs criticalSection while holding a FOR NO KEY UPDATE
+// lock on the datapack's own row, serializing concurrent callers racing to
+// resolve/create the same datapack's dist_rag source. See
+// KnowledgeBaseRepo.WithDatapackRowLock.
+func (s *KnowledgeBaseService) WithDatapackRowLock(
+	ctx context.Context, datapackID string, criticalSection func() error,
+) error {
+	return s.repo.WithDatapackRowLock(ctx, datapackID, criticalSection)
 }
 
 // SumDocumentSizesByOwner returns total KB document bytes for `userID`,
@@ -66,7 +77,7 @@ func (s *KnowledgeBaseService) SumDocumentSizesByOwner(userID string) (int64, er
 func (s *KnowledgeBaseService) BuildDatapackPrefix(
 	userID, datapackID string,
 ) string {
-	return fmt.Sprintf("s3://%s/%s/%s/", s.bucket, userID, datapackID)
+	return DocumentURI(s.bucket, DatapackKeyPrefix(userID, datapackID))
 }
 
 // AddRequest is the payload accepted by KnowledgeBaseHandler.Add.

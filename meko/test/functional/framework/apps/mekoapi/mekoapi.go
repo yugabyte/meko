@@ -11,6 +11,8 @@ package mekoapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +39,9 @@ type Client struct {
 	hc      *http.Client
 	onError func(*Error)
 	headers http.Header
+	// s3Endpoint, when set, replaces the scheme and host of presigned upload
+	// URLs (see postToS3).
+	s3Endpoint string
 }
 
 type Option func(*Client)
@@ -57,6 +63,14 @@ func (c *Client) BaseURL() string { return c.base }
 func (c *Client) WithToken(token string) *Client {
 	cp := *c
 	cp.token = token
+	return &cp
+}
+
+// WithS3Endpoint returns a copy that sends presigned uploads to base instead
+// of the host the URL was signed for.
+func (c *Client) WithS3Endpoint(base string) *Client {
+	cp := *c
+	cp.s3Endpoint = strings.TrimRight(base, "/")
 	return &cp
 }
 
@@ -380,29 +394,127 @@ func (c *Client) RevokeToken(ctx context.Context, id string) error {
 }
 
 type KBUpload struct {
-	DatapackID  string `json:"datapack_id"`
-	DocumentKey string `json:"document_key"`
-	Filename    string `json:"filename"`
-	Status      string `json:"status"`
-	StatusURL   string `json:"status_url"`
+	DatapackID  string
+	DocumentKey string
+	Filename    string
+	// Status is what /create answered, "build_triggered" when it ran.
+	Status string
+	// AlreadyUploaded is true when the datapack already held these bytes, so
+	// nothing was sent to S3.
+	AlreadyUploaded bool
 }
 
+type presignedUpload struct {
+	URL             string            `json:"url"`
+	Fields          map[string]string `json:"fields"`
+	Key             string            `json:"key"`
+	AlreadyUploaded bool              `json:"already_uploaded"`
+}
+
+// UploadKBFile adds a file to the datapack's knowledge base the way the UI
+// does: presign, POST the bytes to S3, confirm, then /create to register it.
 func (c *Client) UploadKBFile(ctx context.Context, datapackID, filename string, content []byte) (KBUpload, error) {
+	base := "/datapacks/" + url.PathEscape(datapackID) + "/knowledge-bases"
+	sum := sha256.Sum256(content)
+	var up presignedUpload
+	if err := c.do(ctx, http.MethodPost, base+"/upload-url", map[string]any{
+		"filename": filename, "size": len(content), "content_hash": hex.EncodeToString(sum[:]),
+	}, &up); err != nil {
+		return KBUpload{}, err
+	}
+	if !up.AlreadyUploaded {
+		if err := c.postToS3(ctx, up, filename, content); err != nil {
+			return KBUpload{}, err
+		}
+	}
+	if err := c.do(ctx, http.MethodPost, base+"/upload-complete", map[string]any{
+		"key": up.Key, "filename": filename, "size": len(content),
+	}, nil); err != nil {
+		return KBUpload{}, err
+	}
+	var created struct {
+		Status   string `json:"status"`
+		Rejected []struct {
+			Filename string `json:"filename"`
+			Reason   string `json:"reason"`
+		} `json:"rejected_documents"`
+	}
+	if err := c.do(ctx, http.MethodPost, base+"/create", nil, &created); err != nil {
+		return KBUpload{}, err
+	}
+	for _, r := range created.Rejected {
+		if r.Filename == filename {
+			return KBUpload{}, fmt.Errorf("create rejected %s: %s", filename, r.Reason)
+		}
+	}
+	return KBUpload{
+		DatapackID: datapackID, DocumentKey: up.Key, Filename: filename,
+		Status: created.Status, AlreadyUploaded: up.AlreadyUploaded,
+	}, nil
+}
+
+// postToS3 sends the presigned POST. The signed fields go first and the file
+// last, as S3 requires. A POST policy's signature covers the policy, not the
+// host, so the request can go to s3Endpoint when the URL names an address
+// only reachable inside the cluster.
+func (c *Client) postToS3(ctx context.Context, up presignedUpload, filename string, content []byte) error {
+	target, err := url.Parse(up.URL)
+	if err != nil {
+		return fmt.Errorf("presigned url %q: %w", up.URL, err)
+	}
+	if c.s3Endpoint != "" {
+		ep, perr := url.Parse(c.s3Endpoint)
+		if perr != nil {
+			return fmt.Errorf("s3 endpoint %q: %w", c.s3Endpoint, perr)
+		}
+		target.Scheme, target.Host = ep.Scheme, ep.Host
+	}
+
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	names := make([]string, 0, len(up.Fields))
+	for name := range up.Fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if werr := mw.WriteField(name, up.Fields[name]); werr != nil {
+			return werr
+		}
+	}
 	part, err := mw.CreateFormFile("file", filename)
 	if err != nil {
-		return KBUpload{}, err
+		return err
 	}
 	if _, err := part.Write(content); err != nil {
-		return KBUpload{}, err
+		return err
 	}
 	if err := mw.Close(); err != nil {
-		return KBUpload{}, err
+		return err
 	}
-	var out KBUpload
-	err = c.exchange(ctx, http.MethodPost, "/datapacks/"+url.PathEscape(datapackID)+"/knowledge-bases/upload", mw.FormDataContentType(), buf.Bytes(), &out)
-	return out, err
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", target.Redacted(), err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if rerr != nil {
+			return fmt.Errorf("POST %s: HTTP %d, read body: %w", target.Redacted(), resp.StatusCode, rerr)
+		}
+		e := &Error{Method: http.MethodPost, Path: target.Path, Status: resp.StatusCode, Body: truncate(string(raw), 512)}
+		if c.onError != nil {
+			c.onError(e)
+		}
+		return e
+	}
+	return nil
 }
 
 type KBDocument struct {

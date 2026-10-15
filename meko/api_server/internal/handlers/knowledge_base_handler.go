@@ -1,26 +1,16 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"path"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/gabriel-vasile/mimetype"
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/auth"
@@ -28,50 +18,6 @@ import (
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
-
-// documentDetailsJSON returns the JSON written to dist_rag.documents.document_details.
-//
-// Shape:
-//
-//		{"meko": {"user_id": "<uploader>", "size": <bytes>, "uploaded_at": "<RFC3339>"}}
-//
-//	  - user_id      authenticated uploader (NOT the datapack owner — multiple
-//	    collaborators can upload to the same shared datapack, so each
-//	    file has to record who actually sent it).
-//	  - size         bytes from S3 Contents.Size; 0 means "unknown" rather
-//	    than "empty file" (S3 occasionally omits Size on certain
-//	    listing edge cases).
-//	  - uploaded_at  S3 LastModified timestamp (RFC3339 UTC) — the moment
-//	    the object was written to the bucket. This is the canonical
-//	    "uploaded" time shown in the UI. Zero time is omitted so
-//	    legacy rows without it degrade gracefully.
-//
-// Output is wire-ready JSONB. Returns nil only on json.Marshal failure
-// — caller logs + falls back to "{}" so the upsert never fails because
-// of details encoding.
-func documentDetailsJSON(uploaderUserID string, size int64, uploadedAt time.Time) []byte {
-	uploadInfo := map[string]any{
-		"user_id": uploaderUserID,
-		"size":    size,
-	}
-	if !uploadedAt.IsZero() {
-		uploadInfo["uploaded_at"] = uploadedAt.UTC().Format(time.RFC3339)
-	}
-	// Namespaced under "meko" because the column belongs to dist_rag, which
-	// is free to write its own keys alongside ours.
-	payload := map[string]any{
-		"meko": uploadInfo,
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		// Shouldn't happen for this fixed shape; log + fall through so
-		// the document is still inserted with empty details rather
-		// than the whole upload failing.
-		slog.Warn("documentDetailsJSON: marshal failed", "error", err)
-		return nil
-	}
-	return b
-}
 
 // KnowledgeBaseHandler holds Echo handlers for knowledge-base endpoints.
 //
@@ -83,6 +29,9 @@ type KnowledgeBaseHandler struct {
 	knowledgeBaseSvc *service.KnowledgeBaseService
 	ragSvc           *service.RagService
 	s3Svc            *service.S3Service
+	// srcResolver resolves (or creates) a datapack's dist_rag source under the
+	// datapack's row lock, so concurrent registrations can't create two.
+	srcResolver *service.SourceResolver
 }
 
 // NewKnowledgeBaseHandler creates a new KnowledgeBaseHandler.
@@ -90,11 +39,13 @@ func NewKnowledgeBaseHandler(
 	knowledgeBaseSvc *service.KnowledgeBaseService,
 	ragSvc *service.RagService,
 	s3Svc *service.S3Service,
+	srcResolver *service.SourceResolver,
 ) *KnowledgeBaseHandler {
 	return &KnowledgeBaseHandler{
 		knowledgeBaseSvc: knowledgeBaseSvc,
 		ragSvc:           ragSvc,
 		s3Svc:            s3Svc,
+		srcResolver:      srcResolver,
 	}
 }
 
@@ -291,9 +242,9 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 			"VALIDATION_ERROR", "content_hash must be a 64-character hex SHA-256")
 	}
 	ext := strings.ToLower(filepath.Ext(req.Filename))
-	if uploadMimeByExt[ext] == "" {
+	if service.UploadMIMEByExt[ext] == "" {
 		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", unsupportedTypeMessage(ext))
+			"VALIDATION_ERROR", service.UnsupportedTypeMessage(ext))
 	}
 	// `size <= 0` is rejected explicitly: otherwise a negative payload
 	// could wrap the int64 free-tier-cap arithmetic below and let an
@@ -464,7 +415,7 @@ func (h *KnowledgeBaseHandler) RequestDownloadURL(c echo.Context) error {
 	// flow through the same path and the prefix matches. Anything
 	// else means the caller is trying to fetch a file outside this
 	// datapack's namespace.
-	expectedPrefix := dp.UserID + "/" + dp.ID + "/"
+	expectedPrefix := service.DatapackKeyPrefix(dp.UserID, dp.ID)
 	if !strings.HasPrefix(key, expectedPrefix) {
 		return apiError(c, http.StatusForbidden,
 			"FORBIDDEN", "document does not belong to this datapack")
@@ -693,15 +644,15 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 	// The key is caller-supplied and this handler deletes on rejection, so it
 	// has to be confined to this datapack's prefix first — otherwise a request
 	// naming someone else's object would have us delete their file.
-	if !strings.HasPrefix(req.Key, fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)) {
+	if !strings.HasPrefix(req.Key, service.DatapackKeyPrefix(dp.UserID, dp.ID)) {
 		return apiError(c, http.StatusForbidden,
 			"FORBIDDEN", "key does not belong to this datapack")
 	}
 
 	if h.s3Svc != nil && h.s3Svc.Enabled() {
 		ctx := c.Request().Context()
-		if _, verr := h.verifyObjectContent(ctx, req.Key); verr != nil {
-			var rejected *contentRejected
+		if _, verr := service.VerifyObjectContent(ctx, h.s3Svc, req.Key); verr != nil {
+			var rejected *service.ContentRejectedError
 			if !errors.As(verr, &rejected) {
 				// Couldn't read it. Leave the object alone and fail loudly:
 				// reporting success here would hand the caller a file that
@@ -739,72 +690,6 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 		"message": "upload confirmed",
 		"key":     req.Key,
 	})
-}
-
-// resolveOrCreateSource returns the dist_rag source_id bound to a datapack's
-// knowledge base, creating and indexing a new source when none exists.
-// isNewSource is true only when the source was created in this call, which
-// lets callers pick WaitAndBuild (new) over BuildSource (already discoverable).
-func (h *KnowledgeBaseHandler) resolveOrCreateSource(
-	dp *models.Datapack, sourceURI string,
-) (sourceID string, isNewSource bool, err error) {
-	if dp == nil {
-		return "", false, fmt.Errorf("datapack is required")
-	}
-	if h.ragSvc == nil {
-		return "", false, fmt.Errorf("rag service is not configured")
-	}
-
-	// A cached mapping whose dist_rag source has since been deleted is stale;
-	// drop it and fall through to recreate.
-	cachedSourceIDs, err := h.knowledgeBaseSvc.GetSourceIDs(dp)
-	if err != nil {
-		return "", false, fmt.Errorf("check cached sources: %w", err)
-	}
-	if len(cachedSourceIDs) > 0 {
-		sourceID = cachedSourceIDs[0]
-		exists, existsErr := h.ragSvc.SourceExists(sourceID)
-		if existsErr != nil {
-			return "", false, fmt.Errorf("validate cached source: %w", existsErr)
-		}
-		if !exists {
-			slog.Warn("stale KB source cache, clearing",
-				"source_id", sourceID, "datapack_id", dp.ID)
-			if derr := h.knowledgeBaseSvc.DeleteByDatapack(dp); derr != nil {
-				slog.Error("failed to clear stale KB source cache",
-					"datapack_id", dp.ID, "error", derr)
-			}
-			sourceID = ""
-		}
-	}
-	if sourceID != "" {
-		return sourceID, false, nil
-	}
-
-	// The source may already exist in dist_rag without a cached mapping (e.g.
-	// created out of band); adopt it and persist the mapping.
-	sourceID, err = h.ragSvc.LookupSourceByURI(sourceURI)
-	if err != nil {
-		return "", false, fmt.Errorf("lookup source: %w", err)
-	}
-	if sourceID != "" {
-		if err := h.knowledgeBaseSvc.InsertWithID(dp.ID, sourceID, sourceURI, nil); err != nil {
-			return "", false, fmt.Errorf("save knowledge base: %w", err)
-		}
-		return sourceID, false, nil
-	}
-
-	sourceID, err = h.ragSvc.CreateSource(sourceURI, dp.ID)
-	if err != nil {
-		return "", false, fmt.Errorf("create source: %w", err)
-	}
-	if err := h.ragSvc.AddSourceToIndex(sourceID); err != nil {
-		return "", false, fmt.Errorf("add source to index: %w", err)
-	}
-	if err := h.knowledgeBaseSvc.InsertWithID(dp.ID, sourceID, sourceURI, nil); err != nil {
-		return "", false, fmt.Errorf("save knowledge base: %w", err)
-	}
-	return sourceID, true, nil
 }
 
 // rejectedDocument names one document CreateKB refused to register, returned
@@ -875,9 +760,9 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	}
 
 	sourceURI := h.knowledgeBaseSvc.BuildDatapackPrefix(dp.UserID, dp.ID)
-	s3Prefix := fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)
+	s3Prefix := service.DatapackKeyPrefix(dp.UserID, dp.ID)
 
-	sourceID, isNewSource, err := h.resolveOrCreateSource(dp, sourceURI)
+	sourceID, isNewSource, err := h.srcResolver.Resolve(c.Request().Context(), dp, sourceURI)
 	if err != nil {
 		slog.Error("failed to resolve knowledge base source",
 			"datapack_id", dp.ID, "error", err)
@@ -968,16 +853,16 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 
 		ctx := c.Request().Context()
 		for _, obj := range objects {
-			docURI := h.documentURI(obj.Key)
+			docURI := service.DocumentURI(h.s3Svc.Bucket(), obj.Key)
 			if existingURIs[docURI] {
 				skippedDocs++
 				continue
 			}
-			// One ranged GET of sniffLen bytes. ConfirmUpload has usually
+			// One ranged GET of service.MIMESniffLen bytes. ConfirmUpload has usually
 			// checked this already, but it is a call the client can skip,
 			// and this loop registers whatever is under the prefix — so
 			// anything that reached the bucket unchecked is caught here.
-			contentType, verr := h.verifyObjectContent(ctx, obj.Key)
+			contentType, verr := service.VerifyObjectContent(ctx, h.s3Svc, obj.Key)
 			if verr != nil {
 				rejectedDocs++
 				rejectedDetails = append(rejectedDetails, rejectedDocument{
@@ -987,17 +872,22 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 				slog.Warn("document rejected: content verification failed",
 					"datapack_id", dp.ID, "document", obj.Key, "error", verr)
 				// Delete only what was positively identified as not being what
-				// it claims — a transport failure is retried next time, not
-				// destroyed. existingURIs only covers THIS source, so
-				// deleteObjectUnlessReferenced re-checks DocumentExistsForURI
-				// (spans every source_id) before anything is removed.
-				var rejected *contentRejected
+				// it claims. A file that failed because S3 wouldn't serve it
+				// is untouched and retried next time; deleting on a transport
+				// error would destroy good data over a network blip.
+				//
+				// existingURIs above only covers THIS source, but a document
+				// registered under an earlier source_id (see DocumentExistsForURI,
+				// which spans every source a datapack has had) is still live --
+				// deleteObjectUnlessReferenced checks that before deleting.
+				var rejected *service.ContentRejectedError
 				if errors.As(verr, &rejected) {
 					h.deleteObjectUnlessReferenced(ctx, dp, obj.Key, "document", "document")
 				}
 				continue
 			}
-			if err := h.upsertDocumentDetails(sourceID, uploaderUserID, contentType, obj); err != nil {
+			if err := service.RegisterDocument(
+				ctx, h.ragSvc, h.s3Svc.Bucket(), sourceID, uploaderUserID, contentType, obj); err != nil {
 				slog.Warn("failed to insert document",
 					"document", obj.Key, "document_uri", docURI,
 					"error", err)
@@ -1069,302 +959,15 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	})
 }
 
-// uploadFormFileField is the multipart/form-data field name the file is
-// sent under. Matches the convention used by OpenAI's and Anthropic's
-// `POST /v1/files` endpoints (`-F file=@...`) so agent/CLI callers can use
-// the same muscle memory.
-const uploadFormFileField = "file"
-
-// uploadUserLocks serializes the check-then-act section of UploadFile (dedup
-// check -> free-tier cap check -> S3 upload -> InsertDocument) per user_id, so
-// concurrent uploads can't both read a stale "current usage" and jointly
-// exceed FreeTierMaxKBStorageBytes, or both pass the dedup check for the same
-// content. E.g. at 99 MiB used against a 100 MiB cap, two concurrent 512KB and
-// 513KB uploads each individually check out fine against the same 99 MiB
-// snapshot, landing ~1KB over cap. Per-user rather than global so unrelated
-// users aren't serialized against each other.
-var (
-	uploadUserLocksMu sync.Mutex
-	uploadUserLocks   = map[string]*sync.Mutex{}
-)
-
-// lockForUploadUser returns the per-user mutex used to serialize UploadFile's
-// dedup/cap-check/upload/insert critical section, creating one on first use.
-func lockForUploadUser(userID string) *sync.Mutex {
-	uploadUserLocksMu.Lock()
-	defer uploadUserLocksMu.Unlock()
-	userLevelIndividualMutex, ok := uploadUserLocks[userID]
-	if !ok {
-		userLevelIndividualMutex = &sync.Mutex{}
-		uploadUserLocks[userID] = userLevelIndividualMutex
-	}
-	return userLevelIndividualMutex
-}
-
-// uploadFormSourceField is the multipart/form-data field name that selects
-// where the file's bytes come from. It's a forward-looking discriminator:
-// today only "local_filesystem" (client-pushed multipart bytes) is supported, but the
-// contract is stable so we can later add out-of-band fetch modes ("url",
-// "gdrive", …) without changing the endpoint shape. Keeping fetch modes
-// behind an explicit value also isolates them as a distinct security surface
-// (server-side URL fetch would introduce SSRF risk that a client-pushed
-// upload does not).
-const uploadFormSourceField = "source"
-
-// UploadSource enumerates the accepted values of the `source` form field.
-type UploadSource string
-
-// UploadSourceLocal is a client-pushed file: the bytes arrive inline in the
-// multipart request (local filesystem, generated artifact, etc.). It is the
-// only supported source today, and the default when `source` is omitted.
-// In the future, we can add support for fetching files from URLs.
-const UploadSourceLocal UploadSource = "local_filesystem"
-
-// multipartOverheadBytes is slack added over the raw file-size cap when
-// bounding the multipart request body, to cover the boundary markers and
-// per-part headers that wrap the file bytes.
-const multipartOverheadBytes = 8 * 1024
-
-// uploadMimeByExt maps accepted upload extensions to their MIME type. It is the
-// single source of truth for what the KB upload paths accept, mirroring the
-// pipeline's SUPPORTED_DOCUMENT_TYPES (yugabyte-db/python/ai/.../rag_pipeline/
-// document_types.py); unsupported types (e.g. video/mp4) are omitted so a file
-// can't sit QUEUED forever. Everything below derives from this map.
-var uploadMimeByExt = map[string]string{
-	".pdf":  "application/pdf",
-	".txt":  "text/plain",
-	".text": "text/plain",
-	".md":   "text/markdown",
-	".json": "application/json",
-	".csv":  "text/csv",
-	".xml":  "text/xml",
-	".html": "text/html",
-	".htm":  "text/html",
-}
-
-// uploadTypeName names a MIME type the way a user would ("a web page", not
-// "text/html; charset=utf-8"). Parameters are stripped since they never carry
-// meaning here; an unrecognized type falls back to the raw value, the only
-// clue support has once it's a file we don't accept at all.
-func uploadTypeName(mime string) string {
-	switch strings.TrimSpace(strings.Split(mime, ";")[0]) {
-	case "application/pdf":
-		return "a PDF"
-	case "text/html", "application/xhtml+xml":
-		return "a web page"
-	case "text/xml", "application/xml":
-		return "an XML file"
-	case "application/json":
-		return "a JSON file"
-	case "text/csv":
-		return "a CSV spreadsheet"
-	case "text/markdown":
-		return "Markdown"
-	case "text/plain":
-		return "plain text"
-	default:
-		return mime
-	}
-}
-
-// uploadMismatchMessage explains a file whose contents disagree with its name.
-// Both upload routes (presigned and direct) share it so the same file gets the
-// same explanation whichever way it arrived.
-func uploadMismatchMessage(ext, detected string) string {
-	return fmt.Sprintf(
-		"This %s file doesn't look like %s inside — it looks like %s. "+
-			"Rename it with the matching extension, or upload the original file.",
-		ext, uploadTypeName(uploadMimeByExt[ext]), uploadTypeName(detected))
-}
-
-// allowedExtensionsMsg is the sorted, comma-joined accept-list shown in
-// "unsupported file" errors.
-var allowedExtensionsMsg = func() string {
-	exts := make([]string, 0, len(uploadMimeByExt))
-	for ext := range uploadMimeByExt {
-		exts = append(exts, ext)
-	}
-	sort.Strings(exts)
-	return strings.Join(exts, ", ")
-}()
-
-// unsupportedTypeMessage is shown when the file's extension is one the indexing
-// pipeline can't read. A file with no extension at all reaches this too, so it
-// gets its own wording rather than a sentence with a blank in it.
-func unsupportedTypeMessage(ext string) string {
-	if ext == "" {
-		return fmt.Sprintf(
-			"This file has no extension, so we can't tell what's in it. Supported types: %s.",
-			allowedExtensionsMsg)
-	}
-	return fmt.Sprintf("%s files can't be added to a knowledge base. Supported types: %s.",
-		ext, allowedExtensionsMsg)
-}
-
-// resolveUploadMIME verifies the file's bytes match its (already-accepted)
-// extension and returns the MIME type to store, or ok=false to reject a renamed
-// / spoofed file. The extension gives the expected type; the content must
-// corroborate it. mtype comes from mimetype.DetectReader, which only reads the
-// leading header (its default limit), not the whole file — see
-// https://pkg.go.dev/github.com/gabriel-vasile/mimetype#DetectReader
-//
-// When mimetype positively identifies the content (PDF, HTML, XML, JSON), it
-// must equal what the extension claims — e.g. HTML saved as .txt, or a video
-// saved as .pdf, is a mismatch and is rejected. The textual fallback below
-// applies when the extension itself claims a type with no reliable signature
-// (text/plain, text/markdown, or text/csv, i.e. .txt/.text/.md/.csv) — those
-// can't be verified any other way. For a signature-bearing extension
-// (.pdf/.json/.xml/.html/.htm), content that isn't positively identified as
-// that type is a mismatch and is rejected, even if it happens to be textual
-// (e.g. plain text renamed to report.pdf) — otherwise the fallback would
-// defeat the corroboration this function exists to perform for exactly those
-// extensions.
-//
-// text/csv is deliberately NOT in the strict/distinctive bucket even though
-// mimetype can positively identify it: its detector is a fragile RFC4180
-// heuristic (see https://github.com/gabriel-vasile/mimetype/issues/138), not
-// a real signature — ordinary multi-line prose where every line happens to
-// contain the same number of commas (e.g. "Hi Krishna, thanks.\nBye now, Krishna.")
-// gets misidentified as text/csv and would otherwise be hard-rejected as
-// "spoofed". Falling through to the textual check still blocks a genuinely
-// binary payload (image, PDF, ...) renamed to .csv, which is all the
-// corroboration a delimited-text format can reliably offer.
-func resolveUploadMIME(mtype *mimetype.MIME, ext string) (contentType, detected string, ok bool) {
-	expected := uploadMimeByExt[ext]
-	detected = mtype.String()
-	if expected == "" {
-		return "", detected, false
-	}
-	if identifiedType, identified := distinctiveMIME(mtype); identified {
-		if identifiedType != expected && !markupEquivalent(mtype, expected) {
-			return "", detected, false
-		}
-		return expected, detected, true
-	}
-	// text/xml joins the textual fallback alongside text/plain/markdown/csv:
-	// mimetype's XML detector requires a leading `<?xml` declaration, which
-	// is optional in the spec — `<root/>` is valid XML with no signature to
-	// match, so undeclared XML must be corroborated as text instead, same as
-	// the client-side sniffer already does (see sniffFileType.ts).
-	if expected != "text/plain" && expected != "text/markdown" &&
-		expected != "text/csv" && expected != "text/xml" {
-		return "", detected, false
-	}
-	if !mimeIsTextual(mtype) {
-		return "", detected, false
-	}
-	return expected, detected, true
-}
-
-// distinctiveMIME returns the supported MIME type mimetype positively detected
-// from the content, if any. text/plain, text/markdown, and text/csv are
-// intentionally excluded: text/plain and text/markdown carry no signature at
-// all (markdown is indistinguishable from plain text), and text/csv's
-// "signature" is a fragile line-shape heuristic prone to false positives on
-// ordinary prose (see resolveUploadMIME) — none of the three can be verified
-// against the extension this strictly, so they fall through to the textual
-// check instead.
-// Each case tests the whole ancestry, not just the detected node: mimetype
-// reports the most specific type it can (an RSS feed comes back as
-// application/rss+xml, a child of text/xml), so comparing only the node
-// would call every specific subtype a spoofed .xml.
-func distinctiveMIME(m *mimetype.MIME) (string, bool) {
-	switch {
-	case mimeDescendsFrom(m, "application/pdf"):
-		return "application/pdf", true
-	case mimeDescendsFrom(m, "text/html"):
-		return "text/html", true
-	case mimeDescendsFrom(m, "text/xml"):
-		return "text/xml", true
-	case mimeDescendsFrom(m, "application/json"):
-		return "application/json", true
-	}
-	return "", false
-}
-
-// markupEquivalent reports whether content already identified as one markup
-// type legitimately answers to the extension's type too. XHTML is the case
-// that needs it: valid as both HTML and XML, but mimetype files it under
-// text/xml, so without this it would fail .html though the name is correct.
-func markupEquivalent(m *mimetype.MIME, expected string) bool {
-	if !m.Is("application/xhtml+xml") {
-		return false
-	}
-	return expected == "text/html" || expected == "text/xml"
-}
-
-// mimeDescendsFrom reports whether m is t, or any descendant of t, in
-// mimetype's type hierarchy.
-//
-// Time: O(depth) parent hops, each doing an O(1) Is() check — depth is a
-// tiny constant (mimetype's tree is shallow). Space: O(1), iterative with
-// no extra allocation. No file bytes are re-read here, so neither scales
-// with upload size.
-func mimeDescendsFrom(m *mimetype.MIME, t string) bool {
-	for ; m != nil; m = m.Parent() {
-		if m.Is(t) {
-			return true
-		}
-	}
-	return false
-}
-
-// mimeIsTextual reports whether the content is genuinely text rather than
-// binary — everything textual sits under text/plain.
-func mimeIsTextual(m *mimetype.MIME) bool {
-	return mimeDescendsFrom(m, "text/plain")
-}
-
-// sniffLen is how many leading bytes identify a file. Matches mimetype's own
-// default read limit, so asking S3 for more would fetch bytes the detector
-// discards.
-const sniffLen = 3072
-
-// contentRejected marks a rejection caused by the file itself (400), as
-// distinct from a failure to fetch it (500) — collapsing the two would
-// report a transient S3 blip as a spoofed file.
-type contentRejected struct{ msg string }
-
-func (e *contentRejected) Error() string { return e.msg }
-
-// verifyUploadedBytes checks an object's leading bytes against the type its
-// extension claims, returning the MIME type to store — the only enforcement
-// point on the presigned path (meko_ui's sniff is a courtesy curl can skip).
-// Shares resolveUploadMIME with the direct-upload handler for one verdict.
-func verifyUploadedBytes(key string, head []byte) (contentType string, err error) {
-	ext := strings.ToLower(path.Ext(key))
-	if _, accepted := uploadMimeByExt[ext]; !accepted {
-		return "", &contentRejected{unsupportedTypeMessage(ext)}
-	}
-	if len(head) == 0 {
-		return "", &contentRejected{"This file is empty, so there's nothing to index."}
-	}
-
-	contentType, detected, ok := resolveUploadMIME(mimetype.Detect(head), ext)
-	if !ok {
-		return "", &contentRejected{uploadMismatchMessage(ext, detected)}
-	}
-	return contentType, nil
-}
-
-// verifyObjectContent reads the head of an already-uploaded object and
-// verifies it. The read is a ranged GET, so cost is bounded by sniffLen rather
-// than by the size of the file.
-func (h *KnowledgeBaseHandler) verifyObjectContent(
-	ctx context.Context, key string,
-) (contentType string, err error) {
-	head, err := h.s3Svc.ReadObjectHead(ctx, key, sniffLen)
-	if err != nil {
-		return "", fmt.Errorf("read head of %s: %w", key, err)
-	}
-	return verifyUploadedBytes(key, head)
-}
-
 // deleteObjectUnlessReferenced deletes key after a content-verification
-// rejection, unless a live document still references it. Shared by
-// ConfirmUpload, CreateKB's sweep, and waitBuildAndPopulateDetails, which
-// otherwise ran the same check independently. noun/logField preserve each
-// caller's own log wording ("upload"/"key" vs "document"/"document").
+// rejection, unless a live document row still points at it -- deleting an
+// object a document row still points at would leave that document visible
+// in the UI but undownloadable, so this is checked before every deletion of
+// a rejected object. Used by ConfirmUpload, CreateKB's sweep and
+// waitBuildAndPopulateDetails.
+//
+// noun and logField are the caller's wording for its log lines: "upload"/"key"
+// for ConfirmUpload, "document"/"document" for the other two.
 func (h *KnowledgeBaseHandler) deleteObjectUnlessReferenced(
 	ctx context.Context, dp *models.Datapack, key, noun, logField string,
 ) {
@@ -1385,354 +988,11 @@ func (h *KnowledgeBaseHandler) deleteObjectUnlessReferenced(
 	}
 }
 
-// UploadFile handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload.
-//
-// Single-call alternative to the presigned upload-url -> PUT -> upload-complete
-// -> create browser flow: the caller sends the file as multipart/form-data
-// (field name "file", capped at the requester's per-tier MaxKBFileBytes —
-// 5 MB free, 50 MB standard, 60 MB pro/enterprise) and this handler
-// uploads to S3, registers the document with dist_rag, and triggers indexing
-// — all in one round trip. Built for programmatic / agentic callers (PAT
-// bearer tokens) that shouldn't have to orchestrate the multi-step browser
-// flow or reach S3 directly. The multipart contract mirrors OpenAI's and
-// Anthropic's `POST /v1/files` (`-F file=@...`).
-//
-// The optional `source` form field selects where the bytes come from:
-// "local_filesystem" (default) is a client-pushed multipart file. It's a forward-looking
-// discriminator — future values like "url" will let the server fetch from a
-// public link (Google Drive, HTTPS, …) without changing the endpoint shape.
-//
-//	@Summary	Upload a file directly to a datapack's knowledge base
-//	@Tags		knowledge-bases
-//	@Accept		multipart/form-data
-//	@Produce	json
-//	@Param		datapack_id	path		string	true	"Datapack ID"
-//	@Param		source		formData	string	false	"Byte source: 'local_filesystem' (default). Reserved: 'url'."
-//	@Param		file		formData	file	true	"File to upload (pdf, txt, md, json, csv, xml, html)"
-//	@Success	202		{object}	APIResponse
-//	@Failure	400		{object}	APIResponse
-//	@Failure	401		{object}	APIResponse
-//	@Failure	402		{object}	APIResponse
-//	@Failure	413		{object}	APIResponse
-//	@Failure	500		{object}	APIResponse
-//	@Failure	503		{object}	APIResponse
-//	@Security	BearerAuth
-//	@Router		/datapacks/{datapack_id}/knowledge-bases/upload [post]
-func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
-	if h.s3Svc == nil || !h.s3Svc.Enabled() {
-		return apiError(c, http.StatusServiceUnavailable,
-			"S3_DISABLED", "file uploads are not configured")
-	}
-	if h.ragSvc == nil {
-		return apiError(c, http.StatusServiceUnavailable,
-			"RAG_DISABLED", "rag service is not configured")
-	}
-
-	// The per-file cap is the requester's tier limit (mirrors the presigned
-	// flow), so the body bound below matches what Standard/Pro are allowed to
-	// upload rather than a flat 5 MB. GetAccount reads the auth context, not the
-	// body, so resolving it before multipart parsing is safe. Falls back to the
-	// base cap when there's no tier limit.
-	acct, err := auth.GetAccount(c)
-	if err != nil || acct == nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "authentication required")
-	}
-	perFileCap := int64(maxFileSizeBytes)
-	if l := service.LimitsFor(acct.AccountType).MaxKBFileBytes; l > 0 {
-		perFileCap = l
-	}
-	// This route buffers the whole file in memory before S3, so cap every
-	// tier at the multipart OOM ceiling — pro/enterprise included. The
-	// presigned flow streams to S3 and does not apply this guard. When the
-	// route ceiling (not the tier cap) is what binds, the error must name
-	// it — telling a Pro user "maximum 60 MB" on a 50 MB endpoint is a lie.
-	sizeMsg := service.UpgradeMessageFileSize(acct.AccountType)
-	if perFileCap > service.MultipartMaxFileBytes {
-		perFileCap = service.MultipartMaxFileBytes
-		sizeMsg = service.MultipartFileTooLargeMessage
-	}
-	bodyCap := perFileCap + multipartOverheadBytes
-
-	// Reject oversized uploads on the declared Content-Length before any
-	// multipart parsing, so the cap holds for every caller regardless of
-	// whether an ingress/proxy enforces a body-size limit. With
-	// Expect: 100-continue (curl sends it for larger bodies) the client never
-	// transmits the payload. The MaxBytesReader below still enforces the cap
-	// when Content-Length is absent or under-reports.
-	if c.Request().ContentLength > bodyCap {
-		return apiError(c, http.StatusRequestEntityTooLarge,
-			"VALIDATION_ERROR", sizeMsg)
-	}
-
-	// Cap the raw body before anything can trigger multipart parsing. Both
-	// FormValue and FormFile call ParseMultipartForm, which drains the entire
-	// body and spills whatever exceeds its in-memory budget to temp files — so
-	// the cap has to precede the first form access, not just the file read. A
-	// chunked upload declares no Content-Length (ContentLength == -1), which
-	// slips past the check above, leaving this as its only bound. Small slack
-	// over the file cap covers the multipart framing (boundary + part headers).
-	c.Request().Body = http.MaxBytesReader(
-		c.Response().Writer, c.Request().Body, bodyCap,
-	)
-
-	// Resolve the byte source up front. Empty defaults to "local_filesystem";
-	// anything else is rejected. Future fetch modes ("url", …) will add their
-	// own cases here without changing the endpoint shape.
-	source := UploadSource(strings.ToLower(strings.TrimSpace(c.FormValue(uploadFormSourceField))))
-	if source == "" {
-		source = UploadSourceLocal
-	}
-	if source != UploadSourceLocal {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR",
-			`unsupported source: "`+string(source)+`"; allowed: local_filesystem`)
-	}
-
-	dp, err := auth.GetDatapack(c)
-	if err != nil {
-		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", "datapack context missing")
-	}
-
-	fileHeader, err := c.FormFile(uploadFormFileField)
-	if err != nil {
-		// FormValue above discards parse errors, so a body that tripped the cap
-		// first surfaces here; report it as 413 rather than a missing-field 400.
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			return apiError(c, http.StatusRequestEntityTooLarge,
-				"VALIDATION_ERROR", sizeMsg)
-		}
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", `multipart form field "file" is required`)
-	}
-
-	filename := filepath.Base(strings.TrimSpace(fileHeader.Filename))
-	if filename == "" || filename == "." {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "filename is required")
-	}
-	// Gate on the extension first (cheap reject before reading the body). The
-	// bytes are re-checked against it below (resolveUploadMIME) so a renamed
-	// file — content that doesn't match its extension — is rejected too.
-	ext := strings.ToLower(filepath.Ext(filename))
-	if uploadMimeByExt[ext] == "" {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", unsupportedTypeMessage(ext))
-	}
-	// Reject on the declared part size before reading any bytes; the decoded
-	// length is re-checked below in case the header under-reports.
-	if fileHeader.Size > perFileCap {
-		return apiError(c, http.StatusRequestEntityTooLarge,
-			"VALIDATION_ERROR", sizeMsg)
-	}
-
-	src, err := fileHeader.Open()
-	if err != nil {
-		slog.Error("UploadFile: failed to open multipart file",
-			"datapack_id", dp.ID, "filename", filename, "error", err)
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "failed to read uploaded file")
-	}
-	defer src.Close()
-
-	// Validate the content type before buffering the whole body. DetectReader
-	// reads only the header (not the whole file); TeeReader captures those bytes
-	// so io.MultiReader can hand them back for the full read below.
-	// https://pkg.go.dev/github.com/gabriel-vasile/mimetype#DetectReader
-	header := &bytes.Buffer{}
-	mtype, err := mimetype.DetectReader(io.TeeReader(src, header))
-	if err != nil {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "failed to read uploaded file")
-	}
-	if header.Len() == 0 {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "This file is empty, so there's nothing to index.")
-	}
-
-	// The extension is already accepted (gated above); the bytes must
-	// corroborate it, so a renamed / spoofed file is rejected here.
-	contentType, detected, supported := resolveUploadMIME(mtype, ext)
-	if !supported {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", uploadMismatchMessage(ext, detected))
-	}
-
-	// Read one byte past the cap so a header that under-reports Size can't
-	// smuggle an oversized body through. header holds the bytes DetectReader
-	// already consumed, so prepend it to the remaining stream.
-	body := io.MultiReader(header, src)
-	data, err := io.ReadAll(io.LimitReader(body, perFileCap+1))
-	if err != nil {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "failed to read uploaded file")
-	}
-	if int64(len(data)) > perFileCap {
-		return apiError(c, http.StatusRequestEntityTooLarge,
-			"VALIDATION_ERROR", sizeMsg)
-	}
-
-	contentHash := sha256.Sum256(data)
-	contentHashHex := hex.EncodeToString(contentHash[:])
-	ctx := c.Request().Context()
-
-	// Serialize per-user from here through InsertDocument: this whole section
-	// is a check-then-act sequence (dedup check, free-tier cap check, S3
-	// upload, document registration) that must be atomic per user, or
-	// concurrent requests can both pass the dedup check for the same content,
-	// or jointly blow through the free-tier storage cap. See
-	// lockForUploadUser's doc comment.
-	userLock := lockForUploadUser(dp.UserID)
-	userLock.Lock()
-	defer userLock.Unlock()
-
-	// Content-hash dedup (identity is the bytes, not the filename), same rule as
-	// the presigned flow. If the same content already exists we don't re-upload
-	// or re-charge storage: report whether it is already processed or still
-	// being processed. An S3 object that was never registered in dist_rag
-	// (orphan), one whose pipeline run FAILED, or one still NOT_STARTED (its
-	// queue call may have been missed) falls through and gets
-	// re-registered/re-indexed below, reusing its key — InsertDocument is an
-	// upsert and the pipeline only skips PROCESSING/COMPLETED rows, so these
-	// are retried rather than reported as still-processing.
-	existingKey, err := h.s3Svc.ExistingUploadKeyByHash(ctx, dp.UserID, dp.ID, contentHashHex)
-	if err != nil {
-		slog.Error("UploadFile: dedup check failed",
-			"datapack_id", dp.ID, "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"S3_ERROR", "failed to check existing upload")
-	}
-	if existingKey != "" {
-		if detail, found := h.documentDetail(dp, existingKey); found &&
-			detail.DocumentStatus != "FAILED" && detail.DocumentStatus != "NOT_STARTED" {
-			status, message := "already_uploaded",
-				"This file was already uploaded and is being processed."
-			if detail.DocumentStatus == "COMPLETED" {
-				status, message = "already_processed",
-					"This file is already processed in the knowledge base."
-			}
-			statusURL := fmt.Sprintf(
-				"%s/api/v1/datapacks/%s/knowledge-bases/document-status?document_key=%s",
-				requestOrigin(c), dp.ID, url.QueryEscape(existingKey))
-			return ok(c, http.StatusOK, map[string]any{
-				"datapack_id":  dp.ID,
-				"document_key": existingKey,
-				"filename":     path.Base(existingKey),
-				"status":       status,
-				"message":      message,
-				"status_url":   statusURL,
-			})
-		}
-	}
-
-	key := existingKey
-	if key == "" {
-		// New content: enforce the storage cap (same as the presigned path,
-		// gated on the REQUESTER's tier), then upload.
-		if service.IsGatedUserType(acct.AccountType) {
-			limits := service.LimitsFor(acct.AccountType)
-			currentBytes, sumErr := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID)
-			if sumErr != nil {
-				slog.Error("UploadFile: tier cap check failed",
-					"user_id", dp.UserID, "datapack_id", dp.ID, "error", sumErr)
-				return apiError(c, http.StatusInternalServerError,
-					"INTERNAL_ERROR", "failed to read tier storage usage")
-			}
-			if currentBytes+int64(len(data)) > limits.MaxKBStorageBytes {
-				slog.Info("UploadFile: blocked by tier cap",
-					"user_id", dp.UserID,
-					"user_type", acct.AccountType,
-					"current_bytes", currentBytes,
-					"incoming_bytes", len(data),
-					"cap", limits.MaxKBStorageBytes,
-				)
-				return respondTierLimit(c, service.KBStorageLimitResponse(acct.AccountType))
-			}
-		}
-		key, err = h.s3Svc.UploadObject(ctx, dp.UserID, dp.ID, contentHashHex, filename, contentType, data)
-		if err != nil {
-			slog.Error("UploadFile: S3 upload failed",
-				"datapack_id", dp.ID, "filename", filename, "error", err)
-			return apiError(c, http.StatusInternalServerError,
-				"S3_ERROR", "failed to upload file")
-		}
-	}
-
-	if err := h.ragSvc.EnsureVectorIndex(); err != nil {
-		slog.Error("UploadFile: failed to ensure vector index",
-			"datapack_id", dp.ID, "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"RAG_ERROR", "failed to initialize vector index")
-	}
-
-	sourceURI := h.knowledgeBaseSvc.BuildDatapackPrefix(dp.UserID, dp.ID)
-	sourceID, isNewSource, err := h.resolveOrCreateSource(dp, sourceURI)
-	if err != nil {
-		slog.Error("UploadFile: failed to resolve knowledge base source",
-			"datapack_id", dp.ID, "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"RAG_ERROR", "failed to resolve knowledge base source")
-	}
-
-	docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), key)
-	details := documentDetailsJSON(acct.ID, int64(len(data)), time.Now())
-	if err := h.ragSvc.InsertDocument(
-		sourceID, key, docURI, contentHashHex, contentType, details,
-	); err != nil {
-		slog.Error("UploadFile: failed to insert document",
-			"datapack_id", dp.ID, "document_uri", docURI, "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"RAG_ERROR", "failed to register document")
-	}
-
-	if isNewSource {
-		go h.ragSvc.WaitAndBuild(sourceID)
-	} else if err := h.ragSvc.BuildSource(sourceID); err != nil {
-		slog.Error("UploadFile: failed to queue the source's documents",
-			"datapack_id", dp.ID, "source_id", sourceID, "error", err)
-		return apiError(c, http.StatusInternalServerError,
-			"RAG_ERROR", "failed to build index")
-	}
-
-	// The s3:// URI and dist_rag source id stay in the logs for
-	// support/debugging rather than in the API response.
-	slog.Info("knowledge base file uploaded via direct API",
-		"user_id", dp.UserID,
-		"datapack_id", dp.ID,
-		"filename", filename,
-		"key", key,
-		"document_uri", docURI,
-		"size", len(data),
-		"rag_source_id", sourceID,
-		"is_new_source", isNewSource,
-		"by_user_id", acct.ID,
-	)
-
-	// Absolute status URL (also in the Location header) for the 202 response,
-	// scoped to this file via ?document_key= so the caller polls just their
-	// upload. requestOrigin honors X-Forwarded-Proto/Host so it's correct behind
-	// the ingress.
-	statusURL := fmt.Sprintf("%s/api/v1/datapacks/%s/knowledge-bases/document-status?document_key=%s",
-		requestOrigin(c), dp.ID, url.QueryEscape(key))
-	c.Response().Header().Set("Location", statusURL)
-
-	return ok(c, http.StatusAccepted, map[string]any{
-		"datapack_id":  dp.ID,
-		"document_key": key,
-		"filename":     filename,
-		"size":         len(data),
-		"status":       "processing",
-		"status_url":   statusURL,
-	})
-}
-
 // waitBuildAndPopulateDetails is the background step for both
 // shouldSkipAPIDocumentSync cases (isNewSource, and an existing source still
 // QUEUED/PROCESSING): wait for CREATE_SOURCE, then verify and populate
 // document_details onto the empty, content-gate-free rows it inserted.
-// Walks every object unconditionally, safe to re-run (upsertDocumentDetails
+// Walks every object unconditionally, safe to re-run (RegisterDocument
 // is an upsert, DeleteDocumentByURI is guarded against an in-flight row).
 // Run via `go`; logs and returns on error since the response is already sent.
 //
@@ -1762,21 +1022,21 @@ func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix,
 		// skipped for, so it's the only thing standing between a spoofed
 		// object and a document_type taken from what the uploader claimed.
 		// Writing the declared type would let this overwrite a type the
-		// sweep sniffed, since InsertDocument's ON CONFLICT updates it.
-		contentType, verr := h.verifyObjectContent(ctx, obj.Key)
+		// sweep sniffed, since InsertDocument updates an existing row's type.
+		contentType, verr := service.VerifyObjectContent(ctx, h.s3Svc, obj.Key)
 		if verr != nil {
-			// A transport/read error says nothing about the object itself. The
-			// sweep just skips it (nothing to update yet); this path always has
-			// a row from CREATE_SOURCE, so "skip" would leave it permanently
-			// empty instead of temporarily wrong — fall back to the declared
-			// type and still record who uploaded it.
-			var rejected *contentRejected
+			// A transport/read error says nothing about the object itself --
+			// unlike the sweep (which rejects on any verr, transport or
+			// content), fall back to the declared type here and still record
+			// who uploaded it.
+			var rejected *service.ContentRejectedError
 			if !errors.As(verr, &rejected) {
 				slog.Warn("waitBuildAndPopulateDetails: content verification unavailable; using declared type",
 					"datapack_id", datapackID, "source_id", sourceID,
 					"document", obj.Key, "error", verr)
 				contentType = obj.ContentType
-				if err := h.upsertDocumentDetails(sourceID, uploaderUserID, contentType, obj); err != nil {
+				if err := service.RegisterDocument(
+					ctx, h.ragSvc, h.s3Svc.Bucket(), sourceID, uploaderUserID, contentType, obj); err != nil {
 					slog.Warn("waitBuildAndPopulateDetails: failed to upsert document details",
 						"datapack_id", datapackID, "source_id", sourceID,
 						"document", obj.Key, "error", err)
@@ -1792,7 +1052,7 @@ func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix,
 			// rather than drop it out from under a still-chunking worker.
 			// Otherwise row before object: reversed, a crash in the gap would
 			// strand a document row on bytes that no longer exist.
-			docURI := h.documentURI(obj.Key)
+			docURI := service.DocumentURI(h.s3Svc.Bucket(), obj.Key)
 			slog.Warn("waitBuildAndPopulateDetails: content rejected; deleting document row",
 				"datapack_id", datapackID, "source_id", sourceID,
 				"document", obj.Key, "error", verr)
@@ -1815,7 +1075,8 @@ func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix,
 			h.deleteObjectUnlessReferenced(ctx, dp, obj.Key, "document", "document")
 			continue
 		}
-		if err := h.upsertDocumentDetails(sourceID, uploaderUserID, contentType, obj); err != nil {
+		if err := service.RegisterDocument(
+			ctx, h.ragSvc, h.s3Svc.Bucket(), sourceID, uploaderUserID, contentType, obj); err != nil {
 			slog.Warn("waitBuildAndPopulateDetails: failed to upsert document details",
 				"datapack_id", datapackID, "source_id", sourceID,
 				"document", obj.Key, "error", err)
@@ -1826,30 +1087,6 @@ func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix,
 	slog.Info("waitBuildAndPopulateDetails: document_details populate complete",
 		"datapack_id", datapackID, "source_id", sourceID,
 		"total_s3_objects", len(objects), "updated", updated)
-}
-
-// documentURI builds the dist_rag.documents.document_uri form ("s3://bucket/key")
-// for an S3 object key. Shared so every call site constructs the exact same
-// string that GetExistingDocURIs / InsertDocument key off of.
-func (h *KnowledgeBaseHandler) documentURI(key string) string {
-	return fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), key)
-}
-
-// upsertDocumentDetails builds document_details for a single S3 object
-// (uploader + size + uploaded-at, see documentDetailsJSON) and upserts it
-// into dist_rag.documents via InsertDocument's ON CONFLICT(source_id,
-// document_uri) path. Shared by the normal CreateKB sync loop and
-// populateDocumentDetails so both write the exact same shape.
-//
-// contentType is passed in because both callers already have it from their
-// own verifyObjectContent call — not because it differs from
-// obj.ContentType, which derives from the same uploadMimeByExt[ext] lookup.
-func (h *KnowledgeBaseHandler) upsertDocumentDetails(
-	sourceID, uploaderUserID, contentType string, obj service.S3Object,
-) error {
-	docURI := h.documentURI(obj.Key)
-	details := documentDetailsJSON(uploaderUserID, obj.Size, obj.UploadedAt)
-	return h.ragSvc.InsertDocument(sourceID, obj.Key, docURI, obj.ETag, contentType, details)
 }
 
 // KBStatus handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/status.
@@ -1931,9 +1168,9 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 // KBDocumentStatus handles
 // GET /api/v1/datapacks/:datapack_id/knowledge-bases/document-status?key=<key>.
 //
-// Returns the pipeline detail for a single uploaded document, identified by the
-// S3 key returned from the direct upload response, instead of the whole
-// datapack's pipeline. Returns 404 until the document appears in dist_rag.
+// Returns the pipeline detail for a single uploaded document, identified by its
+// S3 key (the `key` returned by upload-url), instead of the whole datapack's
+// pipeline. Returns 404 until the document appears in dist_rag.
 //
 //	@Summary	Get pipeline status for a single uploaded document
 //	@Tags		knowledge-bases
@@ -1965,8 +1202,7 @@ func (h *KnowledgeBaseHandler) KBDocumentStatus(c echo.Context) error {
 }
 
 // documentDetail returns the dist_rag pipeline detail for a single document key
-// within a datapack, if it is registered. Reused by KBDocumentStatus and the
-// direct upload dedup check.
+// within a datapack, if it is registered.
 func (h *KnowledgeBaseHandler) documentDetail(
 	dp *models.Datapack, documentKey string,
 ) (repository.PipelineDetail, bool) {
@@ -2206,7 +1442,7 @@ func (h *KnowledgeBaseHandler) PendingUploads(c echo.Context) error {
 			"INTERNAL_ERROR", "datapack context missing")
 	}
 
-	s3Prefix := fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)
+	s3Prefix := service.DatapackKeyPrefix(dp.UserID, dp.ID)
 	objects, err := h.s3Svc.ListObjects(c.Request().Context(), s3Prefix)
 	if err != nil {
 		slog.Error("pending-uploads: failed to list S3 objects",
@@ -2249,7 +1485,7 @@ func (h *KnowledgeBaseHandler) PendingUploads(c echo.Context) error {
 
 	items := make([]PendingUploadItem, 0)
 	for _, obj := range objects {
-		docURI := h.documentURI(obj.Key)
+		docURI := service.DocumentURI(h.s3Svc.Bucket(), obj.Key)
 		if existingURIs[docURI] {
 			continue
 		}
@@ -2289,7 +1525,7 @@ func (h *KnowledgeBaseHandler) DeletePendingUpload(c echo.Context) error {
 	if key == "" {
 		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "key is required")
 	}
-	if !strings.HasPrefix(key, fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)) {
+	if !strings.HasPrefix(key, service.DatapackKeyPrefix(dp.UserID, dp.ID)) {
 		return apiError(c, http.StatusForbidden, "FORBIDDEN", "key does not belong to this datapack")
 	}
 	// A /create can register the file between listing orphans and clicking

@@ -1,4 +1,4 @@
-package handlers
+package service
 
 import (
 	"errors"
@@ -49,7 +49,7 @@ func TestVerifyUploadedBytes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := verifyUploadedBytes(tc.key, tc.head)
+			got, err := VerifyUploadedBytes(tc.key, tc.head)
 
 			if tc.wantType == "" {
 				if err == nil {
@@ -57,9 +57,9 @@ func TestVerifyUploadedBytes(t *testing.T) {
 				}
 				// Callers branch on this type to choose 400 over 500, so a
 				// rejection that isn't tagged would be reported as our fault.
-				var rejected *contentRejected
+				var rejected *ContentRejectedError
 				if !errors.As(err, &rejected) {
-					t.Fatalf("rejection should be *contentRejected, got %T: %v", err, err)
+					t.Fatalf("rejection should be *ContentRejectedError, got %T: %v", err, err)
 				}
 				return
 			}
@@ -75,14 +75,14 @@ func TestVerifyUploadedBytes(t *testing.T) {
 }
 
 // Prose where every line happens to hold the same number of commas trips
-// mimetype's CSV line-shape heuristic. resolveUploadMIME deliberately lets
+// mimetype's CSV line-shape heuristic. ResolveUploadMIME deliberately lets
 // text/csv fall through to the textual check for that reason, and a .txt file
 // must not be rejected just because it looks tabular.
 func TestVerifyUploadedBytes_CSVHeuristicDoesNotRejectProse(t *testing.T) {
 	prose := []byte("Hi Krishna, thanks for the note.\nBye now, Krishna.\n")
 
 	for _, key := range []string{"u/d/h/notes.txt", "u/d/h/table.csv"} {
-		if _, err := verifyUploadedBytes(key, prose); err != nil {
+		if _, err := VerifyUploadedBytes(key, prose); err != nil {
 			t.Errorf("%s should be accepted, got: %v", key, err)
 		}
 	}
@@ -93,10 +93,10 @@ func TestVerifyUploadedBytes_CSVHeuristicDoesNotRejectProse(t *testing.T) {
 func TestVerifyUploadedBytes_SameBytesDifferentExtension(t *testing.T) {
 	html := []byte("<!DOCTYPE html><html><body>report</body></html>")
 
-	if _, err := verifyUploadedBytes("u/d/h/page.html", html); err != nil {
+	if _, err := VerifyUploadedBytes("u/d/h/page.html", html); err != nil {
 		t.Fatalf("html as .html should be accepted, got: %v", err)
 	}
-	_, err := verifyUploadedBytes("u/d/h/page.txt", html)
+	_, err := VerifyUploadedBytes("u/d/h/page.txt", html)
 	if err == nil {
 		t.Fatal("html as .txt should be rejected")
 	}
@@ -113,7 +113,7 @@ func TestVerifyUploadedBytes_SameBytesDifferentExtension(t *testing.T) {
 	}
 }
 
-// The extension gate is a closed list: only the keys of uploadMimeByExt are
+// The extension gate is a closed list: only the keys of UploadMIMEByExt are
 // accepted, and everything else is refused on its name alone, before a byte is
 // read. The refusal has to name the extension it turned away and the types that
 // would have worked, or the user has nothing to act on.
@@ -123,22 +123,22 @@ func TestVerifyUploadedBytes_RejectsExtensionsOutsideTheList(t *testing.T) {
 	body := []byte("plain text, nothing unusual in here\n")
 
 	for _, ext := range []string{".mp4", ".zip", ".exe", ".docx", ".yaml", ".log", ".gz", ".rtf"} {
-		if _, supported := uploadMimeByExt[ext]; supported {
+		if _, supported := UploadMIMEByExt[ext]; supported {
 			t.Fatalf("%s is on the supported list; this case needs one that isn't", ext)
 		}
 		t.Run(ext, func(t *testing.T) {
-			_, err := verifyUploadedBytes("u/d/h/file"+ext, body)
+			_, err := VerifyUploadedBytes("u/d/h/file"+ext, body)
 			if err == nil {
 				t.Fatalf("%s should be rejected", ext)
 			}
-			if msg := err.Error(); !strings.Contains(msg, ext) || !strings.Contains(msg, allowedExtensionsMsg) {
+			if msg := err.Error(); !strings.Contains(msg, ext) || !strings.Contains(msg, SupportedExtensions) {
 				t.Errorf("message should name the refused type and the supported list, got: %q", msg)
 			}
 		})
 	}
 
 	// A name with nothing to go on can't be told which extension was wrong.
-	_, err := verifyUploadedBytes("u/d/h/README", body)
+	_, err := VerifyUploadedBytes("u/d/h/README", body)
 	if err == nil {
 		t.Fatal("a file with no extension should be rejected")
 	}
@@ -160,7 +160,7 @@ func TestVerifyUploadedBytes_XMLSubtypesAreValidXML(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := verifyUploadedBytes("u/d/h/feed.xml", []byte(body)); err != nil {
+			if _, err := VerifyUploadedBytes("u/d/h/feed.xml", []byte(body)); err != nil {
 				t.Fatalf("%s should be accepted as .xml, got: %v", name, err)
 			}
 		})
@@ -172,7 +172,7 @@ func TestVerifyUploadedBytes_XHTMLSatisfiesBothNames(t *testing.T) {
 	xhtml := []byte(`<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>x</body></html>`)
 
 	for _, key := range []string{"u/d/h/page.html", "u/d/h/page.htm", "u/d/h/page.xml"} {
-		if _, err := verifyUploadedBytes(key, xhtml); err != nil {
+		if _, err := VerifyUploadedBytes(key, xhtml); err != nil {
 			t.Errorf("xhtml as %s should be accepted, got: %v", key, err)
 		}
 	}
@@ -184,13 +184,13 @@ func TestVerifyUploadedBytes_XHTMLSatisfiesBothNames(t *testing.T) {
 func TestVerifyUploadedBytes_XMLCannotPassAsPlainText(t *testing.T) {
 	rss := []byte(`<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>`)
 
-	if _, err := verifyUploadedBytes("u/d/h/notes.txt", rss); err == nil {
+	if _, err := VerifyUploadedBytes("u/d/h/notes.txt", rss); err == nil {
 		t.Fatal("rss as .txt should be rejected")
 	}
 }
 
 func TestVerifyUploadedBytes_ExtensionCaseInsensitive(t *testing.T) {
-	if _, err := verifyUploadedBytes("u/d/h/REPORT.PDF", []byte("%PDF-1.4\ntrailer\n")); err != nil {
+	if _, err := VerifyUploadedBytes("u/d/h/REPORT.PDF", []byte("%PDF-1.4\ntrailer\n")); err != nil {
 		t.Fatalf("uppercase extension should be accepted, got: %v", err)
 	}
 }

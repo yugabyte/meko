@@ -95,6 +95,7 @@ type App struct {
 	apiURL    string
 	mcpURL    string
 	llmURL    string
+	s3URL     string
 	secrets   []string
 	values    map[string]any
 	nsCreated bool
@@ -892,7 +893,27 @@ func (a *App) connect(ctx context.Context) error {
 	a.mu.Lock()
 	a.apiURL, a.mcpURL = api, mcp+mcpPath
 	a.mu.Unlock()
+	a.connectMinIO(ctx)
 	return a.connectLLM(ctx)
+}
+
+// connectMinIO finds an address the runner can send presigned uploads to.
+// Without S3_PUBLIC_ENDPOINT the api-server signs them for MinIO's in-cluster
+// name, which resolves only inside the cluster. Only knowledge-base uploads
+// need it, so failing to reach MinIO is logged rather than failing every test:
+// an upload then goes to the signed host and fails there.
+func (a *App) connectMinIO(ctx context.Context) {
+	if a.cfg.S3PublicEndpoint != "" {
+		return
+	}
+	url, err := a.reach(ctx, minioName, minio.Port, "app="+minioName, minio.Port)
+	if err != nil {
+		a.log("mekostack: MinIO not reachable (%v), presigned uploads go to the host they were signed for", err)
+		return
+	}
+	a.mu.Lock()
+	a.s3URL = url
+	a.mu.Unlock()
 }
 
 // ClusterURLs are the api-server and mcp-server addresses a pod in the cluster
@@ -913,6 +934,12 @@ func (a *App) API() *mekoapi.Client {
 	c := a.newAPI(a.APIURL())
 	if tok := a.defaultToken(); tok != "" {
 		c = c.WithToken(tok)
+	}
+	a.mu.Lock()
+	s3 := a.s3URL
+	a.mu.Unlock()
+	if s3 != "" {
+		c = c.WithS3Endpoint(s3)
 	}
 	return c
 }

@@ -50,6 +50,7 @@ type serviceRegistry struct {
 	shareLinkSvc        *service.ShareLinkService
 	setupMailer         service.PasswordSetupEmailSender
 	feedbackRepo        *repository.FeedbackRepo
+	srcResolver         *service.SourceResolver
 	mcpPATRepo          *repository.MCPPATRepo
 	mcpPATAuditRepo     *repository.MCPPATAuditRepo
 	mcpPATSvc           *service.MCPPATService
@@ -157,6 +158,11 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 			slog.Error("failed to initialize S3 service", "error", err)
 		}
 	}
+
+	// One SourceResolver for every path that registers KB documents, so they
+	// all resolve sources the same way. The datapack row lock it takes is
+	// what serializes them.
+	srcResolver := service.NewSourceResolver(kbSvc, ragSvc)
 
 	langfuseSvc := service.NewLangfuseService(service.LangfuseConfig{
 		SystemDB:    cfg.SystemDB,
@@ -380,6 +386,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		shareLinkSvc:          service.NewShareLinkService(repository.NewShareLinkRepo(cfg.SystemDB), sharingSvc),
 		setupMailer:           passwordSetupEmailer,
 		feedbackRepo:          feedbackRepo,
+		srcResolver:           srcResolver,
 		mcpPATRepo:            mcpPATRepo,
 		mcpPATAuditRepo:       mcpPATAuditRepo,
 		mcpPATSvc:             mcpPATSvc,
@@ -1319,7 +1326,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	named.POST("/agents", agentH.Link)
 	named.DELETE("/agents/:agent_id", agentH.Unlink)
 
-	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.ragSvc, reg.s3Svc)
+	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.ragSvc, reg.s3Svc, reg.srcResolver)
 
 	// Read-only datapack routes: any member with datapack access (owner or accepted share),
 	// not the ownership-only group below.
@@ -1388,20 +1395,10 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.DELETE("/datapacks/:datapack_id/knowledge-bases/:rag_source_id", kbH.Delete, kbOwnerOrMaintainer...)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-url", kbH.RequestUploadURL, kbOwnerOrMaintainer...)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
-	// Direct file upload: single-call alternative to the presigned flow for
-	// programmatic/agentic callers. On dpDirect so a PAT (not just a JWT) works.
-	// There is no BodyLimit middleware on this route: the handler caps the raw
-	// body itself so the limit also covers chunked uploads, which declare no
-	// Content-Length for middleware to inspect.
-	dpDirect.POST("/datapacks/:datapack_id/knowledge-bases/upload", kbH.UploadFile,
-		auth.RequireScope(auth.ScopeWrite),
-		auth.RequireDatapackAccess(reg.dpRepo),
-		auth.RequireDatapackOwnerOrMaintainerGrant(),
-	)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
 	g.GET("/datapacks/:datapack_id/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
-	// Single-document status: PAT-reachable so the direct-upload flow can poll a
-	// single file (via the status_url in its 202 response).
+	// Single-document status: PAT-reachable so a programmatic caller can poll a
+	// single file by its S3 key.
 	dpDirect.GET("/datapacks/:datapack_id/knowledge-bases/document-status", kbH.KBDocumentStatus,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),

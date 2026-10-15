@@ -12,10 +12,10 @@ const (
 	gib = 1024 * 1024 * 1024
 )
 
-// LimitsFor is the single source the KB upload routes (both the presigned flow
-// and the multipart UploadFile handler) read their per-file and total-storage
-// caps from, and the docs quote its values. These assertions pin the defaults
-// so a drift here surfaces as a failed test rather than a silently wrong cap.
+// LimitsFor is the single source the presigned KB upload flow reads its
+// per-file and total-storage caps from, and the docs quote its values. These
+// assertions pin the defaults so a drift here surfaces as a failed test
+// rather than a silently wrong cap.
 func TestLimitsFor_PerTierCaps(t *testing.T) {
 	cases := []struct {
 		userType    string
@@ -25,8 +25,7 @@ func TestLimitsFor_PerTierCaps(t *testing.T) {
 		{"free", 5 * mib, 100 * mib},
 		{"standard", 50 * mib, 5 * gib},
 		// Pro/enterprise: storage unlimited; per-file caps at 60 MB
-		// (ProTierMaxKBFileBytes), just above Standard. The multipart OOM guard
-		// (MultipartMaxFileBytes) is route-local and does not appear here.
+		// (ProTierMaxKBFileBytes), just above Standard.
 		{"pro", 60 * mib, service.TierUnlimited},
 		{"enterprise", 60 * mib, service.TierUnlimited},
 		// Unknown tier fails open EXCEPT per-file size → top-tier 60 MB fallback.
@@ -45,8 +44,8 @@ func TestLimitsFor_PerTierCaps(t *testing.T) {
 	}
 }
 
-// UploadFile gates its total-storage check on IsGatedUserType, so pro/enterprise
-// (unlimited) skip it while free/standard don't.
+// The presigned upload flow gates its total-storage check on IsGatedUserType,
+// so pro/enterprise (unlimited) skip it while free/standard don't.
 func TestIsGatedUserType(t *testing.T) {
 	for _, ut := range []string{"free", "standard"} {
 		if !service.IsGatedUserType(ut) {
@@ -79,11 +78,5 @@ func TestUpgradeMessageFileSize(t *testing.T) {
 	}
 }
 
-// The multipart buffering ceiling is route infrastructure, not a tier limit:
-// it must not leak into LimitsFor (the presigned flow reads that), and it
-// defaults to 50 MB.
-func TestMultipartMaxFileBytes(t *testing.T) {
-	if service.MultipartMaxFileBytes != 50*mib {
-		t.Errorf("MultipartMaxFileBytes = %d, want %d", service.MultipartMaxFileBytes, 50*mib)
-	}
-}
+// The multipart buffering ceiling is not a tier limit and must not leak into
+// LimitsFor (the presigned flow reads that); it defaults to 50 MB.

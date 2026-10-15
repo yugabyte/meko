@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"strings"
@@ -64,19 +65,19 @@ func (s *RagService) EnsureVectorIndex() error {
 }
 
 func (s *RagService) LookupIndexID() (string, error) {
-	return s.repo.LookupIndexID()
+	return s.repo.LookupIndexID(context.Background())
 }
 
-func (s *RagService) LookupSourceByURI(sourceURI string) (string, error) {
-	return s.repo.LookupSourceByURI(sourceURI)
+func (s *RagService) LookupSourceByURI(ctx context.Context, sourceURI string) (string, error) {
+	return s.repo.LookupSourceByURI(ctx, sourceURI)
 }
 
-func (s *RagService) SourceExists(sourceID string) (bool, error) {
-	return s.repo.SourceExists(sourceID)
+func (s *RagService) SourceExists(ctx context.Context, sourceID string) (bool, error) {
+	return s.repo.SourceExists(ctx, sourceID)
 }
 
-func (s *RagService) CreateSource(sourceURI, tenantID string) (string, error) {
-	sourceID, err := s.repo.CreateSource(sourceURI, tenantID)
+func (s *RagService) CreateSource(ctx context.Context, sourceURI, tenantID string) (string, error) {
+	sourceID, err := s.repo.CreateSource(ctx, sourceURI, tenantID)
 	if err != nil {
 		return "", err
 	}
@@ -85,15 +86,15 @@ func (s *RagService) CreateSource(sourceURI, tenantID string) (string, error) {
 	return sourceID, nil
 }
 
-func (s *RagService) AddSourceToIndex(sourceID string) error {
-	indexID, err := s.repo.LookupIndexID()
+func (s *RagService) AddSourceToIndex(ctx context.Context, sourceID string) error {
+	indexID, err := s.repo.LookupIndexID(ctx)
 	if err != nil {
 		return err
 	}
 
 	chunkParams := `{"chunk_size": 1024, "chunk_overlap": 256}`
 
-	if err := s.repo.AddSourceToIndex(indexID, sourceID, chunkParams); err != nil {
+	if err := s.repo.AddSourceToIndex(ctx, indexID, sourceID, chunkParams); err != nil {
 		return err
 	}
 	slog.Info("source added to index",
@@ -106,10 +107,10 @@ func (s *RagService) GetExistingDocURIs(sourceID string) (map[string]bool, error
 }
 
 func (s *RagService) InsertDocument(
-	sourceID, documentName, documentURI, checksum, documentType string,
+	ctx context.Context, sourceID, documentName, documentURI, checksum, documentType string,
 	documentDetails []byte,
 ) error {
-	return s.repo.InsertDocument(sourceID, documentName, documentURI, checksum, documentType, documentDetails)
+	return s.repo.InsertDocument(ctx, sourceID, documentName, documentURI, checksum, documentType, documentDetails)
 }
 
 // BuildSource enqueues preprocessing for every document of the source that is

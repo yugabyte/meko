@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -30,9 +31,9 @@ func NewRagRepo(db *sql.DB, schemaName, indexName string) *RagRepo {
 // schema_name and index_name as separate parameters.
 func (r *RagRepo) FullName() string { return r.schemaName + "." + r.indexName }
 
-func (r *RagRepo) LookupIndexID() (string, error) {
+func (r *RagRepo) LookupIndexID(ctx context.Context) (string, error) {
 	var id string
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT id FROM dist_rag.vector_indexes
 		 WHERE schema_name = $1 AND index_name = $2`,
 		r.schemaName, r.indexName,
@@ -43,9 +44,9 @@ func (r *RagRepo) LookupIndexID() (string, error) {
 	return id, nil
 }
 
-func (r *RagRepo) LookupSourceByURI(sourceURI string) (string, error) {
+func (r *RagRepo) LookupSourceByURI(ctx context.Context, sourceURI string) (string, error) {
 	var id string
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT id FROM dist_rag.sources WHERE source_uri = $1`,
 		sourceURI,
 	).Scan(&id)
@@ -58,9 +59,9 @@ func (r *RagRepo) LookupSourceByURI(sourceURI string) (string, error) {
 	return id, nil
 }
 
-func (r *RagRepo) SourceExists(sourceID string) (bool, error) {
+func (r *RagRepo) SourceExists(ctx context.Context, sourceID string) (bool, error) {
 	var exists bool
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT EXISTS(SELECT 1 FROM dist_rag.sources WHERE id = $1::UUID)`,
 		sourceID,
 	).Scan(&exists)
@@ -74,9 +75,9 @@ func (r *RagRepo) SourceExists(sourceID string) (bool, error) {
 // tenantID is required: dist_rag.create_source defaults it to the
 // all-zeros UUID, which would break /knowledge-bases/{counts,documents}
 // (those endpoints filter by tenant_id = datapack_id).
-func (r *RagRepo) CreateSource(sourceURI, tenantID string) (string, error) {
+func (r *RagRepo) CreateSource(ctx context.Context, sourceURI, tenantID string) (string, error) {
 	var sourceID string
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT dist_rag.create_source(
 			r_source_uri := $1,
 			r_tenant_id  := $2::UUID
@@ -89,8 +90,8 @@ func (r *RagRepo) CreateSource(sourceURI, tenantID string) (string, error) {
 	return sourceID, nil
 }
 
-func (r *RagRepo) AddSourceToIndex(indexID, sourceID, chunkParams string) error {
-	_, err := r.db.Exec(
+func (r *RagRepo) AddSourceToIndex(ctx context.Context, indexID, sourceID, chunkParams string) error {
+	_, err := r.db.ExecContext(ctx,
 		`SELECT dist_rag.add_source_to_index(
 			r_index_id := $1::UUID,
 			r_source_id := $2::UUID,
@@ -125,7 +126,56 @@ func (r *RagRepo) GetExistingDocURIs(sourceID string) (map[string]bool, error) {
 	return uris, rows.Err()
 }
 
-// InsertDocument upserts a row into dist_rag.documents.
+// WithSourceRowLock runs criticalSection -- on the same transaction as the
+// lock, not a separate connection -- while holding a FOR NO KEY UPDATE lock on
+// the dist_rag source's own row. dist_rag.documents has no unique constraint on
+// (source_id, document_uri) -- it's extension-owned schema this repo doesn't
+// migrate -- so there's no ON CONFLICT target to upsert against and a plain
+// check-then-write would race two concurrent callers for the same pair (both
+// could see "not exists" and both insert). The source row, guaranteed to
+// already exist, stands in as the shared serialization point instead.
+//
+// FOR NO KEY UPDATE, not FOR UPDATE: it conflicts with another caller's
+// FOR NO KEY UPDATE, which is all the serialization needs, but not with the
+// FOR KEY SHARE that foreign-key checks take on the parent row.
+// dist_rag.documents and dist_rag.vector_index_source_mappings both reference
+// dist_rag.sources(id), so a FOR UPDATE here would also block dist_rag's own
+// inserts for this source for as long as the lock is held.
+//
+// criticalSection runs on this txn so the check and the write commit (or roll
+// back) together with the lock. That is also why the whole transaction can
+// follow ctx, unlike WithDatapackRowLock's: if ctx ends, the write rolls back
+// with the lock instead of outliving it.
+func (r *RagRepo) WithSourceRowLock(
+	ctx context.Context, sourceID string, criticalSection func(txn *sql.Tx) error,
+) error {
+	txn, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin source lock %s: %w", sourceID, err)
+	}
+	defer func() { _ = txn.Rollback() }()
+
+	if err := lockRow(ctx, txn,
+		`SELECT id FROM dist_rag.sources WHERE id = $1::UUID FOR NO KEY UPDATE`,
+		sourceID,
+	); err != nil {
+		return fmt.Errorf("lock source %s: %w", sourceID, err)
+	}
+
+	if err := criticalSection(txn); err != nil {
+		return err
+	}
+
+	if err := txn.Commit(); err != nil {
+		return fmt.Errorf("commit source lock %s: %w", sourceID, err)
+	}
+	return nil
+}
+
+// InsertDocument upserts a row into dist_rag.documents, serialized against
+// concurrent callers for the same (source_id, document_uri) via
+// WithSourceRowLock (see its doc comment for why a lock stands in for a
+// missing unique constraint here).
 //
 // `documentDetails` is a JSONB blob carried under the conventional
 // `meko` sub-key — see the dist_rag schema for the column definition.
@@ -136,66 +186,40 @@ func (r *RagRepo) GetExistingDocURIs(sourceID string) (map[string]bool, error) {
 // uploader provenance survives shared-datapack collaboration; the
 // downstream listing endpoint resolves it to an email at read time.
 func (r *RagRepo) InsertDocument(
-	sourceID, documentName, documentURI, checksum, documentType string,
+	ctx context.Context, sourceID, documentName, documentURI, checksum, documentType string,
 	documentDetails []byte,
 ) error {
 	if len(documentDetails) == 0 {
 		documentDetails = []byte(`{}`)
 	}
-	_, err := r.db.Exec(
-		`INSERT INTO dist_rag.documents
-			(source_id, document_name, document_uri, document_checksum, document_type, document_details)
-		 VALUES ($1::UUID, $2, $3, $4, $5, $6::jsonb)
-		 ON CONFLICT (source_id, document_uri)
-		   DO UPDATE SET
-		     document_type    = EXCLUDED.document_type,
-		     document_details = EXCLUDED.document_details`,
-		sourceID, documentName, documentURI, checksum, documentType, documentDetails,
-	)
-	if err == nil {
-		return nil
-	}
-	slog.Warn("RagRepo.InsertDocument: upsert failed, entering fallback",
-		"source_id", sourceID,
-		"document_uri", documentURI,
-		"error", err,
-	)
-
-	// Fallback path: no unique constraint — check existence and upsert manually.
-	var exists bool
-	if scanErr := r.db.QueryRow(
-		`SELECT EXISTS(SELECT 1 FROM dist_rag.documents WHERE source_id = $1::UUID AND document_uri = $2)`,
-		sourceID, documentURI,
-	).Scan(&exists); scanErr != nil {
-		return fmt.Errorf("check document existence %s: %w", documentName, scanErr)
-	}
-
-	if exists {
-		// Update details on the existing row so provenance is never stale.
-		_, err = r.db.Exec(
-			`UPDATE dist_rag.documents
-			    SET document_type    = $3,
-			        document_details = $4::jsonb
-			  WHERE source_id = $1::UUID AND document_uri = $2`,
-			sourceID, documentURI, documentType, documentDetails,
-		)
-		if err != nil {
-			return fmt.Errorf("update document %s: %w", documentName, err)
+	return r.WithSourceRowLock(ctx, sourceID, func(txn *sql.Tx) error {
+		// One statement instead of a separate exists-check: the UPDATE runs
+		// first and reports via RETURNING whether it touched a row; the
+		// INSERT only fires when it didn't. Without a unique constraint that
+		// is safe against callers that take WithSourceRowLock, which run one
+		// at a time. dist_rag's own CREATE_SOURCE worker also inserts
+		// documents and never takes the lock; callers avoid racing it by not
+		// writing while the source is QUEUED or IN_PROGRESS (CreateKB skips
+		// its sync then, and waitBuildAndPopulateDetails waits for COMPLETED).
+		// On txn, not r.db, so the write commits or rolls back with the lock.
+		if _, err := txn.ExecContext(ctx,
+			`WITH updated AS (
+			     UPDATE dist_rag.documents
+			        SET document_type    = $3,
+			            document_details = $6::jsonb
+			      WHERE source_id = $1::UUID AND document_uri = $2
+			     RETURNING source_id
+			 )
+			 INSERT INTO dist_rag.documents
+			        (source_id, document_name, document_uri, document_checksum, document_type, document_details)
+			 SELECT $1::UUID, $4, $2, $5, $3, $6::jsonb
+			 WHERE NOT EXISTS (SELECT 1 FROM updated)`,
+			sourceID, documentURI, documentType, documentName, checksum, documentDetails,
+		); err != nil {
+			return fmt.Errorf("upsert document %s: %w", documentName, err)
 		}
 		return nil
-	}
-
-	// Document is genuinely new — plain insert without conflict target.
-	_, err = r.db.Exec(
-		`INSERT INTO dist_rag.documents
-			(source_id, document_name, document_uri, document_checksum, document_type, document_details)
-		 VALUES ($1::UUID, $2, $3, $4, $5, $6::jsonb)`,
-		sourceID, documentName, documentURI, checksum, documentType, documentDetails,
-	)
-	if err != nil {
-		return fmt.Errorf("insert document %s: %w", documentName, err)
-	}
-	return nil
+	})
 }
 
 // QueueSourceDocuments enqueues preprocessing for one source's documents that
@@ -207,7 +231,7 @@ func (r *RagRepo) InsertDocument(
 // files into one source before the workers drain it still adds about K²/2
 // tasks for that source. The duplicate is bounded to the source, not removed.
 func (r *RagRepo) QueueSourceDocuments(sourceID string) error {
-	indexID, err := r.LookupIndexID()
+	indexID, err := r.LookupIndexID(context.Background())
 	if err != nil {
 		return fmt.Errorf("queue source %s: %w", sourceID, err)
 	}

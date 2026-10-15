@@ -295,17 +295,6 @@ func (s *S3Service) DeleteObject(ctx context.Context, key string) error {
 	return nil
 }
 
-// ExistingUploadKeyByHash returns the key of an already-stored object with the
-// given content hash under the user's datapack prefix (any filename), or "" if
-// none exists. Content identity is the hash, so the same bytes under a different
-// name count as already uploaded — the same dedup rule as GenerateUploadURL.
-func (s *S3Service) ExistingUploadKeyByHash(
-	ctx context.Context, userID, datapackID, contentHash string,
-) (string, error) {
-	prefix := fmt.Sprintf("%s/%s/%s/", userID, datapackID, contentHash)
-	return s.firstObjectKeyUnderPrefix(ctx, prefix)
-}
-
 // firstObjectKeyUnderPrefix returns the key of any one object under prefix, or
 // "" if none exist. It requests at most one key (MaxKeys=1), which is all the
 // content-hash dedup check needs: it only cares whether an object with this
@@ -420,25 +409,11 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 	return objects, nil
 }
 
-// UploadObject writes data directly to S3 under the KB upload key path
-// "<userID>/<datapackID>/<contentHash>/<filename>" — the same space
-// GenerateUploadURL signs. Used by UploadFile's server-side write for a
-// direct (non-presigned) upload, where the caller has already computed the
-// hash.
-func (s *S3Service) UploadObject(
-	ctx context.Context,
-	userID, datapackID, contentHash, filename, contentType string,
-	data []byte,
-) (string, error) {
-	key := fmt.Sprintf("%s/%s/%s/%s", userID, datapackID, contentHash, sanitizeFilename(filename))
-	return key, s.putObject(ctx, key, contentType, data)
-}
-
 // UploadArtifactObject writes under the "artifacts/" prefix — disjoint from
-// UploadObject's KB key space, so nothing that walks or dedups on
+// the KB key space, so nothing that walks or dedups on
 // "<userID>/<datapackID>/" ever reaches an artifact. Artifacts stored
 // before this method existed still live at the old, shared-prefix key until
-// migrated — see meko/scripts/migrate_artifacts_prefix.py.
+// migrated — see meko/scripts/migrate-artifacts-prefix/migrate.py.
 func (s *S3Service) UploadArtifactObject(
 	ctx context.Context,
 	userID, datapackID, contentHash, filename, contentType string,
@@ -486,11 +461,19 @@ type apiErrorCoder interface {
 	ErrorCode() string
 }
 
-// ReadObjectHead fetches at most n leading bytes via a ranged GET, so
-// content can be verified on the presigned path without pulling a whole
-// file into memory. S3 clamps an overshooting range, except at zero, where
-// S3/MinIO answer 416 — reported here as a nil, nil empty read so a
-// zero-byte object reaches verifyUploadedBytes' own "empty" check.
+// ReadObjectHead fetches at most n leading bytes of an object.
+//
+// A ranged GET, so the transfer is bounded by n no matter how large the object
+// is — the point being that content can be verified on the presigned upload
+// path, where api_server never sees the bytes, without pulling a whole file
+// into memory to look at its first three kilobytes.
+//
+// A range that overshoots a short object is clamped by S3 rather than being an
+// error, so a 33-byte object simply returns 33 bytes -- except at zero: a
+// range against an empty object has nothing to clamp to, so S3/MinIO answer
+// 416 InvalidRange instead. That's reported as a nil, nil empty read here,
+// not an error, so a zero-byte object surfaces through VerifyUploadedBytes'
+// own "this file is empty" check rather than as an opaque S3 read failure.
 func (s *S3Service) ReadObjectHead(
 	ctx context.Context, key string, n int64,
 ) ([]byte, error) {

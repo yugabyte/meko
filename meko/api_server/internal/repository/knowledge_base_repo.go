@@ -122,6 +122,66 @@ func NewKnowledgeBaseRepo(systemDB, dataDB *sql.DB) *KnowledgeBaseRepo {
 	return &KnowledgeBaseRepo{systemDB: systemDB, dataDB: dataDB}
 }
 
+// WithDatapackRowLock runs criticalSection while holding a FOR NO KEY UPDATE
+// lock on the datapack's own row, then commits. Source resolution has no dist_rag row
+// of its own to lock while the source doesn't exist yet -- dist_rag.sources
+// has no unique constraint on source_uri -- so the datapack row, guaranteed
+// to already exist, stands in as the shared serialization point for
+// concurrent callers racing to create the same datapack's first source.
+//
+// FOR NO KEY UPDATE, not FOR UPDATE: tables referencing datapacks
+// (conversation_search_opt_outs, datapack_placements) take FOR KEY SHARE on
+// this row in their foreign-key checks, and FOR UPDATE would block those
+// inserts while a source is being created.
+func (r *KnowledgeBaseRepo) WithDatapackRowLock(
+	ctx context.Context, datapackID string, criticalSection func() error,
+) error {
+	txn, err := beginHeldLock(ctx, r.systemDB)
+	if err != nil {
+		return fmt.Errorf("begin datapack lock %s: %w", datapackID, err)
+	}
+	defer func() { _ = txn.Rollback() }()
+
+	if err := lockRow(ctx, txn,
+		`SELECT datapack_id FROM meko_system.datapacks WHERE datapack_id = $1::UUID FOR NO KEY UPDATE`,
+		datapackID,
+	); err != nil {
+		return fmt.Errorf("lock datapack %s: %w", datapackID, err)
+	}
+
+	if err := criticalSection(); err != nil {
+		return err
+	}
+
+	if err := txn.Commit(); err != nil {
+		return fmt.Errorf("commit datapack lock %s: %w", datapackID, err)
+	}
+	return nil
+}
+
+// lockWaitTimeout bounds how long a row-lock helper waits for the current
+// holder. A wait that long means the holder is stuck, and the caller is
+// better off failing than queueing behind it.
+const lockWaitTimeout = 10 * time.Second
+
+// beginHeldLock begins the transaction a lock lives on, for a critical section
+// that works on other connections. It ignores ctx's cancellation: database/sql
+// rolls a transaction back the moment its context ends, which would release
+// the lock while the critical section is still running and let the next
+// caller in alongside it. Only the wait for the lock is cancellable (lockRow).
+func beginHeldLock(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
+	return db.BeginTx(context.WithoutCancel(ctx), nil)
+}
+
+// lockRow runs a SELECT ... FOR NO KEY UPDATE on txn, giving up when ctx ends
+// or after lockWaitTimeout.
+func lockRow(ctx context.Context, txn *sql.Tx, query, id string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, lockWaitTimeout)
+	defer cancel()
+	var locked string
+	return txn.QueryRowContext(waitCtx, query, id).Scan(&locked)
+}
+
 // Insert inserts a new knowledge_base row with a server-generated
 // rag_source_id (gen_random_uuid). Returns the new rag_source_id.
 // Surfaces ErrKnowledgeBaseExists on PK conflicts (extremely unlikely
