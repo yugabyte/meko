@@ -191,7 +191,7 @@ func completeOAuthCallback(
 		p.onNewAccount(c)
 	}
 
-	return c.Redirect(http.StatusFound, appHomeRedirect(c))
+	return c.Redirect(http.StatusFound, appHomeRedirect(c, created))
 }
 
 // FederatedLogoutConfig holds the Cognito coordinates the browser-driven
@@ -322,8 +322,17 @@ func isSecure(c echo.Context) bool {
 
 // appHomeRedirect points the browser at the SPA root after a successful
 // sign-in; the SPA forwards to onboarding/datapacks based on status.
-func appHomeRedirect(c echo.Context) string {
-	return requestOrigin(c) + "/"
+// newAccount=true appends ?welcome=1, which useAuthBootstrap consumes to
+// fire user_signed_up (vs user_signed_in) — the only reliable signal that
+// the account was just JIT-provisioned in this OAuth round-trip. The FE
+// can't derive this from /auth/me alone (no created_at, has_completed_onboarding
+// is false for anyone who skipped onboarding).
+func appHomeRedirect(c echo.Context, newAccount bool) string {
+	u := requestOrigin(c) + "/"
+	if newAccount {
+		u += "?welcome=1"
+	}
+	return u
 }
 
 // appSignInRedirect sends the browser back to the SPA sign-in page with a

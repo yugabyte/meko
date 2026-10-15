@@ -38,6 +38,25 @@ func TestMountPrefix(t *testing.T) {
 	}
 }
 
+// TestAppHomeRedirectWelcomeParam pins the ?welcome=1 contract between the
+// OAuth callback and the SPA's useAuthBootstrap: the FE needs a reliable
+// one-shot signal that the account was just JIT-provisioned so the funnel
+// records user_signed_up (not user_signed_in). /auth/me alone can't say that.
+func TestAppHomeRedirectWelcomeParam(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/linkedin/callback", nil)
+	req.Host = "app.example.com"
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	if got := appHomeRedirect(c, false); got != "http://app.example.com/" {
+		t.Errorf("appHomeRedirect(_, false) = %q, want %q", got, "http://app.example.com/")
+	}
+	if got := appHomeRedirect(c, true); got != "http://app.example.com/?welcome=1" {
+		t.Errorf("appHomeRedirect(_, true) = %q, want %q", got, "http://app.example.com/?welcome=1")
+	}
+}
+
 // TestStartOAuthLogin_RedirectURIFollowsMount is the regression guard for
 // social sign-in under --base-path: the redirect_uri handed to Cognito has to
 // name a route this server actually registered. Hardcoding /api/v1/... sent the

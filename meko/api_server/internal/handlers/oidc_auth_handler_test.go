@@ -304,8 +304,12 @@ func TestOIDCCallbackHandler_SignsIn(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "http://meko.example.com/" {
-		t.Errorf("Location = %q, want the app root", loc)
+	// ?welcome=1 is set because EnsureAccount returned created=true. The SPA's
+	// useAuthBootstrap strips it on every boot (so no refresh re-fires); if
+	// OidcSignInPage stashed a pending method before the redirect, bootstrap
+	// then fires user_signed_up alongside user_signed_in.
+	if loc := rec.Header().Get("Location"); loc != "http://meko.example.com/?welcome=1" {
+		t.Errorf("Location = %q, want the app root with welcome=1", loc)
 	}
 	if !created {
 		t.Error("no account was provisioned")

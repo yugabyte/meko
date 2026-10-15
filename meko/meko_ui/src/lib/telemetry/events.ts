@@ -30,11 +30,16 @@ export const TELEMETRY_EVENTS = {
 export type TelemetryEventName = (typeof TELEMETRY_EVENTS)[keyof typeof TELEMETRY_EVENTS];
 
 /** Auth method values for signup_method / login_method. Today only email/password is
- *  wired into the UI; google_oauth / linkedin / github slot in here as they're added. */
+ *  wired into the UI; google_oauth / linkedin / github slot in here as they're added.
+ *  OIDC is the catch-all for a BYOC deployment where the customer's own issuer owns
+ *  the user — Meko has no SignUpPage there (the issuer handles enrolment), only
+ *  OidcSignInPage, so the same method covers both a brand-new JIT-provisioned user
+ *  and a returning sign-in. */
 export const AUTH_METHODS = {
   EMAIL_PASSWORD: "email_password",
   GOOGLE_OAUTH: "google_oauth",
   LINKEDIN_OAUTH: "linkedin_oauth",
+  OIDC: "oidc",
 } as const;
 
 /** Value for the conversation_started `client` property. */

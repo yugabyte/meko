@@ -135,9 +135,10 @@ func OIDCCallbackHandler(cfg OIDCCallbackConfig) echo.HandlerFunc {
 			return c.Redirect(http.StatusFound, appSignInRedirect(c, reason))
 		}
 
-		if _, err := cfg.AuthService.EnsureAccountFromIDToken(
+		created, err := cfg.AuthService.EnsureAccountFromIDToken(
 			c.Request().Context(), result.IDToken,
-		); err != nil {
+		)
+		if err != nil {
 			slog.Error("oidc callback: local account provisioning failed", "error", err)
 			return c.Redirect(http.StatusFound, appSignInRedirect(c, oidcReason+"_provision"))
 		}
@@ -149,7 +150,7 @@ func OIDCCallbackHandler(cfg OIDCCallbackConfig) echo.HandlerFunc {
 		setAuthCookie(c, "id_token", result.IDToken)
 		setAuthCookie(c, "refresh_token", result.RefreshToken)
 
-		return c.Redirect(http.StatusFound, appHomeRedirect(c))
+		return c.Redirect(http.StatusFound, appHomeRedirect(c, created))
 	}
 }
 
@@ -176,7 +177,7 @@ func OIDCLogoutHandler(cfg OIDCLogoutConfig) echo.HandlerFunc {
 		clearAuthCookie(c, "id_token")
 		clearAuthCookie(c, "refresh_token")
 
-		home := appHomeRedirect(c)
+		home := appHomeRedirect(c, false)
 		if cfg.Provider == nil {
 			return c.Redirect(http.StatusFound, home)
 		}

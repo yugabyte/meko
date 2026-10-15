@@ -1,6 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
+import { setPendingLoginMethod } from "@/features/auth/pendingLoginMethod";
+import { AUTH_METHODS } from "@/lib/telemetry/events";
 
 interface OidcSignInPageProps {
   /** Where the api-server starts the flow; from GET /auth/config. */
@@ -38,6 +40,11 @@ export default function OidcSignInPage({ loginUrl, error }: OidcSignInPageProps)
           type="button"
           className="h-12 w-full"
           onClick={() => {
+            // Stash the method so useAuthBootstrap's post-redirect boot can
+            // fire the real sign-in/sign-up event. On OIDC a JIT-provisioned
+            // user shows up here just the same as a returning one — the
+            // welcome=1 param from the callback is what tells bootstrap which.
+            setPendingLoginMethod(AUTH_METHODS.OIDC);
             window.location.assign(loginUrl);
           }}
         >

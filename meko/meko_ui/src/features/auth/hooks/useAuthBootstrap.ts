@@ -24,6 +24,19 @@ export function readOnboardingStatusCache(): boolean | null {
   return null;
 }
 
+/** Read-and-strip ?welcome=1 from the current URL. Returns true if present.
+ *  Called once per bootstrap — stripping on consume means a refresh after
+ *  sign-up doesn't re-fire the signup event. */
+export function consumeWelcomeParam(): boolean {
+  if (typeof window === "undefined") return false;
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("welcome") !== "1") return false;
+  url.searchParams.delete("welcome");
+  const next = url.pathname + (url.search ? url.search : "") + url.hash;
+  window.history.replaceState(window.history.state, "", next);
+  return true;
+}
+
 export function useAuthBootstrap({
   setAuthLoading,
   setAuthenticated,
@@ -39,27 +52,44 @@ export function useAuthBootstrap({
         setAuthenticated(true);
         setHasCompletedOnboarding(user.has_completed_onboarding);
         setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
-        // Redirect-based sign-in (e.g. Google) completes here, not in SignInPage.
-        // If a method was stashed before the redirect, the session is now verified
-        // → record the real sign-in once, with the now-known email + user_id.
+        // ?welcome=1 is set by the OAuth callback only when the account was
+        // JIT-provisioned in this round-trip (see api_server appHomeRedirect).
+        // It's the only reliable "new vs existing" signal — /auth/me has no
+        // created_at, and has_completed_onboarding is false for anyone who
+        // skipped onboarding. Strip on every boot so the URL is clean even on
+        // paths that don't fire telemetry; a refresh must not re-fire the
+        // signup event.
+        const welcome = consumeWelcomeParam();
+        // Redirect-based sign-in (Google / LinkedIn / OIDC) completes here, not
+        // in SignInPage / SignUpPage. If a method was stashed before the
+        // redirect, the session is now verified → record the event with the
+        // now-known email + user_id.
         const pendingMethod = consumePendingLoginMethod();
         if (pendingMethod) {
-          // Identify, then fire user_signed_in after a short gap so it maps to the
-          // (now identified) HubSpot contact.
-          identifyThenTrack(
-            {
-              id: user.account_id,
+          const traits = {
+            id: user.account_id,
+            email: user.email,
+            firstName: user.first_name,
+            lastName: user.last_name,
+          };
+          // On a fresh JIT provision (welcome) fire BOTH user_signed_up and
+          // user_signed_in: email users get both events over their lifecycle
+          // (sign_up at the form submit, sign_in on first manual sign-in), so
+          // firing only one here would make social users miss DAU and funnel
+          // steps keyed on either event. identifyThenTrack identifies now and
+          // tracks after a short gap; a second identifyThenTrack call reuses
+          // the same identify() and queues its own track(), so both land.
+          if (welcome) {
+            identifyThenTrack(traits, TELEMETRY_EVENTS.USER_SIGNED_UP, {
               email: user.email,
-              firstName: user.first_name,
-              lastName: user.last_name,
-            },
-            TELEMETRY_EVENTS.USER_SIGNED_IN,
-            {
-              email: user.email,
-              user_id: user.account_id,
-              login_method: pendingMethod,
-            },
-          );
+              signup_method: pendingMethod,
+            });
+          }
+          identifyThenTrack(traits, TELEMETRY_EVENTS.USER_SIGNED_IN, {
+            email: user.email,
+            user_id: user.account_id,
+            login_method: pendingMethod,
+          });
         }
       })
       .catch((err) => {

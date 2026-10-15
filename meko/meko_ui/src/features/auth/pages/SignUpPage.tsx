@@ -14,6 +14,14 @@ import {
   PasswordPolicyPanel,
 } from "@/features/auth/components/PasswordPolicyPanel";
 import { safeReturnTo } from "@/features/auth/returnTo";
+import { setPendingLoginMethod } from "@/features/auth/pendingLoginMethod";
+import { useAuthConfig } from "@/features/auth/authConfig";
+import { LinkedInIcon } from "@/components/icons/LinkedInIcon";
+
+// Mirrors SignInPage: the api_server builds the Cognito /oauth2/authorize
+// redirect with identity_provider=LinkedIn, and the IdP bounces back to
+// the SPA. Defaults to the same-origin /api/v1 the rest of the SPA uses.
+const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(/\/$/, "");
 
 // Marketing pitch shown alongside the sign-up form. Copy is owned by
 // the marketing team; keep this list in sync with the "Sign up for
@@ -32,6 +40,10 @@ const SIGNUP_HIGHLIGHTS: ReadonlyArray<{
 export default function SignUpPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  // Which IdP this deployment runs. Mirrors SignInPage's gate so the LinkedIn
+  // button only renders on Cognito deployments — on an OIDC or dev-auth
+  // deployment the /auth/linkedin/login endpoint returns 503.
+  const authConfig = useAuthConfig();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -43,6 +55,7 @@ export default function SignUpPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [linkedinLoading, setLinkedinLoading] = useState(false);
 
   // Deep-link from sign-in when the user must finish Cognito email verification:
   // `/signup?resume=1&email=...` opens the confirmation-code step with email prefilled.
@@ -121,6 +134,21 @@ export default function SignUpPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLinkedInSignUp = () => {
+    if (loading || linkedinLoading) return;
+    // Mirror SignInPage's LinkedIn handler: stash the method before the
+    // redirect leaves the SPA. useAuthBootstrap fires the real event on the
+    // post-redirect boot. When api_server appends ?welcome=1 (JIT-provisioned,
+    // driven off EnsureAccountFromIDToken's `created` bool in oauth_handler.go)
+    // bootstrap fires BOTH user_signed_up and user_signed_in so social users
+    // get the same event pair as email users; otherwise it fires only
+    // user_signed_in. Both carry signup_method / login_method = linkedin_oauth.
+    setPendingLoginMethod(AUTH_METHODS.LINKEDIN_OAUTH);
+    setError(null);
+    setLinkedinLoading(true);
+    window.location.href = `${API_BASE}/auth/linkedin/login`;
   };
 
   // Only warn once the user has started typing the confirmation, so the field
@@ -277,7 +305,7 @@ export default function SignUpPage() {
             <Button
               type="submit"
               className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
-              disabled={loading || (!awaitingCode && confirmMismatch)}
+              disabled={loading || linkedinLoading || (!awaitingCode && confirmMismatch)}
             >
               {awaitingCode
                 ? loading
@@ -304,6 +332,38 @@ export default function SignUpPage() {
               </p>
             ) : null}
           </form>
+
+          {/* LinkedIn sign-up is hidden on the confirm-code step (nothing to
+              sign up for) and when return_to is present (AWS Marketplace
+              /signup?return_to=/marketplace/complete?t=<token>, invite links,
+              …): the OAuth round-trip doesn't carry return_to through today,
+              so a LinkedIn signup from those entry points would land on `/`
+              and drop the entitlement token. Email/password still works as
+              the fallback. Threading return_to through the OAuth round-trip
+              is tracked separately. Also hidden on OIDC / no-provider
+              deployments where /auth/linkedin/login is not wired. */}
+          {!awaitingCode &&
+          authConfig?.provider === "cognito" &&
+          !safeReturnTo(searchParams.get("return_to")) ? (
+            <>
+              <div className="my-5 flex items-center gap-3">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-xs text-muted-foreground">or</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 w-full border-border bg-input text-foreground hover:bg-white/10"
+                disabled={loading || linkedinLoading}
+                onClick={handleLinkedInSignUp}
+              >
+                <LinkedInIcon className="mr-2 h-5 w-5 text-[#0A66C2] dark:text-white" />
+                {linkedinLoading ? "Redirecting to LinkedIn…" : "Sign up with LinkedIn"}
+              </Button>
+            </>
+          ) : null}
 
           {!awaitingCode ? (
             <>
