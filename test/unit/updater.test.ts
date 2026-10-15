@@ -340,6 +340,32 @@ describe('Updater', () => {
     expect(fx.restart).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    // A release cut since the last check is installed now, not offered after the restart.
+    { name: 'the newest release, not the one found before', listed: ['0.2.0', '0.3.0'], to: '0.3.0' },
+    { name: 'the version found before when the check fails', listed: null, to: '0.2.0' },
+  ])('installs $name', async ({ listed, to }) => {
+    fx.kv.set('update.latest', '0.2.0');
+    buildRelease(fx.releaseDir, to);
+    const source = fakeSource(fx.releaseDir, (listed ?? []).map((v) => rel(v)));
+    const listReleases = vi.fn(async (repo: string) => {
+      if (!listed) throw new Error('rate limited');
+      return source.listReleases(repo);
+    });
+    const download = vi.fn(source.download);
+    const u = fx.makeUpdater({ listReleases, download });
+    expect(u.status()).toMatchObject({ latest: '0.2.0', available: true });
+    const [s, again] = await Promise.all([u.apply(), u.apply()]);
+    expect(listReleases).toHaveBeenCalledOnce();
+    expect(again).toEqual(s);
+    expect(s.lastError).toBeNull();
+    expect(readlinkSync(join(fx.paths.app, 'current'))).toBe(to);
+    expect(download).toHaveBeenCalledWith(expect.anything(), `v${to}`, tarballName(to, 'x64'), expect.anything());
+    // Two clicks, one install.
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(fx.restart).toHaveBeenCalledOnce();
+  });
+
   it('refuses a release whose checksum does not match', async () => {
     buildRelease(fx.releaseDir, '0.2.0', 0, true);
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, [rel('0.2.0')]));

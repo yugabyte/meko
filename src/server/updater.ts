@@ -350,6 +350,8 @@ export class Updater {
   private healthyDuringApply = false;
   private justUpdatedFrom: string | null = null;
   private checking: Promise<UpdateStatus> | null = null;
+  /** The update being checked for or installed: a second click while it runs gets its result. */
+  private applyRun: Promise<UpdateStatus> | null = null;
   private readonly appDir: string | undefined;
 
   constructor(private deps: UpdaterDeps) {
@@ -461,14 +463,26 @@ export class Updater {
     return this.changed();
   }
 
-  async apply(): Promise<UpdateStatus> {
+  apply(): Promise<UpdateStatus> {
     if (!this.enabled) {
       this.lastError = DISABLED;
-      return this.status();
+      return Promise.resolve(this.status());
     }
-    if (this.applying) return this.status();
+    if (this.applying) return Promise.resolve(this.status());
+    this.applyRun ??= this.doApply().finally(() => {
+      this.applyRun = null;
+    });
+    return this.applyRun;
+  }
+
+  /**
+   * Checks again and installs the newest release, not the one the last check found: a release cut
+   * since then would otherwise be offered right after the restart. When the check fails, the
+   * version found before is installed.
+   */
+  private async doApply(): Promise<UpdateStatus> {
     this.dropBadLatest();
-    if (!this.status().available) await this.check();
+    await this.check();
     const target = this.status().available ? this.latest : null;
     if (!target) return this.status();
 
