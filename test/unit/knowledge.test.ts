@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { knowledgeName, uploadError } from '../../src/server/knowledge.js';
 import { MekoApiError } from '../../src/server/mekoapi.js';
-import { skippedNotice, sortDrop } from '../../src/web/knowledge.js';
+import { MAX_KB_UPLOAD_BYTES } from '../../src/shared/types.js';
+import { batchSummary, knowledgeBatch, skippedNotice, sortDrop, type KnowledgeFileState } from '../../src/web/knowledge.js';
 
 describe('knowledge-base files', () => {
   it.each([
@@ -46,5 +47,15 @@ describe('knowledge-base files', () => {
     expect(sortDrop([png, md, pdf, zip], [png])).toEqual({ images: [png], knowledge: [md, pdf], other: [zip] });
     expect(skippedNotice([zip])).toMatch(/^Skipped x\.zip\./);
     expect(skippedNotice([zip, zip])).toMatch(/^Skipped 2 files\./);
+  });
+
+  it('keeps a batch\'s skipped files apart, and sums up what its uploads did', () => {
+    const f = (name: string, size = 10) => ({ name, size });
+    const b = knowledgeBatch([f('a.md'), f('empty.md', 0), f('big.pdf', MAX_KB_UPLOAD_BYTES + 1), f('b.md'), f('c.md'), f('d.md')]);
+    expect([b.files.map((x) => x.name), b.skipped.map((x) => x.name)]).toEqual([['a.md', 'b.md', 'c.md', 'd.md'], ['empty.md', 'big.pdf']]);
+    expect(batchSummary(b)).toBeNull();
+    const states: KnowledgeFileState[] = [{ at: 'indexing' }, { at: 'added' }, { at: 'already' }, { at: 'failed', error: 'no' }];
+    expect(batchSummary({ ...b, states })).toBe('2 files added to the knowledge base. Meko is indexing 1 of them. 1 file was already there. 1 file couldn’t be added.');
+    expect(batchSummary({ ...b, states: [{ at: 'added' }, { at: 'waiting' }, { at: 'waiting' }, { at: 'waiting' }] })).toBe('a.md added to the knowledge base.');
   });
 });

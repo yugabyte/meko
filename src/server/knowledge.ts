@@ -30,6 +30,20 @@ interface Followed {
   filename: string;
   startedAt: number;
   timer: NodeJS.Timeout | null;
+  /** A passing failure was logged: later ones aren't, so a Meko that's down logs once per upload. */
+  warned: boolean;
+}
+
+/**
+ * Whether a failed status check is worth trying again: Meko unreachable or busy, or a 404 in
+ * Meko's envelope while it's still registering the document. A refused key, a Meko without the
+ * route (a 404 without the envelope) or no key at all won't change by waiting.
+ */
+function passing(e: unknown): boolean {
+  if (!(e instanceof MekoApiError)) return true;
+  if (e.status === 0) return e.code === 'UNREACHABLE';
+  if (e.status === 404) return e.code !== 'HTTP_404';
+  return e.status === 429 || e.status >= 500;
 }
 
 /**
@@ -97,14 +111,24 @@ export class KnowledgeService {
       session: { id: row.id, createdAt: row.created_at },
     });
     if (!reply) throw uploadError(error, dp.name);
-    const status = reply.status === 'already_uploaded' || reply.status === 'already_processed' ? reply.status : 'processing';
-    if (status === 'processing' && reply.documentKey) this.follow(row.id, dp.id, reply.documentKey, filename);
+    // Followed only with a key to follow it by; any other answer is an upload AgentK can't report on.
+    const status = reply.status === 'already_uploaded' || reply.status === 'already_processed' ? reply.status
+      : reply.status === 'processing' && reply.documentKey ? 'processing' : 'uploaded';
+    if (status === 'processing') this.follow(row.id, dp.id, reply.documentKey, filename);
     return { filename, documentKey: reply.documentKey, datapackName: dp.name, status };
   }
 
   /** Stops following every upload (the server is stopping). */
   stop(): void {
     this.stopped = true;
+    this.forget();
+  }
+
+  /**
+   * Stops following every upload, saying nothing: Meko was turned off, or its URL or key changed,
+   * so their datapack and document keys may not be on the Meko AgentK talks to now.
+   */
+  forget(): void {
     for (const f of this.followed.values()) if (f.timer) clearTimeout(f.timer);
     this.followed.clear();
   }
@@ -113,7 +137,7 @@ export class KnowledgeService {
     if (this.stopped) return;
     const key = `${datapackId}:${documentKey}`;
     if (this.followed.has(key)) return;
-    const f: Followed = { sessionId, datapackId, documentKey, filename, startedAt: Date.now(), timer: null };
+    const f: Followed = { sessionId, datapackId, documentKey, filename, startedAt: Date.now(), timer: null, warned: false };
     this.followed.set(key, f);
     this.schedule(key, f);
   }
@@ -126,15 +150,24 @@ export class KnowledgeService {
   }
 
   private async check(key: string, f: Followed): Promise<void> {
+    // Meko turned off: no Meko calls at all.
+    if (!this.core.mekoStatus.configured) {
+      this.followed.delete(key);
+      return;
+    }
     let status = '';
+    let stuck = false;
     try {
       status = await this.api.documentStatus(f.datapackId, f.documentKey);
     } catch (e) {
-      // A 404 while Meko is still registering the document, or a passing failure: keep waiting.
-      if (!(e instanceof MekoApiError && e.status === 404)) this.core.log.warn(`checking how ${f.filename} is indexing failed`, errMsg(e));
+      stuck = !passing(e);
+      const quiet = e instanceof MekoApiError && e.status === 404 && !stuck;
+      if (!quiet && (stuck || !f.warned)) this.core.log.warn(`checking how ${f.filename} is indexing failed${stuck ? '; AgentK stopped checking' : ''}`, errMsg(e));
+      if (!quiet) f.warned = true;
     }
     if (this.stopped || this.followed.get(key) !== f) return;
-    const result = status === 'COMPLETED' ? 'indexed' : status === 'FAILED' ? 'failed' : Date.now() - f.startedAt >= this.timing.giveUpMs ? 'unknown' : null;
+    const result = status === 'COMPLETED' ? 'indexed' : status === 'FAILED' ? 'failed'
+      : stuck || Date.now() - f.startedAt >= this.timing.giveUpMs ? 'unknown' : null;
     if (!result) {
       this.schedule(key, f);
       return;

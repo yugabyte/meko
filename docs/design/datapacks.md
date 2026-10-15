@@ -222,15 +222,23 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   `/datapacks/:id/knowledge-bases/upload` with the same key as MCP, and waits up to 2 minutes.
   Meko stores the file and starts indexing it, answering 202 `processing`, or 200
   `already_uploaded` / `already_processed` for bytes it already has (shown as "Already in the
-  knowledge base"). Meko lets only the datapack's owner and maintainers upload. Its refusals come
+  knowledge base"). An answer with no document key, or a status AgentK doesn't know, is
+  `uploaded`: shown as added, and not followed. Meko lets only the datapack's owner and maintainers upload. Its refusals come
   back in words: a 403 asks the owner for maintainer access; a 401 (or a key without write scope)
   points at the Meko tab; a 404 without Meko's envelope means a Meko without the route; Meko's own
   message for 400 and 413 (a plan's smaller file limit). The browser never gets a 401 from it,
   which would sign it out. The upload is in the session's Meko call log (`knowledge_base_upload`).
 - **Indexing.** For a `processing` upload the server follows
   `/datapacks/:id/knowledge-bases/document-status?document_key=` (its `document_status`) every
-  5 seconds for a minute, then every 30, and gives up after 15 minutes; a 404 while Meko registers
-  the document means wait. At `COMPLETED`, `FAILED` or the give-up it sends a `knowledge` event on
+  5 seconds for a minute, then every 30, and gives up after 15 minutes. Waiting only covers what
+  can pass: a 404 in Meko's envelope while it registers the document, Meko unreachable, a 429 or
+  a 5xx (logged once per upload). A refused key, a Meko without the route or no key ends it at
+  once. At `COMPLETED`, `FAILED`, the give-up or such an error it sends a `knowledge` event on
   `/ws/events`, and a page showing that session's terminal says so in a notice ("notes.md is in
-  the knowledge base"). The list is in memory only: a restart drops it and nothing is said for
-  those files, which are in Meko all the same.
+  the knowledge base"). With Meko turned off it makes no more calls, and a change of Meko's URL or
+  key (`mekoChanged()`) drops the list, saying nothing, since the documents may not be on the new
+  Meko. The list is in memory only: a restart drops it too, and the files are in Meko all the same.
+- **The dialog's state** (each file's progress, whether an upload runs) lives on the session's
+  terminal with the files (`uploadKnowledge()` in `terminals.ts`), not in the dialog: the terminal
+  outlasts its pane, so switching sessions mid-upload and back shows the uploads where they are,
+  and they can't be sent twice.

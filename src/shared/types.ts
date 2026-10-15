@@ -1452,13 +1452,14 @@ export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
 /**
  * POST /api/sessions/:id/knowledge: a file added to the knowledge base of the session's project
  * datapack. `processing`: Meko is indexing it, and AgentK reports when it's done (a `knowledge`
- * event). The others: Meko already had the same bytes.
+ * event). `uploaded`: Meko took it, but answered with no document key or a status AgentK doesn't
+ * know, so nothing more is reported. The others: Meko already had the same bytes.
  */
 export interface KnowledgeUpload {
   filename: string;
   documentKey: string;
   datapackName: string;
-  status: 'processing' | 'already_uploaded' | 'already_processed';
+  status: 'processing' | 'uploaded' | 'already_uploaded' | 'already_processed';
 }
 
 /** The most images a new session can start with. */
@@ -1915,7 +1916,8 @@ export type ServerEvent =
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
   /**
    * A file added to a session's knowledge base finished indexing (`indexed`), failed (`failed`), or
-   * was still indexing when AgentK stopped following it (`unknown`).
+   * AgentK stopped following it without an answer (`unknown`): still indexing after 15 minutes, or
+   * Meko refused to say (a refused key, no status route).
    */
   | { type: 'knowledge'; sessionId: string; filename: string; result: 'indexed' | 'failed' | 'unknown' }
   /** A project datapack was shared with you: sent once per datapack. */

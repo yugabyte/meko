@@ -52,7 +52,7 @@ export function TerminalPane({ session, onAsk, knowledge }: { session: Session; 
   const kbOff = 'off' in knowledge ? knowledge.off : null;
   useEffect(() => {
     if (!term.knowledge || !kbOff) return;
-    term.clearKnowledge();
+    term.dropKnowledge();
     term.showNotice(kbOff, 6000);
   }, [term, term.knowledge, kbOff]);
 
@@ -122,13 +122,10 @@ export function TerminalPane({ session, onAsk, knowledge }: { session: Session; 
       </div>
       {term.knowledge && 'datapack' in knowledge && (
         <KnowledgeUploadDialog
-          sessionId={sessionId}
           datapackName={knowledge.datapack}
-          files={term.knowledge}
-          onClose={(summary) => {
-            term.clearKnowledge();
-            if (summary) term.showNotice(summary, 6000);
-          }}
+          batch={term.knowledge}
+          onUpload={() => void term.uploadKnowledge()}
+          onClose={() => term.closeKnowledge()}
         />
       )}
       {/* Touch screens show held images above the compose box instead. */}

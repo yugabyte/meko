@@ -65,11 +65,9 @@ describe('adding files to a knowledge base', () => {
     // In the session's Meko call log, as AgentK's call.
     expect(readFileSync(mekoLogPath(env.core.paths.designs, 's1'), 'utf8')).toContain('"tool":"knowledge_base_upload"');
 
-    // Meko's refusal comes back in words.
+    // Meko's refusal comes back (worded by uploadError, tested on its own).
     env.mekoApi.handle(() => ({ status: 403, body: { error: { code: 'FORBIDDEN', message: 'forbidden' } } }));
-    const refused = await upload('s1', 'notes.md', Buffer.from('# Hi'));
-    expect(refused.statusCode).toBe(403);
-    expect(refused.json().error).toMatch(/only its owner and maintainers can/);
+    expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(403);
   });
 
   it('refuses with no datapack, with Meko off, and for an archived session', async () => {
@@ -95,7 +93,7 @@ describe('adding files to a knowledge base', () => {
     expect(uploads()).toEqual([]);
   });
 
-  it('follows the indexing until Meko is done, and says how it went', async () => {
+  it('follows the indexing until Meko is done, says how it went, and stops at an error that waiting won\'t fix', async () => {
     const p = await project('gamma');
     session(p.id, 's3');
     const kb = new KnowledgeService(env.core, env.mekoApi.api, { fastPollMs: 5, fastForMs: 1000, slowPollMs: 5, giveUpMs: 60_000 });
@@ -105,27 +103,51 @@ describe('adding files to a knowledge base', () => {
       // Not registered yet, then indexing, then done.
       'dk-a': [404, 'PROCESSING', 'COMPLETED'],
       'dk-b': ['FAILED'],
+      // A refused key: no point waiting 15 minutes.
+      'dk-c': [401],
     };
     env.mekoApi.handle((c: ApiCall) => {
       if (c.path.endsWith('/upload')) {
         const name = (c.form?.get('file') as File).name;
+        if (name === 'nokey.md') return { status: 202, body: { data: { status: 'processing' } } };
         return { status: name === 'old.md' ? 200 : 202, body: { data: { document_key: `dk-${name[0]}`, status: name === 'old.md' ? 'already_processed' : 'processing' } } };
       }
       const key = new URL(`https://x${c.path}`).searchParams.get('document_key')!;
       const next = statuses[key].length > 1 ? statuses[key].shift() : statuses[key][0];
-      return next === 404 ? { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such document' } } } : { body: { data: { document_status: next } } };
+      if (next === 404) return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such document' } } };
+      if (next === 401) return { status: 401, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } };
+      return { body: { data: { document_status: next } } };
     });
     try {
       expect((await kb.upload('s3', 'a.md', Buffer.from('a'))).status).toBe('processing');
       expect((await kb.upload('s3', 'b.md', Buffer.from('b'))).status).toBe('processing');
+      expect((await kb.upload('s3', 'c.md', Buffer.from('c'))).status).toBe('processing');
       expect((await kb.upload('s3', 'old.md', Buffer.from('o'))).status).toBe('already_processed');
-      await waitFor(() => events.length, (n) => n >= 2);
+      // No key to follow it by: Meko took it, and AgentK won't say more.
+      expect((await kb.upload('s3', 'nokey.md', Buffer.from('n'))).status).toBe('uploaded');
+      await waitFor(() => events.length, (n) => n >= 3);
       expect(events.sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)))).toEqual([
         { type: 'knowledge', sessionId: 's3', filename: 'a.md', result: 'indexed' },
         { type: 'knowledge', sessionId: 's3', filename: 'b.md', result: 'failed' },
+        { type: 'knowledge', sessionId: 's3', filename: 'c.md', result: 'unknown' },
       ]);
-      // A file Meko already had isn't followed.
+      // The refused key was asked once; a file Meko already had isn't followed.
+      expect(env.mekoApi.calls.filter((c) => c.path.includes('document_key=dk-c'))).toHaveLength(1);
       expect(env.mekoApi.calls.some((c) => c.path.includes('document_key=dk-o'))).toBe(false);
+
+      // Meko turned off, or its URL or key changed: no more status calls, and nothing said.
+      statuses['dk-d'] = ['PROCESSING'];
+      statuses['dk-e'] = ['PROCESSING'];
+      await kb.upload('s3', 'd.md', Buffer.from('d'));
+      env.core.updateConfig((c) => {
+        c.meko.enabled = false;
+      });
+      kb.forget();
+      await kb.upload('s3', 'e.md', Buffer.from('e')).catch(() => undefined);
+      const asked = env.mekoApi.calls.length;
+      await new Promise((r) => setTimeout(r, 50));
+      expect(env.mekoApi.calls.length).toBe(asked);
+      expect(events).toHaveLength(3);
     } finally {
       kb.stop();
     }

@@ -301,6 +301,7 @@ export class Core extends EventEmitter {
   async mekoChanged(): Promise<void> {
     await this.meko.reset();
     this.invites.forgetAccount();
+    this.knowledge.forget();
     void this.syncInvites();
   }
 

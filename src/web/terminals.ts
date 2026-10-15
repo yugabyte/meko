@@ -10,7 +10,9 @@ import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
 import { HeldImages, type HeldImage } from './heldImages';
 import { KB_ACCEPT } from '../shared/knowledge';
-import { pickFiles, skippedNotice, sortDrop } from './knowledge';
+import {
+  batchSummary, knowledgeBatch, pickFiles, skippedNotice, sortDrop, uploadedState, type KnowledgeBatch, type KnowledgeFileState,
+} from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
@@ -205,8 +207,8 @@ class SessionTerminal {
     onChange: () => this.listeners.forEach((l) => l()),
     onError: (e) => this.showNotice(`Couldn’t add the image: ${errorMessage(e)}`, 6000),
   });
-  /** Files dropped or picked for the knowledge base, waiting for the user to confirm (null: none). */
-  knowledge: File[] | null = null;
+  /** Files dropped or picked for the knowledge base, waiting for the user to confirm or uploading (null: none). */
+  knowledge: KnowledgeBatch | null = null;
   /** Input typed while held images are being sent (non-null only then); it follows them. */
   private queued: string[] | null = null;
   /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
@@ -476,12 +478,48 @@ class SessionTerminal {
       this.showNotice('Finish with the files waiting for the knowledge base first.', 4000);
       return;
     }
-    this.knowledge = files;
+    this.knowledge = knowledgeBatch(files);
     this.listeners.forEach((l) => l());
   }
 
-  /** The user decided on the files waiting for the knowledge base (uploaded or cancelled). */
-  clearKnowledge() {
+  /**
+   * Uploads the waiting files one at a time, each one's result kept on the batch. Once every file
+   * went through, the batch closes with a notice; a refusal keeps it open, to be read.
+   */
+  async uploadKnowledge() {
+    const b = this.knowledge;
+    if (!b || b.busy || b.states.some((s) => s.at !== 'waiting')) return;
+    const set = (i: number, s: KnowledgeFileState) => {
+      b.states = b.states.map((x, j) => (j === i ? s : x));
+      this.listeners.forEach((l) => l());
+    };
+    b.busy = true;
+    for (let i = 0; i < b.files.length; i++) {
+      set(i, { at: 'sending' });
+      try {
+        set(i, uploadedState(await api.uploadKnowledge(this.sessionId, b.files[i])));
+      } catch (e) {
+        set(i, { at: 'failed', error: errorMessage(e) });
+      }
+    }
+    b.busy = false;
+    if (b.states.some((s) => s.at === 'failed')) this.listeners.forEach((l) => l());
+    else this.closeKnowledge();
+  }
+
+  /** Closes the files waiting for the knowledge base (Cancel, or Close after uploading), with a notice of what went. Not while uploading. */
+  closeKnowledge() {
+    const b = this.knowledge;
+    if (!b || b.busy) return;
+    this.knowledge = null;
+    const summary = batchSummary(b);
+    if (summary) this.showNotice(summary, 6000);
+    else this.listeners.forEach((l) => l());
+  }
+
+  /** Drops the waiting files unsent (they can't go anywhere). */
+  dropKnowledge() {
+    if (this.knowledge?.busy) return;
     this.knowledge = null;
     this.listeners.forEach((l) => l());
   }
