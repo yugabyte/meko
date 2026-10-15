@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, w
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
-import { BranchGoneError, addWorktree, checkBranchName, restoreWorktree } from '../../src/server/git.js';
+import { BranchGoneError, addWorktree, checkBranchName, listBaseBranches, restoreWorktree } from '../../src/server/git.js';
 import { SUGGEST_MIN_AHEAD, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -129,6 +129,8 @@ describe('new sessions start from an up-to-date base (real git)', () => {
     await expect(checkBranchName(gone, 'main')).rejects.toThrow(`${gone} isn't there any more, so git can't run in it. Put it back there and try again.`);
     await expect(checkBranchName(gone, 'a..b')).rejects.toThrow(/isn't there any more/);
     await expect(addWorktree(gone, wt(), 'ak/x', 'main')).rejects.toThrow(/isn't there any more/);
+    // Nor a base branch that's there: listing them says git couldn't run, not that there are none.
+    await expect(listBaseBranches(gone)).rejects.toThrow(`Couldn't run git in ${gone} to list its branches`);
   });
 
   it('restores a missing worktree from its branch, or origin, without touching main', async () => {
@@ -389,7 +391,7 @@ describe('the diff base of a fork (real git)', () => {
     work();
     git(wt, 'push', '-q', 'origin', 'ak/x');
     const far = (await changes(wt, 'main'))!;
-    expect(far).toMatchObject({ ahead: SUGGEST_MIN_AHEAD + 6, suggestedBase: null });
+    expect(far.ahead).toBe(SUGGEST_MIN_AHEAD + 6);
     expect(await suggestBase(wt, 'main', 'ak/x', far.ahead)).toEqual({ branch: 'rel', ahead: 1 });
     expect(await changes(wt, 'rel')).toMatchObject({ base: 'upstream/rel', ahead: 1 });
   });

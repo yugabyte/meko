@@ -3303,6 +3303,19 @@ div[id^='dak-mermaid-'] .label {
 .chg-bar .btn {
   margin-left: auto;
 }
+/* A branch name in a button: long ones (a stacked branch's) are cut, not widening the header. */
+.base-name {
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.files-note {
+  margin: 0;
+  padding: 0 12px 6px;
+}
 .chg-path.cur::after {
   content: ' (current)';
   color: var(--muted);

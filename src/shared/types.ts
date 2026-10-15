@@ -1465,7 +1465,6 @@ export interface ChangedFile {
   truncated: boolean;
 }
 
-/** Everything changed on a session's branch vs. its base: committed, uncommitted and untracked. */
 /** A session's diff size vs. its base, as the footer shows it. */
 export interface DiffStat {
   /** Changed files, untracked ones included (the Changes panel's count). */
@@ -1474,6 +1473,7 @@ export interface DiffStat {
   removed: number;
 }
 
+/** Everything changed on a session's branch vs. its base: committed, uncommitted and untracked. */
 export interface SessionChanges {
   /** What the changes are compared against, e.g. `origin/main`. */
   base: string;

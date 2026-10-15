@@ -163,9 +163,18 @@ export async function listBranches(repo: string): Promise<string[]> {
   return local.split('\n').filter(Boolean);
 }
 
-/** The branches a session's base can be: local, origin's and upstream's, by name, newest commit first. */
+/**
+ * The branches a session's base can be: local, origin's and upstream's, by name, newest commit first.
+ * Throws when git can't list them, so a branch that's there is never reported missing.
+ */
 export async function listBaseBranches(repo: string): Promise<string[]> {
-  const out = (await tryGit(repo, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin', 'refs/remotes/upstream')) ?? '';
+  let out: string;
+  try {
+    out = await git(repo, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin', 'refs/remotes/upstream');
+  } catch (e) {
+    const err = e as { stderr?: string; message?: string };
+    throw new Error(`Couldn't run git in ${repo} to list its branches: ${(err.stderr || err.message || '').trim().split('\n')[0] || 'git failed'}`, { cause: e });
+  }
   const names = new Set<string>();
   for (const ref of out.split('\n')) {
     const name = /^refs\/(?:heads|remotes\/(?:origin|upstream))\/(.+)$/.exec(ref)?.[1];

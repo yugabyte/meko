@@ -108,15 +108,19 @@ name, newest commit first). Picking one (`PATCH /api/sessions/:id` with `baseBra
 session's base everywhere: the footer and the panel, the PR's target and the prompts that name the
 base, the unpushed count, and Claude's system prompt at its next launch. The session's activity
 notes the change (*Base changed from master to 2026.1*). The branch must be here, on origin or on
-upstream, with history in common with the session's. A review's base, and a session's with a PR,
-is its PR's and can't be changed; there the base is plain text.
+upstream, with history in common with the session's, and not the session's own branch. A review's
+base, and a session's with a PR, is its PR's and can't be changed; there the base is plain text.
+When AgentK finds the session's PR, the PR's base becomes the session's if they differ (the base
+may have changed after the PR prompt went out). The menu says under its filter that the pick
+becomes the session's base, and the PR goes there; long branch names are cut short.
 
 AgentK also suggests a base when the branch is far past its own (`suggestBase()` in `changes.ts`,
 at least 50 commits, `SUGGEST_MIN_AHEAD`): of origin's and upstream's branches whose tips are in
 the branch's history (`git for-each-ref --merged HEAD`, the 50 newest), less the branch's own
 copies and the base itself, the one the fewest commits behind it, when that's fewer. A bar under the
-header says so (*This branch is 1,246 commits ahead of master, but only 2 commits ahead of 2026.1*)
-with **Compare with 2026.1**; nothing changes until it's clicked. The suggestion is worked out only
+header says so (*This branch is 1,246 commits ahead of master, but only 2 commits ahead of 2026.1.
+Comparing with 2026.1 makes it this session's base, and the PR goes there.*) with **Compare with
+2026.1**; nothing changes until it's clicked. The suggestion is worked out only
 when the panel loads, never in the footer's refresh. Below the floor it's ordinary work on a branch,
 and a branch stacked on another uses the menu.
 

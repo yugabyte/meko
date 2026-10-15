@@ -349,14 +349,10 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         <div className="chg-bar" role="status">
           <span>
             This branch is {plural(data.ahead, 'commit')} ahead of {session.baseBranch}, but only {plural(suggested.ahead, 'commit')} ahead
-            of {suggested.branch}.
+            of {suggested.branch}. Comparing with {suggested.branch} makes it this session's base, and the PR goes there.
           </span>
-          <button
-            className="btn small"
-            title={`Make ${suggested.branch} this session's base: the footer, this panel and the PR use it`}
-            onClick={() => changeBase(suggested.branch)}
-          >
-            Compare with {suggested.branch}
+          <button className="btn small" title={`Compare with ${suggested.branch}`} onClick={() => changeBase(suggested.branch)}>
+            Compare with <span className="mono base-name">{suggested.branch}</span>
           </button>
         </div>
       )}
@@ -506,8 +502,9 @@ function BaseMenu({ session, base, onPick }: { session: Session; base: string; o
   };
   return (
     <FilterMenu
-      label={<span className="mono">{base} ▾</span>}
-      title={`Compare with another branch. It becomes this session's base, which the PR goes to.`}
+      label={<><span className="mono base-name">{base}</span> ▾</>}
+      title={`Compared with ${base}. Pick another branch to compare with.`}
+      note="The branch you pick becomes this session's base, and the PR goes there."
       name="Base branches"
       listName="Branches"
       placeholder="Filter branches"
@@ -543,6 +540,8 @@ function FilterMenu<T>(props: {
   onChoose: (item: T) => void;
   onOpen?: () => void;
   align?: 'left' | 'right';
+  /** A line under the filter, about what picking does. */
+  note?: string;
 }) {
   const { items, itemKey, matches, renderItem, onChoose } = props;
   const [open, setOpen] = useState(false);
@@ -617,6 +616,7 @@ function FilterMenu<T>(props: {
             }}
             onKeyDown={keys}
           />
+          {props.note && <p className="muted small files-note">{props.note}</p>}
           {props.error ? (
             <p className="error-text small files-none">{props.error}</p>
           ) : !items ? (

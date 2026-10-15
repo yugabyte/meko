@@ -302,6 +302,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await refused({ baseBranch: 'nope' }, 400);
     await refused({ baseBranch: '' }, 400);
     await refused({ baseBranch: 'alone' }, 400);
+    await refused({ baseBranch: s.branch }, 400); // its own branch: Discard would think nothing is unpushed
     await refused({ baseBranch: 'main', name: ' ' }, 400); // a bad name changes neither
     run(env.core.db, 'UPDATE sessions SET pr_number = 7 WHERE id = ?', s.id);
     await refused({ baseBranch: 'main' }, 409);

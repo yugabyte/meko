@@ -1829,6 +1829,7 @@ export class SessionManager {
     if (r.kind === 'review-pr') throw new HttpError(409, 'A review compares with its PR\'s base, so its base can\'t be changed.');
     if (r.pr_number) throw new HttpError(409, `This session's base is the base of PR #${r.pr_number}, ${r.base_branch}.`);
     if (base === r.base_branch) return;
+    if (base === r.branch) throw new HttpError(400, `${base} is this session's own branch, so it can't be its base.`);
     if (!existsSync(r.worktree_path) || !this.ownsWorktree(r)) throw new HttpError(409, 'This session\'s worktree is gone, so its base can\'t be changed.');
     if (!(await listBaseBranches(r.worktree_path)).includes(base)) {
       throw new HttpError(400, `There's no branch named ${base} here, on origin or on upstream. Fetch it and try again.`);
