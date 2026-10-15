@@ -239,6 +239,37 @@ leaves that target down.
 
 `helm template` sees no CRDs, so render it with `--api-versions opentelemetry.io/v1beta1`.
 
+### Datapack metrics consumer (`datapackMetricsConsumer`)
+
+`templates/datapack-metrics-consumer/deployment.yaml` runs [`meko/event-consumers/datapack-metrics-consumer`](../../../event-consumers/datapack-metrics-consumer/README.md),
+the process that reads the durable event log (`meko_system.events`) and applies each event's effects, so the
+MCP server inserts one row per search instead of doing its bookkeeping inline. It is **off by default**:
+installing it changes nothing until a producer is turned on (`MEKO_EVENTS_EMIT` on the MCP server), and a
+producer turned on with no consumer running only queues events — **enable the consumer first**.
+
+- **Its own image**, `meko-datapack-metrics-consumer` (a static binary, not the 20 GB MCP server image). A BYOC release
+  pulls it from `quay.io/yugabyte` with the same robot as the other `meko-*` images, which needs read on that
+  repository first ([`meko/jenkins/README.md`](../../../jenkins/README.md)); an air-gapped install mirrors it too.
+  The gcp and dev presets instead render `<global.imageRegistry>/meko/meko-datapack-metrics-consumer` (dev ECR), and
+  the image build publishes to Quay only, so before enabling the consumer there, copy the tag into that registry
+  (create the `meko/meko-datapack-metrics-consumer` repository, then pull from Quay, tag and push), or the pod stays in
+  `ImagePullBackOff`. The steps are in `meko-devops/dev/datapack-metrics-consumer-runbook.md`, rollout step 2.
+- **Same database as the MCP server.** `datapackMetricsConsumer.config.SYSTEM_DB_HOST` / `_PORT` / `_NAME` are empty by
+  default and then follow `mekoMcpServer.config`, with the bundled YugabyteDB's Service as the last fallback; the
+  render fails when none is named. `sslmode` comes from `apiServer.config.SYSTEM_DB_SSL_MODE` because the consumer's
+  driver defaults to `require`, unlike libpq's `prefer`. The password is the `system_password` key of
+  `yugabytedb-credentials`.
+- **Replicas are standbys.** Two replicas by default; the first takes every shard's lease and the other takes over
+  within the lease (30 s) if it dies, so more replicas add availability, not throughput. `settings.MAX_SHARDS`
+  spreads shards at the cost of failover; see the component README before using it.
+- **Tuning** is `datapackMetricsConsumer.settings`, rendered as `MEKO_EVENTS_CONSUMER_<KEY>`; `extraEnv` is the escape hatch.
+- **Shutdown.** SIGTERM finishes the batch in progress and releases the leases, so
+  `terminationGracePeriodSeconds` (60) must exceed one batch. A pod cut off by SIGKILL loses nothing: the batch
+  rolls back whole and is redone.
+- **Metrics** are scraped by the otel collector like the other services (`otel.scrape.datapackMetricsConsumer`). The alerts to
+  set (lag, dead letters, partition runway, any row in `events_default`) are listed in the component README; this
+  chart ships no alert rules.
+
 ## Identity provider
 
 `apiServer.cognito.enabled` and `apiServer.oidc.enabled` select who authenticates

@@ -28,6 +28,9 @@ spec:
         {{- end }}
     spec:
       {{- include "meko.imagePullSecrets" . }}
+      # uvicorn drains in-flight requests, then the event producer's final flush (up to 10 s) runs.
+      # The default 30 s can cut that short and lose the queued events.
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds }}
       # Image runs as uid 1000 (app); enforce non-root + drop privileges.
       securityContext:
         runAsNonRoot: true

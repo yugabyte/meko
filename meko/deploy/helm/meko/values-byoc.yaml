@@ -286,6 +286,14 @@ mekoMcpServer:
     llmProvider: openai
     llmModel: gpt-4.1-nano-2025-04-14
 
+# Pulled from quay with the same robot as the other meko-* images, which therefore needs read on
+# meko-datapack-metrics-consumer before this is enabled (meko/jenkins/README.md). Still off here until a
+# release asks for it, so the preset only names the image.
+datapackMetricsConsumer:
+  image:
+    registry: quay.io/yugabyte
+    repository: meko-datapack-metrics-consumer
+
 mekoUi:
   image:
     registry: quay.io/yugabyte

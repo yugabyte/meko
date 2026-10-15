@@ -141,6 +141,7 @@ apiServer:
 # honest about what this release does NOT deploy.
 mekoUi: { enabled: false }
 mekoMcpServer: { enabled: false }
+datapackMetricsConsumer: { enabled: false }
 inferenceGateway: { enabled: false }
 ragAgent: { enabled: false }
 langfuse: { enabled: false }

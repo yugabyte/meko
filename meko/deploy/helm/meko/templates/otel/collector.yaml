@@ -40,6 +40,7 @@ block (or a key in it) a direct lookup nil-pointers the render.
       (dict "job" "meko-api-server" "comp" "apiServer" "scrape" "apiServer" "label" "app" "value" "meko-api-server")
       (dict "job" "meko-mcp-server" "comp" "mekoMcpServer" "scrape" "mcpServer" "label" "app" "value" "meko-mcp-server")
       (dict "job" "meko-inference-gateway" "comp" "inferenceGateway" "scrape" "inferenceGateway" "label" "app_kubernetes_io_name" "value" "inference-gateway")
+      (dict "job" "meko-datapack-metrics-consumer" "comp" "datapackMetricsConsumer" "scrape" "datapackMetricsConsumer" "label" "app" "value" "meko-datapack-metrics-consumer")
       (dict "job" "meko-reconcile-agent" "comp" "reconcileAgent" "scrape" "reconcileAgent" "label" "app" "value" "meko-reconcile-agent") }}
 {{- $v := index $.Values $s.comp }}
 {{- if and $v.enabled (eq (include "meko.componentEnabled" (dict "root" $ "comp" $s.comp)) "true") (dig "scrape" $s.scrape true $otel) (gt (int (dig "metricsPort" 9464 $v)) 0) }}

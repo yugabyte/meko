@@ -803,6 +803,9 @@ mekoMcpServer:
   metricsPort: 9464
   namespace: meko-mcp
   replicas: 3
+  # Drain plus the event producer's final queue flush (10 s) must fit, or queued events are lost on a
+  # SIGKILL. Kubernetes' default is 30 s.
+  terminationGracePeriodSeconds: 45
   # Extra container env entries (name/value or valueFrom). Nothing renders when empty.
   extraEnv: []
   image:
@@ -878,6 +881,57 @@ mekoMcpServer:
       mcpInternal: meko-mcp-internal-secret
 
 # ---------------------------------------------------------------------------
+# datapackMetricsConsumer — the process that reads the durable event log (meko_system.events)
+# and applies each event's effects, so a tool can insert one row and return instead
+# of doing its bookkeeping inline (meko/event-consumers/datapack-metrics-consumer; today context_search's daily
+# count, token-savings rows and audit row). Its own small image — not the MCP
+# server's, which carries torch and the CUDA wheels and is about 20 GB.
+#
+# OFF by default: a producer turned on (MEKO_EVENTS_EMIT on the MCP server) with no
+# consumer running just queues events, so enable this first and let it settle. It
+# works through the log in order and holds one lease per shard, so replicas beyond
+# the first are standbys that take over a dead one's shards within the lease (30 s).
+# See meko/event-consumers/datapack-metrics-consumer/README.md for settings and alerts.
+# ---------------------------------------------------------------------------
+datapackMetricsConsumer:
+  enabled: false
+  namespace: meko-mcp
+  replicas: 2
+  # /healthz and /metrics are on this port (the consumer's HTTP_PORT); the probes and the otel
+  # collector use it. It must be a real port: 0 fails the render rather than turning it off.
+  metricsPort: 8080
+  # Longer than one batch normally takes: SIGTERM finishes the batch in progress and
+  # releases the shard leases before exiting. A batch cut off by SIGKILL rolls back
+  # whole, so the cost of too short a value is repeated work, not wrong counts.
+  terminationGracePeriodSeconds: 60
+  image:
+    repository: meko/meko-datapack-metrics-consumer
+    tag: ""
+  resources:
+    requests: { cpu: "100m", memory: "64Mi" }
+    limits: { cpu: "1", memory: "256Mi" }
+  config:
+    # The database holding meko_system, whose tables are read and written here. Empty means the
+    # same as mekoMcpServer.config (a preset names the database once), and for the host, when that
+    # is empty too, this release's own YugabyteDB when yugabyte.enabled.
+    SYSTEM_DB_HOST: ""
+    SYSTEM_DB_PORT: ""
+    SYSTEM_DB_NAME: ""
+    # lib/pq's own default is `require`, unlike libpq's `prefer`, so the connection says it. Empty
+    # means apiServer.config.SYSTEM_DB_SSL_MODE (`require`, or `disable` for in-namespace
+    # traffic to a database this release owns): the api-server connects the same way.
+    SYSTEM_DB_SSL_MODE: ""
+  # MEKO_EVENTS_CONSUMER_<KEY> settings (BATCH_SIZE, MAX_SHARDS, ...). Nothing renders when empty;
+  # the defaults are in meko/event-consumers/datapack-metrics-consumer/README.md.
+  settings: {}
+  # Extra container env entries (name/value or valueFrom). Nothing renders when empty.
+  extraEnv: []
+  secrets:
+    existing:
+      # The same Secret the MCP server reads; the consumer uses its system_password key.
+      yugabytedb: yugabytedb-credentials
+
+# ---------------------------------------------------------------------------
 # otel — metrics and logs, the meko twin of the amp controller chart's collectors
 # (amp/controller/architecture/ac-metrics.md, ac-logs.md). Two OpenTelemetryCollector
 # CRs, reconciled by the OpenTelemetry Operator: one scrapes this release's
@@ -949,6 +1003,7 @@ otel:
     mcpServer: true
     inferenceGateway: true
     reconcileAgent: true
+    datapackMetricsConsumer: true
     # controller-runtime's own /metrics, authenticated by service-account token.
     # Needs a ClusterRoleBinding to the provisioner's metrics-reader role.
     provisioner: true

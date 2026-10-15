@@ -1,0 +1,330 @@
+# The datapack metrics consumer (templates/datapack-metrics-consumer/deployment.yaml; meko/event-consumers/datapack-metrics-consumer): off by default,
+# its own image and database wiring, and the otel scrape. What this pins:
+#
+#   1. Nothing renders unless enabled, and never in a control plane: installing the chart before the
+#      producers are turned on must change nothing.
+#   2. It reads meko_system from the same database as the MCP server, with the api-server's sslmode: lib/pq
+#      defaults to `require`, so an unstated mode would fail against an in-namespace database without TLS.
+#   3. It has no database to read from only when nothing names one, and says so.
+#   4. Its settings, the termination grace period and the probes.
+#
+#   helm unittest charts/meko
+suite: datapack metrics consumer
+templates:
+  - templates/datapack-metrics-consumer/deployment.yaml
+  - templates/otel/collector.yaml
+set:
+  datapackMetricsConsumer.image.tag: t
+tests:
+  - it: renders nothing by default
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for a control plane even when enabled
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-ycp.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: is a two replica Deployment that surges rather than drops a pod
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: meko-datapack-metrics-consumer
+      - equal:
+          path: metadata.namespace
+          value: meko-mcp
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 60
+
+  - it: runs its own image, not the MCP server's
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/yugabyte/meko-datapack-metrics-consumer:t
+
+  - it: is non-root with a read-only root filesystem
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: probes /healthz on the one port that also serves /metrics
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0]
+          value:
+            name: metrics
+            containerPort: 8080
+            protocol: TCP
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value:
+            path: /healthz
+            port: metrics
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_EVENTS_CONSUMER_HTTP_PORT
+            value: "8080"
+
+  - it: reads the MCP server's database with the api-server's sslmode in dev
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SYSTEM_DB_HOST
+            value: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SYSTEM_DB_NAME
+            value: meko_system
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YUGABYTEDB_SYSTEM_URL
+            value: host=$(SYSTEM_DB_HOST) port=5433 dbname=$(SYSTEM_DB_NAME) user=yugabyte sslmode=require password=$(YUGABYTEDB_SYSTEM_PASSWORD)
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YUGABYTEDB_SYSTEM_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: yugabytedb-credentials
+                key: system_password
+
+  - it: uses sslmode=disable where the api-server does
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-aws.yaml
+      - ../values-prod.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YUGABYTEDB_SYSTEM_URL
+            value: host=$(SYSTEM_DB_HOST) port=5433 dbname=$(SYSTEM_DB_NAME) user=yugabyte sslmode=disable password=$(YUGABYTEDB_SYSTEM_PASSWORD)
+
+  - it: reads the bundled database when the MCP server names none
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    release:
+      namespace: acme
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+      yugabyte.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SYSTEM_DB_HOST
+            value: yb-tservers.acme.svc.cluster.local.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SYSTEM_DB_NAME
+            value: yugabyte
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YUGABYTEDB_SYSTEM_URL
+            value: host=$(SYSTEM_DB_HOST) port=5433 dbname=$(SYSTEM_DB_NAME) user=yugabyte sslmode=disable password=$(YUGABYTEDB_SYSTEM_PASSWORD)
+
+  - it: its own database settings win over the MCP server's
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+      datapackMetricsConsumer.config.SYSTEM_DB_HOST: other-db
+      datapackMetricsConsumer.config.SYSTEM_DB_NAME: other
+      datapackMetricsConsumer.config.SYSTEM_DB_PORT: "5434"
+      datapackMetricsConsumer.config.SYSTEM_DB_SSL_MODE: verify-full
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SYSTEM_DB_HOST
+            value: other-db
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YUGABYTEDB_SYSTEM_URL
+            value: host=$(SYSTEM_DB_HOST) port=5434 dbname=$(SYSTEM_DB_NAME) user=yugabyte sslmode=verify-full password=$(YUGABYTEDB_SYSTEM_PASSWORD)
+
+  - it: fails the render when nothing names a database
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+      yugabyte.enabled: false
+      mekoMcpServer.config.SYSTEM_DB_HOST: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: datapackMetricsConsumer is enabled but has no database
+
+  - it: fails the render when metricsPort is 0 instead of silently keeping 8080
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+      datapackMetricsConsumer.metricsPort: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: datapackMetricsConsumer.metricsPort is 0
+
+  - it: serves metrics and health on the configured port
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+      datapackMetricsConsumer.metricsPort: 9100
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_EVENTS_CONSUMER_HTTP_PORT
+            value: "9100"
+
+  - it: renders its settings under the consumer's prefix, then extraEnv
+    template: templates/datapack-metrics-consumer/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      datapackMetricsConsumer.enabled: true
+      datapackMetricsConsumer.settings:
+        BATCH_SIZE: "100"
+        MAX_SHARDS: "8"
+      datapackMetricsConsumer.extraEnv:
+        - name: LOG_LEVEL
+          value: debug
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_EVENTS_CONSUMER_BATCH_SIZE
+            value: "100"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MEKO_EVENTS_CONSUMER_MAX_SHARDS
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LOG_LEVEL
+            value: debug
+
+  - it: is scraped by the otel collector once it is enabled, and not before
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector:
+      path: metadata.name
+      value: meko-metrics
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      otel.enabled: true
+      global.singleNamespace: true
+      langfuse.enabled: false
+      provisioner.enabled: false
+      datapackMetricsConsumer.enabled: true
+    asserts:
+      - equal:
+          path: spec.config.receivers.prometheus.config.scrape_configs[3].job_name
+          value: meko-datapack-metrics-consumer
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 5
+
+  - it: leaves the collector alone while the consumer is off
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector:
+      path: metadata.name
+      value: meko-metrics
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      otel.enabled: true
+      global.singleNamespace: true
+      langfuse.enabled: false
+      provisioner.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 4

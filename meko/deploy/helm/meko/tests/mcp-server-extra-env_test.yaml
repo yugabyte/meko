@@ -47,3 +47,28 @@ tests:
           content:
             name: AWS_ACCESS_KEY_ID
             value: dummy
+
+  - it: gives the mcp-server 45 s to drain and flush queued events, and takes an override
+    template: templates/meko-mcp-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      mekoMcpServer.image.tag: t
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+
+  - it: renders a different mcp-server grace period when set
+    template: templates/meko-mcp-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      mekoMcpServer.image.tag: t
+      mekoMcpServer.terminationGracePeriodSeconds: 90
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 90

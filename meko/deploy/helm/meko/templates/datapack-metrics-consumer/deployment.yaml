@@ -1,0 +1,115 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "datapackMetricsConsumer")) "true") }}
+{{- $c := .Values.datapackMetricsConsumer }}
+{{- $s := $c.secrets.existing }}
+{{- $port := int (dig "metricsPort" 8080 $c) }}
+{{- if lt $port 1 }}
+{{- fail (printf "datapackMetricsConsumer.metricsPort is %d: the probes and the scrape use this port, so it cannot be turned off. Leave it at 8080 or set another port." $port) }}
+{{- end }}
+{{- /* The same database as the MCP server's meko_system connection, which is where the events are
+       written, so an empty value means that one: a preset then names the database once. The
+       bundled YugabyteDB's Service is filled in the same way and for the same reason as the MCP
+       server's SYSTEM_DB_HOST (a values file cannot see the release namespace), absolute with a
+       trailing dot so ndots:5 does not send the four-dot name down the search list first. */}}
+{{- $mcp := .Values.mekoMcpServer.config }}
+{{- $dbHost := coalesce $c.config.SYSTEM_DB_HOST $mcp.SYSTEM_DB_HOST }}
+{{- if and (not $dbHost) $.Values.yugabyte.enabled }}
+{{- $dbHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
+{{- end }}
+{{- if not $dbHost }}
+{{- fail "datapackMetricsConsumer is enabled but has no database: set datapackMetricsConsumer.config.SYSTEM_DB_HOST (or mekoMcpServer.config.SYSTEM_DB_HOST, which it falls back to), or enable the bundled yugabyte." }}
+{{- end }}
+{{- $dbName := coalesce $c.config.SYSTEM_DB_NAME $mcp.SYSTEM_DB_NAME "meko_system" }}
+{{- $dbPort := coalesce $c.config.SYSTEM_DB_PORT $mcp.SYSTEM_DB_PORT "5433" }}
+{{- $sslMode := coalesce $c.config.SYSTEM_DB_SSL_MODE (dig "SYSTEM_DB_SSL_MODE" "" $.Values.apiServer.config) "require" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-datapack-metrics-consumer
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-datapack-metrics-consumer") | nindent 4 }}
+spec:
+  replicas: {{ $c.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # A surged pod is a standby until the old one releases its leases on SIGTERM.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "meko.selectorLabels" (dict "app" "meko-datapack-metrics-consumer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko.selectorLabels" (dict "app" "meko-datapack-metrics-consumer") | nindent 8 }}
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $c.terminationGracePeriodSeconds }}
+      # The image runs as uid 10001; enforce non-root and drop privileges.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: datapack-metrics-consumer
+          image: {{ include "meko.image" (dict "image" $c.image "global" $.Values.global) }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: SYSTEM_DB_HOST
+              value: {{ $dbHost | quote }}
+            - name: SYSTEM_DB_NAME
+              value: {{ $dbName | quote }}
+            - name: YUGABYTEDB_SYSTEM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.yugabytedb }}
+                  key: system_password
+            {{- /* password last: an empty one followed by another key parses as password=<that key>, which drops sslmode */}}
+            - name: YUGABYTEDB_SYSTEM_URL
+              value: "host=$(SYSTEM_DB_HOST) port={{ $dbPort }} dbname=$(SYSTEM_DB_NAME) user=yugabyte sslmode={{ $sslMode }} password=$(YUGABYTEDB_SYSTEM_PASSWORD)"
+            - name: MEKO_EVENTS_CONSUMER_HTTP_PORT
+              value: {{ $port | quote }}
+            {{- range $k, $v := $c.settings }}
+            - name: MEKO_EVENTS_CONSUMER_{{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- with $c.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            {{- /* One port serves /healthz and /metrics; named `metrics` so the otel scrape finds it. */}}
+            - name: metrics
+              containerPort: {{ $port }}
+              protocol: TCP
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 3
+          # /healthz fails once the work loop has not ticked for 30 s, so a stalled consumer is restarted.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 15
+            failureThreshold: 4
+{{- end }}
