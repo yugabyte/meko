@@ -37,6 +37,22 @@ export const FALLBACK_AUTH_CONFIG: AuthConfig = {
 
 export const AUTH_CONFIG_QUERY_KEY = "auth-config";
 
+/**
+ * Whether the sidebar offers Sign out.
+ *
+ * Hosted (non-BYOC) always does, without reading /auth/config. A BYOC data plane
+ * does only when /auth/config says `oidc`: there the button is the user's only
+ * way to end the issuer session. `cognito` is deliberately not trusted on BYOC,
+ * because it is also what a failed or unrecognised /auth/config falls back to,
+ * and a dev-auth install (`none`, one shared account, no session) must never
+ * show a button whose logout route answers with bare JSON. `null` (loading or
+ * not fetched) keeps it hidden.
+ */
+export function canSignOut(byoc: boolean, config: AuthConfig | null): boolean {
+  if (!byoc) return true;
+  return config?.provider === "oidc";
+}
+
 function parse(raw: AuthConfigResponse | undefined): AuthConfig {
   const provider = raw?.provider;
   if (provider !== "cognito" && provider !== "oidc" && provider !== "none") {
@@ -63,8 +79,11 @@ function parse(raw: AuthConfigResponse | undefined): AuthConfig {
  *
  * Cached for the session: which IdP a deployment runs is fixed at install, so
  * refetching it on every mount of the sign-in page buys nothing.
+ *
+ * `enabled: false` skips the request and returns `null`, for callers that only
+ * need the answer on some deployments (the sidebar reads it on BYOC only).
  */
-export function useAuthConfig(): AuthConfig | null {
+export function useAuthConfig({ enabled = true }: { enabled?: boolean } = {}): AuthConfig | null {
   const { data, isError } = useQuery({
     queryKey: [AUTH_CONFIG_QUERY_KEY],
     queryFn: async ({ signal }) => parse(await getAuthConfig({ signal })),
@@ -72,6 +91,7 @@ export function useAuthConfig(): AuthConfig | null {
     gcTime: Infinity,
     retry: false,
     refetchOnWindowFocus: false,
+    enabled,
   });
 
   if (isError) return FALLBACK_AUTH_CONFIG;

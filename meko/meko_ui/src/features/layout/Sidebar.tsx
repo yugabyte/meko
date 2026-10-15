@@ -47,6 +47,7 @@ import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 import { isLabsEnabled } from "@/lib/labs";
 import { isByocEnabled } from "@/lib/byoc";
+import { canSignOut, useAuthConfig } from "@/features/auth/authConfig";
 import { useProjectsEnabled } from "@/lib/projectsFeature";
 import { SidebarDatapackList } from "@/features/layout/SidebarDatapackList";
 
@@ -80,12 +81,11 @@ export default function Sidebar() {
   const showObserveNav = useFeatureFlag("observeNav");
   // BYOC data plane: the customer runs this in their own account, so Feedback
   // goes through their support contract rather than an in-app form.
-  //
-  // Sign out is hidden on the same flag, which is the weaker of the two: BYOC
-  // does not imply Cognito is off (they are independent chart values), so a
-  // BYOC install that keeps an IdP loses its only sign-out affordance. Gating
-  // on a session signal from /auth/me is the right shape -- tracked, not done.
   const byoc = isByocEnabled();
+  // Sign out follows the identity provider, not the BYOC flag alone: a BYOC
+  // install on OIDC needs it to end the issuer session; one on dev auth has none.
+  // Hosted never reads /auth/config here, so it makes no extra request.
+  const showSignOut = canSignOut(byoc, useAuthConfig({ enabled: byoc }));
   // Discovery Labs tab. Two terms, and they are NOT equivalent:
   //   MEKO_ENABLE_LABS off — ProtectedRoutes bounces /labs too, so the surface
   //     is unreachable rather than merely unlinked.
@@ -675,7 +675,7 @@ export default function Sidebar() {
             )}
           </a>
 
-          {byoc ? null : (
+          {showSignOut && (
             <button
               type="button"
               className={cn(
