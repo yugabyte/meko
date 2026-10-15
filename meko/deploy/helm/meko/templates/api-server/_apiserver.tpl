@@ -122,13 +122,13 @@ byte-identically to the pre-mode chart.
 {{- end }}
 {{- else }}
 - "--langfuse-host=$(LANGFUSE_HOST)"
-{{- /* Bundled langfuse (langfuse.migrate.enabled — this release seeded the admin
+{{- /* Bundled langfuse (meko.langfuseBundled — this release seeded the admin
        key itself, into langfuse-secrets) reads its own generated key rather than
        the static default, which is never right for it: it would call the
        bundled langfuse with a key that doesn't match the one just seeded. Hosted
        dev/prod provision langfuse's admin key out of band and keep the static
        staticArgs value. */}}
-{{- if $.Values.langfuse.migrate.enabled }}
+{{- if include "meko.langfuseBundled" $ }}
 - "--langfuse-admin-api-key=$(LANGFUSE_ADMIN_API_KEY)"
 {{- else }}
 - "--langfuse-admin-api-key={{ $c.staticArgs.langfuseAdminApiKey }}"
@@ -285,7 +285,7 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: LANGFUSE_DB_HOST } }
 - name: LANGFUSE_DB_SSL_MODE
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: LANGFUSE_DB_SSL_MODE } }
-{{- if $.Values.langfuse.migrate.enabled }}
+{{- if include "meko.langfuseBundled" $ }}
 - name: LANGFUSE_ADMIN_API_KEY
   valueFrom: { secretKeyRef: { name: {{ $.Values.langfuse.secrets.existing.langfuse }}, key: ADMIN_API_KEY } }
 {{- end }}

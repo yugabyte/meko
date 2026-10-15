@@ -1,35 +1,30 @@
 # ============================================================================
 # MODE preset — a self-contained Meko data plane in ONE namespace.
 #
-# What the BYOC agent installs into the namespace it runs in: the full stack plus
-# its own YugabyteDB, with nothing outside that namespace and nothing to configure
-# by hand. This file is the difference between a working install and fifteen --set
-# flags, three of which are not guessable.
+# What the BYOC agent installs into the namespace it runs in: the full stack, with
+# nothing outside that namespace and nothing to configure by hand beyond where the
+# database is. This file is the difference between a working install and fifteen
+# --set flags, three of which are not guessable.
+#
+# The database is NOT in this release. It is an operator-managed YugabyteDB universe —
+# a Foundation (foundation/examples/meko-foundation-cr.yaml), RF3 — applied first,
+# whose tserver Service host goes in database.host. bootstrap-databases then creates
+# meko_system at the universe's RF and the data-plane database on an RF1 tablespace,
+# the same split SaaS runs. kind and other dev clusters, where YBA is too heavy, add
+# values-byoc-bundled-db.yaml after this file for a single-node yugabyted instead.
 #
 # Compose with a cloud preset and an env preset, and pass THIS FILE LAST:
 #   helm upgrade --install meko charts/meko -n <ns> \
 #     -f charts/meko/values-gcp.yaml -f charts/meko/values-dev.yaml \
 #     -f charts/meko/values-byoc.yaml \
+#     --set database.host=<foundation tserver host> \
 #     --set-string apiServer.image.tag=$TAG
 #
-# No storage class to pass, on purpose. Two subcharts claim PVCs in a BYOC release
-# — the bundled YugabyteDB and, now, bundled Valkey (langfuse.valkey.managed) — and
-# neither names one: controlPlaneDb is off and the rag-agent workers claim none, so
-# there is nothing else for them to be consistent WITH, and in a customer's cluster
-# we cannot know the class names anyway. The cluster's default class is both the
-# right answer and the only one we can rely on being appropriate there.
-# `global.storageClassName` from the cloud preset governs neither: it cannot reach a
-# subchart's values (Helm resolves values before rendering). YugabyteDB's own guard
-# (acceptClusterDefault below, templates/yugabyte-storage-guard.yaml) fails the
-# install loudly if the cluster has no default class; Valkey's upstream chart has no
-# equivalent, so a cluster with no default class leaves its PVC quietly Pending
-# instead — pin valkey.dataStorage.className explicitly if that cluster is a
-# possibility.
-#
-# The chart does still refuse to install when the cluster has NO default class,
-# because then the PVCs sit Pending forever and the StatefulSet never becomes ready
-# with nothing saying why. To pin a class instead:
-#   --set yugabyte.storage.master.storageClass=<c> --set yugabyte.storage.tserver.storageClass=<c>
+# No storage class to pass, on purpose. The one PVC in this release is bundled Valkey
+# (langfuse.valkey.managed), and in a customer's cluster we cannot know the class
+# names, so the cluster default is the right answer. Valkey's upstream chart has no
+# guard for a cluster with no default class, so its PVC would sit quietly Pending —
+# pin valkey.dataStorage.className explicitly if that cluster is a possibility.
 #
 # The one thing this preset deliberately does NOT decide is image tags, which are
 # per-release.
@@ -85,51 +80,26 @@ global:
   # explicitly — see the comment there.
   imageRegistry: ""
 
+database:
+  # The Foundation's tserver Service, as the host part of its
+  # status.address.ysql_host_ports. Required: with it empty and no bundled database
+  # the api-server has nowhere to connect.
+  host: ""
+
 yugabyte:
-  # Its own database. Needs a build that bundles pg_dist_rag and mage, and the mage gflag — see values.yaml.
-  enabled: true
-  # From Quay, like the rest of the stack, so the namespace needs one pull credential
-  # rather than also an ECR token that expires every ~12h. Until a release ships this
-  # reads an integration-test build, not a release, from quay.io/yugabyte/yugabyte-itest
-  # (where unreleased -bNNN builds live, and the same place the functional tests take their
-  # database from), so the robot behind pullSecretName needs read on that repository as well
-  # as meko-*. A shipped release is published to
-  # quay.io/yugabyte/meko-yugabytedb (meko/jenkins/scripts/mirror-database-image.sh) and
-  # this moves back to it then. Bump the tag rather than re-pushing one in place: a node
-  # that already pulled it keeps the old manifest.
-  Image:
-    repository: quay.io/yugabyte/yugabyte-itest
-    tag: 2026.1.3.0-b57
-    # Its own lever: global.imagePullSecrets is resolved by this chart's templates and
-    # never reaches a subchart, so the database pod would get nothing from the list
-    # above. Must name the same Secret.
-    pullSecretName: quay-registry-creds
-  # The yugabyte-itest build runs as uid 10001, not root as the meko-yugabytedb mirror
-  # did, and a PVC is mounted root-owned unless fsGroup says otherwise: without this
-  # the master cannot write /mnt/disk0 ("Permission denied" in its post-start disk
-  # check) and crash-loops before the database ever starts. The other keys keep the
-  # subchart's defaults (uid/gid and fsGroup 10001, runAsNonRoot).
-  podSecurityContext:
-    enabled: true
-  storage:
-    # Use whatever this cluster puts volumes on. See the header: these are the only
-    # PVCs in the release, and a customer's class names are not ours to guess. The
-    # guard still fails the install if the cluster has no default class at all.
-    acceptClusterDefault: true
+  # The universe is the Foundation's; values-byoc-bundled-db.yaml turns this back on.
+  enabled: false
 
 dataPlaneSecrets:
   enabled: true
-  # The well-known password, on purpose. The bundled YugabyteDB runs with YSQL auth
-  # off, so this guards nothing — it exists because api_server and meko-mcp-server
-  # both insist on reading *a* password, from three Secrets, under two key names.
+  # The well-known password, on purpose. The Foundation's universe (and the bundled
+  # YugabyteDB) runs with YSQL auth off, so this guards nothing — it exists because
+  # api_server and meko-mcp-server both insist on reading *a* password, from three
+  # Secrets, under two key names.
   # Writing them from one value is what removes the "these must all match" step.
   #
-  # To actually authenticate: set a real password here and add
-  #   yugabyte:
-  #     authCredentials: { ysql: { passwordSecretName: yugabytedb-credentials } }
-  # which points the database's own credential job at the same Secret. Do it on a
-  # fresh namespace — the PVC outlives the release, and a database keeps the
-  # password it was initialised with.
+  # To actually authenticate, turn YSQL auth on in the universe and set its yugabyte
+  # password here.
   dbPassword: yugabyte
   # No key, no memory. Left empty because a chart cannot invent one, and because the
   # refs that read it are optional — the stack starts and extraction fails at the
@@ -145,9 +115,8 @@ dataPlaneSecrets:
 # Images from Quay, not the Meko ECR. A customer's cluster cannot hold an ECR token: it
 # expires every ~12h and refreshing it means AWS keys in their namespace, which is why
 # ecrCredentialRefresh stays off below. A Quay robot credential is one static
-# docker-registry Secret, and with the database on Quay too (see `yugabyte` above, which
-# needs read on a second repository until a release ships) it is the only one this release
-# needs.
+# docker-registry Secret, and it is the only one this release needs (the robot also needs
+# read on quay.io/yugabyte/yugabyte-itest, where extensionsImage below lives).
 #
 # Set per component rather than through global.imageRegistry, so a caller who passes an
 # env preset for its other settings does not have to fight it over the registry. Quay
@@ -170,11 +139,17 @@ apiServer:
   enableProjects: true
   enableLinkSharing: false
   migrate:
-    # The database's own image, for a ysqlsh matching the server — from Quay for the
-    # same reason as everything else here. Must be the same image as yugabyte.Image above
-    # (kept in step by hand). Besides ensure-extensions, langfuse's metadata-schema-init and
-    # tracing-schema-init run it too, so a bump moves their schema import to this ysqlsh.
-    extensionsImage: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57
+    # The Foundation's own server build, for a ysqlsh that matches it — from Quay for
+    # the same reason as everything else here. Kept equal to meko-foundation-cr.yaml's
+    # ybSoftwareVersion (foundation/examplecr_test.go). bootstrap-databases,
+    # ensure-extensions, and langfuse's metadata-schema-init and tracing-schema-init all
+    # run it, so a bump moves their schema import to this ysqlsh.
+    extensionsImage: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b21
+    bootstrap:
+      enabled: true
+      # DB_NAME's tablespace: RF1, while meko_system stays at the universe's RF3.
+      dataTablespace: meko_data_rf1
+      dataReplicas: 1
     # Create pg_dist_rag / vector (and mage, which the migrations no longer need) before
     # migrating. Without pg_dist_rag the first data migration dies partway on
     # `dist_rag.vector_indexes` and golang-migrate marks the schema dirty; the api-server
@@ -212,16 +187,15 @@ apiServer:
     # would need a hostname and a certificate this chart has no way to know.
     enabled: false
   config:
-    # Emptied on purpose: the chart fills these with the bundled database's Service
-    # when yugabyte.enabled, which a values file cannot express (it needs the release
-    # namespace). The env presets point them at a shared YugabyteDB; this unsets that.
+    # Emptied on purpose: the chart fills these from database.host (or the bundled
+    # database's Service). The env presets point them at a shared YugabyteDB; this
+    # unsets that.
     DB_HOST: ""
     SYSTEM_DB_HOST: ""
-    # One database holding both the data-plane schemas and meko_system. api_server
-    # supports the colocated layout, and a fresh YugabyteDB has no meko_system
-    # database for the split one to use.
-    DB_NAME: yugabyte
-    SYSTEM_DB_NAME: yugabyte
+    # Two databases, so each can have its own placement: bootstrap-databases creates
+    # both and puts mekodata on the RF1 tablespace.
+    DB_NAME: mekodata
+    SYSTEM_DB_NAME: meko_system
     # In-namespace traffic to a database this release owns.
     DB_SSL_MODE: disable
     SYSTEM_DB_SSL_MODE: disable
@@ -230,7 +204,7 @@ apiServer:
     # that way a BYOC api-server provisions orgs/projects and reads traces
     # against the SHARED hosted instance instead of the one bundled here. The
     # ConfigMap fills both with this release's own langfuse-web Service and its
-    # own YugabyteDB when yugabyte.enabled and these are empty.
+    # own YugabyteDB when these are empty.
     LANGFUSE_HOST: ""
     LANGFUSE_DB_HOST: ""
     # In-namespace traffic to a database this release owns, same as DB_SSL_MODE.
@@ -256,16 +230,19 @@ mekoMcpServer:
     # green, one of them serving someone else's data.
     DB_HOST: ""
     SYSTEM_DB_HOST: ""
+    # mem0's database, emptied for the same reason: the chart fills them with DB_HOST
+    # and DB_NAME.
+    MEM0_HOST: ""
+    MEM0_DB_NAME: ""
     # Emptied for the same reason, and filled the same way: this is the api-server
     # whose /internal/meko-tokens/validate decides whether a Meko PAT is valid.
     # The env preset points it at the HOSTED api-server, so a BYOC install would
     # reject every token minted by the api-server running beside it — and accept
     # ones minted somewhere else entirely.
     MEKO_BASE_URL: ""
-    # One colocated database, matching apiServer.config above: a fresh YugabyteDB has
-    # no separate meko_system database to point the system connection at.
-    DB_NAME: yugabyte
-    SYSTEM_DB_NAME: yugabyte
+    # Matching apiServer.config above.
+    DB_NAME: mekodata
+    SYSTEM_DB_NAME: meko_system
   staticEnv:
     # No Cognito pool in a BYOC data plane, matching apiServer.cognito.enabled=false
     # above. PAT-only: callers present `mko_tkn_*` tokens this Meko issued. Left on
@@ -334,7 +311,7 @@ mekoUi:
 #   provisioner — deliberately not: it renders ClusterRoles and a CRD, and manages
 #                 per-tenant namespaces, which is the opposite of one namespace.
 #
-# langfuse is ON, bundled the same way as the database: valkey.managed=true adds the
+# langfuse is ON, bundled in this release: valkey.managed=true adds the
 # valkey subchart in-namespace, and migrate.enabled=true runs its schema-init the
 # same install (no ClickHouse anywhere — this fork's "tracing" backend is a
 # `clickhouse`-named Postgres schema in the SAME YugabyteDB database, not a real

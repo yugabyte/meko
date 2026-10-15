@@ -14,7 +14,8 @@
 #   1. builds the reconcile-agent image from this tree and side-loads it (the Quay
 #      tag is only pushed when CI holds QUAY_AMP_TOKEN, so nothing here depends on it);
 #   2. registers a kind=meko environment with "desired": [] — no stack seeded;
-#   3. helm-installs the chart with values-byoc.yaml + reconcileAgent.enabled=true,
+#   3. helm-installs the chart with values-byoc.yaml (and the bundled-db overlay) +
+#      reconcileAgent.enabled=true,
 #      which is the command the control plane's own install hint prints;
 #   4. creates a datapack directly through the api-server, as a person would in the
 #      UI, so there is something the agent must NOT touch;
@@ -217,7 +218,8 @@ k -n "$NS" create secret generic meko-data-plane "${creds[@]}" \
 # ------------------------------------------------------------------------- install
 #
 # This is the install hint's command, with the local agent image substituted for the
-# Quay one and the pull secret named. If it drifts from the hint, the hint is wrong.
+# Quay one, the pull secret named, and values-byoc-bundled-db.yaml in place of the
+# hint's Foundation, which kind cannot run. If it drifts otherwise, the hint is wrong.
 #
 # values-byoc.yaml turns langfuse on with migrate.enabled, so — same as the hint —
 # this needs its seven dataPlaneSecrets.langfuse* values AND the S3 event store (a
@@ -236,6 +238,7 @@ LANGFUSE_INIT_PROJECT_SECRET_KEY="$(openssl rand -hex 16)"
 log "installing the stack and the reconcile-agent"
 helm --kube-context "$CTX" upgrade --install meko "$CHART" -n "$NS" \
   -f "$CHART/values-aws.yaml" -f "$CHART/values-dev.yaml" -f "$CHART/values-byoc.yaml" \
+  -f "$CHART/values-byoc-bundled-db.yaml" \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \

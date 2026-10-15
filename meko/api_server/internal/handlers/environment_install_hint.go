@@ -72,10 +72,12 @@ func installHint(c echo.Context, e *models.Environment, byocMetricsURL string) s
 const mekoStackNamespace = "meko"
 
 // mekoPullSecretName is the docker-registry Secret every pod in a BYOC release pulls
-// with. Named here and in values-byoc.yaml's global.imagePullSecrets +
-// yugabyte.Image.pullSecretName — three places that must agree, because the subchart
-// does not read the chart's list and would otherwise be the one pod that cannot pull.
+// with. Named here, in values-byoc.yaml's global.imagePullSecrets, and as the
+// yugaware pull secret in mekoFoundationExample — places that must agree.
 const mekoPullSecretName = "quay-registry-creds"
+
+// mekoFoundationExample is the Foundation a meko BYOC data plane runs on.
+const mekoFoundationExample = "foundation/examples/meko-foundation-cr.yaml"
 
 // ampControllerChart is the published controller chart, the same reference the
 // reconcile-agent upgrades the release from. No --version: helm resolves the
@@ -108,9 +110,11 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Prerequisites\n")
-	fmt.Fprintf(&b, "#   - a meko checkout — the chart is not published to a Helm repo\n")
-	fmt.Fprintf(&b, "#   - a cluster with a default StorageClass (the bundled YugabyteDB claims it)\n")
-	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-* and quay.io/yugabyte/yugabyte-itest\n")
+	fmt.Fprintf(&b, "#   - a meko checkout — neither the chart nor the foundation's is published to a Helm repo\n")
+	fmt.Fprintf(&b, "#   - a Quay robot credential that can read quay.io/yugabyte/meko-*, meko-foundation,\n")
+	fmt.Fprintf(&b, "#     yugaware-itest and yugabyte-itest\n")
+	fmt.Fprintf(&b, "#   - %s edited where it says REPLACE (region,\n", mekoFoundationExample)
+	fmt.Fprintf(&b, "#     zones, storage classes, yugaware password) — the universe this stack runs on\n")
 	otelOperatorPrerequisite(&b)
 
 	// The tags are one release across the stack, but printed separately anyway: the
@@ -190,7 +194,22 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "  --from-literal=api-key=\"${DD_API_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --dry-run=client -o yaml | kubectl apply -f -\n\n")
 
-	fmt.Fprintf(&b, "# 2 — install the stack and the reconcile-agent, from a meko checkout. Swap\n")
+	// The database is a Foundation's universe, not part of the release: RF3, with
+	// the chart's bootstrap putting the data-plane database on an RF1 tablespace.
+	// The CRD is once per cluster; the controller is per Foundation.
+	fmt.Fprintf(&b, "# 2 — the database: an operator-managed YugabyteDB universe (RF3). The CRD\n")
+	fmt.Fprintf(&b, "#      is cluster-scoped, installed once per cluster; YBA takes ~20-40 minutes\n")
+	fmt.Fprintf(&b, "#      to bring the universe up.\n")
+	fmt.Fprintf(&b, "helm upgrade --install meko-foundation-crd foundation/deploy/helm/meko-foundation-crd --wait\n")
+	fmt.Fprintf(&b, "helm upgrade --install fdn foundation/deploy/helm/meko-foundation -n \"${NS}\" \\\n")
+	fmt.Fprintf(&b, "  --set \"imagePullSecrets[0].name=%s\" --wait\n", mekoPullSecretName)
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" apply -f %s\n", mekoFoundationExample)
+	fmt.Fprintf(&b, "kubectl -n \"${NS}\" wait foundation/foundation \\\n")
+	fmt.Fprintf(&b, "  --for=jsonpath='{.status.phase}'=Ready --timeout=60m\n")
+	fmt.Fprintf(&b, "YB_HOST=$(kubectl -n \"${NS}\" get foundation foundation -o jsonpath='{.status.address.ysql_host_ports}')\n")
+	fmt.Fprintf(&b, "YB_HOST=\"${YB_HOST%%:*}\"\n\n")
+
+	fmt.Fprintf(&b, "# 3 — install the stack and the reconcile-agent, from a meko checkout. Swap\n")
 	fmt.Fprintf(&b, "#      values-aws.yaml for values-gcp.yaml, and values-dev.yaml for\n")
 	fmt.Fprintf(&b, "#      values-prod.yaml, to match the cluster. values-byoc.yaml goes LAST\n")
 	fmt.Fprintf(&b, "#      except for EXTRA_VALUES: it is what makes this one self-contained\n")
@@ -198,6 +217,7 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "helm upgrade --install meko %s -n \"${NS}\" \\\n", chart)
 	fmt.Fprintf(&b, "  -f %s/values-aws.yaml -f %s/values-dev.yaml \\\n", chart, chart)
 	fmt.Fprintf(&b, "  -f %s/values-byoc.yaml ${EXTRA_VALUES} \\\n", chart)
+	fmt.Fprintf(&b, "  --set-string database.host=\"${YB_HOST}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string dataPlaneSecrets.openaiApiKey=\"${OPENAI_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string apiServer.image.tag=\"${API_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoMcpServer.image.tag=\"${MCP_TAG}\" \\\n")

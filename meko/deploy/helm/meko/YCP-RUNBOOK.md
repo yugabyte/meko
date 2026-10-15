@@ -223,10 +223,20 @@ kubectl create namespace $ANS
 kubectl -n $ANS create secret generic meko-agent-api-key \
   --from-literal=dev-admin-secret="$K" --from-literal=dev-api-key-id="$KEY_ID"
 
+# The database: an RF3 Foundation in the same namespace (chart README, "The BYOC
+# database"). YBA takes 20-40 minutes.
+helm upgrade --install meko-foundation-crd foundation/deploy/helm/meko-foundation-crd --wait
+helm upgrade --install fdn foundation/deploy/helm/meko-foundation -n $ANS \
+  --set "imagePullSecrets[0].name=quay-registry-creds" --wait
+kubectl -n $ANS apply -f foundation/examples/meko-foundation-cr.yaml
+kubectl -n $ANS wait foundation/foundation --for=jsonpath='{.status.phase}'=Ready --timeout=60m
+YB_HOST=$(kubectl -n $ANS get foundation foundation -o jsonpath='{.status.address.ysql_host_ports}')
+
 helm upgrade --install meko charts/meko -n $ANS \
   -f charts/meko/values-aws.yaml \
   -f charts/meko/values-dev.yaml \
   -f charts/meko/values-byoc.yaml \
+  --set-string database.host="${YB_HOST%:*}" \
   --set-string apiServer.image.tag=$API_TAG \
   --set-string mekoMcpServer.image.tag=$MCP_TAG \
   --set-string mekoUi.image.tag=$UI_TAG \
@@ -243,16 +253,16 @@ collapses the release into one self-contained namespace, and an earlier preset
 otherwise wins.
 
 **One pull credential.** Every image a BYOC release pulls privately names
-`quay.io/yugabyte`, set in `values-byoc.yaml` — the stack per component, the bundled
-YugabyteDB through the subchart's own `Image`. (The meko-ui proxy sidecar is
-`nginx:1.27-alpine` from Docker Hub and needs no credential.) So the env preset is no
-longer what makes them resolvable, and the namespace needs one `docker-registry`
-Secret rather than that plus a rotating ECR token.
+`quay.io/yugabyte`: the stack per component, set in `values-byoc.yaml`, and the
+Foundation's yugaware and DB images. (The meko-ui proxy sidecar is `nginx:1.27-alpine`
+from Docker Hub and needs no credential.) So the env preset is no longer what makes them
+resolvable, and the namespace needs one `docker-registry` Secret rather than that plus a
+rotating ECR token.
 
-The preset names that Secret — `quay-registry-creds` — in both
-`global.imagePullSecrets` and `yugabyte.Image.pullSecretName`, because the chart's list
-is resolved by its own templates and never reaches the subchart. The install hint
-creates it. Node IAM is not a substitute here the way it was for ECR on EKS: it
+That Secret is `quay-registry-creds`, named in `global.imagePullSecrets`, as the
+yugaware pull secret in `meko-foundation-cr.yaml`, and as
+`yugabyte.Image.pullSecretName` in `values-byoc-bundled-db.yaml` — the chart's list never
+reaches a subchart. The install hint creates it. Node IAM is not a substitute here the way it was for ECR on EKS: it
 authorizes nothing on quay.io.
 
 **The stack tags now match.** `meko/jenkins` versions every component at one release,

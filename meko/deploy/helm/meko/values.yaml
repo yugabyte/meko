@@ -320,6 +320,16 @@ apiServer:
     # find a client that matches the server.
     extensionsImage: 161908593886.dkr.ecr.us-east-2.amazonaws.com/yugabyte-db/ybdb-meko-release:2026.1.0.0-b1-meko-2
     enabled: false               # runs the DB migration as an initContainer on the Deployment
+    # Before ensure-extensions: create SYSTEM_DB_NAME and DB_NAME if absent, both on
+    # DB_HOST, and — with dataTablespace set — a tablespace of dataReplicas copies that
+    # DB_NAME defaults to. That is the SaaS split on one universe: meko_system at the
+    # universe's RF, the data plane at RF1. Set the tablespace on a fresh database:
+    # tables that already exist keep the placement they were created with. The
+    # tablespace is created once, so changing dataReplicas later does not re-place it.
+    bootstrap:
+      enabled: false
+      dataTablespace: ""
+      dataReplicas: 1
     # all | datapack | system | controlplane
     #
     # controlplane runs only the YCP fleet-registry set. It is the scope to use in
@@ -373,6 +383,16 @@ controlPlaneDb:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 1Gi }
+
+# ---------------------------------------------------------------------------
+# database — a YugabyteDB this release did not deploy, by its YSQL host (no port;
+# DB_PORT carries that). Fills every empty DB_HOST, SYSTEM_DB_HOST and
+# LANGFUSE_DB_HOST, plus the rag-agent and langfuse DSNs, so one value points the
+# whole stack at it. Ignored when yugabyte.enabled. For a foundation, the host part
+# of its status.address.ysql_host_ports.
+# ---------------------------------------------------------------------------
+database:
+  host: ""
 
 # ---------------------------------------------------------------------------
 # yugabyte — the data-plane database, as the upstream YugabyteDB subchart.

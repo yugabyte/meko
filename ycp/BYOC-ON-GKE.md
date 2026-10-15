@@ -90,6 +90,11 @@ Four flags worth understanding rather than copying:
   `itest-mcs`. Left unset, the derived default carries a run timestamp so repeat runs do
   not collide.
 
+Without `--foundation` the data plane gets a single-node `yugabyted` in its own release
+(`values-byoc-bundled-db.yaml`). With it, the script installs the foundation charts and
+`foundation/examples/meko-foundation-cr.yaml` into the meko namespace — the RF3 universe a
+customer install runs on — and adds the 20–40 minutes YBA takes to bring it up.
+
 **Re-running refreshes the ECR token.** Registration itself is not repeatable — see
 [re-running](#re-running-and-registration).
 

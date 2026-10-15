@@ -2,6 +2,7 @@ package foundation
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -106,5 +107,72 @@ func TestTheCRExampleIsEncryptedEndToEnd(t *testing.T) {
 	}
 	if s, _ := names[0].(string); !strings.Contains(s, TServerEndpointName) {
 		t.Errorf("extraSANs does not name %s: %v", TServerEndpointName, names[0])
+	}
+}
+
+// The meko example is what values-byoc.yaml runs on, so it has to validate, and
+// carry the two properties the meko chart takes for granted rather than checks:
+// plaintext YSQL (the chart connects with sslmode=disable), and the gflag without
+// which every vector index in the RF1 data tablespace is refused at CREATE INDEX.
+func TestTheMekoCRExample(t *testing.T) {
+	data, err := os.ReadFile("examples/meko-foundation-cr.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Metadata struct {
+			Namespace string `yaml:"namespace"`
+		} `yaml:"metadata"`
+		Spec map[string]any `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Metadata.Namespace != "" {
+		t.Errorf("metadata.namespace is %q; it must come from `kubectl apply -n`", doc.Metadata.Namespace)
+	}
+	raw, err := json.Marshal(doc.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr := &FoundationCR{Spec: raw}
+	cr.Metadata.Namespace = "meko"
+	spec, err := loadCRSpec(cr)
+	if err != nil {
+		t.Fatalf("examples/meko-foundation-cr.yaml does not validate: %v", err)
+	}
+	if got := spec.SSLMode(); got != "disable" {
+		t.Errorf("sslMode = %q, want disable: values-byoc.yaml connects without TLS", got)
+	}
+	if rf := fmt.Sprint(spec.universe()["replicationFactor"]); rf != "3" {
+		t.Errorf("replicationFactor = %v, want 3: meko_system takes the universe's RF", rf)
+	}
+	gflags, _ := spec.universe()["gFlags"].(map[string]any)
+	for _, proc := range []string{"masterGFlags", "tserverGFlags"} {
+		flags, _ := gflags[proc].(map[string]any)
+		if flags["ysql_enable_colocated_tables_with_tablespaces"] != "true" {
+			t.Errorf("%s lacks ysql_enable_colocated_tables_with_tablespaces=true", proc)
+		}
+	}
+
+	// The chart's ysqlsh (bootstrap, extensions, langfuse's schema import) is pinned
+	// to the server build it talks to, and nothing else ties the two files together.
+	chart, err := os.ReadFile("../meko/deploy/helm/meko/values-byoc.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		APIServer struct {
+			Migrate struct {
+				ExtensionsImage string `yaml:"extensionsImage"`
+			} `yaml:"migrate"`
+		} `yaml:"apiServer"`
+	}
+	if err := yaml.Unmarshal(chart, &values); err != nil {
+		t.Fatal(err)
+	}
+	image := values.APIServer.Migrate.ExtensionsImage
+	if version := fmt.Sprint(spec.universe()["ybSoftwareVersion"]); !strings.HasSuffix(image, ":"+version) {
+		t.Errorf("values-byoc.yaml extensionsImage %q is not the universe's build %s", image, version)
 	}
 }

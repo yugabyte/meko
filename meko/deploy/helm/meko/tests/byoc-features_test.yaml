@@ -17,6 +17,8 @@ tests:
       - ../values-dev.yaml
       - ../values-byoc.yaml
     set:
+      # values-byoc has no database of its own; this is the Foundation's.
+      database.host: fdn-yb-tserver-conn.fdn.svc.cluster.local
       apiServer.image.tag: t
       mekoUi.image.tag: t
     asserts:

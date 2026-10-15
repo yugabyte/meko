@@ -57,7 +57,9 @@ var pinnedDataPlaneRelease = DataPlaneRelease{
 	// not this repo's, so it moves independently of the release below.
 	Database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2",
 
-	// One release, built by meko/jenkins on 2026-10-13 from b56d9722f1. Host-qualified
+	// One release, built by meko/jenkins on 2026-10-13 from b56d9722f1 — the first with
+	// MEKO-831's retry-safe data migration 1, without which a migrate that fails once
+	// leaves the data schema dirty for good. Host-qualified
 	// like the database above, so qualifyImage leaves every reference alone and the
 	// registry argument decides nothing.
 	APIServer:        "quay.io/yugabyte/meko-api-server:0.261013.0-b56d9722f",

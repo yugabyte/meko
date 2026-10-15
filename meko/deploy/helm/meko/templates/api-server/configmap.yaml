@@ -8,17 +8,12 @@ metadata:
   labels:
     {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
 data:
-  {{- /* The bundled database's address, when the chart is the thing that deployed it.
-
-         DB_HOST cannot be written in a values file, because it needs the release
-         namespace and values files cannot see it. Leaving it to the operator is how
-         a BYOC install ends up with fifteen --set flags and one of them wrong. So:
-         when yugabyte.enabled is on and the host is empty, point at the subchart's
-         own Service. Absolute (trailing dot) — Kubernetes sets ndots:5, and the
-         four-dot relative form sends Go's resolver down the search list first. */}}
-  {{- $ybHost := "" }}
-  {{- if $.Values.yugabyte.enabled }}
-  {{- $ybHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
+  {{- /* An empty DB host fills from one value (meko.dbHost) instead of three --set
+         flags that must agree. The bundled database's Service cannot be written in
+         a values file at all, because it needs the release namespace. */}}
+  {{- $ybHost := include "meko.dbHost" $ }}
+  {{- if and (dig "bootstrap" "enabled" false $c.migrate) (not ($c.config.DB_HOST | default $ybHost)) }}
+  {{- fail "no database to bootstrap: set database.host to the Foundation's tserver host (status.address.ysql_host_ports, without the port), or add values-byoc-bundled-db.yaml for a bundled one." }}
   {{- end }}
   {{- /* Same fill, for the langfuse bundled beside this database: left at the env
          preset's hosted-dev values, a BYOC api-server provisions orgs/projects and

@@ -8,17 +8,11 @@ metadata:
   labels:
     {{- include "meko.componentLabels" (dict "app" "meko-mcp-server") | nindent 4 }}
 data:
-  {{- /* Same fill as the api-server's ConfigMap, and for the same reason: a values
-         file cannot name the bundled database's Service because it cannot see the
-         release namespace. Without this, a BYOC install whose api-server correctly
-         found its own YugabyteDB had an MCP server still dialling the SHARED dev
-         database from the env preset — a stack that looks healthy and reads the
-         wrong data. Absolute (trailing dot): ndots:5 sends the four-dot relative
-         form down the search list first. */}}
-  {{- $ybHost := "" }}
-  {{- if $.Values.yugabyte.enabled }}
-  {{- $ybHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
-  {{- end }}
+  {{- /* Same fill as the api-server's ConfigMap. Without it, a BYOC install whose
+         api-server correctly found its own YugabyteDB had an MCP server still
+         dialling the SHARED dev database from the env preset — a stack that looks
+         healthy and reads the wrong data. */}}
+  {{- $ybHost := include "meko.dbHost" $ }}
   {{- /* MEKO_BASE_URL is the api-server this MCP server validates Meko PATs
          against — mcp_auth/pat_verifier.py POSTs /internal/meko-tokens/validate
          to it. Same failure as the DB hosts above and worse: left at the env
@@ -30,7 +24,7 @@ data:
   {{- $apiBase := "" }}
   {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "apiServer")) "true" }}
   {{- $apiNs := include "meko.ns" (dict "root" $ "ns" $.Values.apiServer.namespace) }}
-  {{- /* Absolute (trailing dot) for the same ndots:5 reason as DB_HOST above.
+  {{- /* Absolute (trailing dot): ndots:5 sends the relative form down the search list first.
          basePath is trimmed of a trailing slash so it cannot yield //api/v1. */}}
   {{- $apiBase = printf "http://meko-api-server-service.%s.svc.cluster.local.:%v%s/api/v1" $apiNs $.Values.apiServer.service.port (trimSuffix "/" $.Values.apiServer.basePath) }}
   {{- end }}
@@ -42,10 +36,21 @@ data:
   {{- $lfNs := include "meko.ns" (dict "root" $ "ns" $.Values.langfuse.namespace) }}
   {{- $lfHost = printf "http://langfuse-web.%s.svc.cluster.local.:3000" $lfNs }}
   {{- end }}
+  {{- /* mem0's connection (HOST/DBNAME in the container) is the data database in
+         every preset, so an empty MEM0_HOST/MEM0_DB_NAME follows DB_HOST/DB_NAME.
+         Left at the env preset's values, a BYOC MCP server stores memories in the
+         shared hosted database. */}}
+  {{- $dataHost := $c.config.DB_HOST | default $ybHost }}
   {{- range $k, $v := $c.config }}
   {{- $val := $v }}
   {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST")) (not $v) }}
   {{- $val = $ybHost }}
+  {{- end }}
+  {{- if and (eq $k "MEM0_HOST") (not $v) }}
+  {{- $val = $dataHost }}
+  {{- end }}
+  {{- if and (eq $k "MEM0_DB_NAME") (not $v) }}
+  {{- $val = $c.config.DB_NAME }}
   {{- end }}
   {{- if and $apiBase (eq $k "MEKO_BASE_URL") (not $v) }}
   {{- $val = $apiBase }}

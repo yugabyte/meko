@@ -28,6 +28,7 @@ tests:
       - ../values-dev.yaml
       - ../values-byoc.yaml
     set:
+      database.host: fdn-yb-tserver-conn.fdn.svc.cluster.local
       apiServer.image.tag: t
       mekoUi.image.tag: t
       mekoMcpServer.image.tag: t

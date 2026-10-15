@@ -128,8 +128,12 @@ env:
     # Helm release name, the same in every stack namespace.
     release: "meko"
     # Presets inside the chart, laid over it left to right, then the generated
-    # values file. The mode preset (byoc) goes last.
-    values_files: ["values-gcp.yaml", "values-dev.yaml", "values-byoc.yaml"]
+    # values file. The mode preset (byoc) goes last, then its bundled-database
+    # overlay: values-byoc.yaml alone expects a Foundation, which mekoqa does not
+    # stand up, and the overlay keeps the one `yugabyte` database suites read both
+    # meko_system and the data tables from. A backing database overrides the bundled
+    # one either way.
+    values_files: ["values-gcp.yaml", "values-dev.yaml", "values-byoc.yaml", "values-byoc-bundled-db.yaml"]
     # One tag for every meko image: a meko-build release (<version>-<sha>) or a
     # custom build (custom-<sha>). Every meko-* repository has it on
     # quay.io/yugabyte. --image-version overrides it for one run.

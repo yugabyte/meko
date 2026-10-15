@@ -978,7 +978,7 @@ func TestMekostackDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
-	if ms.Release != "meko" || strings.Join(ms.ValuesFiles, ",") != "values-gcp.yaml,values-dev.yaml,values-byoc.yaml" {
+	if ms.Release != "meko" || strings.Join(ms.ValuesFiles, ",") != "values-gcp.yaml,values-dev.yaml,values-byoc.yaml,values-byoc-bundled-db.yaml" {
 		t.Errorf("release/values_files = %q / %v", ms.Release, ms.ValuesFiles)
 	}
 	if !mekostack.ValidTag(ms.ImageVersion) {

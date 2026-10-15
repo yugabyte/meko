@@ -182,7 +182,7 @@ tests:
       dataPlaneSecrets.dbPassword: pw
     asserts:
       - failedTemplate:
-          errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled) or name an external one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."
+          errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled), set database.host, or name one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."
 
   - it: fills NEXTAUTH_URL with a browser-reachable default, not the cluster-internal Service name
     template: templates/langfuse/configmap.yaml
@@ -422,7 +422,7 @@ tests:
       dataPlaneSecrets.langfuseInitProjectSecretKey: t
     asserts:
       - failedTemplate:
-          errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled) or name an external one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."
+          errorMessage: "langfuse.migrate.enabled needs a database: enable the bundled one (yugabyte.enabled), set database.host, or name one in apiServer.config.LANGFUSE_DB_HOST (or DB_HOST)."
 
   # MEKO-832: the S3 event-upload store is required, since every conversation event
   # lands there before ingestion. The cases below cover the failure modes (no

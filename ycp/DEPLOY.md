@@ -131,9 +131,9 @@ carry the new set, and an installed release keeps what it was installed with unt
 someone upgrades the chart. The three stack tags are versioned per component, not per
 release, so the hint prints one variable each.
 
-**Registration seeds no desired state.** The workloads — YugabyteDB with `mage` and
-`pg_dist_rag`, api-server, MCP server, RAG worker, inference gateway, UI — come from
-the chart the hint installs, not from the control plane, so a freshly registered
+**Registration seeds no desired state.** The workloads — api-server, MCP server, RAG
+worker, inference gateway, UI — come from the chart the hint installs, and the database
+from the `Foundation` it applies first, not from the control plane, so a freshly registered
 environment has an agent enrolled and nothing declared. `POST /environments` takes a
 `"desired": [...]` if you want to declare resources at registration time.
 

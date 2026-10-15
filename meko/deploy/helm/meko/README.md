@@ -25,8 +25,10 @@ values-gcp.yaml        cloud preset — GKE: GCE ingress + ManagedCertificate, E
 values-dev.yaml        env preset — dev hosts/DB/Cognito/tags
 values-prod.yaml       env preset — prod hosts/DB/Cognito/tags
 values-ycp.yaml       mode preset — YCP control plane (BYOC)
-values-byoc.yaml       mode preset — a self-contained data plane in ONE namespace:
-                       its own YugabyteDB, and no Secrets to create by hand
+values-byoc.yaml       mode preset — a self-contained data plane in ONE namespace, on a
+                       Foundation's universe (database.host), no Secrets by hand
+values-byoc-bundled-db.yaml  dev overlay — a single-node yugabyted in the release instead
+                       of a Foundation, for kind. AFTER values-byoc.yaml
 values-byoc-full.yaml  opt-in overlay — moves the inference gateway onto OpenAI and
                        adds the rag text worker. AFTER values-byoc.yaml; needs an OpenAI key
 ```
@@ -142,9 +144,8 @@ tradeoff, including why nothing is auto-generated.
 The data plane has the same facility, and needs it more: its database password has
 to appear in **three** Secrets under **two** key spellings (`db-password` twice,
 then `password` and `system_password`) *and* match what the database was
-initialised with. `dataPlaneSecrets.dbPassword` writes all of them from one value,
-and when `yugabyte.enabled` puts the database in this release too, both sides of
-that match come from here. `values-byoc.yaml` turns it on.
+initialised with. `dataPlaneSecrets.dbPassword` writes all of them from one value.
+`values-byoc.yaml` turns it on.
 
 The other half of "no Secrets by hand" is that the credentials a data plane does
 not use are read with `optional: true` — S3, the OpenAI key, Cognito on the
@@ -179,11 +180,21 @@ curl -sX POST "$YCP/api/v1/environments" \
 kubectl -n meko-system create secret generic meko-agent-api-key \
   --from-literal=api-key=<the key YBM showed once>
 
-# 3. Deploy the data plane with the agent enabled, pointed at YCP's API base.
+# 3. Stand up the database: a Foundation (RF3) in the same namespace. See
+#    "The BYOC database" below.
+helm upgrade --install meko-foundation-crd foundation/deploy/helm/meko-foundation-crd --wait
+helm upgrade --install fdn foundation/deploy/helm/meko-foundation -n meko-system \
+  --set "imagePullSecrets[0].name=quay-registry-creds" --wait
+kubectl -n meko-system apply -f foundation/examples/meko-foundation-cr.yaml
+kubectl -n meko-system wait foundation/foundation --for=jsonpath='{.status.phase}'=Ready --timeout=60m
+YB_HOST=$(kubectl -n meko-system get foundation foundation -o jsonpath='{.status.address.ysql_host_ports}')
+
+# 4. Deploy the data plane with the agent enabled, pointed at YCP's API base.
 #    values-byoc.yaml goes LAST: it is what makes this one self-contained namespace.
 helm upgrade --install meko charts/meko -n meko-system \
   -f charts/meko/values-aws.yaml -f charts/meko/values-dev.yaml \
   -f charts/meko/values-byoc.yaml \
+  --set-string database.host="${YB_HOST%:*}" \
   --set reconcileAgent.enabled=true \
   --set reconcileAgent.ycpUrl=$YCP --set reconcileAgent.envName=acme-prod \
   --set-string reconcileAgent.image.tag=$AGENT_TAG
@@ -192,6 +203,34 @@ helm upgrade --install meko charts/meko -n meko-system \
 YCP's own register response prints that command with everything it can know already
 filled in — the namespace, the URL it was reached on, and the stack's per-component
 image tags from the release it pins. Prefer it over retyping this.
+
+### The BYOC database
+
+`values-byoc.yaml` deploys no database. It runs on an operator-managed universe — a
+`Foundation` ([`foundation/examples/meko-foundation-cr.yaml`](../../../../foundation/examples/meko-foundation-cr.yaml),
+RF3) — whose tserver Service host goes in `database.host`, which fills every empty DB
+host and DSN in the chart. The SaaS replication split is made inside that one universe
+by the api-server's `bootstrap-databases` init container, ahead of migrate:
+
+- `meko_system` is its own database at the universe's RF3;
+- `mekodata` gets `default_tablespace` = `meko_data_rf1`, a tablespace with one replica
+  whose placement names the universe's cloud and wildcards region and zone. Every table
+  and index created in it later — the migrations, and the per-datapack tables the
+  api-server creates at runtime — lands at RF1 with no change to the migrations.
+
+Two constraints that are not obvious:
+
+- the universe needs `ysql_enable_colocated_tables_with_tablespaces=true` on masters and
+  tservers. YB stores a vector index colocated with its table and otherwise refuses any
+  hnsw index that has a tablespace, which `default_tablespace` gives every one of them.
+  The example sets it; it is a start-time flag.
+- the tablespace only governs what is created after it. Pointing an existing database at
+  it leaves its tables where they are.
+
+kind cannot run YBA, so dev clusters add `values-byoc-bundled-db.yaml` after
+`values-byoc.yaml`: a single-node `yugabyted` in the release and the layout BYOC had
+before the Foundation — one `yugabyte` database for both schemas, so an existing
+bundled release upgrades onto its data.
 
 ### Metrics and logs (`otel`)
 
@@ -213,8 +252,8 @@ OpenTelemetry Operator with the contrib distro — modelled on amp's
     token, through a ClusterRoleBinding to the provisioner's metrics-reader role;
   - Langfuse's DogStatsD metrics, on a `statsd` receiver at UDP 8125 that the web and
     worker containers are pointed at;
-  - the bundled YugabyteDB's master, tserver and YSQL endpoints, with table- and
-    tablet-level series dropped;
+  - with the bundled YugabyteDB (`yugabyte.enabled`), its master, tserver and YSQL
+    endpoints, with table- and tablet-level series dropped;
   - with `otel.podMetrics`, cAdvisor for this release's namespaces.
 
   It ships to `otel.remoteWriteEndpoint`, the BYOC door, or both. `otel.scrape.*`
@@ -323,7 +362,7 @@ answer empty, and — since memory embedding defaults to Bedrock
 `provisioner` renders ClusterRoles and a CRD, which is the opposite of one namespace —
 not a flag away.
 
-`langfuse` is **on** in `values-byoc.yaml`, bundled the same way as the database: no
+`langfuse` is **on** in `values-byoc.yaml`, bundled in the release: no
 ClickHouse anywhere (this fork's "tracing" backend is a `clickhouse`-named Postgres
 schema in the same YugabyteDB database, not a real ClickHouse deployment) and a bundled
 Valkey subchart (`langfuse.valkey.managed: true`). It needs seven

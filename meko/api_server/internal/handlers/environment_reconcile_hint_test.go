@@ -78,6 +78,15 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		// The footnote for the configurations that do need a token — either
 		// identity provider, not just Cognito.
 		"identity provider ON (Cognito or OIDC)",
+		// values-byoc.yaml has no database of its own (MEKO-916): the hint stands
+		// up the Foundation, waits for its address, and hands the host to the
+		// chart, which refuses to render without one.
+		"helm upgrade --install meko-foundation-crd foundation/deploy/helm/meko-foundation-crd",
+		"kubectl -n \"${NS}\" apply -f foundation/examples/meko-foundation-cr.yaml",
+		"--for=jsonpath='{.status.phase}'=Ready",
+		"{.status.address.ysql_host_ports}",
+		`YB_HOST="${YB_HOST%:*}"`,
+		`--set-string database.host="${YB_HOST}"`,
 	} {
 		if !strings.Contains(hint, want) {
 			t.Errorf("hint is missing %q:\n%s", want, hint)

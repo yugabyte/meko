@@ -41,6 +41,70 @@ spec:
       # and Argo CD (no hook-ordering/readiness deadlock). Runs on each pod start;
       # the migration tool is expected to be idempotent / concurrency-safe.
       initContainers:
+        {{- $bootstrap := dig "bootstrap" dict $c.migrate }}
+        {{- if dig "enabled" false $bootstrap }}
+        {{- /* Creates the two databases the migrations target, which nothing else
+               creates on a universe this release did not deploy, and the RF split:
+               meko_system keeps the universe's replication factor while DB_NAME
+               defaults to a tablespace with dataReplicas copies. default_tablespace
+               on the database covers every table and index created in it later,
+               including the per-datapack ones the api-server creates at runtime, so
+               the migrations stay as they are. A tablespace cannot be moved under
+               existing tables by this — it only governs what is created after.
+
+               The placement block names the universe's cloud and wildcards region
+               and zone: YB refuses a wildcard cloud, and min_num_replicas 0, so this
+               is the only form that spreads RF1 tablets over every zone. */}}
+        - name: bootstrap-databases
+          image: {{ $c.migrate.extensionsImage }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PGPASSWORD="$DB_PASSWORD"
+              ysql() { /home/yugabyte/bin/ysqlsh -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER_NAME" -v ON_ERROR_STOP=1 "$@"; }
+              # DDL anywhere in the universe bumps the catalog version, so a concurrent
+              # schema init (langfuse's, another replica's) fails this one with "could
+              # not serialize access". Each step re-checks its own state, so a retry is
+              # safe.
+              retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retrying $1 ($i)"; sleep 5; done; "$@"; }
+              create_db() {
+                [ -n "$(ysql -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname = '$1'")" ] && return 0
+                echo "creating database $1"
+                ysql -d yugabyte -c "CREATE DATABASE \"$1\""
+              }
+              create_tablespace() {
+                [ -n "$(ysql -d yugabyte -tAc "SELECT 1 FROM pg_tablespace WHERE spcname = '$DATA_TABLESPACE'")" ] && return 0
+                cloud=$(ysql -d yugabyte -tAc "SELECT cloud FROM yb_servers() LIMIT 1")
+                placement="{\"num_replicas\":$DATA_REPLICAS,\"placement_blocks\":[{\"cloud\":\"$cloud\",\"region\":\"*\",\"zone\":\"*\",\"min_num_replicas\":$DATA_REPLICAS}]}"
+                echo "creating tablespace $DATA_TABLESPACE: $placement"
+                ysql -d yugabyte -c "CREATE TABLESPACE \"$DATA_TABLESPACE\" WITH (replica_placement = '$placement')"
+              }
+              # Bounded, so a wrong database.host fails with a reason instead of
+              # leaving the pod in Init. The install waits for the Foundation first.
+              deadline=$((SECONDS + 900))
+              until ysql -d yugabyte -tAc 'select 1' >/dev/null 2>&1; do
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "no YSQL at $DB_HOST:$DB_PORT after 15m: check database.host and that the universe is up" >&2
+                  exit 1
+                fi
+                echo "waiting for ysql at $DB_HOST:$DB_PORT ..."
+                sleep 5
+              done
+              for db in "$SYSTEM_DB_NAME" "$DB_NAME"; do retry create_db "$db"; done
+              if [ -n "$DATA_TABLESPACE" ]; then
+                retry create_tablespace
+                retry ysql -d yugabyte -c "ALTER DATABASE \"$DB_NAME\" SET default_tablespace = \"$DATA_TABLESPACE\""
+              fi
+              echo "databases ready"
+          env:
+            {{- include "meko.apiServer.env" $ | nindent 12 }}
+            - name: DATA_TABLESPACE
+              value: {{ dig "dataTablespace" "" $bootstrap | quote }}
+            - name: DATA_REPLICAS
+              value: {{ dig "dataReplicas" 1 $bootstrap | quote }}
+        {{- end }}
         {{- if $c.migrate.ensureExtensions }}
         {{- /* Create the database extensions the data-plane migrations depend on,
                BEFORE migrate runs. Ordering matters more than it looks.
@@ -75,10 +139,15 @@ spec:
                 echo "waiting for ysql at $DB_HOST:$DB_PORT ..."
                 sleep 5
               done
+              # Retried for the same concurrent-DDL conflict bootstrap-databases retries.
               for ext in {{ $c.migrate.extensions | join " " }}; do
                 echo "creating extension $ext (if not present)"
-                /home/yugabyte/bin/ysqlsh -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER_NAME" \
-                  -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS $ext"
+                for i in 1 2 3 4 5 6; do
+                  /home/yugabyte/bin/ysqlsh -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER_NAME" \
+                    -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS $ext" && break
+                  [ "$i" = 6 ] && exit 1
+                  echo "retrying extension $ext ($i)"; sleep 5
+                done
               done
               echo "extensions ready"
           env:

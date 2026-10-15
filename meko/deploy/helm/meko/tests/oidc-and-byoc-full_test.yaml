@@ -17,6 +17,8 @@ set:
   langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET: test-events-bucket
   langfuse.serviceAccount.annotations:
     eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/langfuse
+  # values-byoc has no database of its own; this is the Foundation's.
+  database.host: fdn-yb-tserver-conn.fdn.svc.cluster.local
 tests:
   - it: wires the OIDC flags and env, and passes the client secret by env var only
     template: templates/api-server/deployment.yaml
@@ -200,7 +202,7 @@ tests:
       - isNull:
           path: stringData.AWS_ACCESS_KEY_ID
 
-  - it: builds the rag workers' DSN from the bundled database, password escaped
+  - it: builds the rag workers' DSN from database.host, password escaped
     template: templates/dataplane-secrets.yaml
     documentSelector:
       path: metadata.name
@@ -232,7 +234,7 @@ tests:
     asserts:
       - equal:
           path: stringData.YUGABYTEDB_CONNECTION_STRING
-          value: postgresql://yugabyte:p%40ss%2Fword@yb-tservers.acme.svc.cluster.local.:5433/yugabyte
+          value: postgresql://yugabyte:p%40ss%2Fword@fdn-yb-tserver-conn.fdn.svc.cluster.local.:5433/mekodata
 
   - it: puts the rag workers' AWS pair in rag-agent-secret when both halves are set
     template: templates/dataplane-secrets.yaml
@@ -340,12 +342,16 @@ tests:
       ragAgent.pdf.image.tag: t
       ragAgent.enabled: true
       yugabyte.enabled: false
+      database:
+        host: ""
+      # Otherwise the api-server's own no-database refusal fires first.
+      apiServer.migrate.bootstrap.enabled: false
       dataPlaneSecrets.enabled: true
       dataPlaneSecrets.dbPassword: pw
       dataPlaneSecrets.openaiApiKey: sk-test
     asserts:
       - failedTemplate:
-          errorMessage: "ragAgent.enabled with no database to point it at: set ragAgent.dbConnectionString, or enable the bundled database (yugabyte.enabled)."
+          errorMessage: "ragAgent.enabled with no database to point it at: set ragAgent.dbConnectionString or database.host, or enable the bundled database (yugabyte.enabled)."
 
   - it: refuses an openai gateway with no key
     template: templates/inference-gateway/deployment.yaml

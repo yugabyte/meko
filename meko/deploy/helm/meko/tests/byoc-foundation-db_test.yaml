@@ -1,0 +1,156 @@
+# values-byoc.yaml runs on a Foundation's universe rather than a database of its own
+# (MEKO-916): database.host is the only address it is given, and bootstrap-databases
+# creates the two databases and the RF1 split before anything migrates. Each case
+# here fails silently in a cluster — a component left on the env preset's shared
+# database, or data tables created at the universe's RF3.
+#
+#   helm unittest charts/meko
+suite: byoc foundation database
+templates:
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+  - templates/meko-mcp-server/configmap.yaml
+values:
+  - ../values-gcp.yaml
+  - ../values-dev.yaml
+  - ../values-byoc.yaml
+set:
+  database.host: fdn-yb-tserver-conn.fdn.svc.cluster.local
+  apiServer.image.tag: t
+  mekoMcpServer.image.tag: t
+tests:
+  - it: points every api-server database host at database.host
+    template: templates/api-server/configmap.yaml
+    asserts:
+      - equal: { path: data.DB_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+      - equal: { path: data.SYSTEM_DB_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+      - equal: { path: data.LANGFUSE_DB_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+      - equal: { path: data.DB_NAME, value: mekodata }
+      - equal: { path: data.SYSTEM_DB_NAME, value: meko_system }
+
+  - it: points the mcp-server at the same databases
+    template: templates/meko-mcp-server/configmap.yaml
+    asserts:
+      - equal: { path: data.DB_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+      - equal: { path: data.SYSTEM_DB_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+      - equal: { path: data.DB_NAME, value: mekodata }
+      - equal: { path: data.SYSTEM_DB_NAME, value: meko_system }
+
+  - it: bootstraps the databases and the RF1 tablespace before anything else runs
+    template: templates/api-server/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: bootstrap-databases
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: ensure-extensions
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content: { name: DATA_TABLESPACE, value: meko_data_rf1 }
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content: { name: DATA_REPLICAS, value: "1" }
+
+  - it: keeps the bundled database, without the tablespace, under the dev overlay
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-bundled-db.yaml
+    set:
+      database.host: ""
+    release:
+      namespace: acme
+    template: templates/api-server/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content: { name: DATA_TABLESPACE, value: "" }
+
+  - it: fills the hosts from the bundled database under the dev overlay
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-bundled-db.yaml
+    release:
+      namespace: acme
+    template: templates/api-server/configmap.yaml
+    asserts:
+      - equal: { path: data.DB_HOST, value: yb-tservers.acme.svc.cluster.local. }
+      # The pre-Foundation layout, so an existing bundled release upgrades onto its data.
+      - equal: { path: data.DB_NAME, value: yugabyte }
+      - equal: { path: data.SYSTEM_DB_NAME, value: yugabyte }
+
+  - it: keeps the mcp-server on the one bundled database under the dev overlay
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-byoc.yaml
+      - ../values-byoc-bundled-db.yaml
+    template: templates/meko-mcp-server/configmap.yaml
+    asserts:
+      - equal: { path: data.DB_NAME, value: yugabyte }
+      - equal: { path: data.SYSTEM_DB_NAME, value: yugabyte }
+      - equal: { path: data.MEM0_DB_NAME, value: yugabyte }
+
+  - it: runs no bootstrap on a release whose values predate it
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.migrate.enabled: true
+      apiServer.migrate.bootstrap: null
+    template: templates/api-server/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content: { name: bootstrap-databases }
+          any: true
+
+  - it: refuses values-byoc with no database to bootstrap
+    set:
+      database:
+        host: ""
+    # The Deployment includes the ConfigMap for its checksum, so it renders first.
+    template: templates/api-server/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "no database to bootstrap: set database.host to the Foundation's tserver host (status.address.ysql_host_ports, without the port), or add values-byoc-bundled-db.yaml for a bundled one."
+
+  - it: points the mcp-server's mem0 at the data database, not the env preset's
+    template: templates/meko-mcp-server/configmap.yaml
+    asserts:
+      - equal: { path: data.MEM0_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+      - equal: { path: data.MEM0_DB_NAME, value: mekodata }
+
+  - it: references no langfuse-secrets with the langfuse component off
+    set:
+      langfuse.enabled: false
+    template: templates/api-server/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LANGFUSE_ADMIN_API_KEY
+            valueFrom: { secretKeyRef: { name: langfuse-secrets, key: ADMIN_API_KEY } }
+      - notContains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: LANGFUSE_ADMIN_API_KEY
+            valueFrom: { secretKeyRef: { name: langfuse-secrets, key: ADMIN_API_KEY } }
+
+  - it: does not double a trailing dot already on database.host
+    set:
+      database.host: fdn-yb-tserver-conn.fdn.svc.cluster.local.
+    template: templates/api-server/configmap.yaml
+    asserts:
+      - equal: { path: data.DB_HOST, value: fdn-yb-tserver-conn.fdn.svc.cluster.local. }
+
+  - it: leaves an IP database.host as written
+    set:
+      database.host: 10.1.2.3
+    template: templates/api-server/configmap.yaml
+    asserts:
+      - equal: { path: data.DB_HOST, value: 10.1.2.3 }

@@ -39,6 +39,15 @@
 #   the gateway still runs, on bedrock, which needs BEDROCK_KEY/BEDROCK_SECRET.
 #     OPENAI_API_KEY=sk-... ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --full
 #
+#   --foundation runs the data plane on an operator-managed universe, as a customer
+#   install does: it installs the foundation charts, applies
+#   foundation/examples/meko-foundation-cr.yaml into the meko namespace, waits for it
+#   (YBA: 20-40 minutes) and hands its host to the chart. Without it the data plane
+#   gets values-byoc-bundled-db.yaml's single-node yugabyted, which is far quicker.
+#   --delete tears a Foundation down before the namespace (the operator's finalizers
+#   would otherwise strand it in Terminating) and leaves the shared Foundation CRD.
+#     ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --foundation
+#
 # Environment:
 #   AWS_PROFILE      profile with Meko ECR access (meko-dev here) — required.
 #   MEKO_CHART       the chart directory (default: this checkout's meko/deploy/helm/meko)
@@ -69,6 +78,7 @@ MEKO_UI_TAG="${MEKO_UI_TAG:-0.261013.0-b56d9722f}"
 # openai and adds the rag workers. Free-form so a caller can pass a values file of
 # their own, which is the same mechanism the install hint prints.
 EXTRA_VALUES="${EXTRA_VALUES:-}"
+FOUNDATION=0
 CLOUD="${CLOUD:-gcp}" # which cloud preset: gcp | aws
 # Storage class for the control plane's bundled Postgres. Empty keeps the cloud
 # preset's (pd-ssd on GKE, gp2-csi on AWS); override for a cluster that has neither,
@@ -178,8 +188,12 @@ while [ $# -gt 0 ]; do
     DELETE=1
     shift
     ;;
+  --foundation)
+    FOUNDATION=1
+    shift
+    ;;
   -h | --help)
-    sed -n '2,46p' "$0"
+    sed -n '2,55p' "$0"
     exit 0
     ;;
   *)
@@ -239,6 +253,22 @@ if [ "$DELETE" = "1" ]; then
   log "removing $scope from $CTX: ${DELETE_NS[*]}"
   for ns in "${DELETE_NS[@]}"; do
     if k get ns "$ns" -o jsonpath="{.metadata.labels['meko\.dev/created-by']}" 2>/dev/null | grep -q ycp-on-cluster; then
+      # Every YBA CR carries the operator's finalizer, and deleting the namespace
+      # removes the operator with them, so the Foundation goes first, under Delete,
+      # and its controller's cluster RBAC with helm.
+      if k -n "$ns" get foundation foundation >/dev/null 2>&1; then
+        log "tearing down the Foundation in $ns (YBA takes several minutes)"
+        k -n "$ns" patch foundation foundation --type=merge -p '{"spec":{"deletionPolicy":"Delete"}}' >/dev/null
+        # The controller adds the teardown finalizer on its next pass; deleting
+        # before then would leave the universe behind.
+        for _ in $(seq 1 30); do
+          k -n "$ns" get foundation foundation -o jsonpath='{.metadata.finalizers}' | grep -q teardown && break
+          sleep 5
+        done
+        k -n "$ns" delete foundation foundation --timeout=60m ||
+          die "the Foundation in $ns did not finish tearing down; the namespace is left in place"
+        h -n "$ns" uninstall fdn >/dev/null 2>&1 || true
+      fi
       k delete ns "$ns" --wait=false
       echo "    deleting namespace $ns"
     else
@@ -496,12 +526,26 @@ k -n "$MEKO_NS" create secret generic meko-agent-api-key \
 # cluster, so the agent needs no external address — and the dot matters: ndots:5
 # makes the four-dot relative form walk the search list first and stall.
 YCP_URL="http://meko-api-server-service.$YCP_NS.svc.cluster.local.:80/api/v1"
-# values-byoc.yaml LAST: it is what makes this one self-contained namespace — the
-# stack plus its own YugabyteDB, and nothing outside it.
+DB_VALUES=(-f "$CHART/values-byoc-bundled-db.yaml")
+if [ "$FOUNDATION" = "1" ]; then
+  REPO_ROOT="$(cd "$HERE_DIR/../../.." && pwd)"
+  log "standing up the Foundation in $MEKO_NS (YBA takes 20-40 minutes)"
+  h upgrade --install meko-foundation-crd "$REPO_ROOT/foundation/deploy/helm/meko-foundation-crd" \
+    --wait >/dev/null
+  h upgrade --install fdn "$REPO_ROOT/foundation/deploy/helm/meko-foundation" -n "$MEKO_NS" \
+    --set "imagePullSecrets[0].name=$QUAY_PULL_SECRET" --wait >/dev/null
+  k -n "$MEKO_NS" apply -f "$REPO_ROOT/foundation/examples/meko-foundation-cr.yaml" >/dev/null
+  k -n "$MEKO_NS" wait foundation/foundation --for=jsonpath='{.status.phase}'=Ready --timeout=60m >/dev/null ||
+    die "the Foundation never reached Ready (see: kubectl --context $CTX -n $MEKO_NS get foundation foundation -o yaml)"
+  YB_HOST="$(k -n "$MEKO_NS" get foundation foundation -o jsonpath='{.status.address.ysql_host_ports}')"
+  DB_VALUES=(--set-string database.host="${YB_HOST%:*}")
+fi
+# values-byoc.yaml LAST but for the database and EXTRA_VALUES: it is what makes this
+# one self-contained namespace.
 # shellcheck disable=SC2086 # EXTRA_VALUES is a flag list, and must word-split.
 h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
-  $EXTRA_VALUES \
+  "${DB_VALUES[@]}" $EXTRA_VALUES \
   --set-string dataPlaneSecrets.openaiApiKey="${OPENAI_API_KEY:-}" \
   --set-string dataPlaneSecrets.mcpAwsAccessKeyId="${BEDROCK_KEY:-${AWS_ACCESS_KEY_ID:-}}" \
   --set-string dataPlaneSecrets.mcpAwsSecretAccessKey="${BEDROCK_SECRET:-${AWS_SECRET_ACCESS_KEY:-}}" \

@@ -62,6 +62,36 @@ Usage: {{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi"
 {{- if $active -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+meko.dbHost — the YugabyteDB host an empty DB_HOST/SYSTEM_DB_HOST/LANGFUSE_DB_HOST
+fills with: the bundled subchart's Service when yugabyte.enabled, else database.host
+(a foundation's tserver Service). Empty when neither, which leaves the values as
+written. Absolute (trailing dot) either way — Kubernetes sets ndots:5, and the
+four-dot relative form sends every lookup down the search list first. An IP is left
+as it is.
+*/}}
+{{- define "meko.dbHost" -}}
+{{- if .Values.yugabyte.enabled -}}
+{{- printf "yb-tservers.%s.svc.cluster.local." .Release.Namespace -}}
+{{- else -}}
+{{- $h := dig "host" "" (.Values.database | default dict) -}}
+{{- if and $h (not (hasSuffix "." $h)) (not (regexMatch "^[0-9.]+$|:" $h)) -}}
+{{- $h = printf "%s." $h -}}
+{{- end -}}
+{{- $h -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+meko.langfuseBundled — does this release seed langfuse itself, and so render
+langfuse-secrets with the admin key the api-server reads? Both sides use this one
+condition: langfuse.migrate.enabled alone (values-byoc.yaml sets it) is also true
+with the langfuse component off, where no Secret renders. "true" or "".
+*/}}
+{{- define "meko.langfuseBundled" -}}
+{{- if and (eq (include "meko.componentEnabled" (dict "root" . "comp" "langfuse")) "true") .Values.langfuse.migrate.enabled -}}true{{- end -}}
+{{- end -}}
+
 {{/* Base name, overridable via nameOverride/fullnameOverride. */}}
 {{- define "meko.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}

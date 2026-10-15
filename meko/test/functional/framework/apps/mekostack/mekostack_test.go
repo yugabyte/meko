@@ -100,7 +100,7 @@ func testConfig(t *testing.T) Config {
 	return Config{
 		Context: "ctx", Namespace: "mekoqa-st-abc", RunID: "abc", Owner: "me", TTL: time.Hour,
 		ChartPath: chart, Release: "meko",
-		ValuesFiles:   []string{"values-gcp.yaml", "values-dev.yaml", "values-byoc.yaml"},
+		ValuesFiles:   []string{"values-gcp.yaml", "values-dev.yaml", "values-byoc.yaml", "values-byoc-bundled-db.yaml"},
 		ImageVersion:  "0.261002.0-b75b2a658",
 		ImageTags:     map[string]string{"mcp_server": "custom-abc123"},
 		DatabaseImage: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2",

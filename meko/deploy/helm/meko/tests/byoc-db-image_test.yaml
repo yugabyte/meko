@@ -1,11 +1,12 @@
-# The BYOC database image is set twice: yugabyte.Image (the server) and
-# apiServer.migrate.extensionsImage (the ysqlsh that api-server's ensure-extensions
-# and langfuse's two schema-init containers run). They must be the same build —
+# The bundled BYOC database image is set twice: yugabyte.Image (the server, in
+# values-byoc-bundled-db.yaml) and apiServer.migrate.extensionsImage (the ysqlsh
+# that api-server's bootstrap-databases and ensure-extensions and langfuse's two
+# schema-init containers run, in values-byoc.yaml). They must be the same build —
 # a ysqlsh older than its server — and nothing but this suite ties them together.
 #
 # Every consumer is pinned to the SAME literal below, so bumping one setting and
-# not the other fails here. When you bump the image, change it in values-byoc.yaml
-# in both places and in every `value:` below.
+# not the other fails here. When you bump the image, change it in both files and
+# in every `value:` below.
 #
 #   helm unittest charts/meko
 suite: byoc database image
@@ -26,6 +27,7 @@ values:
   - ../values-gcp.yaml
   - ../values-dev.yaml
   - ../values-byoc.yaml
+  - ../values-byoc-bundled-db.yaml
 set:
   apiServer.image.tag: t
   mekoUi.image.tag: t
@@ -54,9 +56,12 @@ tests:
           path: spec.template.spec.containers[0].image
           value: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57
 
-  - it: runs api-server's ensure-extensions on the same image
+  - it: runs api-server's bootstrap-databases and ensure-extensions on the same image
     template: templates/api-server/deployment.yaml
     asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name=="bootstrap-databases")].image
+          value: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57
       - equal:
           path: spec.template.spec.initContainers[?(@.name=="ensure-extensions")].image
           value: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57

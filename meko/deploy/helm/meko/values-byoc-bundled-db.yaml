@@ -1,0 +1,63 @@
+# ============================================================================
+# OVERLAY on values-byoc.yaml — a single-node yugabyted in the release instead of a
+# Foundation. For kind and dev clusters, where YBA is too heavy to run; a customer
+# install uses the Foundation. Pass it AFTER values-byoc.yaml:
+#
+#   helm upgrade --install meko charts/meko -n <ns> \
+#     -f charts/meko/values-gcp.yaml -f charts/meko/values-dev.yaml \
+#     -f charts/meko/values-byoc.yaml -f charts/meko/values-byoc-bundled-db.yaml \
+#     --set-string apiServer.image.tag=$TAG
+#
+# The layout values-byoc.yaml had before the Foundation: one RF1 database, `yugabyte`,
+# holding both meko_system and the data-plane schemas, so an existing bundled release
+# upgrades onto the data it already has. No tablespace — RF1 throughout.
+#
+# Its PVCs take the cluster's default class. The chart refuses to install when the
+# cluster has NO default class, because then the PVCs sit Pending forever and the
+# StatefulSet never becomes ready with nothing saying why. To pin a class instead:
+#   --set yugabyte.storage.master.storageClass=<c> --set yugabyte.storage.tserver.storageClass=<c>
+# ============================================================================
+
+yugabyte:
+  # Needs a build that bundles pg_dist_rag and mage, and the mage gflag — see values.yaml.
+  enabled: true
+  # From Quay, like the rest of the stack, so the namespace needs one pull credential
+  # rather than also an ECR token that expires every ~12h. Until a release ships this
+  # reads an integration-test build, not a release, from quay.io/yugabyte/yugabyte-itest
+  # (where unreleased -bNNN builds live, and the same place the functional tests take their
+  # database from), so the robot behind pullSecretName needs read on that repository as well
+  # as meko-*. Must be the same image as apiServer.migrate.extensionsImage below
+  # (kept in step by hand). Bump the tag rather than re-pushing one in place: a node
+  # that already pulled it keeps the old manifest.
+  Image:
+    repository: quay.io/yugabyte/yugabyte-itest
+    tag: 2026.1.3.0-b57
+    # Its own lever: global.imagePullSecrets is resolved by this chart's templates and
+    # never reaches a subchart, so the database pod would get nothing from that list.
+    # Must name the same Secret.
+    pullSecretName: quay-registry-creds
+  # The yugabyte-itest build runs as uid 10001, and a PVC is mounted root-owned unless
+  # fsGroup says otherwise: without this the master cannot write /mnt/disk0
+  # ("Permission denied" in its post-start disk check) and crash-loops before the
+  # database ever starts. The other keys keep the subchart's defaults (uid/gid and
+  # fsGroup 10001, runAsNonRoot).
+  podSecurityContext:
+    enabled: true
+  storage:
+    # Use whatever this cluster puts volumes on: a customer's class names are not ours
+    # to guess. The guard still fails the install if the cluster has no default class.
+    acceptClusterDefault: true
+
+apiServer:
+  migrate:
+    extensionsImage: quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57
+    bootstrap:
+      dataTablespace: ""
+  config:
+    DB_NAME: yugabyte
+    SYSTEM_DB_NAME: yugabyte
+
+mekoMcpServer:
+  config:
+    DB_NAME: yugabyte
+    SYSTEM_DB_NAME: yugabyte
