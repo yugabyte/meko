@@ -30,6 +30,10 @@ const namespace = "amp_controller"
 // is counted, but its partial duration is not observed.
 const statusInterrupted = "interrupted"
 
+// taskBuckets extend the default buckets out past a minute: provisioning tasks
+// (create endpoint/branch) and their steps run seconds to minutes.
+var taskBuckets = []float64{0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300}
+
 // Metrics holds the controller's registry and the series recorded at runtime.
 // Construct it with New; a nil *Metrics is a valid no-op recorder.
 type Metrics struct {
@@ -42,6 +46,9 @@ type Metrics struct {
 	tasksInflight  prometheus.Gauge
 	tasksReclaimed prometheus.Counter
 	stepRetries    *prometheus.CounterVec
+	taskPickup     *prometheus.HistogramVec
+	stepDuration   *prometheus.HistogramVec
+	deployPhase    *prometheus.HistogramVec
 	gcOrphans      *prometheus.CounterVec
 	gcSweeps       prometheus.Counter
 	gcSweepDur     prometheus.Histogram
@@ -70,10 +77,8 @@ func New() *Metrics {
 		}, []string{"kind", "status"}),
 		taskDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: namespace, Subsystem: "tasks", Name: "duration_seconds",
-			Help: "Task execution wall-clock time in seconds, by kind (terminal outcomes only).",
-			// Provisioning tasks (create endpoint/branch) run seconds to minutes,
-			// so extend the default buckets out past a minute.
-			Buckets: []float64{0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300},
+			Help:    "Task execution wall-clock time in seconds, by kind (terminal outcomes only).",
+			Buckets: taskBuckets,
 		}, []string{"kind"}),
 		tasksInflight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace, Subsystem: "tasks", Name: "inflight",
@@ -90,6 +95,21 @@ func New() *Metrics {
 			Namespace: namespace, Subsystem: "tasks", Name: "step_retries_total",
 			Help: "Step re-runs after losing a write interlock (SQLSTATE 40001). Labelled by task_step.kind, deliberately NOT `kind` like tasks_total — a step kind and a task kind are different name spaces and joining them yields nonsense. Contention, not breakage.",
 		}, []string{"step_kind"}),
+		taskPickup: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace, Subsystem: "tasks", Name: "pickup_seconds",
+			Help:    "Queue wait in seconds from a task being planned to its first claim, by kind. Reclaims are not observed.",
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
+		}, []string{"kind"}),
+		stepDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace, Subsystem: "tasks", Name: "step_duration_seconds",
+			Help:    "Wall-clock seconds of one successful step attempt, retries included, by task_step.kind.",
+			Buckets: taskBuckets,
+		}, []string{"step_kind"}),
+		deployPhase: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace, Subsystem: "deploy", Name: "phase_seconds",
+			Help:    "Seconds an endpoint deploy spent in each phase: apply (helm, less the pod coming Ready), pod_ready (pod created to Ready, by the pod's own timestamps), verify (the safekeeper answering through the Service). Successful Kubernetes deploys only.",
+			Buckets: taskBuckets,
+		}, []string{"phase"}),
 	}
 
 	m.gcOrphans = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -116,6 +136,9 @@ func New() *Metrics {
 		m.tasksInflight,
 		m.tasksReclaimed,
 		m.stepRetries,
+		m.taskPickup,
+		m.stepDuration,
+		m.deployPhase,
 		m.gcOrphans,
 		m.gcSweeps,
 		m.gcSweepDur,
@@ -174,6 +197,31 @@ func (m *Metrics) StepRetried(stepKind string) {
 		return
 	}
 	m.stepRetries.WithLabelValues(stepKind).Inc()
+}
+
+// TaskPickedUp observes a task's queue wait before its first claim.
+func (m *Metrics) TaskPickedUp(kind string, wait time.Duration) {
+	if m == nil {
+		return
+	}
+	m.taskPickup.WithLabelValues(kind).Observe(wait.Seconds())
+}
+
+// StepFinished observes one successful step attempt. stepKind is the
+// task_step.kind, not the task kind.
+func (m *Metrics) StepFinished(stepKind string, dur time.Duration) {
+	if m == nil {
+		return
+	}
+	m.stepDuration.WithLabelValues(stepKind).Observe(dur.Seconds())
+}
+
+// DeployPhase observes one phase of an endpoint deploy.
+func (m *Metrics) DeployPhase(phase string, dur time.Duration) {
+	if m == nil {
+		return
+	}
+	m.deployPhase.WithLabelValues(phase).Observe(dur.Seconds())
 }
 
 // TaskFinished marks a task leaving execution (inflight--) and counts the

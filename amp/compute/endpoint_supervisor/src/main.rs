@@ -79,6 +79,7 @@ pub mod remote_auth;
 pub mod resources;
 pub mod retry;
 pub mod spec;
+pub mod startup;
 pub mod supervise;
 
 use resources::{Cgroup, Resources};
@@ -580,6 +581,7 @@ fn run() -> Result<std::process::ExitCode> {
     // First, so a delete arriving mid-startup is honoured rather than killing this
     // process with its children already running.
     supervise::install_signal_handlers()?;
+    let mut bring_up_start = std::time::Instant::now();
 
     let env = std::sync::Arc::new(Env::read()?);
     let l = &env.layout;
@@ -638,12 +640,16 @@ fn run() -> Result<std::process::ExitCode> {
     // and neither the read's retry budget nor the restart budget is sized to
     // absorb an outage.
     let (yb_host, yb_port) = env.yb_probe_target()?;
-    boot::wait_for_yb(
+    let yb_wait_start = std::time::Instant::now();
+    if boot::wait_for_yb(
         &yb_host,
         yb_port,
         boot::YB_WAIT_TIMEOUT,
         boot::YB_WAIT_INTERVAL,
-    );
+    ) == boot::Ready::Reachable
+    {
+        startup::phase("yb_wait", yb_wait_start.elapsed());
+    }
     if supervise::shutdown_requested() {
         tracing::info!("shutdown requested during startup; nothing was started");
         return Ok(std::process::ExitCode::SUCCESS);
@@ -659,8 +665,10 @@ fn run() -> Result<std::process::ExitCode> {
         //
         // With `Prerender::Daemons` this renders the compute spec only; see
         // [`render_config`].
-        let overrides = fetch_overrides(&env);
-        render_config(&env, fence_cfg.required, &overrides)?;
+        startup::timed("render", || {
+            let overrides = fetch_overrides(&env);
+            render_config(&env, fence_cfg.required, &overrides)
+        })?;
     }
 
     // Written by each lease's remote-auth run, served by the settings API.
@@ -736,7 +744,11 @@ fn run() -> Result<std::process::ExitCode> {
 
     loop {
         if let Some(f) = fence.as_mut() {
-            if !f.acquire_blocking() {
+            let lease_start = std::time::Instant::now();
+            let acquired = f.acquire_blocking();
+            if acquired {
+                startup::phase("lease", lease_start.elapsed());
+            } else {
                 tracing::info!("shutdown requested while waiting for the write token");
                 // After a lease lost to a late renewal, the store still names this
                 // client with a fresh deadline (`Fence::renew`); release it so a
@@ -746,7 +758,13 @@ fn run() -> Result<std::process::ExitCode> {
                 return Ok(std::process::ExitCode::SUCCESS);
             }
         }
-        let (outcome, returned) = serve_one_lease(&env, fence_cfg.required, fence, &remote_auth)?;
+        let (outcome, returned) = serve_one_lease(
+            &env,
+            fence_cfg.required,
+            fence,
+            &remote_auth,
+            bring_up_start,
+        )?;
         fence = returned;
         match outcome {
             Outcome::Shutdown => {
@@ -769,6 +787,7 @@ fn run() -> Result<std::process::ExitCode> {
             // Only reachable with a fence: `fence::lost` is raised by its
             // renewal thread.
             Outcome::FenceLost => {
+                bring_up_start = std::time::Instant::now();
                 tracing::warn!(
                     "every service stopped; waiting for the write token to bring the \
                      endpoint back up"
@@ -790,6 +809,7 @@ fn serve_one_lease(
     fence_required: bool,
     fence: Option<fence::Fence>,
     remote_auth: &std::sync::Arc<remote_auth::Status>,
+    bring_up_start: std::time::Instant,
 ) -> Result<(Outcome, Option<fence::Fence>)> {
     let l = &env.layout;
 
@@ -845,7 +865,7 @@ fn serve_one_lease(
         // them running against datadirs nobody is closing, which is the
         // situation the signal handlers exist to prevent, and `Supervisor` does
         // not reap on drop.
-        let handshake = (|| -> Result<String> {
+        let handshake = startup::timed("handshake", || -> Result<String> {
             let start_lsn = coordinate::wait_branch_active(
                 boot::LISTEN_HOST,
                 l.pageserver_http_port,
@@ -863,15 +883,21 @@ fn serve_one_lease(
                 coordinate::BRANCH_CREATE_INTERVAL,
             )?;
             Ok(start_lsn)
-        })();
+        });
         if let Err(e) = handshake {
             sup.stop_all();
             return Err(e).context("the pageserver/safekeeper handshake");
         }
 
-        sup.add(compute);
+        // Only on this first spawn: a compute the monitor restarts later is not
+        // waiting on any of the supervisor's boot.
+        sup.add(compute.env_once(
+            startup::BOOT_MS_ENV,
+            &bring_up_start.elapsed().as_millis().to_string(),
+        ));
         // Skips the two that are already running.
         sup.start_all()?;
+        startup::STARTUP_SECONDS.observe(bring_up_start.elapsed().as_secs_f64());
 
         // On its own thread: this waits for Postgres to answer queries, and
         // blocking here would stop the monitor loop from restarting a sibling

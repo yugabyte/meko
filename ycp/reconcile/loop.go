@@ -20,6 +20,7 @@ type Engine struct {
 	stuckAfter time.Duration
 	now        func() time.Time
 	onTick     func(Result, error, time.Duration)
+	onReported func(Result, time.Duration)
 
 	mu        sync.Mutex
 	cache     map[ResourceKey]int64      // last-applied generation; fallback for a backend that cannot echo
@@ -84,6 +85,11 @@ type Options struct {
 	// its error and how long it took — an observer for the caller's metrics, so
 	// this package carries no metrics dependency of its own.
 	OnTick func(res Result, err error, took time.Duration)
+	// OnReported, when set, is called by Run once a tick's report has landed,
+	// with the tick's result and the time from the start of its dispatch to the
+	// reporter returning: how long a change this tick issued took to reach the
+	// control plane's view.
+	OnReported func(res Result, took time.Duration)
 }
 
 // New builds an Engine driving backend.
@@ -111,6 +117,7 @@ func New(backend Backend, opts Options) *Engine {
 		stuckAfter: opts.StuckAfter,
 		now:        opts.Now,
 		onTick:     opts.OnTick,
+		onReported: opts.OnReported,
 		cache:      map[ResourceKey]int64{},
 		failures:   map[ResourceKey]*failState{},
 		permanent:  map[ResourceKey]permMark{},
@@ -597,6 +604,8 @@ func (e *Engine) Run(ctx context.Context, src Source, rep Reporter, interval tim
 		if rerr == nil && rep != nil {
 			if err := rep.Report(ctx, state, res); err != nil {
 				logf("reconcile: report: %v", err)
+			} else if e.onReported != nil {
+				e.onReported(res, e.now().Sub(start))
 			}
 		}
 		select {

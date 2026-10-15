@@ -121,13 +121,15 @@ const (
 // reconstructed from a record's Kind and Args by the Registry on claim and replay
 // (§8.2).
 type StepRecord struct {
-	ID        uuid.UUID
-	TaskID    uuid.UUID
-	Kind      string
-	Status    Status
-	Args      json.RawMessage
-	Result    json.RawMessage
-	Error     *string
+	ID     uuid.UUID
+	TaskID uuid.UUID
+	Kind   string
+	Status Status
+	Args   json.RawMessage
+	Result json.RawMessage
+	Error  *string
+	// StartedAt is when the step's current attempt started; nil until it first runs.
+	StartedAt *time.Time
 	UpdatedAt time.Time
 }
 

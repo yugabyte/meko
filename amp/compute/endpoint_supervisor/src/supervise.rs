@@ -88,6 +88,8 @@ pub struct Service {
     argv: Vec<String>,
     cwd: Option<PathBuf>,
     env: Vec<(String, String)>,
+    /// Set on the next successful spawn only; see [`Self::env_once`].
+    env_once: Vec<(String, String)>,
     /// Inherited variables this child must not see, such as the YugabyteDB
     /// password for a child that runs as the compute user.
     env_remove: Vec<String>,
@@ -120,6 +122,7 @@ impl Service {
             argv,
             cwd: None,
             env: Vec::new(),
+            env_once: Vec::new(),
             env_remove: Vec::new(),
             run_as: None,
             health: None,
@@ -144,6 +147,13 @@ impl Service {
 
     pub fn env(mut self, k: &str, v: &str) -> Self {
         self.env.push((k.to_string(), v.to_string()));
+        self
+    }
+
+    /// A variable for the first spawn only, not for a restart: something that
+    /// describes the bring-up the service was started in.
+    pub fn env_once(mut self, k: &str, v: &str) -> Self {
+        self.env_once.push((k.to_string(), v.to_string()));
         self
     }
 
@@ -186,7 +196,7 @@ impl Service {
         for k in &self.env_remove {
             cmd.env_remove(k);
         }
-        for (k, v) in &self.env {
+        for (k, v) in self.env.iter().chain(&self.env_once) {
             cmd.env(k, v);
         }
         if let Some(id) = self.run_as {
@@ -223,6 +233,7 @@ impl Service {
             .with_context(|| format!("spawn {}", self.name))?;
         tracing::info!(service = %self.name, pid = child.id(), "started");
         self.child = Some(child);
+        self.env_once.clear();
         Ok(())
     }
 
@@ -491,13 +502,13 @@ impl Supervisor {
                 continue;
             }
             let (timeout, interval) = (self.policy.health_timeout, self.policy.health_interval);
-            let res = (|| -> Result<()> {
-                let svc = &mut self.services[i];
+            let svc = &mut self.services[i];
+            let res = crate::startup::timed(&svc.name.clone(), || -> Result<()> {
                 // Retried: a `fork`/`exec` that fails under momentary memory
                 // pressure should not cost a whole pod restart at boot.
                 crate::retry::retry("spawn", &crate::retry::Backoff::spawn(), || svc.spawn())?;
                 svc.wait_healthy(timeout, interval)
-            })();
+            });
             if let Err(e) = res {
                 let failed = self.services[i].name.clone();
                 self.stop_all();
@@ -860,6 +871,28 @@ mod tests {
         wait_for_exit(&mut svc);
         assert_eq!(std::fs::read_to_string(&seen).unwrap(), "4242424242");
         crate::fence::set_current_for_test(None);
+    }
+
+    /// `env_once` describes the bring-up a child was started in, so a restart
+    /// must not see it — and a spawn that failed started nothing, so the retry
+    /// still has to carry it.
+    #[test]
+    fn a_once_variable_reaches_the_first_child_and_no_restart() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let seen = dir.path().join("seen");
+        let script = sh(&format!("printf '%s' \"${{ONCE:-none}}\" > {seen}"));
+        let mut svc = Service::new("compute_ctl", vec!["/nonexistent/compute_ctl".into()])
+            .env_once("ONCE", "1234");
+
+        svc.spawn().expect_err("spawning a missing binary fails");
+        svc.argv = script;
+        svc.spawn().unwrap();
+        wait_for_exit(&mut svc);
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "1234");
+
+        svc.spawn().unwrap();
+        wait_for_exit(&mut svc);
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "none");
     }
 
     fn wait_for_exit(svc: &mut Service) {

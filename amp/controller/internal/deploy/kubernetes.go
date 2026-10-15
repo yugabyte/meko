@@ -192,6 +192,17 @@ type KubernetesConfig struct {
 	EndpointUserSplit bool
 
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait)
+
+	// Phases observes how long each phase of a successful deploy took. Nil
+	// observes nothing and skips the pod read the split needs; a caller with no
+	// recorder must leave it nil rather than store a typed nil.
+	Phases PhaseObserver
+}
+
+// PhaseObserver receives the duration of one deploy phase: "apply", "pod_ready"
+// or "verify". *metrics.Metrics satisfies it.
+type PhaseObserver interface {
+	DeployPhase(phase string, d time.Duration)
 }
 
 // Where the endpoint chart mounts the TLS material; the connection block
@@ -357,6 +368,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	// The watcher runs for the length of the wait: helm removes the pod when it
 	// gives up, and the pod is the only thing that knows why the deploy failed.
 	watch := k.watchDeploy(ctx, release)
+	helmStart := time.Now()
 	err := k.helm.UpgradeInstall(ctx, helm.Release{
 		Name:      release,
 		Chart:     k.cfg.ChartPath,
@@ -376,6 +388,8 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		}
 		return Endpoint{}, k.explainDeployFailure(ctx, release, watch, err)
 	}
+	// Held until the deploy succeeds: verifyReady can still fail it below.
+	helmPhases := k.helmPhases(ctx, release, helmStart, time.Since(helmStart))
 	// A per-endpoint load balancer is the DURABLE client address: the AWS load
 	// balancer controller re-registers the pod when it is replaced, so unlike the
 	// Service DNS the other branches fall back to, it is reachable from outside
@@ -394,6 +408,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		if err := k.verifyReady(ctx, release); err != nil {
 			return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
 		}
+		k.observePhases(helmPhases)
 		// An unpublishable name means there was no zone to mint it in, so the
 		// honest address is the shard's own. The endpoint is equally reachable
 		// either way; what the name buys is the freedom to move it later.
@@ -481,6 +496,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	if err := k.verifyReady(ctx, release); err != nil {
 		return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
 	}
+	k.observePhases(helmPhases)
 	tailnet := k.tailnetAddress(release)
 	k.logger.Info("endpoint ready", "endpoint", release, "address", addr, "tailnet_address", tailnet)
 	// The version reported is the tag that was rendered, read back off the values
@@ -525,7 +541,82 @@ func (k *KubernetesDeployer) verifyReady(ctx context.Context, release string) er
 	if !inCluster() {
 		return nil
 	}
-	return awaitSafekeeper(ctx, k.EndpointSafekeeperURL(release), verifyReadyBudget, verifyReadyInterval)
+	start := time.Now()
+	if err := awaitSafekeeper(ctx, k.EndpointSafekeeperURL(release), verifyReadyBudget, verifyReadyInterval); err != nil {
+		return err
+	}
+	k.observePhase("verify", time.Since(start))
+	return nil
+}
+
+func (k *KubernetesDeployer) observePhase(phase string, d time.Duration) {
+	if k.cfg.Phases != nil {
+		k.cfg.Phases.DeployPhase(phase, d)
+	}
+}
+
+// podFreshnessSlack is how far before the helm call a pod may have been created
+// and still count as this deploy's: the comparison is between this process's
+// clock and the API server's.
+const podFreshnessSlack = 5 * time.Second
+
+type phaseSample struct {
+	phase string
+	took  time.Duration
+}
+
+func (k *KubernetesDeployer) observePhases(samples []phaseSample) {
+	for _, p := range samples {
+		k.observePhase(p.phase, p.took)
+	}
+}
+
+// helmPhases splits helm's --wait into the pod coming Ready and the rest.
+// pod_ready is read off the pod's own creation and Ready timestamps, so it is in
+// one clock and free of helm's poll interval; apply is helm's remaining time
+// (render, apply, the controller creating the pod, the poll that notices it Ready),
+// so the two add up to what the deploy actually waited. A redeploy that did not
+// replace the pod has no pod_ready of its own, so neither is returned.
+func (k *KubernetesDeployer) helmPhases(ctx context.Context, release string, helmStart time.Time, helmDur time.Duration) []phaseSample {
+	if k.cfg.Phases == nil {
+		return nil
+	}
+	body, ok := k.releasePod(ctx, release)
+	if !ok {
+		return nil
+	}
+	created, ready, ok := podReadyTimes(body)
+	if !ok || created.Before(helmStart.Add(-podFreshnessSlack)) {
+		return nil
+	}
+	podReady := max(ready.Sub(created), 0)
+	return []phaseSample{{"pod_ready", podReady}, {"apply", max(helmDur-podReady, 0)}}
+}
+
+// podReadyTimes reads a Pod's creationTimestamp and the time its Ready condition
+// last turned True. ok is false when the pod is not Ready.
+func podReadyTimes(podBody []byte) (created, ready time.Time, ok bool) {
+	var p struct {
+		Metadata struct {
+			CreationTimestamp time.Time `json:"creationTimestamp"`
+		} `json:"metadata"`
+		Status struct {
+			Conditions []struct {
+				Type               string    `json:"type"`
+				Status             string    `json:"status"`
+				LastTransitionTime time.Time `json:"lastTransitionTime"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(podBody, &p) != nil || p.Metadata.CreationTimestamp.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	for _, c := range p.Status.Conditions {
+		if c.Type == "Ready" && c.Status == "True" && !c.LastTransitionTime.IsZero() {
+			return p.Metadata.CreationTimestamp, c.LastTransitionTime, true
+		}
+	}
+	return time.Time{}, time.Time{}, false
 }
 
 // inCluster reports whether the controller is running inside Kubernetes, and so

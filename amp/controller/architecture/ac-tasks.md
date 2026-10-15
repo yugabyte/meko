@@ -64,8 +64,10 @@ sketch in §8.1 of the high-level doc):
 - **`task_step`** — the idempotent steps, one row each, keyed by its own `id`
   (referenced from `task.step_ids`, which fixes their order); a `task_id` backref
   keeps "the steps of this task" a cheap lookup. The `args` are written when the
-  task is created; `result` and `status` are updated as it runs. These rows **are**
-  the write-ahead log.
+  task is created; `result` and `status` are updated as it runs, and `started_at`
+  (migration 0014) is stamped each time an attempt starts — `updated_at` is
+  rewritten by every transition, so it is the only record of when a step began.
+  These rows **are** the write-ahead log.
 - **`subtasks`** (migration `0006`) — a third kind of row, and the exception to
   everything above. A task that fans out over a set it cannot know until Execute time
   creates one subtask per item and **runs them itself**, in its own process. A subtask

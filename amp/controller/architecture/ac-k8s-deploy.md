@@ -61,18 +61,22 @@ Everything is env-overridable (`NS`, `CONTROLLER_TAG`, `ENDPOINT_TAG`,
 
 ```
 POST …/storage-pools/{pool}/clusters/{proj}/branches/{br}/endpoints
-   │  (handlers.go: CreateEndpoint)
-   ├─ core.Backend.CreateEndpoint              → inserts the endpoint row (address empty)
-   ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait
-   └─ core.Backend.SetEndpointAddress(<LB / NodePort / Service DNS>:<port>)
-                                                              → 201 {endpoint}
+   │  (handlers.go: CreateEndpoint)        → plans a create_endpoint task → 202 {task}
+   ⋮
+task worker, create_endpoint step (internal/task/step_create_endpoint.go)
+   ├─ EnsureEndpointRecord                     → inserts the endpoint row (address empty)
+   ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait, then verifyReady
+   └─ SetEndpointAddress(<LB / NodePort / Service DNS>:<port>)
 ```
 
-The deploy is **synchronous**: `helm upgrade --install --wait` blocks until the
-release is ready, then the resolved client address is written back and the call
-returns `201`. The row is inserted first so the single-writer rule is enforced
-before a Helm install is spent; if the deploy then fails, the just-inserted row
-is removed so it does not linger undeployed.
+The API returns `202` with the task as soon as the work is planned; the caller
+polls `GET /api/v1/tasks/{id}` (the `Location` header). Everything else happens in
+the worker's `create_endpoint` step, where `helm upgrade --install --wait` blocks
+until the release is ready and the resolved client address is then written back.
+The row is inserted first so the single-writer rule is enforced before a Helm
+install is spent; a duplicate `read_write` endpoint is a failed task, not a `409`.
+A deploy that fails leaves the row addressless for the failed-create GC sweeper
+to reclaim (`ac-tasks.md`).
 
 `--wait` covers the pod, not the Service: Helm's readiness check for a Service
 verifies it has a ClusterIP (and, for a LoadBalancer, an ingress address) and

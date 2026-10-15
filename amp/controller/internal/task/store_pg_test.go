@@ -313,6 +313,15 @@ func TestPgClaimReportsWhatItOverwrote(t *testing.T) {
 	assertClaimReportsWhatItOverwrote(t, store, task.ID)
 }
 
+func TestPgStartStepRecordsWhenTheStepStarted(t *testing.T) {
+	pool, _ := migratedPool(t)
+	t.Cleanup(pool.Close)
+	resetTasks(t, pool)
+	store := NewPgStore(pool)
+	task := seedTask(t, store, Kind{"test", "", "", nil}, "work", "")
+	assertStartStepRecordsStart(t, store, task.ID)
+}
+
 // TestPgListChangeFeed covers the updated_since feed against real SQL, where the
 // MemStore mirror cannot help: MemStore sorts in Go, so a wrong ORDER BY or a
 // wrong comparison operator in the query passes there and fails only here.

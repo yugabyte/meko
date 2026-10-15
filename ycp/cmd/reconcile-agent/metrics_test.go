@@ -68,9 +68,28 @@ func TestAgentMetricsRecordFetchesAndReports(t *testing.T) {
 	}
 }
 
+// Only a tick that issued something has a dispatch to measure; an idle tick's
+// report would drown the boot path in near-zero samples.
+func TestAgentMetricsSpanOnlyTicksThatDispatched(t *testing.T) {
+	m := newAgentMetrics("amp")
+	m.dispatchReported(reconcile.Result{NoOp: 4}, time.Second)
+	m.dispatchReported(reconcile.Result{Created: 1}, 3*time.Second)
+	m.dispatchReported(reconcile.Result{Updated: 1}, 2*time.Second)
+	if got := testutil.CollectAndCount(m.dispatchSpan); got != 1 {
+		t.Fatalf("dispatch span series = %d, want 1", got)
+	}
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{}).
+		ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "ycp_agent_dispatch_to_report_seconds_count 2") {
+		t.Errorf("want 2 observations (the create and the update):\n%s", rec.Body.String())
+	}
+}
+
 func TestNilAgentMetricsIsANoOp(_ *testing.T) {
 	var m *agentMetrics
 	m.tick(reconcile.Result{}, nil, 0)
+	m.dispatchReported(reconcile.Result{Created: 1}, time.Second)
 	m.fetched("ok")
 	m.reported(nil)
 }

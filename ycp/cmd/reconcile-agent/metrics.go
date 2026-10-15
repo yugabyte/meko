@@ -30,6 +30,7 @@ type agentMetrics struct {
 	reg          *prometheus.Registry
 	ticks        *prometheus.CounterVec
 	tickDuration prometheus.Histogram
+	dispatchSpan prometheus.Histogram
 	lastTickOK   prometheus.Gauge
 	actions      *prometheus.CounterVec
 	resources    *prometheus.GaugeVec
@@ -50,6 +51,12 @@ func newAgentMetrics(kind string) *agentMetrics {
 		tickDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: ns, Name: "tick_duration_seconds",
 			Help:    "Time to list, diff and dispatch one tick.",
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
+		}),
+		dispatchSpan: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: ns, Name: "dispatch_to_report_seconds",
+			Help: "From the start of a tick that issued at least one create, update or delete to YCP " +
+				"accepting its status report. Ticks that issued nothing are not observed.",
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 		}),
 		lastTickOK: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -92,7 +99,7 @@ func newAgentMetrics(kind string) *agentMetrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		collectors.NewBuildInfoCollector(),
-		info, m.ticks, m.tickDuration, m.lastTickOK, m.actions, m.resources, m.observed,
+		info, m.ticks, m.tickDuration, m.dispatchSpan, m.lastTickOK, m.actions, m.resources, m.observed,
 		m.desiredFetch, m.reports, m.lastReportOK,
 	)
 	// Present from the first scrape, so "no failures" reads as 0 rather than absent.
@@ -151,6 +158,14 @@ func (m *agentMetrics) tick(res reconcile.Result, err error, took time.Duration)
 	m.resources.WithLabelValues("unreadable").Set(float64(len(res.Unreadable)))
 	m.resources.WithLabelValues("deferred").Set(float64(res.Deferred))
 	m.observed.Set(float64(len(res.Actual)))
+}
+
+// dispatchReported is the engine's OnReported hook.
+func (m *agentMetrics) dispatchReported(res reconcile.Result, took time.Duration) {
+	if m == nil || res.Created+res.Updated+res.Deleted == 0 {
+		return
+	}
+	m.dispatchSpan.Observe(took.Seconds())
 }
 
 func (m *agentMetrics) fetched(outcome string) {

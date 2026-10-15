@@ -230,7 +230,7 @@ func main() {
 		}
 	}
 
-	eng := reconcile.New(backend, reconcile.Options{OnTick: metrics.tick})
+	eng := reconcile.New(backend, reconcile.Options{OnTick: metrics.tick, OnReported: metrics.dispatchReported})
 	eng.Run(ctx, a, a, interval, log.Printf)
 	log.Printf("reconcile-agent stopped")
 }

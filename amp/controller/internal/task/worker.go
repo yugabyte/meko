@@ -97,6 +97,11 @@ type MetricsRecorder interface {
 	// stepKind is the task_step.kind (e.g. record_branch_recipe), NOT the task
 	// kind — they are different name spaces.
 	StepRetried(stepKind string)
+	// TaskPickedUp observes how long a task waited between being planned and its
+	// first claim.
+	TaskPickedUp(kind string, wait time.Duration)
+	// StepFinished observes one successful step attempt, by task_step.kind.
+	StepFinished(stepKind string, dur time.Duration)
 }
 
 type Worker struct {
@@ -261,6 +266,7 @@ func (w *Worker) claim(ctx context.Context) (*Task, Lease, error) {
 			continue
 		}
 		w.noteReclaim(t, prior)
+		w.notePickup(t, prior)
 		return t, lease, nil
 	}
 	return nil, nil, nil
@@ -283,6 +289,17 @@ func (w *Worker) noteReclaim(t *Task, prior Prior) {
 	if w.metrics != nil {
 		w.metrics.TaskReclaimed()
 	}
+}
+
+// notePickup observes a task's queue wait on its first claim only: a reclaim's
+// wait would include the work the previous owner did. Both ends are the
+// database's clock — Claim's RETURNING reads the updated_at it just wrote — so
+// skew between this process and the database cannot leak into the measurement.
+func (w *Worker) notePickup(t *Task, prior Prior) {
+	if prior.Status != StatusPending || w.metrics == nil {
+		return
+	}
+	w.metrics.TaskPickedUp(t.Kind, max(t.UpdatedAt.Sub(t.CreatedAt), 0))
 }
 
 // drainInFlight waits for in-flight task goroutines to finish, up to the
@@ -483,6 +500,7 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		// (controller/AGENTS.md: log through internal/log, not slog directly), plus
 		// the executing task's identity for a fan-out parent (see running).
 		stepCtx := intoRunning(applog.IntoContext(ctx, stepLog), running{taskID: t.ID, owner: w.owner})
+		stepStart := time.Now()
 		res := w.runStepWithRetry(stepCtx, stepLog, step)
 		if res.Failed() {
 			// A cancelled worker context means we are shutting down (or the parent
@@ -499,6 +517,9 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		}
 		if err := w.store.CompleteStep(ctx, t.ID, st.ID, w.owner, res.Output); err != nil {
 			return fmt.Errorf("mark step succeeded: %w", err)
+		}
+		if w.metrics != nil {
+			w.metrics.StepFinished(st.Kind, time.Since(stepStart))
 		}
 		stepLog.Debug("step succeeded")
 	}

@@ -266,8 +266,15 @@ pub struct ComputeMetrics {
     /// when it's safe to skip this step.
     pub config_ms: u64,
 
+    /// What the endpoint supervisor spent bringing the pod up before it
+    /// spawned this compute_ctl: the YugabyteDB wait, the config render, the
+    /// write lease, the daemons and their handshake. 0 when compute_ctl runs
+    /// without a supervisor, or after the supervisor's monitor restarted it.
+    /// After a lost lease it also covers the wait to win the lease back.
+    pub supervisor_boot_ms: u64,
+
     /// Total time, from when we receive the spec to when we're ready to take
-    /// pg connections.
+    /// pg connections, plus `supervisor_boot_ms`.
     pub total_startup_ms: u64,
     pub load_ext_ms: u64,
     pub num_ext_downloaded: u64,

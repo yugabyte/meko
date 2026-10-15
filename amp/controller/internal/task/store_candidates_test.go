@@ -133,3 +133,44 @@ func assertClaimReportsWhatItOverwrote(t *testing.T, store Store, id uuid.UUID) 
 		}
 	}
 }
+
+// A step's start time is the one timestamp the later transitions must not
+// overwrite: it is the only record of how long the step ran.
+func TestStartStepRecordsWhenTheStepStarted(t *testing.T) {
+	store := NewMemStore()
+	task, steps := pendingTask("k0")
+	store.Seed(task, steps)
+	assertStartStepRecordsStart(t, store, task.ID)
+}
+
+func assertStartStepRecordsStart(t *testing.T, store Store, id uuid.UUID) {
+	t.Helper()
+	ctx := t.Context()
+	if _, _, err := store.Claim(ctx, id, "owner-a"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	steps, err := store.Steps(ctx, id)
+	if err != nil || len(steps) == 0 {
+		t.Fatalf("Steps: %v (%d steps)", err, len(steps))
+	}
+	if steps[0].StartedAt != nil {
+		t.Fatalf("StartedAt = %v before the step ran, want nil", steps[0].StartedAt)
+	}
+	if err := store.StartStep(ctx, id, steps[0].ID, "owner-a"); err != nil {
+		t.Fatalf("StartStep: %v", err)
+	}
+	if err := store.CompleteStep(ctx, id, steps[0].ID, "owner-a", nil); err != nil {
+		t.Fatalf("CompleteStep: %v", err)
+	}
+	steps, err = store.Steps(ctx, id)
+	if err != nil {
+		t.Fatalf("Steps: %v", err)
+	}
+	st := steps[0]
+	if st.StartedAt == nil {
+		t.Fatal("StartedAt = nil after the step ran and completed")
+	}
+	if st.StartedAt.After(st.UpdatedAt) {
+		t.Errorf("StartedAt %v is after the completion's UpdatedAt %v", st.StartedAt, st.UpdatedAt)
+	}
+}

@@ -18,6 +18,8 @@ type fakeRecorder struct {
 	finished  []finishedEvent
 	retried   []string
 	reclaimed int
+	pickups   []string
+	steps     []string
 }
 
 type finishedEvent struct {
@@ -48,6 +50,18 @@ func (r *fakeRecorder) StepRetried(kind string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.retried = append(r.retried, kind)
+}
+
+func (r *fakeRecorder) TaskPickedUp(kind string, _ time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pickups = append(r.pickups, kind)
+}
+
+func (r *fakeRecorder) StepFinished(kind string, _ time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.steps = append(r.steps, kind)
 }
 
 func (r *fakeRecorder) TaskFinished(kind, status string, _ time.Duration) {
@@ -87,6 +101,12 @@ func TestWorkerRecordsSucceededTaskMetrics(t *testing.T) {
 	if got := rec.finished[0]; got.kind != "test" || got.status != "succeeded" {
 		t.Fatalf("finished event = %+v, want {kind:test status:succeeded}", got)
 	}
+	if len(rec.pickups) != 1 || rec.pickups[0] != "test" {
+		t.Fatalf("TaskPickedUp kinds = %v, want [test]", rec.pickups)
+	}
+	if len(rec.steps) != 1 || rec.steps[0] != "k0" {
+		t.Fatalf("StepFinished kinds = %v, want [k0]", rec.steps)
+	}
 }
 
 func TestWorkerRecordsFailedTaskMetrics(t *testing.T) {
@@ -106,17 +126,19 @@ func TestWorkerRecordsFailedTaskMetrics(t *testing.T) {
 
 // Only work another process left running is a reclaim. The MemStore models no
 // difference between a lease that lapsed and one released by a graceful stop, and
-// neither does the worker: both are a takeover and both count.
+// neither does the worker: both are a takeover and both count. Only a first claim
+// observes a pickup: a reclaim's wait would include the previous owner's work.
 func TestWorkerCountsATakeoverAsAReclaim(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		status Status
-		owner  func(w *Worker) *string
-		want   int
+		name        string
+		status      Status
+		owner       func(w *Worker) *string
+		want        int
+		wantPickups int
 	}{
-		{"pending", StatusPending, func(*Worker) *string { return nil }, 0},
-		{"left running by another process", StatusRunning, func(*Worker) *string { o := "dead-owner"; return &o }, 1},
-		{"left running by this process", StatusRunning, func(w *Worker) *string { return &w.owner }, 0},
+		{"pending", StatusPending, func(*Worker) *string { return nil }, 0, 1},
+		{"left running by another process", StatusRunning, func(*Worker) *string { o := "dead-owner"; return &o }, 1, 0},
+		{"left running by this process", StatusRunning, func(w *Worker) *string { return &w.owner }, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := NewMemStore()
@@ -129,8 +151,12 @@ func TestWorkerCountsATakeoverAsAReclaim(t *testing.T) {
 				[]*StepRecord{{ID: s0, TaskID: id, Kind: "k0", Status: StatusPending}},
 			)
 
-			if rec := runViaRecorder(t, w); rec.reclaimed != tc.want {
+			rec := runViaRecorder(t, w)
+			if rec.reclaimed != tc.want {
 				t.Errorf("TaskReclaimed calls = %d, want %d", rec.reclaimed, tc.want)
+			}
+			if len(rec.pickups) != tc.wantPickups {
+				t.Errorf("TaskPickedUp calls = %d, want %d", len(rec.pickups), tc.wantPickups)
 			}
 		})
 	}

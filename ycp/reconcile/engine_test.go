@@ -754,6 +754,53 @@ func TestRunCallsOnTickWithEachResult(t *testing.T) {
 	}
 }
 
+type okReporter struct{}
+
+func (okReporter) Report(context.Context, api.DesiredState, Result) error { return nil }
+
+type failingReporter struct{}
+
+func (failingReporter) Report(context.Context, api.DesiredState, Result) error {
+	return errors.New("control plane unreachable")
+}
+
+// OnReported spans a tick from dispatch to its report landing, and a report that
+// did not land has no span.
+func TestRunCallsOnReportedOnlyForALandedReport(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rep  Reporter
+		want int
+	}{
+		{"landed", okReporter{}, 1},
+		{"failed", failingReporter{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			var spans []time.Duration
+			e := New(newFake(), Options{
+				OnTick: func(Result, error, time.Duration) { cancel() },
+				OnReported: func(res Result, took time.Duration) {
+					if res.Created != 1 {
+						t.Errorf("OnReported result created %d, want the tick's 1", res.Created)
+					}
+					spans = append(spans, took)
+				},
+			})
+			src := oneShotSource{api.DesiredState{Resources: []api.DesiredResource{{Kind: "pool", Name: "p", Generation: 1}}}}
+			e.Run(ctx, src, tc.rep, time.Hour, nil)
+			if len(spans) != tc.want {
+				t.Fatalf("OnReported calls = %d, want %d", len(spans), tc.want)
+			}
+			for _, d := range spans {
+				if d < 0 {
+					t.Errorf("negative span %s", d)
+				}
+			}
+		})
+	}
+}
+
 // Every condition that degrades the environment names its resource in the log: the
 // agent's metric counts them but carries no key (CLOUDGA-37501).
 func TestRunLogsTheResourcesThatDegrade(t *testing.T) {

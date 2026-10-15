@@ -207,8 +207,10 @@ func (s *MemStore) StartStep(_ context.Context, taskID, stepID uuid.UUID, owner 
 		return nil
 	}
 	if st := s.stepsByID[stepID]; st != nil {
+		now := s.now()
 		st.Status = StatusRunning
-		st.UpdatedAt = s.now()
+		st.StartedAt = &now
+		st.UpdatedAt = now
 	}
 	return nil
 }

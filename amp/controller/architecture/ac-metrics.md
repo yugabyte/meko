@@ -74,10 +74,13 @@ All under the `amp_controller_` namespace, following the Prometheus
 | `amp_controller_http_requests_total` | counter | `method`, `route`, `status` | Requests handled. `route` is the matched route **template** (e.g. `/api/v1/pools/:poolId`), never the raw URI, so path parameters don't explode cardinality. The `/metrics` scrape itself is excluded. |
 | `amp_controller_http_request_duration_seconds` | histogram | `method`, `route` | Request latency (default buckets). |
 | `amp_controller_tasks_total` | counter | `kind`, `status` | Tasks the worker finished, by outcome (`succeeded`, `failed`, `interrupted`). |
-| `amp_controller_task_duration_seconds` | histogram | `kind` | Task execution time (terminal outcomes only; an interrupted task did partial work and stays reclaimable, so its partial time is not observed). |
+| `amp_controller_tasks_duration_seconds` | histogram | `kind` | Task execution time (terminal outcomes only; an interrupted task did partial work and stays reclaimable, so its partial time is not observed). |
 | `amp_controller_tasks_inflight` | gauge | — | Tasks currently executing. |
 | `amp_controller_tasks_reclaimed_total` | counter | — | Tasks this process took over that another controller process left `running`: it crashed or lost its lease, or shut down with them in flight, so a restart during work counts too. Unlabelled, so it reads 0 from startup. **Read it alongside `process_start_time_seconds`, not alone:** the controller runs one replica, so a reclaim lands in a process that has just started, often before its first scrape, and `increase()` has no earlier sample to measure it from. |
 | `amp_controller_tasks_step_retries_total` | counter | `step_kind` | Step re-runs after losing a write interlock (SQLSTATE 40001 — see the interlock-retry invariant in `ac-tasks.md`). Contention, not breakage: a fork racing a GC cutoff advance or a sibling fork is expected to lose sometimes. The label is **`step_kind`** (a `task_step.kind`, e.g. `record_branch_recipe`), *not* the `kind` of `tasks_total` (a task kind, e.g. `branch`) — the two are different name spaces, so joining them yields nonsense. What to watch is this counter's rate against `tasks_total{status="failed"}`: retries rising while failures stay flat is contention being absorbed, which is the mechanism working. |
+| `amp_controller_tasks_pickup_seconds` | histogram | `kind` | Queue wait from the task being planned (`created_at`) to its first claim, both read off the database's clock. A reclaim is not observed: its wait would include the previous owner's work. |
+| `amp_controller_tasks_step_duration_seconds` | histogram | `step_kind` | One successful step attempt, interlock retries included. Same `step_kind` name space as `step_retries_total`. `task_steps.started_at` holds the same start per row. |
+| `amp_controller_deploy_phase_seconds` | histogram | `phase` | A successful Kubernetes endpoint deploy, split into `apply` (helm's time less the pod coming Ready: render, apply, pod creation, the poll that sees it Ready), `pod_ready` (pod created to its `Ready` condition, by the pod's own timestamps) and `verify` (`verifyReady`). `apply` + `pod_ready` is helm's whole wait. A redeploy that did not replace the pod observes neither. |
 | `amp_controller_registry_branches` | gauge | — | Branches currently recorded in the registry. |
 | `amp_controller_build_info` | gauge | `version`, `commit`, `build_date` | Constant 1; carries the build identity (from [`internal/version`](../internal/version), see `ac-versioning.md`) for joining onto other series. |
 | `amp_controller_gc_sweeps_total` | counter | — | Completed failed-create GC sweeps, one per tick regardless of how many resource kinds it swept (`ac-tasks.md`). |
@@ -253,7 +256,9 @@ the console prints fills both in. Unset, nothing is stamped. The hint omits
 every series identically.
 
 The reconcile-agent serves its own loop's series (`ycp_agent_*`: tick outcomes,
-desired-state fetches, status reports) on `AGENT_METRICS_PORT` (9464), and with
+desired-state fetches, status reports, and `ycp_agent_dispatch_to_report_seconds`
+— from the start of a tick that issued a create, update or delete to YCP
+accepting its report) on `AGENT_METRICS_PORT` (9464), and with
 `agent.enabled` the controller collector scrapes it as `amp-reconcile-agent`. The backing YugabyteDB is reached by a different pipeline
 entirely, and **only on the operator-managed foundation** — see below. (The QA
 framework also samples the DB into the report portal, which is a third one.)
@@ -432,6 +437,25 @@ certificate.
 
 Served only when the endpoint has a controller (the supervisor's HTTP listener is
 gated on `SUPERVISOR_HTTP_PORT`), which a controller-driven install always sets.
+
+### Endpoint boot — the supervisor's phases
+
+The same listener serves how long the supervisor's part of a boot took
+(`compute/endpoint_supervisor/src/startup.rs`). `yb_wait` and `render` are
+observed once per process; the rest once per bring-up, so again when a pod
+regains its branch's write lease after losing it. A phase that failed or timed
+out is not observed, so the phases need not add up to the total:
+
+| Series | Meaning |
+|---|---|
+| `endpoint_supervisor_startup_phase_seconds{phase}` | `yb_wait`, `render`, `lease` (the write-token acquire), one per service from spawn to healthy (`safekeeper`, `pageserver`, `lfc_state`, `compute_ctl` — the last is the Postgres port opening), and `handshake` (pageserver branch Active, then the safekeeper branch create) |
+| `endpoint_supervisor_startup_seconds` | Start of the bring-up (process start, or the wait for the next lease) to the compute's port opening |
+
+The supervisor also hands its share to `compute_ctl` on the compute's first spawn
+of a bring-up, so `total_startup_ms` in `compute_ctl`'s `/metrics.json` covers the
+whole boot and `supervisor_boot_ms` says how much of it was the supervisor's. A
+compute the supervisor's monitor restarts reports `supervisor_boot_ms: 0`; one
+started after a lost lease counts the wait to regain it.
 
 ### Query-level metrics — `pg_stat_statements`
 

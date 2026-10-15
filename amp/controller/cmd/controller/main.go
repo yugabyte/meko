@@ -94,13 +94,22 @@ func (a recipeStore) RecordBranchRecipe(ctx context.Context, clusterID, branchID
 	})
 }
 
+// phaseObserver keeps the deployer's observer a nil interface when metrics are
+// off: a typed nil would pass its nil check and cost a pod read per deploy.
+func phaseObserver(m *metrics.Metrics) deploy.PhaseObserver {
+	if m == nil {
+		return nil
+	}
+	return m
+}
+
 // buildProvisioning assembles the create-branch / create-endpoint workflow's
 // collaborators from config: the endpoint deployer (when --deploy is on) and the
 // URL launched endpoints use to reach the controller's storage-layer surface. The
 // deploy driver (--deploy-driver) selects the Docker or the Kubernetes/Helm
 // Deployer; both consume the same EndpointSpec, so the create-endpoint workflow is
 // identical.
-func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisioning, error) {
+func buildProvisioning(cfg *config.Config, m *metrics.Metrics, logger *slog.Logger) (api.Provisioning, error) {
 	var prov api.Provisioning
 	// Set whatever the driver: it shapes what the API accepts, not what any one
 	// deployer launches.
@@ -188,6 +197,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ComputeTLSIncludeServiceDNS:   cfg.Deploy.ComputeTLSIncludeServiceDNS,
 				EndpointUserSplit:             cfg.Deploy.EndpointUserSplit,
 				Timeout:                       cfg.Deploy.Timeout,
+				Phases:                        phaseObserver(m),
 			}, logger)
 			prov.EndpointVersion = cfg.Deploy.EndpointImageTag
 			// Externalized extensions are mounted as ImageVolumes, which only the
@@ -353,10 +363,26 @@ func runServe(args []string) error {
 	backend := core.NewPgBackend(pool)
 	regStore := registry.NewStore(pool)
 
+	// Prometheus instrumentation: one registry, shared by the worker (task
+	// metrics), the endpoint deployer (deploy phases) and the HTTP server (request
+	// + runtime metrics, and the /metrics scrape endpoint). Step 1 of the amp
+	// metrics pipeline (architecture/ac-metrics.md). Nil when --metrics=false,
+	// which every consumer treats as a no-op (the scrape endpoint is simply not
+	// mounted).
+	var metricsReg *metrics.Metrics
+	if cfg.Metrics {
+		metricsReg = metrics.New()
+		// Export the registry inventory gauges (branches / pageserver nodes),
+		// counted from the registry store on each scrape.
+		metricsReg.WithRegistrySource(regStore, logger)
+	} else {
+		logger.Info("metrics disabled (--metrics=false); /metrics not served")
+	}
+
 	// The create-timeline / create-endpoint workflow's collaborators: the storage
 	// controller (to record the pending-init recipe) and the endpoint deployer
 	// (to provision the compute, behind the configured driver).
-	prov, err := buildProvisioning(cfg, logger)
+	prov, err := buildProvisioning(cfg, metricsReg, logger)
 	if err != nil {
 		return err
 	}
@@ -443,21 +469,6 @@ func runServe(args []string) error {
 	if prov.Node != nil {
 		deps.RemoteAuth = prov.Node
 	}
-	// Prometheus instrumentation: one registry, shared by the worker (task
-	// metrics) and the HTTP server (request + runtime metrics, and the /metrics
-	// scrape endpoint). Step 1 of the amp metrics pipeline
-	// (architecture/ac-metrics.md). Nil when --metrics=false, which every consumer
-	// treats as a no-op (the scrape endpoint is simply not mounted).
-	var metricsReg *metrics.Metrics
-	if cfg.Metrics {
-		metricsReg = metrics.New()
-		// Export the registry inventory gauges (branches / pageserver nodes),
-		// counted from the registry store on each scrape.
-		metricsReg.WithRegistrySource(regStore, logger)
-	} else {
-		logger.Info("metrics disabled (--metrics=false); /metrics not served")
-	}
-
 	// The task and endpoint leases (architecture/ac-locking.md), over the same pool
 	// as the task log. Losing one exits the process, so a failure to build the
 	// client is fatal here rather than degrading to an unlocked worker.

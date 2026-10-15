@@ -434,8 +434,15 @@ components:
           type: integer
         config_ms:
           type: integer
+        supervisor_boot_ms:
+          type: integer
+          description: >
+            Time the endpoint supervisor spent before spawning compute_ctl in
+            this bring-up; 0 without a supervisor, or after its monitor
+            restarted compute_ctl.
         total_startup_ms:
           type: integer
+          description: Spec received to ready for connections, plus supervisor_boot_ms.
 
     DbsAndRoles:
       type: object

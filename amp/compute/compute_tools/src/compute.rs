@@ -1115,11 +1115,13 @@ impl ComputeNode {
                 .to_std()
                 .unwrap()
                 .as_millis() as u64;
+            state.metrics.supervisor_boot_ms = supervisor_boot_ms();
             state.metrics.total_startup_ms = startup_end_time
                 .signed_duration_since(compute_state.start_time)
                 .to_std()
                 .unwrap()
-                .as_millis() as u64;
+                .as_millis() as u64
+                + state.metrics.supervisor_boot_ms;
             state.metrics.clone()
         };
         self.set_status(ComputeStatus::Running);
@@ -2998,6 +3000,17 @@ fn offload_allowed(prewarm_state: &LfcPrewarmState) -> bool {
     !matches!(prewarm_state, LfcPrewarmState::Prewarming)
 }
 
+/// The endpoint supervisor's share of this boot, which it passes on the first
+/// spawn of a bring-up (`endpoint_supervisor::startup::BOOT_MS_ENV`). Absent or
+/// malformed reads as 0: the startup metrics are informational.
+fn supervisor_boot_ms() -> u64 {
+    parse_supervisor_boot_ms(env::var("AMP_SUPERVISOR_BOOT_MS").ok().as_deref())
+}
+
+fn parse_supervisor_boot_ms(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.trim().parse().ok()).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -3149,5 +3162,14 @@ mod tests {
             );
             assert_eq!(postmaster_owning(pgdata), None);
         }
+    }
+
+    #[test]
+    fn supervisor_boot_ms_reads_only_a_number() {
+        assert_eq!(parse_supervisor_boot_ms(Some("1234")), 1234);
+        assert_eq!(parse_supervisor_boot_ms(Some(" 7\n")), 7);
+        assert_eq!(parse_supervisor_boot_ms(Some("-1")), 0);
+        assert_eq!(parse_supervisor_boot_ms(Some("soon")), 0);
+        assert_eq!(parse_supervisor_boot_ms(None), 0);
     }
 }

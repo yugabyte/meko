@@ -413,7 +413,7 @@ func (s *PgStore) Claim(ctx context.Context, taskID uuid.UUID, owner string) (*T
 func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error) {
 	// Order by each step's position in the task's step_ids list (execution order).
 	rows, err := s.pool.Query(ctx,
-		`SELECT st.id::text, st.task_id::text, st.kind, st.status::text, st.args, st.result, st.error, st.updated_at
+		`SELECT st.id::text, st.task_id::text, st.kind, st.status::text, st.args, st.result, st.error, st.started_at, st.updated_at
 		 FROM task_steps st
 		 JOIN tasks t ON t.id = st.task_id
 		 WHERE st.task_id = $1::uuid
@@ -434,7 +434,7 @@ func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, er
 			result    []byte
 			statusStr string
 		)
-		if err := rows.Scan(&idStr, &tidStr, &st.Kind, &statusStr, &args, &result, &st.Error, &st.UpdatedAt); err != nil {
+		if err := rows.Scan(&idStr, &tidStr, &st.Kind, &statusStr, &args, &result, &st.Error, &st.StartedAt, &st.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if st.ID, err = uuid.Parse(idStr); err != nil {
@@ -455,7 +455,7 @@ func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, er
 
 func (s *PgStore) StartStep(ctx context.Context, taskID, stepID uuid.UUID, owner string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE task_steps SET status = 'running', updated_at = now()
+		`UPDATE task_steps SET status = 'running', started_at = now(), updated_at = now()
 		 WHERE id = $1::uuid
 		   AND EXISTS (SELECT 1 FROM tasks WHERE id = $2::uuid AND owner = $3)`,
 		stepID.String(), taskID.String(), owner)
