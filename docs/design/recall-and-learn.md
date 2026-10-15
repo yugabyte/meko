@@ -147,7 +147,8 @@ couldn't tell which of Claude's saves answers which, so it couldn't mark them.
 it then found out has the answer in its context when it closes. So a step through the mod is
 offered the session's open questions on [What Meko doesn't know](#what-meko-doesnt-know)
 (`sessionGaps()` in `mekogaps.ts`): those it asked in Claude's own searches (subagents' included;
-AgentK's search at start doesn't count, since its query is the task), latest first, at most 30
+AgentK's search at start doesn't count, since its query is the task), the ones it asked last first
+(by its own asks: another session asking one later doesn't move it up), at most 30
 (`GAP_LEARN_MAX`), each as last asked, cut to 300 characters. Other sessions' questions aren't
 offered: the fork knows only this session. The prompt asks for a fact answering each question the
 session found the answer to, with the question numbers in its `answers` (one fact can answer
@@ -231,10 +232,12 @@ starts after the last one's `lastAt` and key, since searches Claude makes in one
 time.
 
 **What the user does with one** (`meko_gap_marks(project_id, query_key, dismissed_at, taught_at,
-taught_text, taught_datapack, opened_at, taught_session, dismissed_session, dismissed_memory)`, each
-action's latest time; the latest one at or after the question's last ask decides its state; the
-`*_session` columns name the session whose learn step made the mark, and a person's own action
-clears them): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
+taught_text, taught_datapack, opened_at, taught_session, dismissed_session, dismissed_memory,
+person_dismissed_at, person_taught_at)`, each action's latest time; the latest one at or after the
+question's last ask decides its state; the `*_session` columns name the session whose learn step
+made the mark, and a person's own action clears them; `person_*_at` keep a person's latest dismissal
+and teach for the usage report, which a learn step's later mark doesn't overwrite, and a restore
+clears the person's dismissal only when it restores theirs): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
 (1 to 2,000 characters, as typed) as a memory in the project's dedicated datapack, as AgentK
 (`agent-k-local`) in the project's Meko conversation, with metadata `{ source: "agent-k-local",
 kind: "taught", question }` (the question cut to 300 characters), and marks it taught with the

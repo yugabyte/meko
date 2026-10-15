@@ -503,7 +503,7 @@ const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'
 
 /** Undoes migration 35 (the learn step's marks on What Meko doesn't know, and its counts of them), for tests that rewind the schema. */
 function dropV35(db: ReturnType<typeof openDb>) {
-  for (const c of ['taught_session', 'dismissed_session', 'dismissed_memory']) db.exec(`ALTER TABLE meko_gap_marks DROP COLUMN ${c}`);
+  for (const c of ['taught_session', 'dismissed_session', 'dismissed_memory', 'person_dismissed_at', 'person_taught_at']) db.exec(`ALTER TABLE meko_gap_marks DROP COLUMN ${c}`);
   for (const c of ['questions', 'taught', 'dismissed']) db.exec(`ALTER TABLE meko_learns DROP COLUMN ${c}`);
 }
 
@@ -626,7 +626,7 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 34 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 35 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
   const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35];
   for (let v = 35; v >= oldest; v--) undo[v - 12](db);

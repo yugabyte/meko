@@ -549,12 +549,17 @@ const MIGRATIONS: string[] = [
   `,
   // 35: the learn step addresses What Meko doesn't know (learn.ts). meko_gap_marks: the session
   // whose learn step taught or dismissed a question (NULL: a person did), and for a dismissal by
-  // one, the saved memory that already said the answer. meko_learns: the questions a step offered
+  // one, the saved memory that already said the answer; and a person's own latest dismissal and
+  // teach (person_dismissed_at, person_taught_at), which a learn step's marks don't overwrite, for
+  // the usage report (every mark so far was a person's). meko_learns: the questions a step offered
   // the fork, and how many it marked taught or dismissed.
   `
   ALTER TABLE meko_gap_marks ADD COLUMN taught_session TEXT;
   ALTER TABLE meko_gap_marks ADD COLUMN dismissed_session TEXT;
   ALTER TABLE meko_gap_marks ADD COLUMN dismissed_memory TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN person_dismissed_at INTEGER;
+  ALTER TABLE meko_gap_marks ADD COLUMN person_taught_at INTEGER;
+  UPDATE meko_gap_marks SET person_dismissed_at = dismissed_at, person_taught_at = taught_at;
   ALTER TABLE meko_learns ADD COLUMN questions INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE meko_learns ADD COLUMN taught INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE meko_learns ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;

@@ -535,10 +535,11 @@ export class Learner {
   /**
    * Marks the questions a fact answers taught or dismissed, each only while it's still open: one a
    * person taught or dismissed while the step ran keeps their mark, and one asked again and answered
-   * since is off the list.
+   * since is off the list. Nothing once the step has closed (its time ran out while the write was
+   * on its way): its counts are written, and it said what it got done.
    */
   private markQuestions(row: SessionRow, job: Job, questions: { key: string }[], action: GapAction & { kind: 'teach' | 'dismiss' }): void {
-    if (!questions.length) return;
+    if (!questions.length || !this.jobs.has(job.id)) return;
     const open = new Set(projectGaps(this.db, row.project_id).filter((g) => g.state === 'open').map((g) => g.key));
     for (const q of questions) {
       if (!open.has(q.key)) continue;
@@ -585,7 +586,7 @@ export class Learner {
 
   private fail(job: Job, step: string, reason: string): void {
     this.close(job, 'failed', step);
-    const saved = job.saves + job.updates + job.dismissed
+    const saved = job.saves + job.updates
       ? ` (${learnSummary(job.saves, job.updates, job.datapack.name, job.taught, job.dismissed).replace(/^S/, 's')} first)` : '';
     // Save learnings can be tried again; at Merge & Close or Discard the session is closing.
     const again = job.trigger === 'manual' ? ' Try Save learnings again.' : '';

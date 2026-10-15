@@ -67,7 +67,8 @@ reports.
   when there was none. Also optional: searches that found nothing relevant (`weak`), and the
   questions on [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know) people dismissed (and
   not restored) and taught, each on the day of its latest dismissal or teach (asking again undoes
-  neither: it counts what users did; a learn step's marks are in its counts instead), left out when there were none.
+  neither, nor does a learn step marking it later: it counts what users did; a learn step's marks are in its counts
+  instead), left out when there were none.
 
 Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask AgentK), designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and

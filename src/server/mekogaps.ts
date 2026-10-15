@@ -13,7 +13,7 @@ import { all, run, type Db } from './db.js';
 export const GAP_PAGE = 100;
 /** Sessions named on a question. */
 const GAP_SESSIONS = 20;
-/** The most questions a learn step is offered (the session's latest), and how much of each. */
+/** The most questions a learn step is offered (the ones the session asked last), and how much of each. */
 export const GAP_LEARN_MAX = 30;
 export const GAP_LEARN_CHARS = 300;
 
@@ -181,14 +181,18 @@ export function findGap(db: Db, projectId: string, key: string): MekoGap | null 
 
 /**
  * The project's open questions a session asked in Claude's own searches (AgentK's search at start
- * doesn't count: its query is the task), latest first, for its learn step to answer: at most
- * `GAP_LEARN_MAX`, each query as last asked, cut to `GAP_LEARN_CHARS`.
+ * doesn't count: its query is the task), the ones it asked last first (by its own asks, not other
+ * sessions'), for its learn step to answer: at most `GAP_LEARN_MAX`, each query as last asked, cut
+ * to `GAP_LEARN_CHARS`.
  */
 export function sessionGaps(db: Db, projectId: string, sessionId: string): { key: string; query: string }[] {
-  const asked = new Set(all<{ key: string }>(db,
-    'SELECT DISTINCT query_key AS key FROM meko_calls WHERE session_id = ? AND quality IS NOT NULL AND query_key IS NOT NULL', sessionId).map((r) => r.key));
+  const asked = new Map(all<{ key: string; at: number }>(db,
+    'SELECT query_key AS key, MAX(at) AS at FROM meko_calls WHERE session_id = ? AND quality IS NOT NULL AND query_key IS NOT NULL GROUP BY query_key',
+    sessionId).map((r) => [r.key, r.at]));
   if (!asked.size) return [];
-  return projectGaps(db, projectId).filter((g) => g.state === 'open' && asked.has(g.key)).slice(0, GAP_LEARN_MAX)
+  return projectGaps(db, projectId).filter((g) => g.state === 'open' && asked.has(g.key))
+    .sort((a, b) => asked.get(b.key)! - asked.get(a.key)! || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .slice(0, GAP_LEARN_MAX)
     .map((g) => ({ key: g.key, query: g.query.replace(/\s+/g, ' ').trim().slice(0, GAP_LEARN_CHARS) }));
 }
 
@@ -196,7 +200,9 @@ export function sessionGaps(db: Db, projectId: string, sessionId: string): { key
  * What was done with a question: dismissed (by a session's learn step, `session`, when Meko already
  * had the answer, the memory that said it), taught (what was saved, where, and the session whose
  * learn step saved it), or restored (open again: a dismissal is cleared, what was taught is kept).
- * Without `session`, a person did it.
+ * Without `session`, a person did it, and it's kept apart too (`person_*_at`), so a learn step's
+ * later mark doesn't take it out of the usage report. A restore undoes a person's dismissal only
+ * when theirs was the one it restores.
  */
 export type GapAction =
   | { kind: 'dismiss'; session?: string; memory?: string | null }
@@ -206,13 +212,17 @@ export type GapAction =
 export function markGap(db: Db, projectId: string, key: string, action: GapAction, at = Date.now()): void {
   run(db, 'INSERT INTO meko_gap_marks(project_id, query_key) VALUES (?, ?) ON CONFLICT DO NOTHING', projectId, key);
   if (action.kind === 'dismiss') {
-    run(db, 'UPDATE meko_gap_marks SET dismissed_at = ?, dismissed_session = ?, dismissed_memory = ? WHERE project_id = ? AND query_key = ?',
-      at, action.session ?? null, action.memory ?? null, projectId, key);
+    run(db, `UPDATE meko_gap_marks SET dismissed_at = ?, dismissed_session = ?, dismissed_memory = ?,
+               person_dismissed_at = CASE WHEN ? IS NULL THEN ? ELSE person_dismissed_at END WHERE project_id = ? AND query_key = ?`,
+      at, action.session ?? null, action.memory ?? null, action.session ?? null, at, projectId, key);
   } else if (action.kind === 'teach') {
-    run(db, 'UPDATE meko_gap_marks SET taught_at = ?, taught_text = ?, taught_datapack = ?, taught_session = ? WHERE project_id = ? AND query_key = ?',
-      at, action.text, action.datapack, action.session ?? null, projectId, key);
+    run(db, `UPDATE meko_gap_marks SET taught_at = ?, taught_text = ?, taught_datapack = ?, taught_session = ?,
+               person_taught_at = CASE WHEN ? IS NULL THEN ? ELSE person_taught_at END WHERE project_id = ? AND query_key = ?`,
+      at, action.text, action.datapack, action.session ?? null, action.session ?? null, at, projectId, key);
   } else {
-    run(db, 'UPDATE meko_gap_marks SET dismissed_at = NULL, dismissed_session = NULL, dismissed_memory = NULL, opened_at = ? WHERE project_id = ? AND query_key = ?',
+    // Values on the right are the row's before the update: the restored dismissal's session.
+    run(db, `UPDATE meko_gap_marks SET dismissed_at = NULL, dismissed_session = NULL, dismissed_memory = NULL, opened_at = ?,
+               person_dismissed_at = CASE WHEN dismissed_session IS NULL THEN NULL ELSE person_dismissed_at END WHERE project_id = ? AND query_key = ?`,
       at, projectId, key);
   }
 }
@@ -224,16 +234,17 @@ export interface GapMark {
 }
 
 /**
- * Each question's latest dismissal (unless restored since) and latest teach, by when, when a person
- * made it. Asking again doesn't undo either: these count what users did, not what's on the list
- * now. A learn step's marks are counted with the learn step (`meko_learns`).
+ * Each question's latest dismissal (unless restored since) and latest teach a person made, by when.
+ * Asking again doesn't undo either, and neither does a learn step's later mark: these count what
+ * users did, not what's on the list now. A learn step's marks are counted with the learn step
+ * (`meko_learns`).
  */
 export function gapMarks(db: Db): GapMark[] {
   const out: GapMark[] = [];
-  for (const m of all<{ dismissed_at: number | null; taught_at: number | null; dismissed_session: string | null; taught_session: string | null }>(db,
-    'SELECT dismissed_at, taught_at, dismissed_session, taught_session FROM meko_gap_marks')) {
-    if (m.dismissed_at !== null && m.dismissed_session === null) out.push({ at: m.dismissed_at, state: 'dismissed' });
-    if (m.taught_at !== null && m.taught_session === null) out.push({ at: m.taught_at, state: 'taught' });
+  for (const m of all<{ dismissed: number | null; taught: number | null }>(db,
+    'SELECT person_dismissed_at AS dismissed, person_taught_at AS taught FROM meko_gap_marks')) {
+    if (m.dismissed !== null) out.push({ at: m.dismissed, state: 'dismissed' });
+    if (m.taught !== null) out.push({ at: m.taught, state: 'taught' });
   }
   return out;
 }

@@ -455,7 +455,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     search(s.id, 'q3', 'Why migrations are append-only', 2000);
     search(s.id, 'q4', 'Can a shipped migration change', 1000);
     // Another session's question, AgentK's search at start for this one, and one already dismissed: not offered.
+    // Another session asking one of this session's questions later doesn't move it up this session's list.
     search('other', 'q5', 'Release tag retention', 5000);
+    search('other', 'q7', 'Can a shipped migration change', 6000);
     run(env.core.db, `INSERT OR REPLACE INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES (?, 4500, 'empty', 0, 0, 900, 'do it', 'do it', 'empty')`, s.id);
     search(s.id, 'q6', 'Old question', 500);
     markGap(env.core.db, projectId, 'old question', { kind: 'dismiss' });
@@ -495,6 +497,35 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(of('do it')?.state).toBe('open');
     expect(dbGet(env.core.db, 'SELECT questions, taught, dismissed FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ questions: 4, taught: 2, dismissed: 1 });
     expect(lastEvent(s.id, 'learned')).toBe("Saved 1 memory and corrected 0 in team/demo; taught Meko 2 questions it couldn't answer and dismissed 1 question it knew already");
+  });
+
+  it('marks no question for a write that lands after the learn step ran out of time', async () => {
+    fakeFiles({ mod: '' });
+    const s = await inReview('Slow');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const projectId = env.core.sessions.row(s.id).project_id;
+    run(env.core.db, `INSERT INTO meko_calls(session_id, tool_use_id, tool, kind, at, input_chars, outcome, results, query, query_key, quality)
+      VALUES (?, 'q1', 'context_search', 'lookup', 1000, 40, 'empty', 0, 'Poll queue order', 'poll queue order', 'empty')`, s.id);
+    fakeFiles({
+      'learn-facts': '{"facts":[{"kind":"decision","component":"lifecycle.ts","text":"Polls run one at a time.","answers":[1]}]}',
+      'learn-decisions': '{"decisions":[{"n":1,"action":"add"}]}',
+    });
+    let land = () => {};
+    let writing = false;
+    Object.assign(env.meko, {
+      addMemory: () => {
+        writing = true;
+        return new Promise<void>((r) => (land = r));
+      },
+    });
+    env.core.learn.timeoutMs = 3000;
+    await env.core.sessions.action(s.id, 'learn');
+    await waitFor(() => writing, (w) => w, 5000, 'the write');
+    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 5000, 'the timeout');
+    land();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(projectGaps(env.core.db, projectId).find((g) => g.key === 'poll queue order')).toMatchObject({ state: 'open', taught: null });
+    expect(dbGet(env.core.db, 'SELECT outcome, taught FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ outcome: 'failed', taught: 0 });
   });
 
   it('tells a later learn step what earlier ones wrote or found known, in the datapack it writes to', async () => {
