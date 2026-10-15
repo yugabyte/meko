@@ -1439,6 +1439,28 @@ export interface PastedImage {
   path: string;
 }
 
+/**
+ * The file extensions Meko's knowledge base takes, lower-case and without the dot: a copy of
+ * `uploadMimeByExt` in Meko's API server (internal/handlers/knowledge_base_handler.go). Meko checks
+ * the bytes against the extension itself.
+ */
+export const KB_UPLOAD_EXTS = ['pdf', 'txt', 'text', 'md', 'json', 'csv', 'xml', 'html', 'htm'] as const;
+
+/** The largest file AgentK sends to a knowledge base: the ceiling of Meko's upload route. Smaller plans get Meko's 413. */
+export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * POST /api/sessions/:id/knowledge: a file added to the knowledge base of the session's project
+ * datapack. `processing`: Meko is indexing it, and AgentK reports when it's done (a `knowledge`
+ * event). The others: Meko already had the same bytes.
+ */
+export interface KnowledgeUpload {
+  filename: string;
+  documentKey: string;
+  datapackName: string;
+  status: 'processing' | 'already_uploaded' | 'already_processed';
+}
+
 /** The most images a new session can start with. */
 export const MAX_START_IMAGES = 20;
 
@@ -1891,6 +1913,11 @@ export interface TotpEnrollResponse {
 export type ServerEvent =
   | { type: 'state'; state: AppState }
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
+  /**
+   * A file added to a session's knowledge base finished indexing (`indexed`), failed (`failed`), or
+   * was still indexing when AgentK stopped following it (`unknown`).
+   */
+  | { type: 'knowledge'; sessionId: string; filename: string; result: 'indexed' | 'failed' | 'unknown' }
   /** A project datapack was shared with you: sent once per datapack. */
   | { type: 'invite'; datapackId: string; title: string; body: string }
   /** The answer to a client's `ping`. */
@@ -2080,6 +2107,10 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
+// POST   /api/sessions/:id/knowledge?name=  file bytes → KnowledgeUpload   (the body is the file, as
+//        application/octet-stream, else 415; `name` is its base name, with an extension in KB_UPLOAD_EXTS, else 400;
+//        empty 400, over MAX_KB_UPLOAD_BYTES 413; 409 for an archived session, with Meko off, or a project with no
+//        dedicated datapack. Sent to Meko's knowledge-base upload route; Meko's refusals come back with their status)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)

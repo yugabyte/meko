@@ -19,7 +19,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Task lifecycle](design/lifecycle.md) | Stages and gates, queued gates, the design after approval, moving a session, instructions with a move |
 | [Reviewing a PR](design/review-pr.md) | Review a PR sessions |
 | [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK and finding a session by what it's about in the command palette |
-| [Datapacks](design/datapacks.md) | Meko datapacks: dedicated and shared, pins, invites |
+| [Datapacks](design/datapacks.md) | Meko datapacks: dedicated and shared, pins, invites, adding files to the knowledge base |
 | [Sharing a project](design/sharing.md) | Sharing a project's datapack with teammates and reviewers |
 | [Meko recall and the learn step](design/recall-and-learn.md) | What Meko gives a session at start, and what it saves at the end |
 | [Token usage](design/token-usage.md) | Reading transcripts, totals and costs, Meko's savings |

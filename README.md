@@ -155,6 +155,9 @@ your phone can connect.
 - **Paste images for Claude:** paste a screenshot into the terminal, or drop image files on it, and
   Claude gets the image with your next message, even when AgentK Local runs on another machine.
   Images pasted into the New session dialog's first prompt go with it when the session starts.
+- **Add documents to the knowledge base:** drop a PDF, Markdown, text, JSON, CSV, XML or HTML file
+  on a session's terminal (or pick one from the ⋯ menu) and, once you confirm, AgentK adds it to
+  the project datapack's knowledge base in Meko and tells you when it's indexed.
 - **Works from your phone:** a drawer for projects, a key bar (Tab, arrows, Ctrl+C, a ▾ row
   of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an image key, and a select mode that copies the lines you drag over), a compose box that takes pasted images too, swipe to scroll back, and the stages and their gates
   in the ⋯ menu.

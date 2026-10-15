@@ -196,7 +196,9 @@ used to send `Ctrl+V` to Claude. On a Mac, `Ctrl+V` reads the clipboard through 
 API (Chrome asks once, Safari before each read): an image is held the same way, and otherwise
 Claude gets `Ctrl+V` as before. On a phone, an image pasted into the compose box is held too (text
 still pastes into the box), and the image key at the end of the key bar's ▾ row picks images to
-hold.
+hold. Documents dropped on the terminal (PDF, Markdown, text and the like) go to the project
+datapack's knowledge base after you confirm: see
+[Adding files to the knowledge base](datapacks.md#adding-files-to-the-knowledge-base).
 
 Images can go with a session's first prompt too: paste them into the New session dialog's First
 prompt field (a review's Notes), drop them on it, or pick them with the image button under it. There's no

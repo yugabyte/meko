@@ -194,3 +194,43 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   starts over). While the list isn't empty, a banner says what's wrong, with **Set up Claude Code
 >   with this Meko** and **Details** (the Meko tab). AgentK never fixes it on its own: not at
 >   startup, and not after a Meko tab change, which only checks again.
+
+## Adding files to the knowledge base
+
+Drop a PDF, TXT, Markdown, JSON, CSV, XML or HTML file on a session's terminal (or pick files with
+**Add to knowledge base…** in the ⋯ sheet or the command palette) and AgentK adds it to the
+knowledge base of the project's dedicated datapack. Images in the same drop are still held for
+Claude; any other file is named in a notice that says what can be dropped. The types are
+`KB_UPLOAD_EXTS`, a copy of `uploadMimeByExt` in Meko's API server, matched by extension in any
+case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
+
+- **Ask first.** The files wait on the session's terminal (`offerKnowledge()` in `terminals.ts`)
+  until a dialog (`KnowledgeUploadDialog.tsx`) names the datapack, says everyone with access to it
+  can find what's in them, and lists each file with its size; one over 50 MB, or empty, is listed as
+  skipped. Nothing is sent before **Upload**. With Meko off, or a project with no dedicated
+  datapack, no dialog opens: a notice says why and how to fix it.
+- **Through the server.** The browser can't call Meko: the key never reaches it. **Upload** posts
+  each file in turn to `POST /api/sessions/:id/knowledge?name=<file name>`, the raw bytes as
+  `application/octet-stream`. That route's parser exists only in its own Fastify scope, as the image
+  routes' does, so no other route takes a non-JSON body, and no HTML form can send that type.
+  `KnowledgeService.upload()` (`src/server/knowledge.ts`) checks the session (409 archived), Meko
+  (409 off), the project's dedicated datapack (409 none: the one the UI names, so a running session
+  after a switch still uploads where the dialog said), the name (its base name only, with a known
+  extension, else 400), and the body (400 empty, 413 over 50 MB, the route's ceiling in Meko). It
+  doesn't look at the bytes: Meko checks them against the extension.
+- **Meko's route.** `MekoApi.uploadKnowledge()` posts `multipart/form-data` with a `file` part to
+  `/datapacks/:id/knowledge-bases/upload` with the same key as MCP, and waits up to 2 minutes.
+  Meko stores the file and starts indexing it, answering 202 `processing`, or 200
+  `already_uploaded` / `already_processed` for bytes it already has (shown as "Already in the
+  knowledge base"). Meko lets only the datapack's owner and maintainers upload. Its refusals come
+  back in words: a 403 asks the owner for maintainer access; a 401 (or a key without write scope)
+  points at the Meko tab; a 404 without Meko's envelope means a Meko without the route; Meko's own
+  message for 400 and 413 (a plan's smaller file limit). The browser never gets a 401 from it,
+  which would sign it out. The upload is in the session's Meko call log (`knowledge_base_upload`).
+- **Indexing.** For a `processing` upload the server follows
+  `/datapacks/:id/knowledge-bases/document-status?document_key=` (its `document_status`) every
+  5 seconds for a minute, then every 30, and gives up after 15 minutes; a 404 while Meko registers
+  the document means wait. At `COMPLETED`, `FAILED` or the give-up it sends a `knowledge` event on
+  `/ws/events`, and a page showing that session's terminal says so in a notice ("notes.md is in
+  the knowledge base"). The list is in memory only: a restart drops it and nothing is said for
+  those files, which are in Meko all the same.

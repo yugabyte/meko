@@ -5,11 +5,21 @@ import { getTerminal, screenLabel } from '../terminals';
 import { AskBar } from './AskSheet';
 import { Busy } from './common';
 import { HeldImages } from './HeldImages';
+import { KnowledgeUploadDialog } from './KnowledgeUploadDialog';
 import { StartupPanel } from './StartupPanel';
 import { TermKeys } from './TermKeys';
 
-/** `onAsk` opens the questions Claude is asking (Session.asking), offered in a bar above the terminal. */
-export function TerminalPane({ session, onAsk }: { session: Session; onAsk?: () => void }) {
+/**
+ * Where files for the knowledge base go: the project's dedicated datapack, or why they can't go
+ * anywhere (Meko is off, or the project has no datapack).
+ */
+export type KnowledgeTarget = { datapack: string } | { off: string };
+
+/**
+ * `onAsk` opens the questions Claude is asking (Session.asking), offered in a bar above the terminal.
+ * `knowledge` says where files dropped for the knowledge base go.
+ */
+export function TerminalPane({ session, onAsk, knowledge }: { session: Session; onAsk?: () => void; knowledge: KnowledgeTarget }) {
   const { id: sessionId, status } = session;
   const hostRef = useRef<HTMLDivElement>(null);
   const [, rerender] = useReducer((x: number) => x + 1, 0);
@@ -37,6 +47,14 @@ export function TerminalPane({ session, onAsk }: { session: Session; onAsk?: () 
     if (prevStatus.current === 'exited' && status !== 'exited') term.reconnect();
     prevStatus.current = status;
   }, [status, term]);
+
+  // Files for the knowledge base with nowhere to go: say why, and drop them.
+  const kbOff = 'off' in knowledge ? knowledge.off : null;
+  useEffect(() => {
+    if (!term.knowledge || !kbOff) return;
+    term.clearKnowledge();
+    term.showNotice(kbOff, 6000);
+  }, [term, term.knowledge, kbOff]);
 
   // While waiting for the session, count down to the move each second.
   const waiting = term.conn === 'open' && term.screen === 'waiting';
@@ -102,6 +120,17 @@ export function TerminalPane({ session, onAsk }: { session: Session; onAsk?: () 
           <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
         )}
       </div>
+      {term.knowledge && 'datapack' in knowledge && (
+        <KnowledgeUploadDialog
+          sessionId={sessionId}
+          datapackName={knowledge.datapack}
+          files={term.knowledge}
+          onClose={(summary) => {
+            term.clearKnowledge();
+            if (summary) term.showNotice(summary, 6000);
+          }}
+        />
+      )}
       {/* Touch screens show held images above the compose box instead. */}
       {!touch && <HeldImages held={term.held} hint="sent with your next Enter" />}
       {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} />}

@@ -9,6 +9,7 @@ import { api, errorMessage } from '../api';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
+import { pickKnowledge } from '../terminals';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
@@ -347,6 +348,15 @@ export function CommandPalette({
         hint: 'Action',
         keywords: 'rename name title session',
         run: onRenameSession,
+      });
+    }
+    if (currentSession && current?.datapacks.some((d) => d.role === 'dedicated')) {
+      out.push({
+        id: 'knowledge',
+        label: ['Add files to the knowledge base of ', { session: currentSession.name }],
+        hint: 'Action',
+        keywords: 'knowledge base kb upload file pdf markdown document meko datapack',
+        run: () => pickKnowledge(currentSession.id),
       });
     }
     if (currentSession && current?.settings.mekoLog) {

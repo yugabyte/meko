@@ -22,6 +22,7 @@ import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
+import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
 import { MekoCallLog } from './mekolog.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
@@ -57,7 +58,7 @@ export interface CoreOptions {
   timers?: boolean;
   /** The Meko plugin's capture script (see findMekoCaptureScript); null turns transcript capture off. */
   mekoCaptureScript?: string | null;
-  /** Meko's REST API client (sharing); by default one on the configured Meko. */
+  /** Meko's REST API client (sharing, knowledge-base uploads); by default one on the configured Meko. */
   mekoApi?: MekoApi;
   /** Checking Meko credentials and setting up Claude Code, for the Meko tab in Settings. */
   mekoTools?: MekoTools;
@@ -67,6 +68,7 @@ export interface CoreOptions {
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
 type InviteEvent = Extract<ServerEvent, { type: 'invite' }>;
+type KnowledgeEvent = Extract<ServerEvent, { type: 'knowledge' }>;
 
 /** How often invites and shares are synced from Meko. */
 const INVITE_SYNC_MS = 5 * 60 * 1000;
@@ -121,6 +123,7 @@ export class Core extends EventEmitter {
   readonly askAgentk: AskAgentk;
   readonly limits: PlanLimitsStore;
   readonly invites: InviteService;
+  readonly knowledge: KnowledgeService;
   readonly mekoTools: MekoTools;
   /** Whether Claude Code's sessions reach AgentK's Meko (MekoStatus.claude). */
   readonly claudeMeko: MekoClaudeWatch;
@@ -220,7 +223,9 @@ export class Core extends EventEmitter {
     this.callHome = new CallHomeService({
       db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
-    this.invites = new InviteService(this, o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey })));
+    const mekoApi = o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey }));
+    this.invites = new InviteService(this, mekoApi);
+    this.knowledge = new KnowledgeService(this, mekoApi);
   }
 
   /** A usage row (Meko, Ask AgentK) that may come after stop() closed the database: dropped then. */
@@ -277,6 +282,10 @@ export class Core extends EventEmitter {
 
   notifyInvite(n: Omit<InviteEvent, 'type'>): void {
     this.emit('notify', { type: 'invite', ...n } satisfies InviteEvent);
+  }
+
+  notifyKnowledge(n: Omit<KnowledgeEvent, 'type'>): void {
+    this.emit('notify', { type: 'knowledge', ...n } satisfies KnowledgeEvent);
   }
 
   /** Syncs the invites and shares waiting in Meko. Never throws. */
@@ -439,6 +448,7 @@ export class Core extends EventEmitter {
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
     this.learn.stop();
+    this.knowledge.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again.
     await this.capture.settled(STOP_CAPTURE_MS);

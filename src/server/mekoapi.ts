@@ -2,6 +2,14 @@ import type { DatapackMember, DatapackPeople, DatapackPendingInvite, ShareGrant 
 import { SHARE_GRANTS } from '../shared/types.js';
 import { strOrNull } from './meko.js';
 
+/** Meko's answer to a knowledge-base upload. */
+export interface KnowledgeUploadReply {
+  documentKey: string;
+  filename: string;
+  /** `processing`, or `already_uploaded` / `already_processed` when Meko had the same bytes. */
+  status: string;
+}
+
 /** A share invite waiting for us, from GET /datapacks/incoming-shares. */
 export interface IncomingShare {
   inviteId: string;
@@ -22,6 +30,8 @@ type Json = Record<string, unknown>;
 type Fetch = typeof fetch;
 
 const TIMEOUT_MS = 30000;
+/** A knowledge-base upload: up to 50 MB on the way out. */
+const UPLOAD_TIMEOUT_MS = 120000;
 
 export function asGrant(v: unknown): ShareGrant | null {
   const g = typeof v === 'string' ? v.trim().toLowerCase() : '';
@@ -59,16 +69,18 @@ export async function looksLikeMekoApi(baseUrl: string, fetchImpl: Fetch = fetch
 }
 
 /**
- * Client for Meko's REST API (the share and invite routes), with the same API key as MCP. Replies
+ * Client for Meko's REST API (the share and invite routes, and knowledge-base uploads), with the same API key as MCP. Replies
  * come as `{ data }` or `{ error: { code, message } }`.
  */
 export class MekoApi {
   constructor(private creds: () => { baseUrl: string | null; apiKey: string }, private fetchImpl: Fetch = fetch) {}
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** A FormData `body` goes as multipart (fetch sets its boundary); anything else as JSON. */
+  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
     const { baseUrl, apiKey } = this.creds();
     if (!baseUrl) throw new MekoApiError(0, 'NO_API_URL', "Meko's API URL isn't known. Set it on the Meko tab in Settings.");
     if (!apiKey) throw new MekoApiError(0, 'NO_KEY', 'No Meko API key is configured.');
+    const form = body instanceof FormData;
     let res: Response;
     try {
       res = await this.fetchImpl(`${baseUrl}${path}`, {
@@ -76,10 +88,10 @@ export class MekoApi {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           Accept: 'application/json',
-          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...(body !== undefined && !form ? { 'Content-Type': 'application/json' } : {}),
         },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        body: form ? body : body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e) {
       const why = (e as Error)?.name === 'TimeoutError' ? 'timed out' : (e as Error)?.message || String(e);
@@ -161,5 +173,24 @@ export class MekoApi {
       .map((r) => ({ inviteId: str(r.invite_id), email: str(r.recipient_email_id), grant: asGrant(r.grant) ?? 'viewer' }))
       .filter((r) => r.inviteId);
     return { members, invites };
+  }
+
+  /**
+   * Adds a file to a datapack's knowledge base (Meko's single-call upload: Meko stores it and starts
+   * indexing). Meko takes the type from the extension and checks it against the bytes.
+   */
+  async uploadKnowledge(datapackId: string, filename: string, bytes: Uint8Array): Promise<KnowledgeUploadReply> {
+    const form = new FormData();
+    // A request body's bytes: never a SharedArrayBuffer, which Blob can't take.
+    form.append('file', new Blob([bytes as Uint8Array<ArrayBuffer>]), filename);
+    const r = await this.request<Json>('POST', `/datapacks/${encodeURIComponent(datapackId)}/knowledge-bases/upload`, form, UPLOAD_TIMEOUT_MS);
+    return { documentKey: str(r?.document_key), filename: str(r?.filename) || filename, status: str(r?.status) };
+  }
+
+  /** How far Meko got indexing a document: its `document_status` (PENDING, PROCESSING, COMPLETED, FAILED…), upper-cased. */
+  async documentStatus(datapackId: string, documentKey: string): Promise<string> {
+    const r = await this.request<Json>('GET',
+      `/datapacks/${encodeURIComponent(datapackId)}/knowledge-bases/document-status?document_key=${encodeURIComponent(documentKey)}`);
+    return str(r?.document_status).toUpperCase();
   }
 }

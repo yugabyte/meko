@@ -75,7 +75,11 @@ export interface ApiCall {
   method: string;
   path: string;
   body: unknown;
+  /** A multipart body (a knowledge-base upload). */
+  form?: FormData;
   auth: string | null;
+  /** The Content-Type sent, if any. */
+  type?: string;
 }
 
 export type ApiHandler = (call: ApiCall) => { status?: number; body?: unknown } | undefined;
@@ -94,7 +98,9 @@ export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
       method: init?.method ?? 'GET',
       path: url.startsWith(baseUrl) ? url.slice(baseUrl.length) : url,
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      form: init?.body instanceof FormData ? init.body : undefined,
       auth: headers.Authorization ?? null,
+      type: headers['Content-Type'],
     };
     calls.push(call);
     const r = state.handler?.(call) ?? { status: 401, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } };

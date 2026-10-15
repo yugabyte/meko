@@ -38,6 +38,20 @@ describe('MekoApi', () => {
     expect(await f.api.incomingShares()).toEqual([]);
   });
 
+  it('uploads a knowledge-base file as multipart, and reads how its indexing goes', async () => {
+    const f = fakeMekoApi();
+    f.handle((c) => c.method === 'POST'
+      ? { status: 202, body: { data: { datapack_id: 'dp 1', document_key: 'k/notes.md', filename: 'notes.md', size: 5, status: 'processing' } } }
+      : ok({ document_status: 'completed', chunks_processed: 1 }));
+    expect(await f.api.uploadKnowledge('dp 1', 'notes.md', Buffer.from('# Hi\n'))).toEqual({ documentKey: 'k/notes.md', filename: 'notes.md', status: 'processing' });
+    expect(await f.api.documentStatus('dp 1', 'k/notes.md')).toBe('COMPLETED');
+    const [up, status] = f.calls;
+    expect([up.method, up.path, up.auth, up.type]).toEqual(['POST', '/datapacks/dp%201/knowledge-bases/upload', 'Bearer test-key', undefined]);
+    const file = up.form?.get('file') as File;
+    expect([file.name, await file.text()]).toEqual(['notes.md', '# Hi\n']);
+    expect(status.path).toBe('/datapacks/dp%201/knowledge-bases/document-status?document_key=k%2Fnotes.md');
+  });
+
   it('says so when asked to share with no API URL', async () => {
     const api = new MekoApi(() => ({ baseUrl: null, apiKey: 'k' }));
     await expect(api.share('d', 'a@b.c', 'viewer')).rejects.toThrow(/API URL/);

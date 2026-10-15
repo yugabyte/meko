@@ -261,6 +261,7 @@ export function SessionSheet({
   onMekoCalls,
   onMove,
   onRename,
+  onKnowledge,
   onAct,
   onClose,
 }: {
@@ -290,6 +291,8 @@ export function SessionSheet({
   onMove: () => void;
   /** Opens the Rename session dialog. */
   onRename: () => void;
+  /** Picks files to add to the knowledge base; left out when there's no datapack to add them to. */
+  onKnowledge?: () => void;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   onClose: () => void;
 }) {
@@ -335,6 +338,11 @@ export function SessionSheet({
         <SheetItem hint="›" onClick={then(onRename)}>
           Rename session
         </SheetItem>
+        {onKnowledge && (
+          <SheetItem hint="›" onClick={then(onKnowledge)}>
+            Add to knowledge base…
+          </SheetItem>
+        )}
         {onMekoCalls && (
           <SheetItem hint="›" onClick={then(onMekoCalls)}>
             Meko calls

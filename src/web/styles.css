@@ -4388,6 +4388,33 @@ div[id^='dak-mermaid-'] .label {
   }
 }
 
+/* Files waiting to be added to the knowledge base (KnowledgeUploadDialog): name, size, then each one's result. */
+.kb-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kb-files li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.kb-files .kb-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.kb-files .skipped .kb-name {
+  color: var(--muted);
+}
+.kb-files .kb-error {
+  flex-basis: 100%;
+}
+
 /* Images held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal on a
    desktop, above the compose box on touch screens. */
 .held-images {

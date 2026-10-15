@@ -8,11 +8,11 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  EventsClientMessage, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
-import { MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
+import { MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
@@ -485,6 +485,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     scope.post<{ Params: { id: string } }>('/api/sessions/:id/images', async (req): Promise<PastedImage> => core.sessions.pasteImage(req.params.id, req.body));
     // One added in the New session dialog, before there's a session: kept under the project until one starts with it.
     scope.post<{ Params: { id: string } }>('/api/projects/:id/images', async (req): Promise<StagedImage> => core.sessions.stageImage(req.params.id, req.body));
+  });
+  // A file added to the session's knowledge base: the body is the file. As with images, its parser
+  // lives only in this scope; application/octet-stream is a type no HTML form can send.
+  await app.register(async (scope) => {
+    scope.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_KB_UPLOAD_BYTES }, (_req, body, done) => done(null, body));
+    scope.post<{ Params: { id: string }; Querystring: { name?: string } }>('/api/sessions/:id/knowledge',
+      async (req): Promise<KnowledgeUpload> => core.knowledge.upload(req.params.id, req.query.name, req.body));
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));

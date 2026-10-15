@@ -9,6 +9,8 @@ import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, typ
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
 import { HeldImages, type HeldImage } from './heldImages';
+import { KB_ACCEPT } from '../shared/knowledge';
+import { pickFiles, skippedNotice, sortDrop } from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
@@ -203,6 +205,8 @@ class SessionTerminal {
     onChange: () => this.listeners.forEach((l) => l()),
     onError: (e) => this.showNotice(`Couldn’t add the image: ${errorMessage(e)}`, 6000),
   });
+  /** Files dropped or picked for the knowledge base, waiting for the user to confirm (null: none). */
+  knowledge: File[] | null = null;
   /** Input typed while held images are being sent (non-null only then); it follows them. */
   private queued: string[] | null = null;
   /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
@@ -452,14 +456,35 @@ class SessionTerminal {
     e.dataTransfer.dropEffect = 'copy';
   };
 
-  /** Images dropped on the terminal are held for Claude; the browser would otherwise open the file. */
+  /**
+   * Images dropped on the terminal are held for Claude, and files the knowledge base takes wait for
+   * the user to confirm adding them; the browser would otherwise open the file.
+   */
   private onDrop = (e: DragEvent) => {
     if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
-    const images = pastedImages(e.dataTransfer);
+    const { images, knowledge, other } = sortDrop(Array.from(e.dataTransfer.files), pastedImages(e.dataTransfer));
     if (images.length) this.holdImages(images);
-    else this.showNotice('Only images can be dropped here: PNG, JPEG, GIF or WebP.', 4000);
+    if (knowledge.length) this.offerKnowledge(knowledge);
+    if (other.length) this.showNotice(skippedNotice(other), 6000);
   };
+
+  /** Files to add to the knowledge base: they wait for the user's decision (TerminalPane asks). */
+  offerKnowledge(files: File[]) {
+    if (!files.length) return;
+    if (this.knowledge) {
+      this.showNotice('Finish with the files waiting for the knowledge base first.', 4000);
+      return;
+    }
+    this.knowledge = files;
+    this.listeners.forEach((l) => l());
+  }
+
+  /** The user decided on the files waiting for the knowledge base (uploaded or cancelled). */
+  clearKnowledge() {
+    this.knowledge = null;
+    this.listeners.forEach((l) => l());
+  }
 
   private setConn(c: TermConn, message: string | null = null, retrying = false) {
     this.conn = c;
@@ -1082,6 +1107,11 @@ export function getTerminal(sessionId: string): SessionTerminal {
 export function hasHeldImages(): boolean {
   for (const t of cache.values()) if (t.held.size) return true;
   return false;
+}
+
+/** Picks files for the session's knowledge base (the tap way to drop them): they wait in its terminal for the user to confirm. */
+export function pickKnowledge(sessionId: string): void {
+  void pickFiles(KB_ACCEPT).then((files) => getTerminal(sessionId).offerKnowledge(files));
 }
 
 export function peekTerminal(sessionId: string): SessionTerminal | undefined {

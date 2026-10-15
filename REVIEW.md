@@ -89,6 +89,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`POST /api/projects/:id/images`) are named by id only: `CreateSessionRequest.images` never
       takes a path, and an id is matched to the server's name pattern inside that project's
       staging folder.
+- [ ] Knowledge-base uploads (`POST /api/sessions/:id/knowledge`) go through the server, so the
+      Meko key never reaches the browser; the route's `application/octet-stream` parser stays in
+      its own scope, the name is a base name only, and nothing is sent to Meko before the user
+      confirms the dialog that names the datapack.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
