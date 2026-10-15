@@ -206,8 +206,8 @@ export default function SignInPage() {
       const code = isMekoApiRequestError(err) ? err.code : undefined;
       if (code === API_ERROR_CODE_INVITE_PASSWORD_EXPIRED) {
         // Admin-created account whose temp password expired. The server already
-        // promoted it to CONFIRMED, so direct the user to Forgot Password (which
-        // now works) via a banner instead of a generic error.
+        // emailed a new temporary password, so tell the user to sign in with it
+        // via a banner instead of a generic error.
         setShowInviteExpired(true);
         return;
       }

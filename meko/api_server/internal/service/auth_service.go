@@ -2,13 +2,19 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/mail"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"meko/api_server/internal/auth"
@@ -30,9 +36,18 @@ type CognitoProvider interface {
 	// GetUserStatus returns the Cognito account status (e.g.
 	// FORCE_CHANGE_PASSWORD) for the given email.
 	GetUserStatus(ctx context.Context, email string) (auth.UserStatus, error)
+	// ResetTempPassword sets a new temporary password on an admin-created user
+	// without sending any Cognito email. AuthService emails the password itself
+	// with the password-setup template (see sendTempPassword).
+	ResetTempPassword(ctx context.Context, email, temporaryPassword string) error
+	// SetPermanentPassword sets a permanent password, which moves a
+	// FORCE_CHANGE_PASSWORD user to CONFIRMED. Called only after the user
+	// presents a valid Meko-issued reset code.
+	SetPermanentPassword(ctx context.Context, email, password string) error
 	// ResendInvite regenerates the temporary password and re-sends the Cognito
-	// invitation email. Used to rescue an admin-created user whose temp password
-	// expired so they get a fresh one and can complete first login.
+	// invitation email (the pool's "Welcome to Meko" template). The
+	// expired-invite rescue falls back to it only when no SES sender is
+	// configured, so deployments without SES keep a working rescue.
 	ResendInvite(ctx context.Context, email string) error
 	Login(
 		ctx context.Context, email, password string,
@@ -62,10 +77,6 @@ type CognitoProvider interface {
 	// code, flipping Cognito's email_verified to true.
 	VerifyEmailAttribute(ctx context.Context, accessToken, code string) error
 }
-
-// ErrForgotPasswordNoAccount is returned when Cognito has no user for this email
-// on the forgot-password flow (mapped to HTTP 404 in the auth handler).
-var ErrForgotPasswordNoAccount = errors.New("no account exists for this email address")
 
 // ErrInvalidProfileName is returned by UpdateProfile when first/last name
 // is blank after trimming. Cognito mandates both, so we reject empties.
@@ -187,15 +198,120 @@ type InviteBackfiller interface {
 // AuthService orchestrates user authentication operations: signup,
 // email confirmation, login, and logout.
 type AuthService struct {
-	cognito          CognitoProvider
-	accounts         AccountStore
-	provisioner      Provisioner
-	inviteBackfiller InviteBackfiller
-	issuerOwnsEmail  bool
+	cognito              CognitoProvider
+	accounts             AccountStore
+	provisioner          Provisioner
+	inviteBackfiller     InviteBackfiller
+	passwordSetupEmailer PasswordSetupEmailSender
+	resetStore           PasswordResetStore
+	issuerOwnsEmail      bool
+	// now is time.Now; tests replace it.
+	now func() time.Time
 }
+
+// PasswordSetupReason says why Meko sent a password-setup email: a reset code
+// for Forgot password, or a new temporary password for an expired invite. The
+// email wording depends on it.
+type PasswordSetupReason string
+
+const (
+	// PasswordSetupForgotPassword: the user asked to reset their password
+	// before finishing first sign-in. The email carries a Meko reset code.
+	PasswordSetupForgotPassword PasswordSetupReason = "forgot_password"
+	// PasswordSetupInviteExpired: the user signed in with an invite temporary
+	// password that had expired. The email carries a new temporary password.
+	PasswordSetupInviteExpired PasswordSetupReason = "invite_expired"
+)
+
+// PasswordSetupEmailParams carries what the password-setup email needs. It is
+// a separate email from the invite: it never says "welcome" or names a
+// datapack. Exactly one of Code (with CodeTTL) and TempPassword is set,
+// matching Reason.
+type PasswordSetupEmailParams struct {
+	RecipientEmail string
+	Code           string
+	TempPassword   string
+	AppURL         string
+	Reason         PasswordSetupReason
+	CodeTTL        time.Duration
+}
+
+// PasswordResetStore persists forgot-password requests for the per-email
+// limit and the reset codes Meko issues itself. The email is passed
+// lowercased. Implemented by repository.PasswordResetRepo.
+type PasswordResetStore interface {
+	CountResetRequestsSince(ctx context.Context, email string, since time.Time) (int, error)
+	RecordResetRequest(ctx context.Context, email string) (string, error)
+	AttachResetCode(ctx context.Context, email, id, codeHash string, expiresAt time.Time) error
+	LatestResetRequest(ctx context.Context, email string) (*models.PasswordResetRequest, error)
+	// ReserveResetAttempt atomically uses one of the code's maxAttempts
+	// guesses. It reports false when the code is used, expired or out of
+	// guesses, so concurrent guesses can't exceed the limit.
+	ReserveResetAttempt(ctx context.Context, email, id string, maxAttempts int) (bool, error)
+	ClaimResetCode(ctx context.Context, email, id string) (bool, error)
+	UnclaimResetCode(ctx context.Context, email, id string) error
+	// DeleteResetRequest drops a recorded request that was rejected or
+	// abandoned so it neither counts toward the limit nor hides a live code.
+	DeleteResetRequest(ctx context.Context, email, id string) error
+}
+
+// Forgot-password limits, following the OWASP Forgot Password Cheat Sheet:
+// a per-account request limit, and a short-lived, single-use,
+// attempt-limited code that changes nothing until it is presented.
+const (
+	// maxResetRequestsPerWindow requests per email in resetRequestWindow,
+	// counted across both the Cognito and the Meko-code paths.
+	maxResetRequestsPerWindow = 5
+	resetRequestWindow        = time.Hour
+	// resetCodeTTL matches Cognito's own reset-code lifetime.
+	resetCodeTTL = time.Hour
+	// maxResetCodeAttempts guesses per code, right or wrong, reserved
+	// atomically in the store.
+	maxResetCodeAttempts = 5
+	// resetCodeDigits gives 10^8 codes; with maxResetCodeAttempts guesses per
+	// code a guess succeeds with probability 5e-8.
+	resetCodeDigits = 8
+)
+
+// PasswordSetupEmailSender sends the password-setup email. Only router.go
+// imports both service and email to wire it.
+type PasswordSetupEmailSender interface {
+	SendPasswordSetupEmail(ctx context.Context, p PasswordSetupEmailParams) error
+}
+
+// errPasswordSetupEmailDisabled is returned by sendTempPassword when no
+// PasswordSetupEmailSender is configured, before any password is changed.
+var errPasswordSetupEmailDisabled = errors.New("password-setup email sender not configured")
+
+// ErrPasswordResetUnavailable is returned when the reset store fails, and when
+// the expired-invite rescue emailed a temporary password that Cognito then
+// refused. The underlying error is logged, not wrapped, so SES and AWS text
+// never reaches the client. The handler maps it to a static 503.
+var ErrPasswordResetUnavailable = errors.New("password reset is temporarily unavailable")
+
+// ErrPasswordResetRateLimited is returned when an email has made
+// maxResetRequestsPerWindow forgot-password requests in resetRequestWindow.
+// The handler maps it to a static 429.
+var ErrPasswordResetRateLimited = errors.New("too many password reset requests")
 
 // AuthServiceOption configures optional AuthService dependencies.
 type AuthServiceOption func(*AuthService)
+
+// WithPasswordResetStore sets the store for the per-email forgot-password
+// limit and Meko-issued reset codes. Without it there is no per-email limit,
+// and an invitee who never finished first sign-in can't reset by email.
+func WithPasswordResetStore(r PasswordResetStore) AuthServiceOption {
+	return func(s *AuthService) { s.resetStore = r }
+}
+
+// WithPasswordSetupEmailer sets the sender for the password-setup email: a
+// Meko reset code for Forgot password, or a new temporary password for the
+// expired-invite rescue. Without it, an invitee who never finished first
+// sign-in gets no email from Forgot password, and the rescue falls back to
+// Cognito's own invitation resend.
+func WithPasswordSetupEmailer(e PasswordSetupEmailSender) AuthServiceOption {
+	return func(s *AuthService) { s.passwordSetupEmailer = e }
+}
 
 // WithProvisioner sets the provisioning service that is triggered when
 // a new account is JIT-created via EnsureAccountFromIDToken.
@@ -232,6 +348,7 @@ func NewAuthService(
 	s := &AuthService{
 		cognito:  cognito,
 		accounts: accounts,
+		now:      time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -369,10 +486,20 @@ type ForgotPasswordStartRequest struct {
 	Email string `json:"email"`
 }
 
-// ForgotPasswordSendCode triggers Cognito ForgotPassword (sends a reset code to
-// the user's email). Note: Cognito rejects this for accounts still in
-// FORCE_CHANGE_PASSWORD; those users are rescued at login time (see Login),
-// which flips them to CONFIRMED so this standard flow works.
+// ForgotPasswordSendCode starts a password reset. It answers the same way
+// whether or not an account exists, and whether or not a code could be sent
+// to it, so the response can't be used to find accounts (OWASP). Each email
+// may make maxResetRequestsPerWindow requests per resetRequestWindow.
+// Cognito rate limits still return 429; store failures still return 503.
+//
+// Cognito emails the reset code for a normal account. Cognito rejects
+// ForgotPassword for an admin-created user who never finished first sign-in
+// (FORCE_CHANGE_PASSWORD) with ErrPasswordResetNotAllowed, so that user would
+// otherwise get no email (MEKO-887). For that user Meko issues and emails its
+// own reset code; ConfirmForgotPasswordReset accepts it. Nothing about the
+// account changes until the code is presented. Other Cognito errors
+// (unconfirmed, disabled, invalid parameter, wrong client secret, outage)
+// are logged and answered the same 200.
 func (s *AuthService) ForgotPasswordSendCode(
 	ctx context.Context, req ForgotPasswordStartRequest,
 ) error {
@@ -380,13 +507,123 @@ func (s *AuthService) ForgotPasswordSendCode(
 	if email == "" {
 		return fmt.Errorf("email is required")
 	}
-	if err := s.cognito.ForgotPassword(ctx, email); err != nil {
-		if errors.Is(err, auth.ErrUserNotFound) {
-			return ErrForgotPasswordNoAccount
+	key := strings.ToLower(email)
+
+	requestID := ""
+	if s.resetStore != nil {
+		// Record first, then count including this request, so concurrent
+		// requests for one email see each other's rows. Rejected or abandoned
+		// requests delete their row so they don't count or hide a live code.
+		var err error
+		if requestID, err = s.resetStore.RecordResetRequest(ctx, key); err != nil {
+			slog.Error("forgot password: recording reset request failed", "email", email, "error", err)
+			return ErrPasswordResetUnavailable
 		}
+		n, err := s.resetStore.CountResetRequestsSince(ctx, key, s.now().Add(-resetRequestWindow))
+		if err != nil {
+			s.discardResetRequest(ctx, key, requestID)
+			slog.Error("forgot password: reset request count failed", "email", email, "error", err)
+			return ErrPasswordResetUnavailable
+		}
+		if n > maxResetRequestsPerWindow {
+			s.discardResetRequest(ctx, key, requestID)
+			slog.Warn("forgot password: per-email limit reached", "email", email, "requests", n)
+			return ErrPasswordResetRateLimited
+		}
+	}
+
+	err := s.cognito.ForgotPassword(ctx, email)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, auth.ErrUserNotFound) {
+		slog.Info("forgot password: no account for email", "email", email)
+		return nil
+	}
+	if errors.Is(err, auth.ErrTooManyRequests) || errors.Is(err, auth.ErrLimitExceeded) {
+		s.discardResetRequest(ctx, key, requestID)
 		return fmt.Errorf("cognito forgot password: %w", err)
 	}
+	if !errors.Is(err, auth.ErrPasswordResetNotAllowed) {
+		s.discardResetRequest(ctx, key, requestID)
+		slog.Warn("forgot password: cognito error answered as uniform success",
+			"email", email, "error", err)
+		return nil
+	}
+	// From here on every outcome returns nil, so the response doesn't tell
+	// an unactivated invitee apart from an unknown email.
+	if s.passwordSetupEmailer == nil || s.resetStore == nil {
+		s.discardResetRequest(ctx, key, requestID)
+		slog.Warn("forgot password: account can't be reset and Meko reset codes are disabled (needs SES)",
+			"email", email)
+		return nil
+	}
+	status, statusErr := s.cognito.GetUserStatus(ctx, email)
+	if statusErr != nil || status != auth.UserStatusForceChangePassword {
+		s.discardResetRequest(ctx, key, requestID)
+		slog.Warn("forgot password: account can't be reset and isn't an unactivated invite",
+			"email", email, "status", string(status), "error", statusErr)
+		return nil
+	}
+	if err := s.sendResetCode(ctx, email, key, requestID); err != nil {
+		s.discardResetRequest(ctx, key, requestID)
+		slog.Error("forgot password: Meko reset code not sent", "email", email, "error", err)
+	}
 	return nil
+}
+
+// discardResetRequest removes a recorded request that was rejected or never
+// finished. Failures are logged; the caller's return value is unchanged.
+func (s *AuthService) discardResetRequest(ctx context.Context, key, requestID string) {
+	if s.resetStore == nil || requestID == "" {
+		return
+	}
+	if err := s.resetStore.DeleteResetRequest(ctx, key, requestID); err != nil {
+		slog.Warn("forgot password: discarding reset request failed",
+			"email", key, "request_id", requestID, "error", err)
+	}
+}
+
+// sendResetCode issues a Meko reset code on request requestID and emails it.
+// The code is stored only as a hash. It is stored before the email goes out
+// so it already works when the user enters it. The caller logs a failure and
+// still answers 200, to keep the response uniform.
+func (s *AuthService) sendResetCode(ctx context.Context, email, key, requestID string) error {
+	code, err := genResetCode()
+	if err != nil {
+		return fmt.Errorf("generate reset code: %w", err)
+	}
+	expiresAt := s.now().Add(resetCodeTTL)
+	if err := s.resetStore.AttachResetCode(ctx, key, requestID, hashResetCode(key, code), expiresAt); err != nil {
+		return fmt.Errorf("store reset code: %w", err)
+	}
+	if err := s.passwordSetupEmailer.SendPasswordSetupEmail(ctx, PasswordSetupEmailParams{
+		RecipientEmail: email,
+		Code:           code,
+		CodeTTL:        resetCodeTTL,
+		Reason:         PasswordSetupForgotPassword,
+	}); err != nil {
+		return fmt.Errorf("send reset code email: %w", err)
+	}
+	slog.Info("forgot password: Meko reset code sent to unactivated account", "email", email)
+	return nil
+}
+
+// genResetCode returns a uniformly random resetCodeDigits-digit code.
+func genResetCode() (string, error) {
+	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(resetCodeDigits), nil)
+	n, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%0*d", resetCodeDigits, n), nil
+}
+
+// hashResetCode is what the store keeps instead of the code. The email is
+// part of the input, so a code hash is only valid for its own account.
+func hashResetCode(key, code string) string {
+	sum := sha256.Sum256([]byte(key + ":" + code))
+	return hex.EncodeToString(sum[:])
 }
 
 // ForgotPasswordConfirmRequest is the body for POST /auth/forgot-password/confirm.
@@ -417,9 +654,64 @@ func (s *AuthService) ConfirmForgotPasswordReset(
 	if newPw != confirm {
 		return ErrPasswordMismatch
 	}
+	if s.resetStore != nil {
+		key := strings.ToLower(email)
+		latest, err := s.resetStore.LatestResetRequest(ctx, key)
+		if err != nil {
+			slog.Error("forgot password confirm: reading reset request failed", "email", email, "error", err)
+			return ErrPasswordResetUnavailable
+		}
+		// The newest request decides the path: a Meko-issued code, or a code
+		// Cognito sent. A request made after a Meko code supersedes it.
+		if latest != nil && latest.CodeHash != "" {
+			return s.confirmMekoResetCode(ctx, email, key, code, newPw, latest)
+		}
+	}
 	if err := s.cognito.ConfirmForgotPassword(ctx, email, code, newPw); err != nil {
 		return fmt.Errorf("cognito confirm forgot password: %w", err)
 	}
+	return nil
+}
+
+// confirmMekoResetCode checks a Meko-issued code and, if it matches, sets the
+// new password as permanent, which also moves the account out of
+// FORCE_CHANGE_PASSWORD. Each check first reserves one of the code's
+// maxResetCodeAttempts guesses in the store, atomically and in SQL, so
+// concurrent requests can't get extra guesses; the reservation also rejects a
+// used or expired code. The code is claimed before Cognito accepts so only one
+// caller can set the password; a Cognito failure unclaims it for a retry.
+// Errors use the same sentinels as Cognito's own codes, so the client can't
+// tell the two paths apart.
+func (s *AuthService) confirmMekoResetCode(
+	ctx context.Context, email, key, code, newPw string, req *models.PasswordResetRequest,
+) error {
+	reserved, err := s.resetStore.ReserveResetAttempt(ctx, key, req.ID, maxResetCodeAttempts)
+	if err != nil {
+		slog.Error("forgot password confirm: reserving an attempt failed", "email", email, "error", err)
+		return ErrPasswordResetUnavailable
+	}
+	if !reserved {
+		return auth.ErrCodeExpired
+	}
+	if subtle.ConstantTimeCompare([]byte(hashResetCode(key, code)), []byte(req.CodeHash)) != 1 {
+		return auth.ErrCodeMismatch
+	}
+	claimed, err := s.resetStore.ClaimResetCode(ctx, key, req.ID)
+	if err != nil {
+		slog.Error("forgot password confirm: claiming code failed", "email", email, "error", err)
+		return ErrPasswordResetUnavailable
+	}
+	if !claimed {
+		return auth.ErrCodeExpired
+	}
+	if err := s.cognito.SetPermanentPassword(ctx, email, newPw); err != nil {
+		if unclaimErr := s.resetStore.UnclaimResetCode(ctx, key, req.ID); unclaimErr != nil {
+			slog.Error("forgot password confirm: unclaim after Cognito failure failed",
+				"email", email, "error", unclaimErr)
+		}
+		return fmt.Errorf("cognito set permanent password: %w", err)
+	}
+	slog.Info("forgot password confirm: Meko reset code accepted, password set", "email", email)
 	return nil
 }
 
@@ -494,7 +786,11 @@ func (s *AuthService) Login(
 	if err != nil {
 		// On expired temp password, send a new temp password and let the caller know.
 		if errors.Is(err, auth.ErrTempPasswordExpired) {
-			if s.rescueExpiredInvite(ctx, req.Email) {
+			rescued, rescueErr := s.rescueExpiredInvite(ctx, req.Email)
+			if rescueErr != nil {
+				return nil, rescueErr
+			}
+			if rescued {
 				return nil, ErrInvitePasswordExpired
 			}
 			// Fallback to not authorized if rescue fails.
@@ -531,33 +827,87 @@ func (s *AuthService) Login(
 	}, nil
 }
 
-// rescueExpiredInvite flips an admin-created user whose temporary password
-// expired from FORCE_CHANGE_PASSWORD to CONFIRMED by setting a random permanent
-// password the user never learns. This unblocks the standard ForgotPassword
-// flow (Cognito rejects reset while the account is FORCE_CHANGE_PASSWORD). It is
-// intentionally best-effort and self-contained: it confirms the account really
-// is in FORCE_CHANGE_PASSWORD before changing anything, and returns false (with
-// a log) on any problem so the caller falls back to a normal 401 rather than
-// leaking state or surfacing an error. Returns true only if the account was
-// rescued.
-func (s *AuthService) rescueExpiredInvite(ctx context.Context, email string) bool {
+// rescueExpiredInvite emails a fresh temporary password to an admin-created
+// user whose invite temporary password expired. It uses the password-setup
+// email when SES is configured, and Cognito's own invitation resend otherwise.
+// The account stays in FORCE_CHANGE_PASSWORD, so signing in with the new
+// temporary password leads to the normal NEW_PASSWORD_REQUIRED flow.
+//
+// It confirms the account really is in FORCE_CHANGE_PASSWORD before changing
+// anything. It returns (true, nil) once the new password is sent, and
+// (false, nil) on a problem that left the account unchanged, so the caller
+// falls back to a normal 401. It returns ErrPasswordResetUnavailable when the
+// email went out but Cognito then refused the new password; see
+// sendTempPassword.
+func (s *AuthService) rescueExpiredInvite(ctx context.Context, email string) (bool, error) {
 	status, err := s.cognito.GetUserStatus(ctx, email)
 	if err != nil {
 		slog.Warn("expired-invite rescue: status lookup failed", "email", email, "error", err)
-		return false
+		return false, nil
 	}
 	if status != auth.UserStatusForceChangePassword {
 		slog.Warn("expired-invite rescue: unexpected status, skipping",
 			"email", email, "status", string(status))
-		return false
+		return false, nil
 	}
-	if err := s.cognito.ResendInvite(ctx, email); err != nil {
-		slog.Error("expired-invite rescue: resend invite failed", "email", email, "error", err)
-		return false
+	if s.passwordSetupEmailer == nil {
+		if err := s.cognito.ResendInvite(ctx, email); err != nil {
+			slog.Error("expired-invite rescue: resend invite failed", "email", email, "error", err)
+			return false, nil
+		}
+	} else if err := s.sendTempPassword(ctx, email, PasswordSetupInviteExpired); err != nil {
+		slog.Error("expired-invite rescue: sending temporary password failed", "email", email, "error", err)
+		if errors.Is(err, ErrPasswordResetUnavailable) {
+			return false, ErrPasswordResetUnavailable
+		}
+		return false, nil
 	}
 	slog.Info("expired-invite rescue: fresh temporary password sent, user can complete first login",
 		"email", email)
-	return true
+	return true, nil
+}
+
+// errPasswordSetupEmailFailed is returned by sendTempPassword when the email
+// failed and nothing in Cognito changed.
+var errPasswordSetupEmailFailed = errors.New("password-setup email failed")
+
+// sendTempPassword emails a fresh temporary password to a FORCE_CHANGE_PASSWORD
+// user with the password-setup template, then sets it in Cognito. Its only
+// caller is the expired-invite rescue, so the user's current temporary password
+// has already expired.
+//
+// The email goes first. If SES fails, nothing changed: it returns
+// errPasswordSetupEmailFailed, and signing in again with the expired password
+// runs the rescue again. If Cognito then refuses the new password, the email
+// holds a password that won't work and the expired one is still in place: it
+// returns ErrPasswordResetUnavailable, which the handler answers with a 503 so
+// the user tries again rather than seeing "invalid credentials". Setting the
+// password first would be worse: a failed email would leave a password the
+// user never received, and the expired password would no longer trigger the
+// rescue.
+func (s *AuthService) sendTempPassword(ctx context.Context, email string, reason PasswordSetupReason) error {
+	if s.passwordSetupEmailer == nil {
+		return errPasswordSetupEmailDisabled
+	}
+	tempPwd, err := genTempPassword()
+	if err != nil {
+		return fmt.Errorf("generate temporary password: %w", err)
+	}
+	if err := s.passwordSetupEmailer.SendPasswordSetupEmail(ctx, PasswordSetupEmailParams{
+		RecipientEmail: email,
+		TempPassword:   tempPwd,
+		Reason:         reason,
+	}); err != nil {
+		slog.Error("password-setup email failed", "email", email, "reason", string(reason), "error", err)
+		return errPasswordSetupEmailFailed
+	}
+	if err := s.cognito.ResetTempPassword(ctx, email, tempPwd); err != nil {
+		slog.Error("password-setup: email sent but Cognito refused the temporary password",
+			"email", email, "reason", string(reason), "error", err)
+		return ErrPasswordResetUnavailable
+	}
+	slog.Info("password-setup email sent", "email", email, "reason", string(reason))
+	return nil
 }
 
 // CompleteNewPassword finishes the NEW_PASSWORD_REQUIRED challenge

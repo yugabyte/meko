@@ -68,7 +68,8 @@ export default function ForgotPasswordPage() {
     setSendLoading(true);
     try {
       await forgotPasswordSendCode({ email: trimmed });
-      // 200 means Cognito accepted ForgotPassword (pool usually returns 404 if username unknown).
+      // The server returns the same 200 whether or not an account exists, so the
+      // page always shows the generic "if an account exists" text.
       setCodeSent(true);
     } catch (err) {
       setSendError(getApiErrorMessage(err, "Could not send code. Try again."));

@@ -109,18 +109,21 @@ func (h *AuthHandler) ResendConfirmation(c echo.Context) error {
 	})
 }
 
-// ForgotPassword handles POST /api/v1/auth/forgot-password (Cognito ForgotPassword).
+// ForgotPassword handles POST /api/v1/auth/forgot-password.
 //
-//	@Summary	Start password reset — email verification code
-//	@Tags		auth
-//	@Accept		json
-//	@Produce	json
-//	@Param		body	body		service.ForgotPasswordStartRequest	true	"Account email"
-//	@Success	200		{object}	APIResponse
-//	@Failure	400		{object}	APIResponse
-//	@Failure	404		{object}	APIResponse
-//	@Failure	429		{object}	APIResponse
-//	@Router		/auth/forgot-password [post]
+//	@Summary		Start password reset: email a reset code
+//	@Description	Emails a reset code: Cognito's for a normal account, or a Meko-issued code for an invited
+//	@Description	account that never finished first sign-in. Returns the same 200 whether or not an account
+//	@Description	exists. Limited to 5 requests per email per hour (429).
+//	@Tags			auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		service.ForgotPasswordStartRequest	true	"Account email"
+//	@Success		200		{object}	APIResponse
+//	@Failure		400		{object}	APIResponse
+//	@Failure		429		{object}	APIResponse
+//	@Failure		503		{object}	APIResponse
+//	@Router			/auth/forgot-password [post]
 func (h *AuthHandler) ForgotPassword(c echo.Context) error {
 	var req service.ForgotPasswordStartRequest
 	if err := c.Bind(&req); err != nil {
@@ -135,17 +138,20 @@ func (h *AuthHandler) ForgotPassword(c echo.Context) error {
 	})
 }
 
-// ForgotPasswordConfirm handles POST /api/v1/auth/forgot-password/confirm (Cognito ConfirmForgotPassword).
+// ForgotPasswordConfirm handles POST /api/v1/auth/forgot-password/confirm.
 //
-//	@Summary	Complete password reset with code and new password
-//	@Tags		auth
-//	@Accept		json
-//	@Produce	json
-//	@Param		body	body		service.ForgotPasswordConfirmRequest	true	"Reset payload"
-//	@Success	200		{object}	APIResponse
-//	@Failure	400		{object}	APIResponse
-//	@Failure	429		{object}	APIResponse
-//	@Router		/auth/forgot-password/confirm [post]
+//	@Summary		Complete password reset with code and new password
+//	@Description	Accepts the code from POST /auth/forgot-password: Cognito's, or a Meko-issued code, which is
+//	@Description	single-use, expires after an hour, and is burned after 5 wrong attempts.
+//	@Tags			auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		service.ForgotPasswordConfirmRequest	true	"Reset payload"
+//	@Success		200		{object}	APIResponse
+//	@Failure		400		{object}	APIResponse
+//	@Failure		429		{object}	APIResponse
+//	@Failure		503		{object}	APIResponse
+//	@Router			/auth/forgot-password/confirm [post]
 func (h *AuthHandler) ForgotPasswordConfirm(c echo.Context) error {
 	var req service.ForgotPasswordConfirmRequest
 	if err := c.Bind(&req); err != nil {
@@ -257,6 +263,7 @@ func (h *AuthHandler) extractAccessToken(c echo.Context) (string, error) {
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	403		{object}	APIResponse	"Cognito USER_NOT_CONFIRMED (code USER_NOT_CONFIRMED); client should offer resend / confirm flow"
+//	@Failure	503		{object}	APIResponse	"Service unavailable; after an expired-invite rescue, sign in again"
 //	@Router		/auth/login [post]
 func (h *AuthHandler) Login(c echo.Context) error {
 	var req service.LoginRequest
@@ -638,9 +645,6 @@ func (h *AuthHandler) classifyAuthErr(
 	case errors.Is(err, auth.ErrUserNotFound):
 		return apiError(c, http.StatusNotFound,
 			"NOT_FOUND", "user not found")
-	case errors.Is(err, service.ErrForgotPasswordNoAccount):
-		return apiError(c, http.StatusNotFound,
-			"NOT_FOUND", err.Error())
 	case errors.Is(err, auth.ErrUserNotConfirmed):
 		// Client: show resend + link to confirmation (sign-up) flow only for this code.
 		return apiError(c, http.StatusForbidden,
@@ -679,6 +683,13 @@ func (h *AuthHandler) classifyAuthErr(
 		errors.Is(err, auth.ErrLimitExceeded):
 		return apiError(c, http.StatusTooManyRequests,
 			"RATE_LIMITED", "too many requests, try again later")
+	case errors.Is(err, service.ErrPasswordResetRateLimited):
+		return apiError(c, http.StatusTooManyRequests,
+			"RATE_LIMITED", "too many password reset requests, try again later")
+	case errors.Is(err, service.ErrPasswordResetUnavailable):
+		// The SES or store error is logged in the service and never wrapped here.
+		return apiError(c, http.StatusServiceUnavailable,
+			"SERVICE_UNAVAILABLE", "password reset is temporarily unavailable, please try again later")
 	case errors.Is(err, auth.ErrCognitoInternal),
 		errors.Is(err, auth.ErrCognitoAccessDenied):
 		// Static message, independent of the sentinel's own text — this is

@@ -35,8 +35,9 @@ export const API_ERROR_CODE_USER_NOT_CONFIRMED = "USER_NOT_CONFIRMED" as const;
 
 /**
  * Returned from POST /auth/login when an admin-created user's temporary password
- * has expired. The server has already flipped the account to CONFIRMED, so the
- * client should direct the user to the (now-working) Forgot Password flow.
+ * has expired. The server has already emailed a new temporary password, and the
+ * account stays in FORCE_CHANGE_PASSWORD, so the client tells the user to check
+ * their inbox and sign in with it.
  */
 export const API_ERROR_CODE_INVITE_PASSWORD_EXPIRED = "INVITE_PASSWORD_EXPIRED" as const;
 
@@ -870,8 +871,9 @@ export type ForgotPasswordStartPayload = {
 };
 
 /**
- * POST /auth/forgot-password — Cognito sends a password-reset code to the user’s email.
- * 404 with NOT_FOUND when no pool user exists for that email (typical Cognito behavior).
+ * POST /auth/forgot-password — emails a reset code: Cognito's for a normal account, or a
+ * Meko-issued code for an invitee who never finished first sign-in. Returns the same 200
+ * whether or not an account exists; 429 after 5 requests per email per hour.
  */
 export async function forgotPasswordSendCode(payload: ForgotPasswordStartPayload) {
   return request<{ message: string }>("/auth/forgot-password", "POST", {

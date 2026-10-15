@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"strings"
 
+	"meko/api_server/internal/auth"
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 	"meko/api_server/internal/telemetry"
@@ -32,6 +33,28 @@ type CognitoInviter interface {
 	// ResetTempPassword sets a new temporary password for an existing
 	// unconfirmed Cognito user. Used when resending an invite.
 	ResetTempPassword(ctx context.Context, email, temporaryPassword string) error
+	// GetUserStatus returns the Cognito account status for email, or
+	// auth.ErrUserNotFound.
+	GetUserStatus(ctx context.Context, email string) (auth.UserStatus, error)
+}
+
+// confirmedWithoutAccount reports whether email already has a CONFIRMED
+// Cognito user. An invitee reaches that state with no local account yet when
+// they set a password with a Meko reset code (MEKO-887); the account is
+// created at their next sign-in. Such a user must get the existing-user email:
+// creating or resetting a temporary password would either send a password
+// Cognito never set or put the account back in FORCE_CHANGE_PASSWORD and
+// replace the password they chose. A failed lookup returns false and keeps the
+// previous behavior.
+func (s *SharingService) confirmedWithoutAccount(ctx context.Context, email string) bool {
+	status, err := s.cognito.GetUserStatus(ctx, email)
+	if err != nil {
+		if !errors.Is(err, auth.ErrUserNotFound) {
+			slog.Warn("invite: cognito status lookup failed", "email", email, "error", err)
+		}
+		return false
+	}
+	return status == auth.UserStatusConfirmed
 }
 
 // InviteEmailParams carries the context needed to render an invitation email.
@@ -175,9 +198,9 @@ type InviteResponse struct {
 	InviteID       string `json:"invite_id"`
 	RecipientEmail string `json:"recipient_email"`
 	GrantRole      string `json:"grant"`
-	// IsNewUser is true when the recipient had no Meko account and one was
-	// provisioned in Cognito as part of this invite. omitempty keeps the
-	// single-invite response shape unchanged for existing users.
+	// IsNewUser is true when CreateUser ran in this invite. omitempty keeps
+	// the single-invite response shape unchanged for existing users and for a
+	// CONFIRMED Cognito user who has no local account yet.
 	IsNewUser bool `json:"is_new_user,omitempty"`
 }
 
@@ -268,7 +291,13 @@ func (s *SharingService) InviteToDatapack(
 		IsExistingUser: recipientUserID != nil,
 	}
 
-	if recipientUserID == nil {
+	// IsNewUser means CreateUser ran in this invite, not merely that the
+	// recipient has no local Meko row. A CONFIRMED Cognito user with no local
+	// account (MEKO-887 reset) must get the existing-user email.
+	createdCognitoUser := false
+	if recipientUserID == nil && s.cognito != nil && s.confirmedWithoutAccount(ctx, email) {
+		emailParams.IsExistingUser = true
+	} else if recipientUserID == nil {
 		// New user: provision Cognito account (suppress Cognito's own email),
 		// then send an SES welcome email with the temporary password.
 		if s.cognito == nil {
@@ -282,6 +311,7 @@ func (s *SharingService) InviteToDatapack(
 			return nil, fmt.Errorf("invite: cognito create user failed: %w", cogErr)
 		}
 		emailParams.TempPassword = tempPwd
+		createdCognitoUser = true
 	}
 
 	if s.emailer != nil {
@@ -340,7 +370,7 @@ func (s *SharingService) InviteToDatapack(
 		InviteID:       inv.InviteID,
 		RecipientEmail: inv.RecipientEmail,
 		GrantRole:      inv.GrantRole,
-		IsNewUser:      recipientUserID == nil,
+		IsNewUser:      createdCognitoUser,
 	}, nil
 }
 
@@ -711,7 +741,9 @@ func (s *SharingService) ResendInvite(
 		IsExistingUser: inv.RecipientUserID != nil,
 	}
 
-	if inv.RecipientUserID == nil {
+	if inv.RecipientUserID == nil && s.cognito != nil && s.confirmedWithoutAccount(ctx, inv.RecipientEmail) {
+		emailParams.IsExistingUser = true
+	} else if inv.RecipientUserID == nil {
 		// New user: reset the Cognito temp password so the fresh SES email
 		// contains a valid credential.
 		if s.cognito == nil {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -60,7 +62,9 @@ type handlerMockCognito struct {
 	logoutFn                func(ctx context.Context, accessToken string) error
 	changePasswordFn        func(ctx context.Context, accessToken, previousPassword, proposedPassword string) error
 	getUserStatusFn         func(ctx context.Context, email string) (auth.UserStatus, error)
+	resetTempPasswordFn     func(ctx context.Context, email, temporaryPassword string) error
 	resendInviteFn          func(ctx context.Context, email string) error
+	setPermanentPasswordFn  func(ctx context.Context, email, password string) error
 }
 
 func (m *handlerMockCognito) SignUp(
@@ -108,11 +112,99 @@ func (m *handlerMockCognito) GetUserStatus(ctx context.Context, email string) (a
 	return "", nil
 }
 
+func (m *handlerMockCognito) ResetTempPassword(ctx context.Context, email, temporaryPassword string) error {
+	if m.resetTempPasswordFn != nil {
+		return m.resetTempPasswordFn(ctx, email, temporaryPassword)
+	}
+	return nil
+}
+
 func (m *handlerMockCognito) ResendInvite(ctx context.Context, email string) error {
 	if m.resendInviteFn != nil {
 		return m.resendInviteFn(ctx, email)
 	}
 	return nil
+}
+
+func (m *handlerMockCognito) SetPermanentPassword(ctx context.Context, email, password string) error {
+	if m.setPermanentPasswordFn != nil {
+		return m.setPermanentPasswordFn(ctx, email, password)
+	}
+	return nil
+}
+
+// handlerResetStore is a minimal in-memory service.PasswordResetStore.
+type handlerResetStore struct {
+	rows []*models.PasswordResetRequest
+}
+
+func (f *handlerResetStore) CountResetRequestsSince(_ context.Context, email string, _ time.Time) (int, error) {
+	n := 0
+	for _, r := range f.rows {
+		if r.Email == email {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *handlerResetStore) RecordResetRequest(_ context.Context, email string) (string, error) {
+	id := fmt.Sprintf("req-%d", len(f.rows)+1)
+	f.rows = append(f.rows, &models.PasswordResetRequest{ID: id, Email: email, RequestedAt: time.Now()})
+	return id, nil
+}
+
+func (f *handlerResetStore) AttachResetCode(_ context.Context, _, id, codeHash string, expiresAt time.Time) error {
+	for _, r := range f.rows {
+		if r.ID == id {
+			r.CodeHash, r.ExpiresAt = codeHash, &expiresAt
+		}
+	}
+	return nil
+}
+
+func (f *handlerResetStore) LatestResetRequest(_ context.Context, email string) (*models.PasswordResetRequest, error) {
+	for i := len(f.rows) - 1; i >= 0; i-- {
+		if f.rows[i].Email == email {
+			return f.rows[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *handlerResetStore) ReserveResetAttempt(context.Context, string, string, int) (bool, error) {
+	return true, nil
+}
+
+func (f *handlerResetStore) ClaimResetCode(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+
+func (f *handlerResetStore) UnclaimResetCode(context.Context, string, string) error {
+	return nil
+}
+
+func (f *handlerResetStore) DeleteResetRequest(_ context.Context, _, id string) error {
+	for i, r := range f.rows {
+		if r.ID == id {
+			f.rows = append(f.rows[:i], f.rows[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+// handlerMockPasswordSetupEmailer counts password-setup emails and returns err.
+type handlerMockPasswordSetupEmailer struct {
+	err  error
+	sent int
+}
+
+func (m *handlerMockPasswordSetupEmailer) SendPasswordSetupEmail(
+	_ context.Context, _ service.PasswordSetupEmailParams,
+) error {
+	m.sent++
+	return m.err
 }
 
 func (m *handlerMockCognito) Login(
@@ -305,10 +397,11 @@ func setupAuthTestServer(
 	t *testing.T,
 	cog service.CognitoProvider,
 	store service.AccountStore,
+	opts ...service.AuthServiceOption,
 ) *httptest.Server {
 	t.Helper()
 
-	authSvc := service.NewAuthService(cog, store)
+	authSvc := service.NewAuthService(cog, store, opts...)
 	// Tests don't exercise /auth/me/usage; pass nil for the usage service.
 	authH := handlers.NewAuthHandler(authSvc, nil)
 
@@ -796,7 +889,112 @@ func TestAuth_ResendConfirmation_Success(t *testing.T) {
 	}
 }
 
-func TestAuth_ForgotPassword_NoAccount(t *testing.T) {
+// forceChangeHandlerCognito fails ForgotPassword the way Cognito does for an
+// invitee who never finished first sign-in.
+func forceChangeHandlerCognito() *handlerMockCognito {
+	return &handlerMockCognito{
+		forgotPasswordFn: func(_ context.Context, _ string) error {
+			return auth.ErrPasswordResetNotAllowed
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+	}
+}
+
+//nolint:gosec // a response message, not a credential
+const forgotPasswordMessage = "If an account exists, a verification code has been sent."
+
+func forgotPasswordMessageOf(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	data, ok := decodeResponse(t, resp).Data.(map[string]any)
+	if !ok {
+		t.Fatal("expected a JSON object in data")
+	}
+	if _, has := data["next_step"]; has {
+		t.Error("the response must not reveal account state")
+	}
+	msg, ok := data["message"].(string)
+	if !ok {
+		t.Fatal("expected a message string")
+	}
+	return msg
+}
+
+func TestAuth_ForgotPassword_ForceChange_SameResponseAndMekoCode(t *testing.T) {
+	mailer := &handlerMockPasswordSetupEmailer{}
+	srv := setupAuthTestServer(t, forceChangeHandlerCognito(), noopAccountStore(),
+		service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(&handlerResetStore{}))
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password", map[string]string{
+		"email": "invited@example.com",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if msg := forgotPasswordMessageOf(t, resp); msg != forgotPasswordMessage {
+		t.Errorf("expected the standard message, got %q", msg)
+	}
+	if mailer.sent != 1 {
+		t.Errorf("expected one reset code email, got %d", mailer.sent)
+	}
+}
+
+func TestAuth_ForgotPassword_ForceChange_EmailFails_SameResponse(t *testing.T) {
+	mailer := &handlerMockPasswordSetupEmailer{err: errors.New("MessageRejected: RequestId: abc-123")}
+	srv := setupAuthTestServer(t, forceChangeHandlerCognito(), noopAccountStore(),
+		service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(&handlerResetStore{}))
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password", map[string]string{
+		"email": "invited@example.com",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the uniform 200, got %d", resp.StatusCode)
+	}
+	if msg := forgotPasswordMessageOf(t, resp); msg != forgotPasswordMessage {
+		t.Errorf("expected the standard message, got %q", msg)
+	}
+}
+
+func TestAuth_ForgotPassword_ForceChange_NoSES_SameResponse(t *testing.T) {
+	srv := setupAuthTestServer(t, forceChangeHandlerCognito(), noopAccountStore(),
+		service.WithPasswordResetStore(&handlerResetStore{}))
+	defer srv.Close()
+
+	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password", map[string]string{
+		"email": "invited@example.com",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the uniform 200 without SES, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuth_ForgotPassword_PerEmailLimit_Returns429(t *testing.T) {
+	store := &handlerResetStore{}
+	srv := setupAuthTestServer(t, &handlerMockCognito{}, noopAccountStore(), service.WithPasswordResetStore(store))
+	defer srv.Close()
+
+	for i := 0; i < 6; i++ {
+		resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password", map[string]string{
+			"email": "user@example.com",
+		})
+		resp.Body.Close()
+		want := http.StatusOK
+		if i == 5 {
+			want = http.StatusTooManyRequests
+		}
+		if resp.StatusCode != want {
+			t.Fatalf("request %d: expected %d, got %d", i+1, want, resp.StatusCode)
+		}
+	}
+}
+
+func TestAuth_ForgotPassword_NoAccount_SameResponse(t *testing.T) {
 	cog := &handlerMockCognito{
 		forgotPasswordFn: func(_ context.Context, _ string) error {
 			return auth.ErrUserNotFound
@@ -809,13 +1007,16 @@ func TestAuth_ForgotPassword_NoAccount(t *testing.T) {
 		"email": "missing@example.com",
 	})
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 (same as an existing account), got %d", resp.StatusCode)
+	}
+	if msg := forgotPasswordMessageOf(t, resp); msg != forgotPasswordMessage {
+		t.Errorf("expected the standard message, got %q", msg)
 	}
 }
 
 func TestAuth_Login_ExpiredTempPassword_Returns401WithCode(t *testing.T) {
-	resendCalled := false
+	resetCalled := false
 	cog := &handlerMockCognito{
 		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
 			return nil, auth.ErrTempPasswordExpired
@@ -823,12 +1024,13 @@ func TestAuth_Login_ExpiredTempPassword_Returns401WithCode(t *testing.T) {
 		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
 			return auth.UserStatusForceChangePassword, nil
 		},
-		resendInviteFn: func(_ context.Context, _ string) error {
-			resendCalled = true
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
+			resetCalled = true
 			return nil
 		},
 	}
-	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	srv := setupAuthTestServer(t, cog, noopAccountStore(),
+		service.WithPasswordSetupEmailer(&handlerMockPasswordSetupEmailer{}))
 	defer srv.Close()
 
 	resp := postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
@@ -843,14 +1045,15 @@ func TestAuth_Login_ExpiredTempPassword_Returns401WithCode(t *testing.T) {
 	if apiResp.Error == nil || apiResp.Error.Code != "INVITE_PASSWORD_EXPIRED" {
 		t.Errorf("expected error code INVITE_PASSWORD_EXPIRED, got %+v", apiResp.Error)
 	}
-	if !resendCalled {
-		t.Error("expected ResendInvite to be called for the expired-invite rescue")
+	if !resetCalled {
+		t.Error("expected ResetTempPassword to be called for the expired-invite rescue")
 	}
 }
 
-func TestAuth_Login_ExpiredTempPassword_RescueFails_Returns401(t *testing.T) {
-	// If the rescue can't complete (here: the resend errors), the login must fail
-	// closed to a plain 401 — never a 500, and never the invite-expired code.
+func TestAuth_Login_ExpiredTempPassword_CognitoRefusesEmailedPassword_Returns503(t *testing.T) {
+	// The email went out but Cognito refused the new password. The user must
+	// be told to retry (a static 503), not "invalid credentials", and never
+	// the invite-expired code.
 	cog := &handlerMockCognito{
 		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
 			return nil, auth.ErrTempPasswordExpired
@@ -858,11 +1061,12 @@ func TestAuth_Login_ExpiredTempPassword_RescueFails_Returns401(t *testing.T) {
 		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
 			return auth.UserStatusForceChangePassword, nil
 		},
-		resendInviteFn: func(_ context.Context, _ string) error {
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
 			return auth.ErrTooManyRequests
 		},
 	}
-	srv := setupAuthTestServer(t, cog, noopAccountStore())
+	srv := setupAuthTestServer(t, cog, noopAccountStore(),
+		service.WithPasswordSetupEmailer(&handlerMockPasswordSetupEmailer{}))
 	defer srv.Close()
 
 	resp := postJSON(t, srv.URL+"/api/v1/auth/login", map[string]string{
@@ -870,12 +1074,12 @@ func TestAuth_Login_ExpiredTempPassword_RescueFails_Returns401(t *testing.T) {
 		"password": "Expired-1!",
 	})
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
 	}
 	apiResp := decodeResponse(t, resp)
 	if apiResp.Error == nil || apiResp.Error.Code == "INVITE_PASSWORD_EXPIRED" {
-		t.Errorf("expected a generic 401 (not the invite-expired code), got %+v", apiResp.Error)
+		t.Errorf("expected a static 503 (not the invite-expired code), got %+v", apiResp.Error)
 	}
 }
 

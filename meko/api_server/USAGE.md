@@ -117,7 +117,7 @@ meko-mcp-server picks that up within 15 seconds.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SES_FROM_ADDRESS` | — | Verified SES sender address (e.g. `no-reply@example.com`). Empty disables invite emails. |
+| `SES_FROM_ADDRESS` | — | Verified SES sender address (e.g. `no-reply@example.com`). Empty disables invite emails and the password-setup email: an invitee who never finished first sign-in then gets no email from Forgot password, and the expired-invite rescue at sign-in falls back to Cognito's own invitation email. |
 | `SES_REGION` | inherits `--cognito-region` | AWS region for SES |
 
 ### Stripe / Billing

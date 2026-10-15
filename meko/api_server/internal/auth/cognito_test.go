@@ -850,3 +850,72 @@ func TestHasEmailPasswordLogin(t *testing.T) {
 		})
 	}
 }
+
+// --------------- SetPermanentPassword tests ---------------
+
+func TestCognitoClient_SetPermanentPassword_SetsPermanent(t *testing.T) {
+	var captured *cip.AdminSetUserPasswordInput
+	mock := &mockCognitoAPI{
+		adminSetUserPasswordFn: func(
+			_ context.Context, params *cip.AdminSetUserPasswordInput, _ ...cipOpt,
+		) (*cip.AdminSetUserPasswordOutput, error) {
+			captured = params
+			return &cip.AdminSetUserPasswordOutput{}, nil
+		},
+	}
+	client := newTestClient(mock)
+
+	if err := client.SetPermanentPassword(context.Background(), " user@example.com ", "New-Pass-1!"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if captured == nil || !captured.Permanent {
+		t.Fatalf("expected AdminSetUserPassword with Permanent=true, got %+v", captured)
+	}
+	if *captured.Username != "user@example.com" || *captured.Password != "New-Pass-1!" {
+		t.Errorf("unexpected input: username=%q", *captured.Username)
+	}
+}
+
+func TestCognitoClient_SetPermanentPassword_InvalidPassword(t *testing.T) {
+	mock := &mockCognitoAPI{
+		adminSetUserPasswordFn: func(
+			_ context.Context, _ *cip.AdminSetUserPasswordInput, _ ...cipOpt,
+		) (*cip.AdminSetUserPasswordOutput, error) {
+			return nil, &types.InvalidPasswordException{Message: strPtr("Password does not conform to policy")}
+		},
+	}
+	client := newTestClient(mock)
+
+	err := client.SetPermanentPassword(context.Background(), "user@example.com", "weak")
+	if err == nil || errors.Is(err, auth.ErrCognitoInternal) {
+		t.Errorf("expected a classified password error, got %v", err)
+	}
+}
+
+// --------------- ForgotPassword NotAuthorized classification ---------------
+
+func TestCognitoClient_ForgotPassword_NotAuthorizedClassification(t *testing.T) {
+	cases := []struct {
+		msg        string
+		notAllowed bool
+	}{
+		{"User password cannot be reset in the current state.", true},
+		{"Unable to verify secret hash for client test-client", false},
+	}
+	for _, tc := range cases {
+		mock := &mockCognitoAPI{
+			forgotPasswordFn: func(
+				_ context.Context, _ *cip.ForgotPasswordInput, _ ...cipOpt,
+			) (*cip.ForgotPasswordOutput, error) {
+				return nil, &types.NotAuthorizedException{Message: strPtr(tc.msg)}
+			},
+		}
+		err := newTestClient(mock).ForgotPassword(context.Background(), "user@example.com")
+		if !errors.Is(err, auth.ErrNotAuthorized) {
+			t.Errorf("%q: expected ErrNotAuthorized, got %v", tc.msg, err)
+		}
+		if got := errors.Is(err, auth.ErrPasswordResetNotAllowed); got != tc.notAllowed {
+			t.Errorf("%q: ErrPasswordResetNotAllowed = %v, want %v", tc.msg, got, tc.notAllowed)
+		}
+	}
+}

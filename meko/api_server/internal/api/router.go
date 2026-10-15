@@ -45,8 +45,10 @@ type serviceRegistry struct {
 	promoteMemoriesSvc  *service.PromoteMemoriesService
 	s3Svc               *service.S3Service
 	sharingRepo         *repository.SharingRepo
+	passwordResetRepo   *repository.PasswordResetRepo
 	sharingSvc          *service.SharingService
 	shareLinkSvc        *service.ShareLinkService
+	setupMailer         service.PasswordSetupEmailSender
 	feedbackRepo        *repository.FeedbackRepo
 	mcpPATRepo          *repository.MCPPATRepo
 	mcpPATAuditRepo     *repository.MCPPATAuditRepo
@@ -135,6 +137,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	promoteMemoriesSvc := service.NewPromoteMemoriesService(promoteMemoriesRepo)
 
 	sharingRepo := repository.NewSharingRepo(cfg.SystemDB)
+	passwordResetRepo := repository.NewPasswordResetRepo(cfg.SystemDB)
 	sharingSvc := service.NewSharingService(sharingRepo, nil)
 	sharingSvc.SetAgentKAdminEmail(cfg.LabsAgentKAdminEmail)
 	feedbackRepo := repository.NewFeedbackRepo(cfg.SystemDB)
@@ -167,6 +170,10 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	}
 	sharingSvc.SetLangfuse(langfuseSvc)
 
+	// AuthService sends its password-setup email (a Meko reset code, or a new
+	// temporary password for an expired invite) through the same SES emailer
+	// (MEKO-887). It stays nil when SES is not configured.
+	var passwordSetupEmailer service.PasswordSetupEmailSender
 	if cfg.SESFromAddress != "" {
 		sesEmailer, sesErr := email.NewSESEmailer(context.Background(), email.SESConfig{
 			Region:      cfg.SESRegion,
@@ -174,13 +181,14 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 			AppURL:      cfg.AppURL,
 		})
 		if sesErr != nil {
-			slog.Error("ses emailer init failed; invite emails disabled", "error", sesErr)
+			slog.Error("ses emailer init failed; invite and password-setup emails disabled", "error", sesErr)
 		} else {
 			sharingSvc.SetEmailer(sesEmailer)
+			passwordSetupEmailer = sesEmailer
 			slog.Info("ses emailer initialized", "from", cfg.SESFromAddress)
 		}
 	} else {
-		slog.Warn("ses invite emails disabled (set SES_FROM_ADDRESS to enable)")
+		slog.Warn("ses invite and password-setup emails disabled (set SES_FROM_ADDRESS to enable)")
 	}
 
 	// Rudderstack telemetry emitter. Same shape as the SES block: missing
@@ -367,8 +375,10 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		promoteMemoriesSvc:    promoteMemoriesSvc,
 		s3Svc:                 s3Svc,
 		sharingRepo:           sharingRepo,
+		passwordResetRepo:     passwordResetRepo,
 		sharingSvc:            sharingSvc,
 		shareLinkSvc:          service.NewShareLinkService(repository.NewShareLinkRepo(cfg.SystemDB), sharingSvc),
+		setupMailer:           passwordSetupEmailer,
 		feedbackRepo:          feedbackRepo,
 		mcpPATRepo:            mcpPATRepo,
 		mcpPATAuditRepo:       mcpPATAuditRepo,
@@ -904,6 +914,12 @@ func registerAuthRoutes(
 	}
 	if reg.sharingRepo != nil {
 		authOpts = append(authOpts, service.WithInviteBackfiller(reg.sharingRepo))
+	}
+	if reg.setupMailer != nil {
+		authOpts = append(authOpts, service.WithPasswordSetupEmailer(reg.setupMailer))
+	}
+	if reg.passwordResetRepo != nil {
+		authOpts = append(authOpts, service.WithPasswordResetStore(reg.passwordResetRepo))
 	}
 
 	// Late-bind the cognito client into the sharing service now that

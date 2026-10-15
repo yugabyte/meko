@@ -934,6 +934,29 @@ func (c *CognitoClient) ResetTempPassword(
 	return nil
 }
 
+// SetPermanentPassword sets a user's permanent password. Cognito moves a
+// FORCE_CHANGE_PASSWORD user to CONFIRMED when the password is permanent.
+// Callers must have verified the user first: AuthService calls it only after
+// the user presents a valid Meko-issued reset code (MEKO-887).
+func (c *CognitoClient) SetPermanentPassword(ctx context.Context, email, password string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	_, err := c.api.AdminSetUserPassword(ctx, &cip.AdminSetUserPasswordInput{
+		UserPoolId: &c.poolID,
+		Username:   &email,
+		Password:   &password,
+		Permanent:  true,
+	})
+	if err != nil {
+		slog.Error("cognito set permanent password failed", "email", email, "error", err)
+		return classifyCognitoErr(err)
+	}
+	slog.Info("cognito permanent password set", "email", email)
+	return nil
+}
+
 // GetUserStatus returns the Cognito account status for the given email (one of
 // the Cognito UserStatus values, e.g. CONFIRMED or FORCE_CHANGE_PASSWORD). A
 // missing user is mapped to ErrUserNotFound so callers can distinguish "no
@@ -1018,6 +1041,13 @@ var (
 	ErrCognitoInternal         = errors.New("authentication service is temporarily unavailable")
 	ErrInvalidCognitoParameter = errors.New("invalid request")
 	ErrCognitoAccessDenied     = errors.New("authentication service is temporarily unavailable")
+	// ErrPasswordResetNotAllowed is ForgotPassword's NotAuthorizedException for
+	// a user whose state blocks a reset, such as an admin-created user still in
+	// FORCE_CHANGE_PASSWORD. It wraps ErrNotAuthorized, so callers that only
+	// check ErrNotAuthorized behave as before. A wrong SECRET_HASH is also a
+	// NotAuthorizedException, but with different text, and stays a plain
+	// ErrNotAuthorized.
+	ErrPasswordResetNotAllowed = fmt.Errorf("%w: password cannot be reset in the current state", ErrNotAuthorized)
 )
 
 // classifyCognitoErr maps AWS Cognito SDK exceptions to sentinel errors.
@@ -1077,6 +1107,12 @@ func classifyCognitoErr(err error) error {
 		// stable API contract — confirm against the live pool.
 		if strings.Contains(msg, "temporary password has expired") {
 			return ErrTempPasswordExpired
+		}
+		// ForgotPassword for a user in FORCE_CHANGE_PASSWORD (AWS documents the
+		// text as "User password cannot be reset in the current state."). Same
+		// caveat as above: message text, not an API contract.
+		if strings.Contains(msg, "cannot be reset in the current state") {
+			return ErrPasswordResetNotAllowed
 		}
 		return ErrNotAuthorized
 	}

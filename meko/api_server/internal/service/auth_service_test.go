@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -47,7 +48,9 @@ type mockCognito struct {
 	logoutFn                func(ctx context.Context, accessToken string) error
 	changePasswordFn        func(ctx context.Context, accessToken, previousPassword, proposedPassword string) error
 	getUserStatusFn         func(ctx context.Context, email string) (auth.UserStatus, error)
+	resetTempPasswordFn     func(ctx context.Context, email, temporaryPassword string) error
 	resendInviteFn          func(ctx context.Context, email string) error
+	setPermanentPasswordFn  func(ctx context.Context, email, password string) error
 	updateUserNameFn        func(ctx context.Context, username, firstName, lastName string) error
 	updateEmailAttrFn       func(ctx context.Context, accessToken, newEmail string) error
 	sendEmailAttrCodeFn     func(ctx context.Context, accessToken string) error
@@ -99,11 +102,139 @@ func (m *mockCognito) GetUserStatus(ctx context.Context, email string) (auth.Use
 	return "", nil
 }
 
+func (m *mockCognito) ResetTempPassword(ctx context.Context, email, temporaryPassword string) error {
+	if m.resetTempPasswordFn != nil {
+		return m.resetTempPasswordFn(ctx, email, temporaryPassword)
+	}
+	return nil
+}
+
 func (m *mockCognito) ResendInvite(ctx context.Context, email string) error {
 	if m.resendInviteFn != nil {
 		return m.resendInviteFn(ctx, email)
 	}
 	return nil
+}
+
+func (m *mockCognito) SetPermanentPassword(ctx context.Context, email, password string) error {
+	if m.setPermanentPasswordFn != nil {
+		return m.setPermanentPasswordFn(ctx, email, password)
+	}
+	return nil
+}
+
+// fakeResetStore is an in-memory service.PasswordResetStore that mirrors
+// repository.PasswordResetRepo's SQL.
+type fakeResetStore struct {
+	countErr error
+	rows     map[string][]*models.PasswordResetRequest
+	seq      int
+}
+
+func newFakeResetStore() *fakeResetStore {
+	return &fakeResetStore{rows: map[string][]*models.PasswordResetRequest{}}
+}
+
+func (f *fakeResetStore) CountResetRequestsSince(_ context.Context, email string, since time.Time) (int, error) {
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	n := 0
+	for _, r := range f.rows[email] {
+		if !r.RequestedAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeResetStore) RecordResetRequest(_ context.Context, email string) (string, error) {
+	f.seq++
+	id := fmt.Sprintf("req-%d", f.seq)
+	f.rows[email] = append(f.rows[email], &models.PasswordResetRequest{
+		ID: id, Email: email, RequestedAt: time.Now().Add(time.Duration(f.seq) * time.Millisecond),
+	})
+	return id, nil
+}
+
+func (f *fakeResetStore) find(email, id string) *models.PasswordResetRequest {
+	for _, r := range f.rows[email] {
+		if r.ID == id {
+			return r
+		}
+	}
+	return nil
+}
+
+func (f *fakeResetStore) AttachResetCode(_ context.Context, email, id, codeHash string, expiresAt time.Time) error {
+	r := f.find(email, id)
+	if r == nil {
+		return errors.New("no such request")
+	}
+	r.CodeHash, r.ExpiresAt = codeHash, &expiresAt
+	return nil
+}
+
+func (f *fakeResetStore) LatestResetRequest(_ context.Context, email string) (*models.PasswordResetRequest, error) {
+	rows := f.rows[email]
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	latest := *rows[len(rows)-1]
+	return &latest, nil
+}
+
+func (f *fakeResetStore) ReserveResetAttempt(_ context.Context, email, id string, maxAttempts int) (bool, error) {
+	r := f.find(email, id)
+	if r == nil || r.CodeHash == "" || r.UsedAt != nil || r.ExpiresAt == nil ||
+		!time.Now().Before(*r.ExpiresAt) || r.Attempts >= maxAttempts {
+		return false, nil
+	}
+	r.Attempts++
+	return true, nil
+}
+
+func (f *fakeResetStore) ClaimResetCode(_ context.Context, email, id string) (bool, error) {
+	r := f.find(email, id)
+	if r == nil || r.UsedAt != nil {
+		return false, nil
+	}
+	now := time.Now()
+	r.UsedAt = &now
+	return true, nil
+}
+
+func (f *fakeResetStore) UnclaimResetCode(_ context.Context, email, id string) error {
+	r := f.find(email, id)
+	if r == nil {
+		return errors.New("no such request")
+	}
+	r.UsedAt = nil
+	return nil
+}
+
+func (f *fakeResetStore) DeleteResetRequest(_ context.Context, email, id string) error {
+	rows := f.rows[email]
+	for i, r := range rows {
+		if r.ID == id {
+			f.rows[email] = append(rows[:i], rows[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+// mockPasswordSetupEmailer records the password-setup emails AuthService sends.
+type mockPasswordSetupEmailer struct {
+	err  error
+	sent []service.PasswordSetupEmailParams
+}
+
+func (m *mockPasswordSetupEmailer) SendPasswordSetupEmail(
+	_ context.Context, p service.PasswordSetupEmailParams,
+) error {
+	m.sent = append(m.sent, p)
+	return m.err
 }
 
 func (m *mockCognito) Login(
@@ -419,19 +550,24 @@ func TestAuthService_ForgotPasswordSendCode_Success(t *testing.T) {
 			return nil
 		},
 	}
-	svc := service.NewAuthService(cog, &mockAccountStore{})
+	store := newFakeResetStore()
+	svc := service.NewAuthService(cog, &mockAccountStore{}, service.WithPasswordResetStore(store))
 
 	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
-		Email: "  user@example.com  ", // trimmed before use
+		Email: "  User@Example.com  ", // trimmed before use
 	}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if forgotEmail != "user@example.com" {
+	if forgotEmail != "User@Example.com" {
 		t.Errorf("expected ForgotPassword for trimmed email, got %q", forgotEmail)
+	}
+	if got := len(store.rows["user@example.com"]); got != 1 {
+		t.Errorf("expected one request recorded under the lowercased email, got %d", got)
 	}
 }
 
-func TestAuthService_ForgotPasswordSendCode_NoAccount(t *testing.T) {
+func TestAuthService_ForgotPasswordSendCode_NoAccount_SameResponse(t *testing.T) {
+	// OWASP: the response must not reveal whether an account exists.
 	cog := &mockCognito{
 		forgotPasswordFn: func(_ context.Context, _ string) error {
 			return auth.ErrUserNotFound
@@ -439,18 +575,355 @@ func TestAuthService_ForgotPasswordSendCode_NoAccount(t *testing.T) {
 	}
 	svc := service.NewAuthService(cog, &mockAccountStore{})
 
-	err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
 		Email: "missing@example.com",
-	})
-	if !errors.Is(err, service.ErrForgotPasswordNoAccount) {
-		t.Errorf("expected ErrForgotPasswordNoAccount, got %v", err)
+	}); err != nil {
+		t.Errorf("expected the same success as an existing account, got %v", err)
 	}
 }
 
-// --- Login expired-temp-password rescue tests ---
+func TestAuthService_ForgotPasswordSendCode_PerEmailLimit(t *testing.T) {
+	calls := 0
+	cog := &mockCognito{
+		forgotPasswordFn: func(_ context.Context, _ string) error {
+			calls++
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, &mockAccountStore{}, service.WithPasswordResetStore(newFakeResetStore()))
 
-func TestAuthService_Login_ExpiredTempPassword_RescuesAndSignals(t *testing.T) {
-	var resentEmail string
+	for i := 0; i < 5; i++ {
+		if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+			Email: "user@example.com",
+		}); err != nil {
+			t.Fatalf("request %d: expected no error, got %v", i+1, err)
+		}
+	}
+	err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "USER@example.com",
+	})
+	if !errors.Is(err, service.ErrPasswordResetRateLimited) {
+		t.Errorf("expected ErrPasswordResetRateLimited on the 6th request, got %v", err)
+	}
+	if calls != 5 {
+		t.Errorf("expected Cognito to be called 5 times, got %d", calls)
+	}
+}
+
+func TestAuthService_ForgotPasswordSendCode_StoreError_Unavailable(t *testing.T) {
+	store := newFakeResetStore()
+	store.countErr = errors.New("connection refused")
+	svc := service.NewAuthService(&mockCognito{}, &mockAccountStore{}, service.WithPasswordResetStore(store))
+
+	err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "user@example.com",
+	})
+	if !errors.Is(err, service.ErrPasswordResetUnavailable) {
+		t.Errorf("expected ErrPasswordResetUnavailable, got %v", err)
+	}
+}
+
+// forceChangeCognito returns a mock whose ForgotPassword fails with forgotErr
+// (ErrPasswordResetNotAllowed for a FORCE_CHANGE_PASSWORD user) and
+// reports status. Any password change fails the test: Forgot password must
+// not change the account before a code is presented.
+func forceChangeCognito(t *testing.T, forgotErr error, status auth.UserStatus) *mockCognito {
+	return &mockCognito{
+		forgotPasswordFn: func(_ context.Context, _ string) error {
+			return forgotErr
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return status, nil
+		},
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
+			t.Error("Forgot password must not reset the temporary password")
+			return nil
+		},
+		setPermanentPasswordFn: func(_ context.Context, _, _ string) error {
+			t.Error("Forgot password must not set a password before a code is presented")
+			return nil
+		},
+	}
+}
+
+func TestAuthService_ForgotPasswordSendCode_ForceChange_SendsMekoCode(t *testing.T) {
+	store := newFakeResetStore()
+	mailer := &mockPasswordSetupEmailer{}
+	svc := service.NewAuthService(
+		forceChangeCognito(t, auth.ErrPasswordResetNotAllowed, auth.UserStatusForceChangePassword),
+		&mockAccountStore{}, service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(store))
+
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "invited@example.com",
+	}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(mailer.sent) != 1 {
+		t.Fatalf("expected one email, got %d", len(mailer.sent))
+	}
+	sent := mailer.sent[0]
+	if sent.Reason != service.PasswordSetupForgotPassword || len(sent.Code) != 8 || sent.TempPassword != "" ||
+		sent.CodeTTL != time.Hour {
+		t.Errorf("expected an 8-digit code valid for an hour and no temp password, got %+v", sent)
+	}
+	latest, err := store.LatestResetRequest(context.Background(), "invited@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil || latest.CodeHash == "" || strings.Contains(latest.CodeHash, sent.Code) {
+		t.Errorf("expected only a hash of the code to be stored, got %+v", latest)
+	}
+}
+
+func TestAuthService_ForgotPasswordSendCode_ForceChange_NoEmailer_SameResponse(t *testing.T) {
+	// Without SES no code can be sent, but the answer must still match an
+	// unknown email's, or it would reveal pending invitees.
+	svc := service.NewAuthService(
+		forceChangeCognito(t, auth.ErrPasswordResetNotAllowed, auth.UserStatusForceChangePassword),
+		&mockAccountStore{}, service.WithPasswordResetStore(newFakeResetStore()))
+
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "invited@example.com",
+	}); err != nil {
+		t.Errorf("expected the same success as any other email, got %v", err)
+	}
+}
+func TestAuthService_ForgotPasswordSendCode_NotAllowed_OtherStatus_SameResponse(t *testing.T) {
+	mailer := &mockPasswordSetupEmailer{}
+	svc := service.NewAuthService(forceChangeCognito(t, auth.ErrPasswordResetNotAllowed, auth.UserStatusConfirmed),
+		&mockAccountStore{}, service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(newFakeResetStore()))
+
+	err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "confirmed@example.com",
+	})
+	if err != nil || len(mailer.sent) != 0 {
+		t.Errorf("expected the uniform success and no email, got err=%v sent=%d", err, len(mailer.sent))
+	}
+}
+func TestAuthService_ForgotPasswordSendCode_OtherCognitoError_UniformSuccess(t *testing.T) {
+	// Account-specific Cognito errors (unconfirmed, disabled, bad secret,
+	// outage) must not distinguish the email from an unknown one.
+	otherErrs := []error{
+		auth.ErrNotAuthorized, auth.ErrUserNotConfirmed, auth.ErrCognitoInternal,
+		auth.ErrInvalidCognitoParameter, auth.ErrCognitoAccessDenied,
+	}
+	for _, forgotErr := range otherErrs {
+		mailer := &mockPasswordSetupEmailer{}
+		store := newFakeResetStore()
+		svc := service.NewAuthService(forceChangeCognito(t, forgotErr, auth.UserStatusForceChangePassword),
+			&mockAccountStore{}, service.WithPasswordSetupEmailer(mailer),
+			service.WithPasswordResetStore(store))
+
+		err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+			Email: "invited@example.com",
+		})
+		if err != nil || len(mailer.sent) != 0 {
+			t.Errorf("%v: expected uniform success and no email, got err=%v sent=%d", forgotErr, err, len(mailer.sent))
+		}
+		if n, _ := store.CountResetRequestsSince(context.Background(), "invited@example.com", time.Now().Add(-time.Hour)); n != 0 {
+			t.Errorf("%v: abandoned request must be discarded, got count=%d", forgotErr, n)
+		}
+	}
+}
+
+func TestAuthService_ForgotPasswordSendCode_RateLimit_DoesNotHideLiveCode(t *testing.T) {
+	store := newFakeResetStore()
+	mailer := &mockPasswordSetupEmailer{}
+	svc := service.NewAuthService(
+		forceChangeCognito(t, auth.ErrPasswordResetNotAllowed, auth.UserStatusForceChangePassword),
+		&mockAccountStore{}, service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(store))
+
+	for i := 0; i < 5; i++ {
+		if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+			Email: "invited@example.com",
+		}); err != nil {
+			t.Fatalf("request %d: %v", i+1, err)
+		}
+	}
+	code := mailer.sent[len(mailer.sent)-1].Code
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "invited@example.com",
+	}); !errors.Is(err, service.ErrPasswordResetRateLimited) {
+		t.Fatalf("expected rate limit on the 6th request, got %v", err)
+	}
+	n, err := store.CountResetRequestsSince(context.Background(), "invited@example.com", time.Now().Add(-time.Hour))
+	if err != nil || n != 5 {
+		t.Fatalf("rejected request must not stay in the count, got n=%d err=%v", n, err)
+	}
+	cog := &mockCognito{
+		setPermanentPasswordFn: func(_ context.Context, _, _ string) error { return nil },
+		confirmForgotPasswordFn: func(_ context.Context, _, _, _ string) error {
+			t.Error("live Meko code must not be sent to Cognito ConfirmForgotPassword")
+			return nil
+		},
+	}
+	svc = service.NewAuthService(cog, &mockAccountStore{},
+		service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(store))
+	if err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code)); err != nil {
+		t.Fatalf("rate-limited request must not hide the live Meko code, got %v", err)
+	}
+}
+func TestAuthService_ForgotPasswordSendCode_ForceChange_EmailFails_SameResponse(t *testing.T) {
+	// An SES failure is logged; the answer stays the uniform success so it
+	// can't single out pending invitees during an SES outage.
+	mailer := &mockPasswordSetupEmailer{err: errors.New("MessageRejected: Email address is not verified. RequestId: abc")}
+	svc := service.NewAuthService(
+		forceChangeCognito(t, auth.ErrPasswordResetNotAllowed, auth.UserStatusForceChangePassword),
+		&mockAccountStore{}, service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(newFakeResetStore()))
+
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "invited@example.com",
+	}); err != nil {
+		t.Errorf("expected the uniform success, got %v", err)
+	}
+}
+
+func TestAuthService_ConfirmForgotPassword_MekoCode_CognitoFails_CodeStillWorks(t *testing.T) {
+	// The code is claimed before Cognito accepts, then unclaimed on failure,
+	// so a Cognito failure leaves it usable and concurrent callers can't both
+	// set the password.
+	calls := 0
+	cog := &mockCognito{
+		setPermanentPasswordFn: func(_ context.Context, _, _ string) error {
+			calls++
+			if calls == 1 {
+				return auth.ErrTooManyRequests
+			}
+			return nil
+		},
+	}
+	svc, code, store := issueMekoCode(t, cog)
+
+	err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code))
+	if !errors.Is(err, auth.ErrTooManyRequests) {
+		t.Fatalf("expected the Cognito error, got %v", err)
+	}
+	latest, err := store.LatestResetRequest(context.Background(), "invited@example.com")
+	if err != nil || latest == nil || latest.UsedAt != nil {
+		t.Fatalf("code must be unclaimed after Cognito failure, got %+v err=%v", latest, err)
+	}
+	if err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code)); err != nil {
+		t.Errorf("expected the retry with the same code to succeed, got %v", err)
+	}
+}
+
+// --- ConfirmForgotPasswordReset with a Meko-issued code ---
+
+// issueMekoCode runs Forgot password for an unactivated invitee and returns
+// the service, the emailed code and the store.
+func issueMekoCode(t *testing.T, cog *mockCognito) (*service.AuthService, string, *fakeResetStore) {
+	t.Helper()
+	cog.forgotPasswordFn = func(_ context.Context, _ string) error { return auth.ErrPasswordResetNotAllowed }
+	cog.getUserStatusFn = func(_ context.Context, _ string) (auth.UserStatus, error) {
+		return auth.UserStatusForceChangePassword, nil
+	}
+	store := newFakeResetStore()
+	mailer := &mockPasswordSetupEmailer{}
+	svc := service.NewAuthService(cog, &mockAccountStore{},
+		service.WithPasswordSetupEmailer(mailer), service.WithPasswordResetStore(store))
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "invited@example.com",
+	}); err != nil {
+		t.Fatalf("ForgotPasswordSendCode: %v", err)
+	}
+	return svc, mailer.sent[0].Code, store
+}
+
+func confirmReq(code string) service.ForgotPasswordConfirmRequest {
+	return service.ForgotPasswordConfirmRequest{
+		Email: "invited@example.com", Code: code, NewPassword: "New-Pass-1!", ConfirmPassword: "New-Pass-1!",
+	}
+}
+
+func TestAuthService_ConfirmForgotPassword_MekoCode_SetsPermanentPassword_Once(t *testing.T) {
+	var setEmail, setPwd string
+	cog := &mockCognito{
+		setPermanentPasswordFn: func(_ context.Context, email, pwd string) error {
+			setEmail, setPwd = email, pwd
+			return nil
+		},
+		confirmForgotPasswordFn: func(_ context.Context, _, _, _ string) error {
+			t.Error("a Meko code must not be sent to Cognito ConfirmForgotPassword")
+			return nil
+		},
+	}
+	svc, code, _ := issueMekoCode(t, cog)
+
+	if err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code)); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if setEmail != "invited@example.com" || setPwd != "New-Pass-1!" {
+		t.Errorf("expected SetPermanentPassword for the user, got %q / %q", setEmail, setPwd)
+	}
+	err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code))
+	if !errors.Is(err, auth.ErrCodeExpired) {
+		t.Errorf("expected a used code to be rejected as expired, got %v", err)
+	}
+}
+
+func TestAuthService_ConfirmForgotPassword_MekoCode_WrongCodeBurnsAfterFive(t *testing.T) {
+	cog := &mockCognito{
+		setPermanentPasswordFn: func(_ context.Context, _, _ string) error {
+			t.Error("no password may be set after the code is burned")
+			return nil
+		},
+	}
+	svc, code, _ := issueMekoCode(t, cog)
+
+	for i := 0; i < 5; i++ {
+		err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq("00000000"))
+		if code == "00000000" {
+			t.Skip("random code collided with the wrong guess")
+		}
+		if !errors.Is(err, auth.ErrCodeMismatch) {
+			t.Fatalf("attempt %d: expected ErrCodeMismatch, got %v", i+1, err)
+		}
+	}
+	err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code))
+	if !errors.Is(err, auth.ErrCodeExpired) {
+		t.Errorf("expected the right code to fail after 5 wrong attempts, got %v", err)
+	}
+}
+
+func TestAuthService_ConfirmForgotPassword_MekoCode_Expired(t *testing.T) {
+	cog := &mockCognito{}
+	svc, code, store := issueMekoCode(t, cog)
+	past := time.Now().Add(-time.Minute)
+	store.rows["invited@example.com"][0].ExpiresAt = &past
+
+	err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq(code))
+	if !errors.Is(err, auth.ErrCodeExpired) {
+		t.Errorf("expected ErrCodeExpired, got %v", err)
+	}
+}
+
+func TestAuthService_ConfirmForgotPassword_NoMekoCode_UsesCognito(t *testing.T) {
+	cognitoCalled := false
+	cog := &mockCognito{
+		confirmForgotPasswordFn: func(_ context.Context, _, _, _ string) error {
+			cognitoCalled = true
+			return nil
+		},
+	}
+	store := newFakeResetStore()
+	svc := service.NewAuthService(cog, &mockAccountStore{}, service.WithPasswordResetStore(store))
+	if err := svc.ForgotPasswordSendCode(context.Background(), service.ForgotPasswordStartRequest{
+		Email: "invited@example.com",
+	}); err != nil {
+		t.Fatalf("ForgotPasswordSendCode: %v", err)
+	}
+
+	if err := svc.ConfirmForgotPasswordReset(context.Background(), confirmReq("123456")); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !cognitoCalled {
+		t.Error("expected Cognito ConfirmForgotPassword when the newest request has no Meko code")
+	}
+}
+
+func TestAuthService_Login_ExpiredTempPassword_NoSES_FallsBackToResendInvite(t *testing.T) {
+	// Without SES the rescue keeps working through Cognito's own resend.
+	resent := ""
 	cog := &mockCognito{
 		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
 			return nil, auth.ErrTempPasswordExpired
@@ -459,7 +932,11 @@ func TestAuthService_Login_ExpiredTempPassword_RescuesAndSignals(t *testing.T) {
 			return auth.UserStatusForceChangePassword, nil
 		},
 		resendInviteFn: func(_ context.Context, email string) error {
-			resentEmail = email
+			resent = email
+			return nil
+		},
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
+			t.Error("ResetTempPassword must not run without an emailer")
 			return nil
 		},
 	}
@@ -472,15 +949,82 @@ func TestAuthService_Login_ExpiredTempPassword_RescuesAndSignals(t *testing.T) {
 	if !errors.Is(err, service.ErrInvitePasswordExpired) {
 		t.Errorf("expected ErrInvitePasswordExpired, got %v", err)
 	}
-	if resentEmail != "pending@example.com" {
-		t.Errorf("expected ResendInvite for pending@example.com, got %q", resentEmail)
+	if resent != "pending@example.com" {
+		t.Errorf("expected ResendInvite for pending@example.com, got %q", resent)
+	}
+}
+
+func TestAuthService_Login_ExpiredTempPassword_EmailFails_KeepsPassword(t *testing.T) {
+	// The rescue emails first: if SES fails, the temporary password is not
+	// replaced.
+	cog := &mockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
+			t.Error("ResetTempPassword must not run when the email fails")
+			return nil
+		},
+	}
+	mailer := &mockPasswordSetupEmailer{err: errors.New("ses down")}
+	svc := service.NewAuthService(cog, &mockAccountStore{}, service.WithPasswordSetupEmailer(mailer))
+
+	_, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "pending@example.com",
+		Password: "Expired-1!",
+	})
+	if errors.Is(err, service.ErrInvitePasswordExpired) || err == nil {
+		t.Errorf("expected a plain login failure, got %v", err)
+	}
+}
+
+// --- Login expired-temp-password rescue tests ---
+
+func TestAuthService_Login_ExpiredTempPassword_RescuesAndSignals(t *testing.T) {
+	var resetEmail, resetPwd string
+	cog := &mockCognito{
+		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
+			return nil, auth.ErrTempPasswordExpired
+		},
+		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
+			return auth.UserStatusForceChangePassword, nil
+		},
+		resetTempPasswordFn: func(_ context.Context, email, pwd string) error {
+			resetEmail, resetPwd = email, pwd
+			return nil
+		},
+	}
+	mailer := &mockPasswordSetupEmailer{}
+	svc := service.NewAuthService(cog, &mockAccountStore{}, service.WithPasswordSetupEmailer(mailer))
+
+	_, err := svc.Login(context.Background(), service.LoginRequest{
+		Email:    "pending@example.com",
+		Password: "Expired-1!",
+	})
+	if !errors.Is(err, service.ErrInvitePasswordExpired) {
+		t.Errorf("expected ErrInvitePasswordExpired, got %v", err)
+	}
+	if resetEmail != "pending@example.com" || resetPwd == "" {
+		t.Errorf("expected ResetTempPassword for pending@example.com with a password, got %q / %q",
+			resetEmail, resetPwd)
+	}
+	if len(mailer.sent) != 1 {
+		t.Fatalf("expected one password-setup email, got %d", len(mailer.sent))
+	}
+	got := mailer.sent[0]
+	if got.Reason != service.PasswordSetupInviteExpired || got.TempPassword != resetPwd ||
+		got.RecipientEmail != "pending@example.com" {
+		t.Errorf("unexpected password-setup email params: %+v", got)
 	}
 }
 
 func TestAuthService_Login_ExpiredTempPassword_NotForceChange_FallsBack(t *testing.T) {
 	// Defensive: if the account isn't actually FORCE_CHANGE_PASSWORD, do not
 	// resend anything and fall back to a normal failed-login.
-	resendCalled := false
+	resetCalled := false
 	cog := &mockCognito{
 		loginFn: func(_ context.Context, _, _ string) (*auth.Result, error) {
 			return nil, auth.ErrTempPasswordExpired
@@ -488,12 +1032,13 @@ func TestAuthService_Login_ExpiredTempPassword_NotForceChange_FallsBack(t *testi
 		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
 			return auth.UserStatusConfirmed, nil
 		},
-		resendInviteFn: func(_ context.Context, _ string) error {
-			resendCalled = true
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
+			resetCalled = true
 			return nil
 		},
 	}
-	svc := service.NewAuthService(cog, &mockAccountStore{})
+	svc := service.NewAuthService(cog, &mockAccountStore{},
+		service.WithPasswordSetupEmailer(&mockPasswordSetupEmailer{}))
 
 	_, err := svc.Login(context.Background(), service.LoginRequest{
 		Email:    "confirmed@example.com",
@@ -505,8 +1050,8 @@ func TestAuthService_Login_ExpiredTempPassword_NotForceChange_FallsBack(t *testi
 	if err == nil {
 		t.Error("expected a login error")
 	}
-	if resendCalled {
-		t.Error("ResendInvite must not be called for a non-force-change account")
+	if resetCalled {
+		t.Error("ResetTempPassword must not be called for a non-force-change account")
 	}
 }
 
@@ -518,18 +1063,19 @@ func TestAuthService_Login_ExpiredTempPassword_ResendError_FallsBack(t *testing.
 		getUserStatusFn: func(_ context.Context, _ string) (auth.UserStatus, error) {
 			return auth.UserStatusForceChangePassword, nil
 		},
-		resendInviteFn: func(_ context.Context, _ string) error {
+		resetTempPasswordFn: func(_ context.Context, _, _ string) error {
 			return auth.ErrTooManyRequests
 		},
 	}
-	svc := service.NewAuthService(cog, &mockAccountStore{})
+	svc := service.NewAuthService(cog, &mockAccountStore{},
+		service.WithPasswordSetupEmailer(&mockPasswordSetupEmailer{}))
 
 	_, err := svc.Login(context.Background(), service.LoginRequest{
 		Email:    "pending@example.com",
 		Password: "Expired-1!",
 	})
-	if errors.Is(err, service.ErrInvitePasswordExpired) {
-		t.Error("must not signal invite-expired when the rescue resend failed")
+	if !errors.Is(err, service.ErrPasswordResetUnavailable) {
+		t.Errorf("expected ErrPasswordResetUnavailable when Cognito refuses the emailed password, got %v", err)
 	}
 	if err == nil {
 		t.Error("expected a login error")

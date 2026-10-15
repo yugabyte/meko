@@ -533,9 +533,9 @@ func run() error {
 	}
 	appURL := appURLForEnv(repository.ParseDeployEnv(*deployEnv))
 	if *sesFromAddress == "" {
-		slog.Warn("ses invite emails disabled (no --ses-from-address / SES_FROM_ADDRESS configured)")
+		slog.Warn("ses invite and password-setup emails disabled (no --ses-from-address / SES_FROM_ADDRESS configured)")
 	} else {
-		slog.Info("ses invite emails enabled", "from", *sesFromAddress, "region", resolvedSESRegion, "app_url", appURL)
+		slog.Info("ses invite and password-setup emails enabled", "from", *sesFromAddress, "region", resolvedSESRegion, "app_url", appURL)
 	}
 
 	// The deprecated flags are parsed and discarded. They are still *accepted* because

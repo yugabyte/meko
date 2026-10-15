@@ -1094,6 +1094,7 @@ const docTemplate = `{
         },
         "/auth/forgot-password": {
             "post": {
+                "description": "Emails a reset code: Cognito's for a normal account, or a Meko-issued code for an invited\naccount that never finished first sign-in. Returns the same 200 whether or not an account\nexists. Limited to 5 requests per email per hour (429).",
                 "consumes": [
                     "application/json"
                 ],
@@ -1103,7 +1104,7 @@ const docTemplate = `{
                 "tags": [
                     "auth"
                 ],
-                "summary": "Start password reset — email verification code",
+                "summary": "Start password reset: email a reset code",
                 "parameters": [
                     {
                         "description": "Account email",
@@ -1128,14 +1129,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
                     },
-                    "429": {
-                        "description": "Too Many Requests",
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1145,6 +1146,7 @@ const docTemplate = `{
         },
         "/auth/forgot-password/confirm": {
             "post": {
+                "description": "Accepts the code from POST /auth/forgot-password: Cognito's, or a Meko-issued code, which is\nsingle-use, expires after an hour, and is burned after 5 wrong attempts.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1181,6 +1183,12 @@ const docTemplate = `{
                     },
                     "429": {
                         "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }
@@ -1232,6 +1240,12 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Cognito USER_NOT_CONFIRMED (code USER_NOT_CONFIRMED); client should offer resend / confirm flow",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service unavailable; after an expired-invite rescue, sign in again",
                         "schema": {
                             "$ref": "#/definitions/handlers.APIResponse"
                         }

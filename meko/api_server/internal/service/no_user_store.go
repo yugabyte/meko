@@ -52,7 +52,13 @@ func (NoUserStore) ConfirmForgotPassword(context.Context, string, string, string
 func (NoUserStore) GetUserStatus(context.Context, string) (auth.UserStatus, error) {
 	return "", ErrUserStoreNotSupported
 }
+func (NoUserStore) ResetTempPassword(context.Context, string, string) error {
+	return ErrUserStoreNotSupported
+}
 func (NoUserStore) ResendInvite(context.Context, string) error {
+	return ErrUserStoreNotSupported
+}
+func (NoUserStore) SetPermanentPassword(context.Context, string, string) error {
 	return ErrUserStoreNotSupported
 }
 func (NoUserStore) Login(context.Context, string, string) (*auth.Result, error) {

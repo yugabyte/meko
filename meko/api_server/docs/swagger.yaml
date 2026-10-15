@@ -1134,6 +1134,10 @@ paths:
     post:
       consumes:
       - application/json
+      description: |-
+        Emails a reset code: Cognito's for a normal account, or a Meko-issued code for an invited
+        account that never finished first sign-in. Returns the same 200 whether or not an account
+        exists. Limited to 5 requests per email per hour (429).
       parameters:
       - description: Account email
         in: body
@@ -1152,21 +1156,24 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/handlers.APIResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.APIResponse'
         "429":
           description: Too Many Requests
           schema:
             $ref: '#/definitions/handlers.APIResponse'
-      summary: Start password reset — email verification code
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+      summary: 'Start password reset: email a reset code'
       tags:
       - auth
   /auth/forgot-password/confirm:
     post:
       consumes:
       - application/json
+      description: |-
+        Accepts the code from POST /auth/forgot-password: Cognito's, or a Meko-issued code, which is
+        single-use, expires after an hour, and is burned after 5 wrong attempts.
       parameters:
       - description: Reset payload
         in: body
@@ -1187,6 +1194,10 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
         "429":
           description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: Service Unavailable
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       summary: Complete password reset with code and new password
@@ -1222,6 +1233,11 @@ paths:
         "403":
           description: Cognito USER_NOT_CONFIRMED (code USER_NOT_CONFIRMED); client
             should offer resend / confirm flow
+          schema:
+            $ref: '#/definitions/handlers.APIResponse'
+        "503":
+          description: Service unavailable; after an expired-invite rescue, sign in
+            again
           schema:
             $ref: '#/definitions/handlers.APIResponse'
       summary: Authenticate and receive tokens
