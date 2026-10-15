@@ -185,7 +185,7 @@ your phone can connect.
   (double-click its tab): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
-  markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each
+  markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
   takes you to them first. Once it's approved, AgentK writes the answers into the design and keeps it current
