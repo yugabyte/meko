@@ -1831,14 +1831,15 @@ div[id^='dak-mermaid-'] .label {
   max-width: 100%;
 }
 /* Zoomed past the column, the diagram scrolls in its own box. */
-.mermaid-view {
-  position: relative;
-}
 .mermaid-view .diagram-scroll {
   overflow-x: auto;
 }
 .mermaid-view.zoomed .mermaid-open {
   max-width: none;
+}
+/* The scroll box clips anything outside it, so the focus ring goes inside the button. */
+.mermaid-view .mermaid-open:focus-visible {
+  outline-offset: -2px;
 }
 .diagram-zoom {
   display: flex;
@@ -1849,7 +1850,7 @@ div[id^='dak-mermaid-'] .label {
   min-width: 28px;
   font-variant-numeric: tabular-nums;
 }
-.diagram-zoom .icon-btn:disabled {
+.diagram-zoom .icon-btn[aria-disabled='true'] {
   opacity: 0.4;
   cursor: default;
   background: transparent;
@@ -1859,11 +1860,20 @@ div[id^='dak-mermaid-'] .label {
   min-width: 48px;
 }
 /* Over the diagram's top right corner, shown while the pointer is on it, a button has focus or
-   it's zoomed. */
+   it's zoomed. Pinned to the top of the panel while a tall diagram scrolls under it; the pin has no
+   height, so the diagram doesn't move down for it. */
+.diagram-zoom-pin {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  height: 0;
+  padding-right: 4px;
+}
 .mermaid-view .diagram-zoom {
-  position: absolute;
-  top: 4px;
-  right: 4px;
+  margin-top: 4px;
+  height: fit-content;
   padding: 2px;
   border: 1px solid var(--rule);
   border-radius: 8px;

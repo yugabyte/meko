@@ -109,12 +109,12 @@ function DiagramFigure({ code, ...shown }: Shown & { code: ReactNode }) {
   return (
     <figure className="mermaid-fig">
       <div className={cx('mermaid-view', zoom.scale !== null && 'zoomed')}>
+        <div className="diagram-zoom-pin">{zoom.controls}</div>
         <div ref={zoom.box} className="diagram-scroll">
           <button type="button" className="mermaid-open" onClick={() => setFull(true)} title="Open full size" aria-label={`${alt}: open full size`}>
             <img ref={zoom.img} src={src} alt={alt} width={width ?? undefined} height={height ?? undefined} style={zoom.style} />
           </button>
         </div>
-        {zoom.controls}
       </div>
       <details className="mermaid-src">
         <summary>Source</summary>
@@ -150,20 +150,27 @@ function useZoom(
   // The box that scrolls when the diagram outgrows it.
   const box = useRef<HTMLDivElement>(null);
   const img = useRef<HTMLImageElement>(null);
-  // Where the middle of the view was in the diagram before a zoom, to keep it there after.
-  const centre = useRef<{ x: number; y: number } | null>(null);
+  // Where the middle of the view was in the diagram before a zoom, to keep it there after: across
+  // the box's own scroll, and down whatever scrolls up and down (the box in the dialog; in the
+  // column the box grows with the image, so the design panel around it).
+  const anchor = useRef<{ x: number; y: number; at: number } | null>(null);
   useLayoutEffect(() => {
     const el = box.current;
-    const c = centre.current;
-    centre.current = null;
-    if (!el || !c) return;
-    el.scrollLeft = c.x * el.scrollWidth - el.clientWidth / 2;
-    el.scrollTop = c.y * el.scrollHeight - el.clientHeight / 2;
+    const a = anchor.current;
+    anchor.current = null;
+    if (!el || !img.current || !a) return;
+    el.scrollLeft = a.x * el.scrollWidth - el.clientWidth / 2;
+    const r = img.current.getBoundingClientRect();
+    const scroller = verticalScroller(el);
+    if (scroller) scroller.scrollTop += r.top + a.y * r.height - a.at;
   }, [scale]);
 
   const zoomTo = (next: number | null) => {
     const el = box.current;
-    if (el) centre.current = { x: (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth, y: (el.scrollTop + el.clientHeight / 2) / el.scrollHeight };
+    if (next === scale || !el || !img.current) return;
+    const r = img.current.getBoundingClientRect();
+    const at = visibleMiddle(img.current);
+    anchor.current = { x: (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth, y: r.height ? (at - r.top) / r.height : 0, at };
     setScale(next);
   };
   const step = (dir: 1 | -1) => {
@@ -173,21 +180,46 @@ function useZoom(
     if (next !== null) zoomTo(next);
   };
   // A fitted diagram's size is only known once measured, so both buttons stay on while it's fitted.
+  // A button that can't act is aria-disabled, not disabled: a disabled button loses focus, and the
+  // one pressed to reach the end would drop a keyboard user's place.
   const can = (dir: 1 | -1) => scale === null || zoomStep(scale, dir) !== null;
 
   const controls = width ? (
     <div className="diagram-zoom" role="group" aria-label="Zoom">
-      <button type="button" className="icon-btn" onClick={() => step(-1)} disabled={!can(-1)} title="Zoom out" aria-label="Zoom out">
+      <button type="button" className="icon-btn" onClick={() => step(-1)} aria-disabled={!can(-1)} title="Zoom out" aria-label="Zoom out">
         −
       </button>
-      <button type="button" className="icon-btn diagram-zoom-level" onClick={() => zoomTo(null)} disabled={scale === null} title="Fit to width">
+      <button type="button" className="icon-btn diagram-zoom-level" onClick={() => zoomTo(null)} aria-disabled={scale === null} title="Fit to width">
         {scale === null ? 'Fit' : `${Math.round(scale * 100)}%`}
       </button>
-      <button type="button" className="icon-btn" onClick={() => step(1)} disabled={!can(1)} title="Zoom in" aria-label="Zoom in">
+      <button type="button" className="icon-btn" onClick={() => step(1)} aria-disabled={!can(1)} title="Zoom in" aria-label="Zoom in">
         +
       </button>
     </div>
   ) : null;
   const style = scale !== null && width ? { width: Math.round(width * scale), maxWidth: 'none' } : undefined;
   return { scale, box, img, style, controls };
+}
+
+/** The screen height of the middle of what's visible of `el`, inside the boxes that clip it and the window. */
+function visibleMiddle(el: HTMLElement): number {
+  const r = el.getBoundingClientRect();
+  let top = Math.max(r.top, 0);
+  let bottom = Math.min(r.bottom, window.innerHeight);
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (getComputedStyle(p).overflowY === 'visible') continue;
+    const pr = p.getBoundingClientRect();
+    top = Math.max(top, pr.top);
+    bottom = Math.min(bottom, pr.bottom);
+  }
+  return bottom > top ? (top + bottom) / 2 : r.top + r.height / 2;
+}
+
+/** `el`, or the nearest box around it, that scrolls up and down; null when none does. */
+function verticalScroller(el: HTMLElement): HTMLElement | null {
+  for (let p: HTMLElement | null = el; p && p !== document.documentElement; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if ((o === 'auto' || o === 'scroll') && p.scrollHeight > p.clientHeight) return p;
+  }
+  return null;
 }

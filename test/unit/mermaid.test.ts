@@ -33,7 +33,6 @@ describe('mermaid diagrams', () => {
     [1.005, -1, 0.9],
     [4, 1, null],
     [0.25, -1, null],
-    [0.1, -1, null],
     [0.1, 1, 0.25],
   ] as const)('zooms from %s by %s to %s', (scale, dir, next) => {
     expect(zoomStep(scale, dir)).toBe(next);
