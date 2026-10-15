@@ -236,10 +236,13 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
     const s = await env.core.sessions.create(p.id, { name: 'Big change', prompt: 'do it', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'idle');
-    gh.pr = { number: 8, url: 'https://github.com/acme/demo/pull/8', state: 'OPEN' };
+    // The PR went to another base than the session's: the session takes the PR's.
+    gh.pr = { number: 8, url: 'https://github.com/acme/demo/pull/8', state: 'OPEN', baseRefName: 'release' };
     gh.status = status({ number: 8, comments: [{ id: 'c1', author: { login: 'yb-agentk-dev' }, body: 'No review: this PR changes 4000 lines.', createdAt: new Date().toISOString() }] });
     await env.core.sessions.action(s.id, 'open-pr');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.reviewState === 'refused', 10000, 'refused');
+    expect(env.core.sessions.get(s.id).baseBranch).toBe('release');
+    expect(lastEvent(s.id, 'base')).toBe('Base set to release, the base of PR #8');
     await env.core.sessions.action(s.id, 'force-review');
     expect(gh.comments).toEqual(['/agentk review force']);
     // The refusal came before the request, so it no longer counts.

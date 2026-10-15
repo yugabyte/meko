@@ -3313,6 +3313,30 @@ div[id^='dak-mermaid-'] .label {
   box-shadow: var(--shadow);
   overflow: hidden;
 }
+.files-pop.left {
+  left: 0;
+  right: auto;
+}
+.chg-bar .btn {
+  margin-left: auto;
+}
+/* A branch name in a button: long ones (a stacked branch's) are cut, not widening the header. */
+.base-name {
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.files-note {
+  margin: 0;
+  padding: 0 12px 6px;
+}
+.chg-path.cur::after {
+  content: ' (current)';
+  color: var(--muted);
+}
 .files-filter {
   display: block;
   width: calc(100% - 16px);
@@ -4833,7 +4857,8 @@ div[id^='dak-mermaid-'] .label {
   .files-menu {
     position: static;
   }
-  .files-pop {
+  .files-pop,
+  .files-pop.left {
     left: 8px;
     right: 8px;
     width: auto;

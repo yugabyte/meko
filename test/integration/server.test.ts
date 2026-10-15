@@ -250,7 +250,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(unknown.statusCode).toBe(400);
     const changes = await app.inject({ url: `/api/sessions/${s.json().id}/changes`, headers: { cookie } });
     expect(changes.statusCode).toBe(200);
-    expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0 });
+    expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0, ahead: 0, suggestedBase: null });
+    expect((await app.inject({ url: `/api/sessions/${s.json().id}/base-branches`, headers: { cookie } })).json()).toContain('main');
 
     // Renaming: behind the origin check, the body checked.
     const rename = (payload: unknown, headers: Record<string, string> = { cookie }) =>

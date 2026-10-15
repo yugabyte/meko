@@ -199,6 +199,7 @@ export const api = {
   openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
+  baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number) =>
     `/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}`,
