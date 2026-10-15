@@ -105,6 +105,7 @@ int debug_compare_local;
 
 static NRelFileInfo unlogged_build_rel_info;
 static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+static SubTransactionId yb_amp_unlogged_build_subid = InvalidSubTransactionId;
 
 /*
  * Permanent relations under an unlogged build, so that any process evicting
@@ -2119,6 +2120,9 @@ yb_amp_start_unlogged_build(SMgrRelation reln)
 	if (unlogged_build_phase != UNLOGGED_BUILD_NOT_IN_PROGRESS)
 		yb_amp_log(ERROR, "unlogged relation build is already in progress");
 
+	/* First, so that AtEOSubXact_yb_amp covers any error below */
+	yb_amp_unlogged_build_subid = GetCurrentSubTransactionId();
+
 	ereport(SmgrTrace,
 			(errmsg(YBAMP_TAG "starting unlogged build of relation %u/%u/%u",
 					RelFileInfoFmt(InfoFromSMgrRel(reln)))));
@@ -2422,6 +2426,22 @@ AtEOXact_yb_amp(XactEvent event, void *arg)
 	communicator_reconfigure_timeout_if_needed();
 }
 
+/*
+ * Forget a build when the subtransaction that started it aborts. Its shared
+ * entry stays until yb_amp_unlink, which runs after its buffers are dropped.
+ */
+static void
+AtEOSubXact_yb_amp(SubXactEvent event, SubTransactionId mySubid,
+				   SubTransactionId parentSubid, void *arg)
+{
+	if (event == SUBXACT_EVENT_ABORT_SUB &&
+		mySubid == yb_amp_unlogged_build_subid)
+	{
+		NRelFileInfoInvalidate(unlogged_build_rel_info);
+		unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+	}
+}
+
 #if PG_MAJORVERSION_NUM >= 18
 /*
  * smgr_startreadv() -- PG18 issues all buffer reads through the AIO framework.
@@ -2578,6 +2598,7 @@ void
 smgr_init_yb_amp(void)
 {
 	RegisterXactCallback(AtEOXact_yb_amp, NULL);
+	RegisterSubXactCallback(AtEOSubXact_yb_amp, NULL);
 
 #if PG_MAJORVERSION_NUM < 18
 	/* PG18 auto-initialises the md smgr via smgrinit(). */

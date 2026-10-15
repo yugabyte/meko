@@ -167,7 +167,8 @@ The smgr implements the full `f_smgr` vtable — `open`, `close`, `create`,
 `exists`, `unlink`, `extend`, `zeroextend`, `prefetch`, `readv`, `startreadv`,
 `writev`, `writeback`, `nblocks`, `truncate`, `immedsync`, `registersync`,
 `maxcombine`, and `fd` — plus `smgr_init_yb_amp()`, which registers the
-end-of-transaction callback `AtEOXact_yb_amp` and calls `communicator_init()`.
+end-of-transaction callback `AtEOXact_yb_amp` and the end-of-subtransaction
+callback `AtEOSubXact_yb_amp`, and calls `communicator_init()`.
 
 ### Read path
 

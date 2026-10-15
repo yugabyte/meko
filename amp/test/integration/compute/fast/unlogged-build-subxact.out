@@ -1,0 +1,87 @@
+SET
+CREATE EXTENSION
+RESET
+CREATE TABLE
+INSERT 0 1000
+CREATE FUNCTION
+BEGIN
+SAVEPOINT
+psql:unlogged-build-subxact.sql:25: ERROR:  division by zero
+ROLLBACK
+CREATE INDEX
+COMMIT
+psql:unlogged-build-subxact.sql:39: NOTICE:  spgist build failed
+DO
+BEGIN
+SAVEPOINT
+psql:unlogged-build-subxact.sql:46: ERROR:  division by zero
+ROLLBACK
+COMMIT
+CREATE INDEX
+SELECT 1000
+BEGIN
+SAVEPOINT
+psql:unlogged-build-subxact.sql:55: ERROR:  division by zero
+ROLLBACK
+COMMIT
+BEGIN
+SAVEPOINT
+SAVEPOINT
+psql:unlogged-build-subxact.sql:63: ERROR:  division by zero
+ROLLBACK
+CREATE INDEX
+COMMIT
+BEGIN
+SAVEPOINT
+CREATE INDEX
+ROLLBACK
+CREATE INDEX
+COMMIT
+BEGIN
+SAVEPOINT
+CREATE INDEX
+COMMIT
+ count
+-------
+     0
+(1 row)
+
+ clear_buffer_cache
+--------------------
+
+(1 row)
+
+SET
+ count
+-------
+   100
+(1 row)
+
+ id
+----
+ 42
+(1 row)
+
+ count
+-------
+     2
+(1 row)
+
+ count
+-------
+    91
+(1 row)
+
+ count
+-------
+   143
+(1 row)
+
+ id
+-----
+ 500
+(1 row)
+
+RESET
+DROP TABLE
+DROP FUNCTION
