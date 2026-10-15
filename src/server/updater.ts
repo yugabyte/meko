@@ -346,7 +346,7 @@ export class Updater {
   private lastCheckedAt: number | null;
   private lastError: string | null = null;
   private applying = false;
-  /** markHealthy came while an update was installing; it runs if that update fails. */
+  /** markHealthy came while an update was being checked for or installed; it runs if that installs nothing. */
   private healthyDuringApply = false;
   private justUpdatedFrom: string | null = null;
   private checking: Promise<UpdateStatus> | null = null;
@@ -468,8 +468,10 @@ export class Updater {
       this.lastError = DISABLED;
       return Promise.resolve(this.status());
     }
+    if (this.applyRun) return this.applyRun;
+    // Installed and switched to: the restart is on its way.
     if (this.applying) return Promise.resolve(this.status());
-    this.applyRun ??= this.doApply().finally(() => {
+    this.applyRun = this.doApply().finally(() => {
       this.applyRun = null;
     });
     return this.applyRun;
@@ -482,11 +484,13 @@ export class Updater {
    */
   private async doApply(): Promise<UpdateStatus> {
     this.dropBadLatest();
+    // Shown as installing from the click on, through the check too.
+    this.applying = true;
+    this.changed();
     await this.check();
     const target = this.status().available ? this.latest : null;
-    if (!target) return this.status();
+    if (!target) return this.endApply();
 
-    this.applying = true;
     this.lastError = null;
     this.changed();
     const { paths } = this.deps;
@@ -542,14 +546,19 @@ export class Updater {
       this.deps.requestRestart();
       return this.status();
     } catch (e) {
-      this.applying = false;
       this.lastError = `Update to ${target} failed: ${(e as Error).message}`;
       this.deps.log(this.lastError);
-      if (this.healthyDuringApply) this.markHealthy();
-      return this.changed();
+      return this.endApply();
     } finally {
       rmSync(staging, { recursive: true, force: true });
     }
+  }
+
+  /** An apply that installed nothing: a markHealthy that came meanwhile runs now. */
+  private endApply(): UpdateStatus {
+    this.applying = false;
+    if (this.healthyDuringApply) this.markHealthy();
+    return this.changed();
   }
 
   /** Name of the running version's directory under app/ (what the rollback wrapper switches back to). */

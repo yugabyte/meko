@@ -96,7 +96,8 @@ sorts higher.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
    Tags are kept, so release notes and version numbering are unaffected.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
-   an "Update to vX" banner; one click installs it without interrupting sessions. Once a version has been healthy for 5 minutes, the
+   a "Version X is available" banner. Its **Update to the latest version** button checks again and
+   installs the newest release then (which may be newer than X), without interrupting sessions. Once a version has been healthy for 5 minutes, the
    server deletes every installed version under `~/.agent-k-local/app/` except the running one and
    one previous version (the one it updated from) to roll back to by hand.
 
