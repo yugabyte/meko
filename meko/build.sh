@@ -43,6 +43,7 @@ Targets (default: all):
   cli            Build the CLI app (meko)
   api            Build the API server (meko-api-server)
   provisioner    Build the provisioner operator (meko-provisioner)
+  datapack-metrics-consumer  Build the datapack metrics event consumer (meko-datapack-metrics-consumer)
 
 Options:
   -l, --lint     Run golangci-lint after building
@@ -69,7 +70,7 @@ while [[ $# -gt 0 ]]; do
     exit 0
     ;;
   -h | --help) usage ;;
-  cli | api | provisioner)
+  cli | api | provisioner | datapack-metrics-consumer)
     TARGETS+=("$1")
     shift
     ;;
@@ -78,7 +79,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ ${#TARGETS[@]} -eq 0 ]; then
-  TARGETS=(cli api provisioner)
+  TARGETS=(cli api provisioner datapack-metrics-consumer)
 fi
 
 # ── Build metadata ───────────────────────────────────────────────────────────
@@ -117,6 +118,12 @@ build_provisioner() {
   ok "meko-provisioner $(file_size "${BUILD_DIR}/meko-provisioner")"
 }
 
+build_datapack_metrics_consumer() {
+  info "Building event-consumers/datapack-metrics-consumer → meko-datapack-metrics-consumer"
+  (cd "${REPO_ROOT}/event-consumers/datapack-metrics-consumer" && go build "${GO_BUILD_FLAGS[@]}" -o "${BUILD_DIR}/meko-datapack-metrics-consumer" .)
+  ok "meko-datapack-metrics-consumer $(file_size "${BUILD_DIR}/meko-datapack-metrics-consumer")"
+}
+
 file_size() {
   local size
   size="$(stat --printf='%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null)"
@@ -135,6 +142,7 @@ for target in "${TARGETS[@]}"; do
   cli) build_cli ;;
   api) build_api ;;
   provisioner) build_provisioner ;;
+  datapack-metrics-consumer) build_datapack_metrics_consumer ;;
   esac
 done
 
@@ -151,6 +159,10 @@ if [ "${RUN_LINT}" = true ]; then
       api)
         info "Linting api_server"
         (cd "${REPO_ROOT}/api_server" && golangci-lint run ./...) && ok "api_server lint passed"
+        ;;
+      datapack-metrics-consumer)
+        info "Linting datapack-metrics-consumer"
+        (cd "${REPO_ROOT}/event-consumers/datapack-metrics-consumer" && golangci-lint run ./...) && ok "datapack-metrics-consumer lint passed"
         ;;
       provisioner)
         info "Linting meko-provisioner"

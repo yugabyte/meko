@@ -1,0 +1,66 @@
+name: Event consumers on YugabyteDB
+
+# The consumer's pull-request job runs against PostgreSQL, which cannot show what only YugabyteDB does:
+# transaction conflicts (SQLSTATE 40001) on the lease and offset updates, the row-comparison range read
+# on the range-sharded primary key of the partitioned events table, tablet splitting, and commit
+# timing under distributed transactions. This runs the same tests, including the end-to-end ones that
+# start the real binary, against a single-node YugabyteDB. It is nightly and on demand rather than per
+# pull request because a YugabyteDB start and its DDL make the suite take about ten minutes.
+#
+# Turn MEKO_EVENTS_EMIT on in a real environment only after this has been green.
+on:
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: YugabyteDB image to test against
+        default: yugabytedb/yugabyte:latest
+
+permissions:
+  contents: read
+
+jobs:
+  consumer_on_yugabytedb:
+    name: Consumer tests on YugabyteDB
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: meko/event-consumers/datapack-metrics-consumer
+    env:
+      # Pin this to the release the Meko database image is built from once the lane has a first green run.
+      YB_IMAGE: ${{ inputs.image || 'yugabytedb/yugabyte:latest' }}
+      EVENTS_TEST_DSN: postgresql://yugabyte:yugabyte@localhost:5433/yugabyte?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: meko/event-consumers/datapack-metrics-consumer/go.mod
+          cache-dependency-path: meko/event-consumers/datapack-metrics-consumer/go.sum
+
+      - name: Start YugabyteDB
+        working-directory: .
+        run: |
+          docker run -d --name yb -p 5433:5433 "$YB_IMAGE" bin/yugabyted start --background=false
+          for i in $(seq 1 60); do
+            if docker exec yb bash -c 'bin/ysqlsh -h "$(hostname)" -U yugabyte -c "select 1"' >/dev/null 2>&1; then
+              echo "YSQL is up after $((i * 5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "YugabyteDB did not come up" >&2
+          docker logs yb | tail -50
+          exit 1
+
+      # One package at a time: concurrent packages creating schemas conflict in YugabyteDB's catalog
+      # ("could not serialize access due to concurrent update") and fail for reasons that are not the code's.
+      - name: Test (go test -p 1 -race)
+        run: go test -p 1 -race -count=1 -timeout 35m ./...
+
+      - name: YugabyteDB log
+        if: failure()
+        working-directory: .
+        run: docker logs yb | tail -100

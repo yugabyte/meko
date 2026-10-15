@@ -18,6 +18,10 @@ name: Meko CI
 #                     that gate is evaluated on.
 #   meko_inference  — inference_gateway (Python): install with the dev extra, run
 #                     pytest. All upstream (LLM / MCP) calls are mocked — no creds.
+#   meko_datapack_metrics_consumer — event-consumers/datapack-metrics-consumer (Go): `go build`, `go vet`, golangci-lint
+#                     (non-blocking), then `go test -race` against a PostgreSQL service
+#                     container, so the DB-backed tests (leases, offsets, dead letters,
+#                     janitor) run rather than skip.
 #   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
 #                     (vitest), and the production build.
 #   meko_ycp        — ycp (the BYOC agent + dpmcp): `go build`, `go vet`,
@@ -73,6 +77,7 @@ jobs:
       meko_api_server: ${{ steps.filter.outputs.meko_api_server }}
       meko_migrations: ${{ steps.filter.outputs.meko_migrations }}
       meko_inference: ${{ steps.filter.outputs.meko_inference }}
+      meko_datapack_metrics_consumer: ${{ steps.filter.outputs.meko_datapack_metrics_consumer }}
       meko_ui: ${{ steps.filter.outputs.meko_ui }}
       meko_ycp: ${{ steps.filter.outputs.meko_ycp }}
       meko_foundation: ${{ steps.filter.outputs.meko_foundation }}
@@ -106,6 +111,9 @@ jobs:
               - 'meko/api_server/internal/db/migrations/**'
             meko_inference:
               - 'meko/inference_gateway/**'
+              - '.github/workflows/meko-pr-build.yml'
+            meko_datapack_metrics_consumer:
+              - 'meko/event-consumers/**'
               - '.github/workflows/meko-pr-build.yml'
             meko_ui:
               - 'meko/meko_ui/**'
@@ -352,6 +360,56 @@ jobs:
       - name: Tests
         run: pytest -q
 
+  meko_datapack_metrics_consumer:
+    name: Meko Datapack Metrics Consumer — build, vet & tests
+    needs: changes
+    if: needs.changes.outputs.meko_datapack_metrics_consumer == 'true' && needs.changes.outputs.meko_code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: meko/event-consumers/datapack-metrics-consumer
+    # The DB-backed tests (leases, offsets, dead letters, the janitor's catalog query) skip without a
+    # database, so give them one. Each creates and drops its own schema.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      EVENTS_TEST_DSN: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: meko/event-consumers/datapack-metrics-consumer/go.mod
+          cache-dependency-path: meko/event-consumers/datapack-metrics-consumer/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      # Non-blocking, like api_server's; keep the version in step with it.
+      - name: Lint (golangci-lint)
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.8.0
+          working-directory: meko/event-consumers/datapack-metrics-consumer
+
+      - name: Tests
+        run: go test -race -count=1 ./...
+
   meko_ui:
     name: Meko UI — typecheck, tests & build
     needs: changes
@@ -576,6 +634,7 @@ jobs:
       - meko_api_server
       - meko_migration_versions
       - meko_inference
+      - meko_datapack_metrics_consumer
       - meko_ui
       - meko_ycp
       - meko_foundation

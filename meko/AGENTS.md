@@ -45,6 +45,7 @@ Meko is a polyglot monorepo. Each top-level directory is an independently-built 
 | `cli_app/` | Go (cobra + bubbletea TUI) | The `meko` CLI binary — entry point for end users. Talks to `api_server`. |
 | `api_server/` | Go (net/http + Swagger) | REST API on `:25433`. Owns datapacks/agents/knowledge-bases, Cognito auth, Langfuse provisioning, S3 uploads, RAG indexing. Migrations are a **separate invocation** (`-migrate-only`), not part of serving — see Database below. |
 | `inference_gateway/` | Python 3.11+ (FastAPI + LangChain) | Playground chat backend on `:8088`. Wires LLM (OpenAI / Bedrock) → Meko MCP server for memory + conversations. |
+| `event-consumers/` | Go (database/sql + lib/pq) | Consumers of the durable event log `meko_system.events`: each subdirectory is one consumer with its own image. Today `datapack-metrics-consumer/` applies `search.completed` events to the datapack metrics tables (daily activity, token savings, free-tier audit): leases per shard, batch + offset in one transaction, dead letters. The MCP server only inserts events. See `event-consumers/README.md`. |
 | `meko-provisioner/` | Go (Kubebuilder operator) | K8s operator that reconciles `MekoUserAccount` CRs into per-tenant namespaces (MCP server, RAG worker, Langfuse). See `meko-provisioner/AGENTS.md` for kubebuilder rules. |
 | `meko_ui/` | TypeScript (React 19 + Vite + Tailwind + Drizzle) + Node Express server | Web UI; Express server in `meko_ui/server/` proxies to `api_server`. |
 | `system_agent/` | Python (LangChain + mem0 + Streamlit) | Standalone agent + Streamlit playground; uses pgvector + BM25 over YugabyteDB. |
@@ -85,6 +86,9 @@ Per-component dev loops:
 # Inference gateway (Python 3.11+)
 (cd inference_gateway && pip install -e ".[dev]" && python -m inference_gateway --llm-provider openai)
 
+# Datapack metrics consumer (needs the migrations that create meko_system.events; /healthz and /metrics on :8080)
+(cd event-consumers/datapack-metrics-consumer && YUGABYTEDB_URL="host=localhost port=5433 dbname=yugabyte user=yugabyte password=yugabyte" go run .)
+
 # UI (dev server with proxy to api_server)
 (cd meko_ui && npm install && npm run dev)        # full server
 (cd meko_ui && npm run dev:client)                # vite-only on :3010
@@ -107,6 +111,9 @@ Per-component dev loops:
 
 # inference_gateway — all upstream calls are mocked, no creds needed
 (cd inference_gateway && pytest)
+
+# event-consumers — DB-backed tests run when EVENTS_TEST_DSN points at a PostgreSQL-compatible server
+(cd event-consumers/datapack-metrics-consumer && go test ./...)
 
 # meko-provisioner — uses envtest (bundles its own apiserver + etcd)
 (cd meko-provisioner && make test)
