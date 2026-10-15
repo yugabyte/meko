@@ -38,7 +38,7 @@ pipeline {
                description: 'exact sha on BRANCH (empty = branch head)')
         string(name: 'IMAGE_VERSION', defaultValue: '',
                description: 'quay tag for all images; empty = custom-<short-sha> of the built commit')
-        string(name: 'IMAGES', defaultValue: 'api-server,ui,inference-gateway,provisioner,mcp-server,rag-agent,langfuse-web,langfuse-worker',
+        string(name: 'IMAGES', defaultValue: 'api-server,ui,inference-gateway,provisioner,datapack-metrics-consumer,mcp-server,rag-agent,langfuse-web,langfuse-worker',
                description: 'which images to build (CSV) — one AWS builder instance each, in parallel, except the langfuse pair which shares one. A tag already on quay is skipped and launches nothing.')
         string(name: 'MCP_REF', defaultValue: 'main',
                description: 'yugabyte/meko-mcp-server branch or sha — mcp-server')

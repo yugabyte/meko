@@ -9,7 +9,7 @@ set -euo pipefail
 
 VERSION="${VERSION:?VERSION is required}"
 QUAY_NS="${QUAY_NS:-quay.io/yugabyte}"
-ALL_IMAGES="api-server,ui,inference-gateway,provisioner,mcp-server,rag-agent,langfuse-web,langfuse-worker"
+ALL_IMAGES="api-server,ui,inference-gateway,provisioner,datapack-metrics-consumer,mcp-server,rag-agent,langfuse-web,langfuse-worker"
 IMAGES="${IMAGES:-$ALL_IMAGES}"
 PUSH="${PUSH:-1}"
 # Outside the workspace: this runs as root in the agent container, and a
@@ -47,7 +47,7 @@ log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
 source_of() {
   case "$1" in
-  api-server | ui | inference-gateway | provisioner) echo meko ;;
+  api-server | ui | inference-gateway | provisioner | datapack-metrics-consumer) echo meko ;;
   mcp-server) echo mcp ;;
   rag-agent) echo ybdb ;;
   langfuse-web | langfuse-worker) echo langfuse ;;
@@ -64,6 +64,7 @@ image_of() {
   ui) echo "$QUAY_NS/meko-ui" ;;
   inference-gateway) echo "$QUAY_NS/meko-inference-gateway" ;;
   provisioner) echo "$QUAY_NS/meko-provisioner" ;;
+  datapack-metrics-consumer) echo "$QUAY_NS/meko-datapack-metrics-consumer" ;;
   mcp-server) echo "$QUAY_NS/meko-mcp-server" ;;
   rag-agent) echo "$QUAY_NS/meko-rag-agent" ;;
   langfuse-web) echo "$QUAY_NS/meko-langfuse-web" ;;
@@ -161,6 +162,10 @@ component_cmds() {
     ;;
   inference-gateway)
     echo 'sudo docker build -t "$IMG" meko/inference_gateway'
+    push_line
+    ;;
+  datapack-metrics-consumer)
+    echo 'sudo docker build -t "$IMG" meko/event-consumers/datapack-metrics-consumer'
     push_line
     ;;
   mcp-server)

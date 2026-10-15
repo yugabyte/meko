@@ -13,6 +13,7 @@ amp's build (`jenkins/amp/` in yugabyte/meko-devops).
 | `ui` | `yugabyte/meko` | `meko/meko_ui/Dockerfile` | `meko-ui` |
 | `inference-gateway` | `yugabyte/meko` | `meko/inference_gateway/Dockerfile` | `meko-inference-gateway` |
 | `provisioner` | `yugabyte/meko` | `make docker-build` | `meko-provisioner` |
+| `datapack-metrics-consumer` | `yugabyte/meko` | `meko/event-consumers/datapack-metrics-consumer/Dockerfile` | `meko-datapack-metrics-consumer` |
 | `mcp-server` | `yugabyte/meko-mcp-server` | `Dockerfile` | `meko-mcp-server` |
 | `rag-agent` | `yugabyte/yugabyte-db` | `python/ai/rag_agent/Dockerfile` | `meko-rag-agent` |
 | `langfuse-web` | `yugabyte/meko-langfuse` | `web/Dockerfile` | `meko-langfuse-web` |
@@ -57,6 +58,16 @@ four today. Until a database release is published to `meko-yugabytedb`, the BYOC
 the database from `quay.io/yugabyte/yugabyte-itest` instead, so the robot needs read there
 too (check it with the claims described below); `ampbot`'s grant on that repository is not
 recorded here.
+
+A fifth, `meko-datapack-metrics-consumer`, is pulled once the chart enables the datapack
+metrics consumer (off by default): grant the read on it, and on any robot a customer uses, before
+that toggle is turned on in a BYOC release.
+
+**Before the PR that adds `datapack-metrics-consumer` to the default image list merges** (a merge gate, not
+a follow-up), create the repository `quay.io/yugabyte/meko-datapack-metrics-consumer` and give
+`yugabyte+mekobot` push on it. Without them the nightly build fails on that image. Also merge the handler
+(`search.completed`) first: an image without it holds every shard on the first event (see the consumer
+README), so deploy order is handler, then image, then the producer flag.
 
 To check what a credential is actually granted — Quay mints a token whose claims list the
 allowed actions, and `actions: []` means authenticated but not authorized:
