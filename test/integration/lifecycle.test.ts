@@ -73,6 +73,7 @@ function tip(dir: string): string {
 const { makeEnv, waitFor } = await import('../helpers.js');
 const { all, get: dbGet, run } = await import('../../src/server/db.js');
 const { SKIPPED_TEXT } = await import('../../src/server/learn.js');
+const { markGap, projectGaps } = await import('../../src/server/mekogaps.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 function status(over: Partial<PrStatus> = {}): PrStatus {
@@ -436,6 +437,64 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.sessions.action(s.id, 'learn');
     await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
     expect(env.meko.calls.find((c) => c.name === 'updateMemory')?.args.slice(0, 2)).toEqual(['m1', 'Gotcha (x.ts): The cache is per process.']);
+  });
+
+  it("teaches Meko the session's questions it found the answers to, and dismisses those Meko already knew", async () => {
+    fakeFiles({ mod: '' });
+    const s = await inReview('Questions');
+    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+    const projectId = env.core.sessions.row(s.id).project_id;
+    run(env.core.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+      hook_token, desired, status, stage, created_at) VALUES ('other', ?, 'other', 'Other', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`, projectId);
+    const search = (sessionId: string, id: string, query: string, at: number) =>
+      run(env.core.db, `INSERT INTO meko_calls(session_id, tool_use_id, tool, kind, at, input_chars, outcome, results, query, query_key, quality)
+        VALUES (?, ?, 'context_search', 'lookup', ?, 40, 'empty', 0, ?, ?, 'empty')`, sessionId, id, at, query, query.toLowerCase());
+    // Latest first, as offered: 1 and 2 are one question in two wordings, 3 and 4 are known to Meko.
+    search(s.id, 'q1', 'Poll queue order', 4000);
+    search(s.id, 'q2', 'Which order do polls run in', 3000);
+    search(s.id, 'q3', 'Why migrations are append-only', 2000);
+    search(s.id, 'q4', 'Can a shipped migration change', 1000);
+    // Another session's question, AgentK's search at start for this one, and one already dismissed: not offered.
+    search('other', 'q5', 'Release tag retention', 5000);
+    run(env.core.db, `INSERT OR REPLACE INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES (?, 4500, 'empty', 0, 0, 900, 'do it', 'do it', 'empty')`, s.id);
+    search(s.id, 'q6', 'Old question', 500);
+    markGap(env.core.db, projectId, 'old question', { kind: 'dismiss' });
+    fakeFiles({
+      'learn-facts': JSON.stringify({ facts: [
+        { kind: 'decision', component: 'lifecycle.ts', text: 'Polls for a session run one at a time.', answers: [1, 2] },
+        { kind: 'gotcha', component: 'db.ts', text: 'Migrations are append-only.', answers: [3, 4] },
+      ] }),
+      'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"skip","id":"m2"}]}',
+    });
+    Object.assign(env.meko, {
+      similar: async (query: string) => {
+        // Someone dismisses question 4 on the page while the step runs: theirs stands.
+        markGap(env.core.db, projectId, 'can a shipped migration change', { kind: 'dismiss' });
+        return query.startsWith('Gotcha') ? [{ id: 'm2', text: 'Never edit a shipped migration.', agentId: 'a' }] : [];
+      },
+    });
+    await env.core.sessions.action(s.id, 'learn');
+    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+
+    expect(modLearn()[0].job.prompt).toContain(
+      "Meko couldn't answer these searches from this session:\n1. Poll queue order\n2. Which order do polls run in\n3. Why migrations are append-only\n4. Can a shipped migration change\nFor each",
+    );
+    const added = env.meko.calls.filter((c) => c.name === 'addMemory');
+    expect(added.map((c) => [c.args[0], (c.args[4] as { questions?: string[] }).questions])).toEqual([
+      ['Decision (lifecycle.ts): Polls for a session run one at a time.', ['Poll queue order', 'Which order do polls run in']],
+    ]);
+    const gaps = projectGaps(env.core.db, projectId);
+    const of = (key: string) => gaps.find((g) => g.key === key);
+    const bySession = { id: s.id, name: 'Questions', archived: false };
+    for (const key of ['poll queue order', 'which order do polls run in']) {
+      expect(of(key)).toMatchObject({ state: 'taught', taught: { text: 'Decision (lifecycle.ts): Polls for a session run one at a time.', datapack: 'team/demo', session: bySession } });
+    }
+    expect(of('why migrations are append-only')).toMatchObject({ state: 'dismissed', dismissal: { session: bySession, memory: 'Never edit a shipped migration.' } });
+    expect(of('can a shipped migration change')).toMatchObject({ state: 'dismissed', dismissal: { session: null, memory: null } });
+    expect(of('release tag retention')?.state).toBe('open');
+    expect(of('do it')?.state).toBe('open');
+    expect(dbGet(env.core.db, 'SELECT questions, taught, dismissed FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ questions: 4, taught: 2, dismissed: 1 });
+    expect(lastEvent(s.id, 'learned')).toBe("Saved 1 memory and corrected 0 in team/demo; taught Meko 2 questions it couldn't answer and dismissed 1 question it knew already");
   });
 
   it('tells a later learn step what earlier ones wrote or found known, in the datapack it writes to', async () => {

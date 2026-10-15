@@ -547,6 +547,18 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (project_id, query_key)
   );
   `,
+  // 35: the learn step addresses What Meko doesn't know (learn.ts). meko_gap_marks: the session
+  // whose learn step taught or dismissed a question (NULL: a person did), and for a dismissal by
+  // one, the saved memory that already said the answer. meko_learns: the questions a step offered
+  // the fork, and how many it marked taught or dismissed.
+  `
+  ALTER TABLE meko_gap_marks ADD COLUMN taught_session TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN dismissed_session TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN dismissed_memory TEXT;
+  ALTER TABLE meko_learns ADD COLUMN questions INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE meko_learns ADD COLUMN taught INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE meko_learns ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDb(path: string): Db {

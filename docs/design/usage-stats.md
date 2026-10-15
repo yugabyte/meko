@@ -55,7 +55,9 @@ reports.
   the day they were made, seeds and searches at start on the day the search ran. Added since
   (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
   Meko (their input, characters ÷ 4), also by tool; [learn steps](recall-and-learn.md#the-learn-step) by trigger
-  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, their Meko searches,
+  (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, the questions
+  on What Meko doesn't know they marked taught and dismissed (`taught`, `dismissed`, optional, added later; how many they
+  were offered isn't sent, since the 7-day report with every count at its largest has no room left in 64 KB), their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
   typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
   recorded in `MekoClient.call`: searches at start, designs, the learn step's) with
@@ -63,9 +65,9 @@ reports.
   plugin's transcript captures AgentK ran (`meko_capture_runs`: runs, failures, time). What a
   capture sends isn't counted: AgentK can't see it. Each goes on the day it began, and is left out
   when there was none. Also optional: searches that found nothing relevant (`weak`), and the
-  questions on [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know) dismissed (and
+  questions on [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know) people dismissed (and
   not restored) and taught, each on the day of its latest dismissal or teach (asking again undoes
-  neither: it counts what users did), left out when there were none.
+  neither: it counts what users did; a learn step's marks are in its counts instead), left out when there were none.
 
 Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask AgentK), designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and

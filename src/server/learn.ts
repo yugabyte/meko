@@ -5,6 +5,7 @@ import { all, get, run } from './db.js';
 import type { ModReply } from './hooks.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, mekoTag, withMekoScope, type SimilarMemory } from './meko.js';
+import { markGap, projectGaps, sessionGaps, type GapAction } from './mekogaps.js';
 import { LEARN_AGENT } from './mekousage.js';
 import { claudePath } from './paths.js';
 import { HttpError } from './projects.js';
@@ -40,14 +41,25 @@ const KINDS: Record<string, string> = {
  * What the fork is asked: the facts this session learned, as JSON, leaving out what it already
  * saved itself and what earlier learn steps covered (`covered`; a fork leaves nothing in the
  * transcript, so it can't see them). It states the saving rule in full: a session launched before
- * the rule was in the system prompt doesn't have it.
+ * the rule was in the system prompt doesn't have it. With `questions` (the session's searches
+ * Meko couldn't answer, `sessionGaps`), each fact also names the ones it answers, by number.
  */
-export function extractPrompt(covered: string[]): string {
-  return `Don't call any tools. List what this session learned that is worth keeping for the team working on this product. ${SAVING_RULE} Each fact must make sense on its own to a teammate who never saw this session. Leave out what you already saved to Meko yourself in this session (memory_add), unless the session has since shown it wrong.${coveredText(covered)}
+export function extractPrompt(covered: string[], questions: string[] = []): string {
+  const facts = questions.length
+    ? '{"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact","answers":[1]}]}'
+    : '{"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact"}]}';
+  return `Don't call any tools. List what this session learned that is worth keeping for the team working on this product. ${SAVING_RULE} Each fact must make sense on its own to a teammate who never saw this session. Leave out what you already saved to Meko yourself in this session (memory_add), unless the session has since shown it wrong.${coveredText(covered)}${questionsText(questions)}
 
 Reply with JSON only, no other text:
-{"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact"}]}
+${facts}
 Reply {"facts":[]} when there is nothing new worth saving.`;
+}
+
+/** The questions part of the fork's prompt: the session's searches Meko couldn't answer, numbered. Empty when there are none. */
+function questionsText(questions: string[]): string {
+  if (!questions.length) return '';
+  const list = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  return `\n\nMeko couldn't answer these searches from this session:\n${list}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: AgentK checks it against what Meko has. Leave a question out when the session didn't find the answer, or when the only answer is about this task or this machine. Don't guess.`;
 }
 
 /**
@@ -67,11 +79,13 @@ export interface Fact {
   kind: string;
   component: string;
   text: string;
+  /** The questions it answers, by their number in the prompt (from 1). */
+  answers: number[];
 }
 
 export interface Decision {
   action: 'add' | 'skip' | 'update';
-  /** For an update: the memory it corrects. */
+  /** For an update: the memory it corrects; for a skip: the one that already says it. */
   id: string | null;
   /** For an update: the corrected text (the fact's own when left out). */
   text: string | null;
@@ -92,8 +106,11 @@ export function firstJson(text: string): Record<string, unknown> | null {
   return null;
 }
 
-/** The facts in the fork's reply, or null when it isn't the JSON asked for. Facts without text are dropped. */
-export function parseFacts(text: string): Fact[] | null {
+/**
+ * The facts in the fork's reply, or null when it isn't the JSON asked for. Facts without text are
+ * dropped, and so are answers that aren't the number of one of the `questions` it was offered.
+ */
+export function parseFacts(text: string, questions = 0): Fact[] | null {
   const facts = firstJson(text)?.facts;
   if (!Array.isArray(facts)) return null;
   const out: Fact[] = [];
@@ -104,6 +121,9 @@ export function parseFacts(text: string): Fact[] | null {
       kind: typeof f.kind === 'string' && Object.hasOwn(KINDS, f.kind) ? f.kind : 'how-it-works',
       component: typeof f.component === 'string' ? f.component.trim().slice(0, 200) : '',
       text: t.slice(0, FACT_CHARS),
+      answers: Array.isArray(f.answers)
+        ? [...new Set((f.answers as unknown[]).filter((n): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= questions))]
+        : [],
     });
   }
   return out;
@@ -131,26 +151,26 @@ function namesPath(text: string, p: string): boolean {
 }
 
 /** The text saved for a fact: its kind and component first, as the saving rule asks for. */
-export function memoryText(f: Fact): string {
+export function memoryText(f: Pick<Fact, 'kind' | 'component' | 'text'>): string {
   const label = Object.hasOwn(KINDS, f.kind) ? KINDS[f.kind] : 'How it works';
   if (f.text.toLowerCase().startsWith(label.toLowerCase())) return f.text;
   return `${label}${f.component ? ` (${f.component})` : ''}: ${f.text}`;
 }
 
 /** What the small model is asked: for each fact, add it, skip it, or correct a memory with it. */
-export function dedupPrompt(facts: Fact[], similar: SimilarMemory[][]): string {
+export function dedupPrompt(facts: Pick<Fact, 'kind' | 'component' | 'text'>[], similar: SimilarMemory[][]): string {
   const list = facts.map((f, i) => {
     const near = similar[i] ?? [];
     const mems = near.length ? near.map((m) => `   - [${m.id}] ${m.text.replace(/\s+/g, ' ').slice(0, 600)}`).join('\n') : '   (none)';
     return `${i + 1}. ${memoryText(f)}\n   Saved memories most like it:\n${mems}`;
   }).join('\n\n');
   return `A coding session learned the facts below. Each is followed by the memories already saved that are most like it. For each fact, decide:
-- "skip" if one of those memories already says it (the same point, even in other words)
+- "skip" if one of those memories already says it (the same point, even in other words): give that memory's id
 - "update" if one of those memories says something this fact shows is wrong or out of date: give that memory's id and its corrected text
 - "add" otherwise
 
 Reply with JSON only, no other text:
-{"decisions":[{"n":1,"action":"add|skip|update","id":"memory id, for update","text":"corrected text, for update"}]}
+{"decisions":[{"n":1,"action":"add|skip|update","id":"memory id, for update or skip","text":"corrected text, for update"}]}
 
 ${list}`;
 }
@@ -173,9 +193,18 @@ export function parseDecisions(text: string): Map<number, Decision> | null {
   return out;
 }
 
-/** "Saved 3 memories and corrected 1 in team/demo", the timeline's line for a learn step. */
-export function learnSummary(saves: number, updates: number, datapack: string): string {
-  return `Saved ${saves} ${saves === 1 ? 'memory' : 'memories'} and corrected ${updates} in ${datapack}`;
+/**
+ * "Saved 3 memories and corrected 1 in team/demo", the timeline's line for a learn step, then what
+ * it did with the session's questions Meko couldn't answer, when it did anything.
+ */
+export function learnSummary(saves: number, updates: number, datapack: string, taught = 0, dismissed = 0): string {
+  const base = `Saved ${saves} ${saves === 1 ? 'memory' : 'memories'} and corrected ${updates} in ${datapack}`;
+  const q = (n: number) => `${n} ${n === 1 ? 'question' : 'questions'}`;
+  const parts = [
+    ...(taught ? [`taught Meko ${q(taught)} it couldn't answer`] : []),
+    ...(dismissed ? [`dismissed ${q(dismissed)} it knew already`] : []),
+  ];
+  return parts.length ? `${base}; ${parts.join(' and ')}` : base;
 }
 
 /** Token counts as a model call reports them (the API's names). */
@@ -206,9 +235,14 @@ interface Job {
   step: 'extract' | 'search' | 'check' | 'save';
   facts: Fact[];
   similar: SimilarMemory[][];
+  /** The session's questions Meko couldn't answer, as offered to the fork (its numbers are their places, from 1). */
+  questions: { key: string; query: string }[];
   saves: number;
   updates: number;
   skips: number;
+  /** Questions marked taught (a fact answering them was written) or dismissed (Meko already said it). */
+  taught: number;
+  dismissed: number;
   /** Fails the step when its time is up, wherever it is (writes included). */
   timer: NodeJS.Timeout;
 }
@@ -380,13 +414,15 @@ export class Learner {
   private startMod(row: SessionRow, trigger: LearnTrigger, dp: DatapackRef): void {
     const id = randomUUID();
     this.insert(row.id, id, trigger, 'mod', null);
+    const questions = sessionGaps(this.db, row.project_id, row.id);
     const timer = setTimeout(() => {
       const job = this.jobs.get(id);
       if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
     }, this.timeoutMs);
     timer.unref?.();
-    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], saves: 0, updates: 0, skips: 0, timer });
-    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id)) });
+    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions, saves: 0, updates: 0, skips: 0, taught: 0, dismissed: 0, timer });
+    run(this.db, 'UPDATE meko_learns SET questions = ? WHERE id = ?', questions.length, id);
+    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions.map((q) => q.query)) });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
   }
 
@@ -416,7 +452,7 @@ export class Learner {
 
   private facts(row: SessionRow, job: Job, body: Record<string, unknown>): void {
     if (typeof body.text !== 'string') return this.fail(job, 'extract', noReply(body.reason, 'look back over the session'));
-    const parsed = parseFacts(body.text);
+    const parsed = parseFacts(body.text, job.questions.length);
     if (!parsed) return this.fail(job, 'extract', "Claude didn't list them in a form AgentK could read");
     const local = this.localPaths(row);
     job.facts = parsed.filter((f) => !machineSpecific(`${f.component} ${f.text}`, local));
@@ -464,17 +500,24 @@ export class Learner {
           try {
             // What Meko now holds for the fact: a correction's own text, else the fact's.
             let written = memoryText(f);
+            const questions = f.answers.map((n) => job.questions[n - 1]).filter(Boolean);
             if (d.action === 'skip') {
               job.skips++;
+              // Meko already says it: the questions it answers are duplicates of what Meko has.
+              const known = (job.similar[i] ?? []).find((m) => m.id === d.id);
+              this.markQuestions(row, job, questions, { kind: 'dismiss', session: row.id, memory: known?.text ?? null });
             } else if (target) {
               written = d.text && !machineSpecific(d.text, local) ? d.text : written;
               await this.core.meko.updateMemory(target.id, written, job.datapack.id, target.agentId, conv);
               job.updates++;
+              this.markQuestions(row, job, questions, { kind: 'teach', text: written, datapack: job.datapack.name, session: row.id });
             } else {
               await this.core.meko.addMemory(written, job.datapack.id, agent, conv, {
                 source: 'agent-k-local', kind: 'learned', fact: f.kind, component: f.component || null, session: row.id, learn: job.id,
+                ...(questions.length ? { questions: questions.map((q) => q.query) } : {}),
               });
               job.saves++;
+              this.markQuestions(row, job, questions, { kind: 'teach', text: written, datapack: job.datapack.name, session: row.id });
             }
             this.cover(job, written);
           } catch (e) {
@@ -487,6 +530,23 @@ export class Learner {
       return;
     }
     if (this.jobs.has(job.id)) this.finish(job);
+  }
+
+  /**
+   * Marks the questions a fact answers taught or dismissed, each only while it's still open: one a
+   * person taught or dismissed while the step ran keeps their mark, and one asked again and answered
+   * since is off the list.
+   */
+  private markQuestions(row: SessionRow, job: Job, questions: { key: string }[], action: GapAction & { kind: 'teach' | 'dismiss' }): void {
+    if (!questions.length) return;
+    const open = new Set(projectGaps(this.db, row.project_id).filter((g) => g.state === 'open').map((g) => g.key));
+    for (const q of questions) {
+      if (!open.has(q.key)) continue;
+      markGap(this.db, row.project_id, q.key, action);
+      open.delete(q.key);
+      if (action.kind === 'teach') job.taught++;
+      else job.dismissed++;
+    }
   }
 
   /** Records a learn model call's tokens as one of the session's responses (so usage shows them too). */
@@ -508,23 +568,25 @@ export class Learner {
     const c = get<{ lookups: number; errors: number; sent: number }>(this.db,
       `SELECT COALESCE(SUM(tool = 'context_search'), 0) AS lookups, COALESCE(SUM(ok = 0), 0) AS errors, COALESCE(SUM(input_chars), 0) AS sent
        FROM meko_agentk_calls WHERE learn_id = ?`, job.id);
-    run(this.db, `UPDATE meko_learns SET ended_at = ?, outcome = ?, failed_step = ?, saves = ?, updates = ?, skips = ?, lookups = ?, errors = ?, sent_chars = ?
-                  WHERE id = ? AND ended_at IS NULL`,
-      Date.now(), outcome, failedStep, job.saves, job.updates, job.skips, c?.lookups ?? 0, c?.errors ?? 0, c?.sent ?? 0, job.id);
+    run(this.db, `UPDATE meko_learns SET ended_at = ?, outcome = ?, failed_step = ?, saves = ?, updates = ?, skips = ?, taught = ?, dismissed = ?,
+                  lookups = ?, errors = ?, sent_chars = ? WHERE id = ? AND ended_at IS NULL`,
+      Date.now(), outcome, failedStep, job.saves, job.updates, job.skips, job.taught, job.dismissed, c?.lookups ?? 0, c?.errors ?? 0, c?.sent ?? 0, job.id);
     this.core.changed();
     this.core.lifecycle.afterLearn(job.sessionId);
   }
 
   private finish(job: Job): void {
     this.close(job, 'done', null);
-    const text = job.facts.length ? learnSummary(job.saves, job.updates, job.datapack.name) : `Nothing new to save to ${job.datapack.name}`;
-    this.core.sessions.event(job.sessionId, 'learned', text, { saves: job.saves, updates: job.updates, skips: job.skips, candidates: job.facts.length });
+    const text = job.facts.length ? learnSummary(job.saves, job.updates, job.datapack.name, job.taught, job.dismissed) : `Nothing new to save to ${job.datapack.name}`;
+    this.core.sessions.event(job.sessionId, 'learned', text,
+      { saves: job.saves, updates: job.updates, skips: job.skips, candidates: job.facts.length, taught: job.taught, dismissed: job.dismissed });
     this.core.sessions.mod.queueToast(job.sessionId, `${text}.`);
   }
 
   private fail(job: Job, step: string, reason: string): void {
     this.close(job, 'failed', step);
-    const saved = job.saves + job.updates ? ` (${learnSummary(job.saves, job.updates, job.datapack.name).replace(/^S/, 's')} first)` : '';
+    const saved = job.saves + job.updates + job.dismissed
+      ? ` (${learnSummary(job.saves, job.updates, job.datapack.name, job.taught, job.dismissed).replace(/^S/, 's')} first)` : '';
     // Save learnings can be tried again; at Merge & Close or Discard the session is closing.
     const again = job.trigger === 'manual' ? ' Try Save learnings again.' : '';
     const text = `AgentK couldn't save what this session learned: ${reason}${saved}.${again}`;
@@ -581,8 +643,8 @@ export class Learner {
       clearTimeout(job.timer);
       this.jobs.delete(open.id);
     }
-    run(this.db, "UPDATE meko_learns SET ended_at = ?, outcome = 'interrupted', saves = ?, updates = ?, skips = ? WHERE id = ?",
-      Date.now(), job?.saves ?? 0, job?.updates ?? 0, job?.skips ?? 0, open.id);
+    run(this.db, "UPDATE meko_learns SET ended_at = ?, outcome = 'interrupted', saves = ?, updates = ?, skips = ?, taught = ?, dismissed = ? WHERE id = ?",
+      Date.now(), job?.saves ?? 0, job?.updates ?? 0, job?.skips ?? 0, job?.taught ?? 0, job?.dismissed ?? 0, open.id);
     this.core.lifecycle.afterLearn(sessionId);
   }
 
