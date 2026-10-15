@@ -401,11 +401,12 @@ func TestPendingUploadRepo_Abandon(t *testing.T) {
 			defer db.Close()
 
 			mock.ExpectExec(`(?s)UPDATE meko_system\.pending_uploads.*`+
-				`state IN \('AWAITING_UPLOAD', 'IN_PROGRESS', 'AWAITING_DISCOVERY'\)`).
-				WithArgs("u/dp/h/a.pdf", "dp-1", "not a PDF").
+				`state IN \('AWAITING_UPLOAD', 'IN_PROGRESS', 'AWAITING_DISCOVERY'\).*`+
+				`expires_at - \$4::BIGINT \* INTERVAL '1 microsecond' <= NOW\(\)`).
+				WithArgs("u/dp/h/a.pdf", "dp-1", "not a PDF", int64(600_000_000)).
 				WillReturnResult(sqlmock.NewResult(0, tc.affected))
 
-			changed, err := NewPendingUploadRepo(db).Abandon("dp-1", "u/dp/h/a.pdf", "not a PDF")
+			changed, err := NewPendingUploadRepo(db).Abandon("dp-1", "u/dp/h/a.pdf", "not a PDF", 10*time.Minute)
 			if err != nil {
 				t.Fatalf("Abandon: %v", err)
 			}

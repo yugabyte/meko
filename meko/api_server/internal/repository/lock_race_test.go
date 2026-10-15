@@ -157,6 +157,33 @@ func TestRagRepo_InsertDocument_SecondCallerSeesFirstCallersInsert(t *testing.T)
 
 // The wait for a lock another transaction holds gives up when ctx ends, and
 // the critical section never runs.
+// A deleted datapack has no row to lock. Callers tell that apart from a
+// failure worth retrying: the pending-upload watcher abandons such a row.
+func TestKnowledgeBaseRepo_WithDatapackRowLock_ReportsADeletedDatapack(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT datapack_id FROM meko_system\.datapacks WHERE datapack_id = \$1::UUID FOR NO KEY UPDATE`).
+		WithArgs("dp-1").
+		WillReturnRows(sqlmock.NewRows([]string{"datapack_id"}))
+	mock.ExpectRollback()
+
+	err = NewKnowledgeBaseRepo(db, db).WithDatapackRowLock(context.Background(), "dp-1", func() error {
+		t.Fatal("critical section ran without the lock")
+		return nil
+	})
+	if !errors.Is(err, ErrDatapackNotFound) {
+		t.Fatalf("err = %v, want ErrDatapackNotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestKnowledgeBaseRepo_WithDatapackRowLock_GivesUpWaitingWhenCtxEnds(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -250,6 +277,67 @@ func TestRagRepo_WithSourceRowLock_GivesUpWaitingWhenCtxEnds(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for mock.ExpectationsWereMet() != nil && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// The user lock behaves as the datapack lock does: the wait gives up when ctx
+// ends, and once taken the lock is held until the critical section returns.
+func TestKnowledgeBaseRepo_WithUserRowLock_GivesUpWaitingWhenCtxEnds(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT user_id FROM meko_system\.users WHERE user_id = \$1::UUID FOR NO KEY UPDATE`).
+		WithArgs("u-1").
+		WillDelayFor(time.Second).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow("u-1"))
+	mock.ExpectRollback()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = NewKnowledgeBaseRepo(db, db).WithUserRowLock(ctx, "u-1", func() error {
+		t.Fatal("critical section ran without the lock")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("WithUserRowLock succeeded; want the wait to give up")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("waited %v for a lock whose ctx ended after 50ms", elapsed)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestKnowledgeBaseRepo_WithUserRowLock_HoldsTheLockAfterCtxEnds(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT user_id FROM meko_system\.users WHERE user_id = \$1::UUID FOR NO KEY UPDATE`).
+		WithArgs("u-1").
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow("u-1"))
+	mock.ExpectCommit()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err = NewKnowledgeBaseRepo(db, db).WithUserRowLock(ctx, "u-1", func() error {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithUserRowLock: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

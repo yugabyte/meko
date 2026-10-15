@@ -35,21 +35,24 @@ type serviceRegistry struct {
 	kbRepo *repository.KnowledgeBaseRepo
 	// freeTierRepo: read by AccountUsageService for /auth/me/usage's
 	// num_conversations counter. Written by meko-mcp-server's quota gate.
-	freeTierRepo        *repository.FreeTierUsageRepo
-	accountUsageSvc     *service.AccountUsageService
-	langfuseSvc         *service.LangfuseService
-	agentSvc            *service.AgentService
-	kbSvc               *service.KnowledgeBaseService
-	ragSvc              *service.RagService
-	memoriesSvc         *service.MemoriesService
-	promoteMemoriesSvc  *service.PromoteMemoriesService
-	s3Svc               *service.S3Service
-	sharingRepo         *repository.SharingRepo
-	passwordResetRepo   *repository.PasswordResetRepo
-	sharingSvc          *service.SharingService
-	shareLinkSvc        *service.ShareLinkService
-	setupMailer         service.PasswordSetupEmailSender
-	feedbackRepo        *repository.FeedbackRepo
+	freeTierRepo       *repository.FreeTierUsageRepo
+	accountUsageSvc    *service.AccountUsageService
+	langfuseSvc        *service.LangfuseService
+	agentSvc           *service.AgentService
+	kbSvc              *service.KnowledgeBaseService
+	ragSvc             *service.RagService
+	memoriesSvc        *service.MemoriesService
+	promoteMemoriesSvc *service.PromoteMemoriesService
+	s3Svc              *service.S3Service
+	sharingRepo        *repository.SharingRepo
+	passwordResetRepo  *repository.PasswordResetRepo
+	sharingSvc         *service.SharingService
+	shareLinkSvc       *service.ShareLinkService
+	setupMailer        service.PasswordSetupEmailSender
+	feedbackRepo       *repository.FeedbackRepo
+	pendingUploadSvc   *service.PendingUploadService
+	// srcResolver: shared with pendingUploadSvc's watcher, so a document
+	// registered by either path lands under the same dist_rag source.
 	srcResolver         *service.SourceResolver
 	mcpPATRepo          *repository.MCPPATRepo
 	mcpPATAuditRepo     *repository.MCPPATAuditRepo
@@ -159,10 +162,12 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		}
 	}
 
-	// One SourceResolver for every path that registers KB documents, so they
-	// all resolve sources the same way. The datapack row lock it takes is
-	// what serializes them.
+	// One SourceResolver shared by the KB handlers and the presigned-upload
+	// watcher, so every path that registers KB documents resolves sources the
+	// same way. The datapack row lock it takes is what serializes them.
 	srcResolver := service.NewSourceResolver(kbSvc, ragSvc)
+	pendingUploadSvc := service.NewPendingUploadService(
+		repository.NewPendingUploadRepo(cfg.SystemDB), s3Svc, ragSvc, kbSvc, srcResolver)
 
 	langfuseSvc := service.NewLangfuseService(service.LangfuseConfig{
 		SystemDB:    cfg.SystemDB,
@@ -386,6 +391,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		shareLinkSvc:          service.NewShareLinkService(repository.NewShareLinkRepo(cfg.SystemDB), sharingSvc),
 		setupMailer:           passwordSetupEmailer,
 		feedbackRepo:          feedbackRepo,
+		pendingUploadSvc:      pendingUploadSvc,
 		srcResolver:           srcResolver,
 		mcpPATRepo:            mcpPATRepo,
 		mcpPATAuditRepo:       mcpPATAuditRepo,
@@ -1326,7 +1332,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	named.POST("/agents", agentH.Link)
 	named.DELETE("/agents/:agent_id", agentH.Unlink)
 
-	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.ragSvc, reg.s3Svc, reg.srcResolver)
+	kbH := handlers.NewKnowledgeBaseHandler(reg.kbSvc, reg.ragSvc, reg.s3Svc, reg.pendingUploadSvc, reg.srcResolver)
 
 	// Read-only datapack routes: any member with datapack access (owner or accepted share),
 	// not the ownership-only group below.
@@ -1393,12 +1399,19 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 	g.DELETE("/datapacks/:datapack_id/knowledge-bases/:rag_source_id", kbH.Delete, kbOwnerOrMaintainer...)
-	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-url", kbH.RequestUploadURL, kbOwnerOrMaintainer...)
+	// On dpDirect (not g) so a PAT works here too: the pending_uploads watcher
+	// registers every presigned upload itself, which is what makes this route
+	// usable from an MCP agent that never calls back.
+	dpDirect.POST("/datapacks/:datapack_id/knowledge-bases/upload-url", kbH.RequestUploadURL,
+		auth.RequireScope(auth.ScopeWrite),
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
 	g.GET("/datapacks/:datapack_id/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
-	// Single-document status: PAT-reachable so a programmatic caller can poll a
-	// single file by its S3 key.
+	// Single-document status: PAT-reachable so a caller can poll a single file
+	// (via the status_url handed back at presign time).
 	dpDirect.GET("/datapacks/:datapack_id/knowledge-bases/document-status", kbH.KBDocumentStatus,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),

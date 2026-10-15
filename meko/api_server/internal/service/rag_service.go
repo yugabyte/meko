@@ -208,6 +208,6 @@ func (s *RagService) GetPipelineStatus(sourceURIs []string) (*repository.Pipelin
 
 func (s *RagService) GetDocumentStatus(
 	sourceURIs []string, documentName string,
-) (*repository.PipelineDetail, error) {
+) (*repository.DocumentProgress, error) {
 	return s.repo.GetDocumentStatus(sourceURIs, documentName)
 }

@@ -128,13 +128,22 @@ export async function uploadFileToS3(
 function s3ErrorMessage(xhr: XMLHttpRequest): string {
   const code = /<Code>([^<]+)<\/Code>/.exec(xhr.responseText)?.[1] ?? "";
   switch (code) {
+    // The per-file and storage limits are checked when the upload URL is
+    // issued. The signed policy then holds the body to exactly the size and
+    // SHA-256 the browser computed, so these mean the bytes sent aren't the
+    // ones that were measured — usually the file changed on disk in between.
     case "EntityTooLarge":
-      // Could be the per-file cap or the plan's remaining storage quota —
-      // the signed policy uses whichever is lower, so this one code covers
-      // both and there's no way to tell which from the S3 response alone.
-      return "File is larger than your plan allows — check your per-file limit and remaining storage.";
     case "EntityTooSmall":
-      return "File is empty.";
+      return (
+        "The file changed while it was being uploaded (its size no longer matches); " +
+        "please try again."
+      );
+    case "XAmzContentChecksumMismatch": // MinIO
+    case "BadDigest": // AWS S3
+      return (
+        "The file changed while it was being uploaded (its contents no longer match); " +
+        "please try again."
+      );
     case "AccessDenied":
       // The signature/policy was rejected — a stale (>5 min) authorization is
       // by far the most likely cause, and retrying gets a fresh one.

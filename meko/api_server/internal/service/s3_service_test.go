@@ -14,7 +14,7 @@ import (
 // TestReadObjectHead_EmptyObject_NoErr pins the fix for a zero-byte object: a
 // Range GET against it is unsatisfiable and S3/MinIO answer 416 InvalidRange,
 // which must surface as an empty read (nil, nil), not an error -- otherwise
-// verifyUploadedBytes' own "this file is empty" rejection is unreachable and
+// VerifyUploadedBytes' own "this file is empty" rejection is unreachable and
 // ConfirmUpload returns a 500 instead of the intended 400 for an empty upload.
 func TestReadObjectHead_EmptyObject_NoErr(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

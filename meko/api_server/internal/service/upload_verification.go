@@ -209,6 +209,10 @@ const MIMESniffLen = 3072
 // and it's a video" is the caller's problem and a 400, while "we couldn't
 // look" is ours and a 500, and treating the second as the first would report a
 // transient S3 blip as a spoofed file.
+//
+// The pending-upload watcher turns on the same distinction, where the stakes are
+// higher than a status code: rejected means delete the object, while
+// couldn't-look means try again next pass.
 type ContentRejectedError struct{ Reason string }
 
 func (e *ContentRejectedError) Error() string { return e.Reason }

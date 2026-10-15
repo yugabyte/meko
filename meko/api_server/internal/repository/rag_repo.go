@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -340,6 +341,25 @@ type PipelineStatus struct {
 	Details   []PipelineDetail `json:"pipeline_details"`
 }
 
+// DocumentProgress is one document's indexing progress. Narrower than
+// PipelineDetail on purpose: it omits the index name, source URI and document
+// name, which are internal addressing the uploader can't act on.
+type DocumentProgress struct {
+	// Legacy is the PipelineDetail document-status returned before it reported
+	// upload progress, kept so the handler can go on returning those fields
+	// to clients that read them.
+	Legacy          PipelineDetail `json:"-"`
+	ChunksProcessed *int           `json:"chunks_processed,omitempty"`
+	// UploadedAt is when the bytes landed in the bucket, or the closest
+	// pipeline timestamp when that wasn't recorded (see GetDocumentStatus).
+	UploadedAt *time.Time `json:"uploaded_at,omitempty"`
+	// SizeBytes is nil for documents registered before provenance was
+	// recorded, and for ones dist_rag discovered by itself.
+	SizeBytes *int64 `json:"size_bytes,omitempty"`
+	// Status is dist_rag's own word: QUEUED, PROCESSING, COMPLETED, FAILED.
+	Status string `json:"status"`
+}
+
 func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error) {
 	ps := &PipelineStatus{IndexName: r.FullName()}
 
@@ -416,15 +436,28 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 // matching document. It is the single-row form of GetPipelineStatus: the
 // document_name filter is pushed into the query so the DB returns just that row
 // instead of the whole datapack's pipeline.
-func (r *RagRepo) GetDocumentStatus(sourceURIs []string, documentName string) (*PipelineDetail, error) {
+func (r *RagRepo) GetDocumentStatus(sourceURIs []string, documentName string) (*DocumentProgress, error) {
 	if len(sourceURIs) == 0 {
 		return nil, nil
 	}
 
+	// uploaded_at falls back to the pipeline's own timestamps: documents
+	// discovered by dist_rag's CREATE_SOURCE worker (rather than registered
+	// through RegisterDocument) carry no meko details, and "no upload time" for
+	// a file that plainly was uploaded is worse than an approximate one.
 	row := r.db.QueryRow(
 		`SELECT DISTINCT ON (document_uri)
-		        schema_name, index_name, source_uri, document_name, document_status,
-		        chunks_processed
+		        schema_name, index_name, source_uri, document_name,
+		        document_status::text AS raw_document_status,
+		        COALESCE(pipeline_status::text, document_status::text) AS document_status,
+		        chunks_processed,
+		        COALESCE(
+		          NULLIF(document_details->'meko'->>'uploaded_at', '')::timestamptz,
+		          pipeline_completed_at,
+		          pipeline_last_started_at,
+		          pipeline_created_at
+		        ) AS uploaded_at,
+		        (document_details->'meko'->>'size')::bigint AS size_bytes
 		 FROM dist_rag.vector_index_pipeline_details
 		 WHERE schema_name   = $1
 		   AND index_name    = $2
@@ -438,19 +471,28 @@ func (r *RagRepo) GetDocumentStatus(sourceURIs []string, documentName string) (*
 	)
 
 	var (
-		d        PipelineDetail
-		schema   string
-		rawIndex string
+		d          DocumentProgress
+		schema     string
+		rawIndex   string
+		uploadedAt sql.NullTime
+		sizeBytes  sql.NullInt64
 	)
 	if err := row.Scan(
-		&schema, &rawIndex, &d.SourceURI, &d.DocumentName,
-		&d.DocumentStatus, &d.ChunksProcessed,
+		&schema, &rawIndex, &d.Legacy.SourceURI, &d.Legacy.DocumentName, &d.Legacy.DocumentStatus,
+		&d.Status, &d.ChunksProcessed, &uploadedAt, &sizeBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("scan document status: %w", err)
 	}
-	d.IndexName = schema + "." + rawIndex
+	if uploadedAt.Valid {
+		d.UploadedAt = &uploadedAt.Time
+	}
+	if sizeBytes.Valid {
+		d.SizeBytes = &sizeBytes.Int64
+	}
+	d.Legacy.IndexName = schema + "." + rawIndex
+	d.Legacy.ChunksProcessed = d.ChunksProcessed
 	return &d, nil
 }

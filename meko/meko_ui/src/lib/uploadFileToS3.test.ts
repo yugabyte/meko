@@ -90,16 +90,24 @@ describe("uploadFileToS3", () => {
     await expect(promise).resolves.toBeUndefined();
   });
 
-  it("translates S3's EntityTooLarge into an actionable message", async () => {
+  // Limits are checked when the URL is issued; the policy then pins the exact
+  // size and SHA-256, so each of these means the bytes changed after they were
+  // measured — not that the file is too big or empty.
+  it.each([
+    ["EntityTooLarge", "its size no longer matches"],
+    ["EntityTooSmall", "its size no longer matches"],
+    ["XAmzContentChecksumMismatch", "its contents no longer match"],
+    ["BadDigest", "its contents no longer match"],
+  ])("translates S3's %s into an actionable message", async (code, message) => {
     install();
     const promise = uploadFileToS3("https://bucket.example.com", {}, file("a.txt", "abc"));
 
     const xhr = await waitForXHR();
     xhr.status = 400;
     xhr.statusText = "Bad Request";
-    xhr.responseText = "<Error><Code>EntityTooLarge</Code></Error>";
+    xhr.responseText = `<Error><Code>${code}</Code></Error>`;
     xhr.onload?.();
-    await expect(promise).rejects.toThrow("larger than your plan allows");
+    await expect(promise).rejects.toThrow(message);
   });
 
   it("falls back to the raw status for an unrecognized S3 error code", async () => {

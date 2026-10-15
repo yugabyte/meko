@@ -91,6 +91,10 @@ var ErrKnowledgeBaseExists = fmt.Errorf("knowledge base already exists")
 // to 404 Not Found.
 var ErrKnowledgeBaseNotFound = fmt.Errorf("knowledge base not found")
 
+// ErrDatapackNotFound is returned by WithDatapackRowLock when the datapack's
+// row is gone: it was deleted.
+var ErrDatapackNotFound = errors.New("datapack not found")
+
 // ErrDocumentNotFound is returned by GetDocumentUploader / DeleteDocument
 // when no dist_rag.documents row matches (datapack_id, document_id).
 // Handlers map this to 404 Not Found.
@@ -146,6 +150,9 @@ func (r *KnowledgeBaseRepo) WithDatapackRowLock(
 		`SELECT datapack_id FROM meko_system.datapacks WHERE datapack_id = $1::UUID FOR NO KEY UPDATE`,
 		datapackID,
 	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = ErrDatapackNotFound
+		}
 		return fmt.Errorf("lock datapack %s: %w", datapackID, err)
 	}
 
@@ -180,6 +187,48 @@ func lockRow(ctx context.Context, txn *sql.Tx, query, id string) error {
 	defer cancel()
 	var locked string
 	return txn.QueryRowContext(waitCtx, query, id).Scan(&locked)
+}
+
+// WithUserRowLock runs criticalSection while holding a FOR NO KEY UPDATE lock
+// on the user's own row. A storage-quota check spans every datapack a user owns, so
+// unlike WithDatapackRowLock it locks the user, not one datapack: two
+// concurrent presigns for the same user (even across different datapacks)
+// must not both read the same pre-write usage total and both pass a check
+// their combined sizes would have failed. FOR NO KEY UPDATE for the same
+// reason as WithDatapackRowLock: it serializes callers without blocking
+// foreign-key inserts that reference the row.
+//
+// Like WithDatapackRowLock, the wait for the lock gives up when ctx ends, and
+// the lock is then held until criticalSection returns: its work (the quota
+// read, the S3 presign, the promise write) runs on other connections.
+func (r *KnowledgeBaseRepo) WithUserRowLock(
+	ctx context.Context, userID string, criticalSection func() error,
+) error {
+	txn, err := beginHeldLock(ctx, r.systemDB)
+	if err != nil {
+		return fmt.Errorf("begin user lock %s: %w", userID, err)
+	}
+	defer func() {
+		if rbErr := txn.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			slog.Warn("user lock rollback failed", "user_id", userID, "error", rbErr)
+		}
+	}()
+
+	if err := lockRow(ctx, txn,
+		`SELECT user_id FROM meko_system.users WHERE user_id = $1::UUID FOR NO KEY UPDATE`,
+		userID,
+	); err != nil {
+		return fmt.Errorf("lock user %s: %w", userID, err)
+	}
+
+	if err := criticalSection(); err != nil {
+		return err
+	}
+
+	if err := txn.Commit(); err != nil {
+		return fmt.Errorf("commit user lock %s: %w", userID, err)
+	}
+	return nil
 }
 
 // Insert inserts a new knowledge_base row with a server-generated
@@ -549,6 +598,62 @@ func (r *KnowledgeBaseRepo) DocumentExistsForURI(
 		return false, fmt.Errorf("document exists for uri: %w", err)
 	}
 	return exists, nil
+}
+
+// DocumentState is what the pending-upload watcher needs to know about a
+// document already registered at its key.
+type DocumentState struct {
+	SourceID string
+	// Status is computed as GetDocumentRef's is. NOT_STARTED means no pipeline
+	// run was ever queued for the document.
+	Status string
+	// HasMekoDetails is false for a document dist_rag's own CREATE_SOURCE
+	// worker created: it carries none of the size and uploader details the
+	// storage quota and attribution read.
+	HasMekoDetails bool
+}
+
+// DocumentStateForURI returns the state of a datapack's document at an S3 URI,
+// with ok false when none of the datapack's sources holds one. Two-step for
+// the same reason as GetDocumentRef.
+func (r *KnowledgeBaseRepo) DocumentStateForURI(
+	datapackID, documentURI, schema, indexName string,
+) (state DocumentState, ok bool, err error) {
+	sourceIDs, err := r.GetSourceIDs(datapackID)
+	if err != nil {
+		return DocumentState{}, false, fmt.Errorf("document state for uri: source ids for datapack %s: %w",
+			datapackID, err)
+	}
+	if len(sourceIDs) == 0 {
+		return DocumentState{}, false, nil
+	}
+	err = r.dataDB.QueryRow(
+		`SELECT d.source_id::text,
+		        COALESCE(lpd.pipeline_status::text, lpd.document_status::text, d.status::text),
+		        COALESCE(d.document_details->'meko' ? 'user_id', false)
+		 FROM   dist_rag.documents d
+		 LEFT JOIN LATERAL (
+		           SELECT pipeline_status, document_status
+		           FROM   dist_rag.vector_index_pipeline_details
+		           WHERE  document_id = d.document_id
+		             AND  schema_name = $3
+		             AND  index_name  = $4
+		           ORDER  BY pipeline_created_at DESC NULLS LAST, pipeline_id DESC
+		           LIMIT  1
+		         ) lpd ON true
+		 WHERE  d.document_uri = $1
+		   AND  d.source_id = ANY($2::uuid[])
+		 LIMIT  1`,
+		documentURI, pq.Array(sourceIDs), schema, indexName,
+	).Scan(&state.SourceID, &state.Status, &state.HasMekoDetails)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DocumentState{}, false, nil
+	}
+	if err != nil {
+		return DocumentState{}, false, fmt.Errorf("document state for uri: %w", err)
+	}
+	state.Status = strings.TrimSpace(state.Status)
+	return state, true, nil
 }
 
 // GetDocumentIDForURI returns the dist_rag document_id for a datapack's

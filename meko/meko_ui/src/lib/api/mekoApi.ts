@@ -1571,8 +1571,17 @@ export async function getDatapackProvisionStatus(
 
 export { sha256Hex, canUseWebCryptoSha256, isNonSecureHttpOrigin } from "../sha256File";
 
-/** Authorizes a direct upload to S3: `url` plus the `fields` to send as
- *  multipart form data (see uploadFileToS3). Absent when already_uploaded. */
+/**
+ * Authorizes a direct upload to S3. Returns a presigned POST: `url` plus the
+ * `fields` that must be sent as multipart form data ahead of the file part
+ * (see uploadFileToS3). `fields` is absent when `already_uploaded` is true.
+ *
+ * `client: "browser"` only labels the caller in api_server's logs. Every presign
+ * is tracked: it counts toward the storage quota until registered, and the
+ * pending-upload watcher may register it before createKnowledgeBase runs —
+ * the confirmUpload/createKnowledgeBase sequence below then finds the
+ * document already there.
+ */
 export async function requestUploadURL(
   datapackId: string,
   filename: string,
@@ -1589,7 +1598,7 @@ export async function requestUploadURL(
   }>(
     `${datapackRoute(datapackId)}/knowledge-bases/upload-url`,
     "POST",
-    { filename, size, content_hash: contentHash },
+    { filename, size, content_hash: contentHash, client: "browser" },
     options,
   );
 }

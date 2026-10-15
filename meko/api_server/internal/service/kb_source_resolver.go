@@ -12,10 +12,10 @@ import (
 // SourceResolver maps a datapack to the dist_rag source backing its knowledge
 // base, creating one when there isn't one yet.
 //
-// It lives in the service layer rather than on a handler so that a path with
-// no echo context (a background goroutine) can share it — every registration
-// path must resolve sources identically, or a document registered by one
-// becomes invisible to the others.
+// It lives here rather than on a handler because the pending-upload watcher
+// registers documents from a background goroutine, which has no echo context —
+// and both it and the request paths must resolve sources identically, or a
+// document registered by one becomes invisible to the other.
 type SourceResolver struct {
 	kbSvc  *KnowledgeBaseService
 	ragSvc *RagService

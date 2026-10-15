@@ -71,9 +71,12 @@ func DocumentDetailsJSON(uploaderUserID string, size int64, uploadedAt time.Time
 // RegisterDocument upserts one S3 object into dist_rag.documents, with the
 // uploader / size / uploaded-at details the UI reads.
 //
-// Both writers go through here — the CreateKB sweep and the post-build
-// populate — sharing it because they write the same row, and the upsert lets
-// a later writer overwrite an earlier one's columns.
+// Three writers go through here — the CreateKB sweep, the post-build populate,
+// and the pending-upload watcher — sharing it because they write the same row.
+// InsertDocument's UPDATE-then-INSERT runs under the source row lock, so a
+// later writer updates the row an earlier one created instead of adding a
+// second one; dist_rag.documents has no unique constraint, so a writer that
+// bypassed InsertDocument would insert duplicates.
 //
 // contentType is a parameter rather than read off obj: callers pass the type
 // VerifyObjectContent resolved from the object's bytes, except that

@@ -3180,7 +3180,7 @@ const docTemplate = `{
                 "tags": [
                     "knowledge-bases"
                 ],
-                "summary": "Get pipeline status for a single uploaded document",
+                "summary": "Get upload and indexing status for a single file",
                 "parameters": [
                     {
                         "type": "string",
@@ -3191,7 +3191,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Document key (from the upload response)",
+                        "description": "Document key (from the upload or upload-url response)",
                         "name": "document_key",
                         "in": "query",
                         "required": true
@@ -6545,6 +6545,10 @@ const docTemplate = `{
         "handlers.uploadURLRequest": {
             "type": "object",
             "properties": {
+                "client": {
+                    "description": "Client says who is driving the upload (\"browser\", \"mcp\", ...). Logged\nonly: every upload is recorded for the watcher and the quota alike,\nsince a self-declared value can't be what exempts a caller from either.",
+                    "type": "string"
+                },
                 "content_hash": {
                     "description": "ContentHash is the hex-encoded SHA-256 of the file bytes, computed by\nthe client before requesting the presigned URL. It is used as the S3\nsub-directory so that (a) the same filename with different content gets\na unique path, and (b) re-uploading identical bytes is idempotent.",
                     "type": "string"
@@ -6553,7 +6557,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "size": {
-                    "description": "Size is the client's *declared* size — only a UX-nicety early\nrejection. The actual cap signed into the policy (see RequestUploadURL's\nsignedCap) is derived entirely from server-side state, so a lied-about\nSize can't get more past S3 than an honest one could.",
+                    "description": "Size is the file's exact length in bytes. The signed policy holds the\nupload to it, so S3 rejects a body of any other length; it must fit the\nper-file cap and the remaining storage quota.",
                     "type": "integer"
                 }
             }

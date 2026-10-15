@@ -137,6 +137,12 @@ definitions:
     type: object
   handlers.uploadURLRequest:
     properties:
+      client:
+        description: |-
+          Client says who is driving the upload ("browser", "mcp", ...). Logged
+          only: every upload is recorded for the watcher and the quota alike,
+          since a self-declared value can't be what exempts a caller from either.
+        type: string
       content_hash:
         description: |-
           ContentHash is the hex-encoded SHA-256 of the file bytes, computed by
@@ -148,10 +154,9 @@ definitions:
         type: string
       size:
         description: |-
-          Size is the client's *declared* size — only a UX-nicety early
-          rejection. The actual cap signed into the policy (see RequestUploadURL's
-          signedCap) is derived entirely from server-side state, so a lied-about
-          Size can't get more past S3 than an honest one could.
+          Size is the file's exact length in bytes. The signed policy holds the
+          upload to it, so S3 rejects a body of any other length; it must fit the
+          per-file cap and the remaining storage quota.
         type: integer
     type: object
   models.CreateFeedbackRequest:
@@ -2410,7 +2415,7 @@ paths:
         name: datapack_id
         required: true
         type: string
-      - description: Document key (from the upload response)
+      - description: Document key (from the upload or upload-url response)
         in: query
         name: document_key
         required: true
@@ -2440,7 +2445,7 @@ paths:
             $ref: '#/definitions/handlers.APIResponse'
       security:
       - BearerAuth: []
-      summary: Get pipeline status for a single uploaded document
+      summary: Get upload and indexing status for a single file
       tags:
       - knowledge-bases
   /datapacks/{datapack_id}/knowledge-bases/documents:

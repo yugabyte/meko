@@ -64,6 +64,16 @@ func (s *KnowledgeBaseService) WithDatapackRowLock(
 	return s.repo.WithDatapackRowLock(ctx, datapackID, criticalSection)
 }
 
+// WithUserRowLock runs criticalSection while holding a FOR NO KEY UPDATE lock
+// on the user's own row, serializing concurrent callers racing on a check that
+// spans every datapack the user owns (e.g. the storage-quota check). See
+// KnowledgeBaseRepo.WithUserRowLock.
+func (s *KnowledgeBaseService) WithUserRowLock(
+	ctx context.Context, userID string, criticalSection func() error,
+) error {
+	return s.repo.WithUserRowLock(ctx, userID, criticalSection)
+}
+
 // SumDocumentSizesByOwner returns total KB document bytes for `userID`,
 // used by the upload-URL handler for free-tier cap enforcement.
 func (s *KnowledgeBaseService) SumDocumentSizesByOwner(userID string) (int64, error) {
@@ -264,6 +274,17 @@ func (s *KnowledgeBaseService) DocumentExistsForURI(
 		return false, fmt.Errorf("datapack is required")
 	}
 	return s.repo.DocumentExistsForURI(dp.ID, documentURI)
+}
+
+// DocumentStateForURI returns the state of the datapack's document at an S3
+// URI, with ok false when it isn't registered.
+func (s *KnowledgeBaseService) DocumentStateForURI(
+	dp *models.Datapack, documentURI string,
+) (repository.DocumentState, bool, error) {
+	if dp == nil {
+		return repository.DocumentState{}, false, fmt.Errorf("datapack is required")
+	}
+	return s.repo.DocumentStateForURI(dp.ID, documentURI, DatapackIndexSchema, DatapackIndexName)
 }
 
 // GetSourceURIs returns the knowledge_base_url values for a datapack.

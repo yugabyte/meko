@@ -338,11 +338,11 @@ func effectiveFlushInterval(cfg ServerConfig) time.Duration {
 	return v
 }
 
-// Run starts the Echo server, launches the MCP PAT last_used_at
-// flusher goroutine, and blocks until a shutdown signal is received.
-// On shutdown the server is drained, the flusher is stopped, and one
-// final flush is attempted so we don't lose pending touches across a
-// rolling restart.
+// Run starts the Echo server, launches the background workers (the MCP PAT
+// last_used_at flusher and the pending-upload watcher), and blocks until a
+// shutdown signal is received. On shutdown the server is drained, the workers
+// are stopped, and one final PAT flush is attempted so we don't lose pending
+// touches across a rolling restart.
 func Run(cfg ServerConfig) error {
 	e, reg, err := NewRouter(cfg)
 	if err != nil {
@@ -362,6 +362,25 @@ func Run(cfg ServerConfig) error {
 	deployPollerCtx, deployPollerCancel := context.WithCancel(context.Background())
 	deployPollerDone := make(chan struct{})
 	go runDeploymentStatusPoller(deployPollerCtx, reg, deploymentStatusPollInterval, deployPollerDone)
+
+	// The pending-upload watcher is part of the agent upload path, not an
+	// optional extra: without it an agent's upload is never indexed unless the
+	// agent happens to call back. It exits by itself when S3 isn't configured,
+	// in which case there are no presigned uploads to reconcile.
+	watcherCtx, watcherCancel := context.WithCancel(context.Background())
+	watcherDone := make(chan struct{})
+	go reg.pendingUploadSvc.RunWatcher(watcherCtx, watcherDone)
+
+	// stopWorkers drains every background goroutine. Called on every exit path,
+	// so a shutdown never returns while a pass is still writing to dist_rag.
+	stopWorkers := func() {
+		flusherCancel()
+		<-flusherDone
+		deployPollerCancel()
+		<-deployPollerDone
+		watcherCancel()
+		<-watcherDone
+	}
 
 	// Flush the Rudderstack batch queue on every Run exit path — normal
 	// shutdown AND the errCh / Shutdown-error early returns. Deferred so
@@ -399,10 +418,7 @@ func Run(cfg ServerConfig) error {
 		slog.Info("shutdown signal received", "signal", sig)
 	case err := <-errCh:
 		if err != nil {
-			flusherCancel()
-			<-flusherDone
-			deployPollerCancel()
-			<-deployPollerDone
+			stopWorkers()
 			return err
 		}
 	}
@@ -418,17 +434,11 @@ func Run(cfg ServerConfig) error {
 		}
 	}
 	if err := e.Shutdown(ctx); err != nil {
-		flusherCancel()
-		<-flusherDone
-		deployPollerCancel()
-		<-deployPollerDone
+		stopWorkers()
 		return fmt.Errorf("server shutdown error: %w", err)
 	}
 
-	flusherCancel()
-	<-flusherDone
-	deployPollerCancel()
-	<-deployPollerDone
+	stopWorkers()
 
 	slog.Info("api server stopped")
 	return nil

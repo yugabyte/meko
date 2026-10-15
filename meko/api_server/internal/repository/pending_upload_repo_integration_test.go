@@ -363,6 +363,16 @@ func TestPendingUploadRepo_HealthAndCleanup_Integration(t *testing.T) {
 	if n, err := repo.PurgeTerminal(7*24*time.Hour, 500); err != nil || n != 1 {
 		t.Fatalf("PurgeTerminal = %d, %v; want 1", n, err)
 	}
+
+	// Abandon leaves a row whose URL may still be used (deadline more than the
+	// grace away) and takes one whose URL has expired.
+	const grace = 10 * time.Minute
+	if changed, err := repo.Abandon(itDatapack, "own/dp/h1/fresh.pdf", "deleted", grace); err != nil || changed {
+		t.Fatalf("Abandon with a usable URL = %v, %v; want left live", changed, err)
+	}
+	if changed, err := repo.Abandon(itDatapack, "own/dp/h2/overdue.pdf", "deleted", grace); err != nil || !changed {
+		t.Fatalf("Abandon with an expired URL = %v, %v; want abandoned", changed, err)
+	}
 }
 
 // The quota counts each pending file once: not a second time against its own

@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -29,9 +31,12 @@ type KnowledgeBaseHandler struct {
 	knowledgeBaseSvc *service.KnowledgeBaseService
 	ragSvc           *service.RagService
 	s3Svc            *service.S3Service
-	// srcResolver resolves (or creates) a datapack's dist_rag source under the
-	// datapack's row lock, so concurrent registrations can't create two.
+	// Shared with the pending-upload watcher, so a document registered by
+	// either lands under the same source.
 	srcResolver *service.SourceResolver
+	// pendingUploadSvc records every presigned URL this handler issues, which
+	// is what lets the watcher register an upload whose client never calls back.
+	pendingUploadSvc *service.PendingUploadService
 }
 
 // NewKnowledgeBaseHandler creates a new KnowledgeBaseHandler.
@@ -39,6 +44,7 @@ func NewKnowledgeBaseHandler(
 	knowledgeBaseSvc *service.KnowledgeBaseService,
 	ragSvc *service.RagService,
 	s3Svc *service.S3Service,
+	pendingUploadSvc *service.PendingUploadService,
 	srcResolver *service.SourceResolver,
 ) *KnowledgeBaseHandler {
 	return &KnowledgeBaseHandler{
@@ -46,6 +52,7 @@ func NewKnowledgeBaseHandler(
 		ragSvc:           ragSvc,
 		s3Svc:            s3Svc,
 		srcResolver:      srcResolver,
+		pendingUploadSvc: pendingUploadSvc,
 	}
 }
 
@@ -158,16 +165,19 @@ func (h *KnowledgeBaseHandler) Delete(c echo.Context) error {
 
 type uploadURLRequest struct {
 	Filename string `json:"filename"`
-	// Size is the client's *declared* size — only a UX-nicety early
-	// rejection. The actual cap signed into the policy (see RequestUploadURL's
-	// signedCap) is derived entirely from server-side state, so a lied-about
-	// Size can't get more past S3 than an honest one could.
+	// Size is the file's exact length in bytes. The signed policy holds the
+	// upload to it, so S3 rejects a body of any other length; it must fit the
+	// per-file cap and the remaining storage quota.
 	Size int64 `json:"size"`
 	// ContentHash is the hex-encoded SHA-256 of the file bytes, computed by
 	// the client before requesting the presigned URL. It is used as the S3
 	// sub-directory so that (a) the same filename with different content gets
 	// a unique path, and (b) re-uploading identical bytes is idempotent.
 	ContentHash string `json:"content_hash"`
+	// Client says who is driving the upload ("browser", "mcp", ...). Logged
+	// only: every upload is recorded for the watcher and the quota alike,
+	// since a self-declared value can't be what exempts a caller from either.
+	Client string `json:"client"`
 }
 
 // isHexSHA256 reports whether s is exactly 64 hexadecimal characters, i.e. a
@@ -191,10 +201,11 @@ const maxFileSizeBytes = 5 * 1024 * 1024 // 5 MB
 // RequestUploadURL handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload-url.
 //
 // Returns a presigned **POST** authorization: `url` plus the `fields` the
-// client sends as multipart form data ahead of the file part. Both the
-// per-file cap and the tier's remaining storage quota are baked into the
-// signed policy (whichever is lower), so S3 rejects an over-cap body with
-// 400 EntityTooLarge — the declared `size` below is only an early UX check.
+// client sends as multipart form data ahead of the file part. The declared
+// `size` must fit the per-file cap and the remaining storage quota, and the
+// signed policy holds the body to exactly that size, so S3 rejects any other
+// length (400 EntityTooLarge / EntityTooSmall). `status_url` is where to poll
+// the file's progress.
 //
 //	@Summary	Generate a presigned S3 upload authorization (POST + policy)
 //	@Tags		knowledge-bases
@@ -262,9 +273,9 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 	// consistent with the FE — a Pro user uploading into a shared
 	// Free-owner datapack gets the Pro caps. Falls back to the legacy
 	// 5 MB per-file cap when there's no account context.
-	account, _ := auth.GetAccount(c)
+	account, err := auth.GetAccount(c)
 	perFileCap := int64(maxFileSizeBytes)
-	if account != nil {
+	if err == nil && account != nil {
 		if l := service.LimitsFor(account.AccountType).MaxKBFileBytes; l > 0 {
 			perFileCap = l
 		}
@@ -278,64 +289,42 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 			"VALIDATION_ERROR", service.UpgradeMessageFileSize(userType))
 	}
 
-	// signedCap goes into the presigned policy, so S3 enforces it on the
-	// body it actually receives; req.Size above is only a UX-nicety early
-	// rejection, not a security boundary, since signedCap is derived
-	// entirely from server-side state, never from the request.
-	signedCap := perFileCap
-	if account != nil && service.IsGatedUserType(account.AccountType) {
-		limits := service.LimitsFor(account.AccountType)
-		currentBytes, err := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID)
-		if err != nil {
-			slog.Error("kb upload cap: sum sizes",
-				"user_id", dp.UserID, "datapack_id", dp.ID, "error", err)
-			return apiError(c, http.StatusInternalServerError,
-				"INTERNAL_ERROR", "failed to read tier storage usage")
-		}
-		remaining := limits.MaxKBStorageBytes - currentBytes
-		if remaining <= 0 || req.Size > remaining {
-			slog.Info("kb upload blocked by tier cap",
-				"user_id", dp.UserID,
-				"user_type", account.AccountType,
-				"current_bytes", currentBytes,
-				"incoming_bytes", req.Size,
-				"cap", limits.MaxKBStorageBytes,
-			)
-			return respondTierLimit(c, service.KBStorageLimitResponse(account.AccountType))
-		}
-		if remaining < signedCap {
-			signedCap = remaining
-		}
+	uploaderID, accountType := dp.UserID, ""
+	if account != nil {
+		uploaderID, accountType = account.ID, account.AccountType
 	}
-
-	result, err := h.s3Svc.GenerateUploadURL(
-		c.Request().Context(),
-		dp.UserID,
-		dp.ID,
-		req.Filename,
-		req.ContentHash,
-		signedCap,
-	)
+	presignedUpload, err := h.pendingUploadSvc.PresignUpload(c.Request().Context(), service.PresignRequest{
+		Datapack:    dp,
+		UploaderID:  uploaderID,
+		AccountType: accountType,
+		Filename:    req.Filename,
+		ContentHash: req.ContentHash,
+		Size:        req.Size,
+		PerFileCap:  perFileCap,
+	})
 	if err != nil {
-		slog.Error("failed to generate presigned upload URL",
-			"user_id", dp.UserID,
-			"datapack_id", dp.ID,
-			"filename", req.Filename,
-			"error", err,
-		)
+		var quotaErr *service.KBQuotaExceededError
+		if errors.As(err, &quotaErr) {
+			return respondTierLimit(c, quotaErr.Response)
+		}
+		slog.Error("kb upload: failed to presign and record",
+			"user_id", dp.UserID, "datapack_id", dp.ID, "error", err)
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "failed to generate upload URL")
 	}
+	presignedUpload.StatusURL = documentStatusURL(
+		c, "/api/v1/datapacks/:datapack_id/knowledge-bases/upload-url", dp.ID, presignedUpload.Key)
 
 	slog.Info("presigned upload URL generated",
 		"user_id", dp.UserID,
 		"datapack_id", dp.ID,
 		"filename", req.Filename,
 		"size", req.Size,
-		"key", result.Key,
+		"client", req.Client,
+		"key", presignedUpload.Key,
 	)
 
-	return ok(c, http.StatusOK, result)
+	return ok(c, http.StatusOK, presignedUpload)
 }
 
 type uploadCompleteRequest struct {
@@ -673,6 +662,11 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 				"filename", req.Filename,
 				"reason", rejected.Error(),
 			)
+			// The key was promised to the watcher at presign; fail it now with the reason we already have instead of leaving it
+			// to sit as "waiting for the file to arrive" until the watcher's own
+			// HeadObject-then-expire path reaches the same conclusion, up to
+			// UploadURLTTL + UploadGracePeriod later.
+			h.pendingUploadSvc.Cancel(dp.ID, req.Key, rejected.Error())
 			return apiError(c, http.StatusBadRequest,
 				"VALIDATION_ERROR", rejected.Error())
 		}
@@ -1165,18 +1159,64 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 	return ok(c, http.StatusOK, status)
 }
 
+// documentStatusURL is the absolute URL for one file's progress. Built from
+// requestOrigin plus mountPrefix(c, routePath) — every route is mounted
+// under cfg.BasePath (router.go's root := e.Group(basePath)), so a bare
+// c.Path()-relative build would 404 for an out-of-process caller (an agent
+// polling well after the request that generated this URL) whenever
+// --base-path is set. routePath is the caller's own registered path
+// (e.g. "/api/v1/datapacks/:datapack_id/knowledge-bases/upload-url"), the
+// same convention oauth_handler.go's mountPrefix callers use.
+func documentStatusURL(c echo.Context, routePath, datapackID, key string) string {
+	return fmt.Sprintf("%s%s/api/v1/datapacks/%s/knowledge-bases/document-status?document_key=%s",
+		requestOrigin(c), mountPrefix(c, routePath), datapackID, url.QueryEscape(key))
+}
+
+// documentStatusResponse is what a caller polling one file gets, whichever half
+// of the lifecycle the file is in. State is the field to branch on; Upload and
+// Document carry the detail behind it, and exactly one of them is set.
+type documentStatusResponse struct {
+	// The fields this route returned before it reported upload progress
+	// (index_name, source_uri, document_name, document_status,
+	// chunks_processed), set only when dist_rag answered — the one case the
+	// old route answered at all. Deprecated: kept so clients reading them keep
+	// working; read state and document instead.
+	*repository.PipelineDetail
+	Upload      *uploadProgress              `json:"upload,omitempty"`
+	Document    *repository.DocumentProgress `json:"document,omitempty"`
+	DocumentKey string                       `json:"document_key"`
+	// Filename is the name the file was uploaded under, not the key it is
+	// stored at — that one carries ids and a content hash.
+	Filename string `json:"filename"`
+	State    string `json:"state"`
+	// Message is for showing a person: an agent relaying a refusal has
+	// something to say beyond the state word.
+	Message string `json:"message"`
+}
+
+// uploadProgress is the pending_uploads half of documentStatusResponse: what is
+// known about an upload not yet registered.
+type uploadProgress struct {
+	ExpiresAt time.Time `json:"expires_at"`
+	LastError string    `json:"last_error,omitempty"`
+	// Attempts counts looks, not failures — a normal upload is resolved on the
+	// first one, so a large number here is the shape of something systemic.
+	Attempts int `json:"attempts"`
+}
+
 // KBDocumentStatus handles
-// GET /api/v1/datapacks/:datapack_id/knowledge-bases/document-status?key=<key>.
+// GET /api/v1/datapacks/:datapack_id/knowledge-bases/document-status?document_key=<key>.
 //
-// Returns the pipeline detail for a single uploaded document, identified by its
-// S3 key (the `key` returned by upload-url), instead of the whole datapack's
-// pipeline. Returns 404 until the document appears in dist_rag.
+// One file's progress rather than the whole datapack's pipeline, which is what
+// makes it pollable by whoever uploaded that file. It answers for both halves
+// of a presigned upload's life: before registration from the promise row, after
+// it from dist_rag. 404 means neither knows this key.
 //
-//	@Summary	Get pipeline status for a single uploaded document
+//	@Summary	Get upload and indexing status for a single file
 //	@Tags		knowledge-bases
 //	@Produce	json
 //	@Param		datapack_id		path		string	true	"Datapack ID"
-//	@Param		document_key	query		string	true	"Document key (from the upload response)"
+//	@Param		document_key	query		string	true	"Document key (from the upload or upload-url response)"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
@@ -1195,34 +1235,36 @@ func (h *KnowledgeBaseHandler) KBDocumentStatus(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "document_key query parameter is required")
 	}
-	if detail, found := h.documentDetail(dp, documentKey); found {
-		return ok(c, http.StatusOK, detail)
-	}
-	return apiError(c, http.StatusNotFound, "NOT_FOUND", "document not found for document_key")
-}
 
-// documentDetail returns the dist_rag pipeline detail for a single document key
-// within a datapack, if it is registered.
-func (h *KnowledgeBaseHandler) documentDetail(
-	dp *models.Datapack, documentKey string,
-) (repository.PipelineDetail, bool) {
-	if h.ragSvc == nil {
-		return repository.PipelineDetail{}, false
-	}
-	sourceURIs, err := h.knowledgeBaseSvc.GetSourceURIs(dp)
-	if err != nil || len(sourceURIs) == 0 {
-		return repository.PipelineDetail{}, false
-	}
-	detail, err := h.ragSvc.GetDocumentStatus(sourceURIs, documentKey)
+	status, found, err := h.pendingUploadSvc.DocumentStatus(dp, documentKey)
 	if err != nil {
-		slog.Error("documentDetail: failed to get document status",
+		slog.Error("KBDocumentStatus: failed to read status",
 			"datapack_id", dp.ID, "document_key", documentKey, "error", err)
-		return repository.PipelineDetail{}, false
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "failed to read upload status")
 	}
-	if detail == nil {
-		return repository.PipelineDetail{}, false
+	if !found {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "document not found for document_key")
 	}
-	return *detail, true
+
+	resp := documentStatusResponse{
+		DocumentKey: documentKey,
+		Filename:    status.Filename,
+		State:       status.State,
+		Message:     status.Message,
+		Document:    status.Document,
+	}
+	if status.Document != nil {
+		resp.PipelineDetail = &status.Document.Legacy
+	}
+	if status.Upload != nil {
+		resp.Upload = &uploadProgress{
+			Attempts:  status.Upload.Attempts,
+			ExpiresAt: status.Upload.ExpiresAt,
+			LastError: status.Upload.LastError,
+		}
+	}
+	return ok(c, http.StatusOK, resp)
 }
 
 // Counts handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/counts.
@@ -1506,11 +1548,11 @@ func (h *KnowledgeBaseHandler) PendingUploads(c echo.Context) error {
 
 // DeletePendingUpload handles DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/pending-uploads?key=<encoded>.
 //
-// Removes a single S3 orphan — nothing else exists for it, so this is an S3
-// DeleteObject and nothing more. Two checks establish that: the prefix,
-// which stops a caller reaching outside their own datapack's key space, and
-// S3KeyIsSafeToDelete, because the orphan list the caller is acting on is a
-// snapshot.
+// Removes a single S3 orphan: the object, plus its pending_uploads row if one
+// is still live (canceled, so the watcher stops looking). No document exists
+// for it, which two checks establish: the prefix, which stops a caller
+// reaching outside their own datapack's key space, and S3KeyIsSafeToDelete,
+// because the orphan list the caller is acting on is a snapshot.
 func (h *KnowledgeBaseHandler) DeletePendingUpload(c echo.Context) error {
 	if h.s3Svc == nil || !h.s3Svc.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,
@@ -1548,6 +1590,10 @@ func (h *KnowledgeBaseHandler) DeletePendingUpload(c echo.Context) error {
 			"datapack_id", dp.ID, "key", key, "error", err)
 		return apiError(c, http.StatusInternalServerError, "S3_ERROR", "failed to delete file")
 	}
+	// If this key was promised to the watcher, fail it now rather than
+	// leaving it to sit as "waiting for the file to arrive" until the
+	// watcher's own HeadObject-then-expire path notices the object is gone.
+	h.pendingUploadSvc.Cancel(dp.ID, key, "the file was deleted before it was added to the knowledge base")
 	slog.Info("pending upload deleted", "datapack_id", dp.ID, "key", key)
 	return ok(c, http.StatusOK, map[string]string{"key": key})
 }

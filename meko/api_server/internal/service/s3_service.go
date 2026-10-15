@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -168,6 +170,33 @@ type PresignedUpload struct {
 	// under, set only when AlreadyUploaded is true. The client uses it to tell
 	// the user whether the skipped file was the same name or just same bytes.
 	ExistingFilename string `json:"existing_filename,omitempty"`
+	// StatusURL is where the caller polls this one file's progress, from "the
+	// bytes have not arrived" through to indexed. Filled in by the handler,
+	// since the URL depends on the request.
+	StatusURL string `json:"status_url,omitempty"`
+}
+
+// sha256HexToChecksum converts a lowercase-hex SHA-256 (the wire format
+// content_hash arrives in) to the base64 form S3's checksum condition and
+// HeadObject response use.
+func sha256HexToChecksum(hexHash string) (string, error) {
+	raw, err := hex.DecodeString(hexHash)
+	if err != nil {
+		return "", fmt.Errorf("content hash is not valid hex: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// contentHashFromKey extracts the hex SHA-256 segment GenerateUploadURL
+// embeds in every key it signs ("<user_id>/<datapack_id>/<hash>/<filename>"),
+// letting a caller holding only the key -- the pending-upload watcher,
+// notably -- recover what content was declared without a dedicated column.
+func contentHashFromKey(key string) (hash string, ok bool) {
+	parts := strings.SplitN(key, "/", 4)
+	if len(parts) != 4 {
+		return "", false
+	}
+	return parts[2], true
 }
 
 // GenerateUploadURL authorizes a direct browser/agent upload to
@@ -175,10 +204,21 @@ type PresignedUpload struct {
 // "<sha256>/" prefix, not the full key, so identical content under any
 // filename reports AlreadyUploaded=true instead of uploading again.
 //
-// A presigned **POST**, not a PUT: a PUT can only pin an exact
-// Content-Length, never a ceiling, so maxSizeBytes had to be trusted from
-// the client. The POST policy's content-length-range makes S3 itself reject
-// an over-cap body with 400 EntityTooLarge before the object is created.
+// A presigned **POST**, whose policy holds the body to exactly size bytes
+// (content-length-range [size, size]): S3 rejects any other length with 400
+// EntityTooLarge or EntityTooSmall before the object is created. Exact, not a
+// range up to the cap, because the declared size is what the storage quota
+// counts an upload by while it is in flight, and S3 holding the body to it is
+// what makes that count true. maxSizeBytes is the most size may be.
+//
+// contentHash also goes into the policy as a required x-amz-checksum-sha256
+// field, so S3 itself verifies the uploaded bytes hash to the value the
+// caller claimed — otherwise contentHash is just a string the client could
+// lie about (to defeat the dedup check above, or to land bytes under a
+// hash-prefixed key that doesn't match their real content) with nothing
+// after presign time to catch it. S3's checksum fields are base64, not hex,
+// so contentHash (already validated as 64 hex chars by the caller) is
+// re-encoded before use.
 //
 // Content-Type is deliberately unconstrained — S3 never inspects the bytes,
 // so a condition on it would only restrict what the client claims, for no
@@ -187,43 +227,82 @@ type PresignedUpload struct {
 func (s *S3Service) GenerateUploadURL(
 	ctx context.Context,
 	userID, datapackID, filename, contentHash string,
-	maxSizeBytes int64,
+	size, maxSizeBytes int64,
+) (*PresignedUpload, error) {
+	existing, err := s.ExistingUpload(ctx, userID, datapackID, contentHash)
+	if err != nil || existing != nil {
+		return existing, err
+	}
+	return s.SignUploadURL(ctx, UploadKey(userID, datapackID, contentHash, filename), contentHash, size, maxSizeBytes)
+}
+
+// UploadKey is the key GenerateUploadURL signs a fresh upload for.
+func UploadKey(userID, datapackID, contentHash, filename string) string {
+	return uploadHashPrefix(userID, datapackID, contentHash) + sanitizeFilename(filename)
+}
+
+func uploadHashPrefix(userID, datapackID, contentHash string) string {
+	return fmt.Sprintf("%s/%s/%s/", userID, datapackID, contentHash)
+}
+
+// ExistingUpload is GenerateUploadURL's dedup step on its own: the
+// AlreadyUploaded answer when identical content is already stored in the
+// datapack, else nil. A caller that checks a quota does it after this, since
+// an upload that sends no bytes needs no room.
+func (s *S3Service) ExistingUpload(
+	ctx context.Context, userID, datapackID, contentHash string,
+) (*PresignedUpload, error) {
+	existingKey, err := s.firstObjectKeyUnderPrefix(ctx, uploadHashPrefix(userID, datapackID, contentHash))
+	if err != nil {
+		return nil, fmt.Errorf("check existing upload: %w", err)
+	}
+	if existingKey == "" {
+		return nil, nil
+	}
+	// Identical content already stored (under existingKey's filename).
+	return &PresignedUpload{
+		Key:              existingKey,
+		AlreadyUploaded:  true,
+		ExistingFilename: path.Base(existingKey),
+	}, nil
+}
+
+// SignUploadURL is GenerateUploadURL's signing step on its own, for a key from
+// UploadKey whose content ExistingUpload found no copy of.
+func (s *S3Service) SignUploadURL(
+	ctx context.Context, key, contentHash string, size, maxSizeBytes int64,
 ) (*PresignedUpload, error) {
 	if maxSizeBytes <= 0 || maxSizeBytes > maxUploadFileBytes {
 		maxSizeBytes = maxUploadFileBytes
 	}
+	if size <= 0 || size > maxSizeBytes {
+		return nil, fmt.Errorf("upload size %d is outside 1..%d", size, maxSizeBytes)
+	}
 
-	hashPrefix := fmt.Sprintf("%s/%s/%s/", userID, datapackID, contentHash)
-
-	existingKey, err := s.firstObjectKeyUnderPrefix(ctx, hashPrefix)
+	base64OfSHA256, err := sha256HexToChecksum(contentHash)
 	if err != nil {
-		return nil, fmt.Errorf("check existing upload: %w", err)
-	}
-	if existingKey != "" {
-		// Identical content already stored (under existingKey's filename).
-		return &PresignedUpload{
-			Key:              existingKey,
-			AlreadyUploaded:  true,
-			ExistingFilename: path.Base(existingKey),
-		}, nil
+		return nil, err
 	}
 
-	key := hashPrefix + sanitizeFilename(filename)
-
+	// PresignPostObject builds the returned Fields itself (algorithm,
+	// credential, date, signature, key, policy) and does not look at any
+	// other PutObjectInput field, so the checksum has to be added by hand on
+	// both sides: as a policy condition (what S3 checks the upload against)
+	// and as a form field (what tells the client to actually send it).
 	presignedPostURL, err := s.presignClient.PresignPostObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	}, func(o *s3.PresignPostOptions) {
 		o.Expires = UploadURLTTL
-		// Lower bound 1, not 0: a zero-byte file has nothing to index, and
-		// the handler already rejects size <= 0 on the declared value.
 		o.Conditions = []any{
-			[]any{"content-length-range", 1, maxSizeBytes},
+			[]any{"content-length-range", size, size},
+			[]any{"eq", "$x-amz-checksum-sha256", base64OfSHA256},
 		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("presign post: %w", err)
 	}
+	presignedPostURL.Values["x-amz-checksum-sha256"] = base64OfSHA256
 
 	return &PresignedUpload{
 		URL:    presignedPostURL.URL,
@@ -330,6 +409,52 @@ func (s *S3Service) ObjectExists(ctx context.Context, key string) (bool, error) 
 	return true, nil
 }
 
+// ErrObjectNotFound reports that the bucket has no such key — as distinct from
+// not being able to find out. The pending-upload watcher turns on that
+// difference: absent is a statement about the upload, while a 5xx, a timeout or
+// an AccessDenied says only that S3 wouldn't answer, and treating the second as
+// the first would discard good uploads over a network blip or an IAM regression.
+var ErrObjectNotFound = errors.New("object not found")
+
+// HeadObject returns an object's metadata, wrapping ErrObjectNotFound when the
+// key isn't there. Metadata only: no bytes, no egress, and identical on MinIO.
+//
+// Size here is the authoritative one. On the presigned path it is the only size
+// api_server ever sees, since the bytes go straight to the bucket and the
+// client's declared size is just a claim.
+func (s *S3Service) HeadObject(ctx context.Context, key string) (S3Object, error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		// Without this, S3 omits ChecksumSHA256 from the response even
+		// though the object was stored with one -- see ChecksumSHA256 below.
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		var nsk *types.NotFound
+		if errors.As(err, &nsk) {
+			return S3Object{}, fmt.Errorf("%w: %s", ErrObjectNotFound, key)
+		}
+		return S3Object{}, fmt.Errorf("head object %s: %w", key, err)
+	}
+	etag := ""
+	if out.ETag != nil {
+		etag = strings.Trim(*out.ETag, "\"")
+	}
+	var uploadedAt time.Time
+	if out.LastModified != nil {
+		uploadedAt = *out.LastModified
+	}
+	return S3Object{
+		Key:            key,
+		ETag:           etag,
+		ContentType:    mimeTypeFromKey(key),
+		Size:           aws.ToInt64(out.ContentLength),
+		UploadedAt:     uploadedAt,
+		ChecksumSHA256: aws.ToString(out.ChecksumSHA256),
+	}, nil
+}
+
 // S3Object holds metadata for a single object in S3.
 type S3Object struct {
 	Key         string // full S3 key e.g. "<user_id>/<datapack_id>/report.pdf"
@@ -343,6 +468,12 @@ type S3Object struct {
 	// was written to the bucket. Zero value when S3 omits it (shouldn't
 	// happen in practice).
 	UploadedAt time.Time
+	// ChecksumSHA256 is the base64 SHA-256 S3 stored for the object, present
+	// only when the uploader supplied one -- every presigned-POST upload
+	// through GenerateUploadURL does. Empty when the backend doesn't return
+	// it even with ChecksumMode enabled; callers must treat empty as
+	// "unverifiable", not "mismatch".
+	ChecksumSHA256 string
 }
 
 // mimeTypeByExtension maps common file extensions to MIME types supported by
@@ -410,7 +541,7 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 }
 
 // UploadArtifactObject writes under the "artifacts/" prefix — disjoint from
-// the KB key space, so nothing that walks or dedups on
+// GenerateUploadURL's KB key space, so nothing that walks or dedups on
 // "<userID>/<datapackID>/" ever reaches an artifact. Artifacts stored
 // before this method existed still live at the old, shared-prefix key until
 // migrated — see meko/scripts/migrate-artifacts-prefix/migrate.py.

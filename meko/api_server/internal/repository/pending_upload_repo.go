@@ -19,13 +19,15 @@ var ErrLeaseLost = errors.New("pending upload lease lost")
 const (
 	PendingUploadAwaiting   = "AWAITING_UPLOAD"
 	PendingUploadInProgress = "IN_PROGRESS"
-	// PendingUploadAwaitingDiscovery is a row handed off to dist_rag's own
-	// CREATE_SOURCE worker: the object belongs to a source the watcher just
-	// created, so dist_rag will discover it and create the document itself,
-	// and the watcher must not register it too (see resolve's isNewSource
-	// branch). Claimable on the same backoff as AWAITING_UPLOAD, but a claimed
-	// row only re-checks dist_rag — it never re-runs source resolution, which
-	// is what would risk a duplicate document.
+	// PendingUploadAwaitingDiscovery is a row waiting on dist_rag's own
+	// CREATE_SOURCE worker: its source is new or still QUEUED/IN_PROGRESS, so
+	// that worker is listing the prefix and may create the document itself,
+	// and writing alongside it is how duplicate documents appear. Claimable on
+	// the same backoff as AWAITING_UPLOAD; a claimed row re-checks the source
+	// and keeps waiting until it is neither, then registers like any other
+	// row (writing the meko details onto dist_rag's document, or inserting it
+	// if the listing missed the object). The status gate, not skipping source
+	// resolution, is what keeps this from racing the worker.
 	PendingUploadAwaitingDiscovery = "AWAITING_DISCOVERY"
 	PendingUploadAbandoned         = "ABANDONED"
 	PendingUploadOversized         = "OVERSIZED"
@@ -52,10 +54,11 @@ type PendingUpload struct {
 	// state it is the reason the upload was refused, which is what a caller
 	// asking after their file is told.
 	LastError string
-	// DeclaredSize is what the client claimed at presign. S3 doesn't enforce
-	// it — the signed policy caps the body at MaxSizeBytes — so it is only as
-	// honest as the client until the object lands and the watcher compares
-	// the real size against it.
+	// DeclaredSize is the size the client declared at presign, and what the
+	// quota counts the upload at until its document is registered. The signed
+	// policy holds the body to exactly the size its URL was signed for, but a
+	// re-presign keeps the larger of two declared sizes while the earlier URL
+	// may still be used (see Promise), so this can exceed what lands.
 	DeclaredSize int64
 	// MaxSizeBytes is the cap this URL was signed under, not the uploader's cap
 	// now.
@@ -199,8 +202,8 @@ func micros(d time.Duration) int64 {
 // still sees AWAITING_DISCOVERY rather than the IN_PROGRESS a plain
 // `UPDATE ... RETURNING state` (or a CTE reading state just ahead of this same
 // UPDATE) would hand back. resolve() depends on seeing AWAITING_DISCOVERY here
-// to skip re-running source resolution against a row dist_rag has already
-// claimed.
+// to keep waiting on dist_rag's discovery instead of going straight to
+// registration.
 func (r *PendingUploadRepo) Claim(
 	limit int, lease, backoffCap time.Duration,
 ) ([]PendingUpload, error) {
@@ -328,10 +331,9 @@ func (r *PendingUploadRepo) SumPendingSizes(ownerUserID, s3Key string) (others, 
 	return others, thisKey, nil
 }
 
-// Retire deletes a row whose upload is now registered in dist_rag.documents —
-// by this service, or by dist_rag's own CREATE_SOURCE worker for a row that
-// was parked in AWAITING_DISCOVERY. Success deliberately leaves no row: the
-// record it held has moved.
+// Retire deletes a row whose upload is now registered in dist_rag.documents,
+// by this service or by the client's own upload-complete/create. Success
+// deliberately leaves no row: the record it held has moved.
 //
 // This and the three writes below are the claimant's: lease is the
 // LeaseExpiresAt Claim returned, and a row no longer held under it is left
@@ -395,14 +397,22 @@ func (r *PendingUploadRepo) Fail(id string, lease time.Time, state, lastError st
 // is not fenced: it overrides a watcher's lease, whose own write then finds
 // the row gone from under it (ErrLeaseLost). Terminal rows keep the reason
 // they already have. Reports whether a row changed.
-func (r *PendingUploadRepo) Abandon(datapackID, s3Key, lastError string) (bool, error) {
+//
+// A row whose URL may still be used is left live: the URL can land the object
+// again, and only a live row gets that upload registered and counted against
+// the quota. urlGrace is how far the row's deadline runs past its URL's
+// expiry; the watcher abandons the row itself once the deadline passes.
+func (r *PendingUploadRepo) Abandon(
+	datapackID, s3Key, lastError string, urlGrace time.Duration,
+) (bool, error) {
 	res, err := r.systemDB.Exec(
 		`UPDATE meko_system.pending_uploads
 		    SET state = '`+PendingUploadAbandoned+`', last_error = $3,
 		        lease_expires_at = NULL, updated_at = NOW()
 		  WHERE s3_key = $1 AND datapack_id = $2::uuid
-		    AND state IN ('`+PendingUploadAwaiting+`', '`+PendingUploadInProgress+`', '`+PendingUploadAwaitingDiscovery+`')`,
-		s3Key, datapackID, lastError,
+		    AND state IN ('`+PendingUploadAwaiting+`', '`+PendingUploadInProgress+`', '`+PendingUploadAwaitingDiscovery+`')
+		    AND expires_at - $4::BIGINT * INTERVAL '1 microsecond' <= NOW()`,
+		s3Key, datapackID, lastError, micros(urlGrace),
 	)
 	if err != nil {
 		return false, fmt.Errorf("abandon pending upload %s: %w", s3Key, err)
