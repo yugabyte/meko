@@ -305,7 +305,7 @@ describe('Updater', () => {
     const u = fx.makeUpdater({ listReleases: async () => [rel('0.2.0')], download });
     expect(u.status()).toMatchObject({ latest: null, available: false, releaseUrl: null });
     const s = await u.apply();
-    expect(s.available).toBe(false);
+    expect(s).toMatchObject({ available: false, applying: false });
     expect(download).not.toHaveBeenCalled();
     expect(fx.restart).not.toHaveBeenCalled();
   });
@@ -327,15 +327,32 @@ describe('Updater', () => {
     }
   });
 
-  it('applies a verified release and schedules a restart', async () => {
-    buildRelease(fx.releaseDir, '0.2.0');
-    const u = fx.makeUpdater(fakeSource(fx.releaseDir, [rel('0.2.0')]));
-    const s = await u.apply();
+  it.each([
+    { name: 'a verified release and schedules a restart', remembered: null, listed: ['0.2.0'], to: '0.2.0' },
+    // A release cut since the last check is installed now, not offered after the restart.
+    { name: 'the newest release, not the one found before', remembered: '0.2.0', listed: ['0.2.0', '0.3.0'], to: '0.3.0' },
+    { name: 'the version found before when the check fails', remembered: '0.2.0', listed: null, to: '0.2.0' },
+  ])('applies $name', async ({ remembered, listed, to }) => {
+    if (remembered) fx.kv.set('update.latest', remembered);
+    buildRelease(fx.releaseDir, to);
+    const source = fakeSource(fx.releaseDir, (listed ?? []).map((v) => rel(v)));
+    const u = fx.makeUpdater({
+      listReleases: async (repo) => {
+        if (!listed) throw new Error('rate limited');
+        return source.listReleases(repo);
+      },
+      download: source.download,
+    });
+    // Two clicks, one install; it shows as installing while the releases are checked.
+    const first = u.apply();
+    expect(u.status().applying).toBe(true);
+    const [s, again] = await Promise.all([first, u.apply()]);
+    expect(again).toEqual(s);
     expect(s.lastError).toBeNull();
-    expect(readlinkSync(join(fx.paths.app, 'current'))).toBe('0.2.0');
-    expect(existsSync(join(fx.paths.app, '0.2.0', 'bin', 'agent-k-local'))).toBe(true);
+    expect(readlinkSync(join(fx.paths.app, 'current'))).toBe(to);
+    expect(existsSync(join(fx.paths.app, to, 'bin', 'agent-k-local'))).toBe(true);
     const pending = JSON.parse(readFileSync(fx.paths.updatePending, 'utf8'));
-    expect(pending).toMatchObject({ from: '0.1.0', to: '0.2.0', attempts: 0 });
+    expect(pending).toMatchObject({ from: '0.1.0', to, attempts: 0 });
     expect(fx.snapshot).toHaveBeenCalledWith(join(fx.paths.home, 'state.db.bak-0.1.0'));
     expect(fx.restart).toHaveBeenCalledOnce();
   });
