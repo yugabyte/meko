@@ -45,6 +45,14 @@
     # Relative path to source directory in case you use Hugo's "--s" option
     srcdir = "docs"
 
+# A header * matches across /, including nested paths. /*.md covers
+# /page.md and /architecture/core-concepts/datapacks.md.
+[[headers]]
+  for = "/*.md"
+  [headers.values]
+    Content-Type = "text/markdown; charset=utf-8"
+    X-Robots-Tag = "noindex"
+
 [[headers]]
   #
   # https://docs.netlify.com/configure-builds/file-based-configuration/#headers
@@ -95,6 +103,13 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), camera=(), microphone=()"
     X-XSS-Protection = "0"
+
+# Leaf pages used to publish at /path/page/index.md. They are now /path/page.md.
+# Not forced, so a section's real /section/index.md file is left in place.
+[[redirects]]
+  from = "/*/index.md"
+  to = "/:splat.md"
+  status = 301
 
 # Redirect hidden pages to their parent pages
 

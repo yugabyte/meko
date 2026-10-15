@@ -224,44 +224,79 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 /**
- * Add markdown copy functionality.
+ * Copy the page's Markdown file into the clipboard.
  */
 (() => {
-  const copyBtn = document.querySelector('.markdown-actions button.copy-link');
-  if (!copyBtn) return;
-  copyBtn.addEventListener('click', function () {
-    const button = this;
-    const originalHtml = button.innerHTML;
+  const button = document.querySelector('.markdown-actions button.copy-link');
+  if (!button || !navigator.clipboard) {
+    return;
+  }
+
+  const label = button.querySelector('span');
+  const originalLabel = label ? label.textContent : '';
+  let resetTimer = 0;
+  let requestId = 0;
+
+  button.addEventListener('click', () => {
     const url = button.getAttribute('data-copy-file');
+    const id = ++requestId;
+    clearTimeout(resetTimer);
+    button.classList.add('is-copying');
+    button.classList.remove('is-copied', 'is-failed');
+    if (label) {
+      label.textContent = 'Copying...';
+    }
 
-    button.innerHTML = '<i class="fa fa-spinner fa-spin me-2"></i><span>Copying...</span>';
+    const pending = fetch(url).then((response) => {
+      if (!response.ok) {
+        throw new Error('File not found');
+      }
+      return response.text();
+    });
 
-    // Fetch the file content.
-    fetch(url)
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error('File not found');
+    // clipboard.write must run in the click so the user gesture is still
+    // active. ClipboardItem accepts a promise and waits for the fetch.
+    // writeText after await is rejected by Safari, and by Chrome when the
+    // fetch is slow.
+    let copy;
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+        copy = navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': pending.then((text) => new Blob([text], { type: 'text/plain' })),
+          }),
+        ]);
+      } else {
+        copy = pending.then((text) => navigator.clipboard.writeText(text));
+      }
+    } catch (error) {
+      copy = Promise.reject(error);
+    }
+
+    copy
+      .then(() => {
+        if (id !== requestId) return;
+        button.classList.add('is-copied');
+        if (label) {
+          label.textContent = 'Copied';
         }
-        return response.text();
-      })
-      .then((text) => {
-        // Copy content to clipboard.
-        navigator.clipboard
-          .writeText(text)
-          .then(() => {
-            button.innerHTML = '<i class="fa fa-copy me-2"></i><span>Copied</span>';
-          })
-          .catch(() => {
-            button.innerHTML = '<i class="fa fa-copy me-2"></i><span>Failed to copy</span>';
-          })
-          .finally(() => {
-            setTimeout(() => {
-              button.innerHTML = originalHtml;
-            }, 2000);
-          });
       })
       .catch(() => {
-        button.innerHTML = originalHtml;
+        if (id !== requestId) return;
+        button.classList.add('is-copied', 'is-failed');
+        if (label) {
+          label.textContent = 'Failed to copy';
+        }
+      })
+      .finally(() => {
+        if (id !== requestId) return;
+        button.classList.remove('is-copying');
+        resetTimer = setTimeout(() => {
+          button.classList.remove('is-copied', 'is-failed');
+          if (label) {
+            label.textContent = originalLabel;
+          }
+        }, 2000);
       });
   });
 })();

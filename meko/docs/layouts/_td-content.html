@@ -1,6 +1,9 @@
 <div class="td-content">
-	<h1>{{ .Title }}</h1>
-  {{ with .OutputFormats.Get "markdown" }}{{ partial "markdown-actions.html" . -}}{{ end }}
+	<div class="heading-title-row">
+		<h1>{{ .Title }}</h1>
+		{{- $md := .OutputFormats.Get "markdown" -}}
+		{{- if $md }}{{ partial "markdown-actions.html" (dict "page" . "md" $md) }}{{ end -}}
+	</div>
 	{{ with .Params.description }}<div class="lead">{{ . | markdownify }}</div>{{ end }}
 	<header class="article-meta">
 		{{ partial "taxonomy_terms_article_wrapper.html" . -}}

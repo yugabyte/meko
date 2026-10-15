@@ -1,6 +1,14 @@
-<div class="markdown-actions">
-  <button class="copy-link" data-copy-file="{{ .RelPermalink }}">
-    <i class="fa fa-copy me-2"></i>
-    <span>Copy page as markdown</span>
+{{- $page := .page -}}
+{{- $href := .md.RelPermalink -}}
+{{- if and $page.IsNode (not $page.IsHome) -}}
+  {{- $path := strings.TrimSuffix "/" (strings.TrimPrefix "/" $page.RelPermalink) -}}
+  {{- if $path -}}
+    {{- $href = printf "/%s.md" $path -}}
+  {{- end -}}
+{{- end -}}
+<div class="markdown-actions d-print-none">
+  <button type="button" class="copy-link" data-copy-file="{{ $href }}" aria-label="Copy page as Markdown">
+    <i class="fa fa-copy" aria-hidden="true"></i>
+    <span>Copy page as Markdown</span>
   </button>
 </div>

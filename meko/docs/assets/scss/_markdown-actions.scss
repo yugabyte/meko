@@ -1,89 +1,86 @@
-.markdown-actions {
-  position: relative;
-  display: inline-flex !important;
-  padding: 4px;
-  margin: 10px 0;
-  left: 10px;
-  top: -6px;
-  border: 1px solid #d7dee4d9;
-  border-radius: 8px;
+.heading-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 0.5rem;
 
-  @media (max-width: 768px) {
-    top: -4px;
+  h1 {
+    margin-bottom: 0;
   }
+}
 
-  button {
-    width: 20px;
-    height: 20px;
-    display: flex;
+.markdown-actions {
+  display: inline-flex;
+  align-items: center;
+
+  button.copy-link {
+    position: relative;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     color: $text-body;
-    background: 0 0 !important;
-    border: none;
-    transition: color 0.15s ease;
+    background: transparent;
+    border: 1px solid #d7dee4d9;
+    border-radius: 8px;
 
-    i.fa {
-      margin: 8px !important;
+    i {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    span {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      z-index: 5;
+      padding: 4px 10px;
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      color: $text-ui;
+      background: $background-color-primary;
+      font-size: 13px;
+      line-height: 16px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
     }
 
     &:hover {
-      background-color: transparent;
-      border: none;
-      color: rgba($text-ui, 0.88);
+      color: $text-ui;
+      border-color: #8ec5ff;
     }
 
-    &.copy-link {
-      position: relative;
+    &:hover span {
+      opacity: 1;
+    }
+
+    // After a click, show the status as the button label. A tooltip under
+    // the title is covered by the page subtitle.
+    &.is-copying,
+    &.is-copied {
+      width: auto;
+      padding: 0 10px;
+      gap: 6px;
 
       span {
-        position: absolute;
-        top: calc(100% + 15px);
-        left: -40px;
-        padding: 0;
-        height: 0;
-        width: 0;
-        overflow: hidden;
-        border-radius: 4px;
-        color: $text-ui;
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        background-size: 200% 200%;
-        font-size: 15px;
-        white-space: nowrap;
-        transition: opacity 250ms 300ms ease;
-        opacity: 0;
-
-        &::before {
-          content: '';
-          position: absolute;
-          z-index: -1;
-          width: 15px;
-          height: 15px;
-          background: linear-gradient(270deg, #5e72e6, #587ae9);
-          transform: rotate(45deg);
-          top: -5px;
-          left: 42px;
-          transition: opacity 250ms 300ms ease;
-        }
-
-        @media (max-width: 599px) {
-          font-size: 11px;
-        }
-      }
-
-      &:hover span {
-        padding: 4px 10px;
-        overflow: visible;
-        width: auto;
-        height: auto;
+        position: static;
         opacity: 1;
-        transition: opacity 250ms ease;
-
-        &::before {
-          opacity: 1;
-          transition: opacity 250ms ease;
-        }
+        padding: 0;
+        border: 0;
+        background: transparent;
       }
+    }
+
+    &.is-copied:not(.is-failed) {
+      color: #8ec5ff;
+    }
+
+    &.is-failed {
+      color: #f87171;
     }
   }
 }

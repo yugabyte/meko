@@ -21,9 +21,13 @@ resourceDir = 'docs/resources'
   [cascade.target]
     path = "/"
 
+# Fetchable Markdown at /path/page.md. Sections publish at /path/index.md,
+# and layouts/_partials/markdown-section.md also publishes /path.md.
+# ugly publishes a regular page as page.md instead of page/index.md.
 [outputFormats.Markdown]
   mediaType = "text/markdown"
   isPlainText = true
+  ugly = true
 
 [outputs]
   page = ["HTML", "Markdown"]
