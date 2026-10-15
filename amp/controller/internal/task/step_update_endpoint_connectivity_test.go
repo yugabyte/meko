@@ -93,3 +93,44 @@ func TestUpdateEndpointConnectivityStepFailsForAnEndpointThatIsGone(t *testing.T
 		t.Fatal("Execute succeeded for a missing endpoint, want a failure")
 	}
 }
+
+// An ingress endpoint's allowlist is its middleware, not a Service field, and is
+// patched in place for the same reason the nlb_* Service is.
+func TestUpdateEndpointConnectivityStepPatchesTheIngressMiddleware(t *testing.T) {
+	for _, mode := range []string{deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal} {
+		state, dep := newFakeStateStore(), &fakeDeployer{}
+		epID := seedConnectivityEndpoint(state, mode)
+		want := []string{"192.0.2.10/32"}
+
+		step := NewUpdateEndpointConnectivityStep(
+			UpdateEndpointConnectivityArgs{EndpointID: epID, AllowedCIDRs: want}, upgradeDeps(state, dep))
+		if res := step.Execute(t.Context()); res.Failed() {
+			t.Fatalf("%s: Execute: %v", mode, res.Err)
+		}
+		if len(dep.created) != 0 || len(dep.sourceRanges) != 0 {
+			t.Errorf("%s: deploys = %d, Service patches = %d, want neither", mode, len(dep.created), len(dep.sourceRanges))
+		}
+		if len(dep.ingressAllowlists) != 1 || !slices.Equal(dep.ingressAllowlists[0].cidrs, want) {
+			t.Fatalf("%s: middleware patches = %v, want one with %v", mode, dep.ingressAllowlists, want)
+		}
+		if got := state.endpointCIDRs[epID]; !slices.Equal(got, want) {
+			t.Errorf("%s: persisted allowed cidrs = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+// An endpoint that predates its middleware cannot enforce a list, so the row must
+// not claim one.
+func TestUpdateEndpointConnectivityStepDoesNotPersistWhenTheMiddlewareIsMissing(t *testing.T) {
+	state, dep := newFakeStateStore(), &fakeDeployer{ingressAllowlistErr: errors.New("no allowlist middleware")}
+	epID := seedConnectivityEndpoint(state, deploy.ConnectivityIngressInternal)
+
+	step := NewUpdateEndpointConnectivityStep(
+		UpdateEndpointConnectivityArgs{EndpointID: epID, AllowedCIDRs: []string{"192.0.2.10/32"}}, upgradeDeps(state, dep))
+	if res := step.Execute(t.Context()); !res.Failed() {
+		t.Fatal("Execute succeeded without a middleware, want a failure")
+	}
+	if _, wrote := state.endpointCIDRs[epID]; wrote {
+		t.Error("allowed cidrs were persisted although nothing enforces them")
+	}
+}

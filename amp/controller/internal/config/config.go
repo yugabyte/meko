@@ -168,6 +168,13 @@ type DeployConfig struct {
 	// no shard ever empties and none can be reclaimed) or "pack" (fullest shard
 	// with room: shards drain by themselves as endpoints retire).
 	IngressPlacement string
+	// IngressSourceFiltering declares that this deployment's shards see real
+	// client addresses — PROXY protocol on AWS, externalTrafficPolicy: Local on
+	// GCP and Azure — and is what lets allowed_cidrs onto the ingress_* modes.
+	// An operator's declaration because only the deploy path knows how the
+	// shards were installed; off, a per-endpoint allowlist would match node
+	// addresses (controller/architecture/ac-ingress.md).
+	IngressSourceFiltering bool
 
 	// StorageClass provisions the endpoint's data volume (/data: pgdata, LFC,
 	// logs) as a PersistentVolumeClaim of that class — a network block volume
@@ -440,6 +447,7 @@ func Load(args []string) (*Config, error) {
 	fs.IntVar(&d.IngressMaxShards, "deploy-ingress-max-shards", envInt("AMP_DEPLOY_INGRESS_MAX_SHARDS", 24), "k8s: ceiling on ingress shards the control plane may build on its own; reaching it alerts rather than spending more")
 	fs.DurationVar(&d.IngressQuarantine, "deploy-ingress-quarantine", envDuration("AMP_DEPLOY_INGRESS_QUARANTINE", 10*time.Minute), "k8s: how long a released ingress port stays unissued, so a cached address cannot reach the database that takes the slot next")
 	fs.StringVar(&d.IngressPlacement, "deploy-ingress-placement", env("AMP_DEPLOY_INGRESS_PLACEMENT", "spread"), "k8s: which shard a new endpoint lands on — spread (emptiest: smallest blast radius, shards never empty) or pack (fullest with room: shards drain and can be reclaimed)")
+	fs.BoolVar(&d.IngressSourceFiltering, "deploy-ingress-source-filtering", envBool("AMP_DEPLOY_INGRESS_SOURCE_FILTERING", false), "k8s: declare that the ingress shards see real client addresses (PROXY protocol on AWS, externalTrafficPolicy=Local on GCP/Azure), which lets connectivity.allowed_cidrs onto the ingress_* modes. Off (the default) = refused there")
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
 	fs.StringVar(&d.ScratchBacking, "deploy-scratch-backing", env("AMP_DEPLOY_SCRATCH_BACKING", ""), "k8s: what the emptyDir /data sits on when --deploy-storage-class is empty — local-nvme (requires --deploy-node-selector naming a pool whose ephemeral storage is instance NVMe) or node-disk (the node's own disk, accepted). Empty = undeclared: the controller warns at startup when /data may land on a network boot volume")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")

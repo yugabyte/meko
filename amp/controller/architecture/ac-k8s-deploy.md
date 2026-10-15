@@ -578,8 +578,9 @@ endpoint:
 
 The `ingress_*` pair is refused with `400` unless the deployment has
 `--deploy-ingress-enabled` set **and** this controller can place an endpoint on a
-shard; the error says which is missing. `allowed_cidrs` is refused on them too —
-a shared load balancer cannot carry a per-endpoint allowlist.
+shard; the error says which is missing. `allowed_cidrs` on them is a per-endpoint
+middleware in the shard's proxy, refused unless `--deploy-ingress-source-filtering`
+says the shards see client addresses ([`ac-ingress.md`](ac-ingress.md#per-endpoint-allowlists)).
 
 `connectivity.allowed_cidrs` becomes that Service's `loadBalancerSourceRanges`,
 which covers the gateway port as well as Postgres's; empty is unrestricted, which on `nlb_external` leaves password authentication as

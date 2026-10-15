@@ -9,8 +9,8 @@ gateway's route, their allowlist middleware, and the DNS record. That is the pro
 retiring the endpoint is still one `helm uninstall` and nothing is orphaned
 behind it, exactly as for the ClusterIP and nlb_* modes.
 
-Only the route is unconditional. The middleware appears with an allowlist, and
-the gateway route and the DNS record only where the deployment has a zone to publish in — without one
+The route and its middleware are unconditional; the gateway route and the DNS
+record appear only where the deployment has a zone to publish in — without one
 (kind, CI, anywhere with no external-dns) the endpoint is addressed by its
 shard's host and port, which is where it answers regardless.
 
@@ -53,10 +53,8 @@ spec:
       services:
         - name: {{ include "yb-amp-endpoint.fullname" . }}
           port: {{ .Values.endpoint.computePort }}
-      {{- with .Values.service.allowedCidrs }}
       middlewares:
         - name: {{ include "yb-amp-endpoint.fullname" $ }}-allow
-      {{- end }}
 {{- /*
 The documentdb gateway's route. Unlike Postgres it needs no port of its own: a
 MongoDB driver opens TLS on its first byte and sends SNI, so every endpoint on the
@@ -85,31 +83,25 @@ spec:
       services:
         - name: {{ include "yb-amp-endpoint.fullname" . }}
           port: {{ .Values.documentdbGateway.port }}
-      {{- with .Values.service.allowedCidrs }}
       middlewares:
         - name: {{ include "yb-amp-endpoint.fullname" $ }}-allow
-      {{- end }}
   tls:
     passthrough: true
 {{- end }}
-{{- with .Values.service.allowedCidrs }}
 ---
 {{- /*
 Per-endpoint source filtering. loadBalancerSourceRanges cannot do this once the
 load balancer is shared — it is a per-Service field and a shard has one Service —
 so the allowlist moves into a middleware bound to this endpoint's routes alone.
+It filters on the address Traefik sees, which is the client's only on a shard
+installed to keep it (PROXY protocol on AWS, externalTrafficPolicy: Local on GCP
+and Azure); the controller refuses allowed_cidrs here unless the deployment says
+its shards do.
 
-Behind a cloud load balancer this needs the shard's entryPoint to trust PROXY
-protocol, or every client appears to come from the load balancer; that is the
-shard's configuration, not this endpoint's.
-*/}}
-{{- /*
-Rendered ahead of the API that will use it. endpointConnectivity still refuses
-allowed_cidrs on the ingress_* modes (a shared load balancer cannot carry a
-per-endpoint allowlist, so the filtering has to move here), which means
-service.allowedCidrs is empty for every release the controller produces today and
-this object is not created. It lands with the chart so that lifting the API
-refusal is a one-line change rather than a chart change too.
+Rendered for every ingress endpoint, unrestricted ones included, so that changing
+the list later is a patch to this one object (deploy.UpdateIngressAllowlist)
+rather than objects created and deleted outside the release. Traefik refuses an
+empty ipAllowList, so "everyone" is spelled out.
 */}}
 apiVersion: traefik.io/v1alpha1
 kind: MiddlewareTCP
@@ -123,8 +115,7 @@ metadata:
 spec:
   ipAllowList:
     sourceRange:
-      {{- toYaml . | nindent 6 }}
-{{- end }}
+      {{- toYaml (.Values.service.allowedCidrs | default (list "0.0.0.0/0" "::/0")) | nindent 6 }}
 {{- /*
 Rendered only for a name that can actually be published. The controller passes
 an empty dnsName for one minted where its family had no zone (an unqualified

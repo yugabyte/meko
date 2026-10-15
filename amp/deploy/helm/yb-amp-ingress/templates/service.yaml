@@ -86,6 +86,10 @@ metadata:
     {{- end }}
 spec:
   type: LoadBalancer
+  {{- if not (has .Values.externalTrafficPolicy (list "Cluster" "Local")) }}
+  {{- fail (printf "externalTrafficPolicy must be Cluster or Local (got %q)" .Values.externalTrafficPolicy) }}
+  {{- end }}
+  externalTrafficPolicy: {{ .Values.externalTrafficPolicy }}
   selector:
     {{- include "yb-amp-ingress.selectorLabels" . | nindent 4 }}
   {{- with .Values.allowedCidrs }}

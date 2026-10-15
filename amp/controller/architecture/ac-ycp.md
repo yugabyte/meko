@@ -171,9 +171,11 @@ the allowlist one they can.
 the address alone cannot show. Against a private address that is conclusive for
 `nlb_external` only; an `nlb_internal` LB is itself privately addressed on GKE/AKS.
 `connectivity_allowed_cidrs` (comma-joined and sorted, as `extensions` is joined)
-exists *only* under an `nlb_*` mode, where an empty value means **unrestricted**;
-absent means there is no load balancer to restrict, so a console can warn about an
-open `nlb_external` endpoint without misreading every `cluster_ip` one.
+exists under an `nlb_*` or an `ingress_*` mode, where an empty value means
+**unrestricted**; absent means there is nothing to restrict, so a console can warn
+about an open external endpoint without misreading every `cluster_ip` one. Agents
+before the release that reports `ingress_*` lists omit the key there, so on an
+`ingress_*` endpoint a missing key means *unknown*, not unrestricted.
 
 That last rule holds **only once `connectivity_mode` is present**. An older agent
 emits neither key — the customer upgrades on their own schedule, so the two sides

@@ -336,10 +336,10 @@ type ResourceStatus struct {
 	// prevent.
 	//
 	// connectivity_mode is reported resolved: an endpoint predating the field
-	// behaves as cluster_ip. connectivity_allowed_cidrs is present only under an
-	// nlb_* mode, comma-joined like extensions, and an EMPTY value there means
-	// unrestricted, not unset — so a consumer splitting on "," must treat the
-	// empty string as the empty list rather than as one blank entry.
+	// behaves as cluster_ip. connectivity_allowed_cidrs is present under an
+	// nlb_* or an ingress_* mode, comma-joined like extensions, and an EMPTY value
+	// there means unrestricted, not unset — so a consumer splitting on "," must
+	// treat the empty string as the empty list rather than as one blank entry.
 	//
 	// Both keys are absent altogether from an agent older than the release that
 	// added them, and the two sides are always skewed (the customer upgrades on
@@ -347,6 +347,9 @@ type ResourceStatus struct {
 	// cluster_ip; only when it is present does a missing cidr key mean "no load
 	// balancer to restrict". Reading absence as the default would silently drop
 	// the warning for the internet-exposed case this encoding exists to surface.
+	// One exception: agents before the release that reports ingress_* lists
+	// omit the key on an ingress_* endpoint, so there a missing key means
+	// unknown, not unrestricted.
 	//
 	// An endpoint also reports how a client verifies its certificate, from the
 	// controller's GET …/ca: tls_ca_required ("true"/"false"), tls_ca_crt (the

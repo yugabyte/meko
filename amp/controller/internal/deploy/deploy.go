@@ -487,6 +487,23 @@ type IngressSupporter interface {
 	SupportsIngress() bool
 }
 
+// IngressSourceFilterer is implemented by a deployer that can enforce a
+// per-endpoint allowlist on the ingress_* modes. The middleware that does it
+// filters on the address Traefik sees, which is a node or load-balancer address
+// unless the shard was installed to keep the client's, so this is the
+// operator's declaration that it was, never something inferred. A deployer that
+// does not implement it cannot.
+type IngressSourceFilterer interface {
+	FiltersIngressSources() bool
+}
+
+// IngressAllowlistUpdater replaces an ingress_* endpoint's allowlist on its live
+// middleware, the counterpart of SourceRangesUpdater for an endpoint whose load
+// balancer is shared and so cannot carry one.
+type IngressAllowlistUpdater interface {
+	UpdateIngressAllowlist(ctx context.Context, name string, cidrs []string) error
+}
+
 // IngressPlacer is implemented by a deployer whose CreateEndpoint knows what to
 // do with an EndpointSpec.Ingress — render the endpoint's route onto its shard
 // and report the address it answers on.

@@ -264,22 +264,42 @@ deployed but holds no AWS credentials by any mechanism and has failed every
 reconcile since it was installed, so it has never published a record.
 `amp/test/ingress-bakeoff/run.sh preflight` reports both halves.
 
+## Per-endpoint allowlists
+
+An endpoint's `allowed_cidrs` is its own `MiddlewareTCP` `ipAllowList`, bound to its
+routes. Every `ingress_*` endpoint gets one — `0.0.0.0/0` and `::/0` when
+unrestricted, because Traefik refuses an empty list — so changing it later is a
+merge patch of that one object (`UpdateIngressAllowlist`), never objects made
+outside the release. An endpoint rendered before that has no middleware: clearing
+its list succeeds (nothing filters it), any other list fails until
+`POST /endpoint-rerenders` re-renders it.
+
+The middleware filters on the address Traefik sees, and by default that is not the
+client's:
+
+| Cloud | Where the address is lost | Fix |
+|---|---|---|
+| AWS | At the NLB: IP targets bypass kube-proxy, but an NLB to IP targets over TCP does not pass the client address on | PROXY protocol (`proxyProtocol.enabled`, `trustedIPs` = the NLB's subnets only) |
+| GCP, Azure | At kube-proxy: the passthrough LB delivers the client address, then `externalTrafficPolicy: Cluster` SNATs it to a node's | `externalTrafficPolicy: Local`; their LBs cannot send PROXY protocol |
+
+Measured on GKE by giving a route an `ipAllowList` of the client's own range and of
+`10.0.0.0/8` in turn: under `Cluster` only the `10.0.0.0/8` rule admitted the
+connection, under `Local` only the client's own did. `Local` costs no measurable
+throughput (16.3k vs 16.9k tps at 16 connections) but the load balancer then
+reaches only nodes running a replica.
+
+So the controller accepts `allowed_cidrs` on `ingress_*` only with
+`--deploy-ingress-source-filtering`, the operator's declaration that the shards
+were installed that way. Without it the list is refused rather than matched
+against node addresses, where a broad range admits everyone. `redeploy.sh`'s
+`INGRESS_SOURCE_FILTERING=true` sets the shard settings for the cloud and only
+then the flag, so the controller never declares what the shards do not yet do.
+Turning it off is refused while any endpoint's middleware holds a list: the
+shards would revert and the stored lists be re-rendered against node addresses.
+The same holds for a rollback below this release, so clear the lists and turn
+filtering off first. Procedure per cloud:
+[`runbooks/ingress-allowlists.md`](../../runbooks/ingress-allowlists.md).
+
 ## Not yet built
 
-Per-listener source-IP filtering, and it needs more than the middleware. The
-shard's Service is `externalTrafficPolicy: Cluster`, so kube-proxy SNATs and the
-proxy sees a node address rather than the client — measured on GKE by giving a
-route an `ipAllowList` of the client's own range and of `10.0.0.0/8` in turn:
-under `Cluster` only the `10.0.0.0/8` rule admitted the connection, under `Local`
-only the client's own did. So an allowlist written against customer addresses
-would match the wrong thing until the Service is `Local`. PROXY protocol is not
-the alternative it is on AWS: GCP's internal passthrough load balancer does not
-offer it, which is why `proxyProtocol` in the shard chart is an AWS-shaped knob.
-`Local` costs no measurable throughput (16.3k vs 16.9k tps at 16 connections,
-inside this cluster's run-to-run spread) but restricts the load balancer to nodes
-that host a replica, so it wants checking against replica placement before it is
-turned on.
-
-Also outstanding: the capacity reconciler's watermark and ceiling. `allowed_cidrs` is refused on the `ingress_*`
-modes until that last one lands; `nlb_*` remains the mode for an endpoint that
-needs an allowlist today.
+The capacity reconciler's watermark and ceiling.

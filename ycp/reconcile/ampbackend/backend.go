@@ -363,12 +363,13 @@ func endpointAttrs(ep ampclient.Endpoint, ca *ampclient.EndpointCaBundle) map[st
 	m = attrPutCA(m, ca)
 	mode := connectivityMode(ep.Connectivity)
 	m = attrPut(m, "connectivity_mode", string(mode))
-	if mode == ampclient.NlbInternal || mode == ampclient.NlbExternal {
+	switch mode {
+	case ampclient.NlbInternal, ampclient.NlbExternal, ampclient.IngressInternal, ampclient.IngressExternal:
 		// Written even when the list is empty, which attrPut would drop: empty
-		// means UNRESTRICTED, and on nlb_external that is Postgres reachable from
-		// the internet with the password as the only barrier. Under cluster_ip the
-		// field has no meaning (the controller refuses it with a 400), so the key
-		// is absent there rather than empty — which would read as unrestricted.
+		// means UNRESTRICTED, and on an external mode that is Postgres reachable
+		// from the internet with the password as the only barrier. Under cluster_ip
+		// the field has no meaning (the controller refuses it with a 400), so the
+		// key is absent there rather than empty — which would read as unrestricted.
 		// Sorted through the same helper the drift comparison normalises with, so
 		// the reported value matches what that check treats as equal and does not
 		// churn tick to tick on a re-ordering the controller considers identical.

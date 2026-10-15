@@ -243,6 +243,13 @@ controller:
       # empties so none can be reclaimed) or `pack` (fullest with room: shards
       # drain by themselves as endpoints retire).
       placement: spread
+      # -- Declare that the shards see real client addresses (PROXY protocol on
+      # AWS, externalTrafficPolicy Local on GCP/Azure), which lets
+      # connectivity.allowed_cidrs onto the ingress_* modes. Off, they are
+      # refused there: an allowlist matched against node addresses admits
+      # everyone in a broad range. redeploy.sh's INGRESS_SOURCE_FILTERING sets
+      # this and the shard settings together.
+      sourceFiltering: false
     storageClass: ""
     # -- What the emptyDir /data sits on when storageClass is empty
     # (AMP_DEPLOY_SCRATCH_BACKING). An emptyDir is carved out of the node's

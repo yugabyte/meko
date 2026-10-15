@@ -681,6 +681,9 @@ type fakeDeployer struct {
 	// sourceRanges records UpdateSourceRanges calls; sourceRangesErr fails them.
 	sourceRanges    []sourceRangesCall
 	sourceRangesErr error
+	// ingressAllowlists records UpdateIngressAllowlist calls; ingressAllowlistErr fails them.
+	ingressAllowlists   []sourceRangesCall
+	ingressAllowlistErr error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
@@ -734,6 +737,13 @@ func (f *fakeDeployer) UpdateSourceRanges(_ context.Context, name string, cidrs 
 	defer f.mu.Unlock()
 	f.sourceRanges = append(f.sourceRanges, sourceRangesCall{name, append([]string(nil), cidrs...)})
 	return f.sourceRangesErr
+}
+
+func (f *fakeDeployer) UpdateIngressAllowlist(_ context.Context, name string, cidrs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ingressAllowlists = append(f.ingressAllowlists, sourceRangesCall{name, append([]string(nil), cidrs...)})
+	return f.ingressAllowlistErr
 }
 
 func (f *fakeDeployer) EndpointSafekeeperURL(id string) string {

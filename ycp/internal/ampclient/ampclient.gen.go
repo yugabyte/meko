@@ -1081,13 +1081,14 @@ type EndpointConnectivity struct {
 	// AllowedCidrs Sources allowed to reach the load balancer, as CIDRs
 	// (`loadBalancerSourceRanges`), e.g. `["10.0.0.0/16"]`. Each entry must
 	// be a valid CIDR **with** a prefix length; a bare IP is rejected with
-	// 400. Only meaningful for the `nlb_*` modes.
+	// 400. Rejected with 400 on `cluster_ip`.
 	//
-	// Not yet supported on the `ingress_*` modes, and rejected with 400
-	// there rather than ignored: the load balancer is shared, so
-	// `loadBalancerSourceRanges` — a per-Service field — cannot express a
-	// per-endpoint allowlist, and accepting one silently would leave the
-	// endpoint open to more than the caller asked for.
+	// On the `ingress_*` modes the load balancer is shared, so the list is
+	// a per-endpoint middleware in the shard's proxy instead. That proxy
+	// sees the client's address only on a shard installed to keep it, so
+	// the list is rejected with 400 there unless the deployment has
+	// `--deploy-ingress-source-filtering` on, rather than accepted and
+	// matched against node addresses.
 	//
 	// Empty means unrestricted. On `nlb_external` that puts Postgres on the
 	// public internet with password authentication as the only barrier, so
@@ -1114,10 +1115,9 @@ type EndpointConnectivity struct {
 	// deliberately no fallback to a dedicated load balancer, which would
 	// reinstate the per-endpoint cost without the caller asking for it.
 	//
-	// `allowed_cidrs` is rejected with 400 on the `ingress_*` modes: a
-	// shared load balancer cannot carry a per-endpoint allowlist, so the
-	// filtering has to move into the shard's proxy, which is not built yet.
-	// Use `nlb_internal` or `nlb_external` for an endpoint that needs one.
+	// On the `ingress_*` modes `allowed_cidrs` is enforced by the shard's
+	// proxy, and is rejected with 400 unless the deployment declares its
+	// shards see real client addresses (`--deploy-ingress-source-filtering`).
 	Mode *EndpointConnectivityMode `json:"mode,omitempty"`
 }
 
@@ -1138,10 +1138,9 @@ type EndpointConnectivity struct {
 // deliberately no fallback to a dedicated load balancer, which would
 // reinstate the per-endpoint cost without the caller asking for it.
 //
-// `allowed_cidrs` is rejected with 400 on the `ingress_*` modes: a
-// shared load balancer cannot carry a per-endpoint allowlist, so the
-// filtering has to move into the shard's proxy, which is not built yet.
-// Use `nlb_internal` or `nlb_external` for an endpoint that needs one.
+// On the `ingress_*` modes `allowed_cidrs` is enforced by the shard's
+// proxy, and is rejected with 400 unless the deployment declares its
+// shards see real client addresses (`--deploy-ingress-source-filtering`).
 type EndpointConnectivityMode string
 
 // EndpointHealth Whether the endpoint's pod is serving right now, read from the workload
@@ -1917,7 +1916,8 @@ type UpdateBranchSettingsRequest struct {
 // list is replaced, not merged; `[]` removes the restriction.
 type UpdateEndpointConnectivityRequest struct {
 	// AllowedCidrs The new `connectivity.allowed_cidrs`, validated as on create: each entry
-	// a CIDR with a prefix length, and only on an `nlb_*` endpoint.
+	// a CIDR with a prefix length, and only on an `nlb_*` endpoint or, where
+	// the deployment has source filtering on, an `ingress_*` one.
 	AllowedCidrs []string `json:"allowed_cidrs"`
 
 	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call

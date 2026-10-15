@@ -184,6 +184,8 @@ spec:
               value: {{ .Values.controller.endpoint.ingress.quarantine | quote }}
             - name: AMP_DEPLOY_INGRESS_PLACEMENT
               value: {{ .Values.controller.endpoint.ingress.placement | quote }}
+            - name: AMP_DEPLOY_INGRESS_SOURCE_FILTERING
+              value: {{ .Values.controller.endpoint.ingress.sourceFiltering | quote }}
             # Endpoint data volume: a PVC of this storage class (empty => emptyDir).
             - name: AMP_DEPLOY_STORAGE_CLASS
               value: {{ .Values.controller.endpoint.storageClass | quote }}

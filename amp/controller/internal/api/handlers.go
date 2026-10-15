@@ -1984,18 +1984,7 @@ func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string
 		}
 	}
 	if len(cidrs) > 0 && mode == deploy.ConnectivityClusterIP {
-		e := apiError("invalid_request", "connectivity.allowed_cidrs applies only to the nlb_internal and nlb_external modes")
-		return "", nil, &e
-	}
-	// An ingress endpoint shares its load balancer, so loadBalancerSourceRanges
-	// — a per-Service field — cannot express a per-endpoint allowlist. The
-	// filtering moves into the shard's proxy instead, which is real work and not
-	// yet done. Refused rather than accepted-and-ignored: silently dropping an
-	// allowlist is how an endpoint ends up open to more than the caller asked
-	// for, and they would have no way to tell.
-	if len(cidrs) > 0 && deploy.IsIngress(mode) {
-		e := apiError("invalid_request", fmt.Sprintf(
-			"connectivity.allowed_cidrs is not yet supported for %s; use nlb_internal or nlb_external for an endpoint that needs one", mode))
+		e := apiError("invalid_request", "connectivity.allowed_cidrs does not apply to cluster_ip")
 		return "", nil, &e
 	}
 	if deploy.IsDedicatedLB(mode) || deploy.IsIngress(mode) {
@@ -2035,6 +2024,27 @@ func endpointConnectivity(in *EndpointConnectivity, dep deploy.Deployer) (string
 				"connectivity.mode %q is not available on this controller yet: shared ingress is "+
 					"turned on, but placing an endpoint on a shard is not wired up, so the endpoint "+
 					"would come back reporting an exposure it does not have", mode))
+			return "", nil, &e
+		}
+	}
+	// An ingress endpoint shares its load balancer, so the allowlist is a
+	// middleware in the shard's proxy, which filters on the address the proxy
+	// sees. That is a node or load-balancer address unless the shards were
+	// installed to keep the client's, and the deployment has to say they were.
+	// Refused rather than accepted-and-ignored: an allowlist matched against
+	// node addresses admits everyone inside a broad range, and nobody can tell.
+	// After the checks above, so a deployment without shared ingress at all is
+	// told that rather than sent to this flag.
+	if len(cidrs) > 0 && deploy.IsIngress(mode) {
+		sf, ok := dep.(deploy.IngressSourceFilterer)
+		if !ok {
+			e := apiError("invalid_request", fmt.Sprintf(
+				"connectivity.allowed_cidrs is not supported for %s by this deploy driver; use nlb_internal or nlb_external for an endpoint that needs one", mode))
+			return "", nil, &e
+		}
+		if !sf.FiltersIngressSources() {
+			e := apiError("invalid_request", fmt.Sprintf(
+				"connectivity.allowed_cidrs is not supported for %s on this deployment: its ingress shards do not see client addresses (--deploy-ingress-source-filtering is off); use nlb_internal or nlb_external for an endpoint that needs one", mode))
 			return "", nil, &e
 		}
 	}

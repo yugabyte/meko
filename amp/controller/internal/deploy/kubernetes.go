@@ -116,6 +116,9 @@ type KubernetesConfig struct {
 	// mints a name — the allocator does, and hands the finished address down — so
 	// a copy of the zones on this struct could only go stale.
 	IngressEnabled bool
+	// IngressSourceFiltering is the operator's declaration that the shards see
+	// real client addresses, so a per-endpoint allowlist matches what it says.
+	IngressSourceFiltering bool
 	// Cloud overrides the cloud detected from node provider IDs ("aws", "gcp",
 	// "azure"), which selects the load-balancer annotations the endpoint chart
 	// renders for the nlb_* connectivity modes. Empty (the normal case) = detect.
@@ -234,7 +237,9 @@ var (
 	_ IngressPlacer = (*KubernetesDeployer)(nil)
 	// The API accepts an allowlist change on any deployer that renders the load
 	// balancer, so the one that does must also be able to change it.
-	_ SourceRangesUpdater = (*KubernetesDeployer)(nil)
+	_ SourceRangesUpdater     = (*KubernetesDeployer)(nil)
+	_ IngressSourceFilterer   = (*KubernetesDeployer)(nil)
+	_ IngressAllowlistUpdater = (*KubernetesDeployer)(nil)
 )
 
 // SupportsConnectivity reports that this deployer renders the per-endpoint
@@ -251,6 +256,11 @@ func (k *KubernetesDeployer) SupportsConnectivity() bool { return true }
 // it, and endpointConnectivity reads it to reject the ingress_* modes up front,
 // so a caller gets a 400 rather than an endpoint that deploys unreachable.
 func (k *KubernetesDeployer) SupportsIngress() bool { return k.cfg.IngressEnabled }
+
+// FiltersIngressSources reports --deploy-ingress-source-filtering, satisfying
+// deploy.IngressSourceFilterer. Only the declaration: whether shared ingress is
+// on at all is SupportsIngress, which endpointConnectivity checks first.
+func (k *KubernetesDeployer) FiltersIngressSources() bool { return k.cfg.IngressSourceFiltering }
 
 // PlacesIngress reports that CreateEndpoint can actually put an endpoint on a
 // shard, satisfying deploy.IngressPlacer. It is what opens the API to the
@@ -1131,6 +1141,44 @@ func sourceRangesPatch(cidrs []string) ([]byte, error) {
 		ranges = nil
 	}
 	return json.Marshal(map[string]any{"spec": map[string]any{"loadBalancerSourceRanges": ranges}})
+}
+
+// unrestrictedSourceRange is what the endpoint chart renders into an ingress_*
+// endpoint's middleware when it has no allowlist. Traefik refuses an empty
+// ipAllowList, so "everyone" has to be spelled out; keeping the middleware
+// present either way is what makes a later change a patch to one field.
+var unrestrictedSourceRange = []string{"0.0.0.0/0", "::/0"}
+
+// UpdateIngressAllowlist sets the source range on an ingress_* endpoint's
+// MiddlewareTCP (the chart's <release>-allow), satisfying
+// deploy.IngressAllowlistUpdater. Like UpdateSourceRanges it patches that one
+// field rather than re-rendering the release, and the caller persists the list
+// so the next render produces the same thing.
+func (k *KubernetesDeployer) UpdateIngressAllowlist(ctx context.Context, name string, cidrs []string) error {
+	ranges := cidrs
+	if len(ranges) == 0 {
+		ranges = unrestrictedSourceRange
+	}
+	patch, err := json.Marshal(map[string]any{"spec": map[string]any{"ipAllowList": map[string]any{"sourceRange": ranges}}})
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/apis/traefik.io/v1alpha1/namespaces/%s/middlewaretcps/%s-allow", k.cfg.Namespace, name)
+	_, status, err := k.k8sAPIPatch(ctx, path, "application/merge-patch+json", patch)
+	if status == http.StatusNotFound {
+		// Rendered before every ingress endpoint got a middleware. With no
+		// middleware nothing filters, which is exactly what an empty list asks
+		// for; any other list would be persisted without being enforced.
+		if len(cidrs) == 0 {
+			return nil
+		}
+		return fmt.Errorf("endpoint %s has no allowlist middleware (its release predates one being rendered for every ingress endpoint); re-render it by rolling it onto this controller's endpoint version (POST /endpoint-rerenders naming it; the pod restarts), then retry", name)
+	}
+	if err != nil {
+		return fmt.Errorf("patch ingress allowlist of %s: %w", name, err)
+	}
+	k.logger.Info("endpoint ingress allowlist updated", "endpoint", name, "allowed_cidrs", cidrs)
+	return nil
 }
 
 // podName returns the name of the endpoint's (single) pod, found by its instance

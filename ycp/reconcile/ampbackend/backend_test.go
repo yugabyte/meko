@@ -198,7 +198,8 @@ func TestListReportsResourceAttrs(t *testing.T) {
 // The console writes an endpoint's connectivity and has no other way to read back
 // what the controller applied, and an nlb_* endpoint on the pod-IP fallback is
 // otherwise indistinguishable from a cluster_ip one. Both halves are encoded so
-// that the cidr key exists iff the mode has a load balancer, and an empty value
+// that the cidr key exists iff the mode has a load balancer (its own or a
+// shard's), and an empty value
 // there means unrestricted rather than unset.
 func TestListReportsEndpointConnectivity(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -225,6 +226,18 @@ func TestListReportsEndpointConnectivity(t *testing.T) {
 			row:  `{"mode":"nlb_external"}`,
 			mode: "nlb_external",
 			// cidrs is the zero value: present and empty.
+			wantCidrs: true,
+		},
+		// A shared load balancer carries the list as the shard proxy's
+		// middleware, and YCP reads it back the same way.
+		"an ingress endpoint reports its list": {
+			row:   `{"mode":"ingress_internal","allowed_cidrs":["10.0.0.0/16"]}`,
+			mode:  "ingress_internal",
+			cidrs: "10.0.0.0/16", wantCidrs: true,
+		},
+		"an unrestricted ingress endpoint is reported, not dropped": {
+			row:       `{"mode":"ingress_external"}`,
+			mode:      "ingress_external",
 			wantCidrs: true,
 		},
 	} {

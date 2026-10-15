@@ -102,3 +102,59 @@ func TestUpdateSourceRangesFailsWhenTheServiceIsMissing(t *testing.T) {
 		t.Fatalf("err = %v, want the 404 reported", err)
 	}
 }
+
+// An ingress endpoint's allowlist is its <release>-allow middleware, patched
+// whole; an empty list must become "everyone", because Traefik refuses an empty
+// ipAllowList and the route that names it would stop serving.
+func TestUpdateIngressAllowlistPatchesTheMiddleware(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cidrs []string
+		want  string
+	}{
+		"replaces the list": {[]string{"192.0.2.10/32"}, `{"spec":{"ipAllowList":{"sourceRange":["192.0.2.10/32"]}}}`},
+		"empty is everyone": {nil, `{"spec":{"ipAllowList":{"sourceRange":["0.0.0.0/0","::/0"]}}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var method, path, ctype, body string
+			fakeAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				method, path, ctype, body = r.Method, r.URL.Path, r.Header.Get("Content-Type"), string(b)
+				_, _ = io.WriteString(w, `{}`)
+			})
+			k := &KubernetesDeployer{cfg: KubernetesConfig{Namespace: "endpoints"}, logger: slog.New(slog.DiscardHandler)}
+
+			if err := k.UpdateIngressAllowlist(t.Context(), "yb-ep-1", tc.cidrs); err != nil {
+				t.Fatalf("UpdateIngressAllowlist: %v", err)
+			}
+			if method != http.MethodPatch || path != "/apis/traefik.io/v1alpha1/namespaces/endpoints/middlewaretcps/yb-ep-1-allow" {
+				t.Errorf("request = %s %s, want PATCH of the endpoint's -allow middleware", method, path)
+			}
+			if ctype != "application/merge-patch+json" {
+				t.Errorf("content type = %q, want a JSON merge patch", ctype)
+			}
+			if body != tc.want {
+				t.Errorf("body = %s, want %s", body, tc.want)
+			}
+		})
+	}
+}
+
+// An endpoint created before every ingress endpoint got a middleware has none to
+// patch, and must fail with a reason rather than persist a list nothing enforces.
+func TestUpdateIngressAllowlistFailsWhenTheMiddlewareIsMissing(t *testing.T) {
+	fakeAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"kind":"Status","reason":"NotFound"}`)
+	})
+	k := &KubernetesDeployer{cfg: KubernetesConfig{Namespace: "endpoints"}, logger: slog.New(slog.DiscardHandler)}
+
+	err := k.UpdateIngressAllowlist(t.Context(), "yb-ep-1", []string{"192.0.2.10/32"})
+	if err == nil || !strings.Contains(err.Error(), "no allowlist middleware") {
+		t.Fatalf("err = %v, want the missing middleware named", err)
+	}
+	// With no middleware nothing filters, which is what an empty list asks for;
+	// clearing such an endpoint was a no-op before every endpoint got one.
+	if err := k.UpdateIngressAllowlist(t.Context(), "yb-ep-1", nil); err != nil {
+		t.Errorf("clearing an endpoint with no middleware = %v, want nil", err)
+	}
+}

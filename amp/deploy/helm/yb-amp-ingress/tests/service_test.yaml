@@ -134,3 +134,30 @@ tests:
       - lengthEqual:
           path: spec.ports
           count: 50
+
+  # Cluster SNATs the client to a node address on GCP and Azure, so every
+  # per-endpoint allowlist would match the node; Local is how those clouds keep it.
+  - it: defaults to Cluster traffic policy
+    set:
+      cloud: gcp
+    asserts:
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Cluster
+
+  - it: renders Local when asked, to keep the client address
+    set:
+      cloud: gcp
+      externalTrafficPolicy: Local
+    asserts:
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Local
+
+  - it: refuses a traffic policy Kubernetes does not have
+    set:
+      cloud: gcp
+      externalTrafficPolicy: local
+    asserts:
+      - failedTemplate:
+          errorMessage: 'externalTrafficPolicy must be Cluster or Local (got "local")'

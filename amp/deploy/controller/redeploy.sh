@@ -90,6 +90,12 @@
 #   INGRESS_PROXY_PROTOCOL  true to trust PROXY protocol from the load balancer,
 #                           without which per-endpoint allowlists see the LB
 #   INGRESS_ALLOWED_CIDRS   "cidr,cidr" coarse gate on the shard's LB
+#   INGRESS_SOURCE_FILTERING true to allow per-endpoint allowed_cidrs on the
+#                           ingress_* modes. Installs the shards so they see
+#                           real client addresses (AWS: needs
+#                           INGRESS_PROXY_PROTOCOL=true and
+#                           INGRESS_PROXY_TRUSTED_IPS; GCP/Azure:
+#                           externalTrafficPolicy=Local) and tells the controller
 # With either zone set it also needs external-dns with its CRD source on, or the
 # DNS records each endpoint renders are inert: deploy/external-dns/install.sh,
 # once per zone. The zones name nlb_* endpoints too; to publish only those, set a
@@ -158,16 +164,45 @@ INGRESS_PORT_RANGE="${INGRESS_PORT_RANGE:-20000-20048}"
 # internet-facing, so the chart refuses to guess.
 INGRESS_CLOUD="${INGRESS_CLOUD:-}"
 # Trust PROXY protocol on the shard's Postgres entryPoints. Needed behind a load
-# balancer that preserves the client address that way. Note that per-endpoint
-# allowlists are NOT yet available on the ingress_* modes — the API refuses
-# allowed_cidrs there — so INGRESS_ALLOWED_CIDRS below is currently the only
-# source filter on a shard, and it applies to every endpoint on it.
+# balancer that preserves the client address that way.
 INGRESS_PROXY_PROTOCOL="${INGRESS_PROXY_PROTOCOL:-false}"
 # Who may assert a client address. The load balancer's own range and nothing
 # wider — anything in this list can claim to be any client, walking past every
 # per-endpoint allowlist on the shard. The chart refuses to render PROXY protocol
 # without it, so there is no accidental trust-everything default.
 INGRESS_PROXY_TRUSTED_IPS="${INGRESS_PROXY_TRUSTED_IPS:-}"
+# Per-endpoint allowlists on the ingress_* modes. Off, the controller refuses
+# allowed_cidrs there and INGRESS_ALLOWED_CIDRS is the only source filter on a
+# shard. On, the shards are installed to see real client addresses — which differs
+# by cloud (controller/architecture/ac-ingress.md) — and the controller is told so.
+# Validated here, before anything is upgraded; the controller is told only after
+# the shards roll out (below), since a controller accepting allowlists behind a
+# shard that SNATs would match them against node addresses.
+INGRESS_SOURCE_FILTERING="${INGRESS_SOURCE_FILTERING:-false}"
+INGRESS_TRAFFIC_POLICY=Cluster
+if [ "${INGRESS_SOURCE_FILTERING}" = "true" ]; then
+  case "${INGRESS_CLOUD}" in
+  aws)
+    # IP targets bypass kube-proxy, but the NLB itself does not pass the client
+    # address on, so PROXY protocol is the only source of it.
+    if [ "${INGRESS_PROXY_PROTOCOL}" != "true" ] || [ -z "${INGRESS_PROXY_TRUSTED_IPS}" ]; then
+      echo "!! INGRESS_SOURCE_FILTERING=true on aws needs INGRESS_PROXY_PROTOCOL=true and" >&2
+      echo "   INGRESS_PROXY_TRUSTED_IPS set to the NLB's subnets: without them the shard sees" >&2
+      echo "   the load balancer as every client." >&2
+      exit 1
+    fi
+    ;;
+  gcp | azure)
+    # Their passthrough load balancers cannot send PROXY protocol; Local stops
+    # kube-proxy from SNATing the address they do deliver.
+    INGRESS_TRAFFIC_POLICY=Local
+    ;;
+  *)
+    echo "!! INGRESS_SOURCE_FILTERING=true needs INGRESS_CLOUD=aws|gcp|azure (got '${INGRESS_CLOUD}')." >&2
+    exit 1
+    ;;
+  esac
+fi
 # Mirror of the Traefik image, for a cluster that pulls only from its own
 # registry. Empty uses the chart's default (Docker Hub), which is anonymous and
 # rate-limited for a proxy in every endpoint's connection path.
@@ -305,6 +340,57 @@ kubectl get ns "${NS}" >/dev/null 2>&1 || echo "WARN: namespace ${NS} not found"
 echo ">> ECR pull secret '${PULL_SECRET}' (refreshing — the ECR token is ~12h)"
 ensure_pull_secret "${NS}" "${ECR}" "${PULL_SECRET}" "${REGION}"
 
+# Source filtering is only safe while the shards keep client addresses, so the
+# controller's declaration must never lead the shards'. Turning it on, the
+# controller first goes out with the value it already runs and is flipped only
+# after every shard has rolled out (below). Turning it off, the controller goes
+# first as usual — but not while any endpoint still holds an allowlist: the
+# shards would revert to SNAT and the stored lists would be re-rendered and
+# matched against node addresses.
+# A failed read must stop the script rather than read as "off" or "no lists": either
+# would let a turn-off through while lists remain. Only a missing Deployment (a
+# first install) means nothing is live.
+_kerr="$(mktemp)"
+if ! LIVE_SOURCE_FILTERING="$(kubectl -n "${NS}" get deploy amp-controller \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="controller")].env[?(@.name=="AMP_DEPLOY_INGRESS_SOURCE_FILTERING")].value}' \
+  2>"${_kerr}")"; then
+  if grep -q '(NotFound)' "${_kerr}"; then
+    LIVE_SOURCE_FILTERING=""
+  else
+    echo "!! could not read the running controller's source-filtering setting:" >&2
+    sed 's/^/   /' "${_kerr}" >&2
+    exit 1
+  fi
+fi
+CONTROLLER_SOURCE_FILTERING="${INGRESS_SOURCE_FILTERING}"
+FLIP_SOURCE_FILTERING=false
+if [ "${INGRESS_SOURCE_FILTERING}" = "true" ] && [ "${LIVE_SOURCE_FILTERING}" != "true" ]; then
+  CONTROLLER_SOURCE_FILTERING=false
+  FLIP_SOURCE_FILTERING=true
+fi
+if [ "${LIVE_SOURCE_FILTERING}" = "true" ] && [ "${INGRESS_SOURCE_FILTERING}" != "true" ]; then
+  # Every ingress endpoint renders a <release>-allow middleware; an unrestricted
+  # one carries exactly 0.0.0.0/0 and ::/0.
+  if ! _middlewares="$(kubectl -n "${NS}" get middlewaretcps.traefik.io \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.ipAllowList.sourceRange}{"\n"}{end}' \
+    2>"${_kerr}")"; then
+    echo "!! could not list the ingress allowlists, so cannot tell whether turning" >&2
+    echo "   INGRESS_SOURCE_FILTERING off is safe:" >&2
+    sed 's/^/   /' "${_kerr}" >&2
+    exit 1
+  fi
+  _restricted="$(printf '%s\n' "${_middlewares}" | grep -- '-allow ' | grep -v ' \["0.0.0.0/0","::/0"\]$' || true)"
+  if [ -n "${_restricted}" ]; then
+    echo "!! INGRESS_SOURCE_FILTERING is on in this deployment and these endpoints hold an" >&2
+    echo "   allowlist. Turning it off reverts the shards to SNAT, after which each list" >&2
+    echo "   would be matched against node addresses. Clear them first (POST" >&2
+    echo "   .../endpoints/{id}/connectivity with allowed_cidrs: []), or keep it on:" >&2
+    echo "${_restricted}" | sed 's/^/     /' >&2
+    exit 1
+  fi
+fi
+rm -f "${_kerr}"
+
 # --set flags map the env-var interface onto the chart's values keys.
 HELM_SET=(
   "imagePullSecrets[0].name=${PULL_SECRET}"
@@ -324,6 +410,7 @@ HELM_SET=(
   "controller.endpoint.ingress.zoneInternal=${INGRESS_ZONE_INTERNAL}"
   "controller.endpoint.ingress.zoneExternal=${INGRESS_ZONE_EXTERNAL}"
   "controller.endpoint.ingress.portRange=${INGRESS_PORT_RANGE}"
+  "controller.endpoint.ingress.sourceFiltering=${CONTROLLER_SOURCE_FILTERING}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
   # cert-manager is owned outside this chart: deploy/tls/trust-root.sh installs
   # it in TLS mode, and a plaintext deploy needs none. Leaving the chart default
@@ -508,6 +595,7 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
       "ports.lo=${INGRESS_PORT_RANGE%%-*}"
       "ports.hi=${INGRESS_PORT_RANGE##*-}"
       "proxyProtocol.enabled=${INGRESS_PROXY_PROTOCOL}"
+      "externalTrafficPolicy=${INGRESS_TRAFFIC_POLICY}"
       # The chart's pull-secret hook: the Traefik image is the only public-registry
       # image in amp/deploy, so a cluster that mirrors it needs the same secret
       # every other release here gets.
@@ -553,6 +641,15 @@ if [ "${INGRESS_ENABLED}" = "true" ]; then
       echo "   an ingress_* create fails with 'no ingress capacity', by design."
     fi
   done
+
+  # Every shard now keeps client addresses, so the controller may say so. A
+  # failure above exits before this, leaving the controller refusing allowlists.
+  if [ "${FLIP_SOURCE_FILTERING}" = "true" ]; then
+    echo ">> shards keep client addresses; turning on ingress source filtering"
+    helm upgrade yb-amp-controller "${CHART_DIR}" -n "${NS}" --reuse-values \
+      --set controller.endpoint.ingress.sourceFiltering=true
+    kubectl -n "${NS}" rollout status deploy/amp-controller --timeout=180s
+  fi
 fi
 
 echo ">> amp controller is up. Access (API under /api/v1, explorer at /api/v1/docs):"

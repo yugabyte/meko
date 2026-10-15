@@ -26,19 +26,20 @@ type UpdateEndpointConnectivityArgs struct {
 }
 
 // updateEndpointConnectivityStep replaces an endpoint's allowed source ranges in
-// place: it patches loadBalancerSourceRanges on the live load-balancer Service and
-// then persists the list, so a later redeploy renders the same thing. It does not
+// place: it patches the live object that enforces them — loadBalancerSourceRanges
+// on an nlb_* endpoint's Service, the source range of an ingress_* endpoint's
+// <release>-allow middleware — and then persists the list, so a later redeploy renders the same thing. It does not
 // re-render the release, which would apply everything else the stored record
-// says too and can roll the pod (deploy.SourceRangesUpdater).
+// says too and can roll the pod (deploy.SourceRangesUpdater, deploy.IngressAllowlistUpdater).
 //
 // Patch-before-persist, as in resize_endpoint: the row is what GET reports and
 // what the reconcile agent compares its spec against, so writing it first would
 // let a failed patch read as applied. The patch is one synchronous field write, so
-// a failure leaves the Service as it was. Both halves are idempotent, so a replay
+// a failure leaves the object as it was. Both halves are idempotent, so a replay
 // after a crash between them converges.
 //
-// An endpoint without a dedicated load balancer has no Service to patch; the API
-// accepts only an empty list for one, so persisting it is the whole change.
+// A cluster_ip endpoint has nothing to patch; the API accepts only an empty list
+// for one, so persisting it is the whole change.
 type updateEndpointConnectivityStep struct {
 	UpdateEndpointConnectivityArgs
 	state    StateStore
@@ -86,6 +87,15 @@ func (s *updateEndpointConnectivityStep) Execute(ctx context.Context) StepResult
 			return Fail(fmt.Errorf("this deployer cannot change a load balancer's source ranges"))
 		}
 		if err := u.UpdateSourceRanges(ctx, EndpointDeployName(s.EndpointID), s.AllowedCIDRs); err != nil {
+			return Fail(fmt.Errorf("apply endpoint allowed cidrs: %w", err))
+		}
+	}
+	if deploy.IsIngress(desired.Connectivity) {
+		u, ok := s.deployer.(deploy.IngressAllowlistUpdater)
+		if !ok {
+			return Fail(fmt.Errorf("this deployer cannot change an ingress endpoint's allowlist"))
+		}
+		if err := u.UpdateIngressAllowlist(ctx, EndpointDeployName(s.EndpointID), s.AllowedCIDRs); err != nil {
 			return Fail(fmt.Errorf("apply endpoint allowed cidrs: %w", err))
 		}
 	}

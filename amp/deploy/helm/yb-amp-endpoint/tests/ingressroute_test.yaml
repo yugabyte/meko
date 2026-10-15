@@ -37,12 +37,17 @@ tests:
         shardHost: 10.0.5.20
     asserts:
       - hasDocuments:
-          count: 1
+          count: 2
       - isKind:
           of: IngressRouteTCP
+        documentIndex: 0
       - equal:
           path: spec.entryPoints[0]
           value: pg-20007
+        documentIndex: 0
+      - isKind:
+          of: MiddlewareTCP
+        documentIndex: 1
 
   - it: still renders the allowlist with no zone, since filtering is not DNS
     set:
@@ -109,6 +114,30 @@ tests:
           path: spec.ipAllowList.sourceRange
           value: ["10.0.0.0/16", "192.168.1.0/24"]
 
+  # Present when unrestricted too, so a later allowlist is a patch to this object
+  # (deploy.UpdateIngressAllowlist). Traefik refuses an empty sourceRange, and a
+  # route naming a middleware that failed to build stops serving.
+  - it: binds an unrestricted endpoint to a middleware that admits everyone
+    set:
+      service.connectivity: ingress_internal
+      service.ingress:
+        shard: pgin-0
+        entryPoint: pg-20007
+        port: 20007
+        shardHost: 10.0.5.20
+    asserts:
+      - equal:
+          path: spec.routes[0].middlewares[0].name
+          value: RELEASE-NAME-yb-amp-endpoint-allow
+        documentIndex: 0
+      - isKind:
+          of: MiddlewareTCP
+        documentIndex: 1
+      - equal:
+          path: spec.ipAllowList.sourceRange
+          value: ["0.0.0.0/0", "::/0"]
+        documentIndex: 1
+
   - it: publishes the endpoint's own name at its shard, with a short TTL
     set:
       service.connectivity: ingress_external
@@ -119,7 +148,7 @@ tests:
         dnsName: ep-77aa.external.example
         shardHost: lb-1.elb.amazonaws.com
         recordType: CNAME
-    documentIndex: 1
+    documentIndex: 2
     asserts:
       - isKind:
           of: DNSEndpoint
@@ -145,7 +174,7 @@ tests:
         dnsName: ep-3f9a2c41.internal.example
         shardHost: 10.0.5.20
         recordType: A
-    documentIndex: 1
+    documentIndex: 2
     asserts:
       - equal:
           path: spec.endpoints[0].recordType
@@ -190,8 +219,9 @@ tests:
       - equal:
           path: spec.tls.passthrough
           value: true
-      - notExists:
-          path: spec.routes[0].middlewares
+      - equal:
+          path: spec.routes[0].middlewares[0].name
+          value: RELEASE-NAME-yb-amp-endpoint-allow
 
   - it: follows the extension when the gateway is not set explicitly
     set:
@@ -253,10 +283,11 @@ tests:
         shardHost: 10.0.5.20
     asserts:
       - hasDocuments:
-          count: 1
+          count: 2
       - equal:
           path: spec.routes[0].match
           value: HostSNI(`*`)
+        documentIndex: 0
 
   - it: renders no gateway route for an endpoint without the gateway
     set:
@@ -270,10 +301,10 @@ tests:
         shardHost: lb-0.example
     asserts:
       - hasDocuments:
-          count: 2
+          count: 3
       - isKind:
           of: DNSEndpoint
-        documentIndex: 1
+        documentIndex: 2
 
   - it: refuses a gateway route with no entryPoint to bind it to
     set:

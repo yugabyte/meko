@@ -29,6 +29,12 @@ func (ingressOK) SupportsConnectivity() bool { return true }
 func (ingressOK) SupportsIngress() bool      { return true }
 func (ingressOK) PlacesIngress() bool        { return true }
 
+// ingressFiltering is ingressOK on a deployment whose shards were installed to
+// keep the client address, the one place an ingress allowlist means anything.
+type ingressFiltering struct{ ingressOK }
+
+func (ingressFiltering) FiltersIngressSources() bool { return true }
+
 type ingressNoPlacement struct{ deploy.Deployer }
 
 func (ingressNoPlacement) SupportsConnectivity() bool { return true }
@@ -172,10 +178,10 @@ func TestEndpointConnectivityRejectsIngressWithoutSharedIngress(t *testing.T) {
 	}
 }
 
-// An ingress endpoint shares its load balancer, so loadBalancerSourceRanges — a
-// per-Service field — cannot express a per-endpoint allowlist. Refusing is the
-// point: silently dropping one is how an endpoint ends up reachable from more
-// than the caller asked for, with no way for them to tell.
+// An ingress allowlist is a middleware in the shard's proxy, which filters on
+// the address it sees — a node's, unless the shards keep the client's. Refusing
+// it where they do not is the point: matched against node addresses, a broad
+// range admits everyone and nobody can tell.
 func TestEndpointConnectivityRejectsCIDRsWithIngress(t *testing.T) {
 	for _, mode := range []string{deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal} {
 		_, _, err := endpointConnectivity(&EndpointConnectivity{
@@ -201,6 +207,24 @@ func TestEndpointConnectivityRejectsCIDRsWithIngress(t *testing.T) {
 		AllowedCidrs: &[]string{"10.0.0.0/8"},
 	}, ingressOK{}); err != nil || len(cidrs) != 1 {
 		t.Errorf("nlb_internal with allowed_cidrs = (%v, %v), want it kept", cidrs, err)
+	}
+	// Without shared ingress at all the caller is told that, not sent to the
+	// source-filtering flag.
+	_, _, err := endpointConnectivity(&EndpointConnectivity{
+		Mode:         ptr(EndpointConnectivityMode(deploy.ConnectivityIngressInternal)),
+		AllowedCidrs: &[]string{"10.0.0.0/8"},
+	}, connOK{})
+	if err == nil || err.Error.Code != "unsupported_connectivity" || !strings.Contains(err.Error.Message, "--deploy-ingress-enabled") {
+		t.Errorf("allowed_cidrs without shared ingress = %v, want the ingress switch named", err)
+	}
+	// A deployment that declares its shards keep the client address takes it.
+	for _, mode := range []string{deploy.ConnectivityIngressInternal, deploy.ConnectivityIngressExternal} {
+		if _, cidrs, err := endpointConnectivity(&EndpointConnectivity{
+			Mode:         ptr(EndpointConnectivityMode(mode)),
+			AllowedCidrs: &[]string{"10.0.0.0/8"},
+		}, ingressFiltering{}); err != nil || len(cidrs) != 1 {
+			t.Errorf("%s with allowed_cidrs under source filtering = (%v, %v), want it kept", mode, cidrs, err)
+		}
 	}
 }
 

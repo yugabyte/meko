@@ -128,7 +128,7 @@ leaves out `pg_stat_statements`. See
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper HTTP |
 | `service.connectivity` | `cluster_ip` | client reachability: `cluster_ip`, `nlb_internal`, `nlb_external`, `ingress_internal`, `ingress_external` |
 | `service.cloud` | _(set by the controller)_ | whose LB annotations to render: `aws`, `gcp`, `azure`. The controller passes what it detected from node provider IDs, or its `--deploy-cloud` override; required for `nlb_internal` |
-| `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted. On the `ingress_*` modes it renders a `MiddlewareTCP` instead, since a shared load balancer cannot carry a per-endpoint allowlist — the API refuses it there for now |
+| `service.allowedCidrs` | `[]` | `loadBalancerSourceRanges` for the `nlb_*` modes; empty = unrestricted. On the `ingress_*` modes it is the source range of the endpoint's `MiddlewareTCP`, rendered for every ingress endpoint (`0.0.0.0/0`, `::/0` when empty) |
 | `service.ingress` | _(set by the controller)_ | the allocated shard slot: `shard`, `entryPoint`, `port`, `dnsName`, `shardHost`, `recordType`. Required for the `ingress_*` modes and rendered by nothing else |
 | `service.dns` | _(set by the controller)_ | the `nlb_*` endpoint's published name: `name`, `target`, `recordType`. The `name` goes in the certificate. A `DNSEndpoint` for it is rendered only once `target` is set |
 | `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
