@@ -136,15 +136,18 @@ export type CiState = 'none' | 'pending' | 'success' | 'failure';
 export type QueuedGate = 'open-pr' | 'merge';
 
 /**
- * Whose reviews Claude addresses: `all` (AgentK, people and other bots), `agentk-people`
- * (AgentK and people) or `people` (people only). Merge waits for AgentK only once it's
- * active on the PR, and never in `people`.
+ * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
+ * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
+ * only). Every other review is held for the user to send or dismiss (`HeldReview`); the user's own
+ * reviews always go straight to Claude. Merge waits for AgentK's review only once AgentK is active
+ * on the PR, and never in `people`; in every mode it waits while a review is held.
  */
-export type ReviewerMode = 'all' | 'agentk-people' | 'people';
+export type ReviewerMode = 'agentk' | 'agentk-people' | 'all' | 'people';
 
 export const REVIEWER_LABELS: Record<ReviewerMode, string> = {
-  all: 'All reviewers',
+  agentk: 'AgentK only',
   'agentk-people': 'AgentK + People',
+  all: 'All reviewers',
   people: 'People only',
 };
 
@@ -743,6 +746,8 @@ export interface Session {
   comments: { drafts: number; queued: number };
   /** How many of the design's questions are open, for the user to answer. */
   designQuestions: { open: number };
+  /** Reviews on the session's PR held for the user to send to AgentK or dismiss, and their authors. */
+  heldReviews: { count: number; authors: string[] };
   /**
    * AgentK's mod is running in the session's Claude (`[claude] mod` on, and the mod polling): answers
    * to the design can be sent and the design approved while AgentK works, and Claude's questions
@@ -1505,6 +1510,49 @@ export interface NewComment {
   body: string;
 }
 
+/**
+ * Who wrote a held review: AgentK (held in People only), a person with a role on the repo (held
+ * in AgentK only), a bot (held except in All reviewers), or someone with no role on the repo
+ * (held in every mode).
+ */
+export type HeldReviewAuthor = 'agentk' | 'person' | 'bot' | 'outsider';
+
+/** An inline comment of a held review. */
+export interface HeldReviewComment {
+  path: string;
+  /** The line it's on in the current diff; null for an outdated comment. */
+  line: number | null;
+  body: string;
+  url: string;
+}
+
+/** A review on the session's PR that waits for the user before it goes to Claude. */
+export interface HeldReview {
+  /** GitHub's node id for the review. */
+  id: string;
+  author: string;
+  kind: HeldReviewAuthor;
+  /** CHANGES_REQUESTED or COMMENTED. */
+  state: string;
+  body: string;
+  url: string;
+  submittedAt: string;
+  comments: HeldReviewComment[];
+  /** Inline comments beyond `comments`, left out (read them on GitHub). */
+  moreComments: number;
+}
+
+export interface HeldReviewsRequest {
+  action: 'send' | 'dismiss';
+  /** HeldReview ids; ones already sent or dismissed are skipped. */
+  ids: string[];
+}
+
+export interface HeldReviewsResult {
+  /** How many were sent or dismissed. */
+  done: number;
+}
+
 export interface SendCommentsResult {
   /** Pasted into Claude now. */
   sent: number;
@@ -2037,6 +2085,8 @@ export type TermServerMessage =
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
+// GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
+// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in PR & Review, or dismiss)
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
 //                                                           a `meko` change is checked against Meko before it's saved;

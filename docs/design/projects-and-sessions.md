@@ -120,7 +120,7 @@ CREATE TABLE sessions (
   push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
                                    --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'review-held' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
@@ -156,6 +156,11 @@ CREATE TABLE design_answers (  -- unused: answers aren't stored, the browser sen
 CREATE TABLE review_comments ( -- comments on a session's diff: draft → queued → sent to Claude
   id TEXT PRIMARY KEY, session_id TEXT, path TEXT, side TEXT, line INTEGER, end_line INTEGER,
   excerpt TEXT, body TEXT, state TEXT, created_at INTEGER, updated_at INTEGER, sent_at INTEGER);
+CREATE TABLE held_reviews (    -- reviews on a session's PR held for the user: held → sent | dismissed
+  session_id TEXT, review_id TEXT, pr_number INTEGER, db_id INTEGER,  -- GitHub's node id; the REST id the prompt names
+  author TEXT, kind TEXT, state TEXT, body TEXT, url TEXT,  -- kind: 'agentk' | 'person' | 'bot' | 'outsider'
+  comments_json TEXT, more_comments INTEGER, submitted_at TEXT, held_at INTEGER,  -- the first 50 inline comments
+  status TEXT, decided_at INTEGER, PRIMARY KEY (session_id, review_id));
 CREATE TABLE session_stages (  -- stage history: who moved it, and when
   session_id TEXT, stage TEXT, entered_at INTEGER, left_at INTEGER, moved_by TEXT);
 CREATE TABLE session_events (  -- every hook call; feeds badges + project activity

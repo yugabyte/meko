@@ -564,6 +564,34 @@ const MIGRATIONS: string[] = [
   ALTER TABLE meko_learns ADD COLUMN taught INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE meko_learns ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;
   `,
+  // 36: reviews held for the user to send to AgentK or dismiss (heldreviews.ts), one row per
+  // review on the session's PR: what the sheet shows (body, inline comments cut to 50) and the
+  // REST id the prompt names. Projects without a reviewer mode keep AgentK + People, the default
+  // they had: new projects default to AgentK only. `held-reviews-since`: when holding began, since
+  // People only never marked AgentK's reviews seen, so its earlier rounds aren't held all at once.
+  `
+  CREATE TABLE held_reviews (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    review_id TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    db_id INTEGER,
+    author TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    body TEXT NOT NULL,
+    url TEXT NOT NULL,
+    comments_json TEXT NOT NULL DEFAULT '[]',
+    more_comments INTEGER NOT NULL DEFAULT 0,
+    submitted_at TEXT NOT NULL,
+    held_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'held',
+    decided_at INTEGER,
+    PRIMARY KEY (session_id, review_id)
+  );
+  UPDATE projects SET settings_json = json_set(CASE WHEN json_valid(settings_json) THEN settings_json ELSE '{}' END, '$.reviewer', 'agentk-people')
+    WHERE NOT json_valid(settings_json) OR json_type(settings_json, '$.reviewer') IS NULL;
+  INSERT OR REPLACE INTO kv(key, value) VALUES ('held-reviews-since', CAST(CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS TEXT));
+  `,
 ];
 
 export function openDb(path: string): Db {

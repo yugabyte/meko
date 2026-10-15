@@ -9,7 +9,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
-  ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
@@ -489,6 +489,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/sessions/:id/comments/send', async (req): Promise<SendCommentsResult> => core.comments.send(req.params.id));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/held-reviews', async (req): Promise<HeldReview[]> => core.lifecycle.heldReviews(req.params.id));
+  app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/held-reviews',
+    async (req): Promise<HeldReviewsResult> => core.lifecycle.decideHeldReviews(req.params.id, req.body));
   app.patch<{ Params: { id: string; cid: string }; Body: { body?: unknown } }>('/api/sessions/:id/comments/:cid',
     async (req): Promise<ReviewComment> => core.comments.edit(req.params.id, req.params.cid, req.body?.body));
   app.delete<{ Params: { id: string; cid: string } }>('/api/sessions/:id/comments/:cid', async (req, reply) => {
