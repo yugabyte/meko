@@ -8,12 +8,9 @@ package consumer
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -27,45 +24,10 @@ import (
 	"meko/event-consumers/datapack-metrics-consumer/internal/config"
 	"meko/event-consumers/datapack-metrics-consumer/internal/stats"
 	"meko/event-consumers/datapack-metrics-consumer/internal/store"
+	"meko/event-consumers/datapack-metrics-consumer/internal/testdb"
 )
 
 const eventType = "search.completed"
-
-const schemaSQL = `
-CREATE SCHEMA __S__;
-CREATE TABLE __S__.events (
-    shard smallint NOT NULL, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    id uuid NOT NULL, type text NOT NULL, event_schema_version smallint NOT NULL DEFAULT 1, payload jsonb NOT NULL,
-    PRIMARY KEY (shard, created_at, id)) PARTITION BY RANGE (created_at);
-CREATE TABLE __S__.events_default PARTITION OF __S__.events DEFAULT;
-DO $$
-DECLARE lo timestamp;
-BEGIN
-  FOR i IN -2..5 LOOP
-    lo := date_trunc('month', now() AT TIME ZONE 'UTC') + make_interval(months => i);
-    EXECUTE format('CREATE TABLE __S__.%I PARTITION OF __S__.events FOR VALUES FROM (%L) TO (%L)',
-      'events_' || to_char(lo, 'YYYY_MM'), (lo AT TIME ZONE 'UTC')::text,
-      ((lo + interval '1 month') AT TIME ZONE 'UTC')::text);
-  END LOOP;
-END $$;
-CREATE TABLE __S__.event_consumers (
-    consumer text NOT NULL, shard smallint NOT NULL, offset_ts timestamptz NOT NULL, offset_id uuid NOT NULL,
-    lease_owner uuid, lease_expires_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (consumer, shard));
-INSERT INTO __S__.event_consumers (consumer, shard, offset_ts, offset_id)
-SELECT 'analytics', s, now() - interval '1 day', '00000000-0000-0000-0000-000000000000'
-    FROM generate_series(0, 15) s;
-CREATE TABLE __S__.event_dead_letters (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), consumer text NOT NULL, shard smallint NOT NULL,
-    event_id uuid NOT NULL, event_created_at timestamptz NOT NULL, type text NOT NULL,
-    event_schema_version smallint NOT NULL, payload jsonb NOT NULL, error text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now());
-CREATE INDEX ON __S__.event_dead_letters (created_at);
-CREATE TABLE __S__.event_applied (
-    consumer text NOT NULL, shard smallint NOT NULL, created_at timestamptz NOT NULL, event_id uuid NOT NULL,
-    PRIMARY KEY (shard, consumer, created_at, event_id));
-CREATE TABLE __S__.effects (event_id uuid NOT NULL);
-`
 
 type env struct {
 	t      *testing.T
@@ -76,22 +38,8 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	dsn := os.Getenv("EVENTS_TEST_DSN")
-	if dsn == "" {
-		t.Skip("EVENTS_TEST_DSN not set")
-	}
-	admin, err := sql.Open("postgres", dsn)
-	must(t, err)
-	b := make([]byte, 5)
-	_, _ = rand.Read(b)
-	e := &env{t: t, dsn: dsn, schema: "_ev_" + hex.EncodeToString(b), admin: admin}
-	// Registered before the DDL, so a schema whose setup fails is still dropped.
-	t.Cleanup(func() {
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + e.schema + " CASCADE")
-		_ = admin.Close()
-	})
-	e.exec(strings.ReplaceAll(schemaSQL, "__S__", e.schema))
-	return e
+	d := testdb.New(t, testdb.EventLogSQL, `CREATE TABLE __S__.effects (event_id uuid NOT NULL)`)
+	return &env{t: t, dsn: d.DSN, schema: d.Schema, admin: d.Admin}
 }
 
 func must(t *testing.T, err error) {

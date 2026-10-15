@@ -1,0 +1,319 @@
+{
+  "searches": [
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 1910,
+      "tokens_if_raw": 12000,
+      "hits_high": 3,
+      "hits_mid": 1,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 640,
+      "tokens_if_raw": 12000,
+      "hits_high": 1,
+      "hits_mid": 2,
+      "hits_low": 1,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+      "tokens_sent": 0,
+      "tokens_if_raw": 0,
+      "hits_high": 0,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "22222222-2222-4222-8222-222222222222",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+      "tokens_sent": 2500,
+      "tokens_if_raw": 9000,
+      "hits_high": 2,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "",
+      "tokens_sent": 800,
+      "tokens_if_raw": 9000,
+      "hits_high": 0,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": false
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "not-a-uuid",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 700,
+      "tokens_if_raw": 12000,
+      "hits_high": 1,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "",
+      "tokens_sent": 300,
+      "tokens_if_raw": 12000,
+      "hits_high": 0,
+      "hits_mid": 0,
+      "hits_low": 1,
+      "quota_metric": "context_search",
+      "quota_audited": false
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "22222222-2222-4222-8222-222222222222",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 500,
+      "tokens_if_raw": 200,
+      "hits_high": 1,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 100,
+      "tokens_if_raw": 12000,
+      "hits_high": 1,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 100,
+      "tokens_if_raw": 12000,
+      "hits_high": 1,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "user_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "tokens_sent": 100,
+      "tokens_if_raw": 12000,
+      "hits_high": 1,
+      "hits_mid": 0,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": true
+    },
+    {
+      "search_type": "hybrid",
+      "datapack_id": "11111111-1111-4111-8111-111111111111",
+      "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+      "user_id": "bogus",
+      "tokens_sent": 400,
+      "tokens_if_raw": 12000,
+      "hits_high": 0,
+      "hits_mid": 1,
+      "hits_low": 0,
+      "quota_metric": "context_search",
+      "quota_audited": false
+    }
+  ],
+  "golden": {
+    "datapack_daily_activity": [
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "TODAY",
+        "hybrid",
+        9
+      ],
+      [
+        "22222222-2222-4222-8222-222222222222",
+        "TODAY",
+        "hybrid",
+        2
+      ]
+    ],
+    "token_savings_log": [
+      [
+        "11111111-1111-4111-8111-111111111111",
+        null,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "hybrid",
+        300,
+        12000,
+        11700
+      ],
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "hybrid",
+        100,
+        12000,
+        11900
+      ],
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "hybrid",
+        100,
+        12000,
+        11900
+      ],
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "hybrid",
+        100,
+        12000,
+        11900
+      ],
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "hybrid",
+        640,
+        12000,
+        11360
+      ],
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "hybrid",
+        1910,
+        12000,
+        10090
+      ],
+      [
+        "11111111-1111-4111-8111-111111111111",
+        null,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+        "hybrid",
+        400,
+        12000,
+        11600
+      ],
+      [
+        "22222222-2222-4222-8222-222222222222",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+        "hybrid",
+        500,
+        200,
+        -300
+      ],
+      [
+        "22222222-2222-4222-8222-222222222222",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+        "hybrid",
+        2500,
+        9000,
+        6500
+      ]
+    ],
+    "token_savings_summary": [
+      [
+        "11111111-1111-4111-8111-111111111111",
+        "hybrid",
+        7,
+        80450,
+        84000,
+        7,
+        4,
+        2
+      ],
+      [
+        "22222222-2222-4222-8222-222222222222",
+        "hybrid",
+        2,
+        6500,
+        9200,
+        3,
+        0,
+        0
+      ]
+    ],
+    "free_tier_audit_log": [
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+        "context_search"
+      ],
+      [
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc2",
+        "context_search"
+      ]
+    ]
+  }
+}

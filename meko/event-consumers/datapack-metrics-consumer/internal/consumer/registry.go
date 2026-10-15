@@ -40,8 +40,3 @@ func (r *Registry) Types() []string {
 	sort.Strings(out)
 	return out
 }
-
-// DefaultRegistry is what the consumer runs with. It is empty until the handler tickets (MEKO-870 and
-// later) add theirs, and an event type with no handler holds its shard (ErrNoHandler), so a build with an
-// empty registry holds every shard on its first event. Merge the handler (MEKO-870) before this runs anywhere.
-func DefaultRegistry() *Registry { return NewRegistry() }

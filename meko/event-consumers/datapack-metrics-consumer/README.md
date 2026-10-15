@@ -24,13 +24,35 @@ YUGABYTEDB_SYSTEM_URL="host=localhost port=5433 dbname=yugabyte user=yugabyte pa
 The database is `YUGABYTEDB_SYSTEM_URL`, else `YUGABYTEDB_URL`, as for the MCP server. The consumer uses
 one connection. `/healthz` and `/metrics` are on `:8080`. `LOG_LEVEL` sets the log level.
 
-**Handlers are separate changes.** The registry is empty until the handler tickets (MEKO-870 and
-later) add theirs. An event whose type has no handler is **not skipped**: the shard waits (counted in
+## Handlers
+
+| Event type | Handler | Writes |
+|---|---|---|
+| `search.completed` | `internal/handlers/search_completed.go` | `datapack_daily_activity`, `token_savings_log`, `token_savings_summary`, `free_tier_audit_log` |
+
+An event whose type has no handler is **not skipped**: the shard waits (counted in
 `meko_events_consumer_errors_total{kind="no_handler"}`, and the lag gauge climbs), so a consumer that is
 older than its producer, such as a rollback or a pod not yet replaced, loses nothing and applies the
 events as soon as a build with the handler runs. One such event holds every event behind it on that
 shard. To give up on one deliberately, insert it into `event_dead_letters` (with its `event_created_at` and `event_schema_version`) and its id into
 `event_applied`, and advance the shard's offset past it, in one transaction.
+
+**`search.completed` v1** is `context_search` finishing: `search_type`, `datapack_id`, `conversation_id`,
+`user_id`, `tokens_sent`, `tokens_if_raw`, `hits_high` / `hits_mid` / `hits_low`, `quota_metric` and
+`quota_audited`. It does what the MCP server's inline code did, and the same checks: nothing is counted
+when the datapack is not a UUID; token-savings rows need a UUID conversation and `tokens_sent > 0`; an
+invalid user is stored as NULL; an audit row needs a valid user and `quota_audited`. Counters are
+coalesced per key within a batch, and the activity date is the UTC date of the payload's `occurred_at`
+(the producer queues events and inserts them in batches, so the row's `created_at` can be seconds later;
+`created_at` is used when `occurred_at` is missing, invalid, or later than `created_at`). So an event
+processed after midnight counts for the day it happened. Rows keep the search's time in `created_at`.
+`token_savings_log` stores token counts as INT, so for a search whose count does not fit (a datapack of
+more than about 2.1 million chunks) the token-savings log and summary rows are skipped, as the inline code
+did, while its daily count and audit row are kept; a warning logs how many searches in a batch were affected.
+
+`testdata/search_completed.json` holds a fixed sequence of searches and the rows the inline code wrote for
+it; `internal/handlers` replays the sequence through the handler and compares every table. Regenerate it
+with `testdata/gen_golden.py` (needs a meko-mcp-server checkout) when the inline bookkeeping changes.
 
 ## How it works
 

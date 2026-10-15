@@ -17,6 +17,7 @@ import (
 
 	"meko/event-consumers/datapack-metrics-consumer/internal/config"
 	"meko/event-consumers/datapack-metrics-consumer/internal/consumer"
+	"meko/event-consumers/datapack-metrics-consumer/internal/handlers"
 	"meko/event-consumers/datapack-metrics-consumer/internal/health"
 	"meko/event-consumers/datapack-metrics-consumer/internal/store"
 )
@@ -45,7 +46,12 @@ func main() {
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	checkTimeZone(db)
-	c := consumer.New(cfg, db, consumer.DefaultRegistry(), uuid.NewString())
+	reg := consumer.NewRegistry()
+	if err := handlers.Register(reg, cfg.Schema); err != nil {
+		slog.Error("cannot register the handlers", "error", err)
+		os.Exit(1)
+	}
+	c := consumer.New(cfg, db, reg, uuid.NewString())
 	shutdown, err := health.Serve(cfg.HTTPPort, c.Heartbeat())
 	if err != nil {
 		slog.Error("cannot start the health server", "error", err)
