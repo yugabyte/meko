@@ -56,6 +56,16 @@ func run() error {
 	dbPort := flag.Int("db-port", 5433, "data-plane database port")
 	dbName := flag.String("db-name", "yugabyte", "data-plane database name")
 	dbSSLMode := flag.String("db-sslmode", "disable", "data-plane database sslmode (disable, require, verify-ca, verify-full)")
+	// 15m is the AMP controller's maxConnLifetime and ysql_client's
+	// DEFAULT_CONNECTION_LIFETIME_MS. 2m is the controller's maxConnIdleTime.
+	// database/sql has no lifetime jitter, so this omits the controller's
+	// extra 0-25%.
+	dbConnMaxLifetime := flag.Duration("db-conn-max-lifetime",
+		envDurationOrDefault("DB_CONN_MAX_LIFETIME", 15*time.Minute),
+		"maximum lifetime for API-server database connections; 0 disables recycling by age")
+	dbConnMaxIdleTime := flag.Duration("db-conn-max-idle-time",
+		envDurationOrDefault("DB_CONN_MAX_IDLE_TIME", 2*time.Minute),
+		"maximum idle time for API-server database connections; 0 disables idle-time recycling")
 
 	// Control-plane (meko_system) database configuration. Empty sentinels
 	// mean "inherit the data-plane value", so single-database deployments
@@ -403,6 +413,14 @@ func run() error {
 	slog.Info("logger configured",
 		"requested", *logLevel, "effective", resolvedLogLevel)
 
+	poolConfig := db.PoolConfig{
+		MaxLifetime: *dbConnMaxLifetime,
+		MaxIdleTime: *dbConnMaxIdleTime,
+	}
+	slog.Info("database pool configured",
+		"max_lifetime", poolConfig.MaxLifetime,
+		"max_idle_time", poolConfig.MaxIdleTime)
+
 	// Resolve system-db settings: empty / zero sentinels inherit from
 	// the data-db settings so a single-database deployment "just works".
 	resolvedSystemDBHost := stringOrDefault(*systemDBHost, *dbHost)
@@ -422,7 +440,7 @@ func run() error {
 		resolvedSystemDBUserName, resolvedSystemDBPassword, resolvedSystemDBSSLMode,
 	)
 
-	dataConn, err := db.ConnectWithRetry(dataConnStr, 5, 3*time.Second)
+	dataConn, err := db.ConnectWithRetry(dataConnStr, 5, 3*time.Second, poolConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to data-plane database: %w", err)
 	}
@@ -443,7 +461,7 @@ func run() error {
 		slog.Info("meko_system schema colocated with data-plane database",
 			"host", *dbHost, "port", *dbPort, "db", *dbName)
 	} else {
-		systemConn, err = db.ConnectWithRetry(systemConnStr, 5, 3*time.Second)
+		systemConn, err = db.ConnectWithRetry(systemConnStr, 5, 3*time.Second, poolConfig)
 		if err != nil {
 			return fmt.Errorf("failed to connect to meko_system database: %w", err)
 		}
@@ -465,7 +483,7 @@ func run() error {
 			"postgresql://%s:%d/%s?user=%s&password=%s&sslmode=%s",
 			*langfuseDBHost, *langfuseDBPort, *langfuseDBName, *langfuseDBUser, *langfuseDBPassword, *langfuseDBSSLMode,
 		)
-		langfuseDBConn, err = db.ConnectWithRetry(langfuseConnStr, 3, 2*time.Second)
+		langfuseDBConn, err = db.ConnectWithRetry(langfuseConnStr, 3, 2*time.Second, poolConfig)
 		if err != nil {
 			slog.Warn("failed to connect to langfuse database; observability features disabled",
 				"host", *langfuseDBHost, "error", err)

@@ -23,6 +23,8 @@ byte-identically to the pre-mode chart.
 - "--db-password=$(DB_PASSWORD)"
 - "--db-name=$(DB_NAME)"
 - "--db-sslmode=$(DB_SSL_MODE)"
+- "--db-conn-max-lifetime=$(DB_CONN_MAX_LIFETIME)"
+- "--db-conn-max-idle-time=$(DB_CONN_MAX_IDLE_TIME)"
 - "--system-db-host=$(SYSTEM_DB_HOST)"
 - "--system-db-port=$(SYSTEM_DB_PORT)"
 - "--system-db-user-name=$(SYSTEM_DB_USER_NAME)"
@@ -173,6 +175,10 @@ secret) so the deploy needs no S3/OpenAI/langfuse/SES Secrets.
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: DB_NAME } }
 - name: DB_SSL_MODE
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: DB_SSL_MODE } }
+- name: DB_CONN_MAX_LIFETIME
+  valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: DB_CONN_MAX_LIFETIME } }
+- name: DB_CONN_MAX_IDLE_TIME
+  valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: DB_CONN_MAX_IDLE_TIME } }
 - name: SYSTEM_DB_HOST
   valueFrom: { configMapKeyRef: { name: {{ $cm }}, key: SYSTEM_DB_HOST } }
 - name: SYSTEM_DB_PORT

@@ -16,6 +16,8 @@
 | `-db-port`          | `5433`        | Database port                    |
 | `-db-user-name`     | `yugabyte`    | Database user name               |
 | `-db-password`      | (empty)       | Database password                |
+| `-db-conn-max-lifetime` | `15m`     | Maximum connection lifetime; `0` disables age-based recycling |
+| `-db-conn-max-idle-time` | `2m`     | Maximum idle time; `0` disables idle-time recycling |
 | `-cognito-region`   | (empty)       | AWS region for Cognito User Pool |
 | `-cognito-pool-id`  | (empty)       | Cognito User Pool ID             |
 | `-cognito-client-id`| (empty)       | Cognito App Client ID            |
@@ -46,6 +48,19 @@ Every flag that has an env-var equivalent is listed here. When both a flag and a
 |---|---|---|
 | `LOG_LEVEL` | `info` | slog level: `debug`, `info`, `warn`, `error` |
 | `MEKO_DEPLOY_ENV` | `prod` | Deployment environment: `prod` or `dev` |
+
+### Database Connection Pool
+
+These settings apply to every database pool the API server opens: the
+data-plane pool, a separate system pool, and the optional Langfuse pool.
+Defaults match the AMP controller: 15m lifetime and 2m idle time.
+`database/sql` closes a connection at 15m; it has no lifetime jitter.
+Keep the idle limit below the deployment's idle timeout.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DB_CONN_MAX_LIFETIME` | `15m` | Maximum connection lifetime; `0` disables age-based recycling |
+| `DB_CONN_MAX_IDLE_TIME` | `2m` | Maximum idle time; `0` disables idle-time recycling |
 
 ### System (control-plane) Database
 

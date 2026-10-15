@@ -253,6 +253,8 @@ apiServer:
     DB_USER_NAME: yugabyte
     DB_NAME: ""
     DB_SSL_MODE: require
+    DB_CONN_MAX_LIFETIME: 15m
+    DB_CONN_MAX_IDLE_TIME: 2m
     SYSTEM_DB_HOST: ""
     SYSTEM_DB_PORT: "5433"
     SYSTEM_DB_USER_NAME: yugabyte

@@ -16,6 +16,23 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
+// PoolConfig controls connection recycling for pools opened by
+// ConnectWithRetry. Zero disables the corresponding limit.
+type PoolConfig struct {
+	MaxLifetime time.Duration
+	MaxIdleTime time.Duration
+}
+
+func (c PoolConfig) validate() error {
+	if c.MaxLifetime < 0 {
+		return fmt.Errorf("max connection lifetime must not be negative")
+	}
+	if c.MaxIdleTime < 0 {
+		return fmt.Errorf("max connection idle time must not be negative")
+	}
+	return nil
+}
+
 // One statement per file for anything that writes rows, and never DDL beside DML:
 // golang-migrate Execs a migration whole, which the simple query protocol runs as a
 // single implicit transaction, and YugabyteDB cannot retry a statement inside one
@@ -44,7 +61,12 @@ func ConnectWithRetry(
 	connString string,
 	maxRetries int,
 	retryDelay time.Duration,
+	poolConfig PoolConfig,
 ) (*sql.DB, error) {
+	if err := poolConfig.validate(); err != nil {
+		return nil, fmt.Errorf("invalid pool configuration: %w", err)
+	}
+
 	var conn *sql.DB
 	var err error
 
@@ -64,6 +86,9 @@ func ConnectWithRetry(
 				maxRetries, err,
 			)
 		}
+
+		conn.SetConnMaxLifetime(poolConfig.MaxLifetime)
+		conn.SetConnMaxIdleTime(poolConfig.MaxIdleTime)
 
 		ctx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,

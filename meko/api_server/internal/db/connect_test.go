@@ -8,10 +8,54 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 )
+
+func TestPoolConfigValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  PoolConfig
+		wantErr bool
+	}{
+		{
+			name: "positive limits",
+			config: PoolConfig{
+				MaxLifetime: 15 * time.Minute,
+				MaxIdleTime: 2 * time.Minute,
+			},
+		},
+		{
+			name:   "zero disables limits",
+			config: PoolConfig{},
+		},
+		{
+			name: "negative lifetime",
+			config: PoolConfig{
+				MaxLifetime: -time.Second,
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative idle time",
+			config: PoolConfig{
+				MaxIdleTime: -time.Second,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
 
 // golang-migrate builds its version table while constructing the driver, so by the
 // time getMigrator returns, meko_system must already exist and the table must have
