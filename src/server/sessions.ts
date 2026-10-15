@@ -902,6 +902,7 @@ export class SessionManager {
       reviewer: settings?.reviewerLogin ?? 'the reviewer',
       // A review-people prompt queued before it named its reviewers.
       reviewers: 'its reviewers',
+      reviews: '(none named: ask the user which reviews to address)',
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
       questionsFile: this.questionsFile(row),

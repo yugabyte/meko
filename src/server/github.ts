@@ -236,6 +236,34 @@ export async function botLogins(worktree: string, number: number, repo?: string 
   return out.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
+/** What reviewDetails tells about one review. */
+export interface ReviewDetail {
+  dbId: number | null;
+  url: string;
+  comments: { path: string; line: number | null; body: string; url: string }[];
+  totalComments: number;
+}
+
+/**
+ * Reviews' REST ids, links and first <first> inline comments, by the node ids `gh pr view` gives
+ * (one GraphQL call). Ids that aren't GitHub node ids are refused, since they go into the query.
+ */
+export async function reviewDetails(cwd: string, ids: string[], first = 50): Promise<Map<string, ReviewDetail>> {
+  const out = new Map<string, ReviewDetail>();
+  if (!ids.length) return out;
+  if (ids.some((id) => !/^[A-Za-z0-9_=-]+$/.test(id))) throw new Error('Not a GitHub review id.');
+  const query = `{ nodes(ids: ${JSON.stringify(ids)}) { ... on PullRequestReview { id databaseId url comments(first: ${first}) { totalCount nodes { path line originalLine body url } } } } }`;
+  const r = JSON.parse(await gh(cwd, 'api', 'graphql', '-f', `query=${query}`)) as {
+    data?: { nodes?: ({ id?: string; databaseId?: number | null; url?: string; comments?: { totalCount?: number; nodes?: { path?: string; line?: number | null; originalLine?: number | null; body?: string; url?: string }[] } } | null)[] };
+  };
+  for (const n of r.data?.nodes ?? []) {
+    if (!n?.id) continue;
+    const comments = (n.comments?.nodes ?? []).map((c) => ({ path: c.path ?? '', line: c.line ?? c.originalLine ?? null, body: c.body ?? '', url: c.url ?? '' }));
+    out.set(n.id, { dbId: n.databaseId ?? null, url: n.url ?? '', comments, totalComments: n.comments?.totalCount ?? comments.length });
+  }
+  return out;
+}
+
 export async function comment(worktree: string, number: number, body: string, repo?: string | null): Promise<void> {
   await gh(worktree, 'pr', 'comment', String(number), ...repoArg(repo), '--body', body);
 }

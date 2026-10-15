@@ -15,6 +15,7 @@ import { mekoSettings } from '../../src/server/mekosettings.js';
 import { all, openDb, run, schemaVersion } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor } from '../../src/server/github.js';
+import { reviewRoute } from '../../src/server/heldreviews.js';
 import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
@@ -206,9 +207,10 @@ describe('config and db', () => {
     db = openDb(file);
     expect(schemaVersion(db)).toBe(version);
     const settings = (id: string) => JSON.parse(all<{ s: string }>(db, 'SELECT settings_json AS s FROM projects WHERE id = ?', id)[0].s);
-    expect(settings('old')).toEqual({ branchPrefix: 'ak_{login}/', notify: false });
-    expect(settings('set')).toEqual({ branchPrefix: 'hari/' });
-    expect(settings('none')).toEqual({});
+    // Migration 36 also keeps them on the reviewer mode they had (AgentK + People).
+    expect(settings('old')).toEqual({ branchPrefix: 'ak_{login}/', notify: false, reviewer: 'agentk-people' });
+    expect(settings('set')).toEqual({ branchPrefix: 'hari/', reviewer: 'agentk-people' });
+    expect(settings('none')).toEqual({ reviewer: 'agentk-people' });
     expect(parseSettings('{}').branchPrefix).toBe('ak_{login}/');
     db.close();
   });
@@ -492,14 +494,51 @@ describe('config and db', () => {
     expect(repoFolder('/ak/worktrees', '/home/u/code/Yugabyte-DB')).toBe(a);
   });
 
-  it('reads an old or unknown reviewer mode as the default', () => {
-    expect(parseSettings(JSON.stringify({ reviewer: 'agentk' })).reviewer).toBe('agentk-people');
+  it('reads an unknown reviewer mode as the default, AgentK only', () => {
+    expect(parseSettings(JSON.stringify({ reviewer: 'bogus' })).reviewer).toBe('agentk');
     expect(parseSettings(JSON.stringify({ reviewer: 'all' })).reviewer).toBe('all');
-    expect(parseSettings('{').reviewer).toBe('agentk-people');
+    expect(parseSettings('{').reviewer).toBe('agentk');
+  });
+
+  it('keeps projects without a reviewer mode on AgentK + People when upgrading a schema 35 database', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    const addProject = (id: string, settings: string) =>
+      run(db, `INSERT INTO projects(id, name, repo_path, default_branch, settings_json, created_at) VALUES (?, ?, '/code/api', 'main', ?, 0)`, id, id, settings);
+    addProject('a', JSON.stringify({ notify: false }));
+    addProject('b', JSON.stringify({ reviewer: 'people' }));
+    addProject('c', 'not json');
+    undoMigrations(db, 36);
+    db.exec('PRAGMA user_version = 35');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    const projects = db.prepare('SELECT settings_json FROM projects ORDER BY id').all() as { settings_json: string }[];
+    expect(projects.map((p) => JSON.parse(p.settings_json))).toEqual([
+      { notify: false, reviewer: 'agentk-people' }, { reviewer: 'people' }, { reviewer: 'agentk-people' },
+    ]);
+    db.close();
+  });
+
+  // Who wrote a review that asks for work, and where it goes in each mode (the user's own always go).
+  it.each([
+    ['agentk', ['claude', 'hold', 'hold', 'hold', 'claude']],
+    ['agentk-people', ['claude', 'claude', 'hold', 'hold', 'claude']],
+    ['all', ['claude', 'claude', 'claude', 'hold', 'claude']],
+    ['people', ['hold', 'claude', 'hold', 'hold', 'claude']],
+  ] as const)('routes reviews in %s mode', (mode, routes) => {
+    const who = ['agentk', 'person', 'bot', 'outsider', 'user'] as const;
+    expect(who.map((w) => reviewRoute(mode, w))).toEqual(routes);
   });
 });
 
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
+
+/** Undoes migration 36 (held reviews; the reviewer modes it filled in stay), for tests that rewind the schema. */
+function dropV36(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE held_reviews');
+}
 
 /** Undoes migration 35 (the learn step's marks on What Meko doesn't know, and its counts of them), for tests that rewind the schema. */
 function dropV35(db: ReturnType<typeof openDb>) {
@@ -628,8 +667,8 @@ const V11_COLUMNS = ['kind'];
 
 /** Undoes migrations 35 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35];
-  for (let v = 35; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36];
+  for (let v = 36; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -641,7 +680,7 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);

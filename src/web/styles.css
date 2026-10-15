@@ -4310,6 +4310,65 @@ div[id^='dak-mermaid-'] .label {
   padding-top: 10px;
   border-top: 1px solid var(--rule);
 }
+/* Held reviews: the Review gate's button, and the dialog listing each review with its inline comments. */
+.btn.held-btn {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.held-list,
+.held-comments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.held-review {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.held-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.held-kind {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--sunk);
+  color: var(--muted);
+  font-size: 11px;
+}
+.held-warn {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  border-radius: 4px;
+}
+.held-comments {
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--rule);
+}
+.held-comments li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 /* A preview spans its card, and grows to 60% of the window's height before it scrolls. */
 .ask-dialog .dq-opt-text {
   flex: 1;

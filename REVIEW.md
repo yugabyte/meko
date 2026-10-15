@@ -161,8 +161,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] `/agentk review force` is only posted when the user asks.
 - [ ] Nothing from someone without a role on the repo (`authorAssociation` other than OWNER,
       MEMBER or COLLABORATOR, and not AgentK, an allowed bot or the user) starts a turn or counts
-      as a `/agentk review` request, and prompts that put PR text in front of Claude call it
-      untrusted, not instructions.
+      as a `/agentk review` request: such a review is only held, and reaches Claude only when the
+      user sends it, marked as from someone with no role. Prompts that put PR text in front of
+      Claude call it untrusted, not instructions. Where a review goes in each mode is
+      `reviewRoute()` in `heldreviews.ts`; don't route reviews anywhere else.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
       Merge-conflict prompts follow the same rules (between reviews and CI in the queue), act only on

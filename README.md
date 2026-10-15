@@ -193,11 +193,12 @@ your phone can connect.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
-  and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and
-  people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
-  you turn that off in Settings → General) and CI failures to Claude. Only reviews
-  from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
-  anyone else's are shown to you and ignored.
+  and AgentK's review have passed. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
+  people's, every reviewer's, or only people's), merge conflicts with the base (unless
+  you turn that off in Settings → General) and CI failures to Claude. Every other review, and
+  any review from someone without a role on the repo, is held for you: you read it in AgentK and
+  send it to AgentK or dismiss it, and Merge & Close waits until you decide. Your own reviews
+  always go to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
