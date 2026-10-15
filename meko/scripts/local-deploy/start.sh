@@ -1075,11 +1075,17 @@ else
   # and the per-core limit at its default of 0 there is no cap. It can't go via
   # enforce_tablet_replica_limits=false: yugabyted appends =true after user
   # flags. Local-dev only; yugabyted.conf keeps it across restarts.
+  #
+  # ysql_timezone=UTC: with it unset, YSQL follows the host's time zone, so a laptop runs in local time while
+  # BYOC and the hosted data plane run in UTC. That matters for datapack_daily_activity: the datapack metrics
+  # consumer counts a search toward the UTC date of its occurred_at, while the MCP server's inline writes and
+  # the dashboard readers use CURRENT_DATE in the session zone, so searches near midnight would land on
+  # different days in different paths. Pinning it makes local match the real environments.
   start_args=(
     --insecure
     "--base_dir=${YB_BASE_DIR}"
     "--master_flags=ysql_yb_enable_mage=true,tablet_replicas_per_gib_limit=0"
-    "--tserver_flags=ysql_yb_enable_mage=true"
+    "--tserver_flags=ysql_yb_enable_mage=true,ysql_timezone=UTC"
     "--background=true"
   )
   [ -n "${YB_ADVERTISE}" ] && start_args+=("--advertise_address=${YB_ADVERTISE}")

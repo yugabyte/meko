@@ -433,7 +433,18 @@ services:
         condition: service_started
       langfuse-web:
         condition: service_started
+      # Consumer first: with the flag on, events written before it runs are only
+      # applied once it starts, so don't let searches begin without it.
+      meko-events-consumer:
+        condition: service_started
     environment:
+      # Event framework: context_search inserts one search.completed event
+      # instead of writing the bookkeeping rows inline; meko-events-consumer
+      # applies them. Unset/false restores the inline path (the control run).
+      MEKO_EVENTS_EMIT: ${MEKO_EVENTS_EMIT:-true}
+      # How often the producer writes its queued events (seconds, 0.5 to 60). A search's numbers reach the
+      # tables about this long plus the consumer's 3 s safety lag later.
+      MEKO_EVENTS_FLUSH_INTERVAL_S: ${MEKO_EVENTS_FLUSH_INTERVAL_S:-5}
       # Run as Streamable-HTTP at /mcp on :8000.
       YB_MCP_TRANSPORT: http
       YB_MCP_STATELESS_HTTP: "true"
@@ -493,6 +504,38 @@ services:
       - ${MEKO_MCP_SERVER_DIR:-../../../../meko-mcp-server}/src:/app/src:ro
     ports:
       - "127.0.0.1:${MCP_SERVER_HOST_PORT}:8000"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Datapack metrics consumer (event framework). Go, its own small image —
+  # NOT part of the MCP server image. Reads meko_system.events and applies
+  # search.completed to the daily-activity / token-savings / audit tables.
+  # Needs the tables from migrations 000029/000030, hence the migrate gate.
+  # sslmode=disable: lib/pq defaults to require, local yugabyted has no TLS. Keep it BEFORE
+  # password: a local yugabyted has an empty YB_PASSWORD, and `password= sslmode=disable` parses
+  # as password "sslmode=disable", which drops the setting and fails every connection.
+  # Health/metrics: http://localhost:${EVENTS_CONSUMER_HOST_PORT:-18080}/healthz and /metrics
+  # ──────────────────────────────────────────────────────────────────
+  meko-events-consumer:
+    image: meko-datapack-metrics-consumer:meko-local
+    build:
+      context: ${MEKO_EVENTS_CONSUMER_DIR:-../../event-consumers/datapack-metrics-consumer}
+      dockerfile: Dockerfile
+    container_name: meko-events-consumer
+    <<: *host-gateway
+    restart: unless-stopped
+    depends_on:
+      meko-api-server-migrate:
+        condition: service_completed_successfully
+    environment:
+      YUGABYTEDB_SYSTEM_URL: "dbname=yugabyte host=host.docker.internal port=${YB_PORT} user=${YB_USER} sslmode=disable password=${YB_PASSWORD}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "127.0.0.1:${EVENTS_CONSUMER_HOST_PORT:-18080}:8080"
     networks: [meko_net]
 
   # ──────────────────────────────────────────────────────────────────
