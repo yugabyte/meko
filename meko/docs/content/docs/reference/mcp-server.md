@@ -22,7 +22,7 @@ When a quota is exceeded, further calls are blocked until you upgrade. Datapack 
 
 ## Tools
 
-The Meko MCP Server provides 25 tools by default. Experimental conversation-search tools are hidden unless a deployment explicitly enables them.
+The Meko MCP Server provides 26 tools by default. Experimental conversation-search tools are hidden unless a deployment explicitly enables them.
 
 Authorization comes from the authenticated user and their datapack grants.
 
@@ -97,7 +97,8 @@ Authorization comes from the authenticated user and their datapack grants.
 | :--- | :---------- |
 | `datapack_create` | Provision a new datapack.<br>Use this to set up a new isolated Meko environment.<br>Typical inputs: `name, conversation_id, datapack_id` |
 | `datapack_describe` | Return datapack details and optional status.<br>Use this to inspect an existing datapack.<br>Typical inputs: `datapack_id, include_status, conversation_id` |
-| `datapack_list` | List datapacks visible to the current user.<br>Use this to see all workspaces/environments.<br>Typical inputs: `conversation_id, datapack_id` |
+| `datapack_search` | Find datapacks visible to the current user, one page at a time.<br>Use this to find a datapack's ID. It works for accounts of any size. `query` matches part of the name (case-insensitive), and `name` matches the exact name. `grant` limits results to datapacks you own (`owner`) or that are shared with you (`shared`). `sort` is `created` (newest first, the default) or `name`.<br>The response is `{datapacks, has_more, next_cursor, total}`. While `has_more` is `true`, get the next page by repeating the call with the same filters and passing `next_cursor` as `cursor`. A Meko API that predates paging returns `has_more: true` with an empty `next_cursor` when more rows match; narrow the search with `query` then. `limit` sets the page size, 1-100 (default: `20`). `total` is `null` unless you pass `include_total`.<br>Typical inputs: `query, name, limit, cursor, grant, sort, include_total, conversation_id` |
+| `datapack_list` | List datapacks visible to the current user as one array.<br>Use this for an account with a small number of datapacks. To find one datapack, use `datapack_search`.<br>With no `query` or `limit`, it returns every datapack, up to 1,000 by default. Above that, it returns a `too_many_datapacks` error. With `query` and no `limit`, it returns every datapack whose name contains `query`, and returns `too_many_datapacks` if more than 100 match. With `limit`, it returns the first `limit` matches (at most 100) and doesn't say whether more exist.<br>Typical inputs: `conversation_id, query, limit, datapack_id` |
 | `datapack_update` | Update a datapack's name, description, and/or conversation-search opt-out.<br>At least one of `name`, `description`, or `conversation_search_opt_out` must be provided; clearing a description with an empty string isn't supported. Conversation search is on by default — opting out (restricted to the datapack's owner or a maintainer) is also available from the portal.<br>Typical inputs: `datapack_id, name, description, conversation_search_opt_out, conversation_id` |
 | `datapack_delete` | Permanently delete a datapack.<br>This operation is irreversible and requires an explicit `datapack_id`.<br>Typical inputs: `datapack_id, conversation_id` |
 
