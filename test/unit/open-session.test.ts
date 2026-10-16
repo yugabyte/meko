@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Session } from '../../src/shared/types';
-import { lastOpenSession, rememberOpenSession, sessionToOpen } from '../../src/web/util.js';
+import type { ProjectWithSessions, Session } from '../../src/shared/types';
+import { lastOpenSession, openSessions, rememberOpenSession, sessionToOpen } from '../../src/web/util.js';
 
 const session = (id: string, createdAt: number, lastEventAt?: number) => ({ id, createdAt, lastEventAt }) as Session;
 
@@ -20,6 +20,21 @@ describe('sessionToOpen', () => {
   it('is undefined for a project without sessions, and leaves the list in order', () => {
     expect(sessionToOpen([], 'old')).toBeUndefined();
     expect(live.map((s) => s.id)).toEqual(['old', 'busy', 'new']);
+  });
+});
+
+describe('openSessions', () => {
+  it('lists the open sessions oldest first, without closed ones', () => {
+    const p = {
+      sessions: [
+        { ...session('b', 2), desired: 'running', status: 'idle' },
+        { ...session('gone', 0), desired: 'archived', status: 'idle' },
+        { ...session('a', 1), desired: 'running', status: 'working' },
+        { ...session('ended', 3), desired: 'running', status: 'archived' },
+      ],
+    } as ProjectWithSessions;
+    expect(openSessions(p).map((s) => s.id)).toEqual(['a', 'b']);
+    expect(p.sessions[0].id).toBe('b');
   });
 });
 

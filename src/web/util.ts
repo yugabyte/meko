@@ -1,6 +1,6 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
-import { INSTRUCTIONS_MAX } from '../shared/types';
+import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
 import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
@@ -28,6 +28,11 @@ const URGENCY: Record<DotState, number> = {
 
 export function liveSessions(p: ProjectWithSessions): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
+}
+
+/** A project's open sessions in the order the rail and the phone's tabs list them: oldest first. */
+export function openSessions(p: ProjectWithSessions): Session[] {
+  return liveSessions(p).sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /**
@@ -524,6 +529,16 @@ export function queuedText(session: Session): string | null {
   const first = session.mergeBlockers[0];
   const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
   return `✓ Merge queued: ${waits}`;
+}
+
+/** A session tab's tooltip: name, what its dot means, stage and tokens. */
+export function sessionTabTitle(s: Session): string {
+  return [
+    s.name,
+    dotTitle(s) + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
+    STAGE_LABELS[s.stage],
+    `${formatTokens(totalTokens(s.usage))} tokens`,
+  ].join(' · ');
 }
 
 /**

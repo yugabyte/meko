@@ -4,7 +4,17 @@ Part of the [AgentK Local design](../design.md).
 
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
-screen, use **Move up** / **Move down** in the project home's settings. The top tabs hold that project's sessions. The
+screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
+hold the project's sessions. With **List sessions under their project** ticked in Settings › General
+(off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
+under it in the rail instead of the tabs, oldest first, one row each with its status dot, its full name
+(wrapped, not cut off) and its stage, so many show at once and any can be opened with one click,
+in any project. The session on screen is highlighted (its project's name turns bold instead), and
+**+ New session** follows each project's list (the project on screen shows it even with no
+sessions). The ▾ at the right of a project's row folds its list away and ▸ brings it back; a folded
+project keeps its dot and count, and takes the highlight when the session on screen is in it. Which
+projects are folded is kept in this browser (`ak-rail-collapsed`). The rail is 248 px wide so the
+names have room. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
 diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking
 the branch copies the full path of the session's worktree (its tooltip shows the path, and the label
@@ -18,7 +28,7 @@ version moves below it first, then the user name is cut off before the server na
 
 ![The AgentK Local window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
 
-Session states, shown with a dot in the rail and on each tab:
+Session states, shown with a dot on each session (on its tab, or in the rail) and on its project:
 
 - **Working:** the dot's halo blinks
 - **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
@@ -36,7 +46,7 @@ Session states, shown with a dot in the rail and on each tab:
 - **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
   review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,
   turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
-  (`dotState()`). The tab's tooltip says what the gate waits on (a merge's from `queuedText()`;
+  (`dotState()`). The session's tooltip says what the gate waits on (a merge's from `queuedText()`;
   an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
@@ -59,12 +69,12 @@ interrupted turn's `/mod/turn`) and on a reset
   m whenever one of its sessions is calling Meko.
 - **How it looks:** the working dot drawn at 12 px (10 px in the layout, with `margin: -1px`, so the
   tab keeps its width as calls start and end), with `/meko-m.png` as an 8 px white mask. It keeps
-  the working blink. The tab's tooltip and the palette say *calling Meko*.
+  the working blink. The session's tooltip and the palette say *calling Meko*.
 - **Why the mod and not command hooks:** AgentK's hooks see the end of every tool call
   (`PostToolUse`) but the start of only a few. A `PreToolUse` matcher would add a process per call
   and leave a failed or interrupted call to a guess. The mod brackets each call exactly.
 
-**Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
+**Renaming a session.** Double-click its tab or its row in the rail (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
 changes: the branch, worktree, pane and Meko agent id were named from it once, at the start,
 and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
@@ -186,6 +196,10 @@ full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) sel
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
 
+**The projects pane's width.** In the wide layout, dragging the pane's right edge (or the arrow
+keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back to 248 px. The
+width is kept in this browser (`ak-rail-width`; `src/web/rail.ts`).
+
 In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would (nothing while it's
 disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). In a form
 with a submit button, that's the submit button if it's primary and nothing otherwise (Turn off
@@ -277,8 +291,9 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
 app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
-top of the screen, in place of `⌘K`). The app bar also holds the session tabs, between the drawer
-button and ⋯, so the session name isn't repeated above them (each tab shows its status and stage). The session header,
+top of the screen, in place of `⌘K`), and, with the setting on, lists the sessions under their projects as on a desktop.
+The app bar also holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
+can switch sessions without opening the drawer (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
