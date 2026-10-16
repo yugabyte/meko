@@ -10,13 +10,8 @@
 //! SK streams committed WAL to a fresh client, catching up to the flush LSN
 //! and delivering records.
 //!
-//! Hot vs cold: a cold (post-restart, served-from-YB) variant is a natural
-//! extension, but restarting the safekeeper triggers the pageserver's
-//! benign reconnect-replay (#57), which bumps the
-//! `durable_walk_unflushed_row` correctness counter that the suite's
-//! post-scenario gate treats as fatal. That variant therefore needs the
-//! gate to whitelist the benign kind (or a non-restart cache-eviction
-//! path); this scenario covers the read path without a restart.
+//! Hot vs cold: the cold (post-restart, served-from-YB) variant is
+//! `sk_wal_cold`; this scenario covers the read path without a restart.
 
 use std::str::FromStr;
 

@@ -443,7 +443,7 @@ pub(crate) static MATERIALIZER_READ_SIDE_DISPATCHES: Lazy<metrics::IntCounter> =
 ///
 /// - `source` — `getpage` (`PageWriter::read_chain`, the GetPage@LSN /
 ///   vectored read path) vs `materializer`
-///   (`PageWriter::read_chain_durable`, the image-fold path).
+///   (`PageWriter::read_chain_for_materialize`, the image-fold path).
 /// - `path` — `fast_cache` (the cache held a complete chain; no YB
 ///   round trip) vs `yb_blend` (fell through to a YB read).
 ///
@@ -581,7 +581,7 @@ pub(crate) static CORRECTNESS_ERRORS: Lazy<metrics::IntCounterVec> = Lazy::new(|
 /// in-progress `materialize_batch_inner`. Driven by `redo_one` futures
 /// inside the materialiser; cleared when the batch's bulk INSERT
 /// completes. Captures the **transient** allocation the
-/// `read_chain_durable → walredo → put_pages` pipeline holds for
+/// `read_chain_for_materialize → walredo → put_pages` pipeline holds for
 /// `REDO_CONCURRENCY` × batch-size keys at a time. Unlike the
 /// post-flush `UnifiedPages.durable_fifo`, this pool is **not** capped
 /// by `read_cache_bytes` — it's bounded only by chain depth × batch

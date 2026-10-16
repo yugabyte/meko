@@ -40,7 +40,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
          WHERE branch_id = '{b}' AND amp_storage.gc_key_decode(key) LIKE '%rel={relnode} fork=0'"
     );
     // Each round grows the heap (new relsize → a new sentinel version at a
-    // new LSN) and checkpoints so the write lands. GC runs concurrently
+    // new LSN) and flushes the pageserver so the write lands. GC runs concurrently
     // (gc_period=1s), so track the PEAK across the burst: it must clearly
     // exceed the trim bound below, or the convergence proves nothing — a
     // trivially small set would satisfy `settled <= 5` even WITHOUT trim.
@@ -56,6 +56,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
             ),
         )
         .await?;
+        c.flush_branch(c.endpoint_ps_http_port("ep_gc_mt")?, &b, &conn).await?;
         peak = peak.max(db::query_i64(&yb, &sentinel_versions).await?);
     }
     if peak < 10 {

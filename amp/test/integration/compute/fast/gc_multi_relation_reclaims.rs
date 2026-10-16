@@ -42,6 +42,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
     }
     db::batch(&conn, "CHECKPOINT").await?;
+    // Flush so the peak below counts every row the drain will reclaim.
+    c.flush_branch(c.endpoint_ps_http_port("ep_gc_mr")?, &b, &conn).await?;
 
     let mut want = Vec::with_capacity(TABLES);
     for t in 0..TABLES {

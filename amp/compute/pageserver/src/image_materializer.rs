@@ -2,9 +2,10 @@
 //!
 //! When `PageWriter::put` observes a key crossing
 //! `YbPageWriterConfig::image_chain_limit` consecutive non-image,
-//! non-`will_init` deltas, it pushes a [`MaterializeJob`] onto a
-//! bounded mpsc. This task drains the queue: per job it reads the
-//! current chain from `PageStore`, walredos to a fresh page image at
+//! non-`will_init` deltas, the flusher task pushes a [`MaterializeJob`]
+//! onto a bounded mpsc. This task drains the queue: per job it reads the
+//! current chain (cache, unflushed rows included, merged with
+//! `PageStore`), walredos to a fresh page image at
 //! the triggering LSN, and INSERTs the result as a new image row
 //! (`is_image=TRUE, will_init=TRUE`). Subsequent reads at LSN ≥ target
 //! anchor on that row instead of the block's last init record. Both
@@ -48,9 +49,8 @@ use crate::walredo::RedoAttemptType;
 /// not by per-row PG parameter overhead; capped to avoid stalling
 /// the queue if walredo is slow.
 ///
-/// Raised once write-side triggers started carrying their durable
-/// chain inline (see `MaterializeJob.chain`): redo no longer blocks on
-/// a YB `read_chain_durable` round-trip per job, so a batch of N is
+/// Raised once redo stopped needing a YB round trip per job (the chain
+/// is normally served from the cache), so a batch of N is
 /// CPU + walproposer-lib bound at `BASE_REDO_CONCURRENCY` parallelism
 /// (scaled by `scale_factor`) and can clear in tens to hundreds of ms
 /// even at the upper end. Larger batches amortise the per-row PG
@@ -76,7 +76,7 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 const BASE_MAX_INFLIGHT_INSERTS: usize = 2;
 
 /// Maximum concurrent `redo_one` futures in flight within a single
-/// `materialize_batch`. Each future does a `read_chain_durable`
+/// `materialize_batch`. Each future does a `read_chain_for_materialize`
 /// (against `hot_path_page_store` — its own sessions, off the
 /// compute-facing store), a CPU WAL-record decode, and a walredo
 /// subprocess RPC.
@@ -113,7 +113,7 @@ pub struct ImageMaterializer {
     page_writer: Arc<PageWriter>,
     /// Internal-traffic `PageStore` (own YSQL connection, shared
     /// with the walreceiver's `PageWriter::flush` write path and
-    /// the materialiser's own cache-miss `read_chain_durable`).
+    /// the materialiser's own cache-miss `read_chain_for_materialize`).
     /// Keeps every materialiser write off the compute getPage
     /// connection — that's the isolation we wanted.
     hot_path_page_store: Arc<PageStore>,
@@ -621,7 +621,7 @@ impl ImageMaterializer {
 
     /// Per-job read + walredo. Returns:
     /// - `Some((image_row, chain_len, n_records))` to enqueue for COPY,
-    /// - `None` to drop the job (nothing durable yet, or already anchored),
+    /// - `None` to drop the job (no chain yet, or already anchored),
     /// - `Err` to log and skip.
     async fn redo_one(&self, job: &MaterializeJob) -> Result<Option<(PageRow, usize, usize)>> {
         // Test-only: hold the job in flight (its key stays in
@@ -629,13 +629,11 @@ impl ImageMaterializer {
         // drop action and exercise the deferral. Inert in production
         // (compiled under `testing`, no action configured).
         utils::failpoint_support::sleep_millis_async!("ps::materialise-redo-one");
-        // target_lsn is durable by construction (post-flush trigger
-        // uses max snapshot LSN per key; read-side trigger uses the
-        // caller's bound). Fetch via `read_chain_durable` — the cache
-        // fast path handles the hot case and YB fallback handles
-        // post-eviction or read-side dispatch.
+        // Rel chains come from `read_chain_for_materialize` (cache,
+        // unflushed rows included, then YB); SLRU chains from YB only,
+        // which is why SLRU jobs target the flush horizon.
         // A failure here (no will_init anchor, transient read error)
-        // means we can't assemble a durable chain for this key.
+        // means we can't assemble a chain for this key.
         // Materialisation is best-effort: log and skip the page rather
         // than aborting (the `Err` arm in the batch loop is reserved for
         // walredo failures, which fatal-abort). The deltas stay in
@@ -685,7 +683,7 @@ impl ImageMaterializer {
         } else {
             match self
                 .page_writer
-                .read_chain_durable(job.key, job.target_lsn)
+                .read_chain_for_materialize(job.key, job.target_lsn)
                 .await
             {
                 Ok(chain) => chain,
@@ -694,7 +692,7 @@ impl ImageMaterializer {
                         branch_id = %self.branch_id,
                         target_lsn = %job.target_lsn,
                         key = %job.key,
-                        "read_chain_durable failed; skipping materialise of this page: {e:#}"
+                        "read_chain_for_materialize failed; skipping materialise of this page: {e:#}"
                     );
                     return Ok(None);
                 }

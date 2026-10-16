@@ -37,6 +37,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .await?;
     }
     db::batch(&bconn, "CHECKPOINT").await?;
+    // Flush so the peak below counts every row the drain will reclaim.
+    c.flush_branch(c.endpoint_ps_http_port("ep_gc_fresh")?, &b1, &bconn).await?;
     let want_sum = db::query_text(
         &bconn,
         "SELECT md5(string_agg(payload, ',' ORDER BY id)) FROM gc_fresh_t",

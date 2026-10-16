@@ -714,7 +714,7 @@ async fn create_compute_page_store(
 }
 
 /// Internal-traffic `PageStore`: walreceiver `PageWriter::flush` +
-/// materialiser `read_chain_durable` cache miss + materialiser
+/// materialiser `read_chain_for_materialize` cache miss + materialiser
 /// `put_pages`. Schema already exists by the time this runs.
 ///
 /// Pool size 2, because YB serialises a pipeline behind a single backend

@@ -40,6 +40,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         db::batch(&conn, &format!("UPDATE gc_invisible SET payload = md5(payload || '{i}')")).await?;
     }
     db::batch(&conn, "CHECKPOINT").await?;
+    // Flush so the peak below counts every row the drain will reclaim.
+    c.flush_branch(c.endpoint_ps_http_port("ep_gc_invis")?, &b, &conn).await?;
 
     let want_sum = db::query_text(
         &conn,

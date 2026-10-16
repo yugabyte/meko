@@ -94,7 +94,7 @@ pub struct TenantSharedResources {
     pub compute_page_store: Arc<crate::page_store::PageStore>,
     /// `PageStore` dedicated to internal traffic: walreceiver
     /// `PageWriter::flush` (parameterised batched INSERT), and the
-    /// image materialiser (cache-miss `read_chain_durable` +
+    /// image materialiser (cache-miss `read_chain_for_materialize` +
     /// `put_pages`). Owning its own YSQL connection keeps walapply
     /// writes and materialiser work off the compute getPage path so
     /// reads stay isolated from internal load.

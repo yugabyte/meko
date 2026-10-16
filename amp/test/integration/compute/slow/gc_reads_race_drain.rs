@@ -102,6 +102,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         db::batch(&conn, &format!("UPDATE race_read SET payload = md5(payload || '{i}')")).await?;
     }
     db::batch(&conn, "CHECKPOINT").await?;
+    // Flush so the peak below counts every row the drain will reclaim.
+    c.flush_branch(c.endpoint_ps_http_port("ep_gc_race")?, &b, &conn).await?;
     // race_read is now FINAL — never written again — so its checksum is
     // a fixed invariant while its sub-anchor versions are trimmed.
     let want_sum = db::query_text(

@@ -1358,33 +1358,36 @@ impl Cluster {
         }
     }
 
-    /// Returns `Some(seconds)` for the drain, or `None` if there was
-    /// nothing to do. Errors propagate to the best-effort wrapper.
-    async fn try_drain_ingest(&self) -> anyhow::Result<Option<u64>> {
-        // The compute's flushed WAL position is the tip the pageserver
-        // must catch up to. A failure here (compute down) means no fresh
-        // lag to drain, so the `?` short-circuit is the right behavior.
-        let tip = crate::db::query_text(
-            &crate::db::compute_conn(self.compute_port()),
-            "select pg_current_wal_flush_lsn()::text",
-        )
-        .await?;
-        let branch = self.branch();
-        // `flush?lsn=<tip>` waits for WAL ingest to reach `tip`, then
-        // force_flushes — advancing `consistent_lsn` to the tip.
-        let url = format!(
-            "http://127.0.0.1:{}/v1/branch/{branch}/flush?lsn={tip}",
-            self.ps_http_port(),
-        );
-        let t0 = Instant::now();
-        let resp = self
-            .daemon_client(self.ps_http_port())?
-            .put(&url)
-            .send()
-            .await?;
+    /// Wait for the pageserver on `ps_http_port` to ingest `conninfo`'s WAL
+    /// tip, then flush its buffer, so YB holds every row written so far.
+    pub async fn flush_branch(
+        &self,
+        ps_http_port: u16,
+        branch: &str,
+        conninfo: &str,
+    ) -> anyhow::Result<()> {
+        let tip =
+            crate::db::query_text(conninfo, "select pg_current_wal_flush_lsn()::text").await?;
+        let url = format!("http://127.0.0.1:{ps_http_port}/v1/branch/{branch}/flush?lsn={tip}");
+        let resp = self.daemon_client(ps_http_port)?.put(&url).send().await?;
         if !resp.status().is_success() {
             bail!("pageserver flush returned {}", resp.status());
         }
+        Ok(())
+    }
+
+    /// Returns `Some(seconds)` for the drain, or `None` if there was
+    /// nothing to do. Errors propagate to the best-effort wrapper.
+    async fn try_drain_ingest(&self) -> anyhow::Result<Option<u64>> {
+        // A failure reading the compute's WAL tip (compute down) means no
+        // fresh lag to drain, so the `?` short-circuit is the right behavior.
+        let t0 = Instant::now();
+        self.flush_branch(
+            self.ps_http_port(),
+            self.branch(),
+            &crate::db::compute_conn(self.compute_port()),
+        )
+        .await?;
         Ok(Some(t0.elapsed().as_secs()))
     }
 
@@ -1598,25 +1601,9 @@ impl Cluster {
             .lines()
             .filter(|l| l.starts_with("pageserver_yb_correctness_errors_total{"))
             .collect();
-        // `durable_walk_unflushed_row` is documented-benign during attach /
-        // reconnect replay (#57): a scenario that restarts the safekeeper
-        // (e.g. sk_wal_cold) makes the pageserver walreceiver reconnect and
-        // replay over still-buffered rows, and the materialiser's durable
-        // walk briefly sees those re-pushed-as-unflushed rows. It bails to
-        // the YB read either way, so this kind is not corruption. Report it
-        // (so a sustained rate stays visible) but don't fail on it alone;
-        // every other kind remains fatal.
-        let (benign, fatal): (Vec<&str>, Vec<&str>) = hit
-            .iter()
-            .partition(|l| l.contains("kind=\"durable_walk_unflushed_row\""));
-        if !benign.is_empty() {
-            for l in &benign {
-                tee_println!("  (benign correctness counter — reconnect/attach replay #57: {l})");
-            }
-        }
-        if !fatal.is_empty() {
+        if !hit.is_empty() {
             eprintln!("FAIL — correctness counter non-zero:");
-            for l in fatal {
+            for l in hit {
                 eprintln!("{l}");
             }
             bail!("correctness counter non-zero");

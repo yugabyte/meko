@@ -369,10 +369,11 @@ reads take the latest row at `lsn ≤ target_lsn` (full overwrite semantics).
 
 **`PageWriter` internal LSN state (memory only):**
 - `flush_horizon_lsn` — advanced to the ingest frontier after a successful
-  flush; caps materialiser reads (`read_chain_durable`,
-  `read_slru_chain_durable`) so a partially landed flush can't expose chain
-  holes. Rows above the horizon may still have unflushed same-record
-  siblings.
+  flush; bounds SLRU materialise targets (`read_slru_chain_durable` reads
+  YB only, so a partially landed flush must not expose chain holes) and
+  the post-flush and cold-residue enqueues. Relation-page folds are not
+  bounded by it. Rows above the horizon may still have unflushed
+  same-record siblings.
 - `record_lsn_history` — the `last → prev` pairing map described under
   `prev_record_lsn`; its highest key is also the flush frontier capture.
 - `DeltaTally.last_lsn` — per-key delta tally for materialiser triggers;

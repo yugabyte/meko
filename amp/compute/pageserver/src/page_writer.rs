@@ -92,11 +92,11 @@ impl Default for FlushPolicy {
 #[derive(Debug, Clone)]
 pub struct MaterializeJob {
     pub key: Key,
-    /// Always durable by construction. The post-flush trigger uses
-    /// `max(snapshot.lsn for key)` (every snapshot row is in YB AND
-    /// marked durable in cache by the time the trigger fires); the
-    /// read-side trigger uses the read's `target_lsn` which is the
-    /// caller's responsibility to bound at a durable LSN.
+    /// A relation-page job targets a buffered delta, flushed or not: the
+    /// crossing delta when `put()` enqueues it, the key's newest on a retry.
+    /// Post-flush, cold-residue and read-side jobs stay at or below
+    /// `flush_horizon_lsn`, which SLRU jobs require: an SLRU chain is
+    /// read from YB alone.
     pub target_lsn: Lsn,
 }
 
@@ -194,8 +194,8 @@ impl DeltaTally {
 /// - `compute_page_store` serves compute-facing reads
 ///   (`scan_range` / `read_chain`). Idle on cache hit.
 /// - `hot_path_page_store` serves walreceiver writes (`flush*`) and
-///   the image materialiser's cache-miss durable read
-///   (`read_chain_durable`). Materialiser image writes also go via
+///   the image materialiser's cache-miss read
+///   (`read_chain_for_materialize`). Materialiser image writes also go via
 ///   this connection (held directly by `ImageMaterializer`).
 ///
 /// Compute getPage stays isolated from internal load — a long flush
@@ -242,20 +242,14 @@ pub struct PageWriter {
     /// since the last anchor for that key. Both fields advance on
     /// each non-anchor `put`; either hitting its
     /// `MaterializerHandle` threshold dispatches a job and removes
-    /// the entry. Shared with the flush path (post-flush trigger),
-    /// which walks the map looking for keys that crossed the
-    /// threshold during the flushed-window.
+    /// the entry.
     delta_counts: DashMap<Key, DeltaTally>,
-    /// Keys whose `delta_counts` tally has *crossed* a materialize
-    /// threshold and are awaiting dispatch — the put loop inserts a key
-    /// here on the transition into "hit", so the flush trigger walks
-    /// only this set instead of sweeping all of `delta_counts`. Without
-    /// it, every flush iterated the whole map (O(all cached keys)) to
-    /// find the few threshold-crossers — the write-path twin of the
-    /// `lookup_range` O(N) cache walk (#21). Treated as an
-    /// over-approximation: the flush walk re-checks the tally and drops
-    /// stale entries, so a spurious member is harmless.
-    delta_ready: DashSet<Key>,
+    /// Keys over their materialize threshold whose job is not enqueued yet:
+    /// SLRU keys until the next flush, relation keys whose enqueue failed at
+    /// the crossing until the flusher's tick retries them. Lets those
+    /// paths skip a walk of all of `delta_counts` (#21). Every reader
+    /// re-checks the tally, so a stale member is harmless.
+    keys_to_materialize: DashSet<Key>,
     materializer: Option<MaterializerHandle>,
     /// GC trim-candidate collection: the shared emitter (sampling + buffering + flush)
     /// both producers feed (ingest window flush, materialiser
@@ -316,34 +310,22 @@ pub struct PageWriter {
     /// `flush()`. `put()` blocks on this when the buffer exceeds
     /// `policy.backpressure_bytes`.
     flush_completed: tokio::sync::Notify,
-    /// Pulsed by `record_delta_for_materialize` the instant a key's
-    /// delta chain first crosses its materialise threshold. The
-    /// periodic flusher (`spawn_flusher`) waits on this alongside its
-    /// timer tick and flushes immediately when it fires, so the
-    /// `flush()`-side materialise dispatch runs within ~ms of the
-    /// crossing instead of waiting for the next `policy.max_age` /
-    /// `max_bytes` flush. Without it, dispatch is bolted to the
-    /// 5s/25MB flush cadence: under a high-rate commit burst a CLOG
-    /// page's chain runs to the full 32768-row page capacity and a
-    /// large un-materialised backlog accumulates, which a later
-    /// basebackup must collapse synchronously (the #115 recycle
-    /// stall). `notify_one` coalesces a burst of crossings into
-    /// back-to-back flushes rather than a per-crossing storm, and
-    /// `put()` never blocks on it (the notify is non-blocking) — so
-    /// this paces the materialiser without throttling ingest. An
-    /// `Arc` so the flusher task can wait on it without holding a
-    /// strong ref to the writer between ticks.
-    materialize_wakeup: Arc<tokio::sync::Notify>,
+    /// Pulsed when an SLRU key crosses its materialise threshold (its
+    /// fold reads YB only, so the flusher flushes before enqueuing the job),
+    /// and by a `put()` that starts waiting on backpressure. Relation keys
+    /// are enqueued from `put()` itself. `notify_one` coalesces a burst, and
+    /// `put()` never blocks on it. An `Arc` so the flusher task can wait on
+    /// it without holding a strong ref to the writer between ticks.
+    flusher_wakeup: Arc<tokio::sync::Notify>,
     /// Total puts that had to wait at least once on `flush_completed`
     /// because the buffer was at `policy.backpressure_bytes`. Exposed
     /// for telemetry / smoke tests.
     backpressure_waits: std::sync::atomic::AtomicU64,
-    /// Upper bound on rel-page LSNs the materialiser is allowed to
-    /// consult in YB. Advanced only when `mark_flushed` runs
-    /// (after every chunk of a flush has committed). Materialiser
-    /// reads cap their `target_lsn` at this value so a mid-flush
-    /// partial-YB-view can never feed walredo a chain with a hole
-    /// — see `read_chain_durable` for the use site.
+    /// Highest LSN every buffered row at or below which is in YB.
+    /// Advanced only when `mark_flushed` runs (after every chunk of a
+    /// flush has committed). Bounds the post-flush and cold-residue
+    /// enqueue targets, which SLRU folds need: an SLRU chain is read
+    /// from YB alone.
     flush_horizon_lsn: std::sync::atomic::AtomicU64,
     /// Serializes the whole of `flush()`. The periodic flusher
     /// (`spawn_flusher`) and every `flush` caller
@@ -509,7 +491,7 @@ impl PageWriter {
             rows_written: AtomicU64::new(0),
             meta_cache_hits: AtomicU64::new(0),
             delta_counts: DashMap::new(),
-            delta_ready: DashSet::new(),
+            keys_to_materialize: DashSet::new(),
             materializer: None,
             consistent_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
             consistent_lsn_observed: std::sync::atomic::AtomicU64::new(0),
@@ -517,7 +499,7 @@ impl PageWriter {
             record_lsn_history: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             consistent_lsn_slot: std::sync::OnceLock::new(),
             flush_completed: tokio::sync::Notify::new(),
-            materialize_wakeup: Arc::new(tokio::sync::Notify::new()),
+            flusher_wakeup: Arc::new(tokio::sync::Notify::new()),
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
             flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
             flush_serialize: tokio::sync::Mutex::new(()),
@@ -729,22 +711,23 @@ impl PageWriter {
     /// Objects (fork / segment) that could still receive a materialised
     /// image at an old (folded) LSN, so a drop of one must be left queued.
     /// Two sources: `in_flight` (dispatched-but-not-landed jobs) and
-    /// `delta_ready` (threshold-crossed keys a later flush may dispatch).
+    /// `keys_to_materialize` (threshold-crossed keys a later flush may dispatch).
     /// Rel blocks map to their fork, SLRU blocks to their segment; anything
     /// else is filtered out. Sub-threshold `delta_counts` are excluded —
     /// they can't dispatch without new deltas and would pin the drop forever.
     pub(crate) fn objects_with_pending_materialise(&self) -> std::collections::HashSet<Key> {
         use crate::page_store::materialise_object_key;
-        let Some(m) = self.materializer.as_ref() else {
+        let Some(materializer) = self.materializer.as_ref() else {
             return Default::default();
         };
         let mut keys: std::collections::HashSet<Key> = self
-            .delta_ready
+            .keys_to_materialize
             .iter()
             .filter_map(|k| materialise_object_key(&k))
             .collect();
         keys.extend(
-            m.in_flight
+            materializer
+                .in_flight
                 .lock()
                 .unwrap()
                 .iter()
@@ -908,6 +891,9 @@ impl PageWriter {
                         backpressure_bytes = self.policy.backpressure_bytes,
                         "PageWriter::put backpressuring on flush",
                     );
+                    // Flush now rather than at the next tick: a buffer this full is over the
+                    // size trigger, which any wakeup flushes.
+                    self.flusher_wakeup.notify_one();
                 }
                 notified.await;
             }
@@ -929,18 +915,13 @@ impl PageWriter {
         if rel_rows.is_empty() && slru_rows.is_empty() && meta_rows.is_empty() {
             return Ok(());
         }
-        // Accumulate per-key delta counters here; the materialiser
-        // trigger still fires from `flush()` (after `mark_flushed`
-        // advances `flush_horizon_lsn`), not from this put loop, so
-        // every job's `target_lsn` is durable by construction — see
-        // `flush()` for the trigger site. A threshold crossing only
-        // *wakes* the flusher (`materialize_wakeup`) so that flush —
-        // and its dispatch — runs promptly instead of at the next
-        // 5s/25MB cadence; the durable-target invariant is unchanged.
+        // Accumulate per-key delta counters here. A relation key's
+        // crossing enqueues its job from here without blocking; an SLRU
+        // key's wakes the flusher (`record_delta_for_materialize`).
         let rel_limits = self
             .materializer
             .as_ref()
-            .map(|m| (m.count_limit, m.payload_bytes_limit))
+            .map(|materializer| (materializer.count_limit, materializer.payload_bytes_limit))
             .filter(|(c, b)| *c > 0 || *b > 0);
         // Rel rows: per-key DashMap shards; no global lock.
         for row in rel_rows {
@@ -973,7 +954,7 @@ impl PageWriter {
         if let Some(slru_count_limit) = self
             .materializer
             .as_ref()
-            .map(|m| m.slru_count_limit)
+            .map(|materializer| materializer.slru_count_limit)
             .filter(|&c| c > 0)
         {
             for (key, lsn, resets_chain) in &slru_mat {
@@ -1025,20 +1006,19 @@ impl PageWriter {
         Ok(())
     }
 
-    /// Send a batch of materialise jobs to the worker. Extracted so
-    /// the post-flush trigger (`flush()`) and read-side dispatch can
-    /// share the same backpressure + metrics path. Caller must have
-    /// already reserved each job's key in `in_flight`.
-    async fn dispatch_materialize_jobs(&self, to_materialize: Vec<MaterializeJob>) {
+    /// Enqueue a batch of SLRU materialise jobs from `flush()`, waiting for
+    /// room in the materialiser's channel. Caller must have already reserved
+    /// each job's key in `in_flight`.
+    async fn enqueue_slru_materialize_jobs(&self, to_materialize: Vec<MaterializeJob>) {
         if to_materialize.is_empty() {
             return;
         }
-        let Some(m) = self.materializer.as_ref() else {
+        let Some(materializer) = self.materializer.as_ref() else {
             return;
         };
         let dispatched = to_materialize.len();
-        let queue_cap = m.tx.max_capacity();
-        let queue_remaining_before = m.tx.capacity();
+        let queue_cap = materializer.tx.max_capacity();
+        let queue_remaining_before = materializer.tx.capacity();
         let mut waited_for_capacity = false;
         for job in to_materialize {
             // Blocking send: backpressure the walreceiver if the
@@ -1050,22 +1030,30 @@ impl PageWriter {
             // here means timeline shutdown — undo the in_flight
             // reservation for this and remaining jobs so a later
             // restart's trigger isn't blocked.
-            if !waited_for_capacity && m.tx.capacity() == 0 {
+            if !waited_for_capacity && materializer.tx.capacity() == 0 {
                 waited_for_capacity = true;
                 crate::metrics::PAGEWRITER_BACKPRESSURE_WAITS
                     .with_label_values(&["materializer"])
                     .inc();
             }
             let key_for_rollback = job.key;
-            if let Err(e) = m.tx.send(job).await {
+            if let Err(e) = materializer.tx.send(job).await {
                 tracing::debug!("materialiser send dropped (receiver closed): {e}");
-                m.in_flight.lock().unwrap().remove(&key_for_rollback);
+                materializer
+                    .in_flight
+                    .lock()
+                    .unwrap()
+                    .remove(&key_for_rollback);
                 break;
             }
         }
-        crate::metrics::MATERIALIZER_QUEUE_DEPTH
-            .set(m.tx.max_capacity().saturating_sub(m.tx.capacity()) as u64);
-        let queue_remaining_after = m.tx.capacity();
+        crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(
+            materializer
+                .tx
+                .max_capacity()
+                .saturating_sub(materializer.tx.capacity()) as u64,
+        );
+        let queue_remaining_after = materializer.tx.capacity();
         if waited_for_capacity || queue_remaining_after < queue_cap / 2 {
             info!(
                 tag = "materialise_dispatch",
@@ -1079,23 +1067,13 @@ impl PageWriter {
         }
     }
 
-    /// Per-key materialise thresholds. SLRU (clog/multixact) block keys
-    /// use the dedicated `slru_count_limit` with the payload trigger
-    /// disabled (clog deltas are tiny); every other key uses the
-    /// relation-page count + payload limits.
-    fn materialize_limits(m: &MaterializerHandle, key: &Key) -> (u32, u32) {
-        if key.is_slru_block_key() {
-            (m.slru_count_limit, 0)
-        } else {
-            (m.count_limit, m.payload_bytes_limit)
-        }
-    }
-
-    /// Advance the per-key delta tally and record a threshold crossing in
-    /// `delta_ready`. An anchor (`resets_chain` — image or `will_init`)
-    /// drops the key instead, since its chain no longer needs collapsing.
-    /// Shared by the rel and SLRU put paths so both stay in lock-step with
-    /// `collect_cold_residue_jobs`'s re-check.
+    /// Advance the per-key delta tally and act on a threshold crossing: a
+    /// relation key's job is enqueued at once, at the crossing delta, and only
+    /// a failed enqueue lands in `keys_to_materialize` for the flusher's tick to retry.
+    /// An SLRU key lands in `keys_to_materialize` and wakes the flusher, since its
+    /// fold reads YB only. An anchor (`resets_chain` — image or
+    /// `will_init`) drops the key instead, since its chain no longer needs
+    /// collapsing.
     fn record_delta_for_materialize(
         &self,
         key: &Key,
@@ -1107,10 +1085,10 @@ impl PageWriter {
     ) {
         if resets_chain {
             self.delta_counts.remove(key);
-            self.delta_ready.remove(key);
+            self.keys_to_materialize.remove(key);
             return;
         }
-        let crossed = {
+        let (crossed, last_lsn) = {
             let mut tally = self.delta_counts.entry(*key).or_default();
             let was_hit = tally.hits(count_limit, payload_bytes_limit);
             tally.count = tally.count.saturating_add(1);
@@ -1119,94 +1097,179 @@ impl PageWriter {
                 tally.last_lsn = lsn;
             }
             // Crossed iff this put pushed the tally from below the
-            // threshold to at/above it — record once per crossing so the
-            // flush trigger can find this key without sweeping the whole
-            // map. (Shard guard drops here, before the ready-set insert:
-            // shard lock → DashSet, never nested.)
-            tally.hits(count_limit, payload_bytes_limit) && !was_hit
+            // threshold to at/above it. (Shard guard drops here, before
+            // `in_flight` or the ready-set: never nested.)
+            (
+                tally.hits(count_limit, payload_bytes_limit) && !was_hit,
+                tally.last_lsn,
+            )
         };
-        if crossed {
-            self.delta_ready.insert(*key);
-            // Wake the periodic flusher now so the flush — and the
-            // dispatch it drives — runs within ~ms of the crossing
-            // rather than at the next 5s/25MB flush. Keeps chains near
-            // the limit instead of letting a hot CLOG page run to a full
-            // 32768-row page under a commit burst (#115). Non-blocking
-            // and coalesced, so this never stalls the ingest put().
-            self.materialize_wakeup.notify_one();
+        if !crossed {
+            return;
+        }
+        if key.is_slru_block_key() {
+            self.keys_to_materialize.insert(*key);
+            self.flusher_wakeup.notify_one();
+        } else if !self.try_enqueue_rel_materialize_job(*key, last_lsn) {
+            self.keys_to_materialize.insert(*key);
         }
     }
 
-    /// Walk `delta_counts` for keys whose tally crossed threshold but
-    /// have no current-flush snapshot row, dispatching them at their
-    /// recorded `last_lsn`. Safe only when `last_lsn ≤
-    /// flush_horizon_lsn` (durable in YB by construction). Called
-    /// from both flush()'s normal trigger path and its
-    /// nothing-to-flush short-circuit, so cold residue still drains
-    /// when compute goes quiet. Removes dispatched keys from
-    /// `delta_counts` so subsequent flushes don't redispatch them.
-    fn collect_cold_residue_jobs(&self) -> Vec<MaterializeJob> {
-        let Some(m) = self.materializer.as_ref() else {
+    /// The materialiser, unless there is none or folds are held off: during
+    /// attach replay a fold can stamp an image above content it never saw
+    /// (#240).
+    fn materializer_if_folds_allowed(&self) -> Option<&MaterializerHandle> {
+        self.materializer
+            .as_ref()
+            .filter(|materializer| materializer.folds_allowed())
+    }
+
+    /// Enqueue a relation key's materialise job without waiting, and restart its
+    /// tally. False when folds are held off, the key is already being
+    /// folded, or the materialiser channel is full.
+    fn try_enqueue_rel_materialize_job(&self, key: Key, target_lsn: Lsn) -> bool {
+        let Some(materializer) = self.materializer_if_folds_allowed() else {
+            return false;
+        };
+        {
+            let mut in_flight = materializer.in_flight.lock().unwrap();
+            if !in_flight.insert(key) {
+                return false;
+            }
+            if materializer
+                .tx
+                .try_send(MaterializeJob { key, target_lsn })
+                .is_err()
+            {
+                in_flight.remove(&key);
+                return false;
+            }
+        }
+        self.delta_counts.remove(&key);
+        crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(
+            materializer
+                .tx
+                .max_capacity()
+                .saturating_sub(materializer.tx.capacity()) as u64,
+        );
+        true
+    }
+
+    /// Retry the relation keys whose enqueue failed at the crossing, at
+    /// their newest buffered delta. Runs on the flusher's tick, so a key
+    /// that stops receiving writes still gets folded.
+    fn retry_enqueue_rel_materialize_jobs(&self) {
+        let Some(materializer) = self.materializer_if_folds_allowed() else {
+            return;
+        };
+        let pending: Vec<Key> = self
+            .keys_to_materialize
+            .iter()
+            .map(|k| *k.key())
+            .filter(|k| !k.is_slru_block_key())
+            .collect();
+        for key in pending {
+            if materializer.tx.capacity() == 0 {
+                break;
+            }
+            // A put can reset the key between the walk and this lookup.
+            let tally = self.delta_counts.get(&key).map(|t| *t);
+            match tally {
+                Some(t) if t.hits(materializer.count_limit, materializer.payload_bytes_limit) => {
+                    if self.try_enqueue_rel_materialize_job(key, t.last_lsn) {
+                        self.keys_to_materialize.remove(&key);
+                    }
+                }
+                _ => {
+                    self.keys_to_materialize.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// Whether an SLRU page, not already being materialized, waits for a
+    /// flush to enqueue its job. The flusher flushes on a wakeup when it
+    /// does. Keys are collected
+    /// before `in_flight` is locked, matching the enqueue paths' order
+    /// (`keys_to_materialize` shard, then `in_flight`).
+    fn slru_materialize_jobs_pending_flush(&self) -> bool {
+        // While folds are held off, a flush would enqueue nothing.
+        let Some(materializer) = self.materializer_if_folds_allowed() else {
+            return false;
+        };
+        let slru: Vec<Key> = self
+            .keys_to_materialize
+            .iter()
+            .filter(|k| k.key().is_slru_block_key())
+            .map(|k| *k.key())
+            .collect();
+        if slru.is_empty() {
+            return false;
+        }
+        let in_flight = materializer.in_flight.lock().unwrap();
+        slru.iter().any(|k| !in_flight.contains(k))
+    }
+
+    /// Take a materialise job for each SLRU crossing, at or below `flush_horizon_lsn`:
+    /// an SLRU fold reads YB alone, so its target must be durable. A tally
+    /// whose newest delta is above the horizon is imaged at the horizon when
+    /// `clamp_to_horizon` (after a flush: the active CLOG/multixact page
+    /// races ahead of it, #115) and left for a later flush otherwise (the
+    /// nothing-to-flush path, which drains cold residue once compute goes
+    /// quiet). Relation keys are enqueued from `put()`
+    /// ([`Self::record_delta_for_materialize`]).
+    /// A taken key is reserved in `in_flight` and leaves both maps, so the
+    /// caller must enqueue its job; stale hints leave only `keys_to_materialize`.
+    fn take_slru_materialize_jobs(&self, clamp_to_horizon: bool) -> Vec<MaterializeJob> {
+        let Some(materializer) = self.materializer_if_folds_allowed() else {
             return Vec::new();
         };
-        if !m.folds_allowed() {
-            // Attach replay still in flight — folding now can produce an
-            // image stamped above content it never saw (#240). Tallies
-            // keep accumulating; dispatch resumes after catch-up.
-            return Vec::new();
-        }
-        if m.count_limit == 0 && m.payload_bytes_limit == 0 && m.slru_count_limit == 0 {
+        if materializer.slru_count_limit == 0 {
             return Vec::new();
         }
         let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
         if horizon == Lsn(0) {
-            // No flush has ever completed — nothing is durable yet,
-            // so cold-residue dispatch would point at non-durable
-            // LSNs. Skip.
             return Vec::new();
         }
-        let mut to_dispatch = Vec::new();
-        let mut dispatched: Vec<Key> = Vec::new();
+        let mut jobs = Vec::new();
         let mut stale: Vec<Key> = Vec::new();
-        // Walk only the keys that crossed a threshold (the ready set),
-        // not all of `delta_counts`. The ready set is a hint: re-check the
-        // live tally and drop any entry that was since reset or dispatched.
-        for entry in self.delta_ready.iter() {
+        for entry in self.keys_to_materialize.iter() {
             let key = entry.key();
+            if !key.is_slru_block_key() {
+                continue;
+            }
             let Some(tally) = self.delta_counts.get(key).map(|t| *t) else {
-                // Tally gone (anchor reset it) — stale hint.
                 stale.push(*key);
                 continue;
             };
-            let (count_limit, payload_bytes_limit) = Self::materialize_limits(m, key);
-            if !tally.hits(count_limit, payload_bytes_limit) {
+            if !tally.hits(materializer.slru_count_limit, 0) {
                 stale.push(*key);
                 continue;
             }
-            if tally.last_lsn == Lsn(0) || tally.last_lsn > horizon {
-                // Crossed but not yet durable — keep queued for a later
-                // flush once the horizon advances.
+            let target_lsn = if tally.last_lsn == Lsn(0) {
                 continue;
-            }
-            let inserted = m.in_flight.lock().unwrap().insert(*key);
-            if inserted {
-                dispatched.push(*key);
-                to_dispatch.push(MaterializeJob {
+            } else if tally.last_lsn <= horizon {
+                tally.last_lsn
+            } else if clamp_to_horizon {
+                horizon
+            } else {
+                continue;
+            };
+            if materializer.in_flight.lock().unwrap().insert(*key) {
+                jobs.push(MaterializeJob {
                     key: *key,
-                    target_lsn: tally.last_lsn,
+                    target_lsn,
                 });
             }
         }
-        // Dispatched keys leave both maps; stale hints leave only the ready
-        // set (their tally, if any, keeps accumulating).
-        for k in &dispatched {
-            self.delta_counts.remove(k);
-            self.delta_ready.remove(k);
+        for job in &jobs {
+            self.delta_counts.remove(&job.key);
+            self.keys_to_materialize.remove(&job.key);
         }
         for k in &stale {
-            self.delta_ready.remove(k);
+            self.keys_to_materialize.remove(k);
         }
-        to_dispatch
+        jobs
     }
 
     /// Range scan: return all page rows in `range` at LSN ≤
@@ -1396,23 +1459,18 @@ impl PageWriter {
         chain_len: usize,
         crossed_segment: bool,
     ) {
-        let Some(m) = self.materializer.as_ref() else {
+        let Some(materializer) = self.materializer.as_ref() else {
             return;
         };
-        // The materialiser's target_lsn must be durable. The read's
-        // target_lsn can sit above the horizon (compute observing its
-        // own pre-flush writes). Cap at the horizon so the resulting
-        // job won't ask the materialiser to read YB above the
-        // partial-flush window. If horizon is 0 (no flush yet) skip
-        // the dispatch — nothing to materialize against.
+        // Capped at the flush horizon. Conservative: folds can read
+        // unflushed rows, so the cap is not needed for correctness.
         let horizon = Lsn(self
             .flush_horizon_lsn
             .load(std::sync::atomic::Ordering::Relaxed));
         if horizon.0 == 0 {
             return;
         }
-        // Materialise at the read's LSN, capped at the durable horizon
-        // (the materialiser may only read durable YB rows). A historical
+        // Materialise at the read's LSN, capped at the horizon. A historical
         // read folds an image at its own LSN — useful, because future reads
         // of the same historical key (static endpoints, branches) anchor on
         // it. What makes installing a below-head image SAFE is the install
@@ -1432,14 +1490,14 @@ impl PageWriter {
         } else {
             chain_len
         };
-        if m.folds_allowed()
+        if materializer.folds_allowed()
             && try_dispatch_read_side(
                 key,
                 bounded_target,
                 effective_len,
-                m.count_limit,
-                &m.in_flight,
-                &m.tx,
+                materializer.count_limit,
+                &materializer.in_flight,
+                &materializer.tx,
             )
         {
             crate::metrics::MATERIALIZER_READ_SIDE_DISPATCHES.inc();
@@ -1469,8 +1527,17 @@ impl PageWriter {
         }
     }
 
-    pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
-        let key_bytes = key_to_bytes(key);
+    /// The chain for `key` at `target_lsn`, and whether the cache alone
+    /// served it. Shared by `read_chain` and `read_chain_for_materialize`,
+    /// which differ only in the store a cache miss reads and the metric
+    /// `source` label.
+    async fn blend_cache_and_persisted_chain(
+        &self,
+        store: &PageStore,
+        source: &'static str,
+        key: Key,
+        target_lsn: Lsn,
+    ) -> Result<(Vec<Arc<PageRow>>, bool)> {
         // Cache-only fast path: if the cache holds a complete chain
         // (image-anchor reachable from target_lsn, no eviction in
         // between), serve from RAM and skip YB entirely. This is the
@@ -1486,73 +1553,63 @@ impl PageWriter {
         if let Some(chain) = self.pages.lookup_chain_if_complete(&key, target_lsn) {
             if self.cache_anchor_covers_lineage(&chain) {
                 crate::metrics::PAGE_READS
-                    .with_label_values(&["getpage", "fast_cache"])
+                    .with_label_values(&[source, "fast_cache"])
                     .inc();
-                return Ok(chain);
+                return Ok((chain, true));
             }
         }
         crate::metrics::PAGE_READS
-            .with_label_values(&["getpage", "yb_blend"])
+            .with_label_values(&[source, "yb_blend"])
             .inc();
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key, target_lsn);
-        let persisted = self
-            .compute_page_store
-            .read_chain_lineage(&self.lineage, &key_bytes, target_lsn)
+        let persisted = store
+            .read_chain_lineage(&self.lineage, &key_to_bytes(key), target_lsn)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
         // Cached rows first, so a tied pair of bases keeps the cached one,
         // which replays to the same page.
         merge_page_chain(&mut merged);
-        let crossed = self.chain_crossed_segment(&merged);
-        self.maybe_dispatch_read_side_materialize(key, target_lsn, merged.len(), crossed);
-        Ok(merged)
+        Ok((merged, false))
     }
 
-    /// Read the chain for `key` at `target_lsn`, using only durable
-    /// sources (post-flush cache + PageStore). Pre-flush rows are
-    /// EXCLUDED. The image materialiser uses this so its image is
-    /// built only from data that survives a process crash.
-    pub async fn read_chain_durable(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
-        // `target_lsn` is the caller's contract: it must be ≤
-        // `flush_horizon_lsn` so a YB read above the horizon can't
-        // surface a mid-flush partial-chunk view. The post-flush
-        // materialiser trigger guarantees this by construction
-        // (it sets `target_lsn` to the snapshot's max, which the
-        // horizon was just advanced to). The read-side dispatch
-        // path must bound its own `target_lsn` similarly.
-        let key_bytes = key_to_bytes(key);
-        // Cache-only fast path (durable-only variant for the
-        // materialiser): same completeness criterion as `read_chain`,
-        // including the lineage caveat on sub-cap anchors.
-        if let Some(chain) = self
-            .pages
-            .lookup_chain_durable_if_complete(&key, target_lsn)
-        {
-            if self.cache_anchor_covers_lineage(&chain) {
-                crate::metrics::PAGE_READS
-                    .with_label_values(&["materializer", "fast_cache"])
-                    .inc();
-                return Ok(chain);
-            }
-        }
-        crate::metrics::PAGE_READS
-            .with_label_values(&["materializer", "yb_blend"])
-            .inc();
-        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain_durable(&key, target_lsn);
-        // Materialiser-side cache miss → the internal conn (same one
-        // the materialiser's write path uses). Keeping this off
-        // `compute_page_store` is the whole point of the split: a
-        // long materialiser walredo-and-INSERT can't stall compute.
-        let persisted = self
-            .hot_path_page_store
-            .read_chain_lineage(&self.lineage, &key_bytes, target_lsn)
+    pub async fn read_chain(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
+        let (chain, from_cache) = self
+            .blend_cache_and_persisted_chain(&self.compute_page_store, "getpage", key, target_lsn)
             .await?;
-        let mut merged = cached;
-        merged.extend(persisted);
-        // Cached rows first, so a tied pair of bases keeps the cached one,
-        // which replays to the same page.
-        merge_page_chain(&mut merged);
+        if !from_cache {
+            let crossed = self.chain_crossed_segment(&chain);
+            self.maybe_dispatch_read_side_materialize(key, target_lsn, chain.len(), crossed);
+        }
+        Ok(chain)
+    }
+
+    /// The materialiser's chain read: `read_chain` on the internal
+    /// connection, refusing an anchorless chain.
+    ///
+    /// Unflushed rows are folded too. An image built from them is safe
+    /// even if the process crashes before they flush: YB sorts the image
+    /// ahead of a same-LSN delta (PK `lsn DESC, will_init DESC`), so the
+    /// replayed delta is never applied on top of it, and the rows below
+    /// the image that are lost with the buffer are re-ingested before
+    /// any read, branch or GC cutoff can reach their LSNs. A mid-flush
+    /// partial YB view cannot leave a hole either: every row of an
+    /// unflushed chunk is still in the (pinned) cache.
+    pub async fn read_chain_for_materialize(
+        &self,
+        key: Key,
+        target_lsn: Lsn,
+    ) -> Result<Vec<Arc<PageRow>>> {
+        // A cache miss reads on the internal conn (the one the materialiser
+        // writes on), so a long walredo-and-INSERT can't stall compute.
+        let (merged, _) = self
+            .blend_cache_and_persisted_chain(
+                &self.hot_path_page_store,
+                "materializer",
+                key,
+                target_lsn,
+            )
+            .await?;
         if merged.last().is_some_and(|r| !r.will_init) {
             // No `will_init` anchor in the merged cache+YB chain ≤
             // target_lsn (#57 part 2). `parse_chain` would set
@@ -1561,14 +1618,15 @@ impl PageWriter {
             // wrong/zero image, making the
             // corruption durable — surfacing later as a heap hole /
             // orphan catalog row / "unexpected zero page". A complete
-            // durable chain must always reach a will_init anchor; its
+            // chain must always reach a will_init anchor; its
             // absence means the page's init record is missing upstream.
             // Refuse loudly rather than fabricate a zero-based page: a
             // hard error stops the materialiser job (logged + skipped by
             // `redo_one`) instead of silently amplifying the loss.
+            let key_bytes = key_to_bytes(key);
             return Err(unanchored_chain_error(
                 "materialize_unanchored_chain",
-                "read_chain_durable",
+                "read_chain_for_materialize",
                 target_lsn,
                 merged.len(),
                 merged.last().map(|r| r.lsn),
@@ -1579,7 +1637,7 @@ impl PageWriter {
         Ok(merged)
     }
 
-    /// SLRU twin of [`Self::read_chain_durable`]: the durable chain for one
+    /// SLRU twin of [`Self::read_chain_for_materialize`]: the durable chain for one
     /// `(kind, segno, blknum)` block at `target_lsn`. For the materialiser.
     ///
     /// Lineage-aware because it must be. A branch only ever stamps SETBIT
@@ -1632,8 +1690,9 @@ impl PageWriter {
     /// Install a freshly-materialised image into the cache. Call AFTER
     /// `PageStore::put_pages([image])` succeeds. Drops the deltas the
     /// image supersedes for that key (durable, lsn ≤ image.lsn, stopping
-    /// at the first unflushed row) and indexes the new image as a durable cache entry; subsequent
-    /// `read_chain` / `read_chain_durable` find the image first and
+    /// at the first unflushed row) and indexes the new image as a durable
+    /// cache entry; subsequent `read_chain` / `read_chain_for_materialize`
+    /// find the image first and
     /// don't walk the chain back.
     ///
     /// The check-trim-insert is delegated to
@@ -1724,20 +1783,18 @@ impl PageWriter {
         let meta_count = meta_rows.len();
         let pending_gc_count = pending_gc_rows.len();
         if rel_count == 0 && slru_count == 0 && meta_count == 0 && pending_gc_count == 0 {
-            // Nothing to flush. Cold-key residue (tallies whose
-            // threshold-crossing happened in past flushes but
-            // haven't dispatched — e.g. blocked by in_flight that
-            // has since cleared) can still drain here. Without this
-            // pass, delta_counts grows monotonically as workloads
-            // wind down — the residue would only get re-examined on
-            // a flush that has rows, which never comes once compute
-            // is idle.
+            // Nothing to flush. SLRU residue (crossed in a past flush,
+            // not enqueued yet — e.g. blocked by in_flight that has
+            // since cleared) can still drain here. Without this pass,
+            // delta_counts grows monotonically as workloads wind down —
+            // the residue would only get re-examined on a flush that has
+            // rows, which never comes once compute is idle.
             //
             // The snapshot may still have claimed slots an image already
             // promoted; marking it drains them.
             self.pages.mark_flushed(&rel_snapshot);
-            let to_dispatch = self.collect_cold_residue_jobs();
-            self.dispatch_materialize_jobs(to_dispatch).await;
+            let to_dispatch = self.take_slru_materialize_jobs(false);
+            self.enqueue_slru_materialize_jobs(to_dispatch).await;
             return Ok(());
         }
         let mut claim = FlushClaim {
@@ -1827,108 +1884,9 @@ impl PageWriter {
                 // from YB); it does not manifest as an unflushed FIFO row
                 // here, so this site makes no durability assertion.
             }
-            // Materialiser trigger fires here, not from `put`. The
-            // trigger LSN is the just-promoted max per key in this
-            // snapshot — durable by construction (every row in
-            // `rel_rows` is now in YB AND marked durable in cache).
-            // Walking `delta_counts` finds keys whose count or
-            // payload-byte tally crossed `image_chain_limit` /
-            // `image_chain_payload_bytes_limit`; for each, find the
-            // max LSN seen in this snapshot and enqueue one job.
-            // Keys present in the current snapshot dispatch at their
-            // per-snapshot max LSN; cold-key residue (threshold-crossed
-            // in a past flush, no current-snapshot row) dispatches at
-            // its tally's `last_lsn` — guaranteed durable when
-            // `last_lsn ≤ flush_horizon_lsn`, which we've just
-            // advanced. Without this fallback, cold residue
-            // accumulates in `delta_counts` forever and the periodic
-            // flush walk grows O(forever) instead of O(active keys).
-            let mut to_materialize: Vec<MaterializeJob> = Vec::new();
-            if let Some(m) = self.materializer.as_ref()
-                && m.folds_allowed()
-                && (m.count_limit > 0 || m.payload_bytes_limit > 0 || m.slru_count_limit > 0)
-            {
-                let mut max_lsn_per_key: HashMap<Key, Lsn> = HashMap::new();
-                for row in &rel_rows {
-                    let entry = max_lsn_per_key.entry(row.key).or_insert(Lsn(0));
-                    if row.lsn > *entry {
-                        *entry = row.lsn;
-                    }
-                }
-                let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
-                let mut dispatched: Vec<Key> = Vec::new();
-                let mut stale: Vec<Key> = Vec::new();
-                // Only the threshold-crossers (ready set) can produce a job —
-                // walk it instead of sweeping all of `delta_counts`. Keys that
-                // crossed during this flush's puts are already in the set (the
-                // put loop records the crossing). The ready set is a hint:
-                // re-check the live tally and drop stale entries.
-                for entry in self.delta_ready.iter() {
-                    let key = entry.key();
-                    let Some(tally) = self.delta_counts.get(key).map(|t| *t) else {
-                        stale.push(*key);
-                        continue;
-                    };
-                    let (count_limit, payload_bytes_limit) = Self::materialize_limits(m, key);
-                    if !tally.hits(count_limit, payload_bytes_limit) {
-                        stale.push(*key);
-                        continue;
-                    }
-                    let target_lsn = match max_lsn_per_key.get(key) {
-                        Some(&lsn) => lsn,
-                        None => {
-                            // Cold residue / SLRU. SLRU (clog/multixact)
-                            // block keys never appear in the rel snapshot,
-                            // so they always land here. The `Lsn(0)` guard
-                            // handles tallies created before the `last_lsn`
-                            // field existed in case of in-place upgrades.
-                            if tally.last_lsn == Lsn(0) {
-                                continue;
-                            }
-                            if tally.last_lsn <= horizon {
-                                // Durable: image up to the newest delta.
-                                tally.last_lsn
-                            } else if key.is_slru_block_key() && horizon > Lsn(0) {
-                                // The actively-growing CLOG/multixact
-                                // page's newest delta always races ahead
-                                // of the durable `horizon`. Don't skip it —
-                                // image the durable prefix at `horizon`.
-                                // Otherwise the page is never collapsed
-                                // until it goes cold (the next page becomes
-                                // active), by which point its chain has run
-                                // to the full 32768-row page capacity and a
-                                // later basebackup must walk all of it (the
-                                // #115 recycle stall). The deltas above
-                                // `horizon` stay as a short tail and are
-                                // re-imaged as `horizon` advances on the
-                                // next flush.
-                                horizon
-                            } else {
-                                // Rel cold residue whose only delta is
-                                // still buffered (bumped post-snapshot by
-                                // an unflushed put) — leave it for the
-                                // next flush, when it's durable.
-                                continue;
-                            }
-                        }
-                    };
-                    let inserted = m.in_flight.lock().unwrap().insert(*key);
-                    if inserted {
-                        dispatched.push(*key);
-                        to_materialize.push(MaterializeJob {
-                            key: *key,
-                            target_lsn,
-                        });
-                    }
-                }
-                for k in &dispatched {
-                    self.delta_counts.remove(k);
-                    self.delta_ready.remove(k);
-                }
-                for k in &stale {
-                    self.delta_ready.remove(k);
-                }
-            }
+            // SLRU crossings are enqueued once this flush has advanced the durable
+            // horizon; relation crossings are enqueued from `put()`.
+            let to_materialize = self.take_slru_materialize_jobs(true);
             // Aux buffers drain under their small mutex.
             {
                 let mut aux = self.aux.lock();
@@ -1965,11 +1923,10 @@ impl PageWriter {
                     aux.opened_at = Some(Instant::now());
                 }
             }
-            self.dispatch_materialize_jobs(to_materialize).await;
-            // Wake any `put()` callers blocked on backpressure. Done
-            // after the state lock is released so the woken tasks can
-            // re-take it immediately.
+            // Wake `put()` callers blocked on backpressure before the SLRU
+            // enqueue, which can wait on a full materialiser queue.
             self.flush_completed.notify_waiters();
+            self.enqueue_slru_materialize_jobs(to_materialize).await;
 
             // Outside the writer lock: persist the dc_lsn advance to
             // `amp_storage.branch_state` if (a) it actually moved AND
@@ -2087,18 +2044,21 @@ impl PageWriter {
         Ok(())
     }
 
+    /// `max_bytes`, or `backpressure_bytes` when that is lower, so a `put()`
+    /// blocked on backpressure never waits for the age trigger.
+    fn flush_size_trigger(&self) -> usize {
+        match self.policy.backpressure_bytes {
+            0 => self.policy.max_bytes,
+            bp => self.policy.max_bytes.min(bp),
+        }
+    }
+
     pub async fn should_flush(&self) -> bool {
         let aux = self.aux.lock();
-        let unflushed_bytes = self.pages.unflushed_bytes() + aux.bytes_in_aux_buffers;
-        if unflushed_bytes >= self.policy.max_bytes {
-            return true;
-        }
-        if let Some(at) = aux.opened_at
-            && at.elapsed() >= self.policy.max_age
-        {
-            return true;
-        }
-        false
+        self.pages.unflushed_bytes() + aux.bytes_in_aux_buffers >= self.flush_size_trigger()
+            || aux
+                .opened_at
+                .is_some_and(|at| at.elapsed() >= self.policy.max_age)
     }
 
     pub async fn stats(&self) -> WriterStats {
@@ -2365,30 +2325,34 @@ impl PageWriter {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let weak = Arc::downgrade(self);
-        // Cloned out so the task can wait on a materialise crossing
-        // without upgrading `weak` (which would pin the writer across
-        // the whole tick and defeat drop-based shutdown).
-        let wakeup = Arc::clone(&self.materialize_wakeup);
+        // Cloned out so the task can wait on a wakeup without upgrading
+        // `weak` (which would pin the writer across the whole tick and
+        // defeat drop-based shutdown).
+        let wakeup = Arc::clone(&self.flusher_wakeup);
         let handle = tokio::spawn(async move {
+            // An interval, not a per-iteration sleep, so passes keep a steady
+            // cadence however often wakeups come.
+            let mut ticker = tokio::time::interval(tick.max(Duration::from_millis(1)));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                // A materialise wakeup forces a flush regardless of the
-                // size/age policy: the just-crossed key needs its chain
-                // durable so `flush()`'s dispatch can enqueue it now.
-                // Timer ticks defer to `should_flush()` as before.
-                let forced = tokio::select! {
+                tokio::select! {
                     _ = cancel_for_task.cancelled() => break,
-                    _ = tokio::time::sleep(tick) => false,
-                    _ = wakeup.notified() => true,
-                };
+                    _ = ticker.tick() => {}
+                    _ = wakeup.notified() => {}
+                }
                 let Some(w) = weak.upgrade() else { break };
-                // `stats()` refreshes the unflushed-bytes Prometheus
-                // gauge as a side-effect. Done every tick so a
-                // /metrics scrape reflects the current buffer depth
-                // even when there's nothing to flush.
+                // Every pass, tick or wakeup: a wakeup only makes the pass
+                // come sooner. `stats()` refreshes the unflushed-bytes gauge
+                // so a /metrics scrape sees the buffer depth even when there
+                // is nothing to flush.
                 let _ = w.stats().await;
-                if (forced || w.should_flush().await)
-                    && let Err(e) = w.flush().await
-                {
+                w.retry_enqueue_rel_materialize_jobs();
+                let flush_due = w.slru_materialize_jobs_pending_flush() || w.should_flush().await;
+                // Lets an integration test keep folded images above unflushed deltas.
+                #[cfg(feature = "testing")]
+                let flush_due =
+                    flush_due && fail::eval("ps::page-writer::hold-flusher", |_| ()).is_none();
+                if flush_due && let Err(e) = w.flush().await {
                     crate::metrics::CORRECTNESS_ERRORS
                         .with_label_values(&["pagewriter_flush"])
                         .inc();
@@ -2523,7 +2487,7 @@ fn key_to_bytes(key: Key) -> Bytes {
 }
 
 /// Bump `correctness_errors{metric_label}` and build the anchorless-chain
-/// error. Shared by `read_chain_durable` and `read_slru_chain_durable` so the
+/// error. Shared by `read_chain_for_materialize` and `read_slru_chain_durable` so the
 /// two refusals can't drift; each call site documents why it refuses.
 /// `subject` carries the caller's key-identifying fields.
 // Every argument is a distinct diagnostic field.
@@ -2541,7 +2505,7 @@ fn unanchored_chain_error(
         .with_label_values(&[metric_label])
         .inc();
     anyhow::anyhow!(
-        "{op}: no will_init anchor in durable chain ≤ target_lsn={target_lsn} \
+        "{op}: no will_init anchor in chain ≤ target_lsn={target_lsn} \
          ({subject}, chain_len={chain_len}, lsn lo={lo:?} hi={hi:?}) — the page's \
          init record is missing; refusing to materialise a base-less page"
     )
@@ -3051,7 +3015,7 @@ mod tests {
     /// #57 part 2: deterministic repro of the materialiser's
     /// anchorless-fold hazard. A key whose `will_init` anchor is absent
     /// from YB (its init record was lost upstream) leaves only non-init
-    /// deltas. `read_chain_durable` must NOT hand that chain to the
+    /// deltas. `read_chain_for_materialize` must NOT hand that chain to the
     /// materialiser: `parse_chain` would set `base_img=None` and walredo
     /// would fold the deltas onto a ZERO page, then `install + trim`
     /// would make that wrong/zero page durable — the "unexpected zero
@@ -3059,7 +3023,7 @@ mod tests {
     /// `redo_one` logs it and skips the page (leaving the deltas in
     /// place) rather than materialising a zero-based image.
     #[tokio::test]
-    async fn read_chain_durable_refuses_anchorless_chain() {
+    async fn read_chain_for_materialize_refuses_anchorless_chain() {
         let (store, schema) = make_store("anchorless").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
         // Deltas only, no will_init anchor anywhere ≤ target.
@@ -3081,10 +3045,10 @@ mod tests {
         );
 
         // The materialiser-facing read must refuse the anchorless chain.
-        let res = w.read_chain_durable(k(1), Lsn(100)).await;
+        let res = w.read_chain_for_materialize(k(1), Lsn(100)).await;
         assert!(
             res.is_err(),
-            "read_chain_durable must error on an anchorless chain (would zero-base \
+            "read_chain_for_materialize must error on an anchorless chain (would zero-base \
              the page); got Ok with {} rows",
             res.map(|c| c.len()).unwrap_or(0),
         );
@@ -3174,7 +3138,7 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// The SLRU twin of `read_chain_durable_refuses_anchorless_chain`: when
+    /// The SLRU twin of `read_chain_for_materialize_refuses_anchorless_chain`: when
     /// the anchor is missing from the branch AND every ancestor, refuse rather
     /// than let walredo fold `SETBIT` deltas onto a zero clog page (which
     /// would read back as "every transaction aborted"). Refusing here means
@@ -3824,6 +3788,34 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// A `put` blocked on backpressure wakes the flusher, whose size trigger
+    /// is clamped to the cap, so it is released long before the age trigger.
+    #[tokio::test]
+    async fn backpressured_put_is_released_before_the_age_trigger() {
+        let (store, schema) = make_store("flusher_backpressure").await;
+        let policy = FlushPolicy {
+            max_age: Duration::from_secs(3600),
+            max_bytes: 1 << 30,
+            backpressure_bytes: 1,
+            ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
+            release_backpressure_per_chunk: true,
+        };
+        let (w, _t) = writer(store.clone(), policy);
+        let w = Arc::new(w);
+        let task = w.spawn_flusher(Duration::from_secs(3600));
+        // Let the interval's immediate first tick pass on an empty buffer.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), w.put(&[(k(2), Lsn(20), image())]))
+            .await
+            .expect("put still blocked on backpressure after 10s")
+            .unwrap();
+        assert_eq!(w.backpressure_waits.load(Ordering::Relaxed), 1);
+        task.shutdown().await;
+        drop_schema(&store, &schema).await;
+    }
+
     #[tokio::test]
     async fn periodic_flusher_does_final_flush_on_shutdown() {
         let (store, schema) = make_store("flusher_final").await;
@@ -3952,8 +3944,7 @@ mod tests {
         let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // (LIMIT - 1) deltas + a flush — the counter sits below
-        // threshold, so the post-flush trigger doesn't fire yet.
+        // (LIMIT - 1) deltas — the counter sits below threshold.
         for i in 0..(LIMIT - 1) {
             w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
                 .await
@@ -3962,9 +3953,7 @@ mod tests {
         w.flush().await.unwrap();
         assert!(rx.try_recv().is_err(), "premature dispatch below threshold");
 
-        // LIMITth delta + flush: the post-flush trigger sees count ≥
-        // limit and enqueues exactly one job at the snapshot's max
-        // LSN for this key.
+        // LIMITth delta crosses: exactly one job, at that delta's LSN.
         w.put(&[(k(1), Lsn(10 + LIMIT as u64), delta_non_init())])
             .await
             .unwrap();
@@ -3996,7 +3985,7 @@ mod tests {
     /// The GC drain's deferral input. `objects_with_pending_materialise`
     /// must report a fork while a job is pending (`in_flight`, from
     /// dispatch until the batch completes) AND while a
-    /// threshold-crossed key sits undispatched in `delta_ready` (cold
+    /// threshold-crossed key sits undispatched in `keys_to_materialize` (cold
     /// residue a later flush may still dispatch) — and go quiet once
     /// both clear. Guards the drop deferral against the
     /// residue-dispatch race: a drop event acted while either
@@ -4021,7 +4010,7 @@ mod tests {
             "quiescent writer reports no busy objects"
         );
 
-        // Cross the threshold + flush: job dispatched → in_flight.
+        // Cross the threshold: job enqueued → in_flight.
         for i in 0..LIMIT {
             w.put(&[(k(2), Lsn(10 + i as u64), delta_non_init())])
                 .await
@@ -4035,28 +4024,23 @@ mod tests {
         );
 
         // Cross again while job1 is still in flight: the re-crossed key
-        // is blocked from dispatch and parks in delta_ready (residue).
+        // is blocked from dispatch and parks in keys_to_materialize (residue).
         for i in 0..LIMIT {
             w.put(&[(k(2), Lsn(100 + i as u64), delta_non_init())])
                 .await
                 .unwrap();
         }
-        // Note the record frontier so the flush advances the horizon —
-        // the residue path only dispatches once its last_lsn is durable.
-        w.note_record_lsn(Lsn(100 + LIMIT as u64), Lsn(100));
-        w.flush().await.unwrap();
         assert!(rx.try_recv().is_err(), "in_flight blocks the re-dispatch");
 
         // job1's batch completes — but the residue must keep the fork
-        // busy: a later flush can still dispatch it.
+        // busy: the next retry can still enqueue it.
         in_flight.lock().unwrap().remove(&job1.key);
         assert!(
             w.objects_with_pending_materialise().contains(&fork),
-            "undispatched delta_ready residue must keep the fork busy"
+            "undispatched keys_to_materialize residue must keep the fork busy"
         );
 
-        // An (empty) flush drains the residue into a real dispatch.
-        w.flush().await.unwrap();
+        w.retry_enqueue_rel_materialize_jobs();
         let job2 = rx.try_recv().expect("residue dispatches once unblocked");
         assert!(w.objects_with_pending_materialise().contains(&fork));
 
@@ -4194,32 +4178,32 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// A key that crosses the threshold (entering the ready set) and is
-    /// then reset by an anchor *before any flush* must NOT dispatch: the
-    /// anchor clears both the tally and the ready-set hint. Guards the
-    /// ready-set ↔ `delta_counts` sync introduced with the per-flush
-    /// walk optimization (#21) — the trigger walks only the ready set, so
-    /// a crossing that's since been cancelled must not linger there.
+    /// A key whose enqueue failed at the crossing and is then reset by an
+    /// anchor must NOT be retried: the anchor clears both the tally and
+    /// the ready-set entry.
     #[tokio::test]
     async fn anchor_after_crossing_cancels_dispatch() {
         let (store, schema) = make_store("mat_cross_then_reset").await;
         const LIMIT: u32 = 3;
-        let (w, _t, mut rx, _in_flight) =
+        let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // Cross the threshold — k(1) enters the ready set.
+        // Cross while the key is being folded — the enqueue fails and k(1)
+        // enters the ready set.
+        in_flight.lock().unwrap().insert(k(1));
         for i in 0..LIMIT {
             w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
                 .await
                 .unwrap();
         }
-        // Anchor at a higher LSN resets the chain before the flush fires.
+        assert!(w.keys_to_materialize.contains(&k(1)));
+        // Anchor at a higher LSN resets the chain before the retry.
         w.put(&[(k(1), Lsn(100), image())]).await.unwrap();
-        w.note_record_lsn(Lsn(100), Lsn(99));
-        w.flush().await.unwrap();
+        in_flight.lock().unwrap().remove(&k(1));
+        w.retry_enqueue_rel_materialize_jobs();
         assert!(
             rx.try_recv().is_err(),
-            "anchor after crossing must cancel the queued dispatch",
+            "anchor after crossing must cancel the pending enqueue",
         );
 
         drop_schema(&store, &schema).await;
@@ -4340,7 +4324,7 @@ mod tests {
         let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // First threshold + flush: dispatch.
+        // First threshold: enqueue.
         for i in 0..LIMIT {
             w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
                 .await
@@ -4354,8 +4338,8 @@ mod tests {
             "in_flight must hold the key while the job is outstanding"
         );
 
-        // While the key is in_flight, subsequent flushes must NOT
-        // enqueue duplicates for it.
+        // While the key is in_flight, later crossings must NOT enqueue
+        // duplicates for it.
         for i in 0..(LIMIT * 3) {
             w.put(&[(k(1), Lsn(100 + i as u64), delta_non_init())])
                 .await
@@ -4368,16 +4352,16 @@ mod tests {
         );
 
         // Materialiser completes — remove the in_flight reservation.
-        // The next push + flush re-fires at the current LSN (counter
-        // still ≥ threshold from the dedup-blocked attempt).
+        // The retry re-fires at the key's newest LSN (counter still ≥
+        // threshold from the dedup-blocked attempt).
         in_flight.lock().unwrap().remove(&first.key);
         w.put(&[(k(1), Lsn(500), delta_non_init())]).await.unwrap();
-        w.flush().await.unwrap();
+        w.retry_enqueue_rel_materialize_jobs();
         let second = rx.try_recv().expect("re-fires after in_flight release");
         assert_eq!(
             second.target_lsn,
             Lsn(500),
-            "re-dispatch must target the latest flushed LSN for this key"
+            "re-enqueue must target the newest LSN for this key"
         );
 
         drop_schema(&store, &schema).await;
@@ -4446,50 +4430,154 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// The post-flush trigger refactor (Phase 4.d follow-on): even
-    /// when the per-key tally is well past the threshold, no
-    /// MaterializeJob fires until a flush completes. Regression
-    /// guard for the put-time trigger semantics we replaced —
-    /// nothing should sneak through `put()`.
+    /// `put()` enqueues a relation key's job at the crossing, without a
+    /// flush. Later crossings while that job is in flight stay pending.
     #[tokio::test]
-    async fn dispatch_does_not_fire_without_flush() {
-        let (store, schema) = make_store("mat_no_dispatch_without_flush").await;
+    async fn put_enqueues_at_the_crossing() {
+        let (store, schema) = make_store("mat_put_enqueues").await;
         const LIMIT: u32 = 10;
         let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // Push 10× the threshold without ever flushing. Pre-refactor
-        // the put-time trigger would have dispatched as soon as the
-        // counter crossed LIMIT; post-refactor nothing should land
-        // in the channel until `flush()` runs.
         for i in 0..(LIMIT * 10) as u64 {
             w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
                 .await
                 .unwrap();
         }
+        let job = rx.try_recv().expect("the crossing put enqueued");
+        assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64 - 1));
+        assert!(rx.try_recv().is_err(), "in_flight blocks later crossings");
         assert!(
-            rx.try_recv().is_err(),
-            "no dispatch should happen until a flush completes",
+            w.keys_to_materialize.contains(&k(1)),
+            "a blocked crossing stays pending"
         );
-
-        // The pending flush only fires after we explicitly flush.
-        w.flush().await.unwrap();
-        let job = rx
-            .try_recv()
-            .expect("flush completes → post-flush trigger fires");
-        // target_lsn is the max LSN in the snapshot, not the LSN of
-        // some interior row that "crossed the threshold". With
-        // pushes 10..(10 + 100), max = 109.
-        assert_eq!(job.target_lsn, Lsn(10 + (LIMIT * 10 - 1) as u64));
 
         drop_schema(&store, &schema).await;
     }
 
+    /// With the flusher running, a relation-page crossing is enqueued at
+    /// the crossing delta, and the buffer is not flushed.
+    #[tokio::test]
+    async fn rel_crossing_enqueues_without_a_flush() {
+        let (store, schema) = make_store("mat_rel_crossing").await;
+        const LIMIT: u32 = 5;
+        let policy = FlushPolicy {
+            max_age: Duration::from_secs(3600),
+            max_bytes: 1 << 30,
+            ..FlushPolicy::default()
+        };
+        let (w, _t, mut rx, _in_flight) = writer_with_materializer(store.clone(), policy, LIMIT);
+        let w = Arc::new(w);
+        let task = w.spawn_flusher(Duration::from_secs(3600));
+        for i in 0..LIMIT as u64 {
+            w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        let job = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("crossing enqueued without a flush")
+            .expect("materialiser channel open");
+        assert_eq!(job.key, k(1));
+        assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64 - 1));
+        assert_eq!(
+            w.stats().await.buffered_rows,
+            LIMIT as usize,
+            "a relation-page crossing must not flush"
+        );
+        task.shutdown().await;
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A full materialiser queue never blocks `put()`: crossings it has no
+    /// room for stay pending and go out on a retry once a slot frees up.
+    #[tokio::test]
+    async fn rel_crossing_enqueue_never_blocks_on_a_full_queue() {
+        let (store, schema) = make_store("mat_rel_crossing_full").await;
+        const LIMIT: u32 = 2;
+        let (w, _t, mut rx, in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+        let queue = rx.max_capacity();
+        for key in 0..=queue as u32 {
+            for i in 0..LIMIT as u64 {
+                w.put(&[(k(key + 1), Lsn(10 + i), delta_non_init())])
+                    .await
+                    .unwrap();
+            }
+        }
+        assert_eq!(rx.len(), queue, "enqueue fills the queue and returns");
+        assert_eq!(
+            w.keys_to_materialize.len(),
+            1,
+            "the crossing with no room stays pending"
+        );
+        let job = rx.recv().await.unwrap();
+        in_flight.lock().unwrap().remove(&job.key);
+        w.retry_enqueue_rel_materialize_jobs();
+        assert!(
+            w.keys_to_materialize.is_empty(),
+            "enqueued once a slot freed up"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// An SLRU crossing still forces a flush: its fold reads YB only, so
+    /// the job can be enqueued only once the deltas are durable.
+    #[tokio::test]
+    async fn slru_crossing_forces_a_flush() {
+        use pageserver_api::key::slru_block_to_key;
+        use pageserver_api::reltag::SlruKind;
+        let (store, schema) = make_store("mat_slru_crossing").await;
+        const SLRU_LIMIT: u32 = 4;
+        let policy = FlushPolicy {
+            max_age: Duration::from_secs(3600),
+            max_bytes: 1 << 30,
+            ..FlushPolicy::default()
+        };
+        let (w, _t, mut rx, _in_flight) =
+            writer_with_materializer_thresholds(store.clone(), policy, 0, 0, SLRU_LIMIT);
+        let w = Arc::new(w);
+        let task = w.spawn_flusher(Duration::from_secs(3600));
+        let sk = slru_block_to_key(SlruKind::Clog, 0, 0);
+        // Noted before the crossing put, so the forced flush can advance
+        // the horizon the SLRU enqueue is bounded by.
+        w.note_record_lsn(Lsn(10 + SLRU_LIMIT as u64), Lsn(10));
+        for i in 0..SLRU_LIMIT as u64 {
+            w.put(&[(sk, Lsn(10 + i), delta_non_init())]).await.unwrap();
+        }
+        let job = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("SLRU crossing enqueued after a forced flush")
+            .expect("materialiser channel open");
+        assert_eq!(job.key, sk);
+        assert_eq!(
+            w.stats().await.buffered_slru_rows,
+            0,
+            "the crossing flushed"
+        );
+        task.shutdown().await;
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The materialiser's read folds unflushed rows, anchored on a
+    /// flushed base.
+    #[tokio::test]
+    async fn read_chain_for_materialize_includes_unflushed_rows() {
+        let (store, schema) = make_store("mat_read_unflushed").await;
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        w.flush().await.unwrap();
+        w.put(&[(k(1), Lsn(20), delta_non_init())]).await.unwrap();
+        w.put(&[(k(1), Lsn(30), delta_non_init())]).await.unwrap();
+        let chain = w.read_chain_for_materialize(k(1), Lsn(30)).await.unwrap();
+        let lsns: Vec<Lsn> = chain.iter().map(|r| r.lsn).collect();
+        assert_eq!(lsns, vec![Lsn(30), Lsn(20), Lsn(10)]);
+        drop_schema(&store, &schema).await;
+    }
+
     /// `flush_horizon_lsn` advances atomically inside
-    /// `mark_flushed` to `max(snapshot.lsn)`. The post-flush
-    /// materialiser trigger relies on this — every job has
-    /// `target_lsn ≤ horizon` by construction, which is what makes
-    /// `read_chain_durable` safe.
+    /// `mark_flushed` to `max(snapshot.lsn)`. The post-flush and
+    /// cold-residue enqueues bound their targets by it.
     #[tokio::test]
     async fn flush_horizon_advances_to_ingest_frontier() {
         let (store, schema) = make_store("mat_horizon").await;
@@ -4585,62 +4673,54 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// When a single key has multiple deltas in one snapshot, the
-    /// dispatched `target_lsn` is the max LSN for that key — not the
-    /// LSN of whichever delta nominally crossed the threshold.
-    /// Pinning this matters because `read_chain_durable(key,
-    /// target_lsn)` walks the chain up to `target_lsn`, so the
-    /// materialised image's LSN equals what we put here.
+    /// A relation-page crossing enqueues its job at the crossing delta's LSN, and
+    /// the deltas after it start the next tally.
     #[tokio::test]
-    async fn flush_trigger_target_lsn_is_per_key_max() {
+    async fn crossing_enqueues_at_the_crossing_delta() {
         let (store, schema) = make_store("mat_target_lsn").await;
         const LIMIT: u32 = 3;
         let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
-        // 5 deltas for k(1), all in the same snapshot. LIMIT=3
-        // crosses with delta #3 at lsn 30, but the snapshot includes
-        // up to lsn 50.
-        for (i, lsn) in [10u64, 20, 30, 40, 50].iter().enumerate() {
-            let _ = i;
-            w.put(&[(k(1), Lsn(*lsn), delta_non_init())]).await.unwrap();
+        for lsn in [10u64, 20, 30, 40, 50] {
+            w.put(&[(k(1), Lsn(lsn), delta_non_init())]).await.unwrap();
         }
-        w.flush().await.unwrap();
-
-        let job = rx.try_recv().expect("trigger fires post-flush");
-        assert_eq!(
-            job.target_lsn,
-            Lsn(50),
-            "target_lsn must be max LSN-for-key in the snapshot, not the \
-             threshold-crossing delta's LSN",
+        let job = rx.try_recv().expect("crossing enqueued");
+        assert_eq!(job.target_lsn, Lsn(30));
+        assert!(
+            rx.try_recv().is_err(),
+            "40 and 50 are below the next crossing"
         );
 
         drop_schema(&store, &schema).await;
     }
 
-    /// Cold-key residue: a tally that crossed the threshold in a
-    /// past flush but isn't in the current snapshot (no new put) must
-    /// still dispatch — at `last_lsn` from the tally, since
-    /// `last_lsn ≤ flush_horizon_lsn` after the prior flush. Without
-    /// this, `delta_counts` grows unbounded as the workload winds
-    /// down (the 8.4M-entries pathology we observed at rest).
+    /// Cold-key residue: an SLRU tally that crossed the threshold in a
+    /// past flush must still be enqueued on a later flush with nothing to
+    /// write, at `last_lsn` from the tally (≤ `flush_horizon_lsn` after the
+    /// prior flush). Without this, `delta_counts` grows unbounded as the
+    /// workload winds down (the 8.4M-entries pathology we observed at rest).
     #[tokio::test]
     async fn cold_key_residue_dispatches_at_last_lsn() {
+        use pageserver_api::key::slru_block_to_key;
+        use pageserver_api::reltag::SlruKind;
         let (store, schema) = make_store("mat_cold_residue").await;
         const LIMIT: u32 = 3;
         let (w, _t, mut rx, in_flight) =
-            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+            writer_with_materializer_thresholds(store.clone(), FlushPolicy::default(), 0, 0, LIMIT);
 
         // Block dispatch by pre-loading in_flight with this key; the
         // first flush will see the threshold but skip dispatch. The
         // tally stays in delta_counts.
-        let key_bytes = k(1);
+        let key_bytes = slru_block_to_key(SlruKind::Clog, 0, 0);
         in_flight.lock().unwrap().insert(key_bytes);
 
         // Cross the threshold. After flush, last_lsn = 30 (max put
         // LSN) and that LSN is durable.
         for lsn in [10u64, 20, 30] {
-            w.put(&[(k(1), Lsn(lsn), delta_non_init())]).await.unwrap();
+            w.put(&[(key_bytes, Lsn(lsn), delta_non_init())])
+                .await
+                .unwrap();
         }
         w.note_record_lsn(Lsn(30), Lsn(20));
         w.flush().await.unwrap();
@@ -4896,6 +4976,85 @@ mod tests {
             Some(Lsn(40)),
             "prev_record_lsn must be persisted alongside consistent_lsn"
         );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A crash after a fold wrote an image from unflushed deltas leaves the
+    /// image in YB above `consistent_lsn` and its deltas lost. Replay must
+    /// rebuild every LSN below the image from the deltas, never the image.
+    #[tokio::test]
+    async fn replay_under_an_image_folded_from_lost_deltas() {
+        let (store, schema) = make_store("replay_under_image").await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_branch_state_row(&store, t).await;
+        let key = k(1);
+        let shape = |chain: &[Arc<PageRow>]| -> Vec<(u64, bool)> {
+            chain.iter().map(|r| (r.lsn.0, r.is_image)).collect()
+        };
+
+        w.put(&[
+            (key, Lsn(100), image()),
+            (key, Lsn(104), delta()),
+            (key, Lsn(108), delta()),
+        ])
+        .await
+        .unwrap();
+        w.note_record_lsn(Lsn(108), Lsn(104));
+        w.flush().await.unwrap();
+
+        for lsn in [112, 114, 116, 118] {
+            w.put(&[(key, Lsn(lsn), delta())]).await.unwrap();
+        }
+        let img = Arc::new(PageRow {
+            key,
+            lsn: Lsn(118),
+            is_image: true,
+            will_init: true,
+            payload: Bytes::from_static(b"folded-image"),
+        });
+        store.put_pages(t, &[img]).await.unwrap();
+        drop(w);
+
+        let w = PageWriter::new(
+            t,
+            store.clone(),
+            store.clone(),
+            FlushPolicy::default(),
+            64 * 1024 * 1024,
+            0,
+        );
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
+        assert_eq!(row.consistent_lsn, Lsn(108));
+        let persisted = store
+            .read_chain(t, &key_to_bytes(key), Lsn(118))
+            .await
+            .unwrap();
+        assert_eq!(shape(&persisted), [(118, true)]);
+
+        let mut expected = vec![(108, false), (104, false), (100, true)];
+        for lsn in [112u64, 114, 116] {
+            w.put(&[(key, Lsn(lsn), delta())]).await.unwrap();
+            expected.insert(0, (lsn, false));
+            for read_at in [lsn, lsn + 1] {
+                let chain = w.read_chain(key, Lsn(read_at)).await.unwrap();
+                assert_eq!(shape(&chain), expected, "read at {read_at}");
+            }
+        }
+
+        w.put(&[(key, Lsn(118), delta())]).await.unwrap();
+        let chain = w.read_chain(key, Lsn(118)).await.unwrap();
+        assert_eq!(shape(&chain), [(118, true)]);
+        let chain = w.read_chain_for_materialize(key, Lsn(118)).await.unwrap();
+        assert_eq!(
+            shape(&chain),
+            [(118, true)],
+            "a re-enqueued job stops at the image"
+        );
+
+        w.put(&[(key, Lsn(120), delta())]).await.unwrap();
+        let chain = w.read_chain(key, Lsn(120)).await.unwrap();
+        assert_eq!(shape(&chain), [(120, false), (118, true)]);
 
         drop_schema(&store, &schema).await;
     }

@@ -56,15 +56,10 @@
 //! ## Lookup
 //! - [`UnifiedPages::lookup_chain`] returns rows for `key` at `lsn ≤
 //!   target_lsn`, including unflushed.
-//! - [`UnifiedPages::lookup_chain_durable`] returns only durable rows.
-//!   Used by the materialiser, which must never fold pre-flush deltas
-//!   into an image (crash + WAL replay would reapply those deltas on
-//!   top of the image → double-apply).
-//! - [`UnifiedPages::lookup_chain_if_complete`] /
-//!   [`UnifiedPages::lookup_chain_durable_if_complete`] are the
-//!   cache-only fast paths: with per-key whole-eviction, a key either
-//!   has its full chain or is absent, so anchor presence is
-//!   sufficient — no `evicted_below` check.
+//! - [`UnifiedPages::lookup_chain_if_complete`] is the cache-only fast
+//!   path: with per-key whole-eviction, a key either has its full chain
+//!   or is absent, so anchor presence is sufficient — no
+//!   `evicted_below` check.
 //!
 //! ## Trim
 //! [`UnifiedPages::install_image_if_extends`] drops the rows a
@@ -430,15 +425,16 @@ impl UnifiedPages {
     ///     cached row would leave a gap `(image.lsn, min_cached)` living
     ///     only in YB).
     ///
-    /// Those two conditions are *sufficient* because the materialiser
-    /// bounds `image.lsn ≤ flush_horizon_lsn`: an unflushed row
-    /// `≤ image.lsn` can only come from a reconnect replaying a WAL record
-    /// whose row is already in YB, and the trim stops at the first such row, so it never leaves a
-    /// gap above one (#1687); and a present key's
-    /// **top** row is never selectively removed (trim only drops a prefix,
-    /// eviction drops the whole key), so a present key's chain is exactly
-    /// the complete suffix `[min_cached, head]`. Trimming to `image.lsn`
-    /// and re-anchoring there yields a complete `[image.lsn, head]`.
+    /// Those two conditions are *sufficient* because a present key's chain
+    /// only ever loses a prefix (trim stops at the first unflushed row,
+    /// eviction drops the whole key), so it stays the complete suffix
+    /// `[min_cached, head]`. The trim must stop there: an image is a
+    /// durable row that can sit above unflushed ones (its own deltas, or
+    /// rows a reconnect replays), and removing it while keeping the
+    /// unflushed rows below would let a read anchor on an older
+    /// `will_init` across the hole (#1687). Unflushed rows kept below
+    /// the image flush normally; a read between them and the image has
+    /// no cached anchor and falls through to the YB blend.
     pub fn install_image_if_extends(&self, image: Arc<PageRow>) -> bool {
         use std::collections::btree_map::Entry;
 
@@ -478,10 +474,9 @@ impl UnifiedPages {
             }
 
             // Trim the durable prefix `≤ image.lsn` the image subsumes,
-            // stopping at the first unflushed row (a reconnect replay):
-            // trimming past it would leave the replayed row as a cache-only
-            // anchor with a gap above it (#1687). An exact-LSN collision is
-            // handled by the insert's Occupied arm below.
+            // stopping at the first unflushed row (see the doc above,
+            // #1687). An exact-LSN collision is handled by the insert's
+            // Occupied arm.
             let to_remove: Vec<Lsn> = ks
                 .chain
                 .range(..=lsn)
@@ -499,9 +494,12 @@ impl UnifiedPages {
             // Insert the image as a durable anchor.
             match ks.chain.entry(lsn) {
                 Entry::Occupied(mut o) => {
-                    // A same-LSN slot survived the trim. It is unflushed (a
+                    // A same-LSN slot survived the trim. It is unflushed,
+                    // normally the delta the image was folded up to (or a
                     // reconnect replay), or flushed and kept because the trim
-                    // stopped at an unflushed row below it. Overwrite it;
+                    // stopped at an unflushed row below it. Overwrite it: the
+                    // image contains the delta and YB sorts the image first at
+                    // this LSN, so an unflushed delta need not be written.
                     // `try_promote` decides whether the unflushed counts change.
                     let prev = row_size(&o.get().row);
                     // Claim the promotion via mark_flushed's CAS (not a bare
@@ -566,20 +564,6 @@ impl UnifiedPages {
             .collect()
     }
 
-    /// Like `lookup_chain` but only durable rows.
-    pub fn lookup_chain_durable(&self, key: &Key, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
-        let Some(node) = self.by_key.get(key) else {
-            return Vec::new();
-        };
-        let ks = node.value().lock();
-        ks.chain
-            .range(..=target_lsn)
-            .rev()
-            .filter(|(_, e)| e.is_durable())
-            .map(|(_, e)| e.row_arc())
-            .collect()
-    }
-
     /// Cache-only fast path. Returns `Some(chain)` (LSN-descending,
     /// including unflushed) iff `key` is present and the chain
     /// contains a `will_init` row at some `anchor_lsn ≤ target_lsn`.
@@ -614,69 +598,6 @@ impl UnifiedPages {
             }
         }
         has_anchor.then_some(out)
-    }
-
-    /// Like `lookup_chain_if_complete` but only durable rows. Used
-    /// by the materialiser's cache-only fast path so it never folds
-    /// pre-flush deltas into an image.
-    ///
-    /// Caller invariant: `target_lsn ≤ flush_horizon_lsn`. Under that
-    /// invariant every cache row with LSN ≤ target_lsn is durable
-    /// (post-flush `mark_flushed` promotes them all atomically), so
-    /// this is a plain backward walk for an anchor.
-    ///
-    /// Seeing an unflushed row here is therefore either (a) the
-    /// benign attach-time race — legacy compaction overlaps the
-    /// walreceiver's replay, which re-puts rows that are already
-    /// durable in YB from the first pass as fresh (unflushed) cache
-    /// entries the cache can't tell apart — or (b) a real horizon
-    /// violation at a dispatch site (#22 bug B family). Both are
-    /// answered the same way: bail out of the fast path and let
-    /// `read_chain_durable` consult YB, which holds the durable
-    /// truth in case (a) and surfaces the violation as a retryable
-    /// redo failure in case (b), instead of silently folding a
-    /// pre-flush row into an image. The counter + warn replace what
-    /// used to be a `debug_assert!` — release builds had no tripwire
-    /// at all.
-    pub fn lookup_chain_durable_if_complete(
-        &self,
-        key: &Key,
-        target_lsn: Lsn,
-    ) -> Option<Vec<Arc<PageRow>>> {
-        let node = self.by_key.get(key)?;
-        let ks = node.value().lock();
-        let mut out = Vec::new();
-        for (_, e) in ks.chain.range(..=target_lsn).rev() {
-            if !e.is_durable() {
-                crate::metrics::CORRECTNESS_ERRORS
-                    .with_label_values(&["durable_walk_unflushed_row"])
-                    .inc();
-                use std::sync::Mutex;
-
-                use once_cell::sync::Lazy;
-                use utils::rate_limit::RateLimit;
-                static LOGGED: Lazy<Mutex<RateLimit>> =
-                    Lazy::new(|| Mutex::new(RateLimit::new(std::time::Duration::from_secs(10))));
-                if let Ok(mut limiter) = LOGGED.try_lock() {
-                    let (lsn, tgt) = (e.row.lsn, target_lsn);
-                    limiter.call(|| {
-                        tracing::warn!(
-                            "durable chain walk saw an unflushed row at lsn={lsn} \
-                             ≤ target_lsn={tgt}; falling back to the YB read. \
-                             Benign during attach replay; a sustained rate \
-                             outside attach means a flush-horizon violation \
-                             (metric correctness_errors{{durable_walk_unflushed_row}})",
-                        );
-                    });
-                }
-                return None;
-            }
-            out.push(e.row_arc());
-            if e.row.will_init {
-                return Some(out);
-            }
-        }
-        None
     }
 
     /// Range scan: rows for keys in `[start_key, end_key)` at `lsn ≤
@@ -732,9 +653,14 @@ impl UnifiedPages {
         // #57 probe, debug builds (integration) only: an unflushed entry must
         // still be its key's live slot. A missing one means something dropped
         // a row nobody has written yet. It is still written here (the entry is
-        // in hand), so this reports the anomaly rather than a loss.
+        // in hand), so this reports the anomaly rather than a loss. An image
+        // install can promote and replace an entry after the filter above;
+        // the image already holds that delta, so that is not an anomaly.
         if cfg!(debug_assertions) {
             for entry in &entries {
+                if entry.is_durable() {
+                    continue;
+                }
                 let (key, lsn) = (&entry.row.key, entry.row.lsn);
                 let why = match self.by_key.get(key) {
                     None => Some("key-gone"),
@@ -832,13 +758,9 @@ impl UnifiedPages {
             //     "nothing added": re-inserting would double-count the
             //     unflushed FIFO / pin, and overwriting could drop a row
             //     that isn't yet in YB.
-            //   - `push_durable()` (materialiser, durable=true): bounds its
-            //     target_lsn ≤ flush_horizon_lsn (only advanced after
-            //     `mark_flushed`), so a same-LSN slot is normally already
-            //     durable. It can also be a still-UNFLUSHED slot from a benign
-            //     reconnect-replay re-push (see the durable arm below); in that
-            //     case we overwrite it with the image and reverse the unflushed
-            //     accounting + drop the stale FIFO entry.
+            //   - `push_durable()` (durable=true): an unflushed same-LSN
+            //     slot is overwritten, reversing its unflushed accounting
+            //     and dropping its FIFO entry (see the durable arm below).
             let node = self.by_key.get_or_insert(key, Mutex::new(KeyState::new()));
             let mut ks_guard = node.value().lock();
             if node.is_removed() {
@@ -887,20 +809,11 @@ impl UnifiedPages {
                             return None;
                         }
                         let prev_size = row_size(&o.get().row);
-                        // push_durable (materialiser image). The slot is
-                        // normally already durable. It can also be a NON-
-                        // durable slot from a benign reconnect-replay re-push:
-                        // after a walreceiver reconnect the replay re-`put`s a
-                        // row that was already flushed (hence evicted/trimmed)
-                        // as a fresh unflushed entry, and the image — folded
-                        // from that same durable row in YB — lands on the same
-                        // (key, lsn). The image's LSN can equal this slot's
-                        // LSN only if a DURABLE row existed here (that LSN is
-                        // where the fold's chain head came from), so the
-                        // unflushed slot is a deterministic re-push of an
-                        // already-durable record and overwriting it loses
-                        // nothing. Record it so we reverse the unflushed
-                        // count and bytes below; the FIFO slot stays.
+                        // push_durable over an existing slot. If it is
+                        // unflushed, the durable row replacing it is what YB
+                        // will serve at this LSN, so the unflushed row need
+                        // not be written: reverse its unflushed count and
+                        // bytes below. Its FIFO slot stays, promoted.
                         // Claim the overwritten slot's promotion with the SAME
                         // CAS mark_flushed uses, not a bare is_durable() read: a
                         // flush snapshot may still hold this exact
@@ -1041,6 +954,20 @@ mod tests {
         assert_eq!(served(&u, 125), Some(vec![120, 110, 100]));
     }
 
+    /// `lookup_chain` restricted to durable rows.
+    fn lookup_chain_durable(u: &UnifiedPages, key: &Key, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
+        let Some(node) = u.by_key.get(key) else {
+            return Vec::new();
+        };
+        let ks = node.value().lock();
+        ks.chain
+            .range(..=target_lsn)
+            .rev()
+            .filter(|(_, e)| e.is_durable())
+            .map(|(_, e)| e.row_arc())
+            .collect()
+    }
+
     fn mk(key: &[u8], lsn: u64, is_image: bool, payload: &[u8]) -> PageRow {
         PageRow {
             key: tkey(key),
@@ -1167,41 +1094,10 @@ mod tests {
         u.push(mk(b"k", 3, false, b"d3"));
 
         let all = u.lookup_chain(&tkey(b"k"), Lsn(100));
-        let durable = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
+        let durable = lookup_chain_durable(&u, &tkey(b"k"), Lsn(100));
         assert_eq!(all.len(), 3);
         assert_eq!(durable.len(), 1);
         assert_eq!(durable[0].lsn, Lsn(1));
-    }
-
-    /// An unflushed row at/below the target makes the durable fast
-    /// path bail out (return None) instead of panicking (the old
-    /// `debug_assert!`, absent in release) or folding the pre-flush
-    /// row into the chain. The caller then consults YB, which is
-    /// correct both for the benign attach-replay race and for a real
-    /// flush-horizon violation.
-    #[test]
-    fn durable_walk_bails_on_unflushed_row() {
-        let u = UnifiedPages::new(4096);
-        u.push(mk(b"k", 1, true, b"img"));
-        u.push(mk(b"k", 2, false, b"d2"));
-        flush_first_n(&u, 2);
-        // Complete durable chain below the target: fast path serves it.
-        assert!(
-            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(100))
-                .is_some()
-        );
-        // An unflushed row enters at lsn 3 ≤ target: fast path must
-        // bail rather than serve a chain it can't prove durable.
-        u.push(mk(b"k", 3, false, b"d3"));
-        assert!(
-            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(100))
-                .is_none()
-        );
-        // A target below the unflushed row keeps the fast path.
-        assert!(
-            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(2))
-                .is_some()
-        );
     }
 
     #[test]
@@ -1334,7 +1230,7 @@ mod tests {
 
     /// Regression for the AWS BTREE PANIC: with per-row FIFO eviction,
     /// an intermediate delta could be popped while the anchor stayed,
-    /// leaving a mid-chain hole that `lookup_chain_durable_if_complete`
+    /// leaving a mid-chain hole that `lookup_chain_if_complete`
     /// served as "complete". Per-key whole-eviction structurally
     /// prevents this — either the key is present (full chain) or
     /// absent.
@@ -1351,7 +1247,7 @@ mod tests {
         u.push_durable(mk(b"cold", 1, true, b"EEEEEEEEEEEEEEEE"));
         u.evict_to_capacity();
 
-        let r = u.lookup_chain_durable_if_complete(&tkey(b"hot"), Lsn(200));
+        let r = u.lookup_chain_if_complete(&tkey(b"hot"), Lsn(200));
         match r {
             Some(chain) => {
                 // If hot is still cached, it must have the anchor and
@@ -1466,7 +1362,7 @@ mod tests {
 
         // The slot holds the durable image, and a flush finds nothing to
         // snapshot (no phantom pending row left behind).
-        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
+        let chain = lookup_chain_durable(&u, &tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1, "durable image present at (k, 10)");
         assert!(chain[0].is_image, "slot replaced by the materialiser image");
         // The next snapshot claims the slot without writing it, and its
@@ -1600,33 +1496,24 @@ mod tests {
         assert_eq!(chain[0].payload.as_ref(), b"folded-image");
     }
 
-    /// Regression for the AWS BTREE walredo PANIC on 2026-06-02,
-    /// updated for the always-on tripwire (#22 hardening): a
-    /// target_lsn covering an unflushed row no longer panics (the old
-    /// `debug_assert!` was compiled out of release builds anyway) —
-    /// the durable fast path bails with None in every build profile
-    /// and the caller falls back to the YB read. The richer scenario
-    /// (interleaved durable rows above the unflushed one) is kept
-    /// from the original test.
+    /// Two folds inside one flush window on a hot page: the second install
+    /// must not drop the first image while unflushed rows sit below it, or
+    /// a read between the two anchors on the old init record across the
+    /// hole (the btree "specified item offset is too large" walredo PANIC).
     #[test]
-    fn durable_if_complete_bails_on_unflushed_in_range() {
+    fn install_keeps_images_above_unflushed_rows() {
         let u = UnifiedPages::new(4096);
-        u.push(mk(b"k", 10, true, b"anchor"));
-        flush_first_n(&u, 1);
-        u.push(mk(b"k", 20, false, b"d20"));
-        flush_first_n(&u, 1);
-        u.push(mk(b"k", 30, false, b"d30")); // UNFLUSHED
-        u.push_durable(mk(b"k", 40, false, b"d40")); // already durable
-        // target_lsn=100 covers the unflushed d30: bail.
-        assert!(
-            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(100))
-                .is_none()
-        );
-        // target_lsn=20 walks only durable rows: fast path serves.
-        assert!(
-            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(20))
-                .is_some()
-        );
+        u.push(mk(b"k", 5, true, b"init"));
+        for lsn in [10, 15, 20, 25, 30] {
+            u.push(mk(b"k", lsn, false, b"delta"));
+        }
+        assert!(u.install_image_if_extends(Arc::new(mk(b"k", 20, true, b"img20"))));
+        assert!(u.install_image_if_extends(Arc::new(mk(b"k", 30, true, b"img30"))));
+        let chain = u
+            .lookup_chain_if_complete(&tkey(b"k"), Lsn(25))
+            .expect("anchored at img20");
+        let got: Vec<(u64, bool)> = chain.iter().map(|r| (r.lsn.0, r.is_image)).collect();
+        assert_eq!(got, vec![(25, false), (20, true)]);
     }
 
     /// Materialiser install at LSN N MUST drop the durable rows with
@@ -1642,7 +1529,7 @@ mod tests {
         flush_first_n(&u, 3);
         // Install fresh image at lsn 25: key present, 25 ≥ min(10) → installs.
         assert!(u.install_image_if_extends(Arc::new(mk(b"k", 25, true, b"materialised"))));
-        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
+        let chain = lookup_chain_durable(&u, &tkey(b"k"), Lsn(100));
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         // The deltas/image ≤ 25 are gone; d30 stays because it's above
         // the new image.
@@ -1679,7 +1566,7 @@ mod tests {
         // A stale image folded at lsn 20 (< min_cached 30) must be refused.
         assert!(!u.install_image_if_extends(Arc::new(mk(b"k", 20, true, b"stale"))));
         // The chain is untouched: still anchored at 30, no lsn-20 anchor.
-        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
+        let chain = lookup_chain_durable(&u, &tkey(b"k"), Lsn(100));
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![40, 30]);
         // A read into the gap finds no fast-path anchor (≥ lsn 20, < 30)

@@ -673,18 +673,22 @@ whose caller drops it mid-way releases its claim the same way.
 
 ### Flusher task and flush triggers
 
-`PageWriter::spawn_flusher` runs a periodic task
-(`flush_poll_interval`, default 500 ms) that flushes when either
-trigger crosses threshold: buffer age ≥ `flush_interval` (5 s) or
-buffered bytes ≥ `flush_size_bytes` (12 MiB). It also waits on
-`materialize_wakeup`: the instant a key's delta tally crosses its
-materialise threshold, the put path pulses the notify and the flusher
-flushes immediately — so materialise dispatch runs within milliseconds
-of the crossing instead of at the next 5 s / 12 MiB cadence.
-`notify_one` coalesces a burst of crossings, and `put()` never blocks
-on it, so this paces the materialiser without throttling ingest. On
-shutdown the task does a final flush plus the throttle-bypassing
-`consistent_lsn` catch-up.
+`PageWriter::spawn_flusher` runs a periodic task on a fixed interval
+(`flush_poll_interval`, default 500 ms) that flushes when buffer age ≥
+`flush_interval` (5 s), buffered bytes ≥ `min(flush_size_bytes,
+backpressure_bytes)` (12 MiB by default), or an SLRU page waits for a
+flush to enqueue its materialise job. Each pass also retries the relation-page materialise
+jobs whose enqueue failed at the crossing (see **Enqueue** below).
+`flusher_wakeup` runs a pass early:
+
+- an **SLRU** crossing pulses it, so the flush and the post-flush
+  enqueue come at once, because an SLRU fold reads YB only;
+- a `put()` that starts waiting on backpressure pulses it, so a buffer at
+  the cap is flushed at once rather than on the next tick.
+
+`notify_one` coalesces a burst of wakeups, and `put()` never blocks
+on it. On shutdown the task does a final flush plus the
+throttle-bypassing `consistent_lsn` catch-up.
 
 ### Backpressure
 
@@ -693,8 +697,8 @@ The walreceiver ingests as fast as the safekeeper sends; two points in
 keeping heap usage bounded:
 
 - **Flush-side.** If `unflushed_bytes + bytes_in_aux_buffers` exceeds
-  `backpressure_bytes` (default 25 MiB), `put` awaits a `Notify` pulsed
-  at the end of every successful flush. With
+  `backpressure_bytes` (default 25 MiB), `put` wakes the flusher and
+  awaits a `Notify` pulsed at the end of every successful flush. With
   `release_backpressure_per_chunk` (default on), rows stop counting as
   soon as their 500-row chunk lands in YB, and each landed chunk pulses
   the notify, so ingest resumes while a large flush is still writing
@@ -703,21 +707,25 @@ keeping heap usage bounded:
   after its chunks landed hands every row back to be written again, so
   `put` also blocks once the undiscounted total reaches twice the cap:
   without that, each failed retry would admit another cap's worth. A
-  flush that succeeds never reaches it. The 12 MiB size trigger fires
-  well before the cap, so this path only engages when YB INSERTs slow
-  down (CPU contention, network spikes, tablet split). Pre-flush rows
+  flush that succeeds never reaches it. The size trigger is clamped to
+  the cap, so with the defaults it fires at 12 MiB, well before it, and
+  this path only engages when YB INSERTs slow down (CPU contention,
+  network spikes, tablet split). Pre-flush rows
   are pinned in `UnifiedPages` until durable, so without the cap the
   buffer grows linearly with the YB backlog — multi-GiB RSS growth on
   co-located deployments under CPU pressure. `backpressure_bytes = 0`
   disables the cap (unbounded growth).
-- **Materialiser-side (queue depth).** The write-time materialise
-  dispatch does a **blocking** `mpsc::send` into the materialiser channel
-  (capacity `materialize_queue_capacity`, default 1000). When the
-  materialiser cannot drain, the channel fills and the walreceiver blocks
-  at the send, bounding in-flight materialisation work. The read-side
-  dispatch uses `try_send` instead — GetPage latency must not depend on
-  materialiser progress; a dropped hint re-fires on the next read of
-  the same key.
+- **Materialiser-side (queue depth).** Relation-page crossings are
+  enqueued from `put()` with `try_send` into the materialiser channel
+  (capacity `materialize_queue_capacity`, default 1000) and wait in
+  `keys_to_materialize` for the flusher's tick while it is full, so they never
+  block ingest. SLRU folds, enqueued
+  after a flush, use a **blocking** `send`; `put()` callers waiting on
+  backpressure are woken before it, but a full channel holds the flusher
+  there, the buffer grows to `backpressure_bytes`, and the walreceiver
+  blocks. The read-side enqueue uses `try_send` — GetPage latency must
+  not depend on materialiser progress; a dropped hint re-fires on the
+  next read of the same key.
 - **Materialiser-side (redo-pipeline bytes).** Before redoing each batch the
   materialiser holds its outstanding `commit_phase` image bytes under
   `materialize_inflight_bytes_limit` (default 512 MiB, not scaled; `0` disables)
@@ -762,12 +770,17 @@ and for SLRU block keys, `image_chain_limit_slru` deltas (default
 **1000**; the payload trigger does not apply — clog deltas are a couple
 of bytes each, so the relation-page thresholds would fire absurdly
 often). Setting a limit to 0 disables that dimension. Threshold
-crossings are recorded in a `delta_ready` set so the flush-side walk
-touches only crossers, not every cached key.
+crossings are recorded in a `keys_to_materialize` set so the enqueue walks
+touch only crossers, not every cached key.
 
-**Dispatch is post-flush, so targets are durable by construction.**
-After every successful flush, `flush()` walks `delta_ready` and
-enqueues one `MaterializeJob { key, target_lsn }` per crossed key:
+**Enqueue.** A relation-page crossing is enqueued from `put()` itself, as
+one `MaterializeJob { key, target_lsn }` at the crossing delta, flushed
+or not, with `try_send`. If the enqueue fails (the channel is full, the key
+is already being folded, or attach replay holds folds off), the key
+waits in `keys_to_materialize` and the flusher's tick retries it at its newest
+buffered delta, so a key that stops receiving writes is still folded.
+SLRU keys go only through `flush()`: after every successful flush it
+walks `keys_to_materialize` and enqueues one job per crossed SLRU key:
 
 - keys with rows in the just-flushed snapshot dispatch at their
   snapshot max LSN (just made durable);
@@ -793,9 +806,9 @@ two-phase pipeline:
 
 1. `redo_phase` — on the worker task, up to `redo_concurrency`
    (4 × `scale_factor`) concurrent `redo_one` futures. Each reads its
-   chain from **durable sources only** — `read_chain_durable` for
-   relation keys (durable cache rows + YB via the hot-path store, pre-flush
-   rows excluded), `read_slru_chain_durable` for SLRU keys — then `parse_chain`
+   chain — `read_chain_for_materialize` for relation keys (cache rows,
+   unflushed included, merged with YB via the hot-path store),
+   `read_slru_chain_durable` for SLRU keys (YB only) — then `parse_chain`
    splits `(base_img, records)` and
    `WalRedoManager::request_redo(key, actual_lsn, base_img, records,
    pg_version, RedoAttemptType::LegacyCompaction)` produces the 8 KiB
@@ -857,7 +870,7 @@ Materialiser RAM has two pools, bounded differently:
   `pageserver_yb_materializer_inflight_bytes` gauge (which sums across every
   timeline's materialiser and is observability only). At realistic
   `scale_factor` the count cap binds first, so this gate rarely engages.
-- **Redo-input chains** (`read_chain_durable` payloads held during redo — the
+- **Redo-input chains** (chain payloads held during redo — the
   pool that actually grows with deep SLRU chains): bounded by `redo_concurrency`
   (a count) × chain depth, released by `chain_guard` before commit. This is the
   variable pool, and it is **not** byte-gated today — #373 will extend the byte
@@ -865,19 +878,37 @@ Materialiser RAM has two pools, bounded differently:
   the current bound).
 
 When the write side stalls, the local image-byte gate (or the count cap) blocking
-before redo stops draining the job queue, which fills it and backpressures the
-walreceiver through the write-side blocking send — the same end-to-end stall path
-as `backpressure_bytes`, keyed on materialiser RAM rather than the pre-flush
+before redo stops draining the job queue, which fills it. Relation-page crossings
+then wait in `keys_to_materialize` for the tick's retry, and the post-flush SLRU enqueue holds the flusher until
+the buffer reaches `backpressure_bytes` and stalls the walreceiver — the same
+end-to-end stall path, keyed on materialiser RAM rather than the pre-flush
 buffer.
 
-Why durable-only reads: if the materialiser built an image from
-pre-flush rows and the process crashed, WAL replay would re-emit those
-deltas — but the image is already in YB at the same LSN, and reads
-above it would walredo the re-emitted deltas on top, double-applying
-them. `read_chain_durable` restricts inputs to data that survives
-crash + replay, and its `target_lsn` is contractually ≤
-`flush_horizon_lsn` so a mid-flush partial-YB view (parallel chunks
-commit out of order) can never feed walredo a chain with a hole.
+**Why folding unflushed rows is safe.** The image is written to YB
+before it is installed, and its inputs may still be unflushed. If the
+process crashes before they flush:
+
+- a replayed delta at the image's own LSN is never applied on top of
+  it: YB's PK (`lsn DESC, will_init DESC`) sorts the image first, and a
+  read stops at the first `will_init` row;
+- deltas below the image that are lost with the buffer are re-ingested
+  by replay before anything can reach their LSNs: reads wait for
+  replay, a branch needs `consistent_lsn` past its point, and the GC
+  cutoff is capped at `consistent_lsn`.
+
+A mid-flush partial YB view (parallel chunks commit out of order)
+cannot leave a hole either, because every row of an unflushed chunk is
+still in the cache, and keys with unflushed rows are pinned against
+eviction.
+
+The image is stamped at the chain head, which is usually an unflushed
+delta. The install replaces that delta's cache slot (one slot per LSN),
+so the delta itself is never written; YB serves the image at that LSN.
+Unflushed rows below the image stay in the cache and flush normally.
+The install trims only the durable prefix and stops at the first
+unflushed row: an image is a durable row that can sit above unflushed
+ones, and trimming it while keeping the rows below would leave a hole a
+cache-only read could anchor across.
 
 **Guarded cache install (`install_image_if_extends`).** The cache fast
 path trusts any cached `will_init` row as an anchor with a complete
@@ -966,8 +997,9 @@ starts below the safekeeper's WAL end closes a per-window latch
 connect — opens it (`mark_replay_caught_up`). While the latch is
 closed:
 
-- **Image materialiser folds are suppressed.** All three dispatch paths
-  (flush trigger, cold residue, read-side) check
+- **Image materialiser folds are suppressed.** All five enqueue paths
+  (relation-page crossing in `put()`, its retry on the tick, post-flush
+  SLRU, cold residue, read-side) check
   `MaterializerHandle::folds_allowed`; a fold dispatched mid-window can
   anchor on state that predates deltas it has not seen and stamp the
   image at the chain tip — a durable lie every later read anchors on
@@ -1268,7 +1300,7 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `image_chain_limit` | 20 | Relation-page deltas-since-anchor before a key is queued for materialisation (`0` disables the count trigger) |
 | `image_chain_limit_slru` | 1000 | Same, for SLRU (clog/multixact) blocks; the payload trigger does not apply to SLRU. `0` disables SLRU materialisation |
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for relation-page materialisation (`0` disables the size trigger) |
-| `materialize_queue_capacity` | 1000 | Bounded mpsc depth (scaled); write-side dispatch **blocks** on it, read-side dispatch uses `try_send` |
+| `materialize_queue_capacity` | 1000 | Bounded mpsc depth (scaled); the post-flush SLRU enqueue **blocks** on it, relation-page and read-side enqueue use `try_send` |
 | `materialize_inflight_bytes_limit` | 512 MiB | Hard ceiling on redone-but-not-INSERTed materialiser image bytes (`pageserver_yb_materializer_inflight_bytes`); the worker drains outstanding INSERTs before redoing more, backpressuring the walreceiver. **Not scaled** (memory ceiling); `0` disables |
 | `read_cache_bytes` | 512 MiB | Soft cap on `UnifiedPages.total_bytes` (scaled); whole cold keys are evicted LRU-order, keys with unflushed rows pinned |
 | `backpressure_bytes` | 25 MiB | Hard ceiling on the pre-flush buffer (scaled); `PageWriter::put` blocks above it; `0` disables |

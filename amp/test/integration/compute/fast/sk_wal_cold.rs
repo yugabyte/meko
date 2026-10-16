@@ -10,11 +10,8 @@
 //! (the bug behind #139's "invalid xlog page header" decode failures), the
 //! cold read stalls or errors and this fails.
 //!
-//! In `slow/` because it restarts the safekeeper on the shared cluster. The
-//! restart makes the pageserver walreceiver reconnect and replay (#57),
-//! which bumps the benign `durable_walk_unflushed_row` correctness counter;
-//! the suite's final verdict reports that kind without failing (see
-//! `Cluster::final_verdict`).
+//! It restarts the safekeeper on the shared cluster, which makes the
+//! pageserver walreceiver reconnect and replay (#57).
 
 use std::str::FromStr;
 use std::time::Duration;

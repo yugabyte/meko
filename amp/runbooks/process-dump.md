@@ -109,7 +109,7 @@ cause before touching the read path.
 ### Flush / materializer stall
 Symptom: writes stall with `unflushed_bytes` pinned high. In the dump, the
 `background_op` flush task parked in `PageWriter::flush` — e.g. on the bounded
-materializer channel `send().await` (`dispatch_materialize_jobs`), while the
+materializer channel `send().await` (`enqueue_slru_materialize_jobs`), while the
 materializer worker is parked in `redo_phase`/`commit_phase`. Note that
 `flush_completed.notify_waiters()` runs *after* that send, so a stuck
 materializer transitively wedges ingest backpressure.
