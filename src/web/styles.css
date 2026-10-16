@@ -1016,13 +1016,19 @@ textarea.input {
   font-size: 12px;
   overflow-x: auto;
 }
+/* Never wider than the row, so a long confirmation wraps instead of running off the edge. */
 .stage-actions {
   flex: none;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
   margin-left: auto;
+  max-width: 100%;
+}
+.stage-actions .confirm-inline {
+  justify-content: flex-end;
 }
 .stg-item {
   display: flex;
