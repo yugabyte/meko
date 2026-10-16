@@ -136,15 +136,18 @@ export type CiState = 'none' | 'pending' | 'success' | 'failure';
 export type QueuedGate = 'open-pr' | 'merge';
 
 /**
- * Whose reviews Claude addresses: `all` (AgentK, people and other bots), `agentk-people`
- * (AgentK and people) or `people` (people only). Merge waits for AgentK only once it's
- * active on the PR, and never in `people`.
+ * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
+ * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
+ * only). Every other review is held for the user to send or dismiss (`HeldReview`); the user's own
+ * reviews always go straight to Claude. Merge waits for AgentK's review only once AgentK is active
+ * on the PR, and never in `people`; in every mode it waits while a review is held.
  */
-export type ReviewerMode = 'all' | 'agentk-people' | 'people';
+export type ReviewerMode = 'agentk' | 'agentk-people' | 'all' | 'people';
 
 export const REVIEWER_LABELS: Record<ReviewerMode, string> = {
-  all: 'All reviewers',
+  agentk: 'AgentK only',
   'agentk-people': 'AgentK + People',
+  all: 'All reviewers',
   people: 'People only',
 };
 
@@ -188,6 +191,8 @@ export interface MekoUsage {
   found: number;
   /** Lookups that returned nothing. */
   empty: number;
+  /** Searches that found something, but nothing relevant: only memories, all scoring below the bar (What Meko doesn't know). */
+  weak: number;
   /** Lookups and saves that failed. */
   errors: number;
   saves: number;
@@ -271,6 +276,8 @@ export interface ProjectUsage {
   total: TokenUsage;
   cost: UsageCost;
   meko: MekoUsage;
+  /** Open questions on What Meko doesn't know, for the line under the Meko stats. */
+  mekoGaps: MekoGapCounts;
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
   byModel: ModelUsage[];
@@ -387,10 +394,14 @@ export interface CallHomeMeko {
   sentByTool?: Partial<Record<CallHomeMekoTool, number>>;
   /** Learn steps (src/server/learn.ts) begun then; left out when there were none. */
   learn?: CallHomeLearn;
-  /** The Meko calls AgentK made itself (searches at start, what shipped, designs, the learn step's); left out when there were none. */
+  /** The Meko calls AgentK made itself (searches at start, designs, the learn step's); left out when there were none. */
   agentk?: CallHomeAgentkMeko;
   /** The Meko plugin's transcript captures AgentK ran; left out when there were none. */
   capture?: { runs: number; failures: number; ms: number };
+  /** Searches that found nothing relevant (`MekoUsage.weak`); left out by installs from before it. */
+  weak?: number;
+  /** Questions on What Meko doesn't know a person dismissed or taught: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. A learn step's marks are in `learn`. Left out when there were none. */
+  gaps?: { dismissed: number; taught: number };
 }
 
 /** Learn steps as the report counts them, by when they began. */
@@ -408,6 +419,13 @@ export interface CallHomeLearn {
   skips: number;
   /** Steps that ended done with nothing saved or corrected. */
   empty: number;
+  /**
+   * Questions on What Meko doesn't know the steps marked taught (a fact answering them was saved)
+   * or dismissed (Meko already had the answer). Optional in the schema: reports from before lack
+   * them. How many were offered isn't sent: the report has no room left for it in 64 KB.
+   */
+  taught: number;
+  dismissed: number;
   /** The step's Meko searches, its failed Meko calls, and about how many tokens it sent to Meko. */
   lookups: number;
   errors: number;
@@ -508,16 +526,22 @@ export interface ProjectSettings {
   /** Browser notifications for this project. */
   notify: boolean;
   /**
-   * Keep each session's Meko calls (what AgentK sent and what came back) in meko-calls.jsonl in the
-   * session's folder, deleted with the session. Off by default.
+   * Keep each session's Meko calls, AgentK's and Claude's (what was sent and what came back), in
+   * meko-calls.jsonl in the session's folder, deleted with the session. Off by default.
    */
   mekoLog: boolean;
 }
 
-/** The Meko tools AgentK calls for a session: the Meko calls page's tool filter. */
+/** The Meko tools AgentK and Claude call for a session: the Meko calls page's tool filter. */
 export const MEKO_LOG_TOOLS = [
-  'context_search', 'conversation_create', 'conversation_update', 'memory_add', 'memory_update', 'artifact_put',
+  'context_search', 'memory_search', 'knowledgebase_search', 'memory_get_all', 'memory_get_by_id', 'conversation_get',
+  'artifact_get', 'memory_add', 'memory_update', 'memory_promote', 'conversation_create', 'conversation_update',
+  'conversation_add_message', 'artifact_put',
 ] as const;
+
+/** Who made a call in a session's Meko call log: AgentK, or Claude through its Meko tools. */
+export const MEKO_CALL_BY = ['agentk', 'claude'] as const;
+export type MekoCallBy = (typeof MEKO_CALL_BY)[number];
 
 /** GET /api/projects/:id/meko-logs: a session of the project that has a Meko call log. */
 export interface MekoLogInfo {
@@ -534,6 +558,9 @@ export interface MekoCallSummary {
   offset: number;
   at: number;
   tool: string;
+  by: MekoCallBy;
+  /** Claude's call, made by one of its subagents. */
+  subagent: boolean;
   /** The learn step that made it, if any. */
   learn: string | null;
   ms: number;
@@ -547,6 +574,11 @@ export interface MekoCallDetail extends MekoCallSummary {
   args: unknown;
   /** The parsed reply, its text when it isn't JSON, or null when none came. */
   result: unknown;
+  /**
+   * Claude's call whose reply was too large for its context: the notice Claude read in its place.
+   * `result` is then the reply Claude Code saved to a file, when it could be read.
+   */
+  notice: string | null;
 }
 
 /** GET /api/sessions/:id/meko-calls: a page of a session's Meko calls, newest first. */
@@ -555,6 +587,88 @@ export interface MekoCallPage {
   /** Older calls match too: ask again with `before` set to the last call's offset. */
   more: boolean;
 }
+
+/** How a search Meko answered poorly went: it found nothing, or found nothing relevant (memories all below the bar). */
+export type MekoGapQuality = 'empty' | 'weak';
+/** A question on What Meko doesn't know: still open, dismissed, or taught (an answer saved to Meko). */
+export type MekoGapState = 'open' | 'dismissed' | 'taught';
+
+/**
+ * A question Meko couldn't answer: every poor search in a project with the same query (by
+ * `key`, the query lower-cased with its whitespace collapsed), Claude's or AgentK's at session start.
+ */
+export interface MekoGap {
+  key: string;
+  /** The query as last asked. */
+  query: string;
+  /** From the latest ask: how it went, who asked (`start`: AgentK's search at session start), and with which tool. */
+  quality: MekoGapQuality;
+  source: 'claude' | 'start';
+  tool: string;
+  /** The latest ask's items, its best memory `score` and best `raw_similarity_score`, which may be different memories' (null when not known). */
+  results: number | null;
+  topScore: number | null;
+  topRaw: number | null;
+  asks: number;
+  /** The sessions that asked, latest first. */
+  sessions: { id: string; name: string; archived: boolean }[];
+  firstAt: number;
+  lastAt: number;
+  state: MekoGapState;
+  /** When it was dismissed or taught (null when it's open). */
+  markedAt: number | null;
+  /**
+   * What was last taught for it, kept when it's asked again (open again) or dismissed after.
+   * `session`: the session whose learn step taught it (null: a person did, with Teach Meko).
+   */
+  taught: { text: string; datapack: string | null; at: number; session: MekoGapSession | null } | null;
+  /**
+   * While it's dismissed: who dismissed it (`session`: the session whose learn step found Meko
+   * already had the answer; null: a person did) and, for a learn step, the memory that already said it.
+   */
+  dismissal: { session: MekoGapSession | null; memory: string | null } | null;
+}
+
+/** The session whose learn step taught or dismissed a question. */
+export interface MekoGapSession {
+  id: string;
+  name: string;
+  archived: boolean;
+}
+
+/** GET /api/projects/:id/meko-gaps: What Meko doesn't know, latest asked first. */
+export interface MekoGapPage {
+  gaps: MekoGap[];
+  /** More match: ask again with `before` set to the last one's `lastAt` and `beforeKey` to its `key` (questions asked at once share a `lastAt`). */
+  more: boolean;
+  counts: Record<MekoGapState, number>;
+  /** The open ones by how their latest ask went. */
+  open: MekoGapCounts;
+  /** Searches recorded with their query (Claude's, and AgentK's at start), and since when (null: none yet). */
+  searches: number;
+  since: number | null;
+}
+
+/** Open questions on What Meko doesn't know, by how their latest ask went. */
+export interface MekoGapCounts {
+  empty: number;
+  weak: number;
+}
+
+/** POST /api/projects/:id/meko-gaps/mark: dismiss a question (`dismissed`), or put a dismissed or taught one back (`null`). */
+export interface MekoGapMarkRequest {
+  key: string;
+  state: 'dismissed' | null;
+}
+
+/** POST /api/projects/:id/meko-gaps/teach: save what Meko should know about a question to the project's dedicated datapack. */
+export interface MekoTeachRequest {
+  key: string;
+  text: string;
+}
+
+/** The longest text Teach Meko saves, in characters. */
+export const MEKO_TEACH_MAX = 2000;
 
 export interface DatapackRef {
   id: string;
@@ -626,12 +740,14 @@ export interface Session {
   hasDesign: boolean;
   /** When the design was last written or republished; null before there is one. */
   designUpdatedAt: number | null;
-  /** Lines added/removed vs. the base branch, refreshed periodically. */
-  diffStat: { added: number; removed: number } | null;
+  /** Files changed and lines added/removed vs. the base branch, refreshed periodically. */
+  diffStat: DiffStat | null;
   /** Review comments on the diff not yet sent to Claude (drafts) or waiting for its turn to end (queued). */
   comments: { drafts: number; queued: number };
   /** How many of the design's questions are open, for the user to answer. */
   designQuestions: { open: number };
+  /** Reviews on the session's PR held for the user to send to AgentK or dismiss, and their authors. */
+  heldReviews: { count: number; authors: string[] };
   /**
    * AgentK's mod is running in the session's Claude (`[claude] mod` on, and the mod polling): answers
    * to the design can be sent and the design approved while AgentK works, and Claude's questions
@@ -941,6 +1057,18 @@ export interface ShareFailure {
 export interface ShareDatapackResult extends DatapackPeople {
   invited: string[];
   failed: ShareFailure[];
+}
+
+/** Someone the Share dialog has invited before (in any project), suggested in it again. */
+export interface ShareContact {
+  /** As last typed. */
+  email: string;
+  /** From Meko's member lists, once they've accepted an invite. */
+  name: string | null;
+  /** Invites that went through. */
+  shares: number;
+  /** When the latest did (ms). */
+  lastAt: number;
 }
 
 /** A person who reviews, or is asked to review, one of the project's PRs. */
@@ -1306,9 +1434,36 @@ export type ChangeSide = 'old' | 'new';
 /** The largest image that can be pasted into a terminal. Claude Code scales big images down itself. */
 export const MAX_PASTE_BYTES = 20 * 1024 * 1024;
 
-/** An image pasted into a session's terminal, saved on the host: the browser pastes this path for Claude. */
+/** An image or file pasted into (or dropped on) a session's terminal, saved on the host: the browser pastes this path for Claude. */
 export interface PastedImage {
   path: string;
+}
+
+/**
+ * The file extensions Meko's knowledge base takes, lower-case and without the dot: a copy of
+ * `uploadMimeByExt` in Meko's API server (internal/handlers/knowledge_base_handler.go). Meko checks
+ * the bytes against the extension itself.
+ */
+export const KB_UPLOAD_EXTS = ['pdf', 'txt', 'text', 'md', 'json', 'csv', 'xml', 'html', 'htm'] as const;
+
+/**
+ * The largest file the knowledge route takes: the ceiling of Meko's upload route (smaller plans get
+ * Meko's 413). Upload to Meko sends files held in a terminal's strip, which holds files up to
+ * MAX_PASTE_BYTES, so from the UI that's the limit.
+ */
+export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * POST /api/sessions/:id/knowledge: a file added to the knowledge base of the session's project
+ * datapack. `processing`: Meko is indexing it, and AgentK reports when it's done (a `knowledge`
+ * event). `uploaded`: Meko took it, but answered with no document key or a status AgentK doesn't
+ * know, so nothing more is reported. The others: Meko already had the same bytes.
+ */
+export interface KnowledgeUpload {
+  filename: string;
+  documentKey: string;
+  datapackName: string;
+  status: 'processing' | 'uploaded' | 'already_uploaded' | 'already_processed';
 }
 
 /** The most images a new session can start with. */
@@ -1337,6 +1492,14 @@ export interface ChangedFile {
   truncated: boolean;
 }
 
+/** A session's diff size vs. its base, as the footer shows it. */
+export interface DiffStat {
+  /** Changed files, untracked ones included (the Changes panel's count). */
+  files: number;
+  added: number;
+  removed: number;
+}
+
 /** Everything changed on a session's branch vs. its base: committed, uncommitted and untracked. */
 export interface SessionChanges {
   /** What the changes are compared against, e.g. `origin/main`. */
@@ -1347,6 +1510,15 @@ export interface SessionChanges {
   removed: number;
   /** Files whose patch was left out because the whole diff hit the size cap. */
   omittedPatches: number;
+  /** Commits on the branch since it left the base. */
+  ahead: number;
+  /**
+   * A branch of origin's or upstream's much closer to the branch than its base, when the branch is
+   * far past its base (it was moved onto another branch, such as a release branch for a backport):
+   * offered as the session's base. The name is without its remote, as `Session.baseBranch` is. Null
+   * when there's none, and for a session that can't change its base (a review, or one with a PR).
+   */
+  suggestedBase: { branch: string; ahead: number } | null;
 }
 
 export type CommentSide = 'old' | 'new';
@@ -1380,6 +1552,49 @@ export interface NewComment {
   endLine: number;
   excerpt: string;
   body: string;
+}
+
+/**
+ * Who wrote a held review: AgentK (held in People only), a person with a role on the repo (held
+ * in AgentK only), a bot (held except in All reviewers), or someone with no role on the repo
+ * (held in every mode).
+ */
+export type HeldReviewAuthor = 'agentk' | 'person' | 'bot' | 'outsider';
+
+/** An inline comment of a held review. */
+export interface HeldReviewComment {
+  path: string;
+  /** The line it's on in the current diff; null for an outdated comment. */
+  line: number | null;
+  body: string;
+  url: string;
+}
+
+/** A review on the session's PR that waits for the user before it goes to Claude. */
+export interface HeldReview {
+  /** GitHub's node id for the review. */
+  id: string;
+  author: string;
+  kind: HeldReviewAuthor;
+  /** CHANGES_REQUESTED or COMMENTED. */
+  state: string;
+  body: string;
+  url: string;
+  submittedAt: string;
+  comments: HeldReviewComment[];
+  /** Inline comments beyond `comments`, left out (read them on GitHub). */
+  moreComments: number;
+}
+
+export interface HeldReviewsRequest {
+  action: 'send' | 'dismiss';
+  /** HeldReview ids; ones already sent or dismissed are skipped. */
+  ids: string[];
+}
+
+export interface HeldReviewsResult {
+  /** How many were sent or dismissed. */
+  done: number;
 }
 
 export interface SendCommentsResult {
@@ -1581,6 +1796,11 @@ export const SESSION_NAME_MAX = 100;
 export interface UpdateSessionRequest {
   /** The new name: trimmed, at most SESSION_NAME_MAX characters, no control characters. */
   name?: string;
+  /**
+   * The new base branch: a local branch, or one of origin's or upstream's, named without its remote.
+   * Not for a review or a session with a PR, whose base is the PR's.
+   */
+  baseBranch?: string;
 }
 
 export interface AttachDatapackRequest {
@@ -1720,6 +1940,12 @@ export interface TotpEnrollResponse {
 export type ServerEvent =
   | { type: 'state'; state: AppState }
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
+  /**
+   * A file added to a session's knowledge base finished indexing (`indexed`), failed (`failed`), or
+   * AgentK stopped following it without an answer (`unknown`): still indexing after 15 minutes, or
+   * Meko refused to say (a refused key, no status route).
+   */
+  | { type: 'knowledge'; sessionId: string; filename: string; result: 'indexed' | 'failed' | 'unknown' }
   /** A project datapack was shared with you: sent once per datapack. */
   | { type: 'invite'; datapackId: string; title: string; body: string }
   /** The answer to a client's `ping`. */
@@ -1796,10 +2022,13 @@ export type TermServerMessage =
 // GET    /api/meko/datapacks/:id/people        → DatapackPeople   (the datapack must be in a project here)
 // POST   /api/meko/datapacks/:id/people ShareDatapackRequest → ShareDatapackResult   (invites by email, or a list of
 //        emails one after another; Meko emails them; fails with the first error when none went through; with `login`,
-//        the email is remembered for that GitHub login)
+//        the email is remembered for that GitHub login; every address invited is counted in the share contacts)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
 //        The four above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
+// GET    /api/share-contacts                   → ShareContact[]   (the people invited before, every project's, ranked:
+//        often and lately first)
+// DELETE /api/share-contacts/:email            → 204   (stops suggesting them; 404 when they weren't kept)
 // POST   /api/invites/check                    → InviteCheck   (lists datapacks and syncs shares with that list; the Open project dialog's one read of Meko)
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204
@@ -1818,6 +2047,14 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
+// GET    /api/projects/:id/meko-gaps?state=open|dismissed|taught|all&before=&beforeKey= → MekoGapPage   (What Meko doesn't
+//        know: the project's poor Meko searches grouped by query, latest asked first (ties by key), 100 at a time, after the
+//        question `before` (its lastAt) and `beforeKey` (its key) name; default open)
+// POST   /api/projects/:id/meko-gaps/mark  MekoGapMarkRequest → 204   (dismiss, or restore: open again, what was taught kept;
+//        404 for a question the project doesn't have)
+// POST   /api/projects/:id/meko-gaps/teach MekoTeachRequest → MekoGap   (saves the text as a memory in the project's
+//        dedicated datapack and marks the question taught; 400 for empty or too long text, 404 for an unknown
+//        question, 409 when Meko is off or there's no dedicated datapack, 502 with Meko's error when the save fails)
 // GET    /api/projects/:id/meko-logs           → MekoLogInfo[]   (the project's sessions with a Meko call log, newest first)
 // GET    /api/projects/:id/pr-reviewers        → PrReviewers[]   (the open PRs of the project's running sessions)
 // GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
@@ -1853,7 +2090,11 @@ export type TermServerMessage =
 //        or when the project is closed)
 // PATCH  /api/sessions/:id    UpdateSessionRequest → Session   (renames it in AgentK and its Meko conversation; the
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
-//        long name or one with control characters, 409 for an archived session)
+//        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
+//        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
+//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone)
+// GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
+//        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
 // POST   /api/sessions/:id/actions/:action     → Session   (action: SessionAction; approve-design takes an optional
 //        DesignAnswersRequest, sent ahead of the approval: 400 for a bad answer or answers too long for one prompt, 409
@@ -1887,8 +2128,9 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
-// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&failed=1 → MekoCallPage   (the session's Meko call log, newest
-//        first, read backwards from the byte offset `before`; limit 1 to 200, default 50; an empty page when it has none)
+// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&by=agentk|claude&failed=1 → MekoCallPage   (the session's Meko
+//        call log, AgentK's calls and Claude's, newest first, read backwards from the byte offset `before`; limit 1 to 200,
+//        default 50; an empty page when it has none)
 // GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
 // GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
 // DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)
@@ -1897,11 +2139,21 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
+// POST   /api/sessions/:id/files?name=  file bytes → PastedImage   (any file for Claude, as application/octet-stream,
+//        else 415; empty 400, over 20 MB 413, 409 for an archived session. Saved owner-only under
+//        ~/.agent-k-local/pastes/<session>/ with a name the server picks, ending in the safe part of `name`)
+// POST   /api/sessions/:id/knowledge?name=  file bytes → KnowledgeUpload   (the body is the file, as
+//        application/octet-stream, else 415; `name` is its base name, with an extension in KB_UPLOAD_EXTS, else 400;
+//        empty 400, over MAX_KB_UPLOAD_BYTES 413; 409 for an archived session, with Meko off, or a project with no
+//        dedicated datapack. Sent to Meko's knowledge-base upload route. Meko's 400, 403, 413 and 415 come back with
+//        their status; anything else Meko answers (a refused key included), or Meko unreachable, is a 502)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
+// GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
+// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in PR & Review, or dismiss)
 // GET    /api/settings                         → Settings
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
 //                                                           a `meko` change is checked against Meko before it's saved;

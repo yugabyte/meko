@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
@@ -90,7 +91,7 @@ describe('Meko call log', () => {
 
     const [latest] = page.calls;
     const detail = (await call('GET', `/api/sessions/${s.id}/meko-calls/${latest.offset}?id=${latest.id}`)).json() as MekoCallDetail;
-    expect(detail).toEqual({ ...latest, args: { text: 'Gotcha: y.' }, result: { error: 'agent_id required' } });
+    expect(detail).toEqual({ ...latest, args: { text: 'Gotcha: y.' }, result: { error: 'agent_id required' }, notice: null });
     expect((await call('GET', `/api/sessions/${s.id}/meko-calls/${latest.offset}?id=nope`)).statusCode).toBe(404);
     expect((await call('GET', '/api/sessions/nope/meko-calls')).statusCode).toBe(404);
     expect((await call('GET', '/api/projects/nope/meko-logs')).statusCode).toBe(404);
@@ -118,6 +119,62 @@ describe('Meko call log', () => {
     traced(s.id);
     expect(existsSync(file)).toBe(false);
     expect((await call('GET', `/api/projects/${p.id}/meko-logs`)).json()).toEqual([]);
+  });
+
+  it("keeps Claude's Meko calls as AgentK's mod reports them, with a reply too large for Claude read from where Claude Code saved it", async () => {
+    const { p, s } = await session();
+    const row = () => env.core.sessions.row(s.id);
+    const mod = (body: Record<string, unknown>) => env.core.sessions.onMod(row().hook_token, '/mod/meko', body, new AbortController().signal);
+    const end = (id: string, over: Record<string, unknown> = {}) => mod({
+      id, state: 'end', tool: 'mcp__meko__memory_search', args: { query: 'login' }, ms: 900, ok: true, text: '{"results":[]}', error: null, subagent: false, ...over,
+    });
+    const file = mekoLogPath(env.core.paths.designs, s.id);
+
+    // Off: the mod isn't asked for its calls, and an end that brings one anyway isn't kept.
+    expect(await mod({ id: 't1', state: 'start' })).toEqual({ status: 204 });
+    await end('t1');
+    expect(existsSync(file)).toBe(false);
+
+    await call('PATCH', `/api/projects/${p.id}`, { settings: { mekoLog: true } });
+    expect(await mod({ id: 't2', state: 'start' })).toEqual({ status: 200, body: { log: true } });
+    await end('t2');
+    traced(s.id);
+    // Claude Code saved a reply too large for Claude in the session's tool-results folder; one in
+    // another session's folder beside it isn't read.
+    const transcript = row().transcript_path!;
+    const results = join(dirname(transcript), row().claude_session_id!, 'tool-results');
+    mkdirSync(results, { recursive: true });
+    writeFileSync(join(results, 'mcp-meko-memory_get_all-1.txt'), '{"result":"all of it"}');
+    const notice = (path: string) => `Error: result (95,000 characters) exceeds maximum allowed tokens. Output has been saved to ${path}.\nFormat: JSON`;
+    await end('t3', { tool: 'mcp__plugin_x_meko__memory_get_all', subagent: true, text: notice(join(results, 'mcp-meko-memory_get_all-1.txt')) });
+    const other = join(dirname(transcript), 'another-claude-session', 'tool-results');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, 'mcp-meko-memory_search-1.txt'), 'secret');
+    await end('t4', { text: notice(join(other, 'mcp-meko-memory_search-1.txt')) });
+    await end('t5', { tool: 'mcp__meko__memory_add', ok: false, text: null, error: 'Interrupted' });
+    await end('t6', { tool: 'Bash' });
+
+    const page = (await call('GET', `/api/sessions/${s.id}/meko-calls`)).json() as MekoCallPage;
+    expect(page.calls.map((c) => [c.tool, c.by, c.subagent, c.ok, c.error])).toEqual([
+      ['memory_add', 'claude', false, false, 'Interrupted'],
+      ['memory_search', 'claude', false, true, null],
+      ['memory_get_all', 'claude', true, true, null],
+      ['context_search', 'agentk', false, true, null],
+      ['memory_search', 'claude', false, true, null],
+    ]);
+    const claude = (await call('GET', `/api/sessions/${s.id}/meko-calls?by=claude`)).json() as MekoCallPage;
+    expect(claude.calls).toHaveLength(4);
+    const agentk = (await call('GET', `/api/sessions/${s.id}/meko-calls?by=agentk`)).json() as MekoCallPage;
+    expect(agentk.calls.map((c) => c.tool)).toEqual(['context_search']);
+    expect((await call('GET', `/api/sessions/${s.id}/meko-calls?by=someone`)).statusCode).toBe(400);
+
+    const open = async (c: MekoCallPage['calls'][number]) =>
+      (await call('GET', `/api/sessions/${s.id}/meko-calls/${c.offset}?id=${c.id}`)).json() as MekoCallDetail;
+    expect(await open(page.calls[4])).toEqual({ ...page.calls[4], args: { query: 'login' }, result: { results: [] }, notice: null });
+    const saved = await open(page.calls[2]);
+    expect([saved.result, saved.notice]).toEqual([{ result: 'all of it' }, expect.stringMatching(/^Error: result/)]);
+    const elsewhere = await open(page.calls[1]);
+    expect([elsewhere.result, elsewhere.notice]).toEqual([expect.stringMatching(/^Error: result/), null]);
   });
 
   it("counts a session's own Meko calls as its: the conversation and recall at start", async () => {

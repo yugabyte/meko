@@ -1,5 +1,6 @@
-import type { MekoFirstTurn, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
-import { cx, firstTurnText, formatCost, formatTokens, learningText, type LearningTile } from '../util';
+import type { MekoFirstTurn, MekoGapCounts, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
+import { navigate, routePath } from '../router';
+import { cx, firstTurnText, formatCost, formatTokens, gapsLine, learningText, type LearningTile } from '../util';
 
 const ESTIMATE =
   'Estimate: each Meko search that found something, and each seed AgentK passed at session start, is credited with the exploring it most likely replaced ' +
@@ -7,9 +8,21 @@ const ESTIMATE =
 
 /**
  * Meko lookups and saves Claude made, what they're estimated to have saved, how many tokens Meko brought into
- * sessions' first turns, and what the learn step saved and cost: the project home and the Usage page.
+ * sessions' first turns, and what the learn step saved and cost: the project home and the Usage page. `gaps`
+ * (the project home only): the questions Meko couldn't answer, as a line under the stats linking to What
+ * Meko doesn't know.
  */
-export function MekoUsageSection({ meko, firstTurn, learning }: { meko: MekoUsage; firstTurn: MekoFirstTurn; learning: MekoLearning }) {
+export function MekoUsageSection({
+  meko,
+  firstTurn,
+  learning,
+  gaps,
+}: {
+  meko: MekoUsage;
+  firstTurn: MekoFirstTurn;
+  learning: MekoLearning;
+  gaps?: { projectId: string; counts: MekoGapCounts };
+}) {
   const learned = learningText(learning);
   const f = (n: number) => n.toLocaleString();
   return (
@@ -41,7 +54,31 @@ export function MekoUsageSection({ meko, firstTurn, learning }: { meko: MekoUsag
         <LearningStat tile={learned.learned} label="Learned" />
         <LearningStat tile={learned.cost} label="Learning cost" />
       </div>
+      {gaps && <GapsLine projectId={gaps.projectId} counts={gaps.counts} />}
     </div>
+  );
+}
+
+/** "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", linking to What Meko doesn't know; nothing when there are none. */
+function GapsLine({ projectId, counts }: { projectId: string; counts: MekoGapCounts }) {
+  const line = gapsLine(counts);
+  if (!line) return null;
+  const route = { view: 'meko-gaps', projectId } as const;
+  return (
+    <a
+      className="meko-gaps"
+      href={routePath(route)}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        navigate(route);
+      }}
+    >
+      <span className="meko-gaps-text">
+        <b>{line.count}</b> Meko couldn't answer <span className="muted">· {line.split}</span>
+      </span>
+      <span className="meko-gaps-link">See what Meko doesn't know ›</span>
+    </a>
   );
 }
 

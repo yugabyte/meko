@@ -13,6 +13,7 @@ import {
   SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport, callHomeKind,
   installFacts, type Probe,
 } from '../../src/server/callhome.js';
+import { markGap } from '../../src/server/mekogaps.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
 import { usageOverview } from '../../src/server/usage.js';
 import { tempDir } from '../helpers.js';
@@ -171,6 +172,18 @@ function seeded(): Db {
   meko('s2', 'tu5', 'memory_get_by_id', 'lookup', '2026-09-28T02:00:00Z', 'error', 10, 'claude-opus-5-5', 5000);
   // Before the window, on a model with no known price.
   meko('s3', 'tu6', 'knowledgebase_search', 'lookup', '2026-01-05T10:00:00Z', 'found', 1000, null, 5000);
+  // What Meko doesn't know: a search that found nothing relevant, and questions taught and dismissed. Only counts are sent.
+  run(db, `UPDATE meko_calls SET query = 'Secret task retention', query_key = 'secret task retention', quality = 'weak' WHERE tool_use_id = 'tu1'`);
+  markGap(db, 'p1', 'secret task retention', { kind: 'teach', text: 'Secret task notes', datapack: 'adlc/proj/zeta' }, at('2026-09-28T03:00:00Z'));
+  markGap(db, 'p1', 'zeta', { kind: 'dismiss' }, at('2026-09-27T15:00:00Z'));
+  // Restored: its dismissal no longer counts.
+  markGap(db, 'p1', 'restored', { kind: 'dismiss' }, at('2026-09-27T15:50:00Z'));
+  markGap(db, 'p1', 'restored', { kind: 'restore' }, at('2026-09-27T16:00:00Z'));
+  // Dismissed by a person, asked again, then taught and dismissed by a learn step: the person's
+  // dismissal still counts; the learn step's marks are counted with the learn step, not here.
+  markGap(db, 'p1', 'by agentk', { kind: 'dismiss' }, at('2026-09-27T14:00:00Z'));
+  markGap(db, 'p1', 'by agentk', { kind: 'teach', text: 'Notes', datapack: 'adlc/proj/zeta', session: 's1' }, at('2026-09-27T15:30:00Z'));
+  markGap(db, 'p1', 'by agentk', { kind: 'dismiss', session: 's1', memory: 'Notes' }, at('2026-09-28T03:30:00Z'));
   const preload = (s: string, iso: string, outcome: string, chars: number, ms: number) =>
     run(db, 'INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)', s, at(iso), outcome, chars ? 2 : 0, chars, ms);
   preload('s1', '2026-09-27T11:00:00Z', 'found', 800, 1200);
@@ -340,7 +353,7 @@ describe('the usage stats report', () => {
     // Credited: the found context_search, the found knowledgebase_search (no price) and s1's seed.
     expect(saved).toMatchObject({ searches: 2, seeds: 1, unpricedSearches: 1, unpricedSeeds: 0 });
     expect(r.totals.meko).toEqual({
-      calls: 6, lookups: 4, found: 2, empty: 1, errors: 1, saves: 1, foundTokens: 1250,
+      calls: 6, lookups: 4, found: 2, empty: 1, weak: 1, errors: 1, saves: 1, foundTokens: 1250,
       byTool: { context_search: 1, memory_search: 1, memory_add: 1, other: 1, memory_get_by_id: 1, knowledgebase_search: 1 },
       savings: {
         searches: 2, seeds: 1, tokens: Math.round(saved.tokens), usdCents: Math.round(saved.usd! * 100), unpricedSearches: 1, unpricedSeeds: 0,
@@ -349,22 +362,25 @@ describe('the usage stats report', () => {
       // Each call sent 40 characters; seeds send nothing.
       sentTokens: 60,
       sentByTool: { context_search: 10, memory_search: 10, memory_add: 10, other: 10, memory_get_by_id: 10, knowledgebase_search: 10 },
+      gaps: { dismissed: 2, taught: 1 },
     });
     expect(r.totals.meko.savings.usdCents).toBeGreaterThan(0);
     expect(r.totals.mekoFirstTurn).toEqual({ sessions: 1, startSearches: 1, searchedTokens: 1000, seedTokens: 200 });
 
     const day = (d: string) => r.days.find((x) => x.day === d)!;
     expect(day('2026-09-27').meko).toMatchObject({
-      calls: 4, lookups: 2, found: 1, empty: 1, errors: 0, saves: 1, foundTokens: 1000,
+      calls: 4, lookups: 2, found: 1, empty: 1, weak: 1, errors: 0, saves: 1, foundTokens: 1000,
       byTool: { context_search: 1, memory_search: 1, memory_add: 1, other: 1 },
       savings: { searches: 1, seeds: 1, unpricedSearches: 0 },
       starts: { found: 1, empty: 0, error: 0, late: 0, ms: 1200 },
+      gaps: { dismissed: 2, taught: 0 },
     });
     expect(day('2026-09-28').meko).toEqual({
-      calls: 1, lookups: 1, found: 0, empty: 0, errors: 1, saves: 0, foundTokens: 0, byTool: { memory_get_by_id: 1 },
+      calls: 1, lookups: 1, found: 0, empty: 0, weak: 0, errors: 1, saves: 0, foundTokens: 0, byTool: { memory_get_by_id: 1 },
       savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
       starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
       sentTokens: 10, sentByTool: { memory_get_by_id: 10 },
+      gaps: { dismissed: 0, taught: 1 },
     });
     expect(day('2026-09-26').meko).toMatchObject({ calls: 0, byTool: {}, starts: { late: 1, ms: 5000 } });
     // A day with no Meko activity leaves it out.
@@ -378,20 +394,22 @@ describe('the usage stats report', () => {
   it("counts learn steps, AgentK's own Meko calls, transcript captures and Ask AgentK's asks, on the day each began", () => {
     const db = seeded();
     const learn = (id: string, s: string, trigger: string, path: string, start: string, end: string, outcome: string, c: number[]) =>
-      run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, candidates, saves, updates, skips, lookups, errors, sent_chars)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, s, trigger, path, at(start), at(end), outcome, ...c);
+      run(db, `INSERT INTO meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, candidates, saves, updates, skips,
+               questions, taught, dismissed, lookups, errors, sent_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, s, trigger, path, at(start), at(end), outcome, ...c);
     const usage = (s: string, id: string, agent: string | null, model: string, iso: string, u: number[]) =>
       run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         s, id, agent, model, at(iso), ...u);
-    // Through the mod at Merge & Close: the fork and the duplicate check, recorded by learn.ts.
-    learn('L1', 's1', 'merge', 'mod', '2026-09-27T17:00:00Z', '2026-09-27T17:01:00Z', 'done', [4, 2, 1, 1, 4, 0, 400]);
+    // Through the mod at Merge & Close: the fork and the duplicate check, recorded by learn.ts. It was
+    // offered 3 questions Meko couldn't answer, taught 2 and dismissed 1.
+    learn('L1', 's1', 'merge', 'mod', '2026-09-27T17:00:00Z', '2026-09-27T17:01:00Z', 'done', [4, 2, 1, 1, 3, 2, 1, 4, 0, 400]);
     usage('s1', 'learn:L1:extract', 'agentk:learn', 'claude-opus-5-5', '2026-09-27T17:00:30Z', [12, 300, 150000, 0]);
     usage('s1', 'learn:L1:dedup', 'agentk:learn', 'claude-haiku-4-5-20251001', '2026-09-27T17:00:50Z', [800, 100, 0, 0]);
     // As a typed turn when asked for: the session's responses while it ran.
-    learn('L2', 's1', 'manual', 'turn', '2026-09-28T03:00:00Z', '2026-09-28T03:05:00Z', 'done', [1, 1, 0, 0, 1, 0, 80]);
+    learn('L2', 's1', 'manual', 'turn', '2026-09-28T03:00:00Z', '2026-09-28T03:05:00Z', 'done', [1, 1, 0, 0, 0, 0, 0, 1, 0, 80]);
     usage('s1', 'm6', null, 'claude-opus-5-5', '2026-09-28T03:02:00Z', [5, 50, 2000, 0]);
     // Skipped at a Discard: Claude was busy.
-    learn('L3', 's2', 'discard', 'none', '2026-09-28T04:00:00Z', '2026-09-28T04:00:00Z', 'skipped', [0, 0, 0, 0, 0, 0, 0]);
+    learn('L3', 's2', 'discard', 'none', '2026-09-28T04:00:00Z', '2026-09-28T04:00:00Z', 'skipped', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     const own = (iso: string, tool: string, chars: number, ok: number, ms: number) =>
       run(db, 'INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, 10, ?, ?, NULL)', at(iso), tool, chars, ok, ms);
     own('2026-09-27T17:00:40Z', 'context_search', 120, 1, 200);
@@ -407,7 +425,7 @@ describe('the usage stats report', () => {
     expect(r.totals.meko.learn).toEqual({
       runs: 3, byTrigger: { merge: 1, manual: 1, discard: 1 }, byPath: { mod: 1, turn: 1, none: 1 },
       byOutcome: { done: 2, failed: 0, interrupted: 0, skipped: 1 },
-      candidates: 5, saves: 3, updates: 1, skips: 1, empty: 0, lookups: 5, errors: 0, sentTokens: 120,
+      candidates: 5, saves: 3, updates: 1, skips: 1, empty: 0, taught: 2, dismissed: 1, lookups: 5, errors: 0, sentTokens: 120,
       tokens: { extract: tokens(12, 300, 150000), dedup: tokens(800, 100, 0), turn: tokens(5, 50, 2000) },
       // Opus 5.5 for the fork and the turn, Haiku 4.5 for the check: $0.0388.
       usdCents: 4,
@@ -443,7 +461,7 @@ describe('the usage stats report', () => {
     const r = report(openDb(':memory:'));
     expect(r.days.some((d) => d.meko)).toBe(false);
     expect(r.totals.meko).toEqual({
-      calls: 0, lookups: 0, found: 0, empty: 0, errors: 0, saves: 0, foundTokens: 0, byTool: {},
+      calls: 0, lookups: 0, found: 0, empty: 0, weak: 0, errors: 0, saves: 0, foundTokens: 0, byTool: {},
       savings: { searches: 0, seeds: 0, tokens: 0, usdCents: 0, unpricedSearches: 0, unpricedSeeds: 0 },
       starts: { found: 0, empty: 0, error: 0, late: 0, ms: 0 },
       sentTokens: 0, sentByTool: {},
@@ -493,7 +511,7 @@ describe('the usage stats report', () => {
       learn: {
         runs: big, byTrigger: { merge: big, manual: big, discard: big }, byPath: { mod: big, turn: big, none: big },
         byOutcome: { done: big, failed: big, interrupted: big, skipped: big },
-        candidates: big, saves: big, updates: big, skips: big, empty: big, lookups: big, errors: big, sentTokens: big,
+        candidates: big, saves: big, updates: big, skips: big, empty: big, taught: big, dismissed: big, lookups: big, errors: big, sentTokens: big,
         tokens: Object.fromEntries(['extract', 'dedup', 'turn'].map((p) => [p, { input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }])) as never,
         usdCents: big,
       },

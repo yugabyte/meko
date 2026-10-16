@@ -15,6 +15,7 @@ import {
   agentkCalls, captureRuns, learnRuns, mekoCalls, mekoStarts, summarizeAgentk, summarizeCapture, summarizeLearn, summarizeMeko, toolCounts, toolSent,
   type AgentkCall, type CaptureRun, type LearnRun, type MekoStart,
 } from './mekousage.js';
+import { gapMarks, type GapMark } from './mekogaps.js';
 import { usageOverview } from './usage.js';
 
 // Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each install
@@ -156,11 +157,12 @@ interface MekoExtras {
   learns: LearnRun[];
   agentk: AgentkCall[];
   capture: CaptureRun[];
+  marks: GapMark[];
 }
 
 /**
  * Meko use as the report has it: counts only, calls by tool, the dollars in whole cents, nothing
- * below 0. Learn steps, AgentK's own calls and captures only when there were some.
+ * below 0. Learn steps, AgentK's own calls, captures and questions marked only when there were some.
  */
 function callHomeMeko(u: MekoUsage, byTool: CallHomeMeko['byTool'], starts: MekoStart[], x: MekoExtras): CallHomeMeko {
   const s: CallHomeMeko['starts'] = { found: 0, empty: 0, error: 0, late: 0, ms: 0 };
@@ -169,7 +171,7 @@ function callHomeMeko(u: MekoUsage, byTool: CallHomeMeko['byTool'], starts: Meko
     s.ms += n(r.ms);
   }
   return {
-    calls: u.calls, lookups: u.lookups, found: u.found, empty: u.empty, errors: u.errors, saves: u.saves, foundTokens: u.foundTokens,
+    calls: u.calls, lookups: u.lookups, found: u.found, empty: u.empty, weak: u.weak, errors: u.errors, saves: u.saves, foundTokens: u.foundTokens,
     byTool,
     savings: {
       searches: u.savings.searches,
@@ -186,6 +188,7 @@ function callHomeMeko(u: MekoUsage, byTool: CallHomeMeko['byTool'], starts: Meko
     ...(x.learns.length ? { learn: summarizeLearn(x.learns) } : {}),
     ...(x.agentk.length ? { agentk: summarizeAgentk(x.agentk) } : {}),
     ...(x.capture.length ? { capture: summarizeCapture(x.capture) } : {}),
+    ...(x.marks.length ? { gaps: { dismissed: x.marks.filter((m) => m.state === 'dismissed').length, taught: x.marks.filter((m) => m.state === 'taught').length } } : {}),
   };
 }
 
@@ -325,19 +328,21 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
   for (const [day, lists] of dayFiles) days.get(day)!.fileTypes = sumFileTypes(lists);
 
   // Meko: calls and seeds on the day they were made, searches at start on the day they ran, learn
-  // steps on the day they began, AgentK's own calls and captures on the day they ran. A day with
-  // none of them leaves `meko` out.
+  // steps on the day they began, AgentK's own calls and captures on the day they ran, and the
+  // questions on What Meko doesn't know on the day they were dismissed or taught. A day with none
+  // of them leaves `meko` out.
   const calls = mekoCalls(db);
   const starts = mekoStarts(db);
   const learns = learnRuns(db);
   const own = agentkCalls(db);
   const captures = captureRuns(db);
-  const dayMeko = new Map<string, { calls: typeof calls; starts: MekoStart[]; learns: LearnRun[]; agentk: AgentkCall[]; capture: CaptureRun[] }>();
+  const marks = gapMarks(db);
+  const dayMeko = new Map<string, { calls: typeof calls; starts: MekoStart[]; learns: LearnRun[]; agentk: AgentkCall[]; capture: CaptureRun[]; marks: GapMark[] }>();
   const mekoDay = (at: number) => {
     const d = dayOf(at);
     if (!d) return undefined;
     let m = dayMeko.get(d.day);
-    if (!m) dayMeko.set(d.day, (m = { calls: [], starts: [], learns: [], agentk: [], capture: [] }));
+    if (!m) dayMeko.set(d.day, (m = { calls: [], starts: [], learns: [], agentk: [], capture: [], marks: [] }));
     return m;
   };
   for (const c of calls) mekoDay(c.at)?.calls.push(c);
@@ -345,6 +350,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
   for (const l of learns) mekoDay(l.at)?.learns.push(l);
   for (const a of own) mekoDay(a.at)?.agentk.push(a);
   for (const c of captures) mekoDay(c.at)?.capture.push(c);
+  for (const g of marks) mekoDay(g.at)?.marks.push(g);
   for (const [day, m] of dayMeko) {
     days.get(day)!.meko = callHomeMeko(summarizeMeko(m.calls), toolCounts(m.calls), m.starts, { sentByTool: toolSent(m.calls), ...m });
   }
@@ -384,7 +390,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
       fileTypes: sumFileTypes(allFiles),
       tokens: { ...overview.total },
       worktrees: { idle: get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM worktrees WHERE session_id IS NULL')?.n ?? 0 },
-      meko: callHomeMeko(overview.meko, toolCounts(calls), starts, { sentByTool: toolSent(calls), learns, agentk: own, capture: captures }),
+      meko: callHomeMeko(overview.meko, toolCounts(calls), starts, { sentByTool: toolSent(calls), learns, agentk: own, capture: captures, marks }),
       mekoFirstTurn: overview.mekoFirstTurn,
     },
     days: [...days.values()],

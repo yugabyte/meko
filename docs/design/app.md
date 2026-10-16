@@ -6,7 +6,11 @@ The left rail holds projects, each with its repo's folder name in small type und
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
 screen, use **Move up** / **Move down** in the project home's settings. The top tabs hold that project's sessions. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
-diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. The foot of the rail
+diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking
+the branch copies the full path of the session's worktree (its tooltip shows the path, and the label
+reads `path copied` for a moment), once a start has made the worktree. A copy the browser blocks shows
+the path in a toast, which stays while the pointer is on it and doesn't close on a click that selects
+its text. The foot of the rail
 shows the user and the server (`hari@dev-box`) with the version, so windows on different machines
 are easy to tell apart. The server name is `[server] name` (set in Settings), else the machine's
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
@@ -86,7 +90,8 @@ first launch) stays. An archived session can't be renamed.
 
 ## Changes
 
-Clicking the `+N −N` numbers in the footer opens a side panel with every file changed on the
+Clicking the `N files · +N −N` numbers in the footer (`+N −N` on a phone, where the footer is
+tight) opens a side panel with every file changed on the
 branch since it left the base: committed, uncommitted and untracked (ignored files are left out).
 The base is the branch's merge base with `origin/<base>` or, in a fork, `upstream/<base>`, whichever
 is closer to the branch (a fork's own `<base>` can lag the upstream one the branch was rebased onto);
@@ -103,6 +108,32 @@ a sandboxing content policy so the bytes can never run as a page. The footer cou
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file.
+
+### Changing the base
+
+The base is the session's base branch, set when it started (or by its PR). Claude can move the
+branch onto another one, such as a release branch for a backport, and then everything since the
+old base shows as changed. The base in the panel's header is a menu of the branches the session
+can be compared with (`GET /api/sessions/:id/base-branches`: local, origin's and upstream's, by
+name, newest commit first). Picking one (`PATCH /api/sessions/:id` with `baseBranch`) makes it the
+session's base everywhere: the footer and the panel, the PR's target and the prompts that name the
+base, the unpushed count, and Claude's system prompt at its next launch. The session's activity
+notes the change (*Base changed from master to 2026.1*). The branch must be here, on origin or on
+upstream, with history in common with the session's, and not the session's own branch. A review's
+base, and a session's with a PR, is its PR's and can't be changed; there the base is plain text.
+When AgentK finds the session's PR, the PR's base becomes the session's if they differ (the base
+may have changed after the PR prompt went out). The menu says under its filter that the pick
+becomes the session's base, and the PR goes there; long branch names are cut short.
+
+AgentK also suggests a base when the branch is far past its own (`suggestBase()` in `changes.ts`,
+at least 50 commits, `SUGGEST_MIN_AHEAD`): of origin's and upstream's branches whose tips are in
+the branch's history (`git for-each-ref --merged HEAD`, the 50 newest), less the branch's own
+copies and the base itself, the one the fewest commits behind it, when that's fewer. A bar under the
+header says so (*This branch is 1,246 commits ahead of master, but only 2 commits ahead of 2026.1.
+Comparing with 2026.1 makes it this session's base, and the PR goes there.*) with **Compare with
+2026.1**; nothing changes until it's clicked. The suggestion is worked out only
+when the panel loads, never in the footer's refresh. Below the floor it's ordinary work on a branch,
+and a branch stacked on another uses the menu.
 
 ## Review comments
 
@@ -174,13 +205,16 @@ button marked `data-submit` (Answer, in AgentK is asking). A field that takes En
 in the Another PR box, `Ctrl+Enter` is Find, as Enter is, so a session can't start on the PR picked
 before.
 
-To give Claude an image, paste it into the terminal (`⌘V`, or `Ctrl+V` / `Ctrl+Shift+V` on Linux and
-Windows) or drop image files on it. Claude Code's own `Ctrl+V` reads the clipboard of the host it
-runs on, which is the browser's only when both are on one computer, so the page uploads each image
-(`POST /api/sessions/:id/images`, the image as the body) and pastes the path the server saved it at;
-Claude Code reads a pasted path to an image as that image and shows `[Image #1]`. The paths wait
-until you send: each image shows in a strip of thumbnails under the terminal (above the compose box
-on touch screens) while it uploads and after, with ✕ to take it out, and the next Enter typed into
+To give Claude an image or any other file, paste it into the terminal (`⌘V`, or `Ctrl+V` /
+`Ctrl+Shift+V` on Linux and Windows) or drop it on it. Claude Code's own `Ctrl+V` reads the
+clipboard of the host it runs on, which is the browser's only when both are on one computer, so
+the page uploads each one and pastes the path the server saved it at: a PNG, JPEG, GIF or WebP
+image to `POST /api/sessions/:id/images` (the image as the body), which Claude Code reads as that
+image and shows as `[Image #1]`; any other file to `POST /api/sessions/:id/files?name=`, which
+Claude opens by its path (Claude's settings allow `Read` on the pastes folder). The paths wait
+until you send: each one shows in a strip under the terminal (above the compose box on touch
+screens), an image as a thumbnail and another file as a tile with its extension, while it uploads
+and after, with ✕ to take it out, and the next Enter typed into
 the terminal (or the key bar's ⏎, or the compose box's Send) pastes the held paths one at a time,
 200 ms apart, after anything you typed, then sends Enter, so `fix this [Image #1]` goes as one
 message (`heldImages.ts`, `flush()` in `terminals.ts`). Keys typed while that runs, sticky-Ctrl
@@ -193,17 +227,21 @@ box doesn't get its text back), and a notice says to check Claude's prompt. An i
 the strip stays on the host until the session's pastes are removed. Held images live in the page,
 on each session's terminal, so an update's reload waits while any session holds some (see Releases
 and auto-update). The server takes
-PNG, JPEG, GIF and WebP, checked by their bytes, up to 20 MB each, and saves them owner-only under
-`~/.agent-k-local/pastes/<session>/`; they're removed when the session is archived or its project
-closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
+PNG, JPEG, GIF and WebP images, checked by their bytes, and files of any type, up to 20 MB each,
+and saves them owner-only under `~/.agent-k-local/pastes/<session>/` with names it picks (a file's
+keeps the safe part of its own name, so Claude sees what it was); they're removed when the session
+is archived or its project closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
 them) pastes the text, unless the text is only the copied files' names. The page can't tell whether
 Claude Code shares its computer (a tunnel to a remote host is localhost too), so `Ctrl+V` works the
 same either way. On Linux and Windows it's the browser's paste, so it pastes text as well, where it
 used to send `Ctrl+V` to Claude. On a Mac, `Ctrl+V` reads the clipboard through the async Clipboard
-API (Chrome asks once, Safari before each read): an image is held the same way, and otherwise
-Claude gets `Ctrl+V` as before. On a phone, an image pasted into the compose box is held too (text
-still pastes into the box), and the image key at the end of the key bar's ▾ row picks images to
-hold.
+API (Chrome asks once, Safari before each read): an image is held the same way (the Clipboard API
+gives no copied files: `⌘V` pastes those), and otherwise Claude gets `Ctrl+V` as before. On a phone,
+an image or file pasted into the compose box is held too (text still pastes into the box), and the
+attach key at the end of the key bar's ▾ row picks files of any type to hold; on a desktop,
+**Attach files to …** in the command palette does. While the strip holds a PDF, Markdown, text or
+another type Meko's knowledge base takes, it offers **Upload to Meko**: see
+[Adding files to the knowledge base](datapacks.md#adding-files-to-the-knowledge-base).
 
 Images can go with a session's first prompt too: paste them into the New session dialog's First
 prompt field (a review's Notes), drop them on it, or pick them with the image button under it. There's no
@@ -269,11 +307,11 @@ and at the far right a ▾ key that opens a second row of more keys: a sticky Ct
 Home, End, Page Up and Page Down; the row stays open until ▾ is tapped again, and ▾ stays lit while
 Ctrl is armed with the row closed; with Ctrl lit, the next letter typed in the compose box or in typing mode goes to
 Claude as Ctrl plus that letter, such as Ctrl+O or Ctrl+R, and Ctrl then `[` sends Escape; last in
-the row, an image key picks images for Claude and closes the row once they're picked), and a compose
+the row, an attach key picks images and files for Claude and closes the row once they're picked), and a compose
 box (it grows with its text to about a fifth of the visible screen, then scrolls) whose text goes
-in as one bracketed paste (with any Escape characters removed), then any held images (see
-Keyboard; images pasted into the box are held above it), then Enter; Send works with images alone,
-and if the terminal isn't connected, the text and images stay. Swiping scrolls through mouse-wheel reports to Claude Code while it has the mouse
+in as one bracketed paste (with any Escape characters removed), then any held images and files (see
+Keyboard; those pasted into the box are held above it), then Enter; Send works with them alone,
+and if the terminal isn't connected, the text and the held files stay. Swiping scrolls through mouse-wheel reports to Claude Code while it has the mouse
 (it runs full screen), and through the terminal's own scrollback otherwise. The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses

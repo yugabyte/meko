@@ -58,6 +58,19 @@ export function diagramSize(svg: string): { width: number | null; height: number
   return ok(w) && ok(h) ? { width: ok(w), height: ok(h) } : { width: null, height: null };
 }
 
+/** The sizes a diagram's zoom buttons step through, as a share of its natural size. */
+export const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
+
+/**
+ * The next size in (`1`) or out (`-1`) from `scale`, which may fall between steps (a diagram fitted
+ * to the column); null when there's none further that way.
+ */
+export function zoomStep(scale: number, dir: 1 | -1): number | null {
+  // A little slack, so a fitted scale a hair off a step doesn't step to that same size.
+  const next = dir > 0 ? ZOOM_STEPS.find((s) => s > scale * 1.01) : ZOOM_STEPS.findLast((s) => s < scale * 0.99);
+  return next ?? null;
+}
+
 /** The SVG as an image URL. Never opened as a page: an SVG document could run its scripts. */
 export function svgDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;

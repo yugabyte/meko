@@ -498,6 +498,100 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX agentk_asks_at ON agentk_asks(at);
   `,
+  // 33: the people the Share dialog has invited (contacts.ts), suggested in it next time: the
+  // address as last typed, keyed in lower case, the name from Meko's member lists, how many invites
+  // went through and when the latest did. Starts with the emails remembered for PR reviewers. The
+  // key is SQLite's lower() (ASCII letters only): emailKey() in contacts.ts builds it the same way.
+  `
+  CREATE TABLE share_contacts (
+    email_key TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    name TEXT,
+    shares INTEGER NOT NULL,
+    last_at INTEGER NOT NULL
+  );
+  INSERT INTO share_contacts(email_key, email, shares, last_at)
+    SELECT lower(value), value, 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    FROM kv WHERE key LIKE 'reviewer-email:%'
+    ON CONFLICT(email_key) DO NOTHING;
+  `,
+  // 34: What Meko doesn't know (mekousage.ts, mekogaps.ts). For Claude's searches: what was asked
+  // (query, cut to 1,000 characters, and query_key, the same lower-cased with its whitespace
+  // collapsed, which groups asks), the best memory scores of the reply (score,
+  // raw_similarity_score), and quality: 'empty' (found nothing) or 'weak' (nothing relevant), NULL
+  // otherwise. For AgentK's search at start: its query, and the quality and best memory score of
+  // what Meko returned before picking. Calls and searches from before this keep NULL: transcripts
+  // aren't read again. meko_gap_marks: what the user did with a question (by query_key), each
+  // action's latest time: dismissed_at (cleared by a restore), taught_at with what was saved and
+  // where, and opened_at (a restore); the latest one at or after the question's last ask decides
+  // its state.
+  `
+  ALTER TABLE meko_calls ADD COLUMN query TEXT;
+  ALTER TABLE meko_calls ADD COLUMN query_key TEXT;
+  ALTER TABLE meko_calls ADD COLUMN top_score REAL;
+  ALTER TABLE meko_calls ADD COLUMN top_raw REAL;
+  ALTER TABLE meko_calls ADD COLUMN quality TEXT CHECK (quality IN ('empty', 'weak'));
+  CREATE INDEX meko_calls_quality ON meko_calls(quality) WHERE quality IS NOT NULL;
+  ALTER TABLE meko_preloads ADD COLUMN query TEXT;
+  ALTER TABLE meko_preloads ADD COLUMN query_key TEXT;
+  ALTER TABLE meko_preloads ADD COLUMN quality TEXT CHECK (quality IN ('empty', 'weak'));
+  ALTER TABLE meko_preloads ADD COLUMN top_score REAL;
+  CREATE TABLE meko_gap_marks (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    query_key TEXT NOT NULL,
+    dismissed_at INTEGER,
+    taught_at INTEGER,
+    taught_text TEXT,
+    taught_datapack TEXT,
+    opened_at INTEGER,
+    PRIMARY KEY (project_id, query_key)
+  );
+  `,
+  // 35: the learn step addresses What Meko doesn't know (learn.ts). meko_gap_marks: the session
+  // whose learn step taught or dismissed a question (NULL: a person did), and for a dismissal by
+  // one, the saved memory that already said the answer; and a person's own latest dismissal and
+  // teach (person_dismissed_at, person_taught_at), which a learn step's marks don't overwrite, for
+  // the usage report (every mark so far was a person's). meko_learns: the questions a step offered
+  // the fork, and how many it marked taught or dismissed.
+  `
+  ALTER TABLE meko_gap_marks ADD COLUMN taught_session TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN dismissed_session TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN dismissed_memory TEXT;
+  ALTER TABLE meko_gap_marks ADD COLUMN person_dismissed_at INTEGER;
+  ALTER TABLE meko_gap_marks ADD COLUMN person_taught_at INTEGER;
+  UPDATE meko_gap_marks SET person_dismissed_at = dismissed_at, person_taught_at = taught_at;
+  ALTER TABLE meko_learns ADD COLUMN questions INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE meko_learns ADD COLUMN taught INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE meko_learns ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;
+  `,
+  // 36: reviews held for the user to send to AgentK or dismiss (heldreviews.ts), one row per
+  // review on the session's PR: what the sheet shows (body, inline comments cut to 50) and the
+  // REST id the prompt names. Projects without a reviewer mode keep AgentK + People, the default
+  // they had: new projects default to AgentK only. `held-reviews-since`: when holding began, since
+  // People only never marked AgentK's reviews seen, so its earlier rounds aren't held all at once.
+  `
+  CREATE TABLE held_reviews (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    review_id TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    db_id INTEGER,
+    author TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    body TEXT NOT NULL,
+    url TEXT NOT NULL,
+    comments_json TEXT NOT NULL DEFAULT '[]',
+    more_comments INTEGER NOT NULL DEFAULT 0,
+    submitted_at TEXT NOT NULL,
+    held_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'held',
+    decided_at INTEGER,
+    PRIMARY KEY (session_id, review_id)
+  );
+  UPDATE projects SET settings_json = json_set(CASE WHEN json_valid(settings_json) THEN settings_json ELSE '{}' END, '$.reviewer', 'agentk-people')
+    WHERE NOT json_valid(settings_json) OR json_type(settings_json, '$.reviewer') IS NULL;
+  INSERT OR REPLACE INTO kv(key, value) VALUES ('held-reviews-since', CAST(CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS TEXT));
+  `,
 ];
 
 export function openDb(path: string): Db {

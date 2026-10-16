@@ -2,14 +2,14 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
-import { changedImage, changes, diffStat } from './changes.js';
+import { changedImage, changes, diffBase, diffStat, suggestBase } from './changes.js';
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
-  fetchPrHead, git, gitRaw, isIdleWorktree, prLocalBranch, prRef, remoteFor, remoteOf, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
+  fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type BranchSource, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
@@ -18,14 +18,15 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
-import { mekoLogPath, removeMekoLog } from './mekolog.js';
+import { claudeReply, mekoLogPath, removeMekoLog } from './mekolog.js';
+import { mekoTool } from './mekousage.js';
 import {
   DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
-import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
+import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
 import {
@@ -207,7 +208,7 @@ const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<vo
 
 export class SessionManager {
   private busy = new Set<string>();
-  private diffs = new Map<string, { added: number; removed: number } | null>();
+  private diffs = new Map<string, DiffStat | null>();
   private mergeInfo = new Map<string, MergeInfo>();
   /** Until when launches don't wait for their Meko conversation (see launchConversation). */
   private conversationSlowUntil = 0;
@@ -341,6 +342,13 @@ export class SessionManager {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     return { path: claudePath(savePastedImage(this.core.paths.pastes, row.id, data)) };
+  }
+
+  /** Saves a file of any type pasted into or dropped on the session's terminal, for the browser to paste its path. */
+  pasteFile(id: string, data: unknown, name: unknown): PastedImage {
+    const row = this.row(id);
+    if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    return { path: claudePath(savePastedFile(this.core.paths.pastes, row.id, data, name)) };
   }
 
   /** Saves an image added in the New session dialog, until a session is created with it. */
@@ -901,6 +909,7 @@ export class SessionManager {
       reviewer: settings?.reviewerLogin ?? 'the reviewer',
       // A review-people prompt queued before it named its reviewers.
       reviewers: 'its reviewers',
+      reviews: '(none named: ask the user which reviews to address)',
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
       questionsFile: this.questionsFile(row),
@@ -1203,7 +1212,7 @@ export class SessionManager {
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
-   * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
+   * (`/mod/meko`), for the session's dot and, with their content, its Meko call log; and a turn you interrupted (`/mod/turn`), which fires
    * no `Stop` hook.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
@@ -1256,9 +1265,16 @@ export class SessionManager {
         return this.core.lifecycle.questionsFromTool(row, body.questions);
       case '/mod/learn':
         return this.core.learn.fromMod(row, body);
-      case '/mod/meko':
+      case '/mod/meko': {
         this.mod.mekoCall(row.id, body.id, body.state);
+        const scope = { id: row.id, createdAt: row.created_at };
+        // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
+        if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };
+        // Answered once it's written (the mod doesn't wait for the answer). The log keeps the order
+        // the ends came in, a saved reply still being read included.
+        if (body.state === 'end' && body.tool !== undefined) await this.logClaudeMeko(row, body);
         return { status: 204 };
+      }
       case '/mod/turn':
         // Only an interrupted turn is reported, and only one with a turn running counts: one report
         // per turn, but a turn the server already ended (a restart) is left alone.
@@ -1798,6 +1814,47 @@ export class SessionManager {
     return this.get(id);
   }
 
+  /** `PATCH /api/sessions/:id`: a new base (setBase), then a new name (rename); a bad name changes neither. */
+  async edit(id: string, req: UpdateSessionRequest): Promise<Session> {
+    if (req.name !== undefined) sessionName(req.name);
+    if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
+    return this.rename(id, { name: req.name });
+  }
+
+  /**
+   * Moves a session onto another base: the branch it's compared with from now on, by the footer and
+   * the Changes panel, and the one the PR, the prompts and the unpushed count use. For a branch that
+   * Claude put on another branch, such as a release branch for a backport. A review's base, and a
+   * session's with a PR, is its PR's.
+   */
+  async setBase(id: string, wanted: string): Promise<void> {
+    const r = this.row(id);
+    if (typeof wanted !== 'string') throw new HttpError(400, 'The base branch must be text.');
+    const base = wanted.trim();
+    if (!base) throw new HttpError(400, 'Pick a base branch.');
+    if (r.desired === 'archived') throw new HttpError(409, 'This session is archived, so its base can\'t be changed.');
+    if (r.kind === 'review-pr') throw new HttpError(409, 'A review compares with its PR\'s base, so its base can\'t be changed.');
+    if (r.pr_number) throw new HttpError(409, `This session's base is the base of PR #${r.pr_number}, ${r.base_branch}.`);
+    if (base === r.base_branch) return;
+    if (base === r.branch) throw new HttpError(400, `${base} is this session's own branch, so it can't be its base.`);
+    if (!existsSync(r.worktree_path) || !this.ownsWorktree(r)) throw new HttpError(409, 'This session\'s worktree is gone, so its base can\'t be changed.');
+    if (!(await listBaseBranches(r.worktree_path)).includes(base)) {
+      throw new HttpError(400, `There's no branch named ${base} here, on origin or on upstream. Fetch it and try again.`);
+    }
+    if (!(await diffBase(r.worktree_path, base))) throw new HttpError(400, `${r.branch} has no history in common with ${base}.`);
+    const from = r.base_branch;
+    this.update(id, { base_branch: base });
+    this.event(id, 'base', `Base changed from ${from} to ${base}`);
+    await this.refreshDiff(id).catch(() => undefined);
+  }
+
+  /** The branches a session's base can be (`GET /api/sessions/:id/base-branches`), its own left out. */
+  async baseBranches(id: string): Promise<string[]> {
+    const r = this.row(id);
+    if (!existsSync(r.worktree_path) || !this.ownsWorktree(r)) throw new HttpError(409, 'This session\'s worktree is gone, so it has no branches to compare with.');
+    return (await listBaseBranches(r.worktree_path)).filter((b) => b !== r.branch);
+  }
+
   /**
    * Renames a session. Only its name changes: the branch, worktree, pane and Meko agent id
    * were named once, at the start. The running Claude sees the new name in its system prompt at its
@@ -1883,6 +1940,8 @@ export class SessionManager {
     if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     const c = await changes(row.worktree_path, row.base_branch);
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
+    // Only a session that can change its base (setBase) is offered one.
+    if (row.kind !== 'review-pr' && !row.pr_number) c.suggestedBase = await suggestBase(row.worktree_path, row.base_branch, row.branch, c.ahead);
     return c;
   }
 
@@ -1902,6 +1961,25 @@ export class SessionManager {
 
   // ---- the Meko call log (mekolog.ts) ----
 
+  /**
+   * One of Claude's Meko calls, as AgentK's mod reports its end (`/mod/meko`), into the session's
+   * Meko call log: a reply too large for Claude's context is read from the file Claude Code saved it
+   * to, the call keeping its place in the log meanwhile. Never rejects.
+   */
+  private logClaudeMeko(row: SessionRow, body: Record<string, unknown>): Promise<void> {
+    const tool = typeof body.tool === 'string' ? mekoTool(body.tool) : null;
+    const scope = { id: row.id, createdAt: row.created_at };
+    if (!tool || !this.core.mekoLog.wants(scope)) return Promise.resolve();
+    const end = Date.now();
+    const ms = typeof body.ms === 'number' && Number.isFinite(body.ms) && body.ms >= 0 ? Math.round(body.ms) : 0;
+    const str = (v: unknown) => (typeof v === 'string' ? v : null);
+    const call = claudeReply(str(body.text), row.transcript_path).then((reply) => ({
+      tool, at: end - ms, ms, ok: body.ok === true, error: str(body.error), args: body.args ?? null,
+      text: reply.text, notice: reply.notice, subagent: body.subagent === true,
+    }));
+    return this.core.mekoLog.recordClaude(scope, call);
+  }
+
   /** The project's sessions that have a Meko call log, the latest written to first. */
   mekoLogs(projectId: string): MekoLogInfo[] {
     if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
@@ -1913,7 +1991,7 @@ export class SessionManager {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; failed?: boolean }): Promise<MekoCallPage> {
+  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; by?: MekoCallBy; failed?: boolean }): Promise<MekoCallPage> {
     return this.core.mekoLog.page(this.row(id).id, q);
   }
 

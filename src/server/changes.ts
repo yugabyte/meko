@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { lstat, readFile, readlink } from 'node:fs/promises';
 import { isAbsolute, join, normalize, sep } from 'node:path';
-import { previewImageType, type ChangedFile, type ChangeKind, type ChangeSide, type SessionChanges } from '../shared/types.js';
+import { previewImageType, type ChangedFile, type ChangeKind, type ChangeSide, type DiffStat, type SessionChanges } from '../shared/types.js';
 import { gitBuffer, gitRaw, tryGit } from './git.js';
 
 /** A single file's patch is cut here. */
@@ -53,29 +53,59 @@ export async function diffBase(worktree: string, base: string): Promise<{ ref: s
   return sha ? { ref: base, sha } : null;
 }
 
-/** Lines added/removed vs. the base, uncommitted and untracked files included. */
-export async function diffStat(worktree: string, base: string): Promise<{ added: number; removed: number } | null> {
+/** Files changed and lines added/removed vs. the base, uncommitted and untracked files included. */
+export async function diffStat(worktree: string, base: string): Promise<DiffStat | null> {
   const mb = await diffBase(worktree, base);
   if (!mb) return null;
   const out = await gitDiff(worktree, '--numstat', '-z', mb.sha).catch(() => null);
   if (out === null) return null;
+  const counts = parseNumstat(out);
   let added = 0, removed = 0;
-  for (const n of parseNumstat(out).values()) {
+  for (const n of counts.values()) {
     added += n.added;
     removed += n.removed;
   }
-  for (const u of (await untracked(worktree, false)).files) added += u.added;
-  return { added, removed };
+  const extra = (await untracked(worktree, false)).files;
+  for (const u of extra) added += u.added;
+  return { files: counts.size + extra.length, added, removed };
+}
+
+/** A branch this many commits past its base may have moved onto another branch (see suggestBase). */
+export const SUGGEST_MIN_AHEAD = 50;
+/** At most this many remote branches are measured for a suggestion, the newest first. */
+const SUGGEST_MAX_REFS = 50;
+
+/**
+ * A base closer to the branch than `base`, for a branch `ahead` commits past it: of origin's and
+ * upstream's branches whose tips are in HEAD's history, the one fewest commits behind HEAD, when
+ * that's fewer than `ahead`. Null below SUGGEST_MIN_AHEAD, which is ordinary work on a branch. The
+ * branch's own copies on a remote, and `base` itself, don't count. Named without the remote.
+ */
+export async function suggestBase(worktree: string, base: string, branch: string, ahead: number): Promise<{ branch: string; ahead: number } | null> {
+  if (ahead < SUGGEST_MIN_AHEAD) return null;
+  const out = await tryGit(worktree, 'for-each-ref', '--merged', 'HEAD', '--sort=-committerdate', '--format=%(refname)', 'refs/remotes/origin', 'refs/remotes/upstream');
+  const refs = (out ?? '').split('\n').flatMap((ref) => {
+    const name = /^refs\/remotes\/(?:origin|upstream)\/(.+)$/.exec(ref)?.[1];
+    return name && name !== 'HEAD' && name !== base && name !== branch ? [{ ref, name }] : [];
+  }).slice(0, SUGGEST_MAX_REFS);
+  let best: { branch: string; ahead: number } | null = null;
+  for (const r of refs) {
+    const count = await tryGit(worktree, 'rev-list', '--count', `${r.ref}..HEAD`);
+    const n = count === null ? NaN : Number(count);
+    if (n < (best?.ahead ?? ahead)) best = { branch: r.name, ahead: n };
+  }
+  return best;
 }
 
 /** Every file changed in the worktree vs. its base, with a patch per file. Null when there's no merge base. */
 export async function changes(worktree: string, base: string): Promise<SessionChanges | null> {
   const mb = await diffBase(worktree, base);
   if (!mb) return null;
-  const [status, numstat, porcelain] = await Promise.all([
+  const [status, numstat, porcelain, ahead] = await Promise.all([
     gitDiff(worktree, '--name-status', '-z', mb.sha),
     gitDiff(worktree, '--numstat', '-z', mb.sha),
     gitRaw(worktree, 'status', '--porcelain', '-z', '--untracked-files=no'),
+    tryGit(worktree, 'rev-list', '--count', `${mb.sha}..HEAD`),
   ]);
   const entries = parseNameStatus(status);
   const counts = parseNumstat(numstat);
@@ -109,6 +139,8 @@ export async function changes(worktree: string, base: string): Promise<SessionCh
     added: files.reduce((t, f) => t + f.added, 0),
     removed: files.reduce((t, f) => t + f.removed, 0),
     omittedPatches,
+    ahead: Number(ahead) || 0,
+    suggestedBase: null,
   };
 }
 

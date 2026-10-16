@@ -1809,7 +1809,7 @@ a.icon-btn {
 }
 
 /* Mermaid diagrams in markdown designs (MarkdownView.tsx): drawn as images, fit to the column;
-   a tap opens one full size. */
+   a tap opens one full size, and − and + zoom it (with a mouse; phones pinch). */
 .mermaid-slot {
   margin: 0 0 0.8em;
 }
@@ -1845,6 +1845,66 @@ div[id^='dak-mermaid-'] .label {
 .mermaid-open img {
   max-width: 100%;
 }
+/* Zoomed past the column, the diagram scrolls in its own box. */
+.mermaid-view .diagram-scroll {
+  overflow-x: auto;
+}
+.mermaid-view.zoomed .mermaid-open {
+  max-width: none;
+}
+/* The scroll box clips anything outside it, so the focus ring goes inside the button. */
+.mermaid-view .mermaid-open:focus-visible {
+  outline-offset: -2px;
+}
+.diagram-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.diagram-zoom .icon-btn {
+  min-width: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.diagram-zoom .icon-btn[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+.diagram-zoom-level {
+  font-size: 12px;
+  min-width: 48px;
+}
+/* Over the diagram's top right corner, shown while the pointer is on it, a button has focus or
+   it's zoomed. Pinned to the top of the panel while a tall diagram scrolls under it; the pin has no
+   height, so the diagram doesn't move down for it. */
+.diagram-zoom-pin {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  height: 0;
+  padding-right: 4px;
+}
+.mermaid-view .diagram-zoom {
+  margin-top: 4px;
+  height: fit-content;
+  padding: 2px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+}
+@media (hover: hover) {
+  .mermaid-view .diagram-zoom {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .mermaid-view:hover .diagram-zoom,
+  .mermaid-view:focus-within .diagram-zoom,
+  .mermaid-view.zoomed .diagram-zoom {
+    opacity: 1;
+  }
+}
 .mermaid-src summary {
   width: fit-content;
   padding: 4px 0;
@@ -1863,8 +1923,20 @@ div[id^='dak-mermaid-'] .label {
   color: var(--ink);
   font-size: 12px;
 }
+/* Sized to the diagram, so it grows and shrinks as − and + zoom it, up to the window less the
+   overlay's padding. Not `wide`: `.dialog.wide` comes later and would cap it at 780 px. */
 .dialog.diagram-dialog {
-  width: min(1200px, 100%);
+  width: fit-content;
+  min-width: min(520px, 100%);
+  max-width: 100%;
+}
+/* The title (the diagram's accTitle or kind) takes what the diagram leaves, never widening it. */
+.diagram-dialog .dialog-hd h2 {
+  contain: inline-size;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The image at its natural size: wider or taller ones scroll here (pinch zoom works too). */
 .diagram-dialog .dialog-body {
@@ -1873,11 +1945,22 @@ div[id^='dak-mermaid-'] .label {
 .diagram-view {
   overflow: auto;
   padding: 14px 18px;
+  /* Room for the vertical scrollbar from the start: added once a tall diagram overflows, it
+     widened the dialog but left a horizontal scrollbar behind. */
+  scrollbar-gutter: stable;
 }
+/* Centred when narrower than the dialog; a wider one starts at the left and scrolls. */
 .diagram-view img {
   max-width: none;
+  margin: 0 auto;
+}
+.diagram-view.fit img {
+  max-width: 100%;
 }
 @media (pointer: coarse) {
+  .diagram-zoom {
+    display: none;
+  }
   .mermaid-src summary {
     display: flex;
     align-items: center;
@@ -2174,6 +2257,58 @@ div[id^='dak-mermaid-'] .label {
 .share-person-btns {
   display: flex;
   gap: 6px;
+}
+/* The people invited before, suggested under the Emails field (ShareSuggestions.tsx). */
+.share-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
+}
+.share-suggest-head {
+  font-size: 12px;
+  color: var(--muted);
+}
+.share-chip {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--sunk);
+  font-size: 12.5px;
+}
+.share-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.share-chip-add {
+  min-width: 0;
+  padding: 3px 4px 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px 0 0 999px;
+}
+.share-chip-email {
+  color: var(--muted);
+}
+.share-chip .share-chip-forget {
+  flex: none;
+  padding: 3px 9px 3px 5px;
+  color: var(--muted);
+  border-radius: 0 999px 999px 0;
+}
+.share-chip button:hover,
+.share-chip button:focus-visible {
+  background: var(--accent-soft);
+}
+.share-chip .share-chip-forget:hover {
+  color: var(--bad);
 }
 
 /* Settings, Meko tab: connection, sharing and Claude Code status */
@@ -2609,6 +2744,10 @@ div[id^='dak-mermaid-'] .label {
   color: var(--accent);
   margin-left: 8px;
 }
+/* Who made the call: AgentK's own calls are the quieter tag, so Claude's stand out. */
+.mc-tag.agentk {
+  color: var(--muted);
+}
 .mc-pill {
   font: 500 11px/1 var(--mono);
   padding: 3px 7px;
@@ -2664,6 +2803,150 @@ div[id^='dak-mermaid-'] .label {
   }
   .mc-row {
     min-height: 44px;
+  }
+}
+
+/* ---------- What Meko doesn't know ---------- */
+.mg-sum {
+  margin: 0;
+}
+.mg-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.mg-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mg-filter {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 99px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.mg-filter.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.mg-list {
+  display: flex;
+  flex-direction: column;
+}
+.mg-gap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 6px;
+  border-top: 1px solid var(--rule);
+}
+.mg-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+.mg-query {
+  flex: 1 1 260px;
+  min-width: 0;
+  font: 500 13px/1.45 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.mg-chips {
+  display: flex;
+  gap: 6px;
+}
+/* How the latest ask went, then what the user did about it. */
+.mg-chip {
+  font: 500 11px/1 var(--mono);
+  padding: 3px 7px;
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.mg-chip.empty {
+  color: var(--bad);
+}
+.mg-chip.weak {
+  color: var(--warn);
+}
+.mg-chip.taught {
+  color: var(--ok);
+}
+.mg-chip.dismissed {
+  color: var(--muted);
+}
+.mg-meta {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.mg-meta .link-btn {
+  font-size: inherit;
+}
+.mg-taught {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: var(--sunk);
+}
+.mg-taught-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* Teach Meko: the question it's about, quoted. */
+.tm-question {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tm-query {
+  margin: 0;
+  max-height: 8em;
+  overflow: auto;
+  padding: 8px 10px;
+  border-left: 3px solid var(--rule);
+  background: var(--sunk);
+  font: 12.5px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tm-text {
+  resize: vertical;
+}
+.tm-count {
+  align-self: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+@media (pointer: coarse) {
+  .mg-actions .btn.small,
+  .mg-bar .btn.small {
+    min-height: 36px;
+  }
+  .mg-filter {
+    min-height: 36px;
+    padding: 6px 12px;
   }
 }
 
@@ -3045,6 +3328,30 @@ div[id^='dak-mermaid-'] .label {
   box-shadow: var(--shadow);
   overflow: hidden;
 }
+.files-pop.left {
+  left: 0;
+  right: auto;
+}
+.chg-bar .btn {
+  margin-left: auto;
+}
+/* A branch name in a button: long ones (a stacked branch's) are cut, not widening the header. */
+.base-name {
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.files-note {
+  margin: 0;
+  padding: 0 12px 6px;
+}
+.chg-path.cur::after {
+  content: ' (current)';
+  color: var(--muted);
+}
 .files-filter {
   display: block;
   width: calc(100% - 16px);
@@ -3280,6 +3587,43 @@ div[id^='dak-mermaid-'] .label {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--rule);
+}
+/* The questions Meko couldn't answer, under the Meko stats: one line linking to What Meko doesn't know. */
+.meko-gaps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+  color: var(--ink);
+  font-size: 13.5px;
+  text-decoration: none;
+}
+.meko-gaps b {
+  color: var(--warn);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.meko-gaps-link {
+  color: var(--accent);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.meko-gaps:hover .meko-gaps-link {
+  text-decoration: underline;
+}
+.meko-gaps:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .meko-gaps {
+    min-height: 44px;
+    align-items: center;
+  }
 }
 .meko-usage-hd {
   display: flex;
@@ -4022,6 +4366,65 @@ div[id^='dak-mermaid-'] .label {
   padding-top: 10px;
   border-top: 1px solid var(--rule);
 }
+/* Held reviews: the Review gate's button, and the dialog listing each review with its inline comments. */
+.btn.held-btn {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.held-list,
+.held-comments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.held-review {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.held-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.held-kind {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--sunk);
+  color: var(--muted);
+  font-size: 11px;
+}
+.held-warn {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  border-radius: 4px;
+}
+.held-comments {
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--rule);
+}
+.held-comments li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 /* A preview spans its card, and grows to 60% of the window's height before it scrolls. */
 .ask-dialog .dq-opt-text {
   flex: 1;
@@ -4041,11 +4444,12 @@ div[id^='dak-mermaid-'] .label {
   }
 }
 
-/* Images held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal on a
-   desktop, above the compose box on touch screens. */
+/* Images and files held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal
+   on a desktop, above the compose box on touch screens. Upload to Meko wraps under it when it asks. */
 .held-images {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 0 10px 6px;
@@ -4078,6 +4482,37 @@ div[id^='dak-mermaid-'] .label {
   background: var(--sunk);
 }
 .held.uploading img {
+  opacity: 0.45;
+}
+/* A held file that isn't an image: a wider tile with its extension, and its name cut to fit. */
+.held.file {
+  width: 96px;
+}
+.held-file {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--sunk);
+  font-size: 10px;
+  color: var(--muted);
+}
+.held-file-ext {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.held-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.held.uploading .held-file {
   opacity: 0.45;
 }
 /* Uploading: a ring that spins when motion is allowed. */
@@ -4130,6 +4565,31 @@ div[id^='dak-mermaid-'] .label {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+/* Upload to Meko (MekoUpload.tsx): a button after the hint, and its question on a row of its own. */
+.held-meko {
+  flex: none;
+  font-size: 12px;
+}
+.held-meko-ask {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.held-meko-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+@media (pointer: coarse) {
+  .held-meko,
+  .held-meko-buttons .btn {
+    min-height: 36px;
+  }
 }
 /* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {
@@ -4469,7 +4929,8 @@ div[id^='dak-mermaid-'] .label {
   .files-menu {
     position: static;
   }
-  .files-pop {
+  .files-pop,
+  .files-pop.left {
     left: 8px;
     right: 8px;
     width: auto;
@@ -4559,6 +5020,10 @@ div[id^='dak-mermaid-'] .label {
   /* A dialog without a footer (Settings) ends with its body, which clears the home indicator. */
   .dialog-body:last-child {
     padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  /* A full-size diagram is a full-width sheet like any dialog; it scrolls sideways inside. */
+  .dialog.diagram-dialog {
+    width: 100%;
   }
   /* Claude's questions take the whole sheet, which shrinks for the keyboard. */
   .dialog.ask-dialog {
@@ -4864,8 +5329,23 @@ div[id^='dak-mermaid-'] .label {
     font-size: 16px;
   }
 }
+@media (max-width: 760px) {
+  /* The name is enough on a phone; the address goes into the field when it's picked. */
+  .share-chip-email {
+    display: none;
+  }
+}
 @media (pointer: coarse) {
   .share-reviewer .input.small {
     min-height: 36px;
+  }
+  .share-chip button {
+    min-height: 36px;
+  }
+  /* An icon button: 40 px. */
+  .share-chip .share-chip-forget {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0 10px 0 6px;
   }
 }

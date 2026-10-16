@@ -453,7 +453,7 @@ function ProjectSettingsForm({
             className="input"
             value={s.reviewer}
             onChange={(e) => set('reviewer', e.target.value as ReviewerMode)}
-            title="Whose reviews AgentK addresses. Merge waits for the AgentK reviewer once it's active on the PR."
+            title="Whose reviews go straight to AgentK. Every other review is held for you to send or dismiss, and your own always go. Merge waits for the AgentK reviewer once it's active on the PR."
           >
             {(Object.keys(REVIEWER_LABELS) as ReviewerMode[]).map((m) => (
               <option key={m} value={m}>{REVIEWER_LABELS[m]}</option>
@@ -503,7 +503,7 @@ function ProjectSettingsForm({
                 <span>
                   Log Meko calls
                   <span className="muted small check-hint">
-                    What AgentK sends to Meko for each session, and what comes back. Deleted with the session.
+                    What AgentK and Claude send to Meko for each session, and what comes back. Deleted with the session.
                   </span>
                 </span>
               </label>

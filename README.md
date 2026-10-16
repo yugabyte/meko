@@ -3,7 +3,7 @@
 # AgentK Local
 
 The agentic coder for ADLC. AgentK Local lets you manage many projects and [Claude Code](https://claude.com/claude-code) sessions at 
-once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and shipped work flow into 
+once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
 datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
@@ -115,7 +115,8 @@ your phone can connect.
   projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko;
   AgentK never changes Claude Code's setup unless you ask.
   Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
-  (in every repo its sessions work in) with their emails, to share with in one click.
+  (in every repo its sessions work in) with their emails, to share with in one click. The Share
+  dialog suggests the people you share with most, in any project, to add with a tap.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
   of a project shared with you, checks one out on a branch a plain `git push` refuses, and has AgentK sum
   it up for you, with the author's design (named in the PR, fetched from Meko, with its questions and
@@ -150,14 +151,19 @@ your phone can connect.
   repos that take long to build start incremental. Each repo keeps up to 3 idle worktrees, and one
   no session has used for 14 days is removed; change both in Settings (0 idle worktrees removes
   worktrees when sessions end).
-- **Changes panel:** click the `+N −N` diff size in a session's footer to see every changed file
+- **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
   **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
-- **Paste images for Claude:** paste a screenshot into the terminal, or drop image files on it, and
-  Claude gets the image with your next message, even when AgentK Local runs on another machine.
-  Images pasted into the New session dialog's first prompt go with it when the session starts.
+  Compare with another branch (a release branch for a backport, say) from the base in its header;
+  when the branch has clearly moved onto another branch, the panel offers to switch.
+- **Paste images and files for Claude:** paste a screenshot or a file into the terminal, or drop
+  files on it, and Claude gets them with your next message, even when AgentK Local runs on another
+  machine. Images pasted into the New session dialog's first prompt go with it when the session starts.
+- **Add documents to the knowledge base:** with a PDF, Markdown, text, JSON, CSV, XML or HTML file
+  waiting under the terminal, **Upload to Meko** adds it to the project datapack's knowledge base
+  once you confirm, and AgentK tells you when it's indexed.
 - **Works from your phone:** a drawer for projects, a key bar (Tab, arrows, Ctrl+C, a ▾ row
-  of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an image key, and a select mode that copies the lines you drag over), a compose box that takes pasted images too, swipe to scroll back, and the stages and their gates
+  of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an attach key, and a select mode that copies the lines you drag over), a compose box that takes pasted images and files too, swipe to scroll back, and the stages and their gates
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
@@ -186,7 +192,7 @@ your phone can connect.
   (double-click its tab): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
-  markdown, with Mermaid diagrams drawn. The design's open questions are listed beside it, each
+  markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
   takes you to them first. Once it's approved, AgentK writes the answers into the design and keeps it current
@@ -194,19 +200,27 @@ your phone can connect.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
-  and AgentK's review have passed. The server watches the PR and hands reviews (AgentK's and
-  people's by default, or every reviewer's, or only people's), merge conflicts with the base (unless
-  you turn that off in Settings → General) and CI failures to Claude. Only reviews
-  from the repo's owner, members and collaborators (and AgentK, bots in *All*, and you) reach Claude;
-  anyone else's are shown to you and ignored.
+  and AgentK's review have passed. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
+  people's, every reviewer's, or only people's), merge conflicts with the base (unless
+  you turn that off in Settings → General) and CI failures to Claude. Every other review, and
+  any review from someone without a role on the repo, is held for you: you read it in AgentK and
+  send it to AgentK or dismiss it, and Merge & Close waits until you decide. Your own reviews
+  always go to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
-  keeps every Meko call it makes for each session (recall at start, design uploads, the learn step,
-  the "Shipped in…" memory) with what it sent and what came back, in a file in the session's
-  folder that's deleted with the session. **View calls** opens them, a session at a time, with
-  filters for the tool and failed calls.
+  keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
+  step) and Claude's (its searches and saves, a reply too large for Claude's context included), with
+  what was sent and what came back, in a file in the session's folder that's deleted with the
+  session. **View calls** opens them, a session at a time, with filters for the tool, who made the
+  call (AgentK or Claude) and failed calls.
+- **What Meko doesn't know:** the project home says how many questions Meko couldn't answer, and
+  links to a list of the searches that found nothing, or only memories scoring below the bar,
+  grouped by question. **Teach Meko** saves your answer to the project's datapack; **Dismiss**
+  hides a question until a session asks it again. When AgentK saves what a session learned through
+  its mod in Claude, it also answers the open questions that session found out, its own and other
+  sessions'.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home

@@ -20,7 +20,14 @@ import type {
   MekoCallDetail,
   MekoCallPage,
   MekoDatapack,
+  MekoCallBy,
+  MekoGap,
+  KnowledgeUpload,
+  MekoGapMarkRequest,
+  MekoGapPage,
+  MekoGapState,
   MekoLogInfo,
+  MekoTeachRequest,
   MoveSessionRequest,
   OpenPrRequest,
   NewComment,
@@ -30,6 +37,9 @@ import type {
   UsageOverview,
   RepoBranches,
   ReposResponse,
+  HeldReview,
+  HeldReviewsRequest,
+  HeldReviewsResult,
   PrReviewers,
   RepoInfo,
   ReviewablePrs,
@@ -48,6 +58,7 @@ import type {
   SettingsUpdate,
   SetDedicatedDatapackRequest,
   SetupRequest,
+  ShareContact,
   ShareDatapackRequest,
   ShareDatapackResult,
   StagedImage,
@@ -140,6 +151,8 @@ export const api = {
     post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}/resend`),
   revokeDatapackInvite: (id: string, inviteId: string) =>
     request<DatapackPeople>('DELETE', `/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}`),
+  shareContacts: () => get<ShareContact[]>('/api/share-contacts'),
+  forgetShareContact: (email: string) => request<void>('DELETE', `/api/share-contacts/${enc(email)}`),
   checkInvites: () => post<InviteCheck>('/api/invites/check'),
   acceptInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/accept`),
   declineInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/decline`),
@@ -187,6 +200,7 @@ export const api = {
   openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   changes: (id: string) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes`),
+  baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number) =>
     `/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}`,
@@ -195,22 +209,35 @@ export const api = {
     request<PastedImage>('POST', `/api/sessions/${enc(id)}/images`, undefined, {
       raw: { data: image, type: image.type.startsWith('image/') ? image.type : 'image/png' },
     }),
+  /** Saves a file of any type pasted into or dropped on the session's terminal, for Claude to read by its path. */
+  pasteFile: (id: string, file: Blob) =>
+    request<PastedImage>('POST', `/api/sessions/${enc(id)}/files?name=${enc(file instanceof File ? file.name : '')}`, undefined, {
+      raw: { data: file, type: 'application/octet-stream' },
+    }),
+  /** Adds a file to the knowledge base of the session's project datapack; the server sends it on to Meko. */
+  uploadKnowledge: (id: string, file: Blob, name: string) =>
+    request<KnowledgeUpload>('POST', `/api/sessions/${enc(id)}/knowledge?name=${enc(name)}`, undefined, {
+      raw: { data: file, type: 'application/octet-stream' },
+    }),
   comments: (id: string) => get<ReviewComment[]>(`/api/sessions/${enc(id)}/comments`),
   addComment: (id: string, b: NewComment) => post<ReviewComment>(`/api/sessions/${enc(id)}/comments`, b),
   editComment: (id: string, cid: string, body: string) =>
     request<ReviewComment>('PATCH', `/api/sessions/${enc(id)}/comments/${enc(cid)}`, { body }),
   deleteComment: (id: string, cid: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/comments/${enc(cid)}`),
   sendComments: (id: string) => post<SendCommentsResult>(`/api/sessions/${enc(id)}/comments/send`),
+  heldReviews: (id: string) => get<HeldReview[]>(`/api/sessions/${enc(id)}/held-reviews`),
+  decideHeldReviews: (id: string, b: HeldReviewsRequest) => post<HeldReviewsResult>(`/api/sessions/${enc(id)}/held-reviews`, b),
   design: (id: string) => get<DesignDoc>(`/api/sessions/${enc(id)}/design`),
   approveDesign: (id: string, b?: DesignAnswersRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/approve-design`, b),
   reviseDesign: (id: string, b: DesignAnswersRequest) => post<void>(`/api/sessions/${enc(id)}/design/answers`, b),
   answerAsk: (id: string, askId: string, b: AskAnswerRequest) => post<void>(`/api/sessions/${enc(id)}/ask/${enc(askId)}`, b),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
   mekoLogs: (projectId: string) => get<MekoLogInfo[]>(`/api/projects/${enc(projectId)}/meko-logs`),
-  mekoCalls: (id: string, q: { before?: number; tool?: string; failed?: boolean } = {}) => {
+  mekoCalls: (id: string, q: { before?: number; tool?: string; by?: MekoCallBy | ''; failed?: boolean } = {}) => {
     const qs = new URLSearchParams();
     if (q.before !== undefined) qs.set('before', String(q.before));
     if (q.tool) qs.set('tool', q.tool);
+    if (q.by) qs.set('by', q.by);
     if (q.failed) qs.set('failed', '1');
     const tail = qs.toString();
     return get<MekoCallPage>(`/api/sessions/${enc(id)}/meko-calls${tail ? `?${tail}` : ''}`);
@@ -220,6 +247,18 @@ export const api = {
   /** Where the browser downloads the session's Meko call log (a plain link: the login cookie goes with it). */
   mekoLogUrl: (id: string) => `/api/sessions/${enc(id)}/meko-calls.jsonl`,
   clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
+  mekoGaps: (projectId: string, q: { state?: MekoGapState | 'all'; after?: { lastAt: number; key: string } } = {}) => {
+    const qs = new URLSearchParams();
+    if (q.state) qs.set('state', q.state);
+    if (q.after) {
+      qs.set('before', String(q.after.lastAt));
+      qs.set('beforeKey', q.after.key);
+    }
+    const tail = qs.toString();
+    return get<MekoGapPage>(`/api/projects/${enc(projectId)}/meko-gaps${tail ? `?${tail}` : ''}`);
+  },
+  markMekoGap: (projectId: string, b: MekoGapMarkRequest) => post<void>(`/api/projects/${enc(projectId)}/meko-gaps/mark`, b),
+  teachMeko: (projectId: string, b: MekoTeachRequest) => post<MekoGap>(`/api/projects/${enc(projectId)}/meko-gaps/teach`, b),
 
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: SettingsUpdate) => request<Settings>('PUT', '/api/settings', b),

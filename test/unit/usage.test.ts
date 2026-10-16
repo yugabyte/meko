@@ -266,4 +266,11 @@ describe('token formatting (web)', () => {
     // Without a known price: tokens only.
     expect(learningText({ ...none, runs: 1, saves: 1, tokens: 9_000, usd: null }).cost).toMatchObject({ num: '≈ 9k', line: null });
   });
+
+  it("says how many questions Meko couldn't answer under the Meko stats, leaving out a part with none", async () => {
+    const { gapsLine } = await import('../../src/web/util.js');
+    expect(gapsLine({ empty: 0, weak: 0 })).toBeNull();
+    expect(gapsLine({ empty: 5, weak: 4 })).toEqual({ count: '9 questions', split: '5 found nothing · 4 nothing relevant' });
+    expect(gapsLine({ empty: 0, weak: 1 })).toEqual({ count: '1 question', split: '1 nothing relevant' });
+  });
 });

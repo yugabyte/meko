@@ -49,7 +49,12 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
 
           {showMeko && (
             <div className="usage-meko">
-              <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} learning={usage.mekoLearning} />
+              <MekoUsageSection
+                meko={usage.meko}
+                firstTurn={usage.mekoFirstTurn}
+                learning={usage.mekoLearning}
+                gaps={{ projectId, counts: usage.mekoGaps }}
+              />
             </div>
           )}
 

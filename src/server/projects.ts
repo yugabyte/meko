@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
-  ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult,
-  SetDedicatedDatapackRequest, UpdateProjectRequest,
+  ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, MekoGap, MekoGapMarkRequest, MekoGapPage,
+  MekoTeachRequest, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult, SetDedicatedDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
-import { newRepoNameProblem, REVIEWER_LABELS } from '../shared/types.js';
+import { MEKO_TEACH_MAX, newRepoNameProblem, REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx, type Db } from './db.js';
@@ -14,6 +14,7 @@ import {
 } from './git.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
+import { findGap, gapPage, markGap } from './mekogaps.js';
 import { expandHome, repoKey } from './paths.js';
 import { repoRoots } from './config.js';
 import { projectUsage } from './usage.js';
@@ -23,6 +24,8 @@ import {
 
 /** How long the project home waits for each datapack's counts. */
 const DESCRIBE_TIMEOUT_MS = 5000;
+/** How much of a question a taught memory's metadata keeps. */
+const TAUGHT_QUESTION_CHARS = 300;
 /** How long an archived session's Meko pin stays: the plugin's SessionEnd hook may still read it. */
 export const PIN_KEEP_MS = 24 * 60 * 60 * 1000;
 
@@ -432,7 +435,7 @@ export class ProjectService {
       const next = { ...toProject(this.db, r).settings, ...req.settings };
       if (!next.branchPrefix.trim()) throw new HttpError(400, 'The branch prefix can\'t be empty.');
       if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
-        throw new HttpError(400, 'Reviewer must be All reviewers, AgentK + People or People only.');
+        throw new HttpError(400, 'Reviewer must be AgentK only, AgentK + People, All reviewers or People only.');
       }
       if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);
@@ -552,6 +555,55 @@ export class ProjectService {
       id,
     ).map<ActivityItem>((r) => ({ at: r.at, sessionId: r.session_id, sessionName: r.name, kind: r.kind, text: r.text ?? '' }));
     return { project, datapacks, activity, usage: projectUsage(this.db, id) };
+  }
+
+  /** What Meko doesn't know: a page of the project's questions (GET /api/projects/:id/meko-gaps). */
+  mekoGaps(id: string, state: unknown, before: unknown, beforeKey: unknown): MekoGapPage {
+    this.get(id);
+    const st = state === undefined || state === '' ? 'open' : state;
+    if (st !== 'open' && st !== 'dismissed' && st !== 'taught' && st !== 'all') throw new HttpError(400, 'state must be open, dismissed, taught or all.');
+    if (before === undefined || before === '') return gapPage(this.db, id, st);
+    const lastAt = Number(before);
+    if (!Number.isFinite(lastAt) || typeof beforeKey !== 'string') throw new HttpError(400, "before must be the last question's lastAt, with beforeKey its key.");
+    return gapPage(this.db, id, st, { lastAt, key: beforeKey });
+  }
+
+  /** Dismisses one of the project's questions, or puts a dismissed or taught one back. */
+  markMekoGap(id: string, body: Partial<MekoGapMarkRequest> | undefined): void {
+    this.get(id);
+    if (body?.state !== 'dismissed' && body?.state !== null) throw new HttpError(400, 'state must be "dismissed" or null.');
+    const gap = this.gapOf(id, body.key);
+    markGap(this.db, id, gap.key, body.state ? { kind: 'dismiss' } : { kind: 'restore' });
+  }
+
+  /**
+   * Teach Meko: saves what the user wrote about one of the project's questions as a memory in its
+   * dedicated datapack (as AgentK, in the project's Meko conversation), then marks it taught.
+   */
+  async teachMeko(id: string, body: Partial<MekoTeachRequest> | undefined): Promise<MekoGap> {
+    this.get(id);
+    const text = typeof body?.text === 'string' ? body.text.trim() : '';
+    if (!text) throw new HttpError(400, 'Write what Meko should know first.');
+    if (text.length > MEKO_TEACH_MAX) throw new HttpError(400, `That's ${text.length.toLocaleString()} characters. Keep it to ${MEKO_TEACH_MAX.toLocaleString()}.`);
+    const gap = this.gapOf(id, body?.key);
+    this.needMeko("it can't be taught");
+    const dp = dedicatedDatapack(this.db, id);
+    if (!dp) throw new HttpError(409, 'This project has no dedicated datapack to save it to. Add one on the project home.', 'NO_DEDICATED_DATAPACK');
+    try {
+      const conv = await this.ensureConversation(id);
+      await this.core.meko.addMemory(text, dp.id, AGENTK_AGENT_ID, conv, { source: 'agent-k-local', kind: 'taught', question: gap.query.slice(0, TAUGHT_QUESTION_CHARS) });
+    } catch (e) {
+      throw new HttpError(502, `Meko couldn't save it: ${errMsg(e)}. Try again.`);
+    }
+    markGap(this.db, id, gap.key, { kind: 'teach', text, datapack: dp.name });
+    return findGap(this.db, id, gap.key) ?? { ...gap, state: 'taught', markedAt: Date.now(), taught: { text, datapack: dp.name, at: Date.now(), session: null }, dismissal: null };
+  }
+
+  /** The project's question with a key, or a 404. */
+  private gapOf(id: string, key: unknown): MekoGap {
+    const gap = typeof key === 'string' ? findGap(this.db, id, key) : null;
+    if (!gap) throw new HttpError(404, "That question isn't on What Meko doesn't know any more. Reload the page.");
+    return gap;
   }
 
   async search(id: string, query: string): Promise<SearchResult[]> {

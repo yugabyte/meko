@@ -26,7 +26,8 @@ partial**), and the tooltip says how many responses were left out. Model ids mat
 **Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
 (`mcp__meko__<tool>`, or a plugin's `mcp__plugin_…_meko__<tool>`) and their results, in the main
 transcript and subagents: `meko_calls(session_id, tool_use_id, agent, tool, kind, at, outcome,
-results, input_chars, result_chars, model, context_tokens)`. A **lookup** searches or fetches
+results, input_chars, result_chars, model, context_tokens, query, query_key, top_score, top_raw, quality)`
+(the last five for [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know)). A **lookup** searches or fetches
 (`memory_search`, `knowledgebase_search`, `context_search`, `memory_get_all`, `memory_get_by_id`,
 `conversation_get`, `artifact_get`); a **save** writes (`memory_add`, `memory_update`,
 `memory_promote`, `artifact_put`, `conversation_add_message`); anything else (datapacks,
@@ -157,9 +158,10 @@ only move when a session gets a reply, so the rail says when they were last repo
   the Merge & Close sessions it was skipped in; and **Learning cost**, the steps' model calls in USD
   with their tokens under it (tokens alone when no model had a price). Both are a dash before any
   step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
-  (and, on the project home, the project has a datapack).
+  (and, on the project home, the project has a datapack). On the project home only, a line under
+  the tiles says how many questions Meko couldn't answer, with the split (`gapsLine` in
+  `src/web/util.ts`), and links to [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know);
+  it's left out while none are open.
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The
   cost is an estimate at API list prices, not a bill.
-- **In Meko.** When a task is cleaned up, its token totals are included in the "shipped" summary
-  written to the project's dedicated datapack.

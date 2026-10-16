@@ -24,7 +24,7 @@ export interface EventsHandlers {
   open: () => SocketLike;
   onState: (s: AppState) => void;
   onConn: (c: Conn) => void;
-  onEvent: (ev: Extract<ServerEvent, { type: 'notify' | 'invite' }>) => void;
+  onEvent: (ev: Extract<ServerEvent, { type: 'notify' | 'invite' | 'knowledge' }>) => void;
   /** After a 4401 close: resolves true to keep retrying, false when the login is gone. */
   checkLogin: () => Promise<boolean>;
   /** Close code that means the login is gone. */
@@ -132,7 +132,7 @@ export class EventsConnection {
       this.updating = !!msg.state.update?.applying;
       this.droppedAt = 0;
       this.h.onState(msg.state);
-    } else if (msg.type === 'notify' || msg.type === 'invite') this.h.onEvent(msg);
+    } else if (msg.type === 'notify' || msg.type === 'invite' || msg.type === 'knowledge') this.h.onEvent(msg);
   }
 
   private probe(): void {

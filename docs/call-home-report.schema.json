@@ -260,6 +260,16 @@
             "failures": { "$ref": "#/$defs/count" },
             "ms": { "$ref": "#/$defs/count" }
           }
+        },
+        "weak": { "$ref": "#/$defs/count" },
+        "gaps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dismissed", "taught"],
+          "properties": {
+            "dismissed": { "$ref": "#/$defs/count" },
+            "taught": { "$ref": "#/$defs/count" }
+          }
         }
       }
     },
@@ -309,6 +319,8 @@
         "updates": { "$ref": "#/$defs/count" },
         "skips": { "$ref": "#/$defs/count" },
         "empty": { "$ref": "#/$defs/count" },
+        "taught": { "$ref": "#/$defs/count" },
+        "dismissed": { "$ref": "#/$defs/count" },
         "lookups": { "$ref": "#/$defs/count" },
         "errors": { "$ref": "#/$defs/count" },
         "sentTokens": { "$ref": "#/$defs/count" },

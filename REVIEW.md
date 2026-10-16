@@ -88,7 +88,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       other route takes a non-JSON body. Images staged in the New session dialog
       (`POST /api/projects/:id/images`) are named by id only: `CreateSessionRequest.images` never
       takes a path, and an id is matched to the server's name pattern inside that project's
-      staging folder.
+      staging folder. Pasted files of other types (`POST /api/sessions/:id/files`) are size-capped
+      and saved owner-only under a name the server picks, keeping only the safe part of the
+      browser's name (`safeFileName()`), and are never served back.
+- [ ] Knowledge-base uploads (`POST /api/sessions/:id/knowledge`) go through the server, so the
+      Meko key never reaches the browser; the `application/octet-stream` parser (it and `/files`)
+      stays in its own scope, the name is a base name only, and nothing is sent to Meko before the
+      user confirms Upload to Meko's question, which names the datapack.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
@@ -161,8 +167,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] `/agentk review force` is only posted when the user asks.
 - [ ] Nothing from someone without a role on the repo (`authorAssociation` other than OWNER,
       MEMBER or COLLABORATOR, and not AgentK, an allowed bot or the user) starts a turn or counts
-      as a `/agentk review` request, and prompts that put PR text in front of Claude call it
-      untrusted, not instructions.
+      as a `/agentk review` request: such a review is only held, and reaches Claude only when the
+      user sends it, marked as from someone with no role. Prompts that put PR text in front of
+      Claude call it untrusted, not instructions. Where a review goes in each mode is
+      `reviewRoute()` in `heldreviews.ts`; don't route reviews anywhere else.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
       three failing heads in a row; a queued one is dropped when the head moves or CI stops failing.
       Merge-conflict prompts follow the same rules (between reviews and CI in the queue), act only on
@@ -202,7 +210,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
-      false) means no Meko calls at all. The one check that calls Meko by itself, trying Claude
+      false) means no Meko calls at all. The one poll is following a knowledge-base upload's
+      indexing (`KnowledgeService` in `knowledge.ts`): only after Meko answered `processing` with
+      a document key, every 5 s for a minute then every 30 s, at most 15 minutes per upload, never
+      with Meko off, stopped at an error waiting can't fix, and dropped on a Meko settings change.
+      The one check that calls Meko by itself, trying Claude
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
       session launch, after Claude Code's setup), in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
@@ -210,7 +222,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.
       The log never holds the API key, is written only while the project has Log Meko calls on and
       the session isn't archived, and is deleted wherever the session's pastes are (archive, failed
-      start, closing the project). Writing it never fails the call.
+      start, closing the project). Writing it never fails the call. Claude's calls reach it only
+      from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
+      file Claude Code saved comes only from the transcript's own session's `tool-results` folder.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
@@ -223,6 +237,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
+- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the transcript reader and recall at
+      start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
+      typed, into the project's dedicated datapack only, as AgentK in the project's conversation,
+      and a question is marked taught only once Meko took it. A learn step marks only questions
+      still open when it writes, offered from Claude's own searches (never one asked only by
+      AgentK's search at start), the session's own first. Queries stay in the database: the
+      usage report gets counts only. A reply too large for Claude is read for a search's quality
+      only from the session's `tool-results` folder (`savedreply.ts`), and never changes what the
+      usage counts (the notice is what Claude read).
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
       the user asked: the installer's question (or `--install-deps`) or **Set up Claude Code with
       this Meko**. A Claude Code token is only ever sent to AgentK's server, and only when Claude

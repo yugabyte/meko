@@ -37,6 +37,7 @@ import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
 import { MekoCallsView } from './MekoCallsView';
+import { MekoGapsView } from './MekoGapsView';
 
 type Modal =
   | { kind: 'none' }
@@ -346,10 +347,16 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     return () => window.removeEventListener('keydown', onKey, true);
   }, [projects, goProject, currentProject, currentSession, live, modalKind]);
 
+  // A toast goes after 5 s, but not while the pointer is on it (say, to select its text).
+  const toastTimer = useRef<number | undefined>(undefined);
+  const hideToastLater = useCallback(() => {
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 5000);
+  }, []);
   const showToast = useCallback((msg: string) => {
     setToast(msg);
-    window.setTimeout(() => setToast((t) => (t === msg ? null : t)), 5000);
-  }, []);
+    hideToastLater();
+  }, [hideToastLater]);
 
   const logout = async () => {
     try {
@@ -399,6 +406,21 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     if (state && modalKind === 'close-project' && closeProjectStale) setModal({ kind: 'none' });
   }, [state, modalKind, closeProjectStale]);
 
+  // A click closes it, unless it selected some of its text (to copy it).
+  const toastBox = toast && (
+    <div
+      className="toast"
+      role="status"
+      onMouseEnter={() => window.clearTimeout(toastTimer.current)}
+      onMouseLeave={hideToastLater}
+      onClick={() => {
+        if (!window.getSelection()?.toString()) setToast(null);
+      }}
+    >
+      {toast}
+    </div>
+  );
+
   if (!state) {
     return <div className="boot">
         <Busy label={conn === 'closed' ? 'Reconnecting to the server' : 'Loading your projects'} />
@@ -416,11 +438,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           session={s}
           onApprove={() => approveDesign(s.id).catch((e) => showToast(errorMessage(e)))}
         />
-        {toast && (
-          <div className="toast" role="status" onClick={() => setToast(null)}>
-            {toast}
-          </div>
-        )}
+        {toastBox}
       </>
     );
   }
@@ -474,6 +492,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMenu={openDrawer}
             onError={showToast}
           />
+        ) : currentProject && route.view === 'meko-gaps' ? (
+          <MekoGapsView key={currentProject.id} project={currentProject} mekoConfigured={state.meko.configured} onMenu={openDrawer} onToast={showToast} />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}
@@ -595,11 +615,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           }}
         />
       )}
-      {toast && (
-        <div className="toast" role="status" onClick={() => setToast(null)}>
-          {toast}
-        </div>
-      )}
+      {toastBox}
     </div>
   );
 }

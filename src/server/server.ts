@@ -8,17 +8,18 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
-  ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  EventsClientMessage, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
-import { MAX_PASTE_BYTES, SHARE_GRANTS } from '../shared/types.js';
+import { MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
+import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
 import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
@@ -275,11 +276,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       throw core.invites.apiFailure(e, 'Meko');
     }
   };
+  /** A datapack's lists, naming the share contacts who are members. */
+  const people = async (id: string): Promise<DatapackPeople> => {
+    const p = await core.invites.api.people(id);
+    learnNames(db, p.members);
+    return p;
+  };
   /** The lists after a change that went through; a failure to read them doesn't make the change look failed. */
   const peopleAfter = (id: string): Promise<DatapackPeople> =>
-    core.invites.api.people(id).catch((e) => ({ members: [], invites: [], refreshError: `Couldn't read the list again: ${errMsg(e)}` }));
+    people(id).catch((e) => ({ members: [], invites: [], refreshError: `Couldn't read the list again: ${errMsg(e)}` }));
   app.get<{ Params: { id: string } }>('/api/meko/datapacks/:id/people', async (req): Promise<DatapackPeople> =>
-    sharing(req.params.id, () => core.invites.api.people(req.params.id)));
+    sharing(req.params.id, () => people(req.params.id)));
   app.post<{ Params: { id: string }; Body: ShareDatapackRequest }>('/api/meko/datapacks/:id/people', async (req): Promise<ShareDatapackResult> => {
     const { email, emails: list, grant, login } = req.body ?? ({} as ShareDatapackRequest);
     if ((email === undefined) === (list === undefined)) throw new HttpError(400, 'Give either one email or a list of emails.');
@@ -318,12 +325,25 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!invited.length && first) throw first;
     // Shared with a PR's reviewer: their email comes up for them next time.
     if (login != null) core.prReview.rememberEmail(login, emails[0]);
+    // Saving the suggestions must never make invites that went through look failed (and be sent again).
+    try {
+      recordShares(db, invited);
+    } catch (e) {
+      core.log.warn("couldn't save the people invited for the Share dialog's suggestions", errMsg(e));
+    }
     return { ...(await peopleAfter(req.params.id)), invited, failed };
   });
   app.post<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId/resend', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.resend(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
   app.delete<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.revoke(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
+
+  // The people invited before, suggested in the Share dialog. Local only, so they don't need Meko.
+  app.get('/api/share-contacts', async (): Promise<ShareContact[]> => listContacts(db));
+  app.delete<{ Params: { email: string } }>('/api/share-contacts/:email', async (req, reply) => {
+    if (!forgetContact(db, req.params.email)) throw new HttpError(404, "That person isn't in the suggestions any more.");
+    return reply.code(204).send();
+  });
 
   // ---- datapacks shared with us ----
   app.post('/api/invites/check', async (): Promise<InviteCheck> => {
@@ -366,6 +386,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.projects.setDedicatedDatapack(req.params.id, req.body));
   app.delete<{ Params: { id: string; dpId: string } }>('/api/projects/:id/datapacks/:dpId', async (req) => core.projects.detachDatapack(req.params.id, req.params.dpId));
   app.get<{ Params: { id: string } }>('/api/projects/:id/home', async (req) => core.projects.home(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { state?: string; before?: string; beforeKey?: string } }>('/api/projects/:id/meko-gaps',
+    async (req): Promise<MekoGapPage> => core.projects.mekoGaps(req.params.id, req.query.state, req.query.before, req.query.beforeKey));
+  app.post<{ Params: { id: string }; Body: MekoGapMarkRequest }>('/api/projects/:id/meko-gaps/mark', async (req, reply) => {
+    core.projects.markMekoGap(req.params.id, req.body);
+    return reply.code(204).send();
+  });
+  app.post<{ Params: { id: string }; Body: MekoTeachRequest }>('/api/projects/:id/meko-gaps/teach', async (req): Promise<MekoGap> =>
+    core.projects.teachMeko(req.params.id, req.body));
   app.get<{ Params: { id: string } }>('/api/projects/:id/pr-reviewers', async (req): Promise<PrReviewers[]> => core.prReview.reviewers(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { pr?: string; repoPath?: string } }>('/api/projects/:id/review-prs', async (req): Promise<ReviewablePrs> =>
     core.prReview.reviewable(req.params.id, { pr: req.query.pr, repoPath: req.query.repoPath }));
@@ -407,13 +435,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return core.sessions.action(req.params.id, action, req.body);
   });
   app.patch<{ Params: { id: string }; Body: UpdateSessionRequest | null }>('/api/sessions/:id', async (req) =>
-    core.sessions.rename(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
+    core.sessions.edit(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/base-branches', async (req) => core.sessions.baseBranches(req.params.id));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
   app.get<{ Params: { id: string } }>('/api/projects/:id/meko-logs', async (req): Promise<MekoLogInfo[]> => core.sessions.mekoLogs(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; failed?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; by?: string; failed?: string } }>(
     '/api/sessions/:id/meko-calls', async (req): Promise<MekoCallPage> => {
-      const { before, limit, tool, failed } = req.query;
+      const { before, limit, tool, by, failed } = req.query;
+      if (by && !(MEKO_CALL_BY as readonly string[]).includes(by)) throw new HttpError(400, 'by must be agentk or claude.');
       const num = (v: string | undefined, what: string) => {
         if (v === undefined || v === '') return undefined;
         const n = Number(v);
@@ -421,7 +451,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
         return n;
       };
       return core.sessions.mekoCalls(req.params.id, {
-        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, failed: failed === '1' || failed === 'true',
+        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, by: (by || undefined) as MekoCallBy | undefined,
+        failed: failed === '1' || failed === 'true',
       });
     });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/meko-calls.jsonl', async (req, reply) => {
@@ -456,9 +487,21 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     // One added in the New session dialog, before there's a session: kept under the project until one starts with it.
     scope.post<{ Params: { id: string } }>('/api/projects/:id/images', async (req): Promise<StagedImage> => core.sessions.stageImage(req.params.id, req.body));
   });
+  // A file for Claude, or for the session's knowledge base: the body is the file. As with images,
+  // the parser lives only in this scope; application/octet-stream is a type no HTML form can send.
+  await app.register(async (scope) => {
+    scope.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_KB_UPLOAD_BYTES }, (_req, body, done) => done(null, body));
+    scope.post<{ Params: { id: string }; Querystring: { name?: string } }>('/api/sessions/:id/files',
+      async (req): Promise<PastedImage> => core.sessions.pasteFile(req.params.id, req.body, req.query.name));
+    scope.post<{ Params: { id: string }; Querystring: { name?: string } }>('/api/sessions/:id/knowledge',
+      async (req): Promise<KnowledgeUpload> => core.knowledge.upload(req.params.id, req.query.name, req.body));
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment[]> => core.comments.list(req.params.id));
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/comments', async (req): Promise<ReviewComment> => core.comments.add(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/sessions/:id/comments/send', async (req): Promise<SendCommentsResult> => core.comments.send(req.params.id));
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/held-reviews', async (req): Promise<HeldReview[]> => core.lifecycle.heldReviews(req.params.id));
+  app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/held-reviews',
+    async (req): Promise<HeldReviewsResult> => core.lifecycle.decideHeldReviews(req.params.id, req.body));
   app.patch<{ Params: { id: string; cid: string }; Body: { body?: unknown } }>('/api/sessions/:id/comments/:cid',
     async (req): Promise<ReviewComment> => core.comments.edit(req.params.id, req.params.cid, req.body?.body));
   app.delete<{ Params: { id: string; cid: string } }>('/api/sessions/:id/comments/:cid', async (req, reply) => {

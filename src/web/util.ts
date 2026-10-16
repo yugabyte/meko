@@ -1,7 +1,7 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX } from '../shared/types';
-import type { MekoFirstTurn, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -154,6 +154,14 @@ export const STATUS_TEXT: Record<DotState, string> = {
 
 /** A learning dot's tooltip. */
 export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
+
+/**
+ * Whether Save learnings is offered: AgentK saves to the project's datapack, so it needs one, Meko and
+ * Claude there. Not while a Discard waits for its learn step: the Discard row already says so.
+ */
+export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack: boolean, mekoConfigured: boolean): boolean {
+  return datapack && mekoConfigured && s.status !== 'exited' && !s.discarding;
+}
 
 /** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {
@@ -373,6 +381,25 @@ export function learningText(l: MekoLearning): { learned: LearningTile; cost: Le
   };
 }
 
+/** How a question's latest ask went, as What Meko doesn't know names it. */
+export const GAP_QUALITY_LABEL: Record<MekoGapQuality, string> = { empty: 'Found nothing', weak: 'Nothing relevant' };
+
+/** "Asked once", "Asked 3 times". */
+export function askedText(asks: number): string {
+  return asks === 1 ? 'Asked once' : `Asked ${asks.toLocaleString()} times`;
+}
+
+/**
+ * The line under the Meko stats on the project home: how many questions Meko couldn't answer, and
+ * the split (a part with none is left out); null when there are none.
+ */
+export function gapsLine(c: MekoGapCounts): { count: string; split: string } | null {
+  const total = c.empty + c.weak;
+  if (total === 0) return null;
+  const parts = [c.empty > 0 && `${c.empty.toLocaleString()} found nothing`, c.weak > 0 && `${c.weak.toLocaleString()} nothing relevant`].filter(Boolean);
+  return { count: `${total.toLocaleString()} ${total === 1 ? 'question' : 'questions'}`, split: parts.join(' · ') };
+}
+
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
 const DESIGN_READY = 'Design ready for your approval';
 
@@ -461,6 +488,14 @@ export function openPrGate(session: Session): GateButton {
   if (session.status === 'needs_input') return gate('AgentK is waiting on you in the terminal. Answer it first.');
   if (session.promptsHeld > 0) return gate('AgentK has prompts from you to take first. Open the PR once it has.');
   return gate(null);
+}
+
+/**
+ * An Update to latest that went through still waits on the state to show it: its answer comes before
+ * the state does. It always moves the commit checked out or the head, or marks the design read.
+ */
+export function updateShowing(before: ReviewingPr, now: ReviewingPr | null): boolean {
+  return !now || now.reviewSha !== before.reviewSha || now.headSha !== before.headSha || now.designUnread !== before.designUnread;
 }
 
 /** The Merge & Close gate in Review. With only blockers that clear by themselves left, a press queues the merge. */

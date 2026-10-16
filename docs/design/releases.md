@@ -60,22 +60,25 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 ```
 
 **Update loop.** The server checks the GitHub Releases API at startup and every 6 hours
-(`update.interval_hours`). The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows an
-"Update to vX" banner (and Settings an **Update** button); a version that was rolled back is never
-offered again. When you click it, the server:
+(`update.interval_hours`). The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows a
+"Version X is available" banner with an **Update to the latest version** button (Settings has the
+same button); a version that was rolled back is never offered again. When you click it, the server:
 
-1. downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
+1. checks the releases again and takes the newest one, so a release cut since the last check is
+   installed now rather than offered right after the restart (if the check fails, it installs the
+   version found before). A second click while this runs gets the same update;
+2. downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
    attestation (with `gh`) when `[update] require_attestation = true`;
-2. unpacks it next to the current version and runs its self-test;
-3. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
+3. unpacks it next to the current version and runs its self-test;
+4. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
    migrations on start, and points `app/current` at the new version;
-4. restarts only the web server unit. Sessions keep running. Closing, the server gives each
+5. restarts only the web server unit. Sessions keep running. Closing, the server gives each
    browser's socket 1 second to answer its close and then drops it, so a page that can't answer
    (a sleeping phone or laptop) doesn't hold the restart for the 30 seconds `ws` would wait. An open
    page whose last state said an update was installing retries its events socket every second
    (for up to 2 minutes, then with the usual backoff), so it reloads into the new version as soon
    as it's up;
-5. if the new version fails to come up three times in a row (the service manager restarts it) before
+6. if the new version fails to come up three times in a row (the service manager restarts it) before
    it has been healthy for 5 minutes, points back to the previous version and marks the new one as
    bad. A deliberate stop (SIGTERM, as for a service restart) takes its start back off the count,
    so restarting by hand in that window isn't mistaken for a crash loop.

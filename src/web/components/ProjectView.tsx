@@ -6,23 +6,27 @@ import {
   type MekoStatus,
   type MoveTarget,
   type ProjectWithSessions,
+  type ReviewingPr,
   type Session,
   type SessionAction,
   type Stage,
 } from '../../shared/types';
 import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
 import { api, errorMessage } from '../api';
+import { copyText } from '../clipboard';
 import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
+import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
+import { newCommitsText, ReviewPrGate } from './ReviewPrGate';
 import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
@@ -107,12 +111,23 @@ export function ProjectView({
   const [sharing, setSharing] = useState(false);
   // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
   const [asking, setAsking] = useState(false);
+  // The reviews held for the user, opened from the stage bar's Review gate.
+  const [heldOpen, setHeldOpen] = useState(false);
+  // The session whose worktree path was just copied from the footer, for 2 s from the last copy
+  // (each copy is a new object, so another click restarts the timer).
+  const [copiedPath, setCopiedPath] = useState<{ id: string } | null>(null);
+  useEffect(() => {
+    if (!copiedPath) return;
+    const t = setTimeout(() => setCopiedPath(null), 2000);
+    return () => clearTimeout(t);
+  }, [copiedPath]);
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPanel(null);
     setSheet(false);
     setSharing(false);
     setAsking(false);
+    setHeldOpen(false);
     setQuestionsAt(0);
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
@@ -132,8 +147,18 @@ export function ProjectView({
   }, [reviewDesign]);
 
   // One session action at a time, so a double tap can't send two merges or resumes.
-  const [acting, setActing] = useState(false);
+  // The view isn't remounted per session, so the action in flight names its session.
+  const [actingOn, setActingOn] = useState<{ id: string; action: SessionAction } | null>(null);
+  const acting = actingOn !== null;
   const actingRef = useRef(false);
+  // An Update to latest that went through, with the PR as it stood: still Updating until the state shows it.
+  const [updated, setUpdated] = useState<{ id: string; pr: ReviewingPr } | null>(null);
+  useEffect(() => {
+    if (!updated) return;
+    // In case the state never shows it (a dead events socket), the button comes back.
+    const t = setTimeout(() => setUpdated(null), 5000);
+    return () => clearTimeout(t);
+  }, [updated]);
   const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
     // With open questions, approving starts with answering them; the approval goes from there.
@@ -144,20 +169,29 @@ export function ProjectView({
       return;
     }
     actingRef.current = true;
-    setActing(true);
+    setActingOn({ id: session.id, action });
+    const pr = session.reviewingPr;
     try {
       if (action === 'approve-design') await approveDesign(session.id);
-      // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
-      else if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+      else {
+        // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
+        if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+        if (action === 'update-pr' && pr) setUpdated({ id: session.id, pr });
+      }
     } catch (e) {
       onError(errorMessage(e));
     } finally {
       actingRef.current = false;
-      setActing(false);
+      setActingOn(null);
     }
   };
+  const updating = !!session && (
+    (actingOn?.id === session.id && actingOn.action === 'update-pr')
+    || (updated?.id === session.id && !updateShowing(updated.pr, session.reviewingPr)));
 
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
+  const changedFiles = session?.diffStat?.files ?? 0;
+  const filesText = `${changedFiles.toLocaleString()} ${changedFiles === 1 ? 'file' : 'files'}`;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
   const canDesign = !!session && (session.hasDesign || session.stage === 'design');
@@ -170,21 +204,37 @@ export function ProjectView({
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
   const canShare = !!dedicated && meko.configured;
-  // AgentK saves what the session learned to the project's datapack: it needs Meko and Claude there.
-  const canLearn = !!session && !!dedicated && meko.configured && session.status !== 'exited';
+  const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   const learnDisabled = acting || !!session?.busy || !!session?.learning;
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
-  const learnTo = canLearn && dedicated ? dedicated.name : null;
+  const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
+  // Files held in the terminal's strip can go to the dedicated datapack's knowledge base (Upload to Meko).
+  const mekoTo = dedicated && meko.configured ? dedicated.name : null;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
-  const branchText = session && (
-    <span title={session.repoPath !== project.repoPath ? session.repoPath : undefined}>
+  const branchLabel = session && (
+    <>
       {session.repoPath && session.repoPath !== project.repoPath ? `${repoFolder(session.repoPath)} · ` : ''}branch {session.branch}
-    </span>
+    </>
   );
+  const branchText = session && (
+    <span title={session.repoPath !== project.repoPath ? session.repoPath : undefined}>{branchLabel}</span>
+  );
+  // On a desktop, clicking the branch copies the worktree's path; the label says so for a moment.
+  // Not while a start is still making the worktree: the path doesn't exist yet.
+  const copyPath = async () => {
+    if (!session) return;
+    if (await copyText(session.worktreePath)) setCopiedPath({ id: session.id });
+    else onError(`Couldn't copy the path. It is ${session.worktreePath}`);
+  };
+  const branchButton = session && (session.startup?.step === 'worktree' ? branchText : (
+    <button className="foot-btn" onClick={() => void copyPath()} title={`${session.worktreePath}\nClick to copy this path`}>
+      {copiedPath?.id === session.id ? 'path copied' : branchLabel}
+    </button>
+  ));
   const tokensText = session && (
     <span title={usageTitle(session.usage)}>
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
@@ -295,7 +345,9 @@ export function ProjectView({
           onMove={onMove}
           onOpenPr={onOpenPr}
           onShare={canShare ? () => setSharing(true) : undefined}
+          onHeld={() => setHeldOpen(true)}
           acting={acting}
+          updating={updating}
           actions={
             <>
               {session?.prUrl && (
@@ -343,7 +395,7 @@ export function ProjectView({
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} />
+          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} mekoTo={mekoTo} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>
@@ -370,14 +422,15 @@ export function ProjectView({
 
       {session && (
         <footer className="foot">
-          {!mobile && branchText}
+          {!mobile && branchButton}
           {session.diffStat && (
             <button
               className={cx('foot-btn', panel === 'changes' && 'on')}
               onClick={() => toggle('changes')}
               aria-expanded={panel === 'changes'}
-              title={`Show every file changed on this branch since ${session.baseBranch}`}
+              title={`Show the files changed on this branch since ${session.baseBranch} (${filesText})`}
             >
+              {!mobile && `${filesText} · `}
               <span className="add">+{session.diffStat.added}</span> <span className="del">−{session.diffStat.removed}</span>
               {pending > 0 && ` · ${pending} ${pending === 1 ? 'comment' : 'comments'}`}
             </button>
@@ -414,7 +467,12 @@ export function ProjectView({
                   }
                   : undefined
               }
+              onHeld={() => {
+                setSheet(false);
+                setHeldOpen(true);
+              }}
               acting={acting}
+              updating={updating}
               actions={null}
               reasons
             />
@@ -445,6 +503,7 @@ export function ProjectView({
         />
       )}
       {session && asking && <AskSheet session={session} onClose={() => setAsking(false)} />}
+      {session && heldOpen && <HeldReviewsSheet session={session} onClose={() => setHeldOpen(false)} />}
       {session && sharing && dedicated && (
         <ShareDialog
           projectId={project.id}
@@ -456,12 +515,6 @@ export function ProjectView({
       )}
     </div>
   );
-}
-
-/** "3 new commits", or what a force-push means for the review. */
-function newCommitsText(n: number | null): string {
-  if (n === null) return 'PR force-pushed';
-  return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
 /**
@@ -517,8 +570,10 @@ function StageBar({
   onMove,
   onOpenPr,
   onShare,
+  onHeld,
   learnTo = null,
   acting = false,
+  updating = false,
   actions,
   reasons = false,
 }: {
@@ -532,8 +587,12 @@ function StageBar({
   onOpenPr: () => void;
   /** Opens the Share dialog at the PR's reviewers; absent when the project can't be shared from here. */
   onShare?: () => void;
+  /** Opens the reviews held for the user. */
+  onHeld: () => void;
   /** A session action is in flight. */
   acting?: boolean;
+  /** This session's Update to latest is in flight, or its result hasn't reached the state yet. */
+  updating?: boolean;
   actions: ReactNode;
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
@@ -633,8 +692,14 @@ function StageBar({
       break;
     case 'review': {
       const merge = mergeGate(session);
+      const held = session.heldReviews;
       gate = (
         <span className="gate-group">
+          {held.count > 0 && (
+            <button className="btn small held-btn" onClick={onHeld} title={`Held for you: ${held.authors.map((a) => `@${a}`).join(', ')}. Send to AgentK or dismiss.`}>
+              {held.count === 1 ? '1 review for you' : `${held.count} reviews for you`}
+            </button>
+          )}
           {onShare && session.prNumber && (
             <button className="btn small" onClick={onShare} title="Share this project with the PR's reviewers, so they can review it with AgentK">
               Share with reviewers
@@ -691,11 +756,6 @@ function StageBar({
       gate = <span className="gate-pill done">Done</span>;
       break;
     case 'reviewing-pr': {
-      const rv = session.reviewingPr;
-      const gone = !!rv && rv.prState !== 'OPEN';
-      const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
-      // A version of the PR's design AgentK hasn't read: Update to latest has it read, commits or not.
-      const designUnread = !!rv && !gone && rv.designUnread;
       reason = midTurn
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
@@ -703,31 +763,7 @@ function StageBar({
           : session.status === 'exited'
             ? 'Resume the session first.'
             : null;
-      gate = (
-        <span className="gate-group">
-          <span className={cx('pr-pill', (moved || designUnread) && 'moved', gone && 'gone')}>
-            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : designUnread ? 'design updated' : 'up to date'}
-          </span>
-          {(moved || designUnread) && (
-            <button
-              className="gate"
-              disabled={blocked || !!reason}
-              title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
-              onClick={() => onAct('update-pr')}
-            >
-              Update to latest
-            </button>
-          )}
-          <ConfirmButton
-            className={moved || designUnread ? 'btn small' : 'gate'}
-            label="Close review"
-            confirmLabel="Close review"
-            prompt="The session is archived and its review branch deleted."
-            onConfirm={() => onAct('close-review')}
-            disabled={blocked || midTurn}
-          />
-        </span>
-      );
+      gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={updating} onAct={onAct} />;
       break;
     }
   }

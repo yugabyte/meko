@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppState } from '../../shared/types';
 import { api, checkLogin, wsUrl, WS_UNAUTHORIZED } from '../api';
 import { EventsConnection, type Conn } from '../events';
+import { knowledgeNotice } from '../knowledge';
+import { peekTerminal } from '../terminals';
 
 export type { Conn };
 
@@ -50,7 +52,12 @@ export function useEvents(
       open: () => new WebSocket(wsUrl('/ws/events')),
       onState: setState,
       onConn: setConn,
-      onEvent: (ev) => (ev.type === 'notify' ? notifyRef.current(ev) : inviteRef.current(ev)),
+      onEvent: (ev) => {
+        if (ev.type === 'notify') notifyRef.current(ev);
+        else if (ev.type === 'invite') inviteRef.current(ev);
+        // How a file added to the knowledge base indexed: said in its session's terminal, if this page has it.
+        else peekTerminal(ev.sessionId)?.showNotice(knowledgeNotice(ev), 8000);
+      },
       checkLogin,
       unauthorized: WS_UNAUTHORIZED,
     });
