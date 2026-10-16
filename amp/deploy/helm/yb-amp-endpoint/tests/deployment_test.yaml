@@ -19,6 +19,27 @@ tests:
             configMapRef:
               name: RELEASE-NAME-yb-amp-endpoint
 
+  - it: mounts no ServiceAccount token and keeps the namespace default by default
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - notExists:
+          path: spec.template.spec.serviceAccountName
+
+  - it: runs as the ServiceAccount it is given, still without a token
+    template: templates/deployment.yaml
+    set:
+      serviceAccountName: amp-controller-endpoint
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: amp-controller-endpoint
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
   - it: defaults the image tag to the chart appVersion
     template: templates/deployment.yaml
     asserts:

@@ -435,3 +435,34 @@ tests:
           content:
             name: AMP_DEPLOY_INGRESS_ZONE_INTERNAL
             value: ""
+
+  - it: points endpoints at the chart's endpoint ServiceAccount by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT
+            value: amp-endpoint
+
+  - it: points endpoints at an existing ServiceAccount when told to
+    set:
+      controller.endpoint.serviceAccount:
+        create: false
+        name: tenant-compute
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT
+            value: tenant-compute
+
+  - it: leaves endpoints on the namespace default when it neither creates nor names one
+    set:
+      controller.endpoint.serviceAccount:
+        create: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT
+            value: ""

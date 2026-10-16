@@ -194,6 +194,7 @@ ServiceAccount, Role, RoleBinding and ClusterRoles from the chart's rendered out
 | `amp-controller` SA | **ClusterRole** `nodes: get, list` | Read `spec.providerID` to detect the cloud (drives `nlb_*` annotations) and resolve NodePort node IPs. Read-only; cluster-wide only because Node is a cluster-scoped kind. | `rbac.nodeRead: true` |
 | `amp-controller` SA | **ClusterRole** `namespaces: get, list, create` | Helm's `--create-namespace` probing. **This is the one grant that can change the cluster.** | `rbac.clusterScoped: false` |
 | otel collector SA | **ClusterRole** `nodes`, `nodes/proxy`, `nodes/metrics` | cAdvisor per-pod resource metrics via the kubelet. | `otel.podMetrics: true` |
+| `amp-endpoint` SA | nothing — no binding, and endpoint pods mount no token | What every endpoint pod runs as, so code inside Postgres has no Kubernetes API access | `controller.endpoint.serviceAccount.create: true` |
 | `reconcile-agent` SA | **Role**, release namespace | `secrets: get, create, patch` — its own identity Secret (`reconcile-agent-state`) only. Its credential lives in a separate operator-planted Secret it never writes. | with `agent.enabled` |
 
 The namespaced Role is broad because the controller drives Helm to create and delete

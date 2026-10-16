@@ -124,9 +124,12 @@ type DeployConfig struct {
 	// Cloud names the cloud whose load-balancer annotations the endpoint chart
 	// renders for the nlb_* connectivity modes. Empty = read it off a node's
 	// spec.providerID, which needs `nodes get, list`.
-	Cloud         string
-	NodeSelector  map[string]string // node labels endpoint pods must match (e.g. a local-NVMe-SSD pool)
-	TailnetSuffix string            // Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") for deriving endpoint tailnet addresses; empty = disabled
+	Cloud        string
+	NodeSelector map[string]string // node labels endpoint pods must match (e.g. a local-NVMe-SSD pool)
+	// EndpointServiceAccount is the ServiceAccount endpoint pods run as; empty =
+	// the namespace's `default`. The pods mount no token either way.
+	EndpointServiceAccount string
+	TailnetSuffix          string // Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") for deriving endpoint tailnet addresses; empty = disabled
 
 	// IngressEnabled is the switch for the whole feature. Off means this
 	// deployment has no shards and the ingress_* connectivity modes are refused,
@@ -438,6 +441,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.Cloud, "deploy-cloud", env("AMP_DEPLOY_CLOUD", ""), "k8s: cloud whose load-balancer annotations the nlb_* connectivity modes render — aws, gcp or azure. Empty = detect from a node's spec.providerID, which needs nodes get/list (rbac.clusterScoped)")
 	var nodeSelectorRaw string
 	fs.StringVar(&nodeSelectorRaw, "deploy-node-selector", env("AMP_DEPLOY_NODE_SELECTOR", ""), "k8s: comma-separated key=value node labels endpoint pods must schedule onto, e.g. a local-NVMe-SSD ephemeral pool (values cannot contain commas)")
+	fs.StringVar(&d.EndpointServiceAccount, "deploy-endpoint-service-account", env("AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT", ""), "k8s: ServiceAccount endpoint pods run as, in the deploy namespace; empty = the namespace's default")
 	fs.StringVar(&d.TailnetSuffix, "deploy-tailnet-suffix", env("AMP_DEPLOY_TAILNET_SUFFIX", ""), "k8s: Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each endpoint's tailnet address when its Service is tailnet-exposed (tailscale.com/expose=true); empty = disabled")
 	fs.BoolVar(&d.IngressEnabled, "deploy-ingress-enabled", envBool("AMP_DEPLOY_INGRESS_ENABLED", false), "k8s: route endpoints through shared ingress shards. Off (the default) = the ingress_* connectivity modes are refused")
 	fs.StringVar(&d.IngressZoneInternal, "deploy-ingress-zone-internal", env("AMP_DEPLOY_INGRESS_ZONE_INTERNAL", ""), "k8s: DNS zone INTERNAL endpoint names (ingress_internal and nlb_internal) are published under, e.g. internal.pg.example.com. Empty = that family's names are not published: an ingress endpoint's address is its shard's host:port, an nlb one's its load balancer's — what a cluster with no external-dns (kind, CI) gets")

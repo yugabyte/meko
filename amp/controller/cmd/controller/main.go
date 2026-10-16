@@ -172,6 +172,7 @@ func buildProvisioning(cfg *config.Config, m *metrics.Metrics, logger *slog.Logg
 				IngressEnabled:                cfg.Deploy.IngressEnabled,
 				IngressSourceFiltering:        cfg.Deploy.IngressSourceFiltering,
 				NodeSelector:                  cfg.Deploy.NodeSelector,
+				EndpointServiceAccount:        cfg.Deploy.EndpointServiceAccount,
 				TailnetSuffix:                 cfg.Deploy.TailnetSuffix,
 				StorageClass:                  cfg.Deploy.StorageClass,
 				DiskSize:                      cfg.Deploy.DiskSize,

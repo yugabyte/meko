@@ -552,6 +552,28 @@ func TestKubernetesValuesNodeSelector(t *testing.T) {
 	}
 }
 
+func TestKubernetesValuesServiceAccount(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.EndpointServiceAccount = "amp-endpoint"
+	v := NewKubernetesDeployer(cfg, nil).values(testEndpointSpec(), "yb-ep-rel")
+	if v.ServiceAccountName != "amp-endpoint" {
+		t.Errorf("ServiceAccountName = %q, want amp-endpoint", v.ServiceAccountName)
+	}
+
+	// Unset, the key is omitted so the chart keeps the namespace's default.
+	data, err := json.Marshal(NewKubernetesDeployer(testKubernetesConfig(), nil).values(testEndpointSpec(), "yb-ep-rel"))
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal(data, &asMap); err != nil {
+		t.Fatalf("unmarshal values: %v", err)
+	}
+	if _, present := asMap["serviceAccountName"]; present {
+		t.Errorf("serviceAccountName should be omitted when unset, got %s", data)
+	}
+}
+
 // An endpoint's tags and identity labels reach the chart together as
 // commonLabels, and a spec with neither omits the key.
 func TestKubernetesValuesCommonLabels(t *testing.T) {

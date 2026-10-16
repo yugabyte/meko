@@ -139,6 +139,25 @@ floating tag.
 amp-reconcile-agent
 {{- end }}
 
+{{/*
+The ServiceAccount endpoint pods run as. Empty only when the chart creates none
+and names none, and then endpoints keep the namespace's `default`. Read with dig:
+a --reuse-values upgrade of a release predating the key has no serviceAccount
+map at all, and should still get one.
+*/}}
+{{- define "yb-amp-controller.endpointServiceAccountCreate" -}}
+{{- if dig "serviceAccount" "create" true .Values.controller.endpoint }}true{{ end }}
+{{- end }}
+
+{{- define "yb-amp-controller.endpointServiceAccountName" -}}
+{{- $name := dig "serviceAccount" "name" "" .Values.controller.endpoint -}}
+{{- if $name -}}
+{{- $name -}}
+{{- else if include "yb-amp-controller.endpointServiceAccountCreate" . -}}
+amp-endpoint
+{{- end -}}
+{{- end }}
+
 {{- define "yb-amp-controller.agentSelectorLabels" -}}
 {{ include "yb-amp-controller.selectorLabels" . }}
 app.kubernetes.io/component: reconcile-agent

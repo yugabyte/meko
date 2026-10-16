@@ -569,6 +569,15 @@ commonLabels: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+# -- ServiceAccount the endpoint pod runs as. The controller sets it (from
+# AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT) to one with no RBAC bindings. Empty = the
+# namespace's `default`.
+serviceAccountName: ""
+# -- Nothing in the endpoint pod calls the Kubernetes API, so no token is mounted:
+# code running inside Postgres could otherwise act with whatever is bound to the
+# ServiceAccount, and on `default` that is whatever anyone else in the namespace
+# bound to it.
+automountServiceAccountToken: false
 securityContext: {}
 # Run the pageserver and safekeeper as the storage user and the compute as its
 # own user, so a compromised Postgres cannot read the YugabyteDB client key

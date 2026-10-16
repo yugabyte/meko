@@ -289,6 +289,23 @@ controller:
     # to put each endpoint's emptyDir /data on NVMe. Empty => no selector
     # (schedules anywhere).
     nodeSelector: []
+    # The ServiceAccount every endpoint pod runs as
+    # (AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT). It has no RBAC bindings and the
+    # pods mount no token.
+    serviceAccount:
+      # -- Create it. Off with `name` set, the named ServiceAccount must already
+      # exist in the release namespace, or no endpoint pod can be created. Off
+      # with `name` empty, endpoints run as the namespace's `default`, still
+      # without a token. Either change reaches an endpoint only on its next
+      # redeploy; until then it keeps the old ServiceAccount, which Helm never
+      # deletes (resource-policy: keep) so its pod can still be replaced.
+      create: true
+      # -- Empty = "amp-endpoint".
+      name: ""
+      # -- e.g. iam.gke.io/gcp-service-account, to give endpoints a Google Cloud
+      # identity through Workload Identity. Without one, an endpoint on a
+      # Workload Identity node pool gets no Google Cloud credentials at all.
+      annotations: {}
     # -- Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") used to derive each
     # endpoint's tailnet address when its Service is tailnet-exposed
     # (tailscale.com/expose=true in service.annotations). Empty disables tailnet

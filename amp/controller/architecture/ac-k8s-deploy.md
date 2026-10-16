@@ -33,6 +33,7 @@ interface onto chart values) and lays down:
   Helm's own release Secrets), and reads pods/services for address lookups — plus
   a small **ClusterRole** for `namespaces` (Helm's `--create-namespace` probes it)
   and `nodes` (the NodePort address resolver reads a node IP);
+- the endpoints' own **ServiceAccount** (`amp-endpoint`), bound to nothing;
 - the **Deployment**, wired for the Kubernetes driver (`AMP_DEPLOY_DRIVER=kubernetes`)
   and internal-LoadBalancer endpoints;
 - an in-cluster **Service** (`amp-controller`, ClusterIP) exposing the API (`8080`)
@@ -550,6 +551,7 @@ Kubernetes driver:
 | `--deploy-storage-class` | storage class for the endpoint `/data` PVC (EBS/PD); empty = ephemeral `emptyDir` |
 | `--deploy-scratch-backing` | what the `emptyDir` `/data` sits on when no storage class is set: `local-nvme` (then `--deploy-node-selector` is required, naming the local-NVMe pool) or `node-disk` (the node's own disk, accepted). Empty (default) = the controller warns at startup when nothing pins `/data` (#1612). Chart value: `controller.endpoint.scratchBacking` |
 | `--deploy-node-selector` | `k=v,k=v` node labels every endpoint pod must schedule onto. Chart value: `controller.endpoint.nodeSelector` |
+| `--deploy-endpoint-service-account` | ServiceAccount every endpoint pod runs as; empty = the namespace's `default`. The chart creates `amp-endpoint`, bound to nothing, and endpoint pods mount no token either way, so code inside Postgres cannot reach the Kubernetes API. Chart value: `controller.endpoint.serviceAccount` |
 | `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 20 GiB × the endpoint's vCPU |
 | `--deploy-disk-gib-per-vcpu` | GiB of `/data` per endpoint vCPU (`0` = the built-in 20; for a pool built to a different disk-per-core shape) |
 | `--deploy-memory-gib-per-vcpu` | GiB of memory per endpoint vCPU (`0` = the built-in 8). Fills in the memory when a request names only CPU, and is the floor every request is held to — a pair below it is a `400`. The escape hatch for a pool whose nodes cannot back 8 GiB/core |

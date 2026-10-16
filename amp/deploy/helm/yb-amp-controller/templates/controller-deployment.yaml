@@ -228,6 +228,8 @@ spec:
             # pool). The controller parses this as a "k=v,k=v" CSV.
             - name: AMP_DEPLOY_NODE_SELECTOR
               value: {{ join "," (.Values.controller.endpoint.nodeSelector | default (list)) | quote }}
+            - name: AMP_DEPLOY_ENDPOINT_SERVICE_ACCOUNT
+              value: {{ include "yb-amp-controller.endpointServiceAccountName" . | quote }}
           readinessProbe:
             httpGet:
               path: /readyz

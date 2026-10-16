@@ -127,6 +127,9 @@ type KubernetesConfig struct {
 	// labels — e.g. a node pool with local-NVMe-SSD ephemeral storage, so the
 	// endpoint's emptyDir /data lands on NVMe instead of the node boot disk.
 	NodeSelector map[string]string
+	// EndpointServiceAccount is the ServiceAccount endpoint pods run as; empty
+	// leaves the chart's default (the namespace's `default`).
+	EndpointServiceAccount string
 
 	// TailnetSuffix, when non-empty AND the endpoint Service is exposed on the
 	// tailnet (ServiceAnnotations has "tailscale.com/expose"="true"), is the
@@ -1703,6 +1706,8 @@ type chartValues struct {
 	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
 	// selector — schedules anywhere).
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	// ServiceAccountName is omitted when empty, leaving the namespace's `default`.
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 	// LFC is nil (omitted) to leave prewarm and offload at the chart's default.
 	LFC *lfcValues `json:"lfc,omitempty"`
 	// CommonLabels are the endpoint's identity labels and tags, labelled onto
@@ -2238,6 +2243,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	if len(k.cfg.NodeSelector) > 0 {
 		v.NodeSelector = k.cfg.NodeSelector
 	}
+	v.ServiceAccountName = k.cfg.EndpointServiceAccount
 	if k.cfg.LFCOffloadIntervalSeconds > 0 {
 		v.LFC = &lfcValues{
 			Autoprewarm:            true,
