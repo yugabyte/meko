@@ -91,7 +91,8 @@ when the commit reviewed is no longer in it), with one notification per new head
 latest** fetches the head, moves the review branch there (`reset --keep`) and sends the
 `review-pr-update` prompt: a short summary of what changed since the commit reviewed so far and of
 the threads that got replies, again without reviewing. The button reads *Updating* with moving
-dots until the request returns, since the fetch can take a while. It's refused while AgentK is mid-turn or
+dots, and takes no second press, from the click until the state shows the update (its answer
+comes before the state, which is pushed within 100 ms), since the fetch can take a while. It's refused while AgentK is mid-turn or
 waiting on you, while the worktree has uncommitted files, or while the branch has commits of your
 own on top of the commit reviewed (move them to another branch first); queued in
 `pending_prompts` if Claude is busy. A review

@@ -6,6 +6,7 @@ import {
   type MekoStatus,
   type MoveTarget,
   type ProjectWithSessions,
+  type ReviewingPr,
   type Session,
   type SessionAction,
   type Stage,
@@ -17,7 +18,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
@@ -146,9 +147,18 @@ export function ProjectView({
   }, [reviewDesign]);
 
   // One session action at a time, so a double tap can't send two merges or resumes.
-  const [actingOn, setActingOn] = useState<SessionAction | null>(null);
+  // The view isn't remounted per session, so the action in flight names its session.
+  const [actingOn, setActingOn] = useState<{ id: string; action: SessionAction } | null>(null);
   const acting = actingOn !== null;
   const actingRef = useRef(false);
+  // An Update to latest that went through, with the PR as it stood: still Updating until the state shows it.
+  const [updated, setUpdated] = useState<{ id: string; pr: ReviewingPr } | null>(null);
+  useEffect(() => {
+    if (!updated) return;
+    // In case the state never shows it (a dead events socket), the button comes back.
+    const t = setTimeout(() => setUpdated(null), 5000);
+    return () => clearTimeout(t);
+  }, [updated]);
   const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
     // With open questions, approving starts with answering them; the approval goes from there.
@@ -159,11 +169,15 @@ export function ProjectView({
       return;
     }
     actingRef.current = true;
-    setActingOn(action);
+    setActingOn({ id: session.id, action });
+    const pr = session.reviewingPr;
     try {
       if (action === 'approve-design') await approveDesign(session.id);
-      // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
-      else if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+      else {
+        // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
+        if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+        if (action === 'update-pr' && pr) setUpdated({ id: session.id, pr });
+      }
     } catch (e) {
       onError(errorMessage(e));
     } finally {
@@ -171,6 +185,9 @@ export function ProjectView({
       setActingOn(null);
     }
   };
+  const updating = !!session && (
+    (actingOn?.id === session.id && actingOn.action === 'update-pr')
+    || (updated?.id === session.id && !updateShowing(updated.pr, session.reviewingPr)));
 
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
   const changedFiles = session?.diffStat?.files ?? 0;
@@ -327,7 +344,8 @@ export function ProjectView({
           onOpenPr={onOpenPr}
           onShare={canShare ? () => setSharing(true) : undefined}
           onHeld={() => setHeldOpen(true)}
-          acting={actingOn}
+          acting={acting}
+          updating={updating}
           actions={
             <>
               {session?.prUrl && (
@@ -451,7 +469,8 @@ export function ProjectView({
                 setSheet(false);
                 setHeldOpen(true);
               }}
-              acting={actingOn}
+              acting={acting}
+              updating={updating}
               actions={null}
               reasons
             />
@@ -551,7 +570,8 @@ function StageBar({
   onShare,
   onHeld,
   learnTo = null,
-  acting = null,
+  acting = false,
+  updating = false,
   actions,
   reasons = false,
 }: {
@@ -567,8 +587,10 @@ function StageBar({
   onShare?: () => void;
   /** Opens the reviews held for the user. */
   onHeld: () => void;
-  /** The session action in flight, if one is. */
-  acting?: SessionAction | null;
+  /** A session action is in flight. */
+  acting?: boolean;
+  /** This session's Update to latest is in flight, or its result hasn't reached the state yet. */
+  updating?: boolean;
   actions: ReactNode;
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
@@ -594,7 +616,7 @@ function StageBar({
   // Other stages the session can be moved to open the move dialog.
   const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
   const midTurn = session.status === 'working' || session.status === 'starting';
-  const blocked = session.busy || acting !== null;
+  const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
   let reason: string | null = null;
 
@@ -739,7 +761,7 @@ function StageBar({
           : session.status === 'exited'
             ? 'Resume the session first.'
             : null;
-      gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={acting === 'update-pr'} onAct={onAct} />;
+      gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={updating} onAct={onAct} />;
       break;
     }
   }

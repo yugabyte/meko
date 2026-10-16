@@ -26,7 +26,7 @@ export function ReviewPrGate({
   /** The session is busy or another action is in flight. */
   blocked: boolean;
   midTurn: boolean;
-  /** Update to latest is in flight: fetching the PR can take a while. */
+  /** Update to latest is in flight (fetching the PR can take a while), or the state doesn't show it yet. */
   updating: boolean;
   onAct: (a: SessionAction) => Promise<void>;
 }) {
@@ -43,7 +43,7 @@ export function ReviewPrGate({
       {(moved || designUnread) && (
         <button
           className="gate"
-          disabled={blocked || !!reason}
+          disabled={blocked || updating || !!reason}
           title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
           onClick={() => onAct('update-pr')}
         >

@@ -1,7 +1,7 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX } from '../shared/types';
-import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -488,6 +488,14 @@ export function openPrGate(session: Session): GateButton {
   if (session.status === 'needs_input') return gate('AgentK is waiting on you in the terminal. Answer it first.');
   if (session.promptsHeld > 0) return gate('AgentK has prompts from you to take first. Open the PR once it has.');
   return gate(null);
+}
+
+/**
+ * An Update to latest that went through still waits on the state to show it: its answer comes before
+ * the state does. It always moves the commit checked out or the head, or marks the design read.
+ */
+export function updateShowing(before: ReviewingPr, now: ReviewingPr | null): boolean {
+  return !now || now.reviewSha !== before.reviewSha || now.headSha !== before.headSha || now.designUnread !== before.designUnread;
 }
 
 /** The Merge & Close gate in Review. With only blockers that clear by themselves left, a press queues the merge. */

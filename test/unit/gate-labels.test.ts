@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Session } from '../../src/shared/types.js';
-import { headerApproves, mergeGate, openPrGate, queuedText } from '../../src/web/util.js';
+import type { ReviewingPr, Session } from '../../src/shared/types.js';
+import { headerApproves, mergeGate, openPrGate, queuedText, updateShowing } from '../../src/web/util.js';
 
 const session = (over: Partial<Session> = {}) =>
   ({
@@ -67,5 +67,18 @@ describe('headerApproves', () => {
     ['shows nothing for an archived session', design(0, { desired: 'archived' }), 'hidden', false],
   ] as const)('%s', (_, s, questions, shown) => {
     expect(headerApproves(s, questions)).toBe(shown);
+  });
+});
+
+describe('updateShowing', () => {
+  const pr = (over: Partial<ReviewingPr> = {}) => ({ reviewSha: 'a', headSha: 'b', designUnread: false, ...over }) as ReviewingPr;
+  it.each([
+    ['not while the state is from before the update', pr(), pr(), false],
+    ['once the commit checked out moved', pr(), pr({ reviewSha: 'b' }), true],
+    ['once the head moved (the PR had no new commits after all)', pr(), pr({ headSha: 'a' }), true],
+    ['once the design is read', pr({ designUnread: true }), pr(), true],
+    ['once the session is gone', pr(), null, true],
+  ] as const)('%s', (_what, before, now, showing) => {
+    expect(updateShowing(before, now)).toBe(showing);
   });
 });
