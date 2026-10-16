@@ -5,7 +5,7 @@ import { all, get, run } from './db.js';
 import type { ModReply } from './hooks.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, mekoTag, withMekoScope, type SimilarMemory } from './meko.js';
-import { markGap, projectGaps, sessionGaps, type GapAction } from './mekogaps.js';
+import { learnGaps, markGap, projectGaps, type GapAction } from './mekogaps.js';
 import { LEARN_AGENT } from './mekousage.js';
 import { claudePath } from './paths.js';
 import { HttpError } from './projects.js';
@@ -41,10 +41,10 @@ const KINDS: Record<string, string> = {
  * What the fork is asked: the facts this session learned, as JSON, leaving out what it already
  * saved itself and what earlier learn steps covered (`covered`; a fork leaves nothing in the
  * transcript, so it can't see them). It states the saving rule in full: a session launched before
- * the rule was in the system prompt doesn't have it. With `questions` (the session's searches
- * Meko couldn't answer, `sessionGaps`), each fact also names the ones it answers, by number.
+ * the rule was in the system prompt doesn't have it. With `questions` (the project's searches Meko
+ * couldn't answer, the session's own first, `learnGaps`), each fact also names the ones it answers, by number.
  */
-export function extractPrompt(covered: string[], questions: string[] = []): string {
+export function extractPrompt(covered: string[], questions: { query: string; own: boolean }[] = []): string {
   const facts = questions.length
     ? '{"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact","answers":[1]}]}'
     : '{"facts":[{"kind":"how-it-works|decision|root-cause|gotcha|measured","component":"…","text":"one self-contained fact"}]}';
@@ -55,11 +55,20 @@ ${facts}
 Reply {"facts":[]} when there is nothing new worth saving.`;
 }
 
-/** The questions part of the fork's prompt: the session's searches Meko couldn't answer, numbered. Empty when there are none. */
-function questionsText(questions: string[]): string {
+/**
+ * The questions part of the fork's prompt: the searches Meko couldn't answer, numbered in one run,
+ * this session's (they come first) and then other sessions' on the project. Empty when there are none.
+ */
+function questionsText(questions: { query: string; own: boolean }[]): string {
   if (!questions.length) return '';
-  const list = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
-  return `\n\nMeko couldn't answer these searches from this session:\n${list}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: AgentK checks it against what Meko has. Leave a question out when the session didn't find the answer, or when the only answer is about this task or this machine. Don't guess.`;
+  const numbered = questions.map((q, i) => ({ own: q.own, line: `${i + 1}. ${q.query}` }));
+  const own = numbered.filter((q) => q.own).map((q) => q.line).join('\n');
+  const others = numbered.filter((q) => !q.own).map((q) => q.line).join('\n');
+  const lists = [
+    own && `Meko couldn't answer these searches from this session:\n${own}`,
+    others && (own ? `Nor these, from other sessions on this project:\n${others}` : `Meko couldn't answer these searches from other sessions on this project:\n${others}`),
+  ].filter(Boolean).join('\n\n');
+  return `\n\n${lists}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: AgentK checks it against what Meko has. Leave a question out when this session didn't find the answer, or when the only answer is about this task or this machine. Don't guess: answer another session's question only when this session established the answer itself.`;
 }
 
 /**
@@ -235,7 +244,7 @@ interface Job {
   step: 'extract' | 'search' | 'check' | 'save';
   facts: Fact[];
   similar: SimilarMemory[][];
-  /** The session's questions Meko couldn't answer, as offered to the fork (its numbers are their places, from 1). */
+  /** The project's questions Meko couldn't answer, as offered to the fork (its numbers are their places, from 1). */
   questions: { key: string; query: string }[];
   saves: number;
   updates: number;
@@ -414,7 +423,7 @@ export class Learner {
   private startMod(row: SessionRow, trigger: LearnTrigger, dp: DatapackRef): void {
     const id = randomUUID();
     this.insert(row.id, id, trigger, 'mod', null);
-    const questions = sessionGaps(this.db, row.project_id, row.id);
+    const questions = learnGaps(this.db, row.project_id, row.id);
     const timer = setTimeout(() => {
       const job = this.jobs.get(id);
       if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
@@ -422,7 +431,7 @@ export class Learner {
     timer.unref?.();
     this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions, saves: 0, updates: 0, skips: 0, taught: 0, dismissed: 0, timer });
     run(this.db, 'UPDATE meko_learns SET questions = ? WHERE id = ?', questions.length, id);
-    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions.map((q) => q.query)) });
+    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions) });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
   }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { openDb, run } from '../../src/server/db.js';
 import { coveredText, dedupPrompt, firstJson, machineSpecific, memoryText, parseDecisions, parseFacts } from '../../src/server/learn.js';
+import { GAP_LEARN_MAX, learnGaps } from '../../src/server/mekogaps.js';
 
 describe('the learn step', () => {
   it('reads the facts from a reply, whatever wraps the JSON', () => {
@@ -28,6 +30,30 @@ describe('the learn step', () => {
       { kind: 'how-it-works', component: '', text: 'y'.repeat(2000), answers: [] },
       ...Array.from({ length: 4 }, () => ({ kind: 'how-it-works', component: '', text: 'x', answers: [] })),
     ]);
+  });
+
+  it("offers the project's open questions up to the cap, the session's own first and then the latest asked", () => {
+    const db = openDb(':memory:');
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('p', 'P', '/r', 'main', 1)`);
+    for (const id of ['s', 'other']) {
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
+               desired, status, stage, created_at) VALUES (?, 'p', ?, ?, 'c', 'b', 'main', '/w', 't', ?, 'running', 'idle', 'code', 1)`, id, id, id, `tok-${id}`);
+    }
+    const search = (session: string, query: string, at: number) =>
+      run(db, `INSERT INTO meko_calls(session_id, tool_use_id, tool, kind, at, input_chars, outcome, results, query, query_key, quality)
+               VALUES (?, ?, 'context_search', 'lookup', ?, 40, 'empty', 0, ?, ?, 'empty')`, session, `${session}-${at}`, at, query, query.toLowerCase());
+    // The session's own: asked early. Other sessions': asked later, more than the cap leaves room for.
+    for (let i = 0; i < 10; i++) search('s', `Own ${i}`, 100 + i);
+    for (let i = 0; i < GAP_LEARN_MAX; i++) search('other', `Other ${i}`, 1000 + i);
+    // Only AgentK's search at start asked it: a task, not offered.
+    run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES ('other', 5000, 'empty', 0, 0, 900, 'do it', 'do it', 'empty')`);
+    const offered = learnGaps(db, 'p', 's');
+    expect(offered).toHaveLength(GAP_LEARN_MAX);
+    expect(offered.slice(0, 11).map((q) => [q.query, q.own])).toEqual([
+      ...Array.from({ length: 10 }, (_, i) => [`Own ${9 - i}`, true]),
+      [`Other ${GAP_LEARN_MAX - 1}`, false],
+    ]);
+    expect(offered.at(-1)?.query).toBe('Other 10');
   });
 
   it('takes the first JSON object that parses', () => {

@@ -106,7 +106,7 @@ gets the same list. The duplicate check still runs on what comes back.
 **Through the mod** (its link live, protocol 2):
 
 1. The server records a `meko_learns` row and puts an `extract` part on the session's next poll,
-   with the session's questions Meko couldn't answer numbered at its end (*Questions at close*, below).
+   with the project's questions Meko couldn't answer numbered at its end (*The project's open questions*, below).
 2. The mod asks `$.model.fork` (the session's own transcript as the main thread last sent it,
    served from the prompt cache, every tool denied, nothing added to the transcript) for the facts
    as JSON (`extractPrompt()`), each with the questions it answers (`answers`), and posts the
@@ -125,7 +125,7 @@ gets the same list. The duplicate check still runs on what comes back.
    that names a local path, then the fact's own; an update naming a memory that wasn't offered
    becomes an add). A fact the check left out is added. One at a time. An added fact that answers
    questions has their queries in its metadata too (`questions`), and its questions are marked
-   (*Questions at close*, below).
+   (*The project's open questions*, below).
 6. The row closes with its counts, the session's timeline says "Saved N memories and corrected M in
    <datapack>" (then "; taught Meko N questions it couldn't answer and dismissed M questions it knew
    already", for what it marked), and the next poll has the mod show the same as a toast.
@@ -144,18 +144,26 @@ under the saving rule itself. The step ends with that turn (`Lifecycle.onTurnEnd
 the Meko calls in the transcript during it. It isn't offered the session's questions: AgentK
 couldn't tell which of Claude's saves answers which, so it couldn't mark them.
 
-**Questions at close.** A session that searched Meko for something
-it then found out has the answer in its context when it closes. So a step through the mod is
-offered the session's open questions on [What Meko doesn't know](#what-meko-doesnt-know)
-(`sessionGaps()` in `mekogaps.ts`): those it asked in Claude's own searches (subagents' included;
-AgentK's search at start doesn't count, since its query is the task), the ones it asked last first
-(by its own asks: another session asking one later doesn't move it up), at most 30
-(`GAP_LEARN_MAX`), each as last asked, cut to 300 characters. Other sessions' questions aren't
-offered: the fork knows only this session. The prompt asks for a fact answering each question the
-session found the answer to, with the question numbers in its `answers` (one fact can answer
-several wordings of one question), and to leave out a question it didn't find out about, or whose
-only answer is about the task or the machine. Such a fact goes through the rule, the local-path
-filter and the duplicate check like any other, and then:
+**The project's open questions.** A session that found out something Meko couldn't answer has
+the answer in its context, whether it searched for it or another session did. So every step
+through the mod (Save learnings, `/agentk_learn`, Merge & Close and Discard alike) is offered the
+project's open questions on [What Meko doesn't know](#what-meko-doesnt-know) (`learnGaps()` in
+`mekogaps.ts`), only those asked in Claude's own searches (subagents' included; one asked only by
+AgentK's search at start isn't, since its query is a task):
+
+- first the session's own, the ones it asked last first (by its own asks: another session asking
+  one later doesn't move it up);
+- then other sessions', latest asked first (the page's order);
+- at most 50 in all (`GAP_LEARN_MAX`), each as last asked, cut to 300 characters.
+
+The prompt numbers them in one run, in two lists ("from this session", then "from other sessions
+on this project"). It asks for a fact answering each question the session found the answer to,
+with the question numbers in its `answers` (one fact can answer several wordings of one question),
+and to leave out a question it didn't find out about, or whose only answer is about the task or
+the machine. The fork knows only this session, so it's told not to guess: another session's
+question is answered only when this session established the answer itself. A wrong mark shows on
+the page with the session that made it, and **Restore** opens the question again. Such a fact goes
+through the rule, the local-path filter and the duplicate check like any other, and then:
 
 - written (added, or a correction): each question it answers is marked **taught** with the text
   written, the datapack, and the session (`meko_gap_marks.taught_session`);
@@ -164,8 +172,8 @@ filter and the duplicate check like any other, and then:
   (`dismissed_session`, `dismissed_memory`);
 - not written (its write failed, it was filtered out, or the step ran out of time): nothing is marked.
 
-A question is marked only while it's still open, so one a person taught or dismissed while the step
-ran keeps their mark. The step records how many it offered, taught and dismissed
+A question is marked only while it's still open, so one a person (or another session's learn step)
+taught or dismissed while the step ran keeps their mark. The step records how many it offered, taught and dismissed
 (`meko_learns.questions`, `taught`, `dismissed`).
 
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
@@ -179,8 +187,8 @@ session moments later, so run `/agentk_learn` during the session to look at one.
 
 The project's Meko searches that found nothing, or nothing relevant, grouped by question, so
 someone can see what Meko is missing and teach it (`src/server/mekogaps.ts`). No model judges a
-search's answer; the [learn step](#the-learn-step) teaches Meko the answers to a closing session's
-questions it found out, and dismisses those Meko already knew (*Questions at close*). The list stays
+search's answer; the [learn step](#the-learn-step) teaches Meko the answers a session found out to
+the project's open questions, and dismisses those Meko already knew (*The project's open questions*). The list stays
 in AgentK's database (it isn't shared with the team on the datapack).
 
 **What's recorded.** The [transcript reader](token-usage.md) keeps, for each of Claude's searches

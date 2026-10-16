@@ -13,8 +13,8 @@ import { all, run, type Db } from './db.js';
 export const GAP_PAGE = 100;
 /** Sessions named on a question. */
 const GAP_SESSIONS = 20;
-/** The most questions a learn step is offered (the ones the session asked last), and how much of each. */
-export const GAP_LEARN_MAX = 30;
+/** The most questions a learn step is offered (the session's own first), and how much of each. */
+export const GAP_LEARN_MAX = 50;
 export const GAP_LEARN_CHARS = 300;
 
 interface AskRow {
@@ -180,20 +180,26 @@ export function findGap(db: Db, projectId: string, key: string): MekoGap | null 
 }
 
 /**
- * The project's open questions a session asked in Claude's own searches (AgentK's search at start
- * doesn't count: its query is the task), the ones it asked last first (by its own asks, not other
- * sessions'), for its learn step to answer: at most `GAP_LEARN_MAX`, each query as last asked, cut
- * to `GAP_LEARN_CHARS`.
+ * The project's open questions for a session's learn step to answer: first those the session asked
+ * in Claude's own searches, the ones it asked last first (by its own asks, not other sessions'),
+ * then those other sessions asked in Claude's own searches, latest asked first. A question asked
+ * only by AgentK's search at start isn't offered: its query is a task. At most `GAP_LEARN_MAX`,
+ * each query as last asked, cut to `GAP_LEARN_CHARS`; `own` says whether the session asked it.
  */
-export function sessionGaps(db: Db, projectId: string, sessionId: string): { key: string; query: string }[] {
+export function learnGaps(db: Db, projectId: string, sessionId: string): { key: string; query: string; own: boolean }[] {
   const asked = new Map(all<{ key: string; at: number }>(db,
     'SELECT query_key AS key, MAX(at) AS at FROM meko_calls WHERE session_id = ? AND quality IS NOT NULL AND query_key IS NOT NULL GROUP BY query_key',
     sessionId).map((r) => [r.key, r.at]));
-  if (!asked.size) return [];
-  return projectGaps(db, projectId).filter((g) => g.state === 'open' && asked.has(g.key))
-    .sort((a, b) => asked.get(b.key)! - asked.get(a.key)! || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-    .slice(0, GAP_LEARN_MAX)
-    .map((g) => ({ key: g.key, query: g.query.replace(/\s+/g, ' ').trim().slice(0, GAP_LEARN_CHARS) }));
+  const byClaude = new Set(all<{ key: string }>(db,
+    `SELECT DISTINCT c.query_key AS key FROM meko_calls c JOIN sessions s ON s.id = c.session_id
+     WHERE s.project_id = ? AND c.quality IS NOT NULL AND c.query_key IS NOT NULL`, projectId).map((r) => r.key));
+  if (!byClaude.size) return [];
+  const open = projectGaps(db, projectId).filter((g) => g.state === 'open' && byClaude.has(g.key));
+  const own = open.filter((g) => asked.has(g.key))
+    .sort((a, b) => asked.get(b.key)! - asked.get(a.key)! || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const others = open.filter((g) => !asked.has(g.key)); // projectGaps order: latest asked first
+  return [...own, ...others].slice(0, GAP_LEARN_MAX)
+    .map((g) => ({ key: g.key, query: g.query.replace(/\s+/g, ' ').trim().slice(0, GAP_LEARN_CHARS), own: asked.has(g.key) }));
 }
 
 /**
