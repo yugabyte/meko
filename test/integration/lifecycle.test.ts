@@ -451,7 +451,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.meko.calls.find((c) => c.name === 'updateMemory')?.args.slice(0, 2)).toEqual(['m1', 'Gotcha (x.ts): The cache is per process.']);
   });
 
-  it("teaches Meko the session's questions it found the answers to, and dismisses those Meko already knew", async () => {
+  it("teaches Meko the project's open questions the session found the answers to, its own first, and dismisses those Meko already knew", async () => {
     fakeFiles({ mod: '' });
     const s = await inReview('Questions');
     await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
@@ -466,7 +466,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     search(s.id, 'q2', 'Which order do polls run in', 3000);
     search(s.id, 'q3', 'Why migrations are append-only', 2000);
     search(s.id, 'q4', 'Can a shipped migration change', 1000);
-    // Another session's question, AgentK's search at start for this one, and one already dismissed: not offered.
+    // Another session's question is offered after this session's own, though it was asked later.
+    // AgentK's search at start and one already dismissed are not offered.
     // Another session asking one of this session's questions later doesn't move it up this session's list.
     search('other', 'q5', 'Release tag retention', 5000);
     search('other', 'q7', 'Can a shipped migration change', 6000);
@@ -477,8 +478,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       'learn-facts': JSON.stringify({ facts: [
         { kind: 'decision', component: 'lifecycle.ts', text: 'Polls for a session run one at a time.', answers: [1, 2] },
         { kind: 'gotcha', component: 'db.ts', text: 'Migrations are append-only.', answers: [3, 4] },
+        { kind: 'how-it-works', component: 'release.yml', text: 'Release tags are kept forever.', answers: [5] },
       ] }),
-      'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"skip","id":"m2"}]}',
+      'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"skip","id":"m2"},{"n":3,"action":"add"}]}',
     });
     Object.assign(env.meko, {
       similar: async (query: string) => {
@@ -491,11 +493,13 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
 
     expect(modLearn()[0].job.prompt).toContain(
-      "Meko couldn't answer these searches from this session:\n1. Poll queue order\n2. Which order do polls run in\n3. Why migrations are append-only\n4. Can a shipped migration change\nFor each",
+      "Meko couldn't answer these searches from this session:\n1. Poll queue order\n2. Which order do polls run in\n3. Why migrations are append-only\n4. Can a shipped migration change\n\n" +
+      'Nor these, from other sessions on this project:\n5. Release tag retention\nFor each',
     );
     const added = env.meko.calls.filter((c) => c.name === 'addMemory');
     expect(added.map((c) => [c.args[0], (c.args[4] as { questions?: string[] }).questions])).toEqual([
       ['Decision (lifecycle.ts): Polls for a session run one at a time.', ['Poll queue order', 'Which order do polls run in']],
+      ['How it works (release.yml): Release tags are kept forever.', ['Release tag retention']],
     ]);
     const gaps = projectGaps(env.core.db, projectId);
     const of = (key: string) => gaps.find((g) => g.key === key);
@@ -505,10 +509,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     }
     expect(of('why migrations are append-only')).toMatchObject({ state: 'dismissed', dismissal: { session: bySession, memory: 'Never edit a shipped migration.' } });
     expect(of('can a shipped migration change')).toMatchObject({ state: 'dismissed', dismissal: { session: null, memory: null } });
-    expect(of('release tag retention')?.state).toBe('open');
+    expect(of('release tag retention')).toMatchObject({ state: 'taught', taught: { session: bySession } });
     expect(of('do it')?.state).toBe('open');
-    expect(dbGet(env.core.db, 'SELECT questions, taught, dismissed FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ questions: 4, taught: 2, dismissed: 1 });
-    expect(lastEvent(s.id, 'learned')).toBe("Saved 1 memory and corrected 0 in team/demo; taught Meko 2 questions it couldn't answer and dismissed 1 question it knew already");
+    expect(dbGet(env.core.db, 'SELECT questions, taught, dismissed FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ questions: 5, taught: 3, dismissed: 1 });
+    expect(lastEvent(s.id, 'learned')).toBe("Saved 2 memories and corrected 0 in team/demo; taught Meko 3 questions it couldn't answer and dismissed 1 question it knew already");
   });
 
   it('marks no question for a write that lands after the learn step ran out of time', async () => {
