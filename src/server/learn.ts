@@ -204,7 +204,7 @@ export function parseDecisions(text: string): Map<number, Decision> | null {
 
 /**
  * "Saved 3 memories and corrected 1 in team/demo", the timeline's line for a learn step, then what
- * it did with the session's questions Meko couldn't answer, when it did anything.
+ * it did with the project's questions Meko couldn't answer (other sessions' too), when it did anything.
  */
 export function learnSummary(saves: number, updates: number, datapack: string, taught = 0, dismissed = 0): string {
   const base = `Saved ${saves} ${saves === 1 ? 'memory' : 'memories'} and corrected ${updates} in ${datapack}`;
