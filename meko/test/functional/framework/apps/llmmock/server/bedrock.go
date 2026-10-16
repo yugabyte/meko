@@ -168,7 +168,7 @@ func (s *Server) bedrockInvoke(w http.ResponseWriter, r *http.Request, model str
 		if len(inputs) == 0 {
 			inputs = []string{text}
 		}
-		vecs := make([][]float64, len(inputs))
+		vecs := make([]vector, len(inputs))
 		for i, t := range inputs {
 			vecs[i], _ = s.embed(t, t, dim)
 		}

@@ -222,9 +222,14 @@ func conversationLifecycle(t *core.T) error {
 	}
 
 	if err := t.Step("conversation_search_finds_a_turn", func(h *core.StepHandle) error {
+		// Conversation search leaves out the conversation it is asked from.
+		asker, err := owner.conversation(dp.ID, "asker "+mk)
+		if err != nil {
+			return err
+		}
 		var last string
-		err := eventually(t, "context_search over conversations to return turn two", 3*visibleWithin(t), func() (bool, error) {
-			text, terr := owner.call("context_search", map[string]any{"datapack_id": dp.ID, "conversation_id": conv, "query": "staging cluster hollyhock " + mk, "force_source": "conversation"})
+		err = eventually(t, "context_search over conversations to return turn two", 3*visibleWithin(t), func() (bool, error) {
+			text, terr := owner.call("context_search", map[string]any{"datapack_id": dp.ID, "conversation_id": asker, "query": "the staging cluster is named hollyhock " + mk, "force_source": "conversation"})
 			if terr != nil {
 				return false, terr
 			}

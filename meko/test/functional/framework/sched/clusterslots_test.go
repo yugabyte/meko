@@ -207,3 +207,50 @@ func TestSchedulerHoldsClusterSlotsAroundTheBody(t *testing.T) {
 		t.Errorf("%d slots still held after the run", st.held())
 	}
 }
+
+type gatedFake struct{ fake.Provider }
+
+func (*gatedFake) SharesInfraAcrossTests() bool { return true }
+
+// An exclusive test that held the infra gate while it queued for a lease could
+// wait on a shared worker whose writer waits on that same gate.
+func TestExclusiveWaitsForItsLeaseOutsideTheInfraGate(t *testing.T) {
+	slots := newClusterSlots(&memSlotStore{}, 1, nil)
+	slots.poll = 5 * time.Millisecond
+	other, err := slots.Acquire(context.Background(), "another run", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &gatedFake{}
+	var once sync.Once
+	p.OnProvision = func(*fake.Env) {
+		once.Do(func() {
+			other()
+			time.Sleep(200 * time.Millisecond)
+		})
+	}
+	pass := func(*core.T) error { return nil }
+	tests := []core.Test{
+		{Name: "x", Suite: "s", Category: core.Functional, Run: pass,
+			Env: core.EnvSpec{Sharing: core.Exclusive, Shape: core.ClusterOnly, ClusterSlots: 1}},
+		{Name: "w", Suite: "s", Category: core.Functional, Run: pass,
+			Env: core.EnvSpec{Sharing: core.Shared, Shape: core.SingleStack, FaultsSharedInfra: true}},
+	}
+	done := make(chan core.RunSummary, 1)
+	go func() {
+		summary, _ := Run(context.Background(), tests, Options{
+			RunOptions:   core.RunOptions{Parallel: 4, Seed: core.NewRunSeed(1, true), Config: core.NewConfig(), Provider: p},
+			Capacity:     1,
+			ClusterSlots: slots,
+		})
+		done <- summary
+	}()
+	select {
+	case summary := <-done:
+		if summary.Counts[core.StatusPassed] != 2 {
+			t.Errorf("counts = %v, want both passed", summary.Counts)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run deadlocked: the exclusive test holds the infra gate waiting for the lease the faulting test's worker holds")
+	}
+}

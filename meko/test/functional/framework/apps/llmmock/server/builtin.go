@@ -40,8 +40,26 @@ func embeddingDim(model string, requested any) int {
 	return 1536
 }
 
-func hashVector(tokens []string, dim int) []float64 {
-	vec := make([]float64, dim)
+// vector always writes its components as float literals. Python's json reads a bare 0
+// as an int, and psycopg refuses a list that mixes ints with floats.
+type vector []float64
+
+func (v vector) MarshalJSON() ([]byte, error) {
+	b := []byte{'['}
+	for i, x := range v {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = strconv.AppendFloat(b, x, 'f', -1, 64)
+		if x == math.Trunc(x) {
+			b = append(b, ".0"...)
+		}
+	}
+	return append(b, ']'), nil
+}
+
+func hashVector(tokens []string, dim int) vector {
+	vec := make(vector, dim)
 	for _, tok := range tokens {
 		h := sha1.Sum([]byte(tok))
 		vec[int(binary.BigEndian.Uint32(h[:4])%uint32(dim))]++
@@ -61,9 +79,9 @@ func hashVector(tokens []string, dim int) []float64 {
 	return vec
 }
 
-func fit(vector []float64, dim int) []float64 {
-	out := make([]float64, dim)
-	copy(out, vector)
+func fit(v []float64, dim int) vector {
+	out := make(vector, dim)
+	copy(out, v)
 	return out
 }
 

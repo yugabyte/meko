@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -29,7 +30,7 @@ func init() {
 		Description: "Knowledge-base documents through both upload paths and out again. The web app's presigned upload (upload-url, the browser's POST to object storage, " +
 			"upload-complete) and the direct upload both reach COMPLETED; the documents list, counts, summary, activity log and source status agree; knowledgebase_search " +
 			"finds each; the download URL returns the bytes uploaded; a viewer of the shared datapack searches but cannot delete, a stranger sees nothing; a document deleted " +
-			"over REST and one deleted with knowledgebase_delete_document leave every view; an upload never completed is listed as pending until it is discarded.",
+			"over REST and one deleted with knowledgebase_delete_document leave every view; an upload never confirmed is registered by the watcher and refused by the pending-upload discard.",
 		Run: kbDocumentLifecycle,
 	})
 }
@@ -106,7 +107,7 @@ func kbDocumentLifecycle(t *core.T) error {
 		}
 		out := map[string]kbDoc{}
 		for _, d := range page.Items {
-			out[d.Name] = d
+			out[path.Base(d.Name)] = d
 		}
 		return out, nil
 	}
@@ -291,44 +292,32 @@ func kbDocumentLifecycle(t *core.T) error {
 		errs = append(errs, err)
 	}
 
-	if err := t.Step("abandoned_upload_is_pending_until_discarded", func(h *core.StepHandle) error {
+	// The watcher registers a presigned upload no client confirms, so the API cannot
+	// make an orphan to discard.
+	if err := t.Step("unconfirmed_upload_is_registered", func(h *core.StepHandle) error {
 		content := []byte("never confirmed " + mk + "\n")
-		key, err := presignedPut(t, owner, s3, dp.ID, "abandoned-"+mk+".txt", content)
+		key, err := presignedPut(t, owner, s3, dp.ID, "unconfirmed-"+mk+".txt", content)
 		h.Set("key", key)
 		if err != nil {
 			return err
 		}
-		pending := func() ([]string, error) {
-			var p struct {
-				Items []struct {
-					Key string `json:"key"`
-				} `json:"items"`
-			}
-			err := owner.rest(get, "/datapacks/"+dp.ID+"/knowledge-bases/pending-uploads", nil, httpOK, &p)
-			return idsOf(p.Items, func(i struct {
+		if err := waitIndexed(t, owner.api, dp.ID, key); err != nil {
+			return err
+		}
+		var p struct {
+			Items []struct {
 				Key string `json:"key"`
-			}) string {
-				return i.Key
-			}), err
+			} `json:"items"`
 		}
-		keys, err := pending()
-		if err != nil {
+		if err := owner.rest(get, "/datapacks/"+dp.ID+"/knowledge-bases/pending-uploads", nil, httpOK, &p); err != nil {
 			return err
 		}
-		if !contains(keys, key) {
-			return fmt.Errorf("an upload never confirmed is not pending: %v, want %s", keys, key)
+		for _, i := range p.Items {
+			if i.Key == key {
+				return fmt.Errorf("%s is still pending after it was indexed", key)
+			}
 		}
-		if err := owner.rest(del, "/datapacks/"+dp.ID+"/knowledge-bases/pending-uploads?key="+url.QueryEscape(key), nil, httpOK, nil); err != nil {
-			return err
-		}
-		keys, err = pending()
-		if err != nil {
-			return err
-		}
-		if contains(keys, key) {
-			return fmt.Errorf("%s is still pending after its discard", key)
-		}
-		return nil
+		return owner.rest(del, "/datapacks/"+dp.ID+"/knowledge-bases/pending-uploads?key="+url.QueryEscape(key), nil, http.StatusConflict, nil)
 	}); err != nil {
 		errs = append(errs, err)
 	}

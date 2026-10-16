@@ -207,12 +207,20 @@ func restartFindings(before, after map[string]int, reasons map[string]string) []
 // works wherever kubectl does. A pod it cannot read twice is returned as unread.
 func (a *App) requestCounts(ctx context.Context) (map[string]float64, map[string]bool) {
 	out, unread := map[string]float64{}, map[string]bool{}
-	pods, err := a.kube.GetSelector(ctx, "pods", "app="+apiDeployment, `{range .items[*]}{.metadata.name}{"\n"}{end}`)
+	pods, err := a.kube.GetSelector(ctx, "pods", "app="+apiDeployment,
+		`{range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.metadata.deletionTimestamp}{"\n"}{end}`)
 	if err != nil {
 		unread["(pod list)"] = true
 		return out, unread
 	}
-	for _, pod := range strings.Fields(pods) {
+	for _, line := range strings.Split(pods, "\n") {
+		// A pod gets no traffic before it runs or once it is terminating, and a
+		// terminating pod's proxy can fail for as long as its sandbox lingers.
+		f := strings.Fields(line)
+		if len(f) != 2 || f[1] != "Running" {
+			continue
+		}
+		pod := f[0]
 		path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%d/proxy/metrics", a.cfg.Namespace, pod, apiMetricsPort)
 		body, err := a.kube.GetRaw(ctx, path)
 		if err != nil {

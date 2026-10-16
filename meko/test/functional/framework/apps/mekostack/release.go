@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -112,6 +114,42 @@ func (r *Releases) Chart(ctx context.Context, version, dir string) (chartPath, i
 		return "", "", fmt.Errorf("untar %s: %w: %s", archive, err, out)
 	}
 	return filepath.Join(dir, chartInRepo), version + "-" + sha[:imageShaLen], nil
+}
+
+// PresetsIn keeps the values files chartPath ships, in order. A release predating a
+// preset has no file for it, and helm refuses a -f it cannot open.
+func PresetsIn(chartPath string, files []string) []string {
+	var out []string
+	for _, f := range files {
+		if _, err := os.Stat(filepath.Join(chartPath, f)); err == nil {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// DatabaseImageIn is the yugabyte.Image chartPath's values.yaml and then files set,
+// the last one naming it winning, or "" when none does.
+func DatabaseImageIn(chartPath string, files []string) (string, error) {
+	var ref string
+	for _, f := range append([]string{"values.yaml"}, files...) {
+		b, err := os.ReadFile(filepath.Join(chartPath, f))
+		if err != nil {
+			return "", err
+		}
+		var v struct {
+			Yugabyte struct {
+				Image struct{ Repository, Tag string } `yaml:"Image"`
+			}
+		}
+		if err := yaml.Unmarshal(b, &v); err != nil {
+			return "", fmt.Errorf("%s: %w", f, err)
+		}
+		if img := v.Yugabyte.Image; img.Repository != "" && img.Tag != "" {
+			ref = img.Repository + ":" + img.Tag
+		}
+	}
+	return ref, nil
 }
 
 // RepoRoot is the top of the git checkout path sits in.

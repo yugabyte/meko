@@ -310,17 +310,31 @@ func healthOK(body string) bool {
 	return true
 }
 
+// Release is what Upgrade moves a stack to. An empty DatabaseImage or ValuesFiles
+// keeps the installed one.
+type Release struct {
+	ChartPath, ImageVersion, DatabaseImage string
+	ValuesFiles                            []string
+}
+
 // Upgrade moves a stack Deploy stood up to another chart and image version with
 // one helm upgrade, keeping its secrets and MinIO: an upgrade in place, the way
 // a customer runs one, so none of the bring-up workarounds apply.
-func (a *App) Upgrade(ctx context.Context, chartPath, imageVersion string) error {
+func (a *App) Upgrade(ctx context.Context, to Release) error {
 	a.mu.Lock()
 	dp, m := a.dp, a.minio
 	a.mu.Unlock()
 	if m == nil {
 		return errors.New("mekostack: Upgrade needs a stack this App deployed")
 	}
+	chartPath, imageVersion := to.ChartPath, to.ImageVersion
 	a.cfg.ChartPath, a.cfg.ImageVersion = chartPath, imageVersion
+	if to.DatabaseImage != "" {
+		a.cfg.DatabaseImage = to.DatabaseImage
+	}
+	if len(to.ValuesFiles) > 0 {
+		a.cfg.ValuesFiles = to.ValuesFiles
+	}
 	if err := a.cfg.Validate(); err != nil {
 		return fmt.Errorf("mekostack: %w", err)
 	}

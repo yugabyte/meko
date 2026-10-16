@@ -540,6 +540,17 @@ func TestBedrockConverseConverseStreamAndInvoke(t *testing.T) {
 	if err := json.Unmarshal(raw, &emb); err != nil || len(emb.Embedding) != 1536 {
 		t.Errorf("titan v1 embedding: %d dims", len(emb.Embedding))
 	}
+	var nums struct{ Embedding []json.Number }
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&nums); err != nil {
+		t.Fatal(err)
+	}
+	for i, n := range nums.Embedding {
+		if !strings.ContainsAny(n.String(), ".eE") {
+			t.Fatalf("titan v1 embedding component %d is %s, which Python's json reads as an int", i, n)
+		}
+	}
 
 	th := RateLimit(time.Second)
 	th.Route, th.Match = RouteBedrock, "bedrock-throttle"

@@ -71,7 +71,7 @@ func (f *fakeStack) Kube() *execk8s.Kubectl {
 }
 func (f *fakeStack) Workloads(context.Context) ([]mekostack.Workload, error) { return nil, nil }
 func (f *fakeStack) Extensions(context.Context) ([]string, error)            { return nil, nil }
-func (f *fakeStack) Upgrade(context.Context, string, string) error           { return nil }
+func (f *fakeStack) Upgrade(context.Context, mekostack.Release) error        { return nil }
 func (f *fakeStack) ProbeAPI(context.Context) error                          { return nil }
 func (f *fakeStack) GuardMark(context.Context) (mekostack.GuardMark, error) {
 	return mekostack.GuardMark{}, nil

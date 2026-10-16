@@ -169,7 +169,7 @@ func (s *Server) openaiEmbeddings(w http.ResponseWriter, r *http.Request, body o
 	}, nil)
 }
 
-func (s *Server) embed(text string, orig any, dim int) ([]float64, string) {
+func (s *Server) embed(text string, orig any, dim int) (vector, string) {
 	if fx := s.st.fixtureFor(text); fx != nil {
 		return fit(fx.Vector, dim), "fixture"
 	}

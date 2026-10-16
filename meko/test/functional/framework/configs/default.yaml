@@ -157,8 +157,9 @@ env:
       # Tag of meko-langfuse-worker.
       langfuse_worker: {tag: ""}
       # The bundled YugabyteDB, a full reference. It follows YugabyteDB's cadence,
-      # not meko's, and meko-build does not publish it.
-      database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2"
+      # not meko's, and meko-build does not publish it. The same image as
+      # yugabyte.Image in values-byoc-bundled-db.yaml, which a test checks.
+      database: "quay.io/yugabyte/yugabyte-itest:2026.1.3.0-b57"
     # api-server replicas. Three, so a migration runs while other replicas serve.
     api_replicas: 3
     # meko-mcp-server replicas, 0 keeps the values files' count (1 in values-dev.yaml).

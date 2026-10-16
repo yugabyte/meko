@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,16 +86,27 @@ func previousRelease(t *core.T) (rerr error) {
 		return err
 	}
 
+	presets := cfg.GetStringSlice("env.mekostack.values_files", nil)
 	var env *k8senv.Env
 	var teardown func() error
-	if err := t.Step("install_from", func(*core.StepHandle) error {
-		var err error
-		env, teardown, err = cluster.BuildStack(t, map[string]string{
+	if err := t.Step("install_from", func(h *core.StepHandle) error {
+		fromPresets := mekostack.PresetsIn(fromChart, presets)
+		fromDB, err := mekostack.DatabaseImageIn(fromChart, fromPresets)
+		if err != nil {
+			return err
+		}
+		h.Set("database", fromDB)
+		overrides := map[string]string{
 			"env.mekostack.chart":         fromChart,
 			"env.mekostack.image_version": fromImage,
+			"env.mekostack.values_files":  strings.Join(fromPresets, ","),
 			// Released charts run langfuse's migrations only against their own database.
 			"db.provider": "chart",
-		})
+		}
+		if fromDB != "" {
+			overrides["env.mekostack.images.database"] = fromDB
+		}
+		env, teardown, err = cluster.BuildStack(t, overrides)
 		return err
 	}); err != nil {
 		return err
@@ -138,7 +150,10 @@ func previousRelease(t *core.T) (rerr error) {
 		}
 		poll = startPoller(env.Stack())
 		start := time.Now()
-		err := env.Stack().Upgrade(t, chart, target)
+		err := env.Stack().Upgrade(t, mekostack.Release{
+			ChartPath: chart, ImageVersion: target, ValuesFiles: presets,
+			DatabaseImage: cfg.GetString("env.mekostack.images.database", ""),
+		})
 		poll.stop()
 		h.Set("took", time.Since(start).Round(time.Second).String())
 		return err

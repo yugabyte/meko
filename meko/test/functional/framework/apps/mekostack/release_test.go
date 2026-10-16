@@ -77,3 +77,38 @@ func TestReleaseChartFromTag(t *testing.T) {
 		t.Errorf("chart at %s = %q, %v, want the tagged version", path, b, err)
 	}
 }
+
+func TestPresetsInKeepsOnlyWhatTheChartShips(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"values-gcp.yaml", "values-byoc.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := PresetsIn(dir, []string{"values-gcp.yaml", "values-byoc.yaml", "values-byoc-bundled-db.yaml"})
+	if strings.Join(got, ",") != "values-gcp.yaml,values-byoc.yaml" {
+		t.Errorf("PresetsIn = %v", got)
+	}
+}
+
+func TestDatabaseImageInTakesTheLastFileNamingOne(t *testing.T) {
+	dir := t.TempDir()
+	for f, body := range map[string]string{
+		"values.yaml":                 "yugabyte:\n  Image:\n    repository: quay.io/yugabyte/meko-yugabytedb\n    tag: old\n",
+		"values-gcp.yaml":             "mekoUi: {}\n",
+		"values-byoc-bundled-db.yaml": "yugabyte:\n  Image:\n    repository: quay.io/yugabyte/yugabyte-itest\n    tag: new\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for files, want := range map[string]string{
+		"values-gcp.yaml": "quay.io/yugabyte/meko-yugabytedb:old",
+		"values-gcp.yaml,values-byoc-bundled-db.yaml": "quay.io/yugabyte/yugabyte-itest:new",
+	} {
+		got, err := DatabaseImageIn(dir, strings.Split(files, ","))
+		if err != nil || got != want {
+			t.Errorf("DatabaseImageIn(%s) = %q, %v, want %q", files, got, err, want)
+		}
+	}
+}

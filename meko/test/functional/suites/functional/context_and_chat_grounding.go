@@ -37,7 +37,9 @@ type contextResult struct {
 	Results struct {
 		Memory        []map[string]any `json:"memory"`
 		KnowledgeBase []map[string]any `json:"knowledge_base"`
-		Conversation  []map[string]any `json:"conversation"`
+		Conversation  struct {
+			Hits []map[string]any `json:"hits"`
+		} `json:"conversation"`
 	} `json:"results"`
 }
 
@@ -65,6 +67,11 @@ func contextAndChatGrounding(t *core.T) error {
 		return err
 	}
 	otherConv, err := owner.conversation(other.ID, "elsewhere "+mk)
+	if err != nil {
+		return err
+	}
+	// Conversation search leaves out the conversation it is asked from.
+	asker, err := owner.conversation(dp.ID, "asker "+mk)
 	if err != nil {
 		return err
 	}
@@ -139,12 +146,12 @@ func contextAndChatGrounding(t *core.T) error {
 		}
 		var last string
 		err := eventually(t, "context_search to return the conversation turn", 3*visibleWithin(t), func() (bool, error) {
-			r, text, terr := search(dp.ID, conv, "release train platform quince "+mk, "")
+			r, text, terr := search(dp.ID, asker, "the release train leaves on Thursdays from platform quince "+mk, "")
 			if terr != nil {
 				return false, terr
 			}
 			last = text
-			return has(r.Results.Conversation, "quince"), nil
+			return has(r.Results.Conversation.Hits, "quince"), nil
 		})
 		if err != nil {
 			return fmt.Errorf("%w; last answer: %s", err, truncate(last, 300))
@@ -152,14 +159,16 @@ func contextAndChatGrounding(t *core.T) error {
 		return nil
 	})
 	step("force_source_narrows", func() error {
-		r, text, terr := search(dp.ID, conv, "amber teapot tidal gauge "+mk, "memory")
+		// The mock embeds by shared words, so only a query carrying most of both texts clears each source's distance floor.
+		both := "the amber teapot green tea tidal gauge north pier equinox " + mk
+		r, text, terr := search(dp.ID, conv, both, "memory")
 		if terr != nil {
 			return terr
 		}
-		if len(r.Results.KnowledgeBase) > 0 || len(r.Results.Conversation) > 0 || !has(r.Results.Memory, "amber") {
+		if len(r.Results.KnowledgeBase) > 0 || len(r.Results.Conversation.Hits) > 0 || !has(r.Results.Memory, "amber") {
 			return fmt.Errorf("force_source=memory answered %s, want only the memory", truncate(text, 300))
 		}
-		r, text, terr = search(dp.ID, conv, "amber teapot tidal gauge "+mk, "knowledge_base")
+		r, text, terr = search(dp.ID, conv, both, "knowledge_base")
 		if terr != nil {
 			return terr
 		}

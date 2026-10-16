@@ -180,7 +180,7 @@ type Stack interface {
 	Workloads(ctx context.Context) ([]mekostack.Workload, error)
 	Extensions(ctx context.Context) ([]string, error)
 	DatapacksWithoutLangfuseProject(ctx context.Context) ([]string, error)
-	Upgrade(ctx context.Context, chartPath, imageVersion string) error
+	Upgrade(ctx context.Context, to mekostack.Release) error
 	ProbeAPI(ctx context.Context) error
 	GuardMark(ctx context.Context) (mekostack.GuardMark, error)
 	GuardCheck(ctx context.Context, m mekostack.GuardMark) ([]mekostack.Finding, error)

@@ -25,6 +25,8 @@ const (
 	ysqlContainer = "ysqlsh"
 
 	backingDB = "yugabyte"
+
+	backingAnswerWithin = 2 * time.Minute
 )
 
 var requiredExtensions = []string{"vector", "pg_dist_rag", "mage"}
@@ -315,7 +317,18 @@ func (a *App) ysqlViaPod(ctx context.Context, query string) (string, error) {
 // ensure-extensions init container minutes into the install.
 func (a *App) checkBacking(ctx context.Context, b Backing) error {
 	a.log("mekostack: checking the %s", b.Describe)
-	out, err := a.ysql(ctx, "SELECT name FROM pg_available_extensions WHERE name IN ('"+strings.Join(requiredExtensions, "','")+"') ORDER BY 1")
+	query := "SELECT name FROM pg_available_extensions WHERE name IN ('" + strings.Join(requiredExtensions, "','") + "') ORDER BY 1"
+	out, err := a.ysql(ctx, query)
+	// A universe reports ready from inside its pods, before its Service has
+	// endpoints, and the ClusterIP refuses until it does.
+	for deadline := time.Now().Add(backingAnswerWithin); err != nil && strings.Contains(err.Error(), "Connection refused") && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+		out, err = a.ysql(ctx, query)
+	}
 	if err != nil {
 		return fmt.Errorf("the database at %s:%d does not answer: %w", b.Host, b.Port, err)
 	}

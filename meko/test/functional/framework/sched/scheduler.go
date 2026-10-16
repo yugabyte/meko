@@ -181,8 +181,10 @@ type scheduler struct {
 
 // enterSharedLock serializes tests declaring the same SharedLock key.
 //
-// Taken after the infra gate and before the lease and the slot, for the same
-// reason: a waiter holding either would deadlock the gate's writer.
+// Taken after the lease and the infra gate and before the slot, the order a
+// shared co-tenant takes them in under its worker's lease. A test holding the key
+// while queued for a lease would wait on a worker whose co-tenant waits for the
+// key. A queued test idles its lease until the holder finishes.
 func (s *scheduler) enterSharedLock(test core.Test) func() {
 	key := test.Env.Locks()
 	if key == "" {
@@ -204,8 +206,10 @@ func (s *scheduler) enterSharedLock(test core.Test) func() {
 
 // enterInfraGate takes this test's side of the gate and returns the release.
 //
-// Must be taken BEFORE the lease and the slot: a waiter holding either while
-// blocked here deadlocks the writer, which needs both.
+// Taken after the lease and before the slot. A shared worker holds its lease
+// across every co-tenant, so a test queued for a lease while holding the gate
+// waits on a writer that waits on it. A waiter holding a slot here deadlocks the
+// writer, which needs one.
 func (s *scheduler) enterInfraGate(test core.Test) func() {
 	if !s.infraGateArmed || test.Env.Dedicated() {
 		return func() {}
@@ -261,8 +265,6 @@ func (s *scheduler) releaseSlot() { <-s.slots }
 func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	test := s.tests[i]
 	defer s.acquireClusterSlots(ctx, test)()
-	defer s.enterInfraGate(test)()
-	defer s.enterSharedLock(test)()
 	if res := s.failIfInfraPoisoned(test); res != nil {
 		return res
 	}
@@ -272,6 +274,12 @@ func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	}
 	// If Acquire failed it was ctx cancellation; RunOne then surfaces the dead
 	// context as an env_failed during provisioning, no separate path needed.
+	defer s.enterInfraGate(test)()
+	defer s.enterSharedLock(test)()
+	// The writer this test waited on can have poisoned the run meanwhile.
+	if res := s.failIfInfraPoisoned(test); res != nil {
+		return res
+	}
 	if s.acquireSlot(ctx) {
 		defer s.releaseSlot()
 	}

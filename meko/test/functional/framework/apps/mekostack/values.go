@@ -178,7 +178,10 @@ func (cfg Config) Values(s DataPlaneSecrets, m MinIO) (map[string]any, error) {
 			gw[k] = val
 		}
 		v["apiServer"].(map[string]any)["extraEnv"] = cfg.apiLLMEnv()
-		v["mekoMcpServer"].(map[string]any)["extraEnv"] = cfg.mcpLLMEnv()
+		mcp := v["mekoMcpServer"].(map[string]any)
+		mcp["extraEnv"] = cfg.mcpLLMEnv()
+		// extraEnv carries AWS_REGION, and server-side apply refuses a second one from the chart.
+		mcp["staticEnv"] = map[string]any{"awsRegion": ""}
 	}
 	// The chart passes only the config keys it names, so a feature flag goes in as env.
 	if len(cfg.APIConfig) > 0 {

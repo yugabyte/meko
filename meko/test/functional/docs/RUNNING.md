@@ -134,7 +134,7 @@ yb meko run trigger --test functional/stack_health --branch me/my-fix --yes
 | `--build-from-source` | build the images from the branch first, tag `custom-<short-sha>` |
 | `--image-version` | one prebuilt Quay tag for every meko image |
 | `--version image=tag` | one component's tag. Images: `api_server`, `mcp_server`, `ui`, `inference_gateway`, `rag_agent`, `langfuse` |
-| `--database-image` | the `meko-yugabytedb` tag or a full reference |
+| `--database-image` | a full reference, such as `quay.io/yugabyte/yugabyte-itest:<tag>`. Unset takes `env.mekostack.images.database` from `framework/configs/default.yaml` |
 | `--option k=v` | a mekoqa `-o` override, repeatable |
 | `--parallel` | concurrent test bodies |
 | `--cluster` | cluster, default from the portal |
@@ -244,8 +244,11 @@ candidates with:
 
 ```bash
 yb meko releases --limit 5                          # complete release tags
-yb meko catalog image_tags --key meko-yugabytedb    # database image tags
 ```
+
+The catalog's `meko-yugabytedb` tags predate Bedrock: their pg_dist_rag has no `AWS_BEDROCK`,
+so data migration 1 fails on them. The default database is the `yugabyte-itest` build
+`values-byoc-bundled-db.yaml` ships, and a render test fails when the two drift.
 
 For a branch under test, use the portal's `--build-from-source` or `BUILD_FROM_SOURCE`, which
 calls `meko-build` in custom mode and runs against `custom-<short-sha>`. A custom build of one

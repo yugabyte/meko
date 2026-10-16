@@ -214,8 +214,9 @@ Two pieces every stack runs come from outside `meko-build`:
     green.
 - **The database image.** `ybdb-meko-release`, a YugabyteDB build with MAGE and
   `pg_dist_rag`, is built by the YugabyteDB side, not by meko CI, and published to
-  `quay.io/yugabyte/meko-yugabytedb` when its tag moves (current
-  `2026.1.0.0-b1-meko-2`). #1319 records that the `Database` field in
+  `quay.io/yugabyte/meko-yugabytedb` when its tag moves. The BYOC bundled-database
+  overlay has since moved to a `quay.io/yugabyte/yugabyte-itest` build, and the
+  framework follows the overlay. #1319 records that the `Database` field in
   `dataplane_release.go` is never read and has drifted from the chart.
 
 The framework treats both as inputs it records rather than builds. Every result

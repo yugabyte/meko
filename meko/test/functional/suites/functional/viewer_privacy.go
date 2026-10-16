@@ -3,6 +3,7 @@ package functional
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
@@ -283,7 +284,7 @@ func viewerPrivacy(t *core.T) error {
 				return nil, err
 			}
 			for i := range page.Items {
-				if page.Items[i].Name == docName {
+				if path.Base(page.Items[i].Name) == docName {
 					return &page.Items[i], nil
 				}
 			}
@@ -321,7 +322,7 @@ func viewerPrivacy(t *core.T) error {
 				return nil, err
 			}
 			for i := range log.Items {
-				if log.Items[i].Name != nil && *log.Items[i].Name == docName {
+				if log.Items[i].Name != nil && path.Base(*log.Items[i].Name) == docName {
 					return &log.Items[i], nil
 				}
 			}

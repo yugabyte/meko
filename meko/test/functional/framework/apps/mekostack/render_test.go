@@ -2,11 +2,16 @@ package mekostack_test
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekostack"
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
@@ -94,13 +99,13 @@ func TestGeneratedValuesRenderWithTheRealChart(t *testing.T) {
 			}
 			var meko int
 			for _, img := range images {
-				if mekostack.IsMekoImage(img) {
+				if mekostack.IsMekoImage(img) && img != c.DatabaseImage {
 					meko++
 				}
 			}
-			want := 8
+			want := 7
 			if !c.RagWorkers {
-				want = 7
+				want = 6
 			}
 			if meko != want {
 				t.Errorf("rendered %d distinct meko images, want %d: %v", meko, want, images)
@@ -129,6 +134,9 @@ func TestGeneratedValuesRenderWithTheRealChart(t *testing.T) {
 					}
 				}
 			}
+			if err := duplicateEnv(stdout.String()); err != nil {
+				t.Error(err)
+			}
 			support, err := mekostack.RenderedSupport(stdout.String())
 			if err != nil {
 				t.Fatal(err)
@@ -154,6 +162,36 @@ func TestGeneratedValuesRenderWithTheRealChart(t *testing.T) {
 	}
 }
 
+// The framework's database stands in for the overlay's bundled one, so an older
+// pin runs every stack on a pg_dist_rag the shipped migrations do not support.
+func TestDatabaseImageIsTheBundledOverlays(t *testing.T) {
+	cfgFile, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := mekostack.FromConfig(cfgFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const overlay = "values-byoc-bundled-db.yaml"
+	b, err := os.ReadFile(filepath.Join(cfg.ChartPath, overlay))
+	if err != nil {
+		t.Skipf("no %s in the chart: %v", overlay, err)
+	}
+	var v struct {
+		Yugabyte struct {
+			Image struct{ Repository, Tag string } `yaml:"Image"`
+		}
+	}
+	if err := yaml.Unmarshal(b, &v); err != nil {
+		t.Fatal(err)
+	}
+	want := v.Yugabyte.Image.Repository + ":" + v.Yugabyte.Image.Tag
+	if cfg.DatabaseImage != want {
+		t.Errorf("env.mekostack.images.database = %q, %s ships %q", cfg.DatabaseImage, overlay, want)
+	}
+}
+
 func TestShippedDefaultsAreValid(t *testing.T) {
 	cfgFile, err := core.LoadConfig(nil, nil, nil)
 	if err != nil {
@@ -173,4 +211,82 @@ func TestShippedDefaultsAreValid(t *testing.T) {
 	if !filepath.IsAbs(cfg.ChartPath) || !strings.HasSuffix(cfg.ChartPath, filepath.Join("meko", "deploy", "helm", "meko")) {
 		t.Errorf("ChartPath = %q, want the repo chart resolved to an absolute path", cfg.ChartPath)
 	}
+}
+
+func TestDuplicateEnvChecksEveryPodTemplate(t *testing.T) {
+	for name, manifest := range map[string]string{
+		"init container": `
+kind: Deployment
+metadata: {name: d}
+spec:
+  template:
+    spec:
+      initContainers:
+      - name: migrate
+        env: [{name: A}, {name: A}]
+`,
+		"cronjob": `
+kind: CronJob
+metadata: {name: c}
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: refresh
+            env: [{name: A}, {name: A}]
+`,
+	} {
+		if err := duplicateEnv(manifest); err == nil {
+			t.Errorf("%s: a duplicate env name passed", name)
+		}
+	}
+}
+
+// helm template accepts a container with one env name twice; the install's server-side apply does not.
+func duplicateEnv(manifest string) error {
+	type container struct {
+		Name string
+		Env  []struct{ Name string }
+	}
+	type podSpec struct {
+		Containers     []container
+		InitContainers []container `yaml:"initContainers"`
+	}
+	dec := yaml.NewDecoder(strings.NewReader(manifest))
+	var dups []string
+	for {
+		var doc struct {
+			Kind     string
+			Metadata struct{ Name string }
+			Spec     struct {
+				Template    struct{ Spec podSpec }
+				JobTemplate struct {
+					Spec struct{ Template struct{ Spec podSpec } }
+				} `yaml:"jobTemplate"`
+			}
+		}
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("decode rendered manifest: %w", err)
+		}
+		for _, ps := range []podSpec{doc.Spec.Template.Spec, doc.Spec.JobTemplate.Spec.Template.Spec} {
+			for _, c := range append(ps.Containers, ps.InitContainers...) {
+				seen := map[string]bool{}
+				for _, e := range c.Env {
+					if seen[e.Name] {
+						dups = append(dups, fmt.Sprintf("%s %s container %s: %s", doc.Kind, doc.Metadata.Name, c.Name, e.Name))
+					}
+					seen[e.Name] = true
+				}
+			}
+		}
+	}
+	if len(dups) > 0 {
+		return fmt.Errorf("duplicate env entries: %s", strings.Join(dups, ", "))
+	}
+	return nil
 }
