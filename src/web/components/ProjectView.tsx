@@ -6,6 +6,7 @@ import {
   type MekoStatus,
   type MoveTarget,
   type ProjectWithSessions,
+  type ReviewingPr,
   type Session,
   type SessionAction,
   type Stage,
@@ -17,7 +18,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
@@ -25,6 +26,7 @@ import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
+import { newCommitsText, ReviewPrGate } from './ReviewPrGate';
 import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
@@ -145,8 +147,18 @@ export function ProjectView({
   }, [reviewDesign]);
 
   // One session action at a time, so a double tap can't send two merges or resumes.
-  const [acting, setActing] = useState(false);
+  // The view isn't remounted per session, so the action in flight names its session.
+  const [actingOn, setActingOn] = useState<{ id: string; action: SessionAction } | null>(null);
+  const acting = actingOn !== null;
   const actingRef = useRef(false);
+  // An Update to latest that went through, with the PR as it stood: still Updating until the state shows it.
+  const [updated, setUpdated] = useState<{ id: string; pr: ReviewingPr } | null>(null);
+  useEffect(() => {
+    if (!updated) return;
+    // In case the state never shows it (a dead events socket), the button comes back.
+    const t = setTimeout(() => setUpdated(null), 5000);
+    return () => clearTimeout(t);
+  }, [updated]);
   const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
     // With open questions, approving starts with answering them; the approval goes from there.
@@ -157,18 +169,25 @@ export function ProjectView({
       return;
     }
     actingRef.current = true;
-    setActing(true);
+    setActingOn({ id: session.id, action });
+    const pr = session.reviewingPr;
     try {
       if (action === 'approve-design') await approveDesign(session.id);
-      // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
-      else if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+      else {
+        // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
+        if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+        if (action === 'update-pr' && pr) setUpdated({ id: session.id, pr });
+      }
     } catch (e) {
       onError(errorMessage(e));
     } finally {
       actingRef.current = false;
-      setActing(false);
+      setActingOn(null);
     }
   };
+  const updating = !!session && (
+    (actingOn?.id === session.id && actingOn.action === 'update-pr')
+    || (updated?.id === session.id && !updateShowing(updated.pr, session.reviewingPr)));
 
   const pending = session ? session.comments.drafts + session.comments.queued : 0;
   const changedFiles = session?.diffStat?.files ?? 0;
@@ -326,6 +345,7 @@ export function ProjectView({
           onShare={canShare ? () => setSharing(true) : undefined}
           onHeld={() => setHeldOpen(true)}
           acting={acting}
+          updating={updating}
           actions={
             <>
               {session?.prUrl && (
@@ -450,6 +470,7 @@ export function ProjectView({
                 setHeldOpen(true);
               }}
               acting={acting}
+              updating={updating}
               actions={null}
               reasons
             />
@@ -492,12 +513,6 @@ export function ProjectView({
       )}
     </div>
   );
-}
-
-/** "3 new commits", or what a force-push means for the review. */
-function newCommitsText(n: number | null): string {
-  if (n === null) return 'PR force-pushed';
-  return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
 /**
@@ -556,6 +571,7 @@ function StageBar({
   onHeld,
   learnTo = null,
   acting = false,
+  updating = false,
   actions,
   reasons = false,
 }: {
@@ -573,6 +589,8 @@ function StageBar({
   onHeld: () => void;
   /** A session action is in flight. */
   acting?: boolean;
+  /** This session's Update to latest is in flight, or its result hasn't reached the state yet. */
+  updating?: boolean;
   actions: ReactNode;
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
@@ -736,11 +754,6 @@ function StageBar({
       gate = <span className="gate-pill done">Done</span>;
       break;
     case 'reviewing-pr': {
-      const rv = session.reviewingPr;
-      const gone = !!rv && rv.prState !== 'OPEN';
-      const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
-      // A version of the PR's design AgentK hasn't read: Update to latest has it read, commits or not.
-      const designUnread = !!rv && !gone && rv.designUnread;
       reason = midTurn
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
@@ -748,31 +761,7 @@ function StageBar({
           : session.status === 'exited'
             ? 'Resume the session first.'
             : null;
-      gate = (
-        <span className="gate-group">
-          <span className={cx('pr-pill', (moved || designUnread) && 'moved', gone && 'gone')}>
-            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : designUnread ? 'design updated' : 'up to date'}
-          </span>
-          {(moved || designUnread) && (
-            <button
-              className="gate"
-              disabled={blocked || !!reason}
-              title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
-              onClick={() => onAct('update-pr')}
-            >
-              Update to latest
-            </button>
-          )}
-          <ConfirmButton
-            className={moved || designUnread ? 'btn small' : 'gate'}
-            label="Close review"
-            confirmLabel="Close review"
-            prompt="The session is archived and its review branch deleted."
-            onConfirm={() => onAct('close-review')}
-            disabled={blocked || midTurn}
-          />
-        </span>
-      );
+      gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={updating} onAct={onAct} />;
       break;
     }
   }
