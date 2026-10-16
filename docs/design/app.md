@@ -13,9 +13,9 @@ in any project. The session on screen is highlighted (its project's name turns b
 **+ New session** follows each project's list (the project on screen shows it even with no
 sessions). The ▾ at the right of a project's row folds its list away and ▸ brings it back; a folded
 project keeps its dot and count, and takes the highlight when the session on screen is in it. Which
-projects are folded is kept in this browser (`ak-rail-collapsed`). The rail is 248 px wide so the
-names have room. The
-main pane is the live Claude terminal, and the footer shows where the session is working: branch,
+projects are folded is kept in this browser (`ak-rail-collapsed`). The rail is 248 px wide by default so the
+names have room, and dragging its right edge makes it wider or narrower (see
+[The projects pane's width](#keyboard)). The main pane is the live Claude terminal, and the footer shows where the session is working: branch,
 diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking
 the branch copies the full path of the session's worktree (its tooltip shows the path, and the label
 reads `path copied` for a moment), once a start has made the worktree. A copy the browser blocks shows

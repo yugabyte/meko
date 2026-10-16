@@ -100,7 +100,7 @@ export function ProjectView({
   onRename: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
-  /** Show the session tabs above the terminal (the wide layout): the rail doesn't list sessions, or is hidden. */
+  /** Show the session tabs above the terminal (the wide layout): the rail doesn't list the sessions. */
   showTabs: boolean;
   onError: (msg: string) => void;
 }) {
@@ -133,7 +133,7 @@ export function ProjectView({
     setHeldOpen(false);
     setQuestionsAt(0);
   }, [session?.id]);
-  // Also when the desktop tabs mount, as the rail is hidden.
+  // Also when the desktop tabs mount, as the rail stops listing the sessions.
   useEffect(() => {
     tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id, showTabs]);
@@ -278,7 +278,7 @@ export function ProjectView({
   );
 
   // On a phone the tabs sit in the app bar, between the drawer button and the session's actions. On a
-  // desktop they sit above the terminal, unless the rail lists the sessions (a setting) and is shown.
+  // desktop they sit above the terminal, unless the rail lists the sessions (a setting).
   const tabs = (
     <div className="tabs" role="tablist" ref={tabsRef}>
       {sessions.map((s) => (

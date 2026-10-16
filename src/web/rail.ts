@@ -53,8 +53,13 @@ export function saveRailCollapsed(ids: Set<string>): void {
   }
 }
 
+// Set by a save in this page, so the setting holds here when storage can't keep it; another tab's
+// change (a storage event) clears it.
+let sessionsHere: boolean | null = null;
+
 /** Whether the pane lists each project's sessions under it, in place of the tabs above the terminal. Off by default. */
 export function railSessionsSaved(): boolean {
+  if (sessionsHere !== null) return sessionsHere;
   try {
     return localStorage.getItem(SESSIONS_KEY) === '1';
   } catch {
@@ -63,6 +68,7 @@ export function railSessionsSaved(): boolean {
 }
 
 export function saveRailSessions(on: boolean): void {
+  sessionsHere = on;
   try {
     if (on) localStorage.setItem(SESSIONS_KEY, '1');
     else localStorage.removeItem(SESSIONS_KEY);
@@ -77,7 +83,11 @@ export function useRailSessions(): boolean {
   const [on, setOn] = useState(railSessionsSaved);
   useEffect(() => {
     const update = () => setOn(railSessionsSaved());
-    const onStorage = (e: StorageEvent) => (e.key === SESSIONS_KEY || e.key === null) && update();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== SESSIONS_KEY && e.key !== null) return;
+      sessionsHere = null;
+      update();
+    };
     window.addEventListener(SESSIONS_CHANGED, update);
     window.addEventListener('storage', onStorage);
     return () => {

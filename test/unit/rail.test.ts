@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { railCollapsedSaved, railSessionsSaved, railWidthSaved } from '../../src/web/rail.js';
+import { railCollapsedSaved, railSessionsSaved, railWidthSaved, saveRailSessions } from '../../src/web/rail.js';
 
 describe('projects pane', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -35,5 +35,16 @@ describe('projects pane', () => {
   ])('lists sessions in the rail for a stored %s: %s (off by default)', (stored, on) => {
     vi.stubGlobal('localStorage', { getItem: () => stored });
     expect(railSessionsSaved()).toBe(on);
+  });
+
+  // Last: the save is kept in the module for the rest of the file.
+  it('keeps the setting for this page when storage refuses it', () => {
+    const refuse = () => {
+      throw new Error('blocked');
+    };
+    vi.stubGlobal('localStorage', { getItem: refuse, setItem: refuse, removeItem: refuse });
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    saveRailSessions(true);
+    expect(railSessionsSaved()).toBe(true);
   });
 });

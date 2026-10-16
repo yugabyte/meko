@@ -52,7 +52,7 @@ export function Rail({
   /** List each project's sessions under it (the Settings toggle); off, the rail lists projects only. */
   sessionsShown: boolean;
   onSelectSession: (s: Session) => void;
-  /** New session in this project, offered under the project on screen. */
+  /** New session in this project, offered at the end of each listed project's sessions. */
   onNewSession: (projectId: string) => void;
   /** Double-clicking a session renames it; the phone layout uses Rename session in the ⋯ sheet. */
   onRenameSession: (sessionId: string) => void;
