@@ -25,6 +25,7 @@ import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
+import { newCommitsText, ReviewPrGate } from './ReviewPrGate';
 import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
@@ -145,7 +146,8 @@ export function ProjectView({
   }, [reviewDesign]);
 
   // One session action at a time, so a double tap can't send two merges or resumes.
-  const [acting, setActing] = useState(false);
+  const [actingOn, setActingOn] = useState<SessionAction | null>(null);
+  const acting = actingOn !== null;
   const actingRef = useRef(false);
   const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
@@ -157,7 +159,7 @@ export function ProjectView({
       return;
     }
     actingRef.current = true;
-    setActing(true);
+    setActingOn(action);
     try {
       if (action === 'approve-design') await approveDesign(session.id);
       // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
@@ -166,7 +168,7 @@ export function ProjectView({
       onError(errorMessage(e));
     } finally {
       actingRef.current = false;
-      setActing(false);
+      setActingOn(null);
     }
   };
 
@@ -325,7 +327,7 @@ export function ProjectView({
           onOpenPr={onOpenPr}
           onShare={canShare ? () => setSharing(true) : undefined}
           onHeld={() => setHeldOpen(true)}
-          acting={acting}
+          acting={actingOn}
           actions={
             <>
               {session?.prUrl && (
@@ -449,7 +451,7 @@ export function ProjectView({
                 setSheet(false);
                 setHeldOpen(true);
               }}
-              acting={acting}
+              acting={actingOn}
               actions={null}
               reasons
             />
@@ -492,12 +494,6 @@ export function ProjectView({
       )}
     </div>
   );
-}
-
-/** "3 new commits", or what a force-push means for the review. */
-function newCommitsText(n: number | null): string {
-  if (n === null) return 'PR force-pushed';
-  return n === 1 ? '1 new commit' : `${n} new commits`;
 }
 
 /**
@@ -555,7 +551,7 @@ function StageBar({
   onShare,
   onHeld,
   learnTo = null,
-  acting = false,
+  acting = null,
   actions,
   reasons = false,
 }: {
@@ -571,8 +567,8 @@ function StageBar({
   onShare?: () => void;
   /** Opens the reviews held for the user. */
   onHeld: () => void;
-  /** A session action is in flight. */
-  acting?: boolean;
+  /** The session action in flight, if one is. */
+  acting?: SessionAction | null;
   actions: ReactNode;
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
@@ -598,7 +594,7 @@ function StageBar({
   // Other stages the session can be moved to open the move dialog.
   const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
   const midTurn = session.status === 'working' || session.status === 'starting';
-  const blocked = session.busy || acting;
+  const blocked = session.busy || acting !== null;
   // Why the Design or Code gate is closed, if it is.
   let reason: string | null = null;
 
@@ -736,11 +732,6 @@ function StageBar({
       gate = <span className="gate-pill done">Done</span>;
       break;
     case 'reviewing-pr': {
-      const rv = session.reviewingPr;
-      const gone = !!rv && rv.prState !== 'OPEN';
-      const moved = !!rv && !gone && rv.headSha !== rv.reviewSha;
-      // A version of the PR's design AgentK hasn't read: Update to latest has it read, commits or not.
-      const designUnread = !!rv && !gone && rv.designUnread;
       reason = midTurn
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
@@ -748,31 +739,7 @@ function StageBar({
           : session.status === 'exited'
             ? 'Resume the session first.'
             : null;
-      gate = (
-        <span className="gate-group">
-          <span className={cx('pr-pill', (moved || designUnread) && 'moved', gone && 'gone')}>
-            {gone ? (rv!.prState === 'MERGED' ? '✓ merged' : 'closed') : moved ? newCommitsText(rv!.newCommits) : designUnread ? 'design updated' : 'up to date'}
-          </span>
-          {(moved || designUnread) && (
-            <button
-              className="gate"
-              disabled={blocked || !!reason}
-              title={reason ?? (moved ? "Check out the PR's latest commits; AgentK sums up what changed" : "AgentK reads the PR's new design and sums it up")}
-              onClick={() => onAct('update-pr')}
-            >
-              Update to latest
-            </button>
-          )}
-          <ConfirmButton
-            className={moved || designUnread ? 'btn small' : 'gate'}
-            label="Close review"
-            confirmLabel="Close review"
-            prompt="The session is archived and its review branch deleted."
-            onConfirm={() => onAct('close-review')}
-            disabled={blocked || midTurn}
-          />
-        </span>
-      );
+      gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={acting === 'update-pr'} onAct={onAct} />;
       break;
     }
   }
