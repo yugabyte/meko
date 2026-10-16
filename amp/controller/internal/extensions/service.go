@@ -311,7 +311,7 @@ var reservedEnvNames = map[string]bool{
 	// Pod identity and wiring the supervisor reads by exact name.
 	"BRANCH_ID": true, "BIN_DIR": true, "RUN_DIR": true,
 	"REQUIRE_WRITE_TOKEN": true, "PRERENDERED_CONFIG": true,
-	"PRIVILEGED_ROLE_NAME": true, "CGROUP_ROOT": true,
+	"PRIVILEGED_ROLE_NAME": true, "CUSTOMER_ROLE": true, "CGROUP_ROOT": true,
 	"AUTOPREWARM": true, "OFFLOAD_LFC_INTERVAL_SECONDS": true,
 	"SHARED_PRELOAD_LIBRARIES": true, "EXTRA_SHARED_PRELOAD_LIBRARIES": true,
 	"BASE_SHARED_PRELOAD_LIBRARIES": true,

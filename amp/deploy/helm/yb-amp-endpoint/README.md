@@ -123,6 +123,7 @@ leaves out `pg_stat_statements`. See
 | `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
 | `endpoint.sharedPreloadLibraries` | _(empty)_ | override for the compute's base `shared_preload_libraries`; empty ⇒ the endpoint image's own list (`yb_amp,pg_stat_statements,pgsentinel,auto_explain`). `preload: true` extensions are appended either way. An override without `pg_stat_statements` also turns off the exporter's `stat_statements` collector and compute_ctl's `/insights` |
 | `endpoint.endpointId` | _(empty)_ | the endpoint's `amp_registry.endpoints` id; lets the supervisor read its own and its branch's `pg_settings` (and the pageserver/safekeeper override columns) from the registry. Empty ⇒ derived defaults only |
+| `endpoint.customerRole` | _(empty)_ | Postgres role clients log in as instead of the `cloud_admin` superuser (AMP-15); `endpoint.password` becomes its password and `cloud_admin` keeps none. Empty ⇒ `cloud_admin` |
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `16Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS. 16Gi is the 8 GiB per vCPU the control plane holds every endpoint to — a core without the memory to feed it gives Postgres a cache it cannot keep |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper HTTP |

@@ -299,6 +299,14 @@ type DeployConfig struct {
 	// certificates.
 	EndpointUserSplit bool
 
+	// EndpointCustomerRole is the Postgres role an endpoint's clients log in as
+	// instead of cloud_admin, the compute's bootstrap superuser (k8s only;
+	// AMP-15, compute/endpoint_supervisor/src/customer_role.rs). The endpoint's
+	// password is that role's, and cloud_admin keeps none. Empty keeps
+	// cloud_admin as the login. An endpoint created before it was set moves onto
+	// it on its next render, with the password its clients already use.
+	EndpointCustomerRole string
+
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait / container ready)
 }
 
@@ -387,6 +395,10 @@ var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // '-', starting and ending alphanumeric); length is checked separately.
 var dns1123Re = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
+// customerRoleRe is the endpoint supervisor's CustomerRole::new rule: a name
+// that reaches DDL unquoted.
+var customerRoleRe = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
 // byteQuantityRe matches a Kubernetes storage quantity ("10Gi", "512Mi", "2G",
 // "1073741824") — the subset deploy.ParseByteQuantity accepts. A typo here would
 // otherwise be discovered as a mis-sized volume at endpoint-create time.
@@ -465,6 +477,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.BackingYBExistingSecret, "deploy-yb-existing-secret", env("AMP_DEPLOY_YB_EXISTING_SECRET", ""), "name of a pre-existing Secret holding the backing YugabyteDB password (preferred over --deploy-yb-password)")
 	fs.StringVar(&d.BackingYBExistingSecretKey, "deploy-yb-existing-secret-key", env("AMP_DEPLOY_YB_EXISTING_SECRET_KEY", "password"), "key within --deploy-yb-existing-secret holding the password")
 	fs.StringVar(&d.BackingYBPassword, "deploy-yb-password", env("AMP_DEPLOY_YB_PASSWORD", ""), "backing YugabyteDB password, inline (dev/test; prefer --deploy-yb-existing-secret). Empty = passwordless/trust auth")
+	fs.StringVar(&d.EndpointCustomerRole, "deploy-endpoint-customer-role", env("AMP_DEPLOY_ENDPOINT_CUSTOMER_ROLE", ""), "k8s: Postgres role endpoint clients log in as instead of the cloud_admin superuser — a member of compute_ctl's privileged role, with no SUPERUSER (AMP-15). Empty = clients log in as cloud_admin")
 	fs.StringVar(&d.BackingYBTLSMode, "deploy-yb-tls-mode", env("AMP_DEPLOY_YB_TLS_MODE", ""), "k8s: libpq sslmode endpoints use to reach YugabyteDB (disable | require | verify-ca | verify-full); anything but disable gives every endpoint a cert-manager client certificate (CN = --deploy-yb-user). Empty = disable")
 	fs.StringVar(&d.BackingYBTLSIssuerKind, "deploy-yb-tls-issuer-kind", env("AMP_DEPLOY_YB_TLS_ISSUER_KIND", "ClusterIssuer"), "k8s: cert-manager issuer kind for endpoint certificates")
 	fs.StringVar(&d.BackingYBTLSIssuerName, "deploy-yb-tls-issuer-name", env("AMP_DEPLOY_YB_TLS_ISSUER_NAME", "amp-ca"), "k8s: cert-manager issuer name for endpoint certificates")
@@ -735,6 +748,16 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	}
 	if d.LFCOffloadIntervalSeconds < 0 {
 		return fmt.Errorf("invalid deploy LFC offload interval %d (want seconds >= 0)", d.LFCOffloadIntervalSeconds)
+	}
+	// The supervisor refuses to boot on a name it cannot use, so a bad one would
+	// otherwise surface as every new endpoint crash-looping.
+	if r := d.EndpointCustomerRole; r != "" {
+		if !customerRoleRe.MatchString(r) {
+			return fmt.Errorf("invalid deploy endpoint customer role %q: want 1-63 lowercase letters, digits and underscores, not starting with a digit", r)
+		}
+		if r == "cloud_admin" || r == "yb_amp_superuser" || strings.HasPrefix(r, "pg_") {
+			return fmt.Errorf("invalid deploy endpoint customer role %q: cloud_admin, yb_amp_superuser and pg_ roles are reserved", r)
+		}
 	}
 	switch d.BackingYBTLSMode {
 	case "", "disable", "require", "verify-ca", "verify-full":

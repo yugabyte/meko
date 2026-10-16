@@ -158,8 +158,17 @@ endpoint:
   # pageserver_settings / safekeeper_settings) from the registry at start. Empty
   # => no override lookup, derived defaults only.
   endpointId: ""
-  # -- Password for the compute's default user (`cloud_admin`, the superuser
-  # initdb created), set by the supervisor once Postgres answers so clients
+  # -- Postgres role clients log in as instead of `cloud_admin`, the superuser
+  # initdb created (AMP-15). The supervisor creates it on every boot as a member
+  # of compute_ctl's privileged role — create-db/role, replication, read/write
+  # all data, no SUPERUSER — and `password` below becomes its password, while
+  # `cloud_admin` keeps none and is reachable over loopback only. An endpoint
+  # first rendered with this set hands `cloud_admin`'s existing password over
+  # to the role, so its clients keep their password and change their user name.
+  # Empty => clients log in as `cloud_admin`.
+  customerRole: ""
+  # -- Password for the compute's login role (`customerRole`, or `cloud_admin`
+  # when that is empty), set by the supervisor once Postgres answers so clients
   # arriving from outside the pod can authenticate. Rendered into the release's
   # Secret and delivered as COMPUTE_PASSWORD.
   #

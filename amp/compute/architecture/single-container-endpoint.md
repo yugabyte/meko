@@ -226,8 +226,8 @@ version judging them is the one in its image, and an extension's setting does no
 exist until that extension is loaded. It applies nothing, so it is safe on an
 endpoint running prerendered config and concurrently with a reload.
 
-`GET /v1/remote-auth` reports what the supervisor did with `cloud_admin`'s
-password on this boot ([below](#bootstrapattach-run-in-the-pod)):
+`GET /v1/remote-auth` reports what the supervisor did with the login role's
+password (`cloud_admin`'s, or the customer role's) on this boot ([below](#bootstrapattach-run-in-the-pod)):
 
 ```
 $ curl -s http://$ENDPOINT:9899/v1/remote-auth
@@ -238,9 +238,9 @@ $ curl -s http://$ENDPOINT:9899/v1/remote-auth
 |---|---|
 | `pending` | Not decided yet. A caller-rendered endpoint skips remote auth and stays here. |
 | `applied` | This boot's `ALTER ROLE` committed. `lsn` is `pg_current_wal_flush_lsn()`, read by a separate statement after the commit, or `null` when that read failed. |
-| `already_set` | The catalog already had a password, so nothing was applied, whether or not one was supplied. |
+| `already_set` | The catalog already had a password, so nothing was applied, whether or not one was supplied. Also a customer role that took over `cloud_admin`'s password: a password exists, set at no LSN the control plane sent. |
 | `unset` | No `COMPUTE_PASSWORD` and no password in the catalog, so remote auth fails until one is set. |
-| `failed` | Postgres never answered, or refused the statement, within the retry budget. |
+| `failed` | Postgres never answered, or refused the statement, within the retry budget — or the customer role's name belongs to a role the bootstrap did not make, which is left alone. |
 
 The controller polls it after creating a root branch's first writer and records
 `lsn` as the branch's fork floor
@@ -407,7 +407,47 @@ The supervisor materializes the branch itself:
   is why the control plane sends one only to a root's first writer and
   reads the outcome back from `GET /v1/remote-auth` (yugabyte/meko#1461).
 
-  All three outcomes log `remote_auth::READY_MARKER`, including the two
+  With `CUSTOMER_ROLE` set (chart `endpoint.customerRole`, controller
+  `--deploy-endpoint-customer-role`), clients do not log in as
+  `cloud_admin` at all (AMP-15). Before the password step, on every
+  boot and in one transaction, the supervisor runs what `compute_ctl`
+  would have under `skip_pg_catalog_updates = false`. It runs
+  `compute_ctl`'s own SQL files, not a copy (`customer_role.rs`):
+  1. It creates the privileged group role (`yb_amp_superuser`:
+     create-db/role, replication, `BYPASSRLS`,
+     `pg_read_all_data`/`pg_write_all_data`, `NOLOGIN`).
+  2. It runs `compute_ctl`'s migrations, tracked in
+     `yb_amp_migration.migration_id` as its runner tracks them.
+  3. It converges the customer role as a non-superuser member of the
+     group.
+  4. It grants the group `CREATE` on the `postgres` database and its
+     `public` schema, which since PG15 only their owner, `cloud_admin`,
+     would otherwise have.
+
+  The password rules then apply to the customer role. A customer role
+  with no password, on an endpoint whose `cloud_admin` has a SCRAM one,
+  takes that one over. This is how a re-render moves an existing
+  endpoint onto the role, with clients keeping their password and only
+  changing their user name. `cloud_admin`'s password is then cleared.
+  An md5 `cloud_admin` password cannot move, because md5 is salted
+  with the user name. It is cleared too: it has admitted nobody
+  remotely since the remote rule became `scram-sha-256` only, so the
+  endpoint has no remote login until the customer role is given a
+  password, and the supervisor warns so. A role of the customer role's
+  name that the bootstrap did not make — one the customer created while
+  they were superuser — is never taken over: the run reports `failed`
+  and changes nothing. The customer keeps everything an owner of its data needs.
+  It loses `COPY ... PROGRAM`, `pg_read_file`, untrusted languages,
+  `ALTER SYSTEM` and `LOAD`, which are what reach the pod and the
+  compute spec.
+
+  This holds only while nothing else in the pod can become
+  `cloud_admin`, and loopback `trust` still lets it (AMP-58). It also
+  does not reassign objects `cloud_admin` already owns, so an existing
+  endpoint's customer can read and write those tables but not ALTER or
+  DROP them.
+
+  All outcomes log `remote_auth::READY_MARKER`, including the ones
   that change nothing: the Docker deployer waits on that line, and
   "settled" is what it needs to know, not "wrote to `pg_authid`".
 

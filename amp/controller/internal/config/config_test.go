@@ -342,6 +342,41 @@ func TestDeployYBTLS(t *testing.T) {
 	}
 }
 
+// TestDeployEndpointCustomerRole asserts the role is off by default and held to
+// the name the endpoint supervisor will accept: anything else would crash-loop
+// every endpoint rendered with it.
+func TestDeployEndpointCustomerRole(t *testing.T) {
+	chart := t.TempDir()
+	base := []string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy",
+		"--deploy-driver", "kubernetes",
+		"--deploy-namespace", "endpoints",
+		"--deploy-chart", chart,
+		"--endpoint-image-repo", "registry.example.com/endpoint",
+		"--deploy-yb-host-ports", "yb-tserver:5433",
+	}
+	with := func(role string) []string {
+		return append(append([]string{}, base...), "--deploy-endpoint-customer-role", role)
+	}
+	c, err := Load(base)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.EndpointCustomerRole != "" {
+		t.Errorf("customer role on by default: %q", c.Deploy.EndpointCustomerRole)
+	}
+	c, err = Load(with("amp_admin"))
+	if err != nil || c.Deploy.EndpointCustomerRole != "amp_admin" {
+		t.Fatalf("Load(amp_admin) = %v, %v", c, err)
+	}
+	for _, bad := range []string{"Admin", "2admin", "amp-admin", "cloud_admin", "yb_amp_superuser", "pg_monitor", strings.Repeat("a", 64)} {
+		if _, err := Load(with(bad)); err == nil {
+			t.Errorf("customer role %q accepted", bad)
+		}
+	}
+}
+
 // TestDeployComputeTLS covers the compute's client-facing certificate: off by
 // default, and each mode validated for what that mode actually needs.
 func TestDeployComputeTLS(t *testing.T) {

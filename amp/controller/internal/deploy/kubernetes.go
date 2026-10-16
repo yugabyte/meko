@@ -194,6 +194,10 @@ type KubernetesConfig struct {
 	// EndpointUserSplit sets the chart's userSplit.enabled.
 	EndpointUserSplit bool
 
+	// EndpointCustomerRole is the role clients log in as instead of cloud_admin
+	// (AMP-15). Empty keeps cloud_admin.
+	EndpointCustomerRole string
+
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait)
 
 	// Phases observes how long each phase of a successful deploy took. Nil
@@ -2054,6 +2058,9 @@ type endpointValues struct {
 	// any REDEPLOY, which has no verifier to render) leaves the supervisor's own
 	// default in place.
 	Password string `json:"password,omitempty"`
+	// CustomerRole is the role clients log in as, and the one Password is set
+	// on. Omitted keeps cloud_admin.
+	CustomerRole string `json:"customerRole,omitempty"`
 	// Resources is the pod's CPU + memory reservation. The chart renders each
 	// value as both a request and a limit, so the pod gets Guaranteed QoS.
 	Resources resourceValues `json:"resources"`
@@ -2150,13 +2157,14 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Dbname:    spec.YB.DBName,
 		},
 		Endpoint: endpointValues{
-			PgVersion:   strconv.Itoa(pgVersion),
-			ComputePort: k.cfg.ComputePort,
-			BranchId:    branchIDValue(spec.BranchID),
-			EndpointId:  spec.EndpointID,
-			Password:    spec.PasswordVerifier,
-			Resources:   resourceValues{CPU: cpu, Memory: memory},
-			Extensions:  extensionValuesFor(spec.Extensions),
+			PgVersion:    strconv.Itoa(pgVersion),
+			ComputePort:  k.cfg.ComputePort,
+			BranchId:     branchIDValue(spec.BranchID),
+			EndpointId:   spec.EndpointID,
+			Password:     spec.PasswordVerifier,
+			CustomerRole: k.cfg.EndpointCustomerRole,
+			Resources:    resourceValues{CPU: cpu, Memory: memory},
+			Extensions:   extensionValuesFor(spec.Extensions),
 		},
 		Controller: controllerValues{URL: spec.ControllerURL},
 		Service: serviceValues{

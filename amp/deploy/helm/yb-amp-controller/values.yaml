@@ -194,6 +194,12 @@ controller:
     # Postgres cannot read the YugabyteDB client key. Needs the foundation to
     # enforce client certificates.
     userSplit: false
+    # -- Postgres role endpoint clients log in as instead of cloud_admin, the
+    # compute's superuser (AMP-15): a non-superuser member of compute_ctl's
+    # privileged role, which gets the endpoint's password while cloud_admin keeps
+    # none. Empty => clients log in as cloud_admin. Set on a running fleet, it
+    # reaches existing endpoints on their next re-render.
+    customerRole: ""
     # -- Issuer for computeTlsMode=issue. Separate from tls.issuerRef, which is
     # the private CA the stack's internal certificates come from: the client-facing
     # certificate is the one that may need a public CA instead.

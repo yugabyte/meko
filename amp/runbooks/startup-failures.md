@@ -63,7 +63,8 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_amp_local port collision, or a postmaster orphaned by an earlier compute_ctl | **H** |
-| Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set | **I** |
+| Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set — or the endpoint has a customer role (`CUSTOMER_ROLE`), and clients log in as that instead | **I** |
+| Supervisor logs `role <name> exists but this supervisor did not create it` / `/v1/remote-auth` says `failed` | `CUSTOMER_ROLE` names a role the customer already made; it is not taken over and `cloud_admin` stays the login | **I** |
 | PS can't find the safekeeper (broker-less builds) | missing `safekeeper_pg_addr` | **J** |
 | Any process exits at startup: `unknown configuration item(s) …` / `unknown field …` | misspelled, stale, or misplaced config key — rejected, not ignored | **K** |
 | SC: `Postgres directory 'lib' not found in <dir>/pg_install` | init baked a `pg_distrib_dir` that doesn't exist on this box | **L** |
@@ -222,6 +223,26 @@ tooling can connect:
 ALTER ROLE cloud_admin PASSWORD 'Yugabyte!1';
 ```
 (Run via the local socket as the bootstrap superuser if password auth is what's failing.)
+
+**Not on an endpoint with a customer role** (`CUSTOMER_ROLE` in its ConfigMap, set by the
+controller's `--deploy-endpoint-customer-role`; AMP-15,
+[`single-container-endpoint.md`](../compute/architecture/single-container-endpoint.md)). There
+`cloud_admin` has no password on purpose: it is the superuser and is reachable over loopback only.
+Giving it one reopens remote superuser login, and the next boot clears it again. Instead:
+- **Clients get `password authentication failed` as `cloud_admin`** after the endpoint moved onto
+  the customer role: they log in as the customer role, with the same password — the supervisor
+  hands `cloud_admin`'s SCRAM password over to it.
+- **No remote login at all, and the supervisor warned that `cloud_admin`'s password was md5**: md5
+  cannot be handed over, and an md5 role has not authenticated remotely since the remote rule became
+  `scram-sha-256` only. Set the customer role's password over the local socket:
+  `ALTER ROLE <customer role> PASSWORD '...'`.
+- **`role <name> exists but this supervisor did not create it`**: a role of that name already
+  existed — most likely one the customer made while they were superuser — so it was not taken over
+  and nothing changed; `cloud_admin` keeps its password and stays the login. Pick a
+  `CUSTOMER_ROLE` no endpoint already has, and re-render.
+- Anything else that stops the customer role from being set up is logged as
+  `could not configure the <role> password, so remote auth will fail: <error>`, and
+  `GET /v1/remote-auth` on the supervisor port (9899) says `failed`.
 
 ## J. PS can't find the safekeeper (broker-less builds)
 With the storage_broker removed, the PS discovers the safekeeper via a `safekeeper_pg_addr` key in

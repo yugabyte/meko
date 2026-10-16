@@ -67,6 +67,10 @@ data:
   # from the registry at start. Unset => derived defaults only, no lookup.
   ENDPOINT_ID: {{ .Values.endpoint.endpointId | quote }}
   {{- end }}
+  {{- if .Values.endpoint.customerRole }}
+  # The non-superuser role clients log in as (AMP-15). Unset => cloud_admin.
+  CUSTOMER_ROLE: {{ .Values.endpoint.customerRole | quote }}
+  {{- end }}
   # The pod's resource reservation, echoed so the supervisor can size
   # shared_buffers, the parallel-worker GUCs and the pageserver/safekeeper
   # scale_factor from it. These are a FALLBACK: the supervisor prefers the

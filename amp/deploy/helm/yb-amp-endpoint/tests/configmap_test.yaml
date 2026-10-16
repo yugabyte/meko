@@ -26,6 +26,20 @@ tests:
       - notExists:
           path: data.ENDPOINT_ID
 
+  - it: names the customer role when one is set
+    set:
+      endpoint:
+        customerRole: amp_admin
+    asserts:
+      - equal:
+          path: data.CUSTOMER_ROLE
+          value: amp_admin
+
+  - it: omits the customer role when unset
+    asserts:
+      - notExists:
+          path: data.CUSTOMER_ROLE
+
   # The supervisor sizes shared_buffers, the parallel-worker GUCs and the
   # pageserver/safekeeper scale_factor from these. They are its FALLBACK — it
   # prefers the container's cgroup limits, which stay correct across an in-place

@@ -197,6 +197,7 @@ func buildProvisioning(cfg *config.Config, m *metrics.Metrics, logger *slog.Logg
 				ComputeTLSCertRenewBefore:     cfg.Deploy.ComputeTLSCertRenewBefore,
 				ComputeTLSIncludeServiceDNS:   cfg.Deploy.ComputeTLSIncludeServiceDNS,
 				EndpointUserSplit:             cfg.Deploy.EndpointUserSplit,
+				EndpointCustomerRole:          cfg.Deploy.EndpointCustomerRole,
 				Timeout:                       cfg.Deploy.Timeout,
 				Phases:                        phaseObserver(m),
 			}, logger)

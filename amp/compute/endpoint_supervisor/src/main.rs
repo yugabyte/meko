@@ -36,9 +36,11 @@
 //! - [`boot`] — the shape of the pod: ports, paths, the base config keys, the
 //!   three services, and waiting for YugabyteDB before starting them.
 //! - [`spec`] — the compute spec.
-//! - [`remote_auth`] — the `cloud_admin` password, without which only loopback
+//! - [`remote_auth`] — the login role's password, without which only loopback
 //!   clients can authenticate. Its success line is the readiness signal the
 //!   controller's Docker deployer waits for.
+//! - [`customer_role`] — with `CUSTOMER_ROLE`, a login for clients that is not a
+//!   superuser, so `cloud_admin` is left to the control plane (AMP-15).
 //!
 //! # Startup order
 //!
@@ -65,6 +67,7 @@ pub mod compute_tls;
 pub mod config;
 pub mod control;
 pub mod coordinate;
+pub mod customer_role;
 pub mod fence;
 pub mod guc;
 pub mod http;
@@ -198,6 +201,9 @@ pub struct Env {
     /// left exactly as the catalog has it; see [`remote_auth`] for why that is
     /// not the same as a default.
     compute_password: Option<String>,
+    /// `CUSTOMER_ROLE`: the role clients log in as instead of `cloud_admin`.
+    /// `None` keeps `cloud_admin` as the login. See [`customer_role`].
+    customer_role: Option<customer_role::CustomerRole>,
     /// Load the previous LFC state on compute startup.
     autoprewarm: bool,
     /// Save the LFC state this often. `None` means never.
@@ -380,6 +386,19 @@ impl Env {
             },
         };
 
+        // A boot failure rather than a warning: falling back to cloud_admin
+        // would hand clients the superuser this setting exists to withhold.
+        let customer_role = env_opt("CUSTOMER_ROLE")
+            .map(|name| {
+                let privileged = layout
+                    .privileged_role_name
+                    .as_deref()
+                    .unwrap_or(customer_role::DEFAULT_PRIVILEGED_ROLE);
+                customer_role::CustomerRole::new(&name, privileged)
+            })
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+
         Ok(Self {
             layout,
             yb_host_ports: env_or("YB_HOST_PORTS", "127.0.0.1:5433"),
@@ -394,6 +413,7 @@ impl Env {
             compute_ssl_key_file: env_opt("COMPUTE_SSL_KEY_FILE"),
             endpoint_id,
             compute_password: env_opt("COMPUTE_PASSWORD"),
+            customer_role,
             autoprewarm: env_bool("AUTOPREWARM"),
             offload_lfc_interval_seconds: env_u64("OFFLOAD_LFC_INTERVAL_SECONDS")?,
             shared_preload_libraries: shared_preload_libraries(
@@ -915,6 +935,7 @@ fn serve_one_lease(
                 &l.pg_bin().join("psql"),
                 l.compute_port,
                 env.compute_password.as_deref(),
+                env.customer_role.clone(),
                 remote_auth.clone(),
             );
         }
@@ -1621,6 +1642,7 @@ mod tests {
             compute_ssl_key_file: None,
             endpoint_id: None,
             compute_password: Some("cloud_admin".into()),
+            customer_role: None,
             autoprewarm: false,
             offload_lfc_interval_seconds: None,
             shared_preload_libraries: "yb_amp".into(),

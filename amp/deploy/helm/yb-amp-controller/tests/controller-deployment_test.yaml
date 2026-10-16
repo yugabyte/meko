@@ -265,6 +265,26 @@ tests:
             name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
             value: "10Gi"
 
+  # AMP-15: empty keeps clients on cloud_admin, and a set role must reach the
+  # controller, or every endpoint it renders hands clients the superuser.
+  - it: leaves the endpoint customer role empty by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_ENDPOINT_CUSTOMER_ROLE
+            value: ""
+
+  - it: passes the endpoint customer role through when set
+    set:
+      controller.endpoint.customerRole: amp_admin
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_ENDPOINT_CUSTOMER_ROLE
+            value: "amp_admin"
+
   - it: turns LFC offload and prewarm on by default
     asserts:
       - contains:

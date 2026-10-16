@@ -129,6 +129,8 @@ spec:
             {{- end }}
             - name: AMP_DEPLOY_ENDPOINT_USER_SPLIT
               value: {{ .Values.controller.endpoint.userSplit | quote }}
+            - name: AMP_DEPLOY_ENDPOINT_CUSTOMER_ROLE
+              value: {{ .Values.controller.endpoint.customerRole | default "" | quote }}
             # The in-cluster URL endpoints use to reach this controller's storage-layer surface.
             - name: AMP_DEPLOY_CONTROLLER_URL
               value: {{ include "yb-amp-controller.endpointControllerUrl" . | quote }}

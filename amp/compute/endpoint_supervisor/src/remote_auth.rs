@@ -1,4 +1,8 @@
-//! Giving `cloud_admin` a password, so non-loopback clients can authenticate.
+//! Giving the login role a password, so non-loopback clients can authenticate.
+//!
+//! The login role is `cloud_admin` unless the endpoint has a [`CustomerRole`],
+//! in which case it is that role and `cloud_admin` keeps no password at all
+//! (AMP-15) — see [`crate::customer_role`].
 //!
 //! The compute spec sets `skip_pg_catalog_updates`, which makes `compute_ctl`
 //! skip the block that would apply the spec's `encrypted_password`
@@ -23,6 +27,20 @@
 //!    built-in default this used to fall back to would have re-passworded the
 //!    role to a well-known string on every one of them.
 //!
+//! A customer role adds a third: one with no password of its own, on an endpoint
+//! whose `cloud_admin` has a SCRAM one, takes that one over, and `cloud_admin`'s
+//! is cleared in the same transaction. That is a re-render carrying an endpoint
+//! created before the customer role onto it — rule 2 means there is no
+//! `COMPUTE_PASSWORD` to give it — and its clients keep their password and change
+//! only the user name. An md5 `cloud_admin` password cannot move (md5 is salted
+//! with the user name), but it has not let anyone in from outside since the
+//! remote rule became `scram-sha-256` only, so it is cleared all the same and
+//! the endpoint has no remote login until the customer role gets a password.
+//!
+//! A role of the customer role's name that the bootstrap did not make — one the
+//! customer created while they were superuser — is never taken over: the run
+//! fails and changes nothing (see [`CustomerRole::conflict_sql`]).
+//!
 //! Rule 1 is why a fork cannot take a password of its own: it inherits its
 //! parent's catalog, so its first endpoint finds one already there. The control
 //! plane therefore sends a password only to a root's first writer, and asks
@@ -46,10 +64,14 @@ use std::time::Duration;
 use camino::Utf8Path;
 use utils::lsn::Lsn;
 
+use crate::customer_role::CustomerRole;
+
 /// The readiness signal the controller's Docker deployer waits for.
 ///
 /// LOAD-BEARING: `controller/internal/deploy/docker.go` greps the container log
-/// for this exact string. If you change it, change that too.
+/// for this exact string. If you change it, change that too. It names
+/// `cloud_admin` even when the password went to a [`CustomerRole`]: the text is
+/// the contract, not a description.
 pub const READY_MARKER: &str = "set cloud_admin password for remote auth";
 
 /// How many times to try before giving up, one second apart. The compute's health
@@ -154,18 +176,102 @@ fn quote_literal(password: &str) -> String {
 }
 
 /// The statement to run. Split out so a test can pin the escaping without
-/// needing a running Postgres.
-fn alter_role_sql(password: &str) -> String {
+/// needing a running Postgres. `role` is `cloud_admin` or a name
+/// [`CustomerRole::new`] accepted, neither of which needs quoting.
+fn alter_role_sql(role: &str, password: &str) -> String {
     format!(
-        "ALTER ROLE cloud_admin WITH PASSWORD '{}'",
+        "ALTER ROLE {role} WITH PASSWORD '{}'",
         quote_literal(password)
     )
 }
 
-/// Does `cloud_admin` already have a password? `t`/`f` from a superuser-only
-/// catalog we can read because this connection IS the superuser, over loopback.
-const HAS_PASSWORD_SQL: &str =
-    "SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = 'cloud_admin'";
+/// Moves `cloud_admin`'s verifier onto `role`. Postgres stores a SCRAM verifier
+/// verbatim, and SCRAM's is not salted with the user name, so it authenticates
+/// the same password under the new name.
+fn hand_over_sql(role: &str) -> String {
+    format!(
+        "DO $amp_auth$ BEGIN EXECUTE pg_catalog.format('ALTER ROLE {role} WITH PASSWORD %L', \
+         (SELECT rolpassword FROM pg_catalog.pg_authid \
+         WHERE rolname OPERATOR(pg_catalog.=) 'cloud_admin')); END $amp_auth$"
+    )
+}
+
+/// Leaves `cloud_admin` reachable only by what needs no password: loopback.
+const CLEAR_ADMIN_SQL: &str = "ALTER ROLE cloud_admin WITH PASSWORD NULL";
+
+/// Has the login role a password; has `cloud_admin` one; is that one SCRAM. One
+/// `t|f|f` row, from a superuser-only catalog we can read because this
+/// connection IS the superuser, over loopback. Without a customer role the login
+/// is `cloud_admin`, and only the first column is used.
+fn state_sql(login: &str) -> String {
+    let has = |role: &str, test: &str| {
+        format!(
+            "coalesce((SELECT {test} FROM pg_catalog.pg_authid \
+             WHERE rolname OPERATOR(pg_catalog.=) '{role}'), false)"
+        )
+    };
+    format!(
+        "SELECT {}, {}, {}",
+        has(login, "rolpassword IS NOT NULL"),
+        has("cloud_admin", "rolpassword IS NOT NULL"),
+        has("cloud_admin", "rolpassword LIKE 'SCRAM-SHA-256$%'"),
+    )
+}
+
+/// What the catalog holds, as [`state_sql`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct State {
+    login_has_password: bool,
+    admin_has_password: bool,
+    admin_password_is_scram: bool,
+}
+
+impl State {
+    fn parse(row: &str) -> Option<Self> {
+        let mut it = row.split('|').map(|f| f == "t");
+        let s = Self {
+            login_has_password: it.next()?,
+            admin_has_password: it.next()?,
+            admin_password_is_scram: it.next()?,
+        };
+        it.next().is_none().then_some(s)
+    }
+}
+
+/// What to do about the login role's password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Password<'a> {
+    /// Rule 1: the role has one already.
+    Keep,
+    /// Rule 2: no `COMPUTE_PASSWORD` and nothing to take over.
+    Unset,
+    Apply(&'a str),
+    /// A customer role takes over `cloud_admin`'s SCRAM password.
+    HandOver,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Decision<'a> {
+    password: Password<'a>,
+    /// Clear `cloud_admin`'s password. Always, with a customer role: a SCRAM one
+    /// has just moved to the customer, and an md5 one admits nobody remotely
+    /// (the remote rule is `scram-sha-256` only), so keeping either would only
+    /// leave a superuser password lying in the catalog.
+    clear_admin: bool,
+}
+
+fn decide(password: Option<&str>, customer: bool, s: State) -> Decision<'_> {
+    let password = match (s.login_has_password, password) {
+        (true, _) => Password::Keep,
+        (false, Some(pw)) => Password::Apply(pw),
+        (false, None) if customer && s.admin_password_is_scram => Password::HandOver,
+        (false, None) => Password::Unset,
+    };
+    Decision {
+        clear_admin: customer && s.admin_has_password,
+        password,
+    }
+}
 
 /// Its own `psql` invocation, after the `ALTER ROLE`'s has exited: in one `-c`
 /// string the two share an implicit transaction, and this would read a position
@@ -228,54 +334,132 @@ fn scrub(err: &str, password: &str) -> String {
     first.replace(password, "<redacted>")
 }
 
-/// Decides what the role's password should be and applies it if anything is to
-/// be done, retrying until Postgres answers. Failure is a warning: the endpoint
-/// is otherwise up, and refusing to supervise it because remote auth could not
-/// be configured would turn a degraded endpoint into no endpoint.
+/// Decides what the login role's password should be and applies it if anything
+/// is to be done, retrying until Postgres answers. With a `customer` role it
+/// first creates that role ([`CustomerRole::bootstrap_sql`]) and the password is
+/// its; without one it is `cloud_admin`'s, as it always was.
+///
+/// Failure is a warning: the endpoint is otherwise up, and refusing to supervise
+/// it because remote auth could not be configured would turn a degraded endpoint
+/// into no endpoint.
 fn configure_remote_auth(
     db: &impl Sql,
     password: Option<&str>,
+    customer: Option<&CustomerRole>,
     attempts: usize,
     interval: Duration,
 ) -> Outcome {
+    let login = customer.map_or("cloud_admin", |c| c.name.as_str());
     let mut last = String::new();
     for attempt in 1..=attempts {
         if attempt > 1 {
             std::thread::sleep(interval);
         }
-        // Also the wait for Postgres to answer queries at all, so nothing is
-        // decided against a compute still restoring its basebackup.
-        let has_password = match db.run(HAS_PASSWORD_SQL) {
-            Ok(answer) => answer == "t",
+        // The first query is also the wait for Postgres to answer queries at
+        // all, so nothing is decided against a compute still restoring its
+        // basebackup. The bootstrap goes first: the role has to exist before its
+        // password can be read.
+        if let Some(c) = customer {
+            match db.run(&c.conflict_sql()) {
+                Ok(answer) if answer == "t" => {
+                    tracing::error!(
+                        "role {login} exists but this supervisor did not create it, so it is not \
+                         taken over and nothing is changed: cloud_admin keeps its password and \
+                         stays the login. Choose a CUSTOMER_ROLE no existing role has (AMP-15)"
+                    );
+                    return Outcome::Failed;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    last = e;
+                    continue;
+                }
+            }
+            if let Err(e) = db.run(&c.bootstrap_sql()) {
+                last = e;
+                continue;
+            }
+        }
+        let state = match db
+            .run(&state_sql(login))
+            .map(|row| (State::parse(&row), row))
+        {
+            Ok((Some(s), _)) => s,
+            Ok((None, row)) => {
+                last = format!("unexpected state row {row:?}");
+                continue;
+            }
             Err(e) => {
                 last = e;
                 continue;
             }
         };
-        match (has_password, password) {
-            (true, _) => {
-                tracing::info!("{READY_MARKER}: skipped, cloud_admin already has a password");
-                return Outcome::AlreadySet;
+        let d = decide(password, customer.is_some(), state);
+
+        // One query, so the customer never loses cloud_admin's password without
+        // having gained its own.
+        let mut sql = Vec::new();
+        match d.password {
+            Password::Apply(pw) => sql.push(alter_role_sql(login, pw)),
+            Password::HandOver => sql.push(hand_over_sql(login)),
+            Password::Keep | Password::Unset => {}
+        }
+        if d.clear_admin {
+            sql.push(CLEAR_ADMIN_SQL.to_string());
+        }
+        if !sql.is_empty()
+            && let Err(e) = db.run(&sql.join(";\n"))
+        {
+            last = scrub(&e, password.unwrap_or_default());
+            continue;
+        }
+
+        let admin = if d.clear_admin {
+            "; cloud_admin's password cleared"
+        } else {
+            ""
+        };
+        if customer.is_some() && state.admin_has_password && d.password == Password::Unset {
+            tracing::warn!(
+                "cloud_admin's password was md5, so {login} could not take it over; it had not \
+                 admitted anyone remotely since the remote rule became scram-sha-256 only, and \
+                 is cleared. The endpoint has no remote login until {login} is given a password"
+            );
+        }
+        return match d.password {
+            Password::Keep => {
+                tracing::info!("{READY_MARKER}: skipped, {login} already has a password{admin}");
+                Outcome::AlreadySet
             }
-            (false, None) => {
+            Password::Unset => {
                 tracing::warn!(
-                    "{READY_MARKER}: skipped, COMPUTE_PASSWORD is unset and cloud_admin has no \
+                    "{READY_MARKER}: skipped, COMPUTE_PASSWORD is unset and {login} has no \
                      password, so remote auth will fail"
                 );
-                return Outcome::Unset;
+                Outcome::Unset
             }
-            (false, Some(pw)) => match db.run(&alter_role_sql(pw)) {
-                Ok(_) => {
-                    // The controller is waiting for exactly this.
+            Password::Apply(_) => {
+                // The controller is waiting for exactly this.
+                if customer.is_none() {
                     tracing::info!("{READY_MARKER}");
-                    return Outcome::Applied { lsn: flush_lsn(db) };
+                } else {
+                    tracing::info!("{READY_MARKER}: role {login}{admin}");
                 }
-                Err(e) => last = scrub(&e, pw),
-            },
-        }
+                Outcome::Applied { lsn: flush_lsn(db) }
+            }
+            // A password is in the catalog, set at no LSN the control plane asked
+            // for: what `already_set` means to it.
+            Password::HandOver => {
+                tracing::info!(
+                    "{READY_MARKER}: {login} took over cloud_admin's password, so clients keep \
+                     it and log in as {login} from now on{admin}"
+                );
+                Outcome::AlreadySet
+            }
+        };
     }
     tracing::warn!(
-        "could not set the cloud_admin password, so remote auth will fail: {}",
+        "could not configure the {login} password, so remote auth will fail: {}",
         last.chars().take(200).collect::<String>()
     );
     Outcome::Failed
@@ -302,7 +486,13 @@ fn flush_lsn(db: &impl Sql) -> Option<Lsn> {
 /// Detached on purpose: it waits on Postgres, and blocking the caller would delay
 /// the monitor loop — so a sibling that crashed meanwhile would not be restarted
 /// until this finished.
-pub fn spawn(psql_bin: &Utf8Path, port: u16, password: Option<&str>, status: Arc<Status>) {
+pub fn spawn(
+    psql_bin: &Utf8Path,
+    port: u16,
+    password: Option<&str>,
+    customer: Option<CustomerRole>,
+    status: Arc<Status>,
+) {
     let (psql_bin, password) = (psql_bin.to_owned(), password.map(str::to_owned));
     let run = status.begin();
     std::thread::spawn(move || {
@@ -310,7 +500,13 @@ pub fn spawn(psql_bin: &Utf8Path, port: u16, password: Option<&str>, status: Arc
             bin: &psql_bin,
             port,
         };
-        let outcome = configure_remote_auth(&db, password.as_deref(), ATTEMPTS, INTERVAL);
+        let outcome = configure_remote_auth(
+            &db,
+            password.as_deref(),
+            customer.as_ref(),
+            ATTEMPTS,
+            INTERVAL,
+        );
         status.finish(run, outcome);
     });
 }
@@ -335,13 +531,13 @@ mod tests {
     fn a_quote_in_the_password_is_escaped() {
         assert_eq!(quote_literal("o'brien"), "o''brien");
         assert_eq!(
-            alter_role_sql("o'brien"),
+            alter_role_sql("cloud_admin", "o'brien"),
             "ALTER ROLE cloud_admin WITH PASSWORD 'o''brien'"
         );
         // The classic injection shape would terminate the literal and append a
         // statement. Doubling keeps it inside, so the whole thing is one literal
         // and the payload survives verbatim as the password.
-        let sql = alter_role_sql("x'; DROP ROLE cloud_admin; --");
+        let sql = alter_role_sql("cloud_admin", "x'; DROP ROLE cloud_admin; --");
         assert_eq!(
             sql,
             "ALTER ROLE cloud_admin WITH PASSWORD 'x''; DROP ROLE cloud_admin; --'"
@@ -370,7 +566,7 @@ mod tests {
                         wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=";
         assert_eq!(quote_literal(verifier), verifier);
         assert_eq!(
-            alter_role_sql(verifier),
+            alter_role_sql("cloud_admin", verifier),
             format!("ALTER ROLE cloud_admin WITH PASSWORD '{verifier}'")
         );
     }
@@ -378,7 +574,7 @@ mod tests {
     #[test]
     fn an_ordinary_password_is_unchanged() {
         assert_eq!(
-            alter_role_sql("cloud_admin"),
+            alter_role_sql("cloud_admin", "cloud_admin"),
             "ALTER ROLE cloud_admin WITH PASSWORD 'cloud_admin'"
         );
     }
@@ -391,6 +587,187 @@ mod tests {
     }
 
     const PW: &str = "SCRAM-SHA-256$4096:c2FsdA==$c3RvcmVk:c2VydmVy";
+
+    /// [`state_sql`] rows without a customer role, where the login is
+    /// `cloud_admin` and so the first two columns agree.
+    const NONE: &str = "f|f|f";
+    const SET: &str = "t|t|t";
+
+    fn customer() -> CustomerRole {
+        CustomerRole::new("amp_admin", "yb_amp_superuser").unwrap()
+    }
+
+    #[test]
+    fn the_state_row_parses_and_nothing_else_does() {
+        assert_eq!(
+            State::parse("t|f|f"),
+            Some(State {
+                login_has_password: true,
+                admin_has_password: false,
+                admin_password_is_scram: false,
+            })
+        );
+        assert_eq!(State::parse("t|f"), None);
+        assert_eq!(State::parse("t|f|f|t"), None);
+    }
+
+    fn state(login: bool, admin: bool, scram: bool) -> State {
+        State {
+            login_has_password: login,
+            admin_has_password: admin,
+            admin_password_is_scram: scram,
+        }
+    }
+
+    /// Without a customer role, cloud_admin's password is never cleared.
+    #[test]
+    fn without_a_customer_role_cloud_admin_is_never_cleared() {
+        for s in [
+            state(true, true, true),
+            state(false, false, false),
+            state(false, true, true),
+        ] {
+            assert!(!decide(None, false, s).clear_admin, "{s:?}");
+            assert!(!decide(Some("v"), false, s).clear_admin, "{s:?}");
+        }
+        assert_eq!(
+            decide(None, false, state(false, true, true)).password,
+            Password::Unset,
+            "only a customer role takes cloud_admin's password over"
+        );
+    }
+
+    /// A new endpoint: the customer gets the caller's password, and cloud_admin
+    /// — which has none — is left without one.
+    #[test]
+    fn a_new_customer_endpoint_passwords_the_customer() {
+        let d = decide(Some("v"), true, state(false, false, false));
+        assert_eq!(d.password, Password::Apply("v"));
+        assert!(!d.clear_admin);
+    }
+
+    /// An endpoint created before the customer role, re-rendered onto it: no
+    /// COMPUTE_PASSWORD, so the customer takes cloud_admin's, and cloud_admin
+    /// loses it in the same query.
+    #[test]
+    fn an_existing_endpoint_hands_its_scram_password_over() {
+        let d = decide(None, true, state(false, true, true));
+        assert_eq!(d.password, Password::HandOver);
+        assert!(d.clear_admin);
+    }
+
+    /// Restarts after the handover, or a cloud_admin password set by hand since:
+    /// the customer keeps its own and cloud_admin's goes.
+    #[test]
+    fn a_customer_with_a_password_keeps_it_and_cloud_admin_loses_its() {
+        let d = decide(Some("v"), true, state(true, true, true));
+        assert_eq!(d.password, Password::Keep);
+        assert!(d.clear_admin);
+        assert!(!decide(None, true, state(true, false, false)).clear_admin);
+    }
+
+    /// md5 is salted with the user name, so it cannot move. It admits nobody
+    /// remotely anyway (the remote rule is scram-sha-256 only), so it is cleared
+    /// rather than left as a superuser password in the catalog.
+    #[test]
+    fn an_md5_cloud_admin_password_is_cleared_not_moved() {
+        let d = decide(None, true, state(false, true, false));
+        assert_eq!(d.password, Password::Unset);
+        assert!(d.clear_admin);
+        let d = decide(Some("v"), true, state(false, true, false));
+        assert_eq!(d.password, Password::Apply("v"));
+        assert!(d.clear_admin);
+    }
+
+    #[test]
+    fn the_handover_reads_cloud_admins_verifier_into_the_customer() {
+        assert_eq!(
+            hand_over_sql("amp_admin"),
+            "DO $amp_auth$ BEGIN EXECUTE pg_catalog.format('ALTER ROLE amp_admin WITH PASSWORD %L', \
+             (SELECT rolpassword FROM pg_catalog.pg_authid \
+             WHERE rolname OPERATOR(pg_catalog.=) 'cloud_admin')); END $amp_auth$"
+        );
+    }
+
+    /// The whole run with a customer role: bootstrap, read, then the password
+    /// and the clear in one query, then the LSN on its own — so the fork floor
+    /// is past the commit that cleared cloud_admin too.
+    #[test]
+    fn a_customer_run_bootstraps_then_applies_and_clears_in_one_query() {
+        let c = customer();
+        let db = Scripted::new(&[Ok("f"), Ok(""), Ok("f|t|t"), Ok(""), Ok("0/40")]);
+        assert_eq!(
+            configure_remote_auth(&db, Some(PW), Some(&c), 5, Duration::ZERO),
+            Outcome::Applied { lsn: lsn("0/40") }
+        );
+        assert_eq!(
+            *db.sent.borrow(),
+            [
+                c.conflict_sql(),
+                c.bootstrap_sql(),
+                state_sql("amp_admin"),
+                format!("{};\n{CLEAR_ADMIN_SQL}", alter_role_sql("amp_admin", PW)),
+                FLUSH_LSN_SQL.to_string(),
+            ]
+        );
+    }
+
+    /// A handover sets a password the control plane never sent, at no LSN it
+    /// asked about: `already_set`, which gives the root a 0/0 fork floor.
+    #[test]
+    fn a_handover_is_already_set() {
+        let c = customer();
+        let db = Scripted::new(&[Ok("f"), Ok(""), Ok("f|t|t"), Ok("")]);
+        assert_eq!(
+            configure_remote_auth(&db, None, Some(&c), 5, Duration::ZERO),
+            Outcome::AlreadySet
+        );
+        assert_eq!(
+            db.sent.borrow()[3],
+            format!("{};\n{CLEAR_ADMIN_SQL}", hand_over_sql("amp_admin"))
+        );
+    }
+
+    /// A failed bootstrap decides nothing, and is retried from the top.
+    #[test]
+    fn a_failed_bootstrap_is_retried_before_anything_is_decided() {
+        let c = customer();
+        let db = Scripted::new(&[Ok("f"), Err("starting up"), Ok("f"), Ok(""), Ok("t|f|f")]);
+        assert_eq!(
+            configure_remote_auth(&db, None, Some(&c), 5, Duration::ZERO),
+            Outcome::AlreadySet
+        );
+        assert_eq!(db.sent.borrow()[2], c.conflict_sql());
+        assert_eq!(db.sent.borrow()[3], c.bootstrap_sql());
+    }
+
+    /// A role of the customer role's name that the bootstrap did not make is
+    /// the customer's own: taking it over would hand its password-holder the
+    /// group's privileges and lock out the clients using cloud_admin. Nothing
+    /// past the check runs.
+    #[test]
+    fn a_role_the_bootstrap_did_not_make_is_left_alone() {
+        let c = customer();
+        let db = Scripted::new(&[Ok("t")]);
+        assert_eq!(
+            configure_remote_auth(&db, Some(PW), Some(&c), 5, Duration::ZERO),
+            Outcome::Failed
+        );
+        assert_eq!(*db.sent.borrow(), [c.conflict_sql()]);
+    }
+
+    #[test]
+    fn the_conflict_check_names_the_login_and_the_group() {
+        let sql = customer().conflict_sql();
+        assert!(
+            sql.contains("r.rolname OPERATOR(pg_catalog.=) 'amp_admin'"),
+            "{sql}"
+        );
+        assert!(
+            sql.contains("g.rolname OPERATOR(pg_catalog.=) 'yb_amp_superuser'"),
+            "{sql}"
+        );
+    }
 
     /// A compute that answers from a script, recording what it was sent.
     /// Running out of script is a connection error, like a compute that is not up.
@@ -408,7 +785,7 @@ mod tests {
         }
 
         fn decide(&self, password: Option<&str>) -> Outcome {
-            configure_remote_auth(self, password, 5, Duration::ZERO)
+            configure_remote_auth(self, password, None, 5, Duration::ZERO)
         }
     }
 
@@ -429,9 +806,9 @@ mod tests {
 
     #[test]
     fn no_password_and_none_in_the_catalog_is_unset_and_writes_nothing() {
-        let db = Scripted::new(&[Ok("f")]);
+        let db = Scripted::new(&[Ok(NONE)]);
         assert_eq!(db.decide(None), Outcome::Unset);
-        assert_eq!(*db.sent.borrow(), [HAS_PASSWORD_SQL]);
+        assert_eq!(*db.sent.borrow(), [state_sql("cloud_admin")]);
     }
 
     /// The catalog decides, not COMPUTE_PASSWORD: a role with a password is
@@ -439,9 +816,9 @@ mod tests {
     #[test]
     fn a_role_with_a_password_keeps_it() {
         for password in [Some(PW), None] {
-            let db = Scripted::new(&[Ok("t")]);
+            let db = Scripted::new(&[Ok(SET)]);
             assert_eq!(db.decide(password), Outcome::AlreadySet, "{password:?}");
-            assert_eq!(*db.sent.borrow(), [HAS_PASSWORD_SQL]);
+            assert_eq!(*db.sent.borrow(), [state_sql("cloud_admin")]);
         }
     }
 
@@ -450,7 +827,7 @@ mod tests {
     /// position would precede the commit.
     #[test]
     fn an_applied_password_reports_the_lsn_read_after_its_commit() {
-        let db = Scripted::new(&[Ok("f"), Ok(""), Ok("0/16B3748")]);
+        let db = Scripted::new(&[Ok(NONE), Ok(""), Ok("0/16B3748")]);
         assert_eq!(
             db.decide(Some(PW)),
             Outcome::Applied {
@@ -460,8 +837,8 @@ mod tests {
         assert_eq!(
             *db.sent.borrow(),
             [
-                HAS_PASSWORD_SQL.to_string(),
-                alter_role_sql(PW),
+                state_sql("cloud_admin"),
+                alter_role_sql("cloud_admin", PW),
                 FLUSH_LSN_SQL.to_string()
             ]
         );
@@ -472,7 +849,7 @@ mod tests {
         let db = Scripted::new(&[
             Err("the database system is starting up"),
             Err("the database system is starting up"),
-            Ok("f"),
+            Ok(NONE),
             Ok(""),
             Ok("1/0"),
         ]);
@@ -484,7 +861,7 @@ mod tests {
     #[test]
     fn an_unreadable_lsn_is_applied_without_one() {
         for answer in [Err("gone"), Ok("garbage")] {
-            let db = Scripted::new(&[Ok("f"), Ok(""), answer]);
+            let db = Scripted::new(&[Ok(NONE), Ok(""), answer]);
             assert_eq!(
                 db.decide(Some(PW)),
                 Outcome::Applied { lsn: None },
@@ -503,7 +880,7 @@ mod tests {
 
     #[test]
     fn a_refused_alter_role_is_failed() {
-        let db = Scripted::new(&[Ok("f"), Err("ERROR: permission denied"), Ok("f")]);
+        let db = Scripted::new(&[Ok(NONE), Err("ERROR: permission denied"), Ok(NONE)]);
         assert_eq!(db.decide(Some(PW)), Outcome::Failed);
     }
 
@@ -512,9 +889,9 @@ mod tests {
     #[test]
     fn a_password_found_after_a_lost_reply_is_already_set() {
         let db = Scripted::new(&[
-            Ok("f"),
+            Ok(NONE),
             Err("server closed the connection unexpectedly"),
-            Ok("t"),
+            Ok(SET),
         ]);
         assert_eq!(db.decide(Some(PW)), Outcome::AlreadySet);
     }
@@ -558,11 +935,11 @@ mod tests {
             .finish();
         tracing::subscriber::with_default(subscriber, || {
             for script in [
-                vec![Ok("f"), Ok(""), Ok("0/1")],
-                vec![Ok("f"), Ok(""), Err("x")],
-                vec![Ok("t")],
+                vec![Ok(NONE), Ok(""), Ok("0/1")],
+                vec![Ok(NONE), Ok(""), Err("x")],
+                vec![Ok(SET)],
                 // Every pass refused, so the last error logged is the echo.
-                [Ok("f"), Err(echo)].repeat(5),
+                [Ok(NONE), Err(echo)].repeat(5),
             ] {
                 Scripted::new(&script).decide(Some(PW));
             }
@@ -662,5 +1039,149 @@ mod tests {
         ] {
             assert_eq!(o.name(), name);
         }
+    }
+
+    /// Against a real Postgres, because the SQL is the part a unit test cannot
+    /// check. It rewrites roles, so it wants a scratch cluster whose bootstrap
+    /// superuser is `cloud_admin`, reachable over `127.0.0.1` with `trust`:
+    ///
+    /// ```text
+    /// initdb -D $D -U cloud_admin --auth=trust
+    /// pg_ctl -D $D -o "-p 55999 -k $D -c listen_addresses=127.0.0.1" start
+    /// AMP_TEST_PG_BIN=<pg>/bin AMP_TEST_PG_PORT=55999 \
+    ///   cargo test -p endpoint_supervisor -- --ignored customer_role_against
+    /// ```
+    #[test]
+    #[ignore = "needs a scratch Postgres; see the doc comment"]
+    fn customer_role_against_a_real_postgres() {
+        let bin = camino::Utf8PathBuf::from(std::env::var("AMP_TEST_PG_BIN").unwrap());
+        let psql_bin = bin.join("psql");
+        let port: u16 = std::env::var("AMP_TEST_PG_PORT").unwrap().parse().unwrap();
+        let db = Psql {
+            bin: &psql_bin,
+            port,
+        };
+        let q = |sql: &str| db.run(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let as_customer = |sql: &str| {
+            let out = std::process::Command::new(&psql_bin)
+                .args([
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    &port.to_string(),
+                    "-U",
+                    "amp_admin",
+                ])
+                .args([
+                    "-d",
+                    "postgres",
+                    "-tA",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    "--no-psqlrc",
+                ])
+                .args(["-c", sql])
+                .output()
+                .unwrap();
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
+        };
+
+        // An endpoint whose clients have been logging in as cloud_admin — and,
+        // so the test can run again on one cluster, no customer password yet.
+        q(
+            "DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'amp_admin') THEN \
+           ALTER ROLE amp_admin WITH PASSWORD NULL; END IF; END $$",
+        );
+        q("ALTER ROLE cloud_admin WITH PASSWORD 'existing-secret'");
+        let verifier = q("SELECT rolpassword FROM pg_authid WHERE rolname = 'cloud_admin'");
+        assert!(verifier.starts_with("SCRAM-SHA-256$"), "{verifier}");
+
+        // A role the customer made themselves under the configured name is not
+        // taken over: nothing changes, and cloud_admin keeps its password.
+        q("DROP ROLE IF EXISTS amp_taken; CREATE ROLE amp_taken LOGIN PASSWORD 'theirs'");
+        let taken = CustomerRole::new("amp_taken", "yb_amp_superuser").unwrap();
+        assert_eq!(
+            configure_remote_auth(&db, None, Some(&taken), ATTEMPTS, INTERVAL),
+            Outcome::Failed
+        );
+        assert_eq!(
+            q("SELECT rolpassword FROM pg_authid WHERE rolname = 'cloud_admin'"),
+            verifier
+        );
+        assert_eq!(
+            q(
+                "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member \
+               WHERE r.rolname = 'amp_taken'"
+            ),
+            "0"
+        );
+
+        let role = customer();
+        // Twice: every boot runs it. The first hands the password over; the
+        // second finds it there.
+        for _ in 0..2 {
+            assert_eq!(
+                configure_remote_auth(&db, None, Some(&role), ATTEMPTS, INTERVAL),
+                Outcome::AlreadySet
+            );
+            assert_eq!(
+                q(
+                    "SELECT rolsuper, rolcanlogin, rolcreaterole, rolcreatedb, rolbypassrls, \
+                   rolreplication FROM pg_roles WHERE rolname = 'amp_admin'"
+                ),
+                "f|t|t|t|t|t"
+            );
+            assert_eq!(
+                q("SELECT pg_has_role('amp_admin', 'yb_amp_superuser', 'member')"),
+                "t"
+            );
+            assert_eq!(
+                q("SELECT rolpassword FROM pg_authid WHERE rolname = 'amp_admin'"),
+                verifier,
+                "the customer takes over cloud_admin's password verbatim"
+            );
+            assert_eq!(
+                q("SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = 'cloud_admin'"),
+                "t"
+            );
+            assert_eq!(q("SELECT id FROM yb_amp_migration.migration_id"), "12");
+        }
+
+        // AMP-15 step 1: the customer cannot reach the machine.
+        let denied = as_customer("COPY (SELECT 1) TO PROGRAM 'id'").unwrap_err();
+        assert!(
+            denied.contains("permission denied") || denied.contains("must be superuser"),
+            "{denied}"
+        );
+        let denied = as_customer("SELECT pg_read_file('/etc/hostname')").unwrap_err();
+        assert!(denied.contains("permission denied"), "{denied}");
+        let denied = as_customer("ALTER SYSTEM SET work_mem = '1GB'").unwrap_err();
+        assert!(denied.contains("permission denied"), "{denied}");
+
+        // ...and can still administer its own data.
+        as_customer(
+            "DROP TABLE IF EXISTS amp15_t; CREATE TABLE amp15_t (x int); \
+             INSERT INTO amp15_t VALUES (1)",
+        )
+        .unwrap();
+        as_customer("CREATE SCHEMA IF NOT EXISTS amp15_s").unwrap();
+        as_customer("DROP ROLE IF EXISTS amp15_r; CREATE ROLE amp15_r LOGIN").unwrap();
+        as_customer("SELECT count(*) FROM pg_stat_activity").unwrap();
+        // Data cloud_admin owns — what an endpoint from before the customer role
+        // is full of — through pg_read_all_data / pg_write_all_data.
+        q("DROP TABLE IF EXISTS amp15_admin; CREATE TABLE amp15_admin (x int)");
+        as_customer("INSERT INTO amp15_admin VALUES (1); SELECT * FROM amp15_admin").unwrap();
+        // pg_read_all_data reaches pg_authid too — Neon's model has the same
+        // property — so what keeps the superuser out of reach is that its row
+        // holds no password to take.
+        assert_eq!(
+            as_customer("SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = 'cloud_admin'")
+                .unwrap(),
+            "t"
+        );
     }
 }

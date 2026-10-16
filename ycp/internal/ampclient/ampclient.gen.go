@@ -551,8 +551,8 @@ type Branch struct {
 	// `password`: true only for a root branch until its first writer's
 	// password is seen to land. A fork inherits its parent's catalog, password included,
 	// and a root's first writer sets it for good; a `password` sent where
-	// this is false is ignored. Changing it later is
-	// `ALTER ROLE cloud_admin` over a connection that already
+	// this is false is ignored. Changing it later is `ALTER ROLE` on the
+	// login user (see createEndpoint) over a connection that already
 	// authenticates. Always false on a controller whose endpoints do not
 	// apply a password (the local driver). Absent from controllers that
 	// predate it, which required a password on every writer.
@@ -829,8 +829,10 @@ type CreateEndpointRequest struct {
 	// start — there is no live-reload path today.
 	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
 
-	// Password Password for the compute's default Postgres user (`cloud_admin`, the
-	// superuser `initdb` created) — who clients connect to `address` as.
+	// Password Password for the compute's login user — who clients connect to
+	// `address` as: `cloud_admin` (the superuser `initdb` created), or the
+	// non-superuser role the deployment names with
+	// `--deploy-endpoint-customer-role` (AMP-15).
 	// Either a plaintext, or a SCRAM-SHA-256 verifier as `pg_authid` stores
 	// it (`SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`, at
 	// least 4096 iterations and a salt of at least 16 bytes), which sets a
@@ -996,7 +998,7 @@ type DaemonSettings map[string]interface{}
 
 // Endpoint defines model for Endpoint.
 type Endpoint struct {
-	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed. Never a pod address, so a pod reschedule does not invalidate it: a load-balanced mode reports its load balancer, and a `cluster_ip` endpoint reports whatever the deployment publishes it on — the endpoint Service's in-cluster DNS name by default, or a node address where endpoints are deployed as NodePort Services, which a node replacement does invalidate.
+	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, or the deployment's customer role, database postgres). Empty until the endpoint is deployed. Never a pod address, so a pod reschedule does not invalidate it: a load-balanced mode reports its load balancer, and a `cluster_ip` endpoint reports whatever the deployment publishes it on — the endpoint Service's in-cluster DNS name by default, or a node address where endpoints are deployed as NodePort Services, which a node replacement does invalidate.
 	Address string `json:"address"`
 
 	// BranchId The branch (storage-layer branch id) this endpoint is bound to.

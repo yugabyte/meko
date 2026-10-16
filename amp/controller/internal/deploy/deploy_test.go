@@ -97,6 +97,20 @@ func TestKubernetesValues(t *testing.T) {
 	}
 }
 
+// The customer role is deployer-wide, so every render carries it — which is what
+// moves an endpoint created before it was set onto it at its next re-render.
+func TestKubernetesValuesCustomerRole(t *testing.T) {
+	spec := testEndpointSpec()
+	if got := NewKubernetesDeployer(testKubernetesConfig(), nil).values(spec, spec.Name).Endpoint.CustomerRole; got != "" {
+		t.Errorf("CustomerRole = %q by default, want empty (cloud_admin)", got)
+	}
+	cfg := testKubernetesConfig()
+	cfg.EndpointCustomerRole = "amp_admin"
+	if got := NewKubernetesDeployer(cfg, nil).values(spec, spec.Name).Endpoint.CustomerRole; got != "amp_admin" {
+		t.Errorf("CustomerRole = %q, want amp_admin", got)
+	}
+}
+
 // The endpoint's version is the chart's image.tag, and an endpoint that asks for
 // nothing gets exactly the configured tag — the behaviour before versions were
 // per-endpoint. The fallback is resolved here rather than delegated to the chart

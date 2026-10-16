@@ -429,7 +429,8 @@ type ResizeResult struct {
 }
 
 // Endpoint is a running compute: an id (for teardown) and the address a client
-// connects to over the Postgres wire (user cloud_admin, database postgres).
+// connects to over the Postgres wire (user cloud_admin, or the deployer's
+// customer role when it has one, database postgres).
 type Endpoint struct {
 	ID      string
 	Address string // host:port — the primary (e.g. Kubernetes LoadBalancer) address
