@@ -466,6 +466,10 @@ func (f *fakeProvisioner) WaitTask(_ context.Context, taskUUID string) (yba.Task
 	return yba.TaskStatus{}, nil
 }
 
+func (f *fakeProvisioner) RetryTask(context.Context, string) (yba.TaskRef, error) {
+	return yba.TaskRef{}, fmt.Errorf("fakeProvisioner does not retry tasks")
+}
+
 func (f *fakeProvisioner) WaitUniverseReady(_ context.Context, _ string, _ time.Duration) error {
 	f.ev.add("wait_ready")
 	f.readyChecks++
@@ -1356,4 +1360,111 @@ func TestBuildYBASpecsRejectsUnknownStreamCompression(t *testing.T) {
 	if _, err := p.buildYBASpecs(); err == nil || !strings.Contains(err.Error(), "lz4") {
 		t.Errorf("buildYBASpecs = %v, want the unknown mode rejected", err)
 	}
+}
+
+type scriptedTasks struct {
+	waits    map[string]error
+	pollErr  error
+	retryErr error
+	retries  []string
+	next     int
+}
+
+func (s *scriptedTasks) WaitTask(_ context.Context, id string) (yba.TaskStatus, error) {
+	if s.pollErr != nil {
+		return yba.TaskStatus{}, s.pollErr
+	}
+	if err := s.waits[id]; err != nil {
+		return yba.TaskStatus{Status: yba.TaskFailure}, err
+	}
+	return yba.TaskStatus{Status: yba.TaskSuccess}, nil
+}
+
+func (s *scriptedTasks) RetryTask(_ context.Context, id string) (yba.TaskRef, error) {
+	s.retries = append(s.retries, id)
+	s.next++
+	return yba.TaskRef{TaskUUID: fmt.Sprintf("t%d", s.next+1)}, s.retryErr
+}
+
+func TestWaitCreateTaskRetriesAFailedYbcUpload(t *testing.T) {
+	defer func(d time.Duration) { yba.KubectlRetryDelay = d }(yba.KubectlRetryDelay)
+	yba.KubectlRetryDelay = time.Millisecond
+	ybc := fmt.Errorf("task t1 (Created Universe : u) ended Failure: ConfigureUniverse: hit error:\n\n Could not upload the ybc contents.")
+	nop := func(string, ...any) {}
+
+	s := &scriptedTasks{waits: map[string]error{"t1": ybc}}
+	if err := waitCreateTask(context.Background(), s, "t1", nil, nop); err != nil {
+		t.Fatalf("a create whose retry succeeds must succeed: %v", err)
+	}
+	if len(s.retries) != 1 || s.retries[0] != "t1" {
+		t.Errorf("retried %v, want [t1]", s.retries)
+	}
+
+	s = &scriptedTasks{waits: map[string]error{}}
+	for i := 1; i <= yba.KubectlRetries+1; i++ {
+		s.waits[fmt.Sprintf("t%d", i)] = ybc
+	}
+	if err := waitCreateTask(context.Background(), s, "t1", nil, nop); err == nil || !strings.Contains(err.Error(), "after 5 retries") {
+		t.Fatalf("a create whose every retry fails must fail and say so: %v", err)
+	}
+	if len(s.retries) != yba.KubectlRetries {
+		t.Errorf("retried %d times, want %d", len(s.retries), yba.KubectlRetries)
+	}
+
+	s = &scriptedTasks{waits: map[string]error{"t1": fmt.Errorf("ended Failure: no space left on device")}}
+	if err := waitCreateTask(context.Background(), s, "t1", nil, nop); err == nil || len(s.retries) != 0 {
+		t.Errorf("another failure: err = %v, retries %v; want it returned unretried", err, s.retries)
+	}
+
+	s = &scriptedTasks{pollErr: fmt.Errorf("yba unreachable: port-forward svc/yugaware: error dialing backend")}
+	if err := waitCreateTask(context.Background(), s, "t1", nil, nop); err == nil || len(s.retries) != 0 {
+		t.Errorf("a poll error: err = %v, retries %v; want it returned unretried", err, s.retries)
+	}
+}
+
+func TestWaitCreateTaskAdoptsALockAfterARetryPostErrors(t *testing.T) {
+	defer func(d time.Duration) { yba.KubectlRetryDelay = d }(yba.KubectlRetryDelay)
+	yba.KubectlRetryDelay = time.Millisecond
+	ybc := fmt.Errorf("ended Failure: Could not upload the ybc contents.")
+	nop := func(string, ...any) {}
+	post := fmt.Errorf("POST retry: connection reset")
+	for _, tc := range []struct {
+		name      string
+		id        string
+		adoptErr  error
+		wantErr   bool
+		wantWaits bool
+	}{
+		{"the universe is locked by the retried task", "t9", nil, false, true},
+		{"the universe is locked with no task id yet", "", nil, false, false},
+		{"nothing locked the universe", "", fmt.Errorf("no create task locked it"), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			waited := false
+			s := &scriptedTasks{waits: map[string]error{"t1": ybc}, retryErr: post}
+			adopt := func(context.Context) (string, error) {
+				s.retryErr = nil
+				return tc.id, tc.adoptErr
+			}
+			err := waitCreateTask(context.Background(), &waitSpy{s, &waited}, "t1", adopt, nop)
+			if tc.wantErr != (err != nil) || (err != nil && !errors.Is(err, post)) {
+				t.Fatalf("err = %v, want error %v wrapping the POST's", err, tc.wantErr)
+			}
+			if waited != tc.wantWaits {
+				t.Errorf("waited on t9 = %v, want %v", waited, tc.wantWaits)
+			}
+		})
+	}
+}
+
+type waitSpy struct {
+	*scriptedTasks
+	t9 *bool
+}
+
+func (w *waitSpy) WaitTask(ctx context.Context, id string) (yba.TaskStatus, error) {
+	if id == "t9" {
+		*w.t9 = true
+	}
+	return w.scriptedTasks.WaitTask(ctx, id)
 }

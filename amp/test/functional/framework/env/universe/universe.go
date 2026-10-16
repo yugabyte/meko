@@ -93,6 +93,49 @@ const (
 
 var adoptLockPoll = 3 * time.Second
 
+type taskRetrier interface {
+	WaitTask(ctx context.Context, taskUUID string) (yba.TaskStatus, error)
+	RetryTask(ctx context.Context, taskUUID string) (yba.TaskRef, error)
+}
+
+// waitCreateTask waits for the universe create, re-running it in place after
+// YBA's kubectl call failed. A retry POST that errored may still have landed, so adopt
+// returns the task the universe is locked by, if any.
+func waitCreateTask(ctx context.Context, cl taskRetrier, taskUUID string, adopt func(context.Context) (string, error), logf func(string, ...any)) error {
+	for attempt := 1; ; attempt++ {
+		task, err := cl.WaitTask(ctx, taskUUID)
+		if !yba.KubectlFailed(task, err) {
+			return err
+		}
+		if attempt > yba.KubectlRetries {
+			return fmt.Errorf("after %d retries: %w", yba.KubectlRetries, err)
+		}
+		logf("provision_yba: create task %s failed on a kubectl call; retrying it in %s (retry %d of %d): %v", taskUUID, yba.KubectlRetryDelay, attempt, yba.KubectlRetries, err)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("retry %d of %d cut short (%v): %w", attempt, yba.KubectlRetries, ctx.Err(), err)
+		case <-time.After(yba.KubectlRetryDelay):
+		}
+		ref, rerr := cl.RetryTask(ctx, taskUUID)
+		if rerr != nil {
+			id, aerr := "", error(nil)
+			if adopt != nil {
+				id, aerr = adopt(ctx)
+			}
+			if adopt != nil && aerr == nil && id == "" {
+				logf("provision_yba: retrying create task %s errored (%v), but the universe is locked; waiting for it to be ready", taskUUID, rerr)
+				return nil
+			}
+			if id == "" {
+				return fmt.Errorf("retrying create task %s after %q failed (adopt: %v): %w", taskUUID, err.Error(), aerr, rerr)
+			}
+			logf("provision_yba: retrying create task %s errored (%v); waiting on the universe's task %s", taskUUID, rerr, id)
+			ref.TaskUUID = id
+		}
+		taskUUID = ref.TaskUUID
+	}
+}
+
 // awaitCreateLock polls an adopted universe until its create task has locked it
 // and returns that task's id, or "" when the lock shows only updateInProgress.
 // Before the lock the record can already read updateSucceeded, which
@@ -227,6 +270,7 @@ type ybaProvisioner interface {
 	ResolvePlacement(ctx context.Context, providerUUID string, placement []yba.RegionPlacement) ([]yba.RegionPlacement, error)
 	CreateUniverseFromSpec(ctx context.Context, s yba.UniverseSpec) (yba.TaskRef, error)
 	WaitTask(ctx context.Context, taskUUID string) (yba.TaskStatus, error)
+	RetryTask(ctx context.Context, taskUUID string) (yba.TaskRef, error)
 	WaitUniverseReady(ctx context.Context, ref string, timeout time.Duration) error
 	GetUniverse(ctx context.Context, ref string) (yba.Universe, error)
 	ForceDeleteUniverseAndWait(ctx context.Context, universeID string) (yba.TaskRef, error)
@@ -909,7 +953,18 @@ func (p *Provider) createUniverse(ctx context.Context, cp *ybaControlPlane, uniS
 	// An adopted universe whose lock showed no task id was still seen locked, so
 	// WaitUniverseReady below cannot read a not-yet-started build as done.
 	if !adopted || ref.TaskUUID != "" {
-		if _, err := cl.WaitTask(ctx, ref.TaskUUID); err != nil {
+		adopt := func(ctx context.Context) (string, error) {
+			id := universeID
+			if id == "" {
+				id = universeName
+			}
+			u, err := cl.GetUniverse(ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return awaitCreateLock(ctx, cl, u.UniverseUUID, adoptLockTimeout)
+		}
+		if err := waitCreateTask(ctx, cl, ref.TaskUUID, adopt, p.log); err != nil {
 			return failure(fmt.Errorf("provision_yba: create universe %q: %w", universeName, err))
 		}
 	}

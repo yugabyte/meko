@@ -19,6 +19,7 @@ const (
 	taskFeedOrderedByFeed    = "updated_at_asc"
 	taskFeedOrderedByDefault = "created_at_desc"
 	taskFeedFastTasks        = 3
+	taskFeedAttempts         = 3
 )
 
 func init() {
@@ -72,36 +73,59 @@ func (a *ampFeatureRun) taskFeed(ctx context.Context) error {
 	// The long task: an endpoint deploy on a branch of its own, planned before the
 	// quick forks and left running through them. Its row is created first and goes
 	// terminal last, which is exactly the shape the change feed exists for.
-	slowBranch := "feed-slow-" + a.f.suffix()
-	if err := createBranchRetrying(ctx, cl, proj.poolID, proj.projID, controller.CreateBranchRequest{
-		Name: slowBranch, ParentBranchID: proj.branchID, ForkPointLSN: lsn,
-	}); err != nil {
-		return fmt.Errorf("fork %s: %w", slowBranch, err)
-	}
-	slow, err := findBranchCtl(ctx, cl, proj.poolID, proj.projID, slowBranch)
-	if err != nil {
-		return err
-	}
-	epTask, epLoc, err := cl.CreateEndpoint(ctx, proj.poolID, proj.projID, slow.BranchID, controller.CreateEndpointRequest{Role: roleReadWrite})
-	if err != nil {
-		return fmt.Errorf("plan the endpoint create: %w", err)
-	}
-	epTaskID := controller.TaskRef(epTask, epLoc)
-
-	forkIDs := make([]string, 0, taskFeedFastTasks)
-	for i := 0; i < taskFeedFastTasks; i++ {
-		name := fmt.Sprintf("feed-%s-%d", a.f.suffix(), i)
-		task, loc, err := cl.CreateBranch(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
-			Name: name, ParentBranchID: proj.branchID, ForkPointLSN: lsn,
-		})
+	var (
+		epTaskID string
+		forkIDs  []string
+	)
+	for attempt := 1; ; attempt++ {
+		slowBranch := fmt.Sprintf("feed-slow-%s-%d", a.f.suffix(), attempt)
+		if err := createBranchRetrying(ctx, cl, proj.poolID, proj.projID, controller.CreateBranchRequest{
+			Name: slowBranch, ParentBranchID: proj.branchID, ForkPointLSN: lsn,
+		}); err != nil {
+			return fmt.Errorf("fork %s: %w", slowBranch, err)
+		}
+		slow, err := findBranchCtl(ctx, cl, proj.poolID, proj.projID, slowBranch)
 		if err != nil {
-			return fmt.Errorf("fork %s: %w", name, err)
+			return err
 		}
-		id := controller.TaskRef(task, loc)
-		if _, err := cl.WaitTask(ctx, id); err != nil {
-			return fmt.Errorf("fork %s task %s: %w", name, id, err)
+		epTask, epLoc, err := cl.CreateEndpoint(ctx, proj.poolID, proj.projID, slow.BranchID, controller.CreateEndpointRequest{Role: roleReadWrite})
+		if err != nil {
+			return fmt.Errorf("plan the endpoint create: %w", err)
 		}
-		forkIDs = append(forkIDs, id)
+		epTaskID = controller.TaskRef(epTask, epLoc)
+
+		forkIDs = make([]string, 0, taskFeedFastTasks)
+		var lastFork time.Time
+		for i := 0; i < taskFeedFastTasks; i++ {
+			name := fmt.Sprintf("feed-%s-%d-%d", a.f.suffix(), attempt, i)
+			task, loc, err := cl.CreateBranch(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
+				Name: name, ParentBranchID: proj.branchID, ForkPointLSN: lsn,
+			})
+			if err != nil {
+				return fmt.Errorf("fork %s: %w", name, err)
+			}
+			id := controller.TaskRef(task, loc)
+			done, err := cl.WaitTask(ctx, id)
+			if err != nil {
+				return fmt.Errorf("fork %s task %s: %w", name, id, err)
+			}
+			forkIDs = append(forkIDs, id)
+			lastFork = done.UpdatedAt
+		}
+
+		// A deploy that lands before the last fork leaves nothing above the
+		// watermark to look for; that is timing, not a feed defect.
+		ep, err := cl.GetTask(ctx, epTaskID)
+		if err != nil {
+			return fmt.Errorf("read the endpoint create task %s: %w", epTaskID, err)
+		}
+		if (ep.Status != controller.TaskSucceeded && ep.Status != controller.TaskFailed) || ep.UpdatedAt.After(lastFork) {
+			break
+		}
+		if attempt == taskFeedAttempts {
+			return fmt.Errorf("in %d attempts the endpoint create went terminal before the last of %d forks (last: %s at %s, fork done %s), so the scenario never formed", attempt, taskFeedFastTasks, epTaskID, ep.UpdatedAt, lastFork)
+		}
+		a.f.logf("attempt %d: endpoint create %s went %s at %s, before the last fork at %s; planning another", attempt, epTaskID, ep.Status, ep.UpdatedAt, lastFork)
 	}
 
 	def, err := cl.ListTasks(ctx, controller.ListTasksOptions{ClusterID: proj.projID, Limit: 1000})
@@ -162,7 +186,8 @@ func (a *ampFeatureRun) taskFeed(ctx context.Context) error {
 	}
 
 	// The watermark an incremental reader would hold after consuming the forks.
-	watermark := newestUpdatedAt(all.Tasks)
+	// Not the endpoint create's own: it may already be terminal in this page.
+	watermark := newestUpdatedAt(all.Tasks, epTaskID)
 	empty, err := feed(watermark.Add(time.Second))
 	if err != nil {
 		return fmt.Errorf("feed past the watermark: %w", err)
@@ -235,10 +260,10 @@ func countNotID(ts []controller.Task, id string) int {
 	return n
 }
 
-func newestUpdatedAt(ts []controller.Task) time.Time {
+func newestUpdatedAt(ts []controller.Task, skipID string) time.Time {
 	var newest time.Time
 	for _, t := range ts {
-		if t.UpdatedAt.After(newest) {
+		if t.ID != skipID && t.UpdatedAt.After(newest) {
 			newest = t.UpdatedAt
 		}
 	}

@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -653,5 +654,180 @@ func TestForwardLostItsPod(t *testing.T) {
 		if got := forwardLostItsPod(tc.line); got != tc.want {
 			t.Errorf("forwardLostItsPod(%q) = %v, want %v", tc.line, got, tc.want)
 		}
+	}
+}
+
+func TestPortForwardRetriesAnUnreachableKubelet(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	const dialFail = "error: error upgrading connection: error dialing backend: dial timeout, backstop\n"
+	starts := 0
+	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		starts++
+		out := dialFail
+		if starts == 3 {
+			out = "Forwarding from 127.0.0.1:18080 -> 5433\n"
+		}
+		return &fakeProc{out: strings.NewReader(out), killed: make(chan struct{})}, nil
+	})
+	pf, err := k.PortForward(context.Background(), "svc/yb-ep-1", 18080, 5433)
+	if err != nil {
+		t.Fatalf("a forward that comes up on the third dial must succeed: %v", err)
+	}
+	defer pf.Close()
+	if starts != 3 {
+		t.Errorf("kubectl started %d times, want 3", starts)
+	}
+}
+
+func TestPortForwardGivesUpOnTheKubeletAsEnvironment(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	starts := 0
+	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		starts++
+		return &fakeProc{out: strings.NewReader("error: error upgrading connection: error dialing backend: dial timeout, backstop\n"), killed: make(chan struct{})}, nil
+	})
+	_, err := k.PortForward(context.Background(), "svc/yb-ep-1", 18080, 5433)
+	var ku *KubeletUnreachableError
+	if !errors.As(err, &ku) {
+		t.Fatalf("err = %v, want a KubeletUnreachableError", err)
+	}
+	if starts != kubeletDialAttempts {
+		t.Errorf("kubectl started %d times, want %d", starts, kubeletDialAttempts)
+	}
+}
+
+func TestPortForwardDoesNotRetryOtherFailures(t *testing.T) {
+	starts := 0
+	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		starts++
+		return &fakeProc{out: strings.NewReader("error: error upgrading connection: pods \"yb-ep-1\" not found\n"), killed: make(chan struct{})}, nil
+	})
+	_, err := k.PortForward(context.Background(), "pod/yb-ep-1", 18080, 5433)
+	var ku *KubeletUnreachableError
+	if err == nil || errors.As(err, &ku) {
+		t.Fatalf("err = %v, want a plain failure: a missing pod is not the kubelet's fault", err)
+	}
+	if starts != 1 {
+		t.Errorf("kubectl started %d times, want 1", starts)
+	}
+}
+
+func TestCopyRetriesABrokenStream(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	calls := 0
+	k := New(Config{Context: "x", Namespace: "ns"}).WithRunner(func(_ context.Context, _ io.Reader, _ []string) (execpkg.Result, error) {
+		calls++
+		if calls < 3 {
+			return execpkg.Result{ExitCode: 1, Stderr: "error: error reading from error stream: next reader: read tcp 172.17.0.4:41824->10.150.8.6:443: i/o timeout"}, nil
+		}
+		return execpkg.Result{}, nil
+	}).ForPod("client", "")
+	if err := k.Copy(context.Background(), "/tmp/a.tar.gz", "/opt/a.tar.gz"); err != nil {
+		t.Fatalf("a copy that lands on the third try must succeed: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("kubectl cp ran %d times, want 3", calls)
+	}
+
+	calls = 0
+	k = New(Config{Context: "x", Namespace: "ns"}).WithRunner(func(_ context.Context, _ io.Reader, _ []string) (execpkg.Result, error) {
+		calls++
+		return execpkg.Result{ExitCode: 1, Stderr: "error: no space left on device"}, nil
+	}).ForPod("client", "")
+	err := k.Copy(context.Background(), "/tmp/a.tar.gz", "/opt/a.tar.gz")
+	var ku *KubeletUnreachableError
+	if err == nil || errors.As(err, &ku) || calls != 1 {
+		t.Errorf("a full disk: err = %v after %d call(s), want one plain failure", err, calls)
+	}
+}
+
+func TestApplyRetriesATimedOutWebhook(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	const webhook = `Error from server (InternalError): error when creating "STDIN": Internal error occurred: failed calling webhook "mopentelemetrycollectorbeta.kb.io": failed to call webhook: Post "https://opentelemetry-operator-webhook.opentelemetry-operator-system.svc:443/mutate?timeout=10s": context deadline exceeded`
+	for _, tc := range []struct {
+		name      string
+		stderr    string
+		failFirst int
+		wantCalls int
+		wantErr   bool
+	}{
+		{"timed-out webhook, then applied", webhook, 2, 3, false},
+		{"webhook never answers", webhook, 99, webhookAttempts, true},
+		{"invalid manifest", `error: error validating "STDIN": unknown field "spec.foo"`, 99, 1, true},
+	} {
+		calls := 0
+		k := New(Config{Context: "x", Namespace: "ns"}).WithRunner(func(_ context.Context, _ io.Reader, _ []string) (execpkg.Result, error) {
+			calls++
+			if calls <= tc.failFirst {
+				return execpkg.Result{ExitCode: 1, Stderr: tc.stderr}, nil
+			}
+			return execpkg.Result{}, nil
+		})
+		err := k.Apply(context.Background(), "kind: ConfigMap")
+		if (err != nil) != tc.wantErr || calls != tc.wantCalls {
+			t.Errorf("%s: err = %v after %d call(s), want error %v after %d", tc.name, err, calls, tc.wantErr, tc.wantCalls)
+		}
+	}
+}
+
+const execDialFail = "Error from server: error dialing backend: dial timeout, backstop\n"
+
+func TestRunStdinReplaysASeekableStdin(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	var got []string
+	k := New(Config{Namespace: "ns", Pod: "p"}).WithRunner(
+		func(_ context.Context, stdin io.Reader, _ []string) (execpkg.Result, error) {
+			b, _ := io.ReadAll(stdin)
+			got = append(got, string(b))
+			if len(got) == 1 {
+				return execpkg.Result{ExitCode: 1, Stderr: execDialFail}, nil
+			}
+			return execpkg.Result{Stdout: "ok"}, nil
+		})
+	res, err := k.RunStdin(context.Background(), strings.NewReader("body"), "cat")
+	if err != nil || res.Stdout != "ok" {
+		t.Fatalf("RunStdin = %+v, %v; want the second attempt's result", res, err)
+	}
+	if len(got) != 2 || got[1] != "body" {
+		t.Fatalf("stdin per attempt = %q, want the full body replayed", got)
+	}
+}
+
+func TestRunStdinDoesNotRetryAStreamStdin(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	attempts := 0
+	k := New(Config{Namespace: "ns", Pod: "p"}).WithRunner(
+		func(context.Context, io.Reader, []string) (execpkg.Result, error) {
+			attempts++
+			return execpkg.Result{ExitCode: 1, Stderr: execDialFail}, nil
+		})
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	_, err := k.RunStdin(context.Background(), pr, "cat")
+	var unreachable *KubeletUnreachableError
+	if !errors.As(err, &unreachable) || attempts != 1 {
+		t.Fatalf("err = %v after %d attempts, want a KubeletUnreachableError on the first", err, attempts)
+	}
+}
+
+func TestRunStdinTypesAnUnreachableKubeletOnceTheBudgetIsSpent(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	attempts := 0
+	k := New(Config{Namespace: "ns", Pod: "p"}).WithRunner(
+		func(context.Context, io.Reader, []string) (execpkg.Result, error) {
+			attempts++
+			return execpkg.Result{ExitCode: 1, Stderr: execDialFail}, nil
+		})
+	_, err := k.RunStdin(context.Background(), strings.NewReader("body"), "cat")
+	var unreachable *KubeletUnreachableError
+	if !errors.As(err, &unreachable) || attempts != kubeletDialAttempts {
+		t.Fatalf("err = %v after %d attempts, want a KubeletUnreachableError after %d", err, attempts, kubeletDialAttempts)
 	}
 }

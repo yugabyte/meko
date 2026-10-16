@@ -85,7 +85,8 @@ var schedulingSignals = []struct {
 	{"readiness wait timed out", []string{"not ready before"}},
 }
 
-// KubeAPIUnreachable is true only when an unreachable API server is the WHOLE failure, never one branch of a join.
+// KubeAPIUnreachable is true only when an unreachable API server, or a kubelet
+// the API server could not reach, is the WHOLE failure, never one branch of a join.
 func KubeAPIUnreachable(err error) bool {
 	if err == nil {
 		return false
@@ -103,7 +104,8 @@ func KubeAPIUnreachable(err error) bool {
 		return true
 	}
 	var ae *k8s.APIServerUnreachableError
-	if errors.As(err, &ae) {
+	var ke *k8s.KubeletUnreachableError
+	if errors.As(err, &ae) || errors.As(err, &ke) {
 		return !hasJoin(err)
 	}
 	return false

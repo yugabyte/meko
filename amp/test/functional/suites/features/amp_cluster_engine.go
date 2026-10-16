@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -42,6 +43,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression"},
 		OwningTeam:  core.TeamControlPlane,
+		Timeout:     30 * time.Minute,
 		Description: "Create one cluster per engine (postgres, aidb plus an explicit extension, oracle, sqlserver co-mounted with hexabridge) and assert each records its engine in get and list, seeds exactly its bundle unioned with the request, re-adding a seeded extension is a no-op, and an endpoint on each non-postgres engine can create and exercise every seeded extension; an unknown engine is refused with 400.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpClusterEngine,

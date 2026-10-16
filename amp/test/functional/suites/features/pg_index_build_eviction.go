@@ -26,8 +26,9 @@ const (
 	ibeSamples   = 20
 	// HNSW is approximate; an intact graph finds a row's own vector at
 	// ef_search 200 nearly always, a graph with dropped pages does not.
-	ibeMinSelfHits = 18
-	ibeBuildBudget = 15 * time.Minute
+	ibeMinSelfHits   = 18
+	ibeBuildBudget   = 5 * time.Minute
+	ibeBuildAttempts = 5
 )
 
 type ibeIndex struct {
@@ -219,23 +220,9 @@ func (r *ibeRun) build(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	bctx, cancel := context.WithTimeout(ctx, ibeBuildBudget)
-	defer cancel()
 	for _, ix := range ibeIndexes {
-		setup := []string{fmt.Sprintf("SET max_parallel_maintenance_workers = %d", ix.workers), "SET maintenance_work_mem = '64MB'"}
-		n, err := r.underEviction(bctx, setup, ix.ddl)
-		if err != nil {
-			if now, perr := r.postmasterStart(ctx); perr != nil || now != started {
-				return fmt.Errorf("building %s under eviction: %w; the compute restarted (postmaster start %q, now %q, %v): an evicted unlogged-build page crashed it (meko#1700)", ix.name, err, started, now, perr)
-			}
-			return fmt.Errorf("building %s under eviction: %w", ix.name, err)
-		}
-		r.a.f.logf("%s built with %d checkpoints running meanwhile", ix.name, n)
-		if n == 0 {
-			return fmt.Errorf("no CHECKPOINT completed during the %s build, so nothing evicted its pages and the build proves nothing", ix.name)
-		}
-		if now, err := r.postmasterStart(ctx); err != nil || now != started {
-			return fmt.Errorf("the compute restarted during the %s build (postmaster start %q, now %q, %v)", ix.name, started, now, err)
+		if err := r.buildOne(ctx, ix, started); err != nil {
+			return err
 		}
 	}
 	n, err := r.unloggedBuilds(ctx)
@@ -244,6 +231,38 @@ func (r *ibeRun) build(ctx context.Context) error {
 	}
 	if n != 0 {
 		return fmt.Errorf("%d unlogged builds are still registered after every build ended", n)
+	}
+	return nil
+}
+
+func (r *ibeRun) buildOne(ctx context.Context, ix ibeIndex, started string) error {
+	bctx, cancel := context.WithTimeout(ctx, ibeBuildBudget)
+	defer cancel()
+	setup := []string{fmt.Sprintf("SET max_parallel_maintenance_workers = %d", ix.workers), "SET maintenance_work_mem = '64MB'"}
+	var n int64
+	var err error
+	// The parallel GIN build can finish inside one CHECKPOINT round trip.
+	for attempt := 1; ; attempt++ {
+		n, err = r.underEviction(bctx, setup, ix.ddl)
+		if err != nil {
+			if now, perr := r.postmasterStart(ctx); perr != nil || now != started {
+				return fmt.Errorf("building %s under eviction: %w; the compute restarted (postmaster start %q, now %q, %v): an evicted unlogged-build page crashed it (meko#1700)", ix.name, err, started, now, perr)
+			}
+			return fmt.Errorf("building %s under eviction: %w", ix.name, err)
+		}
+		r.a.f.logf("%s built with %d checkpoints running meanwhile (attempt %d)", ix.name, n, attempt)
+		if n > 0 || attempt == ibeBuildAttempts {
+			break
+		}
+		if _, err := r.conn.Exec(ctx, "DROP INDEX "+ix.name); err != nil {
+			return fmt.Errorf("drop %s to rebuild it under a checkpoint: %w", ix.name, err)
+		}
+	}
+	if n == 0 {
+		return fmt.Errorf("no CHECKPOINT completed during any of %d builds of %s, so nothing evicted its pages and the build proves nothing", ibeBuildAttempts, ix.name)
+	}
+	if now, err := r.postmasterStart(ctx); err != nil || now != started {
+		return fmt.Errorf("the compute restarted during the %s build (postmaster start %q, now %q, %v)", ix.name, started, now, err)
 	}
 	return nil
 }

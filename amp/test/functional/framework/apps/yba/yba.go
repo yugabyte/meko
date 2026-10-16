@@ -434,6 +434,30 @@ func (c *Client) GetTask(ctx context.Context, taskUUID string) (TaskStatus, erro
 	return out, err
 }
 
+// YBA runs kubectl cp and exec against its pods, and on amp-dev one of those
+// fails to reach the kubelet every few minutes.
+const KubectlRetries = 5
+
+var KubectlRetryDelay = 30 * time.Second
+
+// KubectlFailed reports a task WaitTask saw end on one of those calls. A poll
+// error carries the same text but leaves the task status empty.
+func KubectlFailed(task TaskStatus, err error) bool {
+	if err == nil || (task.Status != TaskFailure && task.Status != TaskAborted) {
+		return false
+	}
+	return strings.Contains(err.Error(), "Could not upload the ybc contents") ||
+		strings.Contains(err.Error(), "error dialing backend")
+}
+
+// RetryTask asks YBA to re-run a failed task from its failed subtask; the reply
+// names the new task.
+func (c *Client) RetryTask(ctx context.Context, taskUUID string) (TaskRef, error) {
+	var out TaskRef
+	_, err := c.doJSON(ctx, http.MethodPost, c.custURL("/tasks/"+taskUUID+"/retry"), nil, &out)
+	return out, err
+}
+
 // WaitTask polls GET …/tasks/{tUUID} with capped exponential backoff under ctx
 // until the task reaches a terminal status. A failed or aborted task returns an
 // error carrying the task title.

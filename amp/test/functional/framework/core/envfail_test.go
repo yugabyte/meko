@@ -133,6 +133,9 @@ func TestKubeAPIUnreachableIsTypedAndSole(t *testing.T) {
 		Err: errors.New("port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: Unable to connect to the server: dial tcp 10.150.8.6:443: i/o timeout)"),
 	}
 	product := errors.New("amcheck: heap tuple is not in the index")
+	kubelet := &k8s.KubeletUnreachableError{
+		Err: errors.New("port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: error: error upgrading connection: error dialing backend: dial timeout, backstop)"),
+	}
 
 	for _, c := range []struct {
 		name string
@@ -146,6 +149,8 @@ func TestKubeAPIUnreachableIsTypedAndSole(t *testing.T) {
 		{"text only", errors.New("log line: Unable to connect to the server: i/o timeout"), false},
 		{"joined with a finding", errors.Join(kube, product), false},
 		{"a wrapped join carrying a finding", fmt.Errorf("check target: %w", errors.Join(kube, product)), false},
+		{"kubelet unreachable, wrapped", fmt.Errorf("depth 16: %w", kubelet), true},
+		{"kubelet unreachable joined with a finding", errors.Join(kubelet, product), false},
 	} {
 		if got := core.KubeAPIUnreachable(c.err); got != c.want {
 			t.Errorf("%s: KubeAPIUnreachable = %v, want %v", c.name, got, c.want)

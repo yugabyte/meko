@@ -327,6 +327,7 @@ func largeRecordOnTop(t *core.T, s *core.StepHandle, env ampTenantEnv, kube, bac
 	journals []*AckJournal, params walSwitchParams) error {
 	var targets []string
 	var maxWalk int64
+	unread := false
 	for i := range fleet.Tenants {
 		ten := &fleet.Tenants[i]
 		pod, err := endpointPodFor(t, kube, ten.Endpoint)
@@ -359,6 +360,9 @@ func largeRecordOnTop(t *core.T, s *core.StepHandle, env ampTenantEnv, kube, bac
 			return fmt.Errorf("SIGSTOP pageserver pid(s) %s: %w", joinPIDs(ps, ","), err)
 		}
 		position, walk := pageserverPosition(t.Context, backing, ten.BranchID, end)
+		if walk < 0 {
+			unread = true
+		}
 		if walk > maxWalk {
 			maxWalk = walk
 		}
@@ -382,6 +386,10 @@ func largeRecordOnTop(t *core.T, s *core.StepHandle, env ampTenantEnv, kube, bac
 	s.Set("anchor_walk_bytes", maxWalk)
 	s.Set("reached_meko800_shape", reached)
 	shape := "the anchor walk did not have to cross the whole record"
+	if !reached && unread {
+		s.Set("reached_meko800_shape", "unknown")
+		shape = "the pageserver position could not be read, so whether the anchor walk had to cross the whole record (the meko#800 shape) is unknown"
+	}
 	if reached {
 		shape = fmt.Sprintf("the anchor walk had to cross %d MiB of one record, more than its %d MiB window (the meko#800 shape)", maxWalk>>20, anchorScanWindow>>20)
 	}

@@ -15,9 +15,10 @@ import (
 const (
 	// helm upgrade --install --wait holds the release in pending-install until
 	// the pod is ready, about 20s on a warm node.
-	pendingInstallWatch = 3 * time.Minute
-	controllerBackWait  = 10 * time.Minute
-	resumedTaskWait     = 15 * time.Minute
+	pendingInstallWatch    = 3 * time.Minute
+	pendingInstallAttempts = 3
+	controllerBackWait     = 10 * time.Minute
+	resumedTaskWait        = 15 * time.Minute
 )
 
 func init() {
@@ -62,31 +63,19 @@ func (a *ampFeatureRun) endpointCreateControllerRestart(ctx context.Context) err
 	if err != nil {
 		return err
 	}
-	task, _, err := cl.CreateEndpoint(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{Role: roleReadWrite})
-	if err != nil {
-		return fmt.Errorf("start the endpoint create: %w", err)
-	}
-
+	var task controller.Task
 	var release string
-	err = pollUntil(ctx, pendingInstallWatch, 300*time.Millisecond, func() (bool, error) {
-		out, err := kube.GetSelector(ctx, "secret", "owner=helm,status=pending-install", `{.items[*].metadata.labels.name}`)
-		if err != nil {
-			return false, nil
+	for attempt := 1; ; attempt++ {
+		task, release, err = a.createUntilPendingInstall(ctx, cl, kube)
+		if err != nil || release != "" {
+			break
 		}
-		for _, n := range strings.Fields(out) {
-			if strings.HasPrefix(n, ampstack.EndpointWorkloadName("")) {
-				release = n
-				return true, nil
-			}
+		if attempt == pendingInstallAttempts {
+			return fmt.Errorf("in %d endpoint creates the test never saw a helm release in pending-install, so the controller was never restarted mid-install", attempt)
 		}
-		t, err := cl.GetTask(ctx, task.ID)
-		if err == nil && t.Status != controller.TaskPending && t.Status != controller.TaskRunning {
-			return false, fmt.Errorf("task %s reached %s before its helm release was seen in pending-install, so the controller was never restarted mid-install", task.ID, t.Status)
-		}
-		return false, nil
-	})
+	}
 	if err != nil {
-		return fmt.Errorf("watch for the endpoint's helm release in pending-install: %w", err)
+		return err
 	}
 	a.f.logf("amp_endpoint_create_controller_restart: release %s is pending-install, deleting the controller pod", release)
 
@@ -170,4 +159,73 @@ func (a *ampFeatureRun) endpointCreateControllerRestart(ctx context.Context) err
 		return fmt.Errorf("the endpoint created across a controller restart does not serve: %w", err)
 	}
 	return nil
+}
+
+// The pending-install window is about 10s and a controller call can stall 30s on
+// the exec relay, so the watch reads only helm secrets.
+func (a *ampFeatureRun) createUntilPendingInstall(ctx context.Context, cl *controller.Client, kube *k8s.Kubectl) (controller.Task, string, error) {
+	before, err := endpointReleases(ctx, kube)
+	if err != nil {
+		return controller.Task{}, "", err
+	}
+	task, _, err := cl.CreateEndpoint(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{Role: roleReadWrite})
+	if err != nil {
+		return task, "", fmt.Errorf("start the endpoint create: %w", err)
+	}
+	var release, missed string
+	err = pollUntil(ctx, pendingInstallWatch, 300*time.Millisecond, func() (bool, error) {
+		now, err := endpointReleases(ctx, kube)
+		if err != nil {
+			return false, nil
+		}
+		for n, status := range now {
+			if _, ok := before[n]; ok {
+				continue
+			}
+			switch status {
+			case "pending-install":
+				release = n
+				return true, nil
+			case "deployed":
+				missed = n
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t, terr := cl.GetTask(ctx, task.ID)
+		return task, "", fmt.Errorf("watch for the endpoint's helm release in pending-install (task %s is %q, read error %v): %w", task.ID, t.Status, terr, err)
+	}
+	if release != "" {
+		return task, release, nil
+	}
+	a.f.logf("amp_endpoint_create_controller_restart: release %s reached deployed before the watch saw it pending-install, deleting it and creating again", missed)
+	if _, err := cl.WaitTask(ctx, task.ID); err != nil {
+		return task, "", fmt.Errorf("wait for the endpoint create %s whose install was missed: %w", task.ID, err)
+	}
+	id := strings.TrimPrefix(missed, ampstack.EndpointWorkloadName(""))
+	if _, err := cl.DeleteEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, id); err != nil {
+		return task, "", fmt.Errorf("delete endpoint %s before creating again: %w", id, err)
+	}
+	return task, "", nil
+}
+
+func endpointReleases(ctx context.Context, kube *k8s.Kubectl) (map[string]string, error) {
+	out, err := kube.GetSelector(ctx, "secret", "owner=helm",
+		`{range .items[*]}{.metadata.labels.name}={.metadata.labels.status}{" "}{end}`)
+	if err != nil {
+		return nil, fmt.Errorf("list helm release secrets: %w", err)
+	}
+	m := map[string]string{}
+	for _, f := range strings.Fields(out) {
+		n, status, _ := strings.Cut(f, "=")
+		if !strings.HasPrefix(n, ampstack.EndpointWorkloadName("")) {
+			continue
+		}
+		if m[n] == "" || status == "pending-install" || status == "deployed" {
+			m[n] = status
+		}
+	}
+	return m, nil
 }

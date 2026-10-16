@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -192,13 +193,23 @@ func (k *Kubectl) RunStdin(ctx context.Context, stdin io.Reader, cmd string) (ex
 	}
 	extra = append(extra, "--", "sh", "-c", cmd)
 	argv := append(k.base(), extra...)
+	// The exec never started, so stdin can be replayed if it rewinds.
+	rewind, _ := stdin.(io.Seeker)
 	for attempt := 1; ; attempt++ {
+		if rewind != nil && attempt > 1 {
+			if _, err := rewind.Seek(0, io.SeekStart); err != nil {
+				return execpkg.Result{}, fmt.Errorf("kubectl exec %s: rewind stdin: %w", k.cfg.Pod, err)
+			}
+		}
 		res, err := k.run(ctx, stdin, argv)
 		if err != nil {
 			return res, fmt.Errorf("kubectl exec %s: %w", k.cfg.Pod, err)
 		}
-		if stdin != nil || attempt >= kubeletDialAttempts || !kubeletUnreachable(res.Stderr) {
+		if !kubeletUnreachable(res.Stderr) {
 			return res, nil
+		}
+		if (stdin != nil && rewind == nil) || attempt >= kubeletDialAttempts {
+			return res, &KubeletUnreachableError{Err: fmt.Errorf("kubectl exec %s: %s (after %d attempts)", k.cfg.Pod, strings.TrimSpace(res.Stderr), attempt)}
 		}
 		if k.logf != nil {
 			k.logf("kubectl exec %s: %s; retrying (attempt %d/%d)", k.cfg.Pod, strings.TrimSpace(res.Stderr), attempt, kubeletDialAttempts)
@@ -206,7 +217,29 @@ func (k *Kubectl) RunStdin(ctx context.Context, stdin io.Reader, cmd string) (ex
 		select {
 		case <-ctx.Done():
 			return res, fmt.Errorf("kubectl exec %s: %s: %w", k.cfg.Pod, strings.TrimSpace(res.Stderr), ctx.Err())
-		case <-time.After(time.Duration(attempt) * 3 * time.Second):
+		case <-time.After(time.Duration(attempt) * kubeletRetryDelay):
+		}
+	}
+}
+
+// cp streams through the API server to the kubelet; a broken stream is retried,
+// and one that never holds ends as a KubeletUnreachableError.
+func (k *Kubectl) cp(ctx context.Context, extra ...string) error {
+	for attempt := 1; ; attempt++ {
+		res, err := k.exec(ctx, nil, extra...)
+		if err == nil || ctx.Err() != nil || !kubeletStreamFailed(res.Stderr) {
+			return err
+		}
+		if attempt >= kubeletDialAttempts {
+			return &KubeletUnreachableError{Err: fmt.Errorf("%w (after %d attempts)", err, attempt)}
+		}
+		if k.logf != nil {
+			k.logf("kubectl cp: %s; retrying (attempt %d/%d)", strings.TrimSpace(res.Stderr), attempt, kubeletDialAttempts)
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt) * kubeletRetryDelay):
 		}
 	}
 }
@@ -221,8 +254,7 @@ func (k *Kubectl) Copy(ctx context.Context, localPath, remotePath string) error 
 	if k.cfg.Container != "" {
 		extra = append(extra, "-c", k.cfg.Container)
 	}
-	_, err := k.exec(ctx, nil, extra...)
-	return err
+	return k.cp(ctx, extra...)
 }
 
 // Fetch downloads remotePath from the bound pod to localPath via `kubectl cp`.
@@ -235,8 +267,7 @@ func (k *Kubectl) Fetch(ctx context.Context, remotePath, localPath string) error
 	if k.cfg.Container != "" {
 		extra = append(extra, "-c", k.cfg.Container)
 	}
-	_, err := k.exec(ctx, nil, extra...)
-	return err
+	return k.cp(ctx, extra...)
 }
 
 // podPath renders the "[ns/]pod:path" argument kubectl cp expects.
@@ -251,8 +282,20 @@ func (k *Kubectl) podPath(path string) string {
 
 // Apply applies a manifest passed on stdin (`kubectl apply -f -`).
 func (k *Kubectl) Apply(ctx context.Context, manifest string) error {
-	_, err := k.exec(ctx, strings.NewReader(manifest), "apply", "-f", "-")
-	return err
+	for attempt := 1; ; attempt++ {
+		res, err := k.exec(ctx, strings.NewReader(manifest), "apply", "-f", "-")
+		if err == nil || ctx.Err() != nil || attempt >= webhookAttempts || !webhookUnreachable(res.Stderr) {
+			return err
+		}
+		if k.logf != nil {
+			k.logf("kubectl apply: admission webhook unreachable; retrying (attempt %d/%d)", attempt, webhookAttempts)
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt) * kubeletRetryDelay):
+		}
+	}
 }
 
 // GetJSON returns a resource as JSON. A missing resource is an error whose text
@@ -714,6 +757,24 @@ func (k *Kubectl) ListPods(ctx context.Context) ([]string, error) {
 // it (whose ctx carries a provisioning-only deadline), so binding the process to
 // that ctx would kill live forwards the instant provisioning returned.
 func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, remotePort int) (*PortForward, error) {
+	for attempt := 1; ; attempt++ {
+		pf, err := k.portForwardOnce(ctx, target, localPort, remotePort)
+		var ku *KubeletUnreachableError
+		if err == nil || !errors.As(err, &ku) || attempt >= kubeletDialAttempts {
+			return pf, err
+		}
+		if k.logf != nil {
+			k.logf("port-forward %s: %v; retrying (attempt %d/%d)", target, err, attempt, kubeletDialAttempts)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(time.Duration(attempt) * kubeletRetryDelay):
+		}
+	}
+}
+
+func (k *Kubectl) portForwardOnce(ctx context.Context, target string, localPort, remotePort int) (*PortForward, error) {
 	spec := fmt.Sprintf("%d:%d", localPort, remotePort)
 	if localPort <= 0 {
 		spec = fmt.Sprintf(":%d", remotePort) // let kubectl allocate an ephemeral local port
@@ -751,6 +812,9 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 			werr := fmt.Errorf("port-forward %s not ready: %w%s", target, err, pf.outputSuffix())
 			if apiServerUnreachable(pf.Output()) {
 				return nil, &APIServerUnreachableError{Err: werr}
+			}
+			if kubeletStreamFailed(pf.Output()) {
+				return nil, &KubeletUnreachableError{Err: werr}
 			}
 			return nil, werr
 		}

@@ -262,3 +262,26 @@ func TestExecTransportDoesNotReplayPOSTOnAnAPIServerEOF(t *testing.T) {
 		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
+
+func TestExecTransportKeepsTheRelayPodOnAnUnreachableKubelet(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	kube := New(Config{Namespace: "ns", Pod: "relay", Container: "relay"}).WithRunner(
+		func(context.Context, io.Reader, []string) (execpkg.Result, error) {
+			return execpkg.Result{ExitCode: 1, Stderr: execDialFail}, nil
+		})
+	ensured := false
+	tr := &HTTPExecTransport{
+		Kube: kube, BaseURL: "http://amp-controller:8080",
+		EnsurePod: func(context.Context) error { ensured = true; return nil },
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://placeholder/api/v1/tasks/t1", nil)
+	_, err := tr.RoundTrip(req)
+	var unreachable *KubeletUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("err = %v, want a KubeletUnreachableError", err)
+	}
+	if ensured {
+		t.Fatal("recreated the relay pod, which lands it on the same node")
+	}
+}

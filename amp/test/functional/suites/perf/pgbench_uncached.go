@@ -102,7 +102,9 @@ func runPgbenchUncached(t *core.T) error {
 func pgbenchUncachedSpecs(res BenchResult) []metricSpec {
 	specs := renamePrefix(pgbenchMetricSpecs(res), "pgbench.", "pgbench_uncached.")
 	if res.CacheHit.Median > 0 {
-		specs = append(specs, metricSpec{Name: "pgbench_uncached.lfc_hit_pct", Unit: "%", Dir: core.LowerIsBetter, Stats: res.CacheHit, Info: true})
+		// A fraction of a percent by design, so first-to-last moves by multiples
+		// (0.11% -> 0.29%) with nothing wrong.
+		specs = append(specs, metricSpec{Name: "pgbench_uncached.lfc_hit_pct", Unit: "%", Dir: core.LowerIsBetter, Stats: res.CacheHit, Info: true, NoDrift: true})
 	}
 	return specs
 }

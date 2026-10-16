@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // universeWithGflags carries fields this package does not model, so a round-trip that drops them is visible.
@@ -299,6 +301,63 @@ func TestUpgradeSoftwareAndWaitSurfacesAFailedTask(t *testing.T) {
 	})
 	if err := f.client().UpgradeSoftwareAndWait(context.Background(), "u1", "2026.1.2.0-b67", UpgradeRolling, time.Second); err == nil {
 		t.Fatal("a failed upgrade task must fail the call")
+	}
+}
+
+func TestUpgradeSoftwareAndWaitRetriesAFailedKubectlCall(t *testing.T) {
+	defer func(d time.Duration) { KubectlRetryDelay = d }(KubectlRetryDelay)
+	KubectlRetryDelay = time.Millisecond
+	for _, tc := range []struct {
+		name      string
+		failure   string
+		retryWins bool
+	}{
+		{"a ybc upload whose retry succeeds", "hit error: Could not upload the ybc contents.", true},
+		{"an exec whose retry succeeds", "Unable to run the command: uname -m. Code: 1. Output: Error from server: error dialing backend: dial timeout, backstop", true},
+		{"a ybc upload every retry fails", "hit error: Could not upload the ybc contents.", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			defer f.close()
+			retries := 0
+			f.on("GET /api/v1/customers/cust1/universes/u1", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, universeWithGflags(map[string]any{}, map[string]any{}))
+			})
+			f.on("POST /api/v1/customers/cust1/universes/u1/upgrade/db_version", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, TaskRef{TaskUUID: "task-up"})
+			})
+			f.on("GET /api/v1/customers/cust1/tasks/task-up", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, TaskStatus{Status: "Failure", Title: "Upgraded Software"})
+			})
+			f.on("GET /api/v1/customers/cust1/tasks/task-up/failed", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]any{"failedSubTasks": []map[string]any{{"errorString": tc.failure}}})
+			})
+			f.on("POST /api/v1/customers/cust1/tasks/task-up/retry", func(w http.ResponseWriter, _ *http.Request) {
+				retries++
+				next := "task-up"
+				if tc.retryWins {
+					next = "task-ok"
+				}
+				writeJSON(w, http.StatusOK, TaskRef{TaskUUID: next})
+			})
+			f.on("GET /api/v1/customers/cust1/tasks/task-ok", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, TaskStatus{Status: "Success", Percent: 100})
+			})
+			f.on("POST /api/v1/customers/cust1/universes/u1/upgrade/software/precheck", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]any{"finalizeRequired": false})
+			})
+
+			err := f.client().UpgradeSoftwareAndWait(context.Background(), "u1", "2026.1.2.0-b67", UpgradeRolling, time.Second)
+			if tc.retryWins {
+				if err != nil || retries != 1 {
+					t.Fatalf("err = %v after %d retries, want success after 1", err, retries)
+				}
+				return
+			}
+			if err == nil || !core.IsEnvFailure(err) || retries != KubectlRetries {
+				t.Fatalf("err = %v (env %v) after %d retries, want an env failure after %d", err, core.IsEnvFailure(err), retries, KubectlRetries)
+			}
+		})
 	}
 }
 
@@ -617,5 +676,85 @@ func TestEnsureReleaseRelaxesTheVersionGatesBeforeCreating(t *testing.T) {
 	}
 	if !created {
 		t.Fatal("the release was never created")
+	}
+}
+
+func TestRestartUniverseAndWaitDoesNotRetryAPollError(t *testing.T) {
+	defer func(d time.Duration) { KubectlRetryDelay = d }(KubectlRetryDelay)
+	KubectlRetryDelay = time.Millisecond
+	f := newFake()
+	defer f.close()
+	retries := 0
+	f.on("GET /api/v1/customers/cust1/universes/u1", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, universeWithGflags(map[string]any{}, map[string]any{}))
+	})
+	f.on("POST /api/v1/customers/cust1/universes/u1/upgrade/restart", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, TaskRef{TaskUUID: "task-up"})
+	})
+	f.on("GET /api/v1/customers/cust1/tasks/task-up", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "error dialing backend: dial timeout", http.StatusBadRequest)
+	})
+	f.on("POST /api/v1/customers/cust1/tasks/task-up/retry", func(w http.ResponseWriter, _ *http.Request) {
+		retries++
+		writeJSON(w, http.StatusOK, TaskRef{TaskUUID: "task-up"})
+	})
+	err := f.client().RestartUniverseAndWait(context.Background(), "u1", UpgradeRolling, time.Second)
+	if err == nil || retries != 0 {
+		t.Fatalf("err = %v after %d retries, want the poll error returned unretried", err, retries)
+	}
+}
+
+func TestRestartUniverseAndWaitAdoptsTheLockAfterARetryPostErrors(t *testing.T) {
+	defer func(d, l, p time.Duration) { KubectlRetryDelay, retryLockTimeout, retryLockPoll = d, l, p }(KubectlRetryDelay, retryLockTimeout, retryLockPoll)
+	KubectlRetryDelay, retryLockTimeout, retryLockPoll = time.Millisecond, 100*time.Millisecond, time.Millisecond
+	for _, tc := range []struct {
+		name   string
+		lockBy string
+	}{
+		{"the retry landed", "task-ok"},
+		{"the retry never landed", "task-up"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			defer f.close()
+			locked := func() map[string]any {
+				u := universeWithGflags(map[string]any{}, map[string]any{})
+				d := u["universeDetails"].(map[string]any)
+				d["updateInProgress"] = tc.lockBy == "task-ok"
+				d["updatingTaskUUID"] = tc.lockBy
+				return u
+			}
+			f.on("GET /api/v1/customers/cust1/universes/u1", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, universeWithGflags(map[string]any{}, map[string]any{}))
+			})
+			f.on("GET /api/v1/customers/cust1/universes", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, []any{locked()})
+			})
+			f.on("POST /api/v1/customers/cust1/universes/u1/upgrade/restart", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, TaskRef{TaskUUID: "task-up"})
+			})
+			f.on("GET /api/v1/customers/cust1/tasks/task-up", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, TaskStatus{Status: "Failure", Title: "Restart Universe"})
+			})
+			f.on("GET /api/v1/customers/cust1/tasks/task-up/failed", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]any{"failedSubTasks": []map[string]any{{"errorString": "hit error: Could not upload the ybc contents."}}})
+			})
+			f.on("POST /api/v1/customers/cust1/tasks/task-up/retry", func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "connection reset", http.StatusBadRequest)
+			})
+			f.on("GET /api/v1/customers/cust1/tasks/task-ok", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, TaskStatus{Status: "Success", Percent: 100})
+			})
+			err := f.client().RestartUniverseAndWait(context.Background(), "u1", UpgradeRolling, time.Second)
+			if tc.lockBy == "task-ok" {
+				if err != nil {
+					t.Fatalf("err = %v, want the adopted retry waited to success", err)
+				}
+				return
+			}
+			if err == nil || !core.IsEnvFailure(err) {
+				t.Fatalf("err = %v (env %v), want an env failure", err, core.IsEnvFailure(err))
+			}
+		})
 	}
 }

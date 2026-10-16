@@ -89,7 +89,6 @@ type healthRun struct {
 
 	workloads []*healthWorkload
 	wg        sync.WaitGroup
-	deadline  time.Time
 
 	childBranch controller.Branch
 	childEP     controller.Endpoint
@@ -220,10 +219,11 @@ func (h *healthRun) deployClientPod(ctx context.Context) error {
 // healthWorkload is one background sample-app run: started + WaitReady in the
 // launch phase, then liveness-monitored in a goroutine until its run window ends.
 type healthWorkload struct {
-	name   string
-	app    *sampleapp.App
-	err    error
-	killed atomic.Bool
+	name     string
+	app      *sampleapp.App
+	deadline time.Time // the jar's own --run_time end, counted from its launch
+	err      error
+	killed   atomic.Bool
 }
 
 // endpointHostPort resolves the in-cluster address the client pod dials: the
@@ -291,7 +291,7 @@ func (h *healthRun) backgroundWorkloads(ctx context.Context) error {
 		app := sampleapp.New(h.clientPod.Exec(), spec,
 			sampleapp.WithLogf(h.a.f.logf),
 			sampleapp.WithReadyTimeout(h.cfg.ReadyTimeout))
-		hw := &healthWorkload{name: w.name, app: app}
+		hw := &healthWorkload{name: w.name, app: app, deadline: time.Now().Add(h.cfg.RunTime)}
 		if err := app.Start(ctx); err != nil {
 			return fmt.Errorf("%s start: %w", w.name, err)
 		}
@@ -304,13 +304,12 @@ func (h *healthRun) backgroundWorkloads(ctx context.Context) error {
 		h.workloads = append(h.workloads, hw)
 	}
 
-	h.deadline = time.Now().Add(h.cfg.RunTime)
 	for _, hw := range h.workloads {
 		hw := hw
 		h.wg.Add(1)
 		go func() {
 			defer h.wg.Done()
-			hw.err = hw.monitor(ctx, h.deadline)
+			hw.err = hw.monitor(ctx, hw.deadline)
 		}()
 	}
 	return nil
@@ -324,7 +323,8 @@ func (w *healthWorkload) monitor(ctx context.Context, deadline time.Time) error 
 			return nil
 		}
 		alive, err := w.app.Running(ctx)
-		if err == nil && !alive {
+		// The probe is a kubectl exec and can outlast the grace.
+		if err == nil && !alive && time.Now().Before(deadline.Add(-healthMonitorGrace)) {
 			return fmt.Errorf("workload %s died mid-run (%s before its run window ended)", w.name, time.Until(deadline).Round(time.Second))
 		}
 		select {

@@ -61,8 +61,10 @@ func (t *HTTPExecTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if err == nil {
 		return parseWireResponse(res.Stdout, req)
 	}
+	// ensureRelay re-applies the pod in place, so it cannot route around a kubelet.
 	var unreachable *APIServerUnreachableError
-	if t.EnsurePod == nil || errors.As(err, &unreachable) {
+	var kubelet *KubeletUnreachableError
+	if t.EnsurePod == nil || errors.As(err, &unreachable) || errors.As(err, &kubelet) {
 		return nil, err
 	}
 	if t.Logf != nil {

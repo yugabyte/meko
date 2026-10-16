@@ -341,3 +341,18 @@ func TestUniverseHealth(t *testing.T) {
 		t.Errorf("health = %+v", hc)
 	}
 }
+
+func TestRetryTaskPostsAndReturnsTheNewTask(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	f.on("POST /api/v1/customers/cust1/tasks/task-1/retry", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"taskUUID": "task-2", "resourceUUID": "u-1"})
+	})
+	ref, err := f.client().RetryTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if ref.TaskUUID != "task-2" || ref.ResourceUUID != "u-1" {
+		t.Errorf("ref = %+v, want task-2 on u-1", ref)
+	}
+}

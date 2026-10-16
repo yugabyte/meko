@@ -13,6 +13,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 func init() {
@@ -42,7 +43,7 @@ type controlPlaneNemesisParams struct {
 func controlPlaneNemesisParamsFromConfig(c *core.Config) controlPlaneNemesisParams {
 	return controlPlaneNemesisParams{
 		Tenants:        c.GetInt("stress.control_plane_nemesis.tenants", 2),
-		Rounds:         c.GetInt("stress.control_plane_nemesis.rounds", 2),
+		Rounds:         c.GetInt("stress.control_plane_nemesis.rounds", 3),
 		InFlightBudget: c.GetDuration("stress.control_plane_nemesis.in_flight_budget", 60*time.Second),
 		SettleTimeout:  c.GetDuration("stress.control_plane_nemesis.settle_timeout", 15*time.Minute),
 		PayloadBytes:   c.GetInt("stress.control_plane_nemesis.payload_bytes", 256),
@@ -121,10 +122,18 @@ func runControlPlaneNemesis(t *core.T) error {
 		return err
 	}
 
-	var live []churnBranch
+	var (
+		live        []churnBranch
+		reclaimed   int
+		pollErrs    int
+		lastPollErr error
+		logErr      error
+	)
 	for r := 1; r <= params.Rounds; r++ {
 		var fired []firedTask
 		var gate *settleGate
+		var cl *controller.Client
+		var pods []string
 
 		if err := t.Step(fmt.Sprintf("tasks_in_flight_%d", r), func(s *core.StepHandle) error {
 			// Settle before firing: a 20s settle between firing and the kill let every
@@ -133,9 +142,18 @@ func runControlPlaneNemesis(t *core.T) error {
 			if err != nil {
 				return err
 			}
-			cl, err := env.AmpController(t.Context)
+			cl, err = env.AmpController(t.Context)
 			if err != nil {
 				return err
+			}
+			// Listed before firing: a kubectl call after the tasks start can stall 30s,
+			// and a branch create is done in under a second.
+			names, err := kube.GetSelector(t.Context, "pod", controllerSelector, "{.items[*].metadata.name}")
+			if err != nil {
+				return fmt.Errorf("list controller pods (%s) in %q: %w", controllerSelector, kube.Namespace(), err)
+			}
+			if pods = strings.Fields(names); len(pods) == 0 {
+				return fmt.Errorf("no pod matches %s in namespace %q, so there is no controller to kill", controllerSelector, kube.Namespace())
 			}
 			for i := range fleet.Tenants {
 				ten := &fleet.Tenants[i]
@@ -179,6 +197,8 @@ func runControlPlaneNemesis(t *core.T) error {
 					for _, f := range fired {
 						task, err := cl.GetTask(t.Context, f.ID)
 						if err != nil {
+							pollErrs++
+							lastPollErr = err
 							return false, nil
 						}
 						if task.Status == controller.TaskRunning {
@@ -196,25 +216,6 @@ func runControlPlaneNemesis(t *core.T) error {
 
 		var killed []string
 		if err := t.Step(fmt.Sprintf("kill_controller_%d", r), func(s *core.StepHandle) error {
-			cl, err := env.AmpController(t.Context)
-			if err != nil {
-				return err
-			}
-			running := 0
-			for _, f := range fired {
-				if task, err := cl.GetTask(t.Context, f.ID); err == nil && task.Status == controller.TaskRunning {
-					running++
-				}
-			}
-			s.Set("running_at_kill", running)
-			names, err := kube.GetSelector(t.Context, "pod", controllerSelector, "{.items[*].metadata.name}")
-			if err != nil {
-				return fmt.Errorf("list controller pods (%s) in %q: %w", controllerSelector, kube.Namespace(), err)
-			}
-			pods := strings.Fields(names)
-			if len(pods) == 0 {
-				return fmt.Errorf("no pod matches %s in namespace %q, so there is no controller to kill", controllerSelector, kube.Namespace())
-			}
 			for _, pod := range pods {
 				if err := kube.DeleteNow(t.Context, pod); err != nil {
 					return fmt.Errorf("force-delete controller pod %s: %w", pod, err)
@@ -256,6 +257,14 @@ func runControlPlaneNemesis(t *core.T) error {
 				}
 				s.Set("settle_seconds_"+task.Kind+"_"+f.ID[:8], time.Since(start).Seconds())
 			}
+			// A running task seen before the kill may still finish before the pod dies,
+			// so only the new controller's log says whether one was reclaimed.
+			n, err := countReclaims(t.Context, kube, controllerSelector, fired)
+			if err != nil {
+				logErr = err
+			}
+			s.Set("reclaimed", n)
+			reclaimed += n
 			for bi := range live {
 				b := &live[bi]
 				if b.Round != r || b.BranchID != "" {
@@ -402,5 +411,37 @@ func runControlPlaneNemesis(t *core.T) error {
 		return err
 	}
 
+	if reclaimed == 0 {
+		err := fmt.Errorf("no round's restarted controller reclaimed a fired task, so no kill interrupted one (%d task polls failed, last: %v, log read: %v)", pollErrs, lastPollErr, logErr)
+		if pollErrs > 0 || logErr != nil {
+			return core.AsEnvFailure(err)
+		}
+		return err
+	}
 	return faults.Assert(t)
+}
+
+func countReclaims(ctx context.Context, kube *k8s.Kubectl, selector string, fired []firedTask) (int, error) {
+	names, err := kube.GetSelector(ctx, "pod", selector, "{.items[*].metadata.name}")
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, pod := range strings.Fields(names) {
+		out, err := kube.Logs(ctx, "pod/"+pod, "", 0)
+		if err != nil {
+			return n, err
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if !strings.Contains(line, "reclaimed a task another process left running") {
+				continue
+			}
+			for _, f := range fired {
+				if strings.Contains(line, f.ID) {
+					n++
+				}
+			}
+		}
+	}
+	return n, nil
 }

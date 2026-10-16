@@ -157,7 +157,7 @@ func (c *Client) RestartUniverseAndWait(ctx context.Context, universeID string, 
 	if err != nil {
 		return err
 	}
-	return c.waitUpgradeTask(ctx, "restart", ref)
+	return c.waitUpgradeTask(ctx, universeID, "restart", ref)
 }
 
 func (c *Client) UpgradeGflagsAndWait(ctx context.Context, universeID string, master, tserver map[string]string, opt UpgradeOption, sleep time.Duration) error {
@@ -165,7 +165,7 @@ func (c *Client) UpgradeGflagsAndWait(ctx context.Context, universeID string, ma
 	if err != nil {
 		return err
 	}
-	return c.waitUpgradeTask(ctx, "gflag upgrade", ref)
+	return c.waitUpgradeTask(ctx, universeID, "gflag upgrade", ref)
 }
 
 func (c *Client) UpgradeSoftwareAndWait(ctx context.Context, universeID, version string, opt UpgradeOption, sleep time.Duration) error {
@@ -173,7 +173,7 @@ func (c *Client) UpgradeSoftwareAndWait(ctx context.Context, universeID, version
 	if err != nil {
 		return err
 	}
-	if err := c.waitUpgradeTask(ctx, "software upgrade", ref); err != nil {
+	if err := c.waitUpgradeTask(ctx, universeID, "software upgrade", ref); err != nil {
 		return err
 	}
 	required, err := c.FinalizeRequired(ctx, universeID, version)
@@ -188,17 +188,42 @@ func (c *Client) UpgradeSoftwareAndWait(ctx context.Context, universeID, version
 	if err != nil {
 		return fmt.Errorf("finalize upgrade to %s: %w", version, err)
 	}
-	return c.waitUpgradeTask(ctx, "finalize upgrade", fref)
+	return c.waitUpgradeTask(ctx, universeID, "finalize upgrade", fref)
 }
 
-func (c *Client) waitUpgradeTask(ctx context.Context, what string, ref TaskRef) error {
+func (c *Client) waitUpgradeTask(ctx context.Context, universeID, what string, ref TaskRef) error {
 	if ref.TaskUUID == "" {
 		return fmt.Errorf("%s: YBA returned no task to wait on", what)
 	}
-	if _, err := c.WaitTask(ctx, ref.TaskUUID); err != nil {
-		return fmt.Errorf("%s: %w", what, err)
+	taskUUID := ref.TaskUUID
+	for attempt := 1; ; attempt++ {
+		task, err := c.WaitTask(ctx, taskUUID)
+		if err == nil {
+			return nil
+		}
+		if !KubectlFailed(task, err) {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		if attempt > KubectlRetries {
+			return core.AsEnvFailure(fmt.Errorf("%s: after %d retries: %w", what, KubectlRetries, err))
+		}
+		c.log("yba: %s task %s failed on a kubectl call; retrying it in %s (retry %d of %d)", what, taskUUID, KubectlRetryDelay, attempt, KubectlRetries)
+		select {
+		case <-ctx.Done():
+			return core.AsEnvFailure(fmt.Errorf("%s: retry %d of %d cut short (%v): %w", what, attempt, KubectlRetries, ctx.Err(), err))
+		case <-time.After(KubectlRetryDelay):
+		}
+		r, rerr := c.RetryTask(ctx, taskUUID)
+		if rerr != nil {
+			id, lerr := c.retriedTask(ctx, universeID, taskUUID)
+			if lerr != nil {
+				return core.AsEnvFailure(fmt.Errorf("%s: retrying task %s after %q: %w (%v)", what, taskUUID, err.Error(), rerr, lerr))
+			}
+			c.log("yba: retrying %s task %s errored (%v); waiting on the universe's task %s", what, taskUUID, rerr, id)
+			r.TaskUUID = id
+		}
+		taskUUID = r.TaskUUID
 	}
-	return nil
 }
 
 // mergeGflags accepts either shape YBA stores gflags in and writes the list form.
@@ -350,7 +375,7 @@ func (c *Client) GrowUniverseVolumesAndWait(ctx context.Context, universeID stri
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := c.waitUpgradeTask(ctx, fmt.Sprintf("grow volumes to %d GB", to), ref); err != nil {
+	if err := c.waitUpgradeTask(ctx, universeID, fmt.Sprintf("grow volumes to %d GB", to), ref); err != nil {
 		return from, to, err
 	}
 	return from, to, c.WaitUniverseReady(ctx, universeID, timeout)
@@ -398,7 +423,7 @@ func (c *Client) EditUniverseNodesAndWait(ctx context.Context, universeID string
 	if err != nil {
 		return err
 	}
-	if err := c.waitUpgradeTask(ctx, fmt.Sprintf("edit to %d nodes", numNodes), ref); err != nil {
+	if err := c.waitUpgradeTask(ctx, universeID, fmt.Sprintf("edit to %d nodes", numNodes), ref); err != nil {
 		return err
 	}
 	return c.WaitUniverseReady(ctx, universeID, timeout)
@@ -453,4 +478,36 @@ func growPrimaryVolumeSize(params map[string]any, addGB int) (from, to int, err 
 	from, to = int(size), int(size)+addGB
 	dev["volumeSize"] = to
 	return from, to, nil
+}
+
+var (
+	retryLockTimeout = 2 * time.Minute
+	retryLockPoll    = 3 * time.Second
+)
+
+// retriedTask finds the task a retry POST started when the POST errored, since
+// YBA may have accepted it anyway.
+func (c *Client) retriedTask(ctx context.Context, universeID, failed string) (string, error) {
+	deadline := time.Now().Add(retryLockTimeout)
+	last := "never read"
+	for {
+		u, err := c.GetUniverse(ctx, universeID)
+		if err != nil {
+			last = err.Error()
+		} else {
+			d := u.UniverseDetails
+			last = fmt.Sprintf("updateInProgress=%v updatingTaskUUID=%q", d.UpdateInProgress, d.UpdatingTaskUUID)
+			if d.UpdateInProgress && d.UpdatingTaskUUID != "" && d.UpdatingTaskUUID != failed {
+				return d.UpdatingTaskUUID, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no retried task locked universe %s within %s (last read: %s)", universeID, retryLockTimeout, last)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(retryLockPoll):
+		}
+	}
 }
