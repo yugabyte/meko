@@ -1022,6 +1022,24 @@ impl Cluster {
         Ok(sum)
     }
 
+    /// Value of the series `name` — a bare metric name, or one with its full
+    /// label set (`foo_total{verdict="durable"}`) — from the metrics endpoint
+    /// on `http_port`, or `None` when the exposition carries no such series.
+    /// Unlike [`Self::metric_sum`], absent and zero stay distinct — the
+    /// difference a pre-registered counter exists to make.
+    pub async fn metric_value(&self, http_port: u16, name: &str) -> anyhow::Result<Option<f64>> {
+        let body = reqwest::get(format!("http://127.0.0.1:{http_port}/metrics"))
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        Ok(body
+            .lines()
+            .filter_map(|l| l.strip_prefix(name)?.strip_prefix(' '))
+            .filter_map(|v| v.trim().parse::<f64>().ok())
+            .next())
+    }
+
     /// Value of the exported gauge `name` for exactly one `branch_id` label,
     /// from the metrics endpoint on `http_port`. `None` while the series has
     /// not materialized yet. Unlike [`Self::metric_sum`] this is scoped to a

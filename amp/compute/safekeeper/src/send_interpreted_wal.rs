@@ -433,9 +433,7 @@ impl InterpretedWalReader {
                 match redec.poll_decode() {
                     Ok(Some((lsn, _))) => {
                         if lsn >= failure_lsn {
-                            crate::metrics::WAL_READER_DECODE_TRIPWIRE
-                                .with_label_values(&["transient"])
-                                .inc();
+                            crate::metrics::DecodeTripwireVerdict::Transient.inc();
                             error!(
                                 "decode tripwire: re-read from {from_lsn} decoded cleanly past the \
                                  failure at {failure_lsn} — original was a TRANSIENT read-time splice, \
@@ -446,9 +444,7 @@ impl InterpretedWalReader {
                     }
                     Ok(None) => break, // need more bytes
                     Err(e2) => {
-                        crate::metrics::WAL_READER_DECODE_TRIPWIRE
-                            .with_label_values(&["durable"])
-                            .inc();
+                        crate::metrics::DecodeTripwireVerdict::Durable.inc();
                         error!(
                             "decode tripwire: re-read from {from_lsn} FAILED AGAIN near {failure_lsn} \
                              — likely DURABLE WAL corruption. original: {err:?}, re-read: {e2:?}"
@@ -458,9 +454,7 @@ impl InterpretedWalReader {
                 }
             }
         }
-        crate::metrics::WAL_READER_DECODE_TRIPWIRE
-            .with_label_values(&["inconclusive"])
-            .inc();
+        crate::metrics::DecodeTripwireVerdict::Inconclusive.inc();
         error!(
             "decode tripwire: inconclusive re-reading from {from_lsn} for failure at {failure_lsn} \
              (could not re-decode past it). original: {err:?}"

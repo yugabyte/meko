@@ -305,6 +305,10 @@ async fn main() -> anyhow::Result<()> {
 type JoinTaskRes = Result<anyhow::Result<()>, JoinError>;
 
 async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
+    // Before the HTTP listener binds and before YB is reached, so no scrape can
+    // find the failure counters absent.
+    safekeeper::metrics::preinitialize_metrics();
+
     info!("starting safekeeper WAL service on {}", conf.listen_pg_addr);
     let pg_listener = tcp_listener::bind(conf.listen_pg_addr.clone()).map_err(|e| {
         error!("failed to bind to address {}: {}", conf.listen_pg_addr, e);

@@ -15,6 +15,8 @@ use metrics::{
 };
 use once_cell::sync::Lazy;
 use postgres_ffi::XLogSegNo;
+use strum::VariantNames;
+use strum_macros::{IntoStaticStr, VariantNames};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
@@ -138,7 +140,7 @@ pub static WAL_READER_DECODE_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_reader_decode_errors_total counter")
 });
-pub static WAL_READER_DECODE_TRIPWIRE: Lazy<IntCounterVec> = Lazy::new(|| {
+static WAL_READER_DECODE_TRIPWIRE: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "safekeeper_wal_reader_decode_tripwire_total",
         concat!(
@@ -151,6 +153,29 @@ pub static WAL_READER_DECODE_TRIPWIRE: Lazy<IntCounterVec> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_reader_decode_tripwire_total counter")
 });
+
+/// Verdicts for `WAL_READER_DECODE_TRIPWIRE`. An enum, not a `&str`, so the
+/// label domain stays closed and the seeding in [`preinitialize_metrics`]
+/// cannot fall behind a new verdict.
+#[derive(Debug, Clone, Copy, VariantNames, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum DecodeTripwireVerdict {
+    /// The re-read decoded cleanly: a read-time splice.
+    Transient,
+    /// The re-read failed again: genuine WAL corruption.
+    Durable,
+    /// The range could not be re-read or decided.
+    Inconclusive,
+}
+
+impl DecodeTripwireVerdict {
+    pub fn inc(self) {
+        WAL_READER_DECODE_TRIPWIRE
+            .with_label_values(&[<&'static str>::from(self)])
+            .inc();
+    }
+}
+
 pub static WAL_STORAGE_LIMIT_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_wal_storage_limit_errors",
@@ -338,6 +363,35 @@ pub static YB_WAL_BATCH_BYTES: Lazy<Histogram> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_yb_wal_batch_bytes histogram")
 });
+
+/// Register the counters that only move on a failure, so they export at zero
+/// from the first scrape. A `Lazy` registers on first touch, and for these the
+/// first touch is the failure itself: until then the series is absent, which
+/// no alert can fire on and no dashboard can show as flat.
+pub fn preinitialize_metrics() {
+    [
+        &WAL_CONSUMER_BATCH_RETRIES,
+        &WAL_READER_DECODE_ERRORS,
+        &WAL_STORAGE_LIMIT_ERRORS,
+    ]
+    .into_iter()
+    .for_each(|c| {
+        Lazy::force(c);
+    });
+
+    // Forcing a vec registers its family but creates no children, and a
+    // childless vec exposes nothing — so name every verdict.
+    for verdict in DecodeTripwireVerdict::VARIANTS {
+        WAL_READER_DECODE_TRIPWIRE
+            .with_label_values(&[verdict])
+            .inc_by(0);
+    }
+    // `success` is created on the acceptor hot path; `error` only on the first
+    // failed message, so its family looks exported while this child is absent.
+    PROPOSER_ACCEPTOR_MESSAGES_TOTAL
+        .with_label_values(&["error"])
+        .inc_by(0);
+}
 
 pub static REMOVED_WAL_SEGMENTS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(

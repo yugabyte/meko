@@ -19,6 +19,11 @@
 //! trigger is incidental and need not persist. Post-fix the consumer retries
 //! the batch, the retry succeeds immediately, and the only visible cost is one
 //! warning line. Pre-fix the endpoint never accepts another write.
+//!
+//! It also guards the retry's alertability: an alert can only fire on
+//! `safekeeper_wal_consumer_batch_retries_total` if it is exported before the
+//! first failure, so the counter must be present ahead of the injection and
+//! advance across it.
 
 use std::time::Duration;
 
@@ -33,6 +38,20 @@ use crate::tee_println;
 /// failure here means the timeline stopped accepting writes, not that it was
 /// briefly slow.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
+
+const RETRIES: &str = "safekeeper_wal_consumer_batch_retries_total";
+
+/// Every series `preinitialize_metrics` registers. Each one only moves on a
+/// failure, so each must already be on `/metrics` before any failure happens.
+const PREINITIALIZED: &[&str] = &[
+    RETRIES,
+    "safekeeper_wal_reader_decode_errors_total",
+    "safekeeper_wal_storage_limit_errors",
+    "safekeeper_wal_reader_decode_tripwire_total{verdict=\"transient\"}",
+    "safekeeper_wal_reader_decode_tripwire_total{verdict=\"durable\"}",
+    "safekeeper_wal_reader_decode_tripwire_total{verdict=\"inconclusive\"}",
+    "safekeeper_proposer_acceptor_messages_total{outcome=\"error\"}",
+];
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let conninfo = db::compute_conn(c.compute_port());
@@ -50,6 +69,22 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await
     .context("seed timed out")??;
+
+    // Earlier scenarios share this safekeeper and may have retried already, so
+    // the retry count is a baseline to beat, not an expected zero.
+    step("The failure counters are exported before any failure");
+    for series in PREINITIALIZED {
+        if c.metric_value(c.sk_http_port(), series).await?.is_none() {
+            bail!(
+                "{series} is absent from the safekeeper's /metrics — it must export at zero \
+                 from startup, or no alert can fire on it"
+            );
+        }
+    }
+    let retries_before = c
+        .metric_value(c.sk_http_port(), RETRIES)
+        .await?
+        .context("retry counter vanished between reads")?;
 
     // `1*return` fires exactly once: the next consumer batch fails, every batch
     // after it is untouched.
@@ -116,6 +151,18 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     if sk_log_contains(c, "the producer is gone") {
         bail!("consumer exited on a batch failure while the producer was still live (#770)");
+    }
+
+    step("The retry counter advanced across the injected failure");
+    let retries_after = c
+        .metric_value(c.sk_http_port(), RETRIES)
+        .await?
+        .context("retry counter vanished after the failure")?;
+    if retries_after < retries_before + 1.0 {
+        bail!(
+            "{RETRIES} went {retries_before} -> {retries_after} across an injected batch \
+             failure; the retry happened (logged) but the metric an alert reads did not move"
+        );
     }
 
     step("Final integrity check");

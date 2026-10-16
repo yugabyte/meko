@@ -10,7 +10,17 @@ Metrics are exposed at `GET /metrics` (auth-exempt; see
 1. **Global `Lazy` metrics** — registered into the default registry on first
    touch via the `register_*!` macros. A `Lazy` static that no code path
    ever touches never registers and therefore never appears in the
-   exposition (see [Defined but inert](#defined-but-inert)).
+   exposition (see [Defined but inert](#defined-but-inert)). The counters
+   that only move on a failure are forced at startup by
+   `preinitialize_metrics()`, so they export `0` from the first scrape:
+   `safekeeper_wal_consumer_batch_retries_total`,
+   `safekeeper_wal_reader_decode_errors_total`,
+   `safekeeper_wal_storage_limit_errors`, every `verdict` of
+   `safekeeper_wal_reader_decode_tripwire_total`, and the `outcome="error"`
+   child of `safekeeper_proposer_acceptor_messages_total`. A new alertable
+   counter (or failure-only label value) belongs in that function; left `Lazy`
+   alone it is absent until its first failure, and an absent series cannot
+   fire an alert.
 2. **Per-timeline collector** — `TimelineCollector` is a custom Prometheus
    `Collector` registered once at startup (`metrics::register_internal`).
    On every scrape it resets its gauges and re-emits one series per
