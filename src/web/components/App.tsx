@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppState, AuthStatus, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
 import { approveDesign, settleApprovals } from '../design-answers';
@@ -7,12 +7,15 @@ import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
+import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, useRailSessions } from '../rail';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import {
+  cx,
   lastOpenSession,
   lastSessionClosed,
   liveSessions,
+  openSessions,
   modKey,
   withCreated,
   withOpened,
@@ -32,7 +35,7 @@ import { NewSessionDialog } from './NewSessionDialog';
 import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
 import { ProjectView } from './ProjectView';
-import { Rail } from './Rail';
+import { PaneIcon, Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
@@ -121,6 +124,15 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const [toast, setToast] = useState<string | null>(null);
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
+  const [railWidth, setRailWidth] = useState(railWidthSaved);
+  useEffect(() => saveRailWidth(railWidth), [railWidth]);
+  const railSessions = useRailSessions();
+  // The wide layout's projects pane, hidden or shown by its buttons; the phone's drawer is `drawer`.
+  const [railHidden, setRailHidden] = useState(railHiddenSaved);
+  const toggleRail = (hidden: boolean) => {
+    setRailHidden(hidden);
+    saveRailHidden(hidden);
+  };
   // A project just opened, as Open project returned it: shown (withOpened) until a state push brings
   // it, since the push can come after the reply, or late on a slow or reconnecting events socket.
   const [opened, setOpened] = useState<Project | null>(null);
@@ -226,7 +238,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const currentProject =
     route.view === 'root' || route.view === 'usage' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
   const live = useMemo(
-    () => (currentProject ? liveSessions(currentProject).sort((a, b) => a.createdAt - b.createdAt) : []),
+    () => (currentProject ? openSessions(currentProject) : []),
     [currentProject],
   );
   const currentSession =
@@ -444,11 +456,23 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }
 
   return (
-    <div className="app">
+    <div
+      className={cx('app', !mobile && railHidden && 'rail-hidden')}
+      style={railWidth ? ({ '--rail-w': `${railWidth}px` } as CSSProperties) : undefined}
+    >
       {mobile && drawer && <div className="rail-scrim" onClick={closeDrawer} aria-hidden="true" />}
+      {!mobile && railHidden ? (
+        <nav className="rail-strip" aria-label="Projects">
+          <button className="icon-btn" onClick={() => toggleRail(false)} title="Show projects" aria-label="Show projects" aria-expanded={false}>
+            <PaneIcon />
+          </button>
+        </nav>
+      ) : (
       <Rail
         projects={projects}
         currentId={currentProject?.id ?? null}
+        currentSessionId={currentSession?.id ?? null}
+        sessionsShown={railSessions}
         usageOpen={route.view === 'usage'}
         onUsage={() => {
           navigate({ view: 'usage' }, { replace: isDrawerEntry() });
@@ -465,13 +489,25 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           goProject(p);
           closeDrawer();
         }}
+        onSelectSession={(s) => {
+          navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
+          closeDrawer();
+        }}
+        onNewSession={(projectId) => {
+          closeDrawer();
+          setModal({ kind: 'new-session', projectId });
+        }}
+        onRenameSession={(sessionId) => setModal({ kind: 'rename', sessionId })}
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
         onLogout={auth.localAccess ? undefined : fromDrawer(logout)}
         onReorder={moveProject}
+        onResize={mobile ? undefined : setRailWidth}
+        onHide={mobile ? undefined : () => toggleRail(true)}
         open={drawer}
       />
+      )}
       <div className="main">
         <Banners
           state={state}
@@ -519,6 +555,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onMenu={openDrawer}
+            showTabs={!railSessions || railHidden}
             onError={showToast}
           />
         ) : (

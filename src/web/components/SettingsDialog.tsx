@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { saveRailSessions, useRailSessions } from '../rail';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
@@ -41,7 +42,12 @@ export function SettingsDialog({
         </div>
       }
     >
-      {tab === 'general' && <GeneralTab />}
+      {tab === 'general' && (
+        <div className="stack">
+          <RailSessionsSetting />
+          <GeneralTab />
+        </div>
+      )}
       {tab === 'meko' && <MekoTab status={meko} />}
       {tab === 'account' && (
         <div className="stack">
@@ -51,6 +57,20 @@ export function SettingsDialog({
       )}
       {tab === 'updates' && <UpdatesTab initial={update} />}
     </Dialog>
+  );
+}
+
+/** Saved in this browser as it's ticked, apart from the server settings below and their Save. */
+function RailSessionsSetting() {
+  const on = useRailSessions();
+  return (
+    <div className="field">
+      <label className="check">
+        <input id="set-rail-sessions" type="checkbox" checked={on} onChange={(e) => saveRailSessions(e.target.checked)} />
+        <span>List sessions under their project in the projects pane</span>
+      </label>
+      <span className="hint">In place of the tabs above the terminal. Kept in this browser.</span>
+    </div>
   );
 }
 
