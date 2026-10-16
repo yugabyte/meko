@@ -30,6 +30,7 @@ export function Rail({
   onReorder,
   onPalette,
   onResize,
+  onHide,
   open,
 }: {
   projects: ProjectWithSessions[];
@@ -65,6 +66,8 @@ export function Rail({
   onPalette: () => void;
   /** Sets the pane's width, null for the default (the wide layout). */
   onResize?: (width: number | null) => void;
+  /** Hides the pane (the wide layout); left out on a phone, where the rail is a drawer. */
+  onHide?: () => void;
   /** Phone layout: the rail is a drawer, shown while open. */
   open: boolean;
 }) {
@@ -235,6 +238,11 @@ export function Rail({
               <Icon d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 3v18" />
             )}
           </button>
+          {onHide && (
+            <button className="icon-btn rail-hide" onClick={onHide} title="Hide projects" aria-label="Hide projects" aria-expanded={true}>
+              <PaneIcon />
+            </button>
+          )}
           {onLogout && (
             <button className="icon-btn" onClick={onLogout} title="Sign out" aria-label="Sign out">
               <Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9" />
@@ -310,6 +318,15 @@ function Icon({ d }: { d: string }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={d} />
+    </svg>
+  );
+}
+
+/** A pane beside a page: the projects pane's hide and show buttons. */
+export function PaneIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z M9 4v16" />
     </svg>
   );
 }

@@ -1,7 +1,8 @@
-// The projects pane: whether it lists sessions, how wide it is, and which projects' sessions are
-// folded, kept in this browser.
+// The projects pane: whether it lists sessions, is hidden (the wide layout), how wide it is, and which
+// projects' sessions are folded, kept in this browser.
 import { useEffect, useState } from 'react';
 
+const HIDDEN_KEY = 'ak-rail-hidden';
 const WIDTH_KEY = 'ak-rail-width';
 const COLLAPSED_KEY = 'ak-rail-collapsed';
 const SESSIONS_KEY = 'ak-rail-sessions';
@@ -13,6 +14,23 @@ export const RAIL_MAX = 480;
 
 export function clampRailWidth(w: number): number {
   return Math.round(Math.min(RAIL_MAX, Math.max(RAIL_MIN, w)));
+}
+
+export function railHiddenSaved(): boolean {
+  try {
+    return localStorage.getItem(HIDDEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveRailHidden(hidden: boolean): void {
+  try {
+    if (hidden) localStorage.setItem(HIDDEN_KEY, '1');
+    else localStorage.removeItem(HIDDEN_KEY);
+  } catch {
+    /* storage unavailable: it holds for this page */
+  }
 }
 
 /** The saved width, or null for the default. */

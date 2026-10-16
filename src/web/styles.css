@@ -643,6 +643,18 @@ textarea.input {
   height: 100%;
   overflow: hidden;
 }
+/* The projects pane hidden: a strip with the button that shows it again. */
+.app.rail-hidden {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+.rail-strip {
+  background: var(--rail);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+}
 .rail {
   position: relative;
   background: var(--rail);
@@ -912,6 +924,10 @@ textarea.input {
 .rail-actions {
   display: flex;
   gap: 2px;
+}
+.rail-hide {
+  order: 1;
+  margin-left: auto;
 }
 /* Plan usage limits (5-hour and weekly), above the rail's buttons. */
 .limits {

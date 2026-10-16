@@ -7,10 +7,11 @@ import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
-import { railWidthSaved, saveRailWidth, useRailSessions } from '../rail';
+import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, useRailSessions } from '../rail';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import {
+  cx,
   lastOpenSession,
   lastSessionClosed,
   liveSessions,
@@ -34,7 +35,7 @@ import { NewSessionDialog } from './NewSessionDialog';
 import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
 import { ProjectView } from './ProjectView';
-import { Rail } from './Rail';
+import { PaneIcon, Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
@@ -126,6 +127,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const [railWidth, setRailWidth] = useState(railWidthSaved);
   useEffect(() => saveRailWidth(railWidth), [railWidth]);
   const railSessions = useRailSessions();
+  // The wide layout's projects pane, hidden or shown by its buttons; the phone's drawer is `drawer`.
+  const [railHidden, setRailHidden] = useState(railHiddenSaved);
+  const toggleRail = (hidden: boolean) => {
+    setRailHidden(hidden);
+    saveRailHidden(hidden);
+  };
   // A project just opened, as Open project returned it: shown (withOpened) until a state push brings
   // it, since the push can come after the reply, or late on a slow or reconnecting events socket.
   const [opened, setOpened] = useState<Project | null>(null);
@@ -449,8 +456,18 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }
 
   return (
-    <div className="app" style={railWidth ? ({ '--rail-w': `${railWidth}px` } as CSSProperties) : undefined}>
+    <div
+      className={cx('app', !mobile && railHidden && 'rail-hidden')}
+      style={railWidth ? ({ '--rail-w': `${railWidth}px` } as CSSProperties) : undefined}
+    >
       {mobile && drawer && <div className="rail-scrim" onClick={closeDrawer} aria-hidden="true" />}
+      {!mobile && railHidden ? (
+        <nav className="rail-strip" aria-label="Projects">
+          <button className="icon-btn" onClick={() => toggleRail(false)} title="Show projects" aria-label="Show projects" aria-expanded={false}>
+            <PaneIcon />
+          </button>
+        </nav>
+      ) : (
       <Rail
         projects={projects}
         currentId={currentProject?.id ?? null}
@@ -487,8 +504,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         onLogout={auth.localAccess ? undefined : fromDrawer(logout)}
         onReorder={moveProject}
         onResize={mobile ? undefined : setRailWidth}
+        onHide={mobile ? undefined : () => toggleRail(true)}
         open={drawer}
       />
+      )}
       <div className="main">
         <Banners
           state={state}
@@ -536,7 +555,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onMenu={openDrawer}
-            showTabs={!railSessions}
+            showTabs={!railSessions || railHidden}
             onError={showToast}
           />
         ) : (

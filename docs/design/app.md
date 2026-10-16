@@ -196,9 +196,12 @@ full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) sel
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
 
-**The projects pane's width.** In the wide layout, dragging the pane's right edge (or the arrow
-keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back to 248 px. The
-width is kept in this browser (`ak-rail-width`; `src/web/rail.ts`).
+**The projects pane's width, and hiding it.** In the wide layout, dragging the pane's right edge
+(or the arrow keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back
+to 248 px. The pane button at the right of the rail's foot shrinks the rail to a strip holding a
+button that shows it again. While it's hidden, the session tabs show above the terminal even when
+the rail lists the sessions. Its width and whether it's hidden are kept in this browser
+(`ak-rail-width`, `ak-rail-hidden`; `src/web/rail.ts`).
 
 In a dialog, `Ctrl+Enter` (`⌘Enter`) presses its main button, as a click would (nothing while it's
 disabled): Start session, Move to…, Save and the like (`submitButton()` in `common.tsx`). In a form

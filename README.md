@@ -73,7 +73,7 @@ your phone can connect.
 
 ## Features
 
-- **Projects** in a left rail you can widen by dragging its edge (with each one's open sessions listed under it, if you turn that on in Settings): each is an effort to build or improve a feature, product or service,
+- **Projects** in a left rail you can widen by dragging its edge, or hide (with each one's open sessions listed under it, if you turn that on in Settings): each is an effort to build or improve a feature, product or service,
   worked on in a git repo picked from your repos folder (`~/code` by default), cloned into it, or
   started there as a new repo (git init and a first commit). A repo with no commits yet, or an
   empty folder, gets the same empty first commit, so sessions have a base to branch from; a repo
