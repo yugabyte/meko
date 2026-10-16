@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import type { LimitWindow, PlanLimits, ProjectWithSessions } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
+import { RAIL_DEFAULT, clampRailWidth } from '../rail';
+import { ariaBinding, shortcutLabel } from '../shortcuts';
 import type { ThemePref } from '../theme';
 import { aggregateDot, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
 import { StatusDot } from './common';
@@ -23,6 +25,10 @@ export function Rail({
   onLogout,
   onReorder,
   onPalette,
+  onHide,
+  onResize,
+  hideKey,
+  paletteKey,
   open,
 }: {
   projects: ProjectWithSessions[];
@@ -47,6 +53,14 @@ export function Rail({
   /** Moves a project to this index in the list. Touch screens use Move up/down on the project home. */
   onReorder: (id: string, index: number) => void;
   onPalette: () => void;
+  /** Hides the pane (the wide layout); left out on a phone, where the rail is a drawer. */
+  onHide?: () => void;
+  /** Sets the pane's width, null for the default (the wide layout). */
+  onResize?: (width: number | null) => void;
+  /** The hide shortcut as shown, or null when there's none. */
+  hideKey: string | null;
+  /** The palette's binding, or null when there's none. */
+  paletteKey: string | null;
   /** Phone layout: the rail is a drawer, shown while open. */
   open: boolean;
 }) {
@@ -54,6 +68,8 @@ export function Rail({
   const touch = useTouch();
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const [resizing, setResizing] = useState(false);
   const mod = isMac() ? '⌘' : 'Ctrl+';
   const who = [
     onLogout ? `Signed in as ${username}` : username,
@@ -76,13 +92,14 @@ export function Rail({
   };
 
   return (
-    <nav className={cx('rail', open && 'open')} aria-label="Projects" inert={mobile && !open}>
+    <nav ref={navRef} className={cx('rail', open && 'open', resizing && 'resizing')} aria-label="Projects" inert={mobile && !open}>
+      {onResize && <RailResizer nav={navRef} onResize={onResize} onDragging={setResizing} />}
       {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing.
           It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
-      <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
+      <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={paletteKey ? ariaBinding(paletteKey) : undefined}>
         <img src="/logo.png" alt="" width={16} height={16} />
         <span className="rail-search-text">Ask AgentK</span>
-        {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
+        {!touch && paletteKey && <kbd aria-hidden="true">{shortcutLabel(paletteKey)}</kbd>}
       </button>
       <div className="rail-list">
         {projects.map((p, i) => {
@@ -157,6 +174,17 @@ export function Rail({
               <Icon d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 3v18" />
             )}
           </button>
+          {onHide && (
+            <button
+              className="icon-btn rail-hide"
+              onClick={onHide}
+              title={`Hide projects${hideKey ? ` (${hideKey})` : ''}`}
+              aria-label="Hide projects"
+              aria-expanded={true}
+            >
+              <PaneIcon />
+            </button>
+          )}
           {onLogout && (
             <button className="icon-btn" onClick={onLogout} title="Sign out" aria-label="Sign out">
               <Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9" />
@@ -233,5 +261,70 @@ function Icon({ d }: { d: string }) {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={d} />
     </svg>
+  );
+}
+
+/** A pane beside a page: the projects pane's hide and show buttons. */
+export function PaneIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z M9 4v16" />
+    </svg>
+  );
+}
+
+const STEP = 20;
+
+/** The pane's right edge: drag it, or use the arrow keys on it; a double-click goes back to the default. */
+function RailResizer({
+  nav,
+  onResize,
+  onDragging,
+}: {
+  nav: RefObject<HTMLElement | null>;
+  onResize: (width: number | null) => void;
+  onDragging: (on: boolean) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const width = () => nav.current?.getBoundingClientRect().width ?? RAIL_DEFAULT;
+  const drag = (on: boolean) => {
+    setDragging(on);
+    onDragging(on);
+  };
+  const down = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag(true);
+  };
+  const move = (e: PointerEvent<HTMLDivElement>) => {
+    if (!dragging || !nav.current) return;
+    onResize(clampRailWidth(e.clientX - nav.current.getBoundingClientRect().left));
+  };
+  const up = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    drag(false);
+  };
+  const keys = (e: KeyboardEvent<HTMLDivElement>) => {
+    const d = e.key === 'ArrowRight' ? STEP : e.key === 'ArrowLeft' ? -STEP : 0;
+    if (!d) return;
+    e.preventDefault();
+    onResize(clampRailWidth(width() + d));
+  };
+  return (
+    <div
+      className="panel-resizer rail-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the projects pane"
+      title="Drag to resize. Double-click for the default width."
+      tabIndex={0}
+      onPointerDown={down}
+      onPointerMove={move}
+      onPointerUp={up}
+      onPointerCancel={up}
+      onDoubleClick={() => onResize(null)}
+      onKeyDown={keys}
+    />
   );
 }

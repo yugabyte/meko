@@ -185,6 +185,40 @@ code,
   color: var(--bad);
   font-size: 13px;
 }
+/* Settings › Shortcuts: the action, its keys and the buttons on one line, an error under them. */
+.shortcuts {
+  display: flex;
+  flex-direction: column;
+}
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, auto) 210px;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.shortcut-row kbd {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--sunk);
+}
+.shortcut-rec {
+  grid-column: 2 / 4;
+}
+.shortcut-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.shortcut-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
 .ok-text {
   color: var(--ok);
   font-size: 13px;
@@ -638,11 +672,24 @@ textarea.input {
 .app {
   display: grid;
   /* Wide enough for the rail's search bar ("Ask AgentK" beside Ctrl+K) and the projects' names. */
-  grid-template-columns: 228px minmax(0, 1fr);
+  grid-template-columns: var(--rail-w, 228px) minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
+/* The projects pane hidden: a strip with the button that shows it again. */
+.app.rail-hidden {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+.rail-strip {
+  background: var(--rail);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+}
 .rail {
+  position: relative;
   background: var(--rail);
   border-right: 1px solid var(--rule);
   display: flex;
@@ -839,6 +886,10 @@ textarea.input {
 .rail-actions {
   display: flex;
   gap: 2px;
+}
+.rail-hide {
+  order: 1;
+  margin-left: auto;
 }
 /* Plan usage limits (5-hour and weekly), above the rail's buttons. */
 .limits {
@@ -1408,6 +1459,13 @@ textarea.input {
 .resizing > .panel-resizer {
   outline: none;
   background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px);
+}
+.rail-resizer {
+  left: auto;
+  right: -4px;
+}
+.rail.resizing {
+  user-select: none;
 }
 .design-panel {
   width: 62%;

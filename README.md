@@ -132,6 +132,10 @@ your phone can connect.
   login". Besides names, it searches each session's task, PR title, branch and design, closed sessions
   included, in the project you're on (every project from elsewhere), and lists the best matches with
   the text that matched. Picking one goes to it, or opens its PR when it's closed.
+- **Keyboard shortcuts you can change:** `⌘B` (`Ctrl+Shift+B` on Linux and Windows) hides or shows
+  the projects pane, and Settings › Shortcuts changes it, Ask AgentK's `⌘K` and the session
+  switching keys, or adds keys for New session, Rename, Move, Project home, Usage and Settings.
+  Drag the pane's right edge to make it wider or narrower.
 - **Paste a GitHub link to start:** paste a PR or issue link into Ask AgentK (`⌘K`). A PR
   gets a Review a PR session, an issue a task that fixes or implements it (from Design, or straight
   to Code), in the project it belongs to: the one whose datapack its description names, else the

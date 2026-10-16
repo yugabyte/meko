@@ -9,6 +9,7 @@ import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, typ
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
 import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
 import { HeldImages, type HeldImage } from './heldImages';
+import { shortcutAction } from './shortcuts';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
@@ -291,9 +292,8 @@ class SessionTerminal {
         void this.ctrlV();
         return false;
       }
-      if (mod && (e.key === 'k' || e.key === 'K')) return false;
       if (mod && /^[1-9]$/.test(e.key)) return false;
-      if (e.ctrlKey && e.key === 'Tab') return false;
+      if (shortcutAction(e)) return false;
       return true;
     });
   }

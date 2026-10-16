@@ -9,6 +9,7 @@ import { api, errorMessage } from '../api';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
+import { shortcutLabel, useShortcuts } from '../shortcuts';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
@@ -54,6 +55,8 @@ export function CommandPalette({
   onOpenPr,
   onRenameSession,
   onSettings,
+  railHidden,
+  onToggleProjects,
   onStarted,
   askAgentk,
   onEditSession,
@@ -72,6 +75,9 @@ export function CommandPalette({
   /** Opens the Rename session dialog for the session on screen. */
   onRenameSession: () => void;
   onSettings: () => void;
+  /** The projects pane is hidden (on a phone: the drawer is closed). */
+  railHidden: boolean;
+  onToggleProjects: () => void;
   /** A session started from a pasted link (in a project it may just have opened), or one AgentK proposed. */
   onStarted: (r: StartFromLinkResult) => void;
   /** `[ask_agentk] enabled`: offer Ask AgentK. */
@@ -80,6 +86,7 @@ export function CommandPalette({
   onEditSession: (projectId: string, initial: CreateSessionRequest) => void;
 }) {
   const [q, setQ] = useState('');
+  const toggleKey = useShortcuts()['toggle-projects'];
   const [idx, setIdx] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -391,9 +398,16 @@ export function CommandPalette({
     }
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
-    out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
+    out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp shortcuts keyboard keys', run: onSettings });
+    out.push({
+      id: 'toggle-projects',
+      label: [railHidden ? 'Show projects' : 'Hide projects'],
+      hint: shortcutLabel(toggleKey) ?? 'Action',
+      keywords: 'projects pane rail sidebar hide show toggle collapse',
+      run: onToggleProjects,
+    });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSettings, railHidden, toggleKey, onToggleProjects]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];

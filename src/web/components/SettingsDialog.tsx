@@ -1,14 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { useIsMobile } from '../hooks/useMedia';
 import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
+import { ShortcutsTab } from './ShortcutsTab';
 
-export type SettingsTab = 'general' | 'meko' | 'account' | 'updates';
+export type SettingsTab = 'general' | 'shortcuts' | 'meko' | 'account' | 'updates';
 type Tab = SettingsTab;
 
-const TAB_LABEL: Record<Tab, string> = { general: 'General', meko: 'Meko', account: 'Account', updates: 'Updates' };
+const TAB_LABEL: Record<Tab, string> = { general: 'General', shortcuts: 'Shortcuts', meko: 'Meko', account: 'Account', updates: 'Updates' };
 
 export function SettingsDialog({
   auth,
@@ -25,6 +27,8 @@ export function SettingsDialog({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  // The phone layout has no keyboard to speak of, and its tab row fits four.
+  const tabs: Tab[] = useIsMobile() ? ['general', 'meko', 'account', 'updates'] : ['general', 'shortcuts', 'meko', 'account', 'updates'];
   return (
     <Dialog
       title="Settings"
@@ -32,7 +36,7 @@ export function SettingsDialog({
       onClose={onClose}
       aside={
         <div className="seg" role="tablist">
-          {(['general', 'meko', 'account', 'updates'] as Tab[]).map((t) => (
+          {tabs.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={cx(tab === t && 'on')} onClick={() => setTab(t)}>
               {TAB_LABEL[t]}
             </button>
@@ -41,6 +45,7 @@ export function SettingsDialog({
       }
     >
       {tab === 'general' && <GeneralTab />}
+      {tab === 'shortcuts' && <ShortcutsTab />}
       {tab === 'meko' && <MekoTab status={meko} />}
       {tab === 'account' && (
         <div className="stack">

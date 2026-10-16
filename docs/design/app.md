@@ -170,7 +170,8 @@ terminal**, which hides it for that start in this page.
 ## Keyboard
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
-normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
+normal tab, so it works in the installed app window), `⌘B` (`Ctrl+Shift+B` off a Mac, since
+`Ctrl+B` is Claude Code's "run in the background") hides or shows the projects pane, and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
 or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
@@ -179,7 +180,24 @@ The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the sho
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
-through to the terminal whenever it has focus. To copy from the terminal, drag across the text and
+through to the terminal whenever it has focus.
+
+**Changing shortcuts.** Settings › Shortcuts lists the actions a shortcut can run: hide or show
+the projects pane, Ask AgentK, next and previous session, and (with no keys by default) new
+session, rename, move to another stage, project home, Usage and Settings. Each can be changed
+(press the new keys), removed, or put back to its default (`src/web/shortcuts.ts`). Bindings are
+kept in this browser's localStorage (`ak-shortcuts`, only the ones that differ from the defaults),
+since keys differ between a Mac and a PC. A shortcut needs Ctrl, Alt or ⌘ (or is an F key), so
+typing still reaches the terminal, and can't take `⌘1–9`, `⌘C/V/X/A/Z` or `⌘Enter`; giving a
+shortcut keys another action has is refused, while **Default** takes them from it. The terminal
+lets every bound key through to the app. The tab isn't shown in the phone layout.
+
+**The projects pane.** In the wide layout, the shortcut, the pane button at the right of the
+rail's foot, or **Hide projects** in the palette shrinks the rail to a strip holding a button that
+shows it again (so a touch screen can too). Dragging the pane's right edge (or the arrow keys on
+it) sets its width, from 180 to 480 px; a double-click on the edge goes back to 228 px. Whether
+it's hidden and its width are kept in this browser (`ak-rail-hidden`, `ak-rail-width`;
+`src/web/rail.ts`). In the phone layout the same shortcut and palette item open the drawer. To copy from the terminal, drag across the text and
 press `Ctrl+C` (`⌘C`), which
 copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser

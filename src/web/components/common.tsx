@@ -107,9 +107,11 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Focus the first control once on open; Escape closes; Tab stays inside.
+  // Focus the first control once on open; Escape closes; Tab stays inside. A control marked
+  // `data-own-keys` (recording a shortcut) takes every key itself.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-own-keys]')) return;
       if (e.key === 'Escape') {
         e.stopPropagation();
         closeRef.current();

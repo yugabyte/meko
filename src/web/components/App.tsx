@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { moveBlockedIn } from '../../shared/stages';
 import type { AppState, AuthStatus, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
 import { approveDesign, settleApprovals } from '../design-answers';
@@ -7,9 +8,12 @@ import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
+import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth } from '../rail';
+import { shortcutAction, shortcutLabel, useShortcuts, type ShortcutAction } from '../shortcuts';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import {
+  cx,
   lastOpenSession,
   lastSessionClosed,
   liveSessions,
@@ -32,7 +36,7 @@ import { NewSessionDialog } from './NewSessionDialog';
 import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
 import { ProjectView } from './ProjectView';
-import { Rail } from './Rail';
+import { PaneIcon, Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
@@ -121,6 +125,11 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const [toast, setToast] = useState<string | null>(null);
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
+  // The wide layout's projects pane, hidden or shown by its shortcut or the buttons; the phone's drawer is `drawer`.
+  const [railHidden, setRailHidden] = useState(railHiddenSaved);
+  const [railWidth, setRailWidth] = useState(railWidthSaved);
+  useEffect(() => saveRailWidth(railWidth), [railWidth]);
+  const shortcuts = useShortcuts();
   // A project just opened, as Open project returned it: shown (withOpened) until a state push brings
   // it, since the push can come after the reply, or late on a slow or reconnecting events socket.
   const [opened, setOpened] = useState<Project | null>(null);
@@ -291,10 +300,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }, []);
 
   // The phone layout's projects drawer gets its own history entry, so the Back gesture closes it.
-  const openDrawer = () => {
+  const openDrawer = useCallback(() => {
     if (!isDrawerEntry()) history.pushState({ akDrawer: true }, '', location.href);
     setDrawer(true);
-  };
+  }, []);
   const closeDrawer = useCallback(() => {
     setDrawer(false);
     if (isDrawerEntry()) history.back();
@@ -319,15 +328,63 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     f();
   };
 
-  // Global shortcuts; none while a dialog is open, except ⌘K to close the palette.
+  const toggleRail = useCallback((hidden: boolean) => {
+    setRailHidden(hidden);
+    saveRailHidden(hidden);
+  }, []);
+
+  /** Runs a shortcut's action; false when it does nothing here, so the key goes on to the page. */
+  const runShortcut = (a: ShortcutAction): boolean => {
+    switch (a) {
+      case 'toggle-projects':
+        if (!mobile) toggleRail(!railHidden);
+        else if (drawer) closeDrawer();
+        else openDrawer();
+        return true;
+      case 'palette':
+        setModal((m) => (m.kind === 'palette' ? { kind: 'none' } : { kind: 'palette' }));
+        return true;
+      case 'next-session':
+      case 'prev-session': {
+        if (!currentProject || !live.length) return false;
+        const idx = Math.max(0, live.findIndex((s) => s.id === currentSession?.id));
+        const next = live[(idx + (a === 'prev-session' ? -1 : 1) + live.length) % live.length];
+        navigate({ view: 'project', projectId: currentProject.id, sessionId: next.id });
+        return true;
+      }
+      case 'new-session':
+        if (!currentProject) return false;
+        setModal({ kind: 'new-session', projectId: currentProject.id });
+        return true;
+      case 'rename-session':
+        if (!currentSession) return false;
+        setModal({ kind: 'rename', sessionId: currentSession.id });
+        return true;
+      case 'move-session':
+        if (!currentSession || moveBlockedIn(currentSession.stage)) return false;
+        setModal({ kind: 'move', sessionId: currentSession.id });
+        return true;
+      case 'project-home':
+        if (!currentProject) return false;
+        navigate({ view: 'home', projectId: currentProject.id });
+        setModal({ kind: 'none' });
+        return true;
+      case 'usage':
+        navigate({ view: 'usage' });
+        setModal({ kind: 'none' });
+        return true;
+      case 'settings':
+        setModal({ kind: 'settings' });
+        return true;
+    }
+  };
+  const runShortcutRef = useRef(runShortcut);
+  runShortcutRef.current = runShortcut;
+
+  // Global shortcuts; none while a dialog other than the palette is open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (modalKind !== 'none' && modalKind !== 'palette') return;
-      if (modKey(e) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setModal((m) => (m.kind === 'palette' ? { kind: 'none' } : { kind: 'palette' }));
-        return;
-      }
       if (modKey(e) && /^[1-9]$/.test(e.key) && !e.altKey && !e.shiftKey) {
         const p = projects[Number(e.key) - 1];
         if (p) {
@@ -336,16 +393,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         }
         return;
       }
-      if (e.ctrlKey && e.key === 'Tab' && currentProject && live.length > 0) {
-        e.preventDefault();
-        const idx = Math.max(0, live.findIndex((s) => s.id === currentSession?.id));
-        const next = live[(idx + (e.shiftKey ? -1 : 1) + live.length) % live.length];
-        navigate({ view: 'project', projectId: currentProject.id, sessionId: next.id });
-      }
+      const a = shortcutAction(e);
+      if (a && runShortcutRef.current(a)) e.preventDefault();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [projects, goProject, currentProject, currentSession, live, modalKind]);
+  }, [projects, goProject, modalKind]);
 
   // A toast goes after 5 s, but not while the pointer is on it (say, to select its text).
   const toastTimer = useRef<number | undefined>(undefined);
@@ -421,6 +474,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     </div>
   );
 
+  const hideKey = shortcutLabel(shortcuts['toggle-projects']);
+
   if (!state) {
     return <div className="boot">
         <Busy label={conn === 'closed' ? 'Reconnecting to the server' : 'Loading your projects'} />
@@ -444,8 +499,24 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   }
 
   return (
-    <div className="app">
+    <div
+      className={cx('app', !mobile && railHidden && 'rail-hidden')}
+      style={railWidth ? ({ '--rail-w': `${railWidth}px` } as CSSProperties) : undefined}
+    >
       {mobile && drawer && <div className="rail-scrim" onClick={closeDrawer} aria-hidden="true" />}
+      {!mobile && railHidden ? (
+        <nav className="rail-strip" aria-label="Projects">
+          <button
+            className="icon-btn"
+            onClick={() => toggleRail(false)}
+            title={`Show projects${hideKey ? ` (${hideKey})` : ''}`}
+            aria-label="Show projects"
+            aria-expanded={false}
+          >
+            <PaneIcon />
+          </button>
+        </nav>
+      ) : (
       <Rail
         projects={projects}
         currentId={currentProject?.id ?? null}
@@ -470,8 +541,13 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
         onLogout={auth.localAccess ? undefined : fromDrawer(logout)}
         onReorder={moveProject}
+        onHide={mobile ? undefined : () => toggleRail(true)}
+        onResize={mobile ? undefined : setRailWidth}
+        hideKey={hideKey}
+        paletteKey={shortcuts.palette}
         open={drawer}
       />
+      )}
       <div className="main">
         <Banners
           state={state}
@@ -605,6 +681,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSettings={() => setModal({ kind: 'settings' })}
+          railHidden={mobile ? !drawer : railHidden}
+          onToggleProjects={() => (mobile ? openDrawer() : toggleRail(!railHidden))}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           onStarted={({ project, session }) => {
@@ -619,3 +697,4 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     </div>
   );
 }
+
