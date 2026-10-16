@@ -130,8 +130,11 @@ export function ProjectView({
     setAsking(false);
     setHeldOpen(false);
     setQuestionsAt(0);
-    tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id]);
+  // Also when the desktop tabs mount, as the rail is hidden.
+  useEffect(() => {
+    tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [session?.id, showTabs]);
   // Showing the questions is for the panel open now: one opened later starts on the design.
   useEffect(() => {
     if (panel !== 'design') setQuestionsAt(0);

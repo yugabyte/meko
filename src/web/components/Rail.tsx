@@ -55,7 +55,7 @@ export function Rail({
   onSelectSession: (s: Session) => void;
   /** New session in this project, offered under the project on screen. */
   onNewSession: (projectId: string) => void;
-  /** Double-clicking a session renames it; touch screens use Rename session in the ⋯ sheet. */
+  /** Double-clicking a session renames it; the phone layout uses Rename session in the ⋯ sheet. */
   onRenameSession: (sessionId: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
@@ -165,9 +165,9 @@ export function Rail({
                       key={s.id}
                       className={cx('rail-sess', s.id === currentSessionId && 'sel')}
                       onClick={() => onSelectSession(s)}
-                      onDoubleClick={touch ? undefined : () => onRenameSession(s.id)}
+                      onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
                       aria-current={s.id === currentSessionId ? 'page' : undefined}
-                      title={sessionTabTitle(s) + (touch ? '' : '\nDouble-click to rename')}
+                      title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
                     >
                       <StatusDot status={dotState(s)} phase={s.id} />
                       <span className="rail-sess-name">{s.name}</span>

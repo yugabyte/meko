@@ -52,9 +52,18 @@ type KeyLike = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'altKey' | 'shif
 /** The binding a key press makes, or null for a modifier alone. */
 export function eventBinding(e: KeyLike): string | null {
   if (['Control', 'Alt', 'Shift', 'Meta', 'OS', 'AltGraph', 'CapsLock', 'Dead', 'Unidentified', ''].includes(e.key)) return null;
-  // The physical key for letters and digits: Shift and Option change e.key (⌥B is ∫).
+  // The character typed, so ⌘K is K on any layout (Dvorak's K is KeyV). Only when Shift, Option or a
+  // non-Latin layout turned the key into something else (⇧1 is !, ⌥B is ∫) does the physical key name it.
   const m = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(e.code);
-  const key = m ? (m[1] ?? m[2]) : e.key === ' ' ? 'Space' : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  const key = /^[a-z0-9]$/i.test(e.key)
+    ? e.key.toUpperCase()
+    : m
+      ? (m[1] ?? m[2])
+      : e.key === ' '
+        ? 'Space'
+        : e.key.length === 1
+          ? e.key.toUpperCase()
+          : e.key;
   const held = [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey];
   return [...MODS.filter((_, i) => held[i]), key].join('+');
 }
@@ -83,21 +92,29 @@ export function ariaBinding(binding: string): string {
 }
 
 /**
- * Why a key press can't be a shortcut, or null when it can. One needs Ctrl, Alt or ⌘ (or is an F
- * key), so typing still reaches the terminal, and can't take the keys the app keeps for itself.
+ * Why a key press can't be a shortcut, or null when it can. A bound key never reaches the terminal,
+ * so a shortcut can't be a key the terminal takes (a plain key, Ctrl+letter, or Alt/Option with a
+ * typed key), nor one the app keeps for itself.
  */
 export function bindingProblem(binding: string, mac: boolean): string | null {
   const parts = binding.split('+');
-  const key = parts.at(-1) ?? '';
-  const mods = new Set(parts.slice(0, -1));
+  const key = parts.at(-1) || '+';
+  const mods = new Set(parts.slice(0, -1).filter(Boolean));
+  const shown = formatBinding(binding, mac);
+  const typed = key.length === 1;
   if (!mods.has('Ctrl') && !mods.has('Alt') && !mods.has('Meta') && !/^F\d{1,2}$/.test(key)) {
-    return `Add ${mac ? '⌘, ⌃ or ⌥' : 'Ctrl or Alt'}, so typing still reaches the terminal.`;
+    return `Add ${mac ? '⌘' : 'Ctrl'}, so typing still reaches the terminal.`;
   }
   const mod = mac ? 'Meta' : 'Ctrl';
-  const plain = mods.size === 1 && mods.has(mod);
-  if (plain && /^[1-9]$/.test(key)) return `${formatBinding(binding, mac)} switches projects.`;
-  if (plain && ['C', 'V', 'X', 'A', 'Z'].includes(key)) return `${formatBinding(binding, mac)} is kept for editing text.`;
-  if (key === 'Enter' && (mods.has('Ctrl') || mods.has('Meta')) && mods.size === 1) return `${formatBinding(binding, mac)} sends dialogs.`;
+  if (mods.size === 1 && mods.has(mod) && /^[1-9]$/.test(key)) return `${shown} switches projects.`;
+  if (mods.has(mod) && !mods.has('Alt') && ['C', 'V', 'X', 'A', 'Z'].includes(key)) return `${shown} is kept for editing text.`;
+  if (key === 'Enter' && (mods.has('Ctrl') || mods.has('Meta')) && mods.size === 1) return `${shown} sends dialogs.`;
+  if (typed && mods.has('Alt') && !mods.has('Ctrl') && !mods.has('Meta')) {
+    return mac ? `${shown} types a character on a Mac. Add ⌘ or ⌃.` : `${shown} goes to the terminal. Add Ctrl.`;
+  }
+  if (/^[A-Z]$/.test(key) && mods.has('Ctrl') && !mods.has('Shift') && !mods.has('Alt') && !mods.has('Meta')) {
+    return `${shown} goes to the terminal (Claude uses Ctrl+letter keys). Add ${mac ? '⇧ or ⌥' : 'Shift or Alt'}.`;
+  }
   return null;
 }
 

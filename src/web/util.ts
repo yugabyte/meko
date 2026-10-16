@@ -523,11 +523,6 @@ export function queuedText(session: Session): string | null {
   return `✓ Merge queued: ${waits}`;
 }
 
-/**
- * A session's dot in words, for its tab's tooltip: the long learning text, or what a queued gate
- * waits on. The queued dot shows between turns, when a queued Open PR is already going (the pill's
- * "goes when the turn ends" is for mid-turn).
- */
 /** A session tab's tooltip: name, what its dot means, stage and tokens. */
 export function sessionTabTitle(s: Session): string {
   return [
@@ -538,6 +533,11 @@ export function sessionTabTitle(s: Session): string {
   ].join(' · ');
 }
 
+/**
+ * A session's dot in words, for its tab's tooltip: the long learning text, or what a queued gate
+ * waits on. The queued dot shows between turns, when a queued Open PR is already going (the pill's
+ * "goes when the turn ends" is for mid-turn).
+ */
 export function dotTitle(s: Session): string {
   const dot = dotState(s);
   if (dot === 'learning') return LEARNING_TITLE;

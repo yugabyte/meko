@@ -694,7 +694,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSettings={() => setModal({ kind: 'settings' })}
           railHidden={mobile ? !drawer : railHidden}
-          onToggleProjects={() => (mobile ? openDrawer() : toggleRail(!railHidden))}
+          onToggleProjects={() => (!mobile ? toggleRail(!railHidden) : drawer ? closeDrawer() : openDrawer())}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           onStarted={({ project, session }) => {

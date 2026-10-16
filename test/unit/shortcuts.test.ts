@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { railWidthSaved } from '../../src/web/rail.js';
 import { actionFor, assign, bindingProblem, changedBindings, defaultBindings, eventBinding, formatBinding, mergeBindings } from '../../src/web/shortcuts.js';
 
 const press = (key: string, code: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean } = {}) => ({
@@ -8,6 +9,10 @@ const press = (key: string, code: string, mods: { ctrl?: boolean; alt?: boolean;
 describe('keyboard shortcuts', () => {
   it.each([
     [press('b', 'KeyB', { meta: true }), 'Meta+B'],
+    // Dvorak: the key labelled K is at QWERTY's V. The letter typed names it.
+    [press('k', 'KeyV', { meta: true }), 'Meta+K'],
+    // A non-Latin layout types no Latin letter, so the physical key names it.
+    [press('л', 'KeyK', { ctrl: true, shift: true }), 'Ctrl+Shift+K'],
     [press('B', 'KeyB', { ctrl: true, shift: true }), 'Ctrl+Shift+B'],
     // Option changes the character a Mac types; the physical key still names it.
     [press('∫', 'KeyB', { alt: true, meta: true }), 'Alt+Meta+B'],
@@ -46,12 +51,21 @@ describe('keyboard shortcuts', () => {
     ['Meta+B', true, null],
     ['Ctrl+Alt+P', false, null],
     ['F2', false, null],
+    ['Ctrl+Shift+R', false, null],
+    ['Ctrl+Meta+D', true, null],
     ['B', true, /typing still reaches the terminal/],
     ['Shift+B', false, /typing still reaches the terminal/],
+    // Ctrl+letter is the terminal's, on a Mac too (Ctrl+C interrupts Claude).
+    ['Ctrl+D', true, /goes to the terminal/],
+    ['Ctrl+R', false, /goes to the terminal/],
+    // Option types characters on a Mac (⌥L is @ on a German one); Alt+key is the terminal's elsewhere.
+    ['Alt+L', true, /types a character/],
+    ['Alt+Shift+2', false, /goes to the terminal/],
     ['Meta+3', true, /switches projects/],
     ['Ctrl+V', false, /editing text/],
+    ['Ctrl+Shift+C', false, /editing text/],
     ['Meta+Enter', true, /sends dialogs/],
-    // Ctrl is not the Mac's command key, so these are free there.
+    // Ctrl is not the Mac's command key, so this one is free there.
     ['Ctrl+3', true, null],
   ])('%s (Mac: %s) can be a shortcut unless %s', (binding, mac, problem) => {
     const p = bindingProblem(binding, mac as boolean);
@@ -69,5 +83,23 @@ describe('keyboard shortcuts', () => {
     // Anything unreadable leaves its action at the default.
     expect(mergeBindings(d, { palette: 7, bogus: 'Meta+X' })).toEqual(d);
     expect(mergeBindings(d, 'junk')).toEqual(d);
+  });
+});
+
+describe('projects pane width', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    [null, null],
+    ['', null],
+    ['junk', null],
+    ['0', null],
+    ['300', 300],
+    ['300.6', 301],
+    ['90', 180],
+    ['2000', 480],
+  ])('reads a stored %s as %s', (stored, width) => {
+    vi.stubGlobal('localStorage', { getItem: () => stored });
+    expect(railWidthSaved()).toBe(width);
   });
 });

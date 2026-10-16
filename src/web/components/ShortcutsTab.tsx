@@ -32,14 +32,15 @@ export function ShortcutsTab() {
     }
     const b = eventBinding(e.nativeEvent);
     if (!b) return;
-    const problem = bindingProblem(b, mac);
+    // Its own default is always allowed back (though Ctrl+K, say, breaks the rules for new keys), as Default does.
+    const own = b === defaults[action];
     const taken = SHORTCUT_ACTIONS.find((a) => a.action !== action && bindings[a.action] === b);
-    const text = problem ?? (taken && `${shortcutLabel(b)} is already ${taken.label.toLowerCase()}. Remove it there first.`);
+    const text = own ? null : (bindingProblem(b, mac) ?? (taken && `${shortcutLabel(b)} already runs “${taken.label}”. Remove or change it there first.`));
     if (text) {
       setError({ action, text });
       return;
     }
-    saveShortcuts({ ...bindings, [action]: b });
+    saveShortcuts(assign(bindings, action, b));
     setRecording(null);
     setError(null);
   };

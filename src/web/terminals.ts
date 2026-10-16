@@ -293,7 +293,9 @@ class SessionTerminal {
         return false;
       }
       if (mod && /^[1-9]$/.test(e.key)) return false;
-      if (shortcutAction(e)) return false;
+      // The app's capture listener ran first and prevented the default only if the shortcut did something;
+      // one that does nothing here (Move on a Merge & Close session, say) goes on to Claude.
+      if (e.defaultPrevented && shortcutAction(e)) return false;
       return true;
     });
   }
