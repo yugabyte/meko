@@ -75,7 +75,7 @@ export function ContextEfficiencyCard({
             <div className="flex justify-between text-[10px] text-muted-foreground">
               <span className="flex items-center gap-1">
                 <span className="inline-block h-2 w-2 rounded-sm bg-muted-foreground/30" />
-                Sent to Claude
+                Sent to the model
               </span>
               <span className="font-semibold tabular-nums text-success">
                 {Math.round(savedPct * 100)}% filtered out
@@ -93,7 +93,7 @@ export function ContextEfficiencyCard({
               label="Avg sent / query"
               value={`~${formatTokens(avgTokensSent)}`}
               caption="tokens"
-              tooltip="Avg tokens actually passed to Claude per query — the compressed context after Meko retrieves, re-ranks, and filters the matched chunks. This is what your LLM sees."
+              tooltip="Average number of tokens actually passed to the model per query. This is the compressed context after Meko retrieves, re-ranks, and filters the matched chunks. This is what your LLM sees."
             />
             <PerQueryStat
               label="Baseline / query"
