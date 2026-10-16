@@ -22,6 +22,7 @@ import type {
   MekoDatapack,
   MekoCallBy,
   MekoGap,
+  KnowledgeUpload,
   MekoGapMarkRequest,
   MekoGapPage,
   MekoGapState,
@@ -207,6 +208,16 @@ export const api = {
   pasteImage: (id: string, image: Blob) =>
     request<PastedImage>('POST', `/api/sessions/${enc(id)}/images`, undefined, {
       raw: { data: image, type: image.type.startsWith('image/') ? image.type : 'image/png' },
+    }),
+  /** Saves a file of any type pasted into or dropped on the session's terminal, for Claude to read by its path. */
+  pasteFile: (id: string, file: Blob) =>
+    request<PastedImage>('POST', `/api/sessions/${enc(id)}/files?name=${enc(file instanceof File ? file.name : '')}`, undefined, {
+      raw: { data: file, type: 'application/octet-stream' },
+    }),
+  /** Adds a file to the knowledge base of the session's project datapack; the server sends it on to Meko. */
+  uploadKnowledge: (id: string, file: Blob, name: string) =>
+    request<KnowledgeUpload>('POST', `/api/sessions/${enc(id)}/knowledge?name=${enc(name)}`, undefined, {
+      raw: { data: file, type: 'application/octet-stream' },
     }),
   comments: (id: string) => get<ReviewComment[]>(`/api/sessions/${enc(id)}/comments`),
   addComment: (id: string, b: NewComment) => post<ReviewComment>(`/api/sessions/${enc(id)}/comments`, b),

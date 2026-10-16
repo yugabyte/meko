@@ -210,6 +210,8 @@ export function ProjectView({
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
   const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
+  // Files held in the terminal's strip can go to the dedicated datapack's knowledge base (Upload to Meko).
+  const mekoTo = dedicated && meko.configured ? dedicated.name : null;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -393,7 +395,7 @@ export function ProjectView({
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} />
+          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} mekoTo={mekoTo} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>

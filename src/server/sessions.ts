@@ -26,7 +26,7 @@ import {
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
-import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedImage, stageImage } from './pastes.js';
+import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
 import {
@@ -342,6 +342,13 @@ export class SessionManager {
     const row = this.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     return { path: claudePath(savePastedImage(this.core.paths.pastes, row.id, data)) };
+  }
+
+  /** Saves a file of any type pasted into or dropped on the session's terminal, for the browser to paste its path. */
+  pasteFile(id: string, data: unknown, name: unknown): PastedImage {
+    const row = this.row(id);
+    if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    return { path: claudePath(savePastedFile(this.core.paths.pastes, row.id, data, name)) };
   }
 
   /** Saves an image added in the New session dialog, until a session is created with it. */

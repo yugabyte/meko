@@ -7,8 +7,9 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, type TermClientMessage, type TermServerMessage } from '../shared/types';
 import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
-import { copyText, decodeOsc52, pastedImages, readClipboardImages } from './clipboard';
+import { copyText, decodeOsc52, pastedFiles, readClipboardImages } from './clipboard';
 import { HeldImages, type HeldImage } from './heldImages';
+import { isPastableImage, mekoPlan, mekoSummary, pickFiles, type MekoResult } from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
   clampFont, ctrlSequence, decayVelocity, flingVelocity, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
@@ -197,12 +198,18 @@ class SessionTerminal {
    * which Claude Code reads as the image.
    */
   readonly held = new HeldImages<Blob>({
-    upload: async (image) => (await api.pasteImage(this.sessionId, image)).path,
-    thumb: (image) => URL.createObjectURL(image),
+    upload: async (b) => (isPastableImage(b) ? await api.pasteImage(this.sessionId, b) : await api.pasteFile(this.sessionId, b)).path,
+    thumb: (b) => (isPastableImage(b) ? URL.createObjectURL(b) : null),
+    name: (b) => (b instanceof File ? b.name : ''),
     revoke: (url) => URL.revokeObjectURL(url),
     onChange: () => this.listeners.forEach((l) => l()),
-    onError: (e) => this.showNotice(`Couldn’t add the image: ${errorMessage(e)}`, 6000),
+    onError: (e) => this.showNotice(`Couldn’t attach it: ${errorMessage(e)}`, 6000),
   });
+  /**
+   * Upload to Meko on the held files: `asking` while the strip asks to confirm, and the held ids
+   * being sent (they stay held, out of the next Enter's paths, until each is done).
+   */
+  meko: { asking: boolean; sending: ReadonlySet<number> } = { asking: false, sending: new Set() };
   /** Input typed while held images are being sent (non-null only then); it follows them. */
   private queued: string[] | null = null;
   /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
@@ -330,15 +337,15 @@ class SessionTerminal {
     this.listeners.forEach((l) => l());
   }
 
-  /** Holds images for Claude until the next Enter or Send; each starts uploading now. */
-  holdImages(images: Blob[]) {
-    if (!images.length) return;
-    if (images.some((i) => i.size > MAX_PASTE_BYTES)) {
-      const what = images.length === 1 ? 'the image' : 'the images';
-      this.showNotice(`Couldn’t add ${what}: images over ${MAX_PASTE_BYTES / 1024 / 1024} MB can’t be pasted.`, 6000);
+  /** Holds images and files for Claude until the next Enter or Send; each starts uploading now. */
+  holdFiles(files: Blob[]) {
+    if (!files.length) return;
+    if (files.some((i) => i.size > MAX_PASTE_BYTES)) {
+      const what = files.length === 1 ? 'it' : 'them';
+      this.showNotice(`Couldn’t attach ${what}: files over ${MAX_PASTE_BYTES / 1024 / 1024} MB can’t be attached.`, 6000);
       return;
     }
-    this.held.add(images);
+    this.held.add(files);
   }
 
   /** Held images are being sent: Send waits, and typed keys are queued. */
@@ -396,6 +403,8 @@ class SessionTerminal {
         if (this.notice === waiting) this.hideNotice();
       } else images = await this.held.ready();
       if (!images) return false;
+      // Files on their way to Meko aren't Claude's: they leave the strip once uploaded.
+      images = images.filter((i) => !this.meko.sending.has(i.id));
       const bracketed = this.term.modes.bracketedPasteMode;
       const pastes: { data: string; image?: HeldImage }[] = [
         ...(text ? [{ data: pasteText(text, bracketed) }] : []),
@@ -404,6 +413,8 @@ class SessionTerminal {
       for (const [i, p] of pastes.entries()) {
         // One paste at a time, so Claude Code makes each image path an [Image #N].
         if (i) await sleep(IMAGE_PASTE_GAP);
+        // Upload to Meko took it meanwhile: it's Meko's, not Claude's.
+        if (p.image && this.meko.sending.has(p.image.id)) continue;
         if (!this.send({ type: 'input', data: p.data })) return cutOff();
         sent = true;
         if (p.image) this.held.release([p.image]);
@@ -425,11 +436,11 @@ class SessionTerminal {
   }
 
   private onPaste = (e: ClipboardEvent) => {
-    const images = pastedImages(e.clipboardData);
-    if (!images.length) return; // text: xterm pastes it
+    const files = pastedFiles(e.clipboardData);
+    if (!files.length) return; // text: xterm pastes it
     e.preventDefault();
     e.stopPropagation();
-    this.holdImages(images);
+    this.holdFiles(files);
   };
 
   /**
@@ -439,7 +450,7 @@ class SessionTerminal {
   private async ctrlV() {
     const images = await readClipboardImages();
     if (images?.length) {
-      this.holdImages(images);
+      this.holdFiles(images);
       return;
     }
     this.send({ type: 'input', data: '\x16' });
@@ -452,14 +463,53 @@ class SessionTerminal {
     e.dataTransfer.dropEffect = 'copy';
   };
 
-  /** Images dropped on the terminal are held for Claude; the browser would otherwise open the file. */
+  /**
+   * Files dropped on the terminal, images or not, are held for Claude (by the paste's rule for text
+   * alongside them); the browser would otherwise open them.
+   */
   private onDrop = (e: DragEvent) => {
     if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
-    const images = pastedImages(e.dataTransfer);
-    if (images.length) this.holdImages(images);
-    else this.showNotice('Only images can be dropped here: PNG, JPEG, GIF or WebP.', 4000);
+    this.holdFiles(pastedFiles(e.dataTransfer));
   };
+
+  /** Shows or hides Upload to Meko's question in the strip. Not while an upload runs. */
+  askMeko(on: boolean) {
+    if (this.meko.sending.size) return;
+    this.meko = { ...this.meko, asking: on };
+    this.listeners.forEach((l) => l());
+  }
+
+  /**
+   * Upload to Meko: sends the held files the knowledge base takes, one at a time, to the project's
+   * datapack. Each one sent leaves the strip, so it doesn't go to Claude too; one that fails stays
+   * held. A notice sums it up.
+   */
+  async uploadToMeko() {
+    if (this.meko.sending.size || this.sending) return;
+    const items = mekoPlan(this.held.list).upload;
+    if (!items.length) return;
+    this.meko = { asking: false, sending: new Set(items.map((i) => i.id)) };
+    this.listeners.forEach((l) => l());
+    const results: MekoResult[] = [];
+    for (const item of items) {
+      const file = this.held.source(item.id);
+      // Taken out of the strip meanwhile: nothing to send.
+      if (file) {
+        try {
+          results.push({ name: item.name, upload: await api.uploadKnowledge(this.sessionId, file, item.name) });
+          this.held.remove(item.id);
+        } catch (e) {
+          results.push({ name: item.name, error: errorMessage(e) });
+        }
+      }
+      const sending = new Set(this.meko.sending);
+      sending.delete(item.id);
+      this.meko = { ...this.meko, sending };
+      this.listeners.forEach((l) => l());
+    }
+    if (results.length) this.showNotice(mekoSummary(results), results.some((r) => 'error' in r) ? 10000 : 6000);
+  }
 
   private setConn(c: TermConn, message: string | null = null, retrying = false) {
     this.conn = c;
@@ -1082,6 +1132,11 @@ export function getTerminal(sessionId: string): SessionTerminal {
 export function hasHeldImages(): boolean {
   for (const t of cache.values()) if (t.held.size) return true;
   return false;
+}
+
+/** Picks files to attach to the session (the way to drop them without dragging): held in its terminal's strip. */
+export function attachFiles(sessionId: string): void {
+  void pickFiles().then((files) => getTerminal(sessionId).holdFiles(files));
 }
 
 export function peekTerminal(sessionId: string): SessionTerminal | undefined {

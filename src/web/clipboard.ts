@@ -57,17 +57,26 @@ export interface Transfer<F> {
  * come with a picture of them), unless the text is only the files' names, as when copying files.
  */
 export function pastedImages<F extends { type: string; name?: string }>(dt: Transfer<F> | null | undefined): F[] {
-  const images = Array.from(dt?.files ?? []).filter((f) => f.type.startsWith('image/'));
-  if (!images.length) return [];
+  return onlyNamed(Array.from(dt?.files ?? []).filter((f) => f.type.startsWith('image/')), dt);
+}
+
+/** The files of any type in a paste or drop, by the same rule as `pastedImages` for text alongside them. */
+export function pastedFiles<F extends { type: string; name?: string }>(dt: Transfer<F> | null | undefined): F[] {
+  return onlyNamed(Array.from(dt?.files ?? []), dt);
+}
+
+/** `files`, unless the transfer's text is more than their names. */
+function onlyNamed<F extends { name?: string }>(files: F[], dt: Transfer<F> | null | undefined): F[] {
+  if (!files.length) return [];
   let text = '';
   try {
     text = dt?.getData?.('text/plain') ?? '';
   } catch {
     /* no text to read */
   }
-  const names = new Set(images.map((f) => f.name));
+  const names = new Set(files.map((f) => f.name));
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  return lines.every((l) => names.has(l)) ? images : [];
+  return lines.every((l) => names.has(l)) ? files : [];
 }
 
 /**

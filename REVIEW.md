@@ -88,7 +88,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       other route takes a non-JSON body. Images staged in the New session dialog
       (`POST /api/projects/:id/images`) are named by id only: `CreateSessionRequest.images` never
       takes a path, and an id is matched to the server's name pattern inside that project's
-      staging folder.
+      staging folder. Pasted files of other types (`POST /api/sessions/:id/files`) are size-capped
+      and saved owner-only under a name the server picks, keeping only the safe part of the
+      browser's name (`safeFileName()`), and are never served back.
+- [ ] Knowledge-base uploads (`POST /api/sessions/:id/knowledge`) go through the server, so the
+      Meko key never reaches the browser; the `application/octet-stream` parser (it and `/files`)
+      stays in its own scope, the name is a base name only, and nothing is sent to Meko before the
+      user confirms Upload to Meko's question, which names the datapack.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
@@ -204,7 +210,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
-      false) means no Meko calls at all. The one check that calls Meko by itself, trying Claude
+      false) means no Meko calls at all. The one poll is following a knowledge-base upload's
+      indexing (`KnowledgeService` in `knowledge.ts`): only after Meko answered `processing` with
+      a document key, every 5 s for a minute then every 30 s, at most 15 minutes per upload, never
+      with Meko off, stopped at an error waiting can't fix, and dropped on a Meko settings change.
+      The one check that calls Meko by itself, trying Claude
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
       session launch, after Claude Code's setup), in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.

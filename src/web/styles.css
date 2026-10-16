@@ -4429,11 +4429,12 @@ div[id^='dak-mermaid-'] .label {
   }
 }
 
-/* Images held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal on a
-   desktop, above the compose box on touch screens. */
+/* Images and files held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal
+   on a desktop, above the compose box on touch screens. Upload to Meko wraps under it when it asks. */
 .held-images {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 0 10px 6px;
@@ -4466,6 +4467,37 @@ div[id^='dak-mermaid-'] .label {
   background: var(--sunk);
 }
 .held.uploading img {
+  opacity: 0.45;
+}
+/* A held file that isn't an image: a wider tile with its extension, and its name cut to fit. */
+.held.file {
+  width: 96px;
+}
+.held-file {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: 0 6px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--sunk);
+  font-size: 10px;
+  color: var(--muted);
+}
+.held-file-ext {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.held-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.held.uploading .held-file {
   opacity: 0.45;
 }
 /* Uploading: a ring that spins when motion is allowed. */
@@ -4518,6 +4550,31 @@ div[id^='dak-mermaid-'] .label {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+/* Upload to Meko (MekoUpload.tsx): a button after the hint, and its question on a row of its own. */
+.held-meko {
+  flex: none;
+  font-size: 12px;
+}
+.held-meko-ask {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.held-meko-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+@media (pointer: coarse) {
+  .held-meko,
+  .held-meko-buttons .btn {
+    min-height: 36px;
+  }
 }
 /* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {

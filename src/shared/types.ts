@@ -1434,9 +1434,36 @@ export type ChangeSide = 'old' | 'new';
 /** The largest image that can be pasted into a terminal. Claude Code scales big images down itself. */
 export const MAX_PASTE_BYTES = 20 * 1024 * 1024;
 
-/** An image pasted into a session's terminal, saved on the host: the browser pastes this path for Claude. */
+/** An image or file pasted into (or dropped on) a session's terminal, saved on the host: the browser pastes this path for Claude. */
 export interface PastedImage {
   path: string;
+}
+
+/**
+ * The file extensions Meko's knowledge base takes, lower-case and without the dot: a copy of
+ * `uploadMimeByExt` in Meko's API server (internal/handlers/knowledge_base_handler.go). Meko checks
+ * the bytes against the extension itself.
+ */
+export const KB_UPLOAD_EXTS = ['pdf', 'txt', 'text', 'md', 'json', 'csv', 'xml', 'html', 'htm'] as const;
+
+/**
+ * The largest file the knowledge route takes: the ceiling of Meko's upload route (smaller plans get
+ * Meko's 413). Upload to Meko sends files held in a terminal's strip, which holds files up to
+ * MAX_PASTE_BYTES, so from the UI that's the limit.
+ */
+export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * POST /api/sessions/:id/knowledge: a file added to the knowledge base of the session's project
+ * datapack. `processing`: Meko is indexing it, and AgentK reports when it's done (a `knowledge`
+ * event). `uploaded`: Meko took it, but answered with no document key or a status AgentK doesn't
+ * know, so nothing more is reported. The others: Meko already had the same bytes.
+ */
+export interface KnowledgeUpload {
+  filename: string;
+  documentKey: string;
+  datapackName: string;
+  status: 'processing' | 'uploaded' | 'already_uploaded' | 'already_processed';
 }
 
 /** The most images a new session can start with. */
@@ -1913,6 +1940,12 @@ export interface TotpEnrollResponse {
 export type ServerEvent =
   | { type: 'state'; state: AppState }
   | { type: 'notify'; projectId: string; sessionId: string; title: string; body: string }
+  /**
+   * A file added to a session's knowledge base finished indexing (`indexed`), failed (`failed`), or
+   * AgentK stopped following it without an answer (`unknown`): still indexing after 15 minutes, or
+   * Meko refused to say (a refused key, no status route).
+   */
+  | { type: 'knowledge'; sessionId: string; filename: string; result: 'indexed' | 'failed' | 'unknown' }
   /** A project datapack was shared with you: sent once per datapack. */
   | { type: 'invite'; datapackId: string; title: string; body: string }
   /** The answer to a client's `ping`. */
@@ -2106,6 +2139,14 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
+// POST   /api/sessions/:id/files?name=  file bytes → PastedImage   (any file for Claude, as application/octet-stream,
+//        else 415; empty 400, over 20 MB 413, 409 for an archived session. Saved owner-only under
+//        ~/.agent-k-local/pastes/<session>/ with a name the server picks, ending in the safe part of `name`)
+// POST   /api/sessions/:id/knowledge?name=  file bytes → KnowledgeUpload   (the body is the file, as
+//        application/octet-stream, else 415; `name` is its base name, with an extension in KB_UPLOAD_EXTS, else 400;
+//        empty 400, over MAX_KB_UPLOAD_BYTES 413; 409 for an archived session, with Meko off, or a project with no
+//        dedicated datapack. Sent to Meko's knowledge-base upload route. Meko's 400, 403, 413 and 415 come back with
+//        their status; anything else Meko answers (a refused key included), or Meko unreachable, is a 502)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)
