@@ -197,32 +197,35 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 
 ## Adding files to the knowledge base
 
-Drop a PDF, TXT, Markdown, JSON, CSV, XML or HTML file on a session's terminal (or pick files with
-**Add to knowledge base…** in the ⋯ sheet or the command palette) and AgentK adds it to the
-knowledge base of the project's dedicated datapack. Images in the same drop are still held for
-Claude; any other file is named in a notice that says what can be dropped. The types are
-`KB_UPLOAD_EXTS`, a copy of `uploadMimeByExt` in Meko's API server, matched by extension in any
+Files dropped on or pasted into a session's terminal wait in the strip under it, held for Claude
+(see the paste and drop part of [The app](app.md)). While at least one of them is a PDF, TXT,
+Markdown, JSON, CSV, XML or HTML file, the strip offers **Upload to Meko**, which adds those to the
+knowledge base of the project's dedicated datapack (`MekoUpload.tsx`, `uploadToMeko()` in
+`terminals.ts`). It isn't offered with Meko off or a project with no dedicated datapack. The types
+are `KB_UPLOAD_EXTS`, a copy of `uploadMimeByExt` in Meko's API server, matched by extension in any
 case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
 
-- **Ask first.** The files wait on the session's terminal (`offerKnowledge()` in `terminals.ts`)
-  until a dialog (`KnowledgeUploadDialog.tsx`) names the datapack, says everyone with access to it
-  can find what's in them, and lists each file with its size; one over 50 MB, or empty, is listed as
-  skipped. Nothing is sent before **Upload**. With Meko off, or a project with no dedicated
-  datapack, no dialog opens: a notice says why and how to fix it.
+- **Ask first.** **Upload to Meko** asks in the strip before anything leaves: which files go, to
+  which datapack, that everyone with access to it can find what's in them, and which held files it
+  skips (`mekoAsk()` in `src/web/knowledge.ts`). Nothing is sent before **Upload**.
+- **Out of the strip.** Each file Meko takes leaves the strip, so it doesn't also go to Claude; one
+  that fails stays held, and a notice sums up what was added, what Meko already had and why any
+  failed. While they're sent they're left out of an Enter's paths. The state (`meko`: asking, and
+  the ids being sent) lives on the session's terminal, which outlasts its pane, so switching
+  sessions mid-upload and back shows it where it is, and a file can't be sent twice.
 - **Through the server.** The browser can't call Meko: the key never reaches it. **Upload** posts
   each file in turn to `POST /api/sessions/:id/knowledge?name=<file name>`, the raw bytes as
   `application/octet-stream`. That route's parser exists only in its own Fastify scope, as the image
   routes' does, so no other route takes a non-JSON body, and no HTML form can send that type.
   `KnowledgeService.upload()` (`src/server/knowledge.ts`) checks the session (409 archived), Meko
   (409 off), the project's dedicated datapack (409 none: the one the UI names, so a running session
-  after a switch still uploads where the dialog said), the name (its base name only, with a known
+  after a switch still uploads where the question said), the name (its base name only, with a known
   extension, else 400), and the body (400 empty, 413 over 50 MB, the route's ceiling in Meko). It
   doesn't look at the bytes: Meko checks them against the extension.
 - **Meko's route.** `MekoApi.uploadKnowledge()` posts `multipart/form-data` with a `file` part to
   `/datapacks/:id/knowledge-bases/upload` with the same key as MCP, and waits up to 2 minutes.
   Meko stores the file and starts indexing it, answering 202 `processing`, or 200
-  `already_uploaded` / `already_processed` for bytes it already has (shown as "Already in the
-  knowledge base"). An answer with no document key, or a status AgentK doesn't know, is
+  `already_uploaded` / `already_processed` for bytes it already has ("already there"). An answer with no document key, or a status AgentK doesn't know, is
   `uploaded`: shown as added, and not followed. Meko lets only the datapack's owner and maintainers upload. Its refusals come
   back in words: a 403 asks the owner for maintainer access; a 401 (or a key without write scope)
   points at the Meko tab; a 404 without Meko's envelope means a Meko without the route; Meko's own
@@ -238,7 +241,3 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   the knowledge base"). With Meko turned off it makes no more calls, and a change of Meko's URL or
   key (`mekoChanged()`) drops the list, saying nothing, since the documents may not be on the new
   Meko. The list is in memory only: a restart drops it too, and the files are in Meko all the same.
-- **The dialog's state** (each file's progress, whether an upload runs) lives on the session's
-  terminal with the files (`uploadKnowledge()` in `terminals.ts`), not in the dialog: the terminal
-  outlasts its pane, so switching sessions mid-upload and back shows the uploads where they are,
-  and they can't be sent twice.

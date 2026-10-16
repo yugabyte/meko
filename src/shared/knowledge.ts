@@ -9,6 +9,3 @@ export function isKnowledgeFile(name: string): boolean {
 
 /** The types the knowledge base takes, in words: "PDF, TXT, MD, …". */
 export const KB_TYPES_TEXT = 'PDF, TXT, Markdown, JSON, CSV, XML or HTML';
-
-/** The file picker's `accept` for knowledge-base files. */
-export const KB_ACCEPT = KB_UPLOAD_EXTS.map((e) => `.${e}`).join(',');

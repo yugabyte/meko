@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { knowledgeName, uploadError } from '../../src/server/knowledge.js';
 import { MekoApiError } from '../../src/server/mekoapi.js';
-import { MAX_KB_UPLOAD_BYTES } from '../../src/shared/types.js';
-import { batchSummary, knowledgeBatch, skippedNotice, sortDrop, type KnowledgeFileState } from '../../src/web/knowledge.js';
+import type { KnowledgeUpload } from '../../src/shared/types.js';
+import { mekoAsk, mekoPlan, mekoSummary, type MekoResult } from '../../src/web/knowledge.js';
 
 describe('knowledge-base files', () => {
   it.each([
@@ -41,21 +41,21 @@ describe('knowledge-base files', () => {
     expect(h.message).toMatch(message);
   });
 
-  it('sorts a drop into images for Claude, files for the knowledge base, and the rest', () => {
-    const f = (name: string) => ({ name });
-    const [png, md, pdf, zip] = [f('a.png'), f('notes.md'), f('spec.PDF'), f('x.zip')];
-    expect(sortDrop([png, md, pdf, zip], [png])).toEqual({ images: [png], knowledge: [md, pdf], other: [zip] });
-    expect(skippedNotice([zip])).toMatch(/^Skipped x\.zip\./);
-    expect(skippedNotice([zip, zip])).toMatch(/^Skipped 2 files\./);
+  it('splits held files into those Upload to Meko takes and those it skips, and asks before sending', () => {
+    const held = [{ name: 'notes.md' }, { name: '' }, { name: 'spec.PDF' }, { name: 'x.zip' }];
+    const plan = mekoPlan(held);
+    expect([plan.upload.map((h) => h.name), plan.skip.map((h) => h.name)]).toEqual([['notes.md', 'spec.PDF'], ['', 'x.zip']]);
+    const ask = mekoAsk(plan, 'adlc/proj/r/p');
+    expect(ask).toMatch(/^Upload notes\.md and spec\.PDF to adlc\/proj\/r\/p\? Everyone with access/);
+    expect(ask).toMatch(/It skips a pasted image and x\.zip:/);
+    expect(mekoAsk(mekoPlan([{ name: 'a.md' }]), 'dp')).not.toMatch(/skips/);
   });
 
-  it('keeps a batch\'s skipped files apart, and sums up what its uploads did', () => {
-    const f = (name: string, size = 10) => ({ name, size });
-    const b = knowledgeBatch([f('a.md'), f('empty.md', 0), f('big.pdf', MAX_KB_UPLOAD_BYTES + 1), f('b.md'), f('c.md'), f('d.md')]);
-    expect([b.files.map((x) => x.name), b.skipped.map((x) => x.name)]).toEqual([['a.md', 'b.md', 'c.md', 'd.md'], ['empty.md', 'big.pdf']]);
-    expect(batchSummary(b)).toBeNull();
-    const states: KnowledgeFileState[] = [{ at: 'indexing' }, { at: 'added' }, { at: 'already' }, { at: 'failed', error: 'no' }];
-    expect(batchSummary({ ...b, states })).toBe('2 files added to the knowledge base. Meko is indexing 1 of them. 1 file was already there. 1 file couldn’t be added.');
-    expect(batchSummary({ ...b, states: [{ at: 'added' }, { at: 'waiting' }, { at: 'waiting' }, { at: 'waiting' }] })).toBe('a.md added to the knowledge base.');
+  it('sums up an Upload to Meko: what was added, what Meko had, what failed and why', () => {
+    const up = (name: string, status: KnowledgeUpload['status']): MekoResult =>
+      ({ name, upload: { filename: name, documentKey: 'k', datapackName: 'dp', status } });
+    expect(mekoSummary([up('a.md', 'processing'), up('b.md', 'uploaded'), up('c.md', 'already_processed'), { name: 'd.pdf', error: 'Meko said no.' }]))
+      .toBe('a.md and b.md added to the knowledge base. Meko is indexing 1 of them. c.md was already there. Couldn’t add d.pdf: Meko said no.');
+    expect(mekoSummary([up('a.md', 'processing')])).toBe('a.md added to the knowledge base. Meko is indexing it.');
   });
 });

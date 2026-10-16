@@ -4429,38 +4429,12 @@ div[id^='dak-mermaid-'] .label {
   }
 }
 
-/* Files waiting to be added to the knowledge base (KnowledgeUploadDialog): name, size, then each one's result. */
-.kb-files {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.kb-files li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  min-width: 0;
-}
-.kb-files .kb-name {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.kb-files .skipped .kb-name {
-  color: var(--muted);
-}
-.kb-files .kb-error {
-  flex-basis: 100%;
-}
-
-/* Images held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal on a
-   desktop, above the compose box on touch screens. */
+/* Images and files held for Claude until the next Enter or Send (HeldImages.tsx): under the terminal
+   on a desktop, above the compose box on touch screens. Upload to Meko wraps under it when it asks. */
 .held-images {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 0 10px 6px;
@@ -4493,6 +4467,23 @@ div[id^='dak-mermaid-'] .label {
   background: var(--sunk);
 }
 .held.uploading img {
+  opacity: 0.45;
+}
+/* A held file that isn't an image: its extension on a tile the size of a thumbnail. */
+.held-file {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--sunk);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.held.uploading .held-file {
   opacity: 0.45;
 }
 /* Uploading: a ring that spins when motion is allowed. */
@@ -4545,6 +4536,31 @@ div[id^='dak-mermaid-'] .label {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+/* Upload to Meko (MekoUpload.tsx): a button after the hint, and its question on a row of its own. */
+.held-meko {
+  flex: none;
+  font-size: 12px;
+}
+.held-meko-ask {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.held-meko-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+@media (pointer: coarse) {
+  .held-meko,
+  .held-meko-buttons .btn {
+    min-height: 36px;
+  }
 }
 /* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {

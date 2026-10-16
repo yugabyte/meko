@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOsc52, pastedImages } from '../../src/web/clipboard.js';
+import { decodeOsc52, pastedFiles, pastedImages } from '../../src/web/clipboard.js';
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64');
 
@@ -26,6 +26,10 @@ describe('images pasted or dropped on the terminal', () => {
     expect(pastedImages(transfer([shot]))).toEqual([shot]);
     expect(pastedImages(transfer([shot, file('notes.txt', 'text/plain')]))).toEqual([shot]);
     expect(pastedImages(transfer([file('notes.txt', 'text/plain')]))).toEqual([]);
+    // The terminal takes every file; the New session dialog, images only.
+    const notes = file('notes.txt', 'text/plain');
+    expect(pastedFiles(transfer([shot, notes], 'image.png\nnotes.txt'))).toEqual([shot, notes]);
+    expect(pastedFiles(transfer([notes], 'some copied text'))).toEqual([]);
     expect(pastedImages(null)).toEqual([]);
     expect(pastedImages({ files: null })).toEqual([]);
   });

@@ -1,6 +1,7 @@
-// Images pasted into a session's terminal in the browser. Claude Code can't see the browser's
-// clipboard, so the image is saved on the host and its path is pasted instead: Claude Code reads
-// a pasted path to a .png, .jpg, .gif or .webp file as an attached image.
+// Images and files pasted into (or dropped on) a session's terminal in the browser. Claude Code
+// can't see the browser's clipboard, so each is saved on the host and its path is pasted instead:
+// Claude Code reads a pasted path to a .png, .jpg, .gif or .webp file as an attached image, and
+// Claude opens any other file by its path with its Read tool.
 //
 // Images added in the New session dialog come before there's a session: they're staged under the
 // project (`.new/<project>/`, which no session id can be) and moved into the session's folder when
@@ -68,6 +69,35 @@ function writeImage(dir: string, image: { data: Buffer; ext: string }, now: Date
   const stamp = now.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   const path = join(dir, `${stamp}-${randomBytes(4).toString('hex')}.${image.ext}`);
   writeFileSync(path, image.data, { mode: 0o600, flag: 'wx' });
+  return path;
+}
+
+/**
+ * A pasted file's name made safe to keep in its saved name: no folders, only letters, digits,
+ * dots, dashes and underscores (so the path pastes as one word), at most 60 characters, never
+ * starting with a dot. Empty when nothing of it is left.
+ */
+export function safeFileName(name: unknown): string {
+  if (typeof name !== 'string') return '';
+  const base = name.split(/[/\\]/).pop() ?? '';
+  return base.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').slice(-60).replace(/^[.-]+/, '');
+}
+
+/**
+ * Saves a file pasted into or dropped on a session's terminal, of any type, and returns its path.
+ * The server picks the name (a time stamp and random part, then the safe part of the file's own
+ * name, so Claude sees what it was); the folders and file are the owner's alone. Never served back.
+ */
+export function savePastedFile(root: string, sessionId: string, data: unknown, name: unknown, now = new Date()): string {
+  if (!Buffer.isBuffer(data)) throw new HttpError(415, "Send the file's bytes as the body, as application/octet-stream.");
+  if (!data.length) throw new HttpError(400, 'The file was empty.');
+  if (data.length > MAX_PASTE_BYTES) throw new HttpError(413, `That file is over ${MAX_PASTE_BYTES / 1024 / 1024} MB. Attach a smaller one.`);
+  const dir = pasteDir(root, sessionId);
+  ownDirs(root, dir);
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const safe = safeFileName(name);
+  const path = join(dir, `${stamp}-${randomBytes(4).toString('hex')}${safe ? `-${safe}` : ''}`);
+  writeFileSync(path, data, { mode: 0o600, flag: 'wx' });
   return path;
 }
 

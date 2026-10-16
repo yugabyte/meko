@@ -1,74 +1,59 @@
 import { KB_TYPES_TEXT, isKnowledgeFile } from '../shared/knowledge';
-import { MAX_KB_UPLOAD_BYTES, type KnowledgeUpload, type ServerEvent } from '../shared/types';
+import type { KnowledgeUpload, ServerEvent } from '../shared/types';
 
-/**
- * Where one file for the knowledge base is: not sent yet, sending, in Meko (`indexing`: AgentK
- * reports when it's done; `added`: Meko took it with nothing to follow; `already`: Meko had it), or refused.
- */
-export type KnowledgeFileState =
-  | { at: 'waiting' }
-  | { at: 'sending' }
-  | { at: 'indexing' }
-  | { at: 'added' }
-  | { at: 'already' }
-  | { at: 'failed'; error: string };
+/** The image types the host takes as images (checked by their bytes there): anything else held is a file. */
+const PASTABLE_IMAGES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
-/**
- * Files waiting on a session's terminal to be added to the knowledge base: the ones that can go,
- * each with where it is, and the ones skipped (empty, or over the limit). Kept on the terminal, which
- * outlasts its pane, so a dialog opened again shows the uploads still running.
- */
-export interface KnowledgeBatch<F extends { name: string; size: number } = File> {
-  files: F[];
-  states: KnowledgeFileState[];
-  skipped: F[];
-  /** An upload is running: the batch can't be closed or sent again. */
-  busy: boolean;
+/** Whether a held blob goes up as an image (Claude Code attaches it) rather than as a file. */
+export function isPastableImage(b: { type: string }): boolean {
+  return PASTABLE_IMAGES.includes(b.type);
 }
 
-/** A batch for these files, none sent yet. */
-export function knowledgeBatch<F extends { name: string; size: number }>(files: F[]): KnowledgeBatch<F> {
-  const fits = files.filter((f) => f.size > 0 && f.size <= MAX_KB_UPLOAD_BYTES);
-  return { files: fits, states: fits.map(() => ({ at: 'waiting' })), skipped: files.filter((f) => !fits.includes(f)), busy: false };
+/** A held file's extension for its tile ("PDF", "MD"), or "FILE" when its name has none. */
+export function fileBadge(name: string): string {
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1) : '';
+  return ext && ext.length <= 5 ? ext.toUpperCase() : 'FILE';
 }
 
-/** Where a file is once the server answered its upload. */
-export function uploadedState(r: KnowledgeUpload): KnowledgeFileState {
-  return { at: r.status === 'processing' ? 'indexing' : r.status === 'uploaded' ? 'added' : 'already' };
+/** Which held files Upload to Meko takes (`upload`: a type the knowledge base takes) and which it skips. */
+export function mekoPlan<T extends { name: string }>(held: readonly T[]): { upload: T[]; skip: T[] } {
+  return { upload: held.filter((h) => isKnowledgeFile(h.name)), skip: held.filter((h) => !isKnowledgeFile(h.name)) };
 }
 
-/** The terminal notice once a batch's uploads are over: what was added, what was there, what failed. Null when none went. */
-export function batchSummary(b: KnowledgeBatch<{ name: string; size: number }>): string | null {
-  const count = (at: KnowledgeFileState['at']) => b.states.filter((s) => s.at === at).length;
-  const nFiles = (n: number) => (n === 1 ? '1 file' : `${n} files`);
-  const indexing = count('indexing');
-  const added = indexing + count('added');
-  const already = count('already');
-  const failed = count('failed');
+/** "notes.md", "notes.md and spec.pdf", "3 files". */
+export function fileList(names: string[]): string {
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.length} files`;
+}
+
+/** The question Upload to Meko asks before anything leaves: what goes, where, who can find it, and what it skips. */
+export function mekoAsk(plan: { upload: { name: string }[]; skip: { name: string }[] }, datapack: string): string {
+  const skip = plan.skip.length
+    ? ` It skips ${fileList(plan.skip.map((s) => s.name || 'a pasted image'))}: the knowledge base takes ${KB_TYPES_TEXT} files.`
+    : '';
+  return `Upload ${fileList(plan.upload.map((u) => u.name))} to ${datapack}? Everyone with access to the datapack can find what's in ${plan.upload.length === 1 ? 'it' : 'them'}.${skip}`;
+}
+
+/** One file's Upload to Meko: the server's answer, or why it failed. */
+export type MekoResult = { name: string; upload: KnowledgeUpload } | { name: string; error: string };
+
+/** The terminal notice once Upload to Meko is over: what was added, what Meko already had, what failed and why. */
+export function mekoSummary(results: MekoResult[]): string {
+  const ok = results.filter((r): r is { name: string; upload: KnowledgeUpload } => 'upload' in r);
+  const failed = results.filter((r): r is { name: string; error: string } => 'error' in r);
+  const added = ok.filter((r) => r.upload.status === 'processing' || r.upload.status === 'uploaded');
+  const there = ok.filter((r) => !added.includes(r));
+  const indexing = added.filter((r) => r.upload.status === 'processing').length;
   const parts: string[] = [];
-  if (added) {
-    const what = added === 1 ? b.files[b.states.findIndex((s) => s.at === 'indexing' || s.at === 'added')].name : nFiles(added);
-    const them = indexing === added ? (added === 1 ? 'it' : 'them') : `${indexing} of them`;
-    parts.push(`${what} added to the knowledge base.${indexing ? ` Meko is indexing ${them}.` : ''}`);
+  if (added.length) {
+    const them = indexing === added.length ? (added.length === 1 ? 'it' : 'them') : `${indexing} of them`;
+    parts.push(`${fileList(added.map((r) => r.name))} added to the knowledge base.${indexing ? ` Meko is indexing ${them}.` : ''}`);
   }
-  if (already) parts.push(`${nFiles(already)} ${already === 1 ? 'was' : 'were'} already there.`);
-  if (failed) parts.push(`${nFiles(failed)} couldn’t be added.`);
-  return parts.length ? parts.join(' ') : null;
-}
-
-/**
- * Files dropped on a terminal, sorted: `images` (as `pastedImages` found them) are held for Claude,
- * `knowledge` files can go to the knowledge base, and `other` can go nowhere.
- */
-export function sortDrop<F extends { name: string }>(files: F[], images: F[]): { images: F[]; knowledge: F[]; other: F[] } {
-  const rest = files.filter((f) => !images.includes(f));
-  return { images, knowledge: rest.filter((f) => isKnowledgeFile(f.name)), other: rest.filter((f) => !isKnowledgeFile(f.name)) };
-}
-
-/** The notice for dropped files that can go nowhere: what was skipped, and what can be dropped. */
-export function skippedNotice(other: { name: string }[]): string {
-  const what = other.length === 1 ? other[0].name : `${other.length} files`;
-  return `Skipped ${what}. Drop images for Claude, or ${KB_TYPES_TEXT} files for the knowledge base.`;
+  if (there.length) parts.push(`${fileList(there.map((r) => r.name))} ${there.length === 1 ? 'was' : 'were'} already there.`);
+  if (failed.length) parts.push(`Couldn’t add ${fileList(failed.map((r) => r.name))}: ${failed[0].error}`);
+  return parts.join(' ');
 }
 
 /** What the terminal says when a file added to the knowledge base is done indexing (a `knowledge` event). */
@@ -78,19 +63,12 @@ export function knowledgeNotice(ev: Extract<ServerEvent, { type: 'knowledge' }>)
   return `AgentK couldn’t tell whether Meko indexed ${ev.filename}. Search the knowledge base for it later.`;
 }
 
-/** Human-readable size: "820 B", "14 KB", "3.2 MB". */
-export function fileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
 /** Opens the browser's file picker (from a click or tap) and resolves with what was picked; nothing on cancel. */
-export function pickFiles(accept: string): Promise<File[]> {
+export function pickFiles(accept = ''): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = accept;
+    if (accept) input.accept = accept;
     input.multiple = true;
     input.addEventListener('change', () => resolve(Array.from(input.files ?? [])));
     input.addEventListener('cancel', () => resolve([]));

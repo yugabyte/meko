@@ -88,11 +88,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       other route takes a non-JSON body. Images staged in the New session dialog
       (`POST /api/projects/:id/images`) are named by id only: `CreateSessionRequest.images` never
       takes a path, and an id is matched to the server's name pattern inside that project's
-      staging folder.
+      staging folder. Pasted files of other types (`POST /api/sessions/:id/files`) are size-capped
+      and saved owner-only under a name the server picks, keeping only the safe part of the
+      browser's name (`safeFileName()`), and are never served back.
 - [ ] Knowledge-base uploads (`POST /api/sessions/:id/knowledge`) go through the server, so the
-      Meko key never reaches the browser; the route's `application/octet-stream` parser stays in
-      its own scope, the name is a base name only, and nothing is sent to Meko before the user
-      confirms the dialog that names the datapack.
+      Meko key never reaches the browser; the `application/octet-stream` parser (it and `/files`)
+      stays in its own scope, the name is a base name only, and nothing is sent to Meko before the
+      user confirms Upload to Meko's question, which names the datapack.
 - [ ] Repo files served to the browser (image previews) are limited to image types inside the
       worktree or base commit, and carry the sandboxing content policy.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no

@@ -487,10 +487,12 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     // One added in the New session dialog, before there's a session: kept under the project until one starts with it.
     scope.post<{ Params: { id: string } }>('/api/projects/:id/images', async (req): Promise<StagedImage> => core.sessions.stageImage(req.params.id, req.body));
   });
-  // A file added to the session's knowledge base: the body is the file. As with images, its parser
-  // lives only in this scope; application/octet-stream is a type no HTML form can send.
+  // A file for Claude, or for the session's knowledge base: the body is the file. As with images,
+  // the parser lives only in this scope; application/octet-stream is a type no HTML form can send.
   await app.register(async (scope) => {
     scope.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_KB_UPLOAD_BYTES }, (_req, body, done) => done(null, body));
+    scope.post<{ Params: { id: string }; Querystring: { name?: string } }>('/api/sessions/:id/files',
+      async (req): Promise<PastedImage> => core.sessions.pasteFile(req.params.id, req.body, req.query.name));
     scope.post<{ Params: { id: string }; Querystring: { name?: string } }>('/api/sessions/:id/knowledge',
       async (req): Promise<KnowledgeUpload> => core.knowledge.upload(req.params.id, req.query.name, req.body));
   });

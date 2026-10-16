@@ -16,7 +16,7 @@ import { copyText } from '../clipboard';
 import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
-import { disposeTerminal, pickKnowledge } from '../terminals';
+import { disposeTerminal } from '../terminals';
 import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
@@ -26,7 +26,7 @@ import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
 import { ShareDialog } from './ShareDialog';
-import { TerminalPane, type KnowledgeTarget } from './TerminalPane';
+import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
 
 /** Where this browser keeps the Review a PR sessions whose PR's design it has opened by itself. */
@@ -191,12 +191,8 @@ export function ProjectView({
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
   const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
-  // Files dropped on the terminal (or picked from the ⋯ sheet) go to the dedicated datapack's knowledge base.
-  const knowledge: KnowledgeTarget = !meko.configured
-    ? { off: 'Meko is off. Turn it on on the Meko tab in Settings to add files to a knowledge base.' }
-    : dedicated
-      ? { datapack: dedicated.name }
-      : { off: 'This project has no datapack. Give it one on its home page to add files to a knowledge base.' };
+  // Files held in the terminal's strip can go to the dedicated datapack's knowledge base (Upload to Meko).
+  const mekoTo = dedicated && meko.configured ? dedicated.name : null;
   const goHome = () => navigate({ view: 'home', projectId: project.id });
 
   // A session in another repo than the project's names it first.
@@ -379,7 +375,7 @@ export function ProjectView({
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} knowledge={knowledge} />
+          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} mekoTo={mekoTo} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>
@@ -481,7 +477,6 @@ export function ProjectView({
           onMekoCalls={project.settings.mekoLog ? () => navigate({ view: 'meko', projectId: project.id, sessionId: session.id }) : undefined}
           onMove={() => onMove()}
           onRename={() => onRename(session.id)}
-          onKnowledge={'datapack' in knowledge ? () => pickKnowledge(session.id) : undefined}
           onAct={act}
           onClose={() => setSheet(false)}
         />

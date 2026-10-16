@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { pastedImages } from '../clipboard';
+import { pastedFiles } from '../clipboard';
 import { BAR_KEYS, MORE_KEYS, insertedChar, type BarKey } from '../keys';
 import type { SessionTerminal } from '../terminals';
 import { cx, keepFocus } from '../util';
 import { HeldImages } from './HeldImages';
+import { MekoUpload } from './MekoUpload';
 
 const draftKey = (id: string) => `ak-compose-${id}`;
 
@@ -45,10 +46,11 @@ function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKe
 
 /**
  * For touch screens: keys a phone keyboard lacks, and a compose box that gets the phone's
- * autocorrect, dictation and paste. Images (pasted into the box, or picked with the image key in the
- * ▾ row) wait above the box and go with the message. The terminal font size is in the session sheet.
+ * autocorrect, dictation and paste. Images and files (pasted into the box, or picked with the attach key
+ * in the ▾ row) wait above the box and go with the message. The terminal font size is in the session sheet.
  */
-export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal; sessionId: string; disabled: boolean }) {
+/** `mekoTo`: the datapack Upload to Meko sends held files to, or null when there's none (Meko off, or no datapack). */
+export function TermKeys({ term, sessionId, disabled, mekoTo }: { term: SessionTerminal; sessionId: string; disabled: boolean; mekoTo: string | null }) {
   const [text, setText] = useState(() => readDraft(sessionId));
   /** The row of more keys (Ctrl, Esc, Shift+Tab…) is open. */
   const [more, setMore] = useState(false);
@@ -162,20 +164,18 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           {MORE_KEYS.map((k) => (
             <SendKey key={k.key} term={term} k={k} disabled={disabled} />
           ))}
-          {/* A phone has no paste or drop of images into the terminal: pick them instead. */}
+          {/* A phone has no paste or drop of files into the terminal: pick them instead. */}
           <button
             className="key"
-            title="Paste an image for Claude"
-            aria-label="Paste an image for Claude"
+            title="Attach an image or file for Claude"
+            aria-label="Attach an image or file for Claude"
             disabled={disabled}
             onPointerDown={keepFocus}
             onMouseDown={keepFocus}
             onClick={() => picker.current?.click()}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <circle cx="9" cy="10" r="1.6" />
-              <path d="M21 16l-5-5-9 9" />
+              <path d="M21 12.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8.5-8.5" />
             </svg>
           </button>
         </div>
@@ -184,20 +184,19 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
       <input
         ref={picker}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp,image/*"
         multiple
         hidden
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
-          // Cleared, so picking the same image again still fires a change.
+          // Cleared, so picking the same file again still fires a change.
           e.target.value = '';
           if (!files.length) return;
-          term.holdImages(files);
+          term.holdFiles(files);
           // Picked: the row has done its job, so give the terminal its space back.
           setMore(false);
         }}
       />
-      <HeldImages held={term.held} hint="sent with your message" />
+      <HeldImages held={term.held} hint="sent with your message" actions={mekoTo && <MekoUpload term={term} datapack={mekoTo} />} />
       <form
         className="compose"
         onSubmit={(e) => {
@@ -222,11 +221,11 @@ export function TermKeys({ term, sessionId, disabled }: { term: SessionTerminal;
           autoCorrect={term.ctrl ? 'off' : undefined}
           autoCapitalize={term.ctrl ? 'none' : undefined}
           onPaste={(e) => {
-            // Images wait above the box and go with the message; text pastes into the box as usual.
-            const images = pastedImages(e.clipboardData);
-            if (!images.length) return;
+            // Images and files wait above the box and go with the message; text pastes into the box as usual.
+            const files = pastedFiles(e.clipboardData);
+            if (!files.length) return;
             e.preventDefault();
-            term.holdImages(images);
+            term.holdFiles(files);
           }}
           onChange={(e) => {
             const next = e.target.value;

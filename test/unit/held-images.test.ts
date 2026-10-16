@@ -9,7 +9,9 @@ function setup() {
   let changes = 0;
   const held = new HeldImages<string>({
     upload: (name) => new Promise((resolve, reject) => pending.set(name, { resolve, reject })),
-    thumb: (name) => `blob:${name}`,
+    // A file that isn't an image has no preview.
+    thumb: (name) => (name.endsWith('.png') ? `blob:${name}` : null),
+    name: (name) => name,
     revoke: (url) => revoked.push(url),
     onChange: () => changes++,
     onError: (e) => errors.push(e),
@@ -34,11 +36,17 @@ function setup() {
 describe('held images', () => {
   it('upload as they are added, and show which are done', async () => {
     const t = setup();
-    t.held.add(['a.png', 'b.png']);
-    expect(t.held.list.map((i) => [i.thumb, i.path])).toEqual([
-      ['blob:a.png', null],
-      ['blob:b.png', null],
+    t.held.add(['a.png', 'b.png', 'notes.md']);
+    expect(t.held.list.map((i) => [i.thumb, i.name, i.path])).toEqual([
+      ['blob:a.png', 'a.png', null],
+      ['blob:b.png', 'b.png', null],
+      [null, 'notes.md', null],
     ]);
+    // What each one is stays at hand (Upload to Meko sends it), until it's taken out; a file has no preview to revoke.
+    const notes = t.held.list[2].id;
+    expect(t.held.source(notes)).toBe('notes.md');
+    t.held.remove(notes);
+    expect([t.held.source(notes), t.revoked]).toEqual([undefined, []]);
     expect(t.held.uploading).toBe(true);
     await t.finish('b.png');
     await t.finish('a.png');

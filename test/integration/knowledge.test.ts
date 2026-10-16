@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
@@ -68,6 +69,27 @@ describe('adding files to a knowledge base', () => {
     // Meko's refusal comes back (worded by uploadError, tested on its own).
     env.mekoApi.handle(() => ({ status: 403, body: { error: { code: 'FORBIDDEN', message: 'forbidden' } } }));
     expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(403);
+  });
+
+  it('saves a file of any type for Claude, behind the login, owner-only, and only as raw bytes', async () => {
+    const p = await project('files');
+    session(p.id, 'sf');
+    const attach = (name: string, payload: Buffer | string | object, headers: Record<string, string> = {}) =>
+      app.inject({
+        method: 'POST', url: `/api/sessions/sf/files?name=${encodeURIComponent(name)}`,
+        headers: { cookie, 'content-type': 'application/octet-stream', ...headers }, payload,
+      });
+    expect((await attach('a.zip', Buffer.from('PK'), { cookie: '' })).statusCode).toBe(401);
+    expect((await attach('a.zip', Buffer.from('PK'), { origin: 'https://evil.example' })).statusCode).toBe(403);
+    expect((await attach('a.zip', { path: '/etc/passwd' }, { 'content-type': 'application/json' })).statusCode).toBe(415);
+    const ok = await attach('../a b.zip', Buffer.from('PK'));
+    expect(ok.statusCode).toBe(200);
+    const path: string = ok.json().path;
+    expect(path.startsWith(join(env.core.paths.pastes, 'sf') + '/')).toBe(true);
+    expect(path).toMatch(/-a-b\.zip$/);
+    expect([readFileSync(path, 'utf8'), statSync(path).mode & 0o777]).toEqual(['PK', 0o600]);
+    // Nothing went to Meko.
+    expect(env.mekoApi.calls).toEqual([]);
   });
 
   it('refuses with no datapack, with Meko off, and for an archived session', async () => {

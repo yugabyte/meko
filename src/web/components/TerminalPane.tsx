@@ -5,21 +5,15 @@ import { getTerminal, screenLabel } from '../terminals';
 import { AskBar } from './AskSheet';
 import { Busy } from './common';
 import { HeldImages } from './HeldImages';
-import { KnowledgeUploadDialog } from './KnowledgeUploadDialog';
+import { MekoUpload } from './MekoUpload';
 import { StartupPanel } from './StartupPanel';
 import { TermKeys } from './TermKeys';
 
 /**
- * Where files for the knowledge base go: the project's dedicated datapack, or why they can't go
- * anywhere (Meko is off, or the project has no datapack).
- */
-export type KnowledgeTarget = { datapack: string } | { off: string };
-
-/**
  * `onAsk` opens the questions Claude is asking (Session.asking), offered in a bar above the terminal.
- * `knowledge` says where files dropped for the knowledge base go.
+ * `mekoTo` is the datapack the held files' Upload to Meko sends to: null hides it (Meko off, or no datapack).
  */
-export function TerminalPane({ session, onAsk, knowledge }: { session: Session; onAsk?: () => void; knowledge: KnowledgeTarget }) {
+export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onAsk?: () => void; mekoTo: string | null }) {
   const { id: sessionId, status } = session;
   const hostRef = useRef<HTMLDivElement>(null);
   const [, rerender] = useReducer((x: number) => x + 1, 0);
@@ -47,14 +41,6 @@ export function TerminalPane({ session, onAsk, knowledge }: { session: Session; 
     if (prevStatus.current === 'exited' && status !== 'exited') term.reconnect();
     prevStatus.current = status;
   }, [status, term]);
-
-  // Files for the knowledge base with nowhere to go: say why, and drop them.
-  const kbOff = 'off' in knowledge ? knowledge.off : null;
-  useEffect(() => {
-    if (!term.knowledge || !kbOff) return;
-    term.dropKnowledge();
-    term.showNotice(kbOff, 6000);
-  }, [term, term.knowledge, kbOff]);
 
   // While waiting for the session, count down to the move each second.
   const waiting = term.conn === 'open' && term.screen === 'waiting';
@@ -120,17 +106,9 @@ export function TerminalPane({ session, onAsk, knowledge }: { session: Session; 
           <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
         )}
       </div>
-      {term.knowledge && 'datapack' in knowledge && (
-        <KnowledgeUploadDialog
-          datapackName={knowledge.datapack}
-          batch={term.knowledge}
-          onUpload={() => void term.uploadKnowledge()}
-          onClose={() => term.closeKnowledge()}
-        />
-      )}
-      {/* Touch screens show held images above the compose box instead. */}
-      {!touch && <HeldImages held={term.held} hint="sent with your next Enter" />}
-      {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} />}
+      {/* Touch screens show held images and files above the compose box instead. */}
+      {!touch && <HeldImages held={term.held} hint="sent with your next Enter" actions={mekoTo && <MekoUpload term={term} datapack={mekoTo} />} />}
+      {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} mekoTo={mekoTo} />}
     </div>
   );
 }

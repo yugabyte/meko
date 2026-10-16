@@ -1434,7 +1434,7 @@ export type ChangeSide = 'old' | 'new';
 /** The largest image that can be pasted into a terminal. Claude Code scales big images down itself. */
 export const MAX_PASTE_BYTES = 20 * 1024 * 1024;
 
-/** An image pasted into a session's terminal, saved on the host: the browser pastes this path for Claude. */
+/** An image or file pasted into (or dropped on) a session's terminal, saved on the host: the browser pastes this path for Claude. */
 export interface PastedImage {
   path: string;
 }
@@ -2135,6 +2135,9 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
+// POST   /api/sessions/:id/files?name=  file bytes → PastedImage   (any file for Claude, as application/octet-stream,
+//        else 415; empty 400, over 20 MB 413, 409 for an archived session. Saved owner-only under
+//        ~/.agent-k-local/pastes/<session>/ with a name the server picks, ending in the safe part of `name`)
 // POST   /api/sessions/:id/knowledge?name=  file bytes → KnowledgeUpload   (the body is the file, as
 //        application/octet-stream, else 415; `name` is its base name, with an extension in KB_UPLOAD_EXTS, else 400;
 //        empty 400, over MAX_KB_UPLOAD_BYTES 413; 409 for an archived session, with Meko off, or a project with no

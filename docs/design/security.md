@@ -38,7 +38,7 @@ their own copy.
   `SameSite=Strict` cookie (`Secure` over HTTPS) that lasts 14 days, renewed as you use the app.
   Changing the password signs out every other browser. Access checks key on the route a request
   matched, so an encoded path (`/%61pi/…`) gets the same checks as `/api/…`. The API only takes
-  JSON bodies, so a plain HTML form can't post to it; the routes that take a file (pasted images,
+  JSON bodies, so a plain HTML form can't post to it; the routes that take a file (pasted images and files,
   knowledge-base uploads) parse `image/*` or `application/octet-stream`, types a form can't send,
   each only in its own scope. Every WebSocket upgrade checks the cookie (or
   local access) and refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
