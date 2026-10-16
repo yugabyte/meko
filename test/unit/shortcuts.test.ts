@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { railWidthSaved } from '../../src/web/rail.js';
+import { railCollapsedSaved, railWidthSaved } from '../../src/web/rail.js';
 import { actionFor, assign, bindingProblem, changedBindings, defaultBindings, eventBinding, formatBinding, mergeBindings } from '../../src/web/shortcuts.js';
 
 const press = (key: string, code: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean } = {}) => ({
@@ -86,7 +86,7 @@ describe('keyboard shortcuts', () => {
   });
 });
 
-describe('projects pane width', () => {
+describe('projects pane', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it.each([
@@ -101,5 +101,15 @@ describe('projects pane width', () => {
   ])('reads a stored %s as %s', (stored, width) => {
     vi.stubGlobal('localStorage', { getItem: () => stored });
     expect(railWidthSaved()).toBe(width);
+  });
+
+  it.each([
+    [null, []],
+    ['junk', []],
+    ['{"a":1}', []],
+    ['["p1", 7, "p2"]', ['p1', 'p2']],
+  ])('reads stored folded projects %s as %o', (stored, ids) => {
+    vi.stubGlobal('localStorage', { getItem: () => stored });
+    expect([...railCollapsedSaved()]).toEqual(ids);
   });
 });

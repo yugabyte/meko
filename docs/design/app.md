@@ -8,7 +8,10 @@ screen, use **Move up** / **Move down** in the project home's settings. Each pro
 are listed under it in the rail, oldest first, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage, so many show at once and any can be opened with one click,
 in any project. The session on screen is highlighted (its project's name turns bold instead), and
-**+ New session** follows the sessions of the project on screen. The rail is 248 px wide so the
+**+ New session** follows each project's list (the project on screen shows it even with no
+sessions). The ▾ at the right of a project's row folds its list away and ▸ brings it back; a folded
+project keeps its dot and count, and takes the highlight when the session on screen is in it. Which
+projects are folded is kept in this browser (`ak-rail-collapsed`). The rail is 248 px wide so the
 names have room. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
 diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking

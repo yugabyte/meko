@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import { STAGE_LABELS, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
-import { RAIL_DEFAULT, clampRailWidth } from '../rail';
+import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import { ariaBinding, shortcutLabel } from '../shortcuts';
 import type { ThemePref } from '../theme';
 import { aggregateDot, cx, dotState, formatTokens, isMac, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
@@ -83,6 +83,15 @@ export function Rail({
   const [resizing, setResizing] = useState(false);
   const mod = isMac() ? '⌘' : 'Ctrl+';
   const listRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(railCollapsedSaved);
+  const fold = (id: string) => {
+    const next = new Set(collapsed);
+    if (!next.delete(id)) next.add(id);
+    // Projects closed since are dropped, so the list doesn't grow forever.
+    for (const c of next) if (!projects.some((p) => p.id === c)) next.delete(c);
+    setCollapsed(next);
+    saveRailCollapsed(next);
+  };
   useEffect(() => {
     listRef.current?.querySelector('.rail-sess.sel')?.scrollIntoView({ block: 'nearest' });
   }, [currentSessionId]);
@@ -121,45 +130,63 @@ export function Rail({
           const sessions = openSessions(p);
           const count = sessions.length;
           const current = p.id === currentId;
+          const listed = count > 0 || current;
+          const folded = listed && collapsed.has(p.id);
           // The project row is highlighted only when none of its sessions is: one highlight at a time.
-          const sessionShown = current && sessions.some((s) => s.id === currentSessionId);
+          const sessionShown = current && !folded && sessions.some((s) => s.id === currentSessionId);
           return (
             <Fragment key={p.id}>
-              <button
-                className={cx('proj', current && (sessionShown ? 'cur' : 'sel'), overId === p.id && dragId !== p.id && (dropAfter(p.id) ? 'drop-after' : 'drop-target'))}
-                onClick={() => onSelect(p)}
-                aria-current={current && !sessionShown ? 'page' : undefined}
-                draggable={!touch}
-                onDragStart={(e) => {
-                  setDragId(p.id);
-                  e.dataTransfer.effectAllowed = 'move';
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setOverId(p.id);
-                }}
-                onDragLeave={() => setOverId((o) => (o === p.id ? null : o))}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  drop(p.id);
-                  setDragId(null);
-                  setOverId(null);
-                }}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setOverId(null);
-                }}
-                title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
-              >
-                {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
-                <span className="proj-text">
-                  <span className="proj-name">{p.name}</span>
-                  <span className="proj-repo">{repoFolder(p.repoPath)}</span>
-                </span>
-                <span className="n">{count}</span>
-              </button>
-              {(count > 0 || current) && (
-                <div className="rail-sessions" role="group" aria-label={`Sessions in ${p.name}`}>
+              <div className={cx('proj-row', listed && 'foldable')}>
+                <button
+                  className={cx('proj', current && (sessionShown ? 'cur' : 'sel'), overId === p.id && dragId !== p.id && (dropAfter(p.id) ? 'drop-after' : 'drop-target'))}
+                  onClick={() => onSelect(p)}
+                  aria-current={current && !sessionShown ? 'page' : undefined}
+                  draggable={!touch}
+                  onDragStart={(e) => {
+                    setDragId(p.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setOverId(p.id);
+                  }}
+                  onDragLeave={() => setOverId((o) => (o === p.id ? null : o))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    drop(p.id);
+                    setDragId(null);
+                    setOverId(null);
+                  }}
+                  onDragEnd={() => {
+                    setDragId(null);
+                    setOverId(null);
+                  }}
+                  title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
+                >
+                  {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
+                  <span className="proj-text">
+                    <span className="proj-name">{p.name}</span>
+                    <span className="proj-repo">{repoFolder(p.repoPath)}</span>
+                  </span>
+                  <span className="n">{count}</span>
+                </button>
+                {listed && (
+                  <button
+                    className="proj-fold"
+                    onClick={() => fold(p.id)}
+                    aria-expanded={!folded}
+                    aria-controls={`rail-sessions-${p.id}`}
+                    aria-label={`${folded ? 'Show' : 'Hide'} the sessions in ${p.name}`}
+                    title={folded ? 'Show sessions' : 'Hide sessions'}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d={folded ? 'M9 6l6 6-6 6' : 'M6 9l6 6 6-6'} />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              {listed && !folded && (
+                <div className="rail-sessions" id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
                   {sessions.map((s) => (
                     <button
                       key={s.id}
@@ -174,11 +201,9 @@ export function Rail({
                       <span className="stchip">{STAGE_LABELS[s.stage]}</span>
                     </button>
                   ))}
-                  {current && (
-                    <button className="rail-sess rail-sess-new" onClick={() => onNewSession(p.id)}>
-                      + New session
-                    </button>
-                  )}
+                  <button className="rail-sess rail-sess-new" onClick={() => onNewSession(p.id)}>
+                    + New session
+                  </button>
                 </div>
               )}
             </Fragment>
