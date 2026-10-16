@@ -855,3 +855,44 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "userSplit.storageGid must equal podSecurityContext.fsGroup"
+
+  - it: renders no tolerations or topology spread constraints by default
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.tolerations
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+
+  - it: renders tolerations and topology spread constraints verbatim
+    template: templates/deployment.yaml
+    set:
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: amp
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              amp.yugabyte.com/cluster-id: c1
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: dedicated
+              operator: Equal
+              value: amp
+              effect: NoSchedule
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  amp.yugabyte.com/cluster-id: c1

@@ -160,7 +160,9 @@ the default branch's set is also mirrored on the cluster); a branch's `fork_lsn`
 `connectivity_allowed_cidrs`. A branch also
 reports its `pg_settings` and `write_token_settings`, an endpoint its
 `pg_settings`, `pageserver_settings`, `safekeeper_settings` and
-`extended_config` — see [below](#settings-are-reported-whole). A branch and an
+`extended_config` — see [below](#settings-are-reported-whole) — and its
+`tolerations` and `topology_spread_constraints`, each a JSON array written on every
+tick (`[]` when none, so absent means an older agent). A branch and an
 endpoint also report `applied_generation` — see below.
 The connectivity pair is the observed counterpart of the `connectivity` spec field:
 the mode is one [endpoints cannot converge](#what-an-endpoint-spec-can-declare-and-not-get),
@@ -440,8 +442,14 @@ pod, where most `pg_settings` reload in place.
 
 ### What an endpoint spec can declare and not get
 
-An endpoint converges `resources`, its three settings surfaces and
-`connectivity.allowed_cidrs`. What is left over — `connectivity.mode`, `role`, `tags`,
+An endpoint converges `resources`, its three settings surfaces,
+`connectivity.allowed_cidrs`, `tolerations` and `topology_spread_constraints`. The
+last two go through `updateEndpointScheduling`, which re-renders the release and so
+**recreates the pod**; it is issued after a CIDR change and before a resize, each a
+task of its own, and a declared list is sent only when it differs from the row's. Both
+are **BYOC only**: YCP refuses either, on an endpoint or a `with_writer` cluster
+spec, in every write to a MANAGED environment (registration included), whose nodes
+are Yugabyte's. What is left over — `connectivity.mode`, `role`, `tags`,
 `extended_config` — is permanent drift on an **existing** endpoint, named in the
 resource's `Error`. Omitting a field leaves it unmanaged.
 

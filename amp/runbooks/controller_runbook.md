@@ -87,7 +87,7 @@ Three failure modes, three different next moves:
 |---|---|---|
 | `CrashLoopBackOff` / `restartCount` climbing | a process inside the container exits non-zero on start. Since #960 this no longer covers "bootstrap took too long" — the kubelet does not kill a container inside its startup budget — so this is a real non-zero exit, e.g. the supervisor's own `BRANCH_ACTIVE_TIMEOUT` (180s) firing | container logs (step 3) |
 | `Running` but `READY 0/1`, `restartCount=0` | **usually still bootstrapping.** The startupProbe suspends liveness until the compute first listens, so a slow bootstrap now sits here rather than crash-looping (#960). Check the container log for progress before treating it as stuck; only once the startup budget is spent is the readiness probe the thing to chase | container logs; then the service behind the readiness probe; SC registration |
-| `ContainerCreating` / `Pending` | image pull, scheduling, PVC binding — including `Insufficient ephemeral-storage`, which means the pool cannot back this endpoint's 20 GiB/vCPU data volume (a 32-vCPU endpoint asks for 640 GiB; size the node pool's local SSDs to match). On a test cluster, pin a flat size instead: `controller.endpoint.diskSizeOverride=10Gi` | events; `describe pod` |
+| `ContainerCreating` / `Pending` | image pull, scheduling (after a scheduling change, see [Endpoint `Pending` after a scheduling change](#endpoint-pending-after-a-scheduling-change)), PVC binding — including `Insufficient ephemeral-storage`, which means the pool cannot back this endpoint's 20 GiB/vCPU data volume (a 32-vCPU endpoint asks for 640 GiB; size the node pool's local SSDs to match). On a test cluster, pin a flat size instead: `controller.endpoint.diskSizeOverride=10Gi` | events; `describe pod` |
 
 Confirm with the container's terminated state:
 ```bash
@@ -533,6 +533,29 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   predating the meko#492 validation (`select config->>'memory' from
   amp_registry.endpoints where id = '<ep>'`). Pass an explicit `memory` (e.g.
   `"4Gi"`) with the resize.
+
+## Endpoint `Pending` after a scheduling change
+
+An `update_endpoint_scheduling` task failed on the helm wait, and the endpoint's
+pod is `Pending` with a `FailedScheduling` event (`didn't match pod topology
+spread constraints`, `had untolerated taint`).
+
+The release has the new lists, but the task persists only after a successful
+wait, so `GET` on the endpoint (and the YCP agent's attrs) still shows the old
+ones. The chart's `Recreate` strategy has already removed the old pod, so the
+endpoint is down. Nothing rolls back on its own.
+
+- **Restore what the pod had:** `POST …/endpoints/<ep>/scheduling` with the
+  lists `GET` shows. That re-renders from them and recreates the pod where it
+  ran before.
+- **Keep the change, make it satisfiable:** relax `whenUnsatisfiable` to
+  `ScheduleAnyway`, or add the toleration the target pool needs, and resend.
+
+On a YCP environment, fix the desired spec instead; the agent resends it.
+
+**Logs missing for endpoints on tainted nodes.** The OTel logs daemonset has to
+tolerate the same taints, or nothing collects logs on those nodes. Set
+`otel.logsTolerations` on the `yb-amp-controller` release to match.
 
 ## `409` on `POST /endpoint-upgrades` — a roll in flight, or nothing to roll
 

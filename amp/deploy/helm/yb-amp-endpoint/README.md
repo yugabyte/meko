@@ -136,6 +136,7 @@ leaves out `pg_stat_statements`. See
 | `metrics.postgresExporter.extraArgs` | `[]` | extra exporter flags, beyond the `--no-collector.database` / `--collector.stat_statements` the template sets |
 | `persistence.storageClass` | _(empty)_ | back `/data` with a PVC of this class (EBS/PD); empty ⇒ `emptyDir` |
 | `persistence.size` | `10Gi` | PVC size when `persistence.storageClass` is set |
+| `tolerations` / `topologySpreadConstraints` | `[]` / `[]` | the pod's tolerations and spread constraints, verbatim; the controller sets both per endpoint from the endpoint API. A spread constraint must select other endpoints' pods (e.g. by `amp.yugabyte.com/cluster-id`), since each endpoint is a single-pod release |
 | `podSecurityContext.fsGroup` | `1000` | pod fsGroup (the image's run-as gid) so a provisioned PVC is writable |
 | `supervisor.maxRestarts` / `restartWindowSeconds` / `restartBackoffSeconds` | `5` / `60` / `2` | in-pod restart policy |
 

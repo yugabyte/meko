@@ -148,7 +148,8 @@ type Locking interface{ Lock() ResourceLock }
 ```
 
 `create_endpoint`, `resize_endpoint`, `update_endpoint_connectivity`,
-`upgrade_endpoint`, `rerender_endpoint` and `delete_endpoint` declare
+`update_endpoint_scheduling`, `upgrade_endpoint`, `rerender_endpoint` and
+`delete_endpoint` declare
 `endpoint:<endpoint-id>`. The declarations sit together in `locks.go`
 rather than one per step file, so what serializes against what is answerable from
 one place.
@@ -173,6 +174,9 @@ needs intent locks on the branch and cluster above the endpoints:
 With `upgrade_endpoint` that gap can also make a row lie: a fan-out redeploying from
 a pre-upgrade snapshot puts the endpoint back on the old version while
 `endpoints.version` reads the new one, and both tasks succeed, so no replay runs.
+`update_endpoint_scheduling` has the same hole: the fan-out can put back the
+tolerations and spread constraints of its snapshot while `config` holds the new
+ones.
 
 **The owner names the unit of work, not the process.** `pglease` grants
 unconditionally to the current holder, so two units in one process sharing a

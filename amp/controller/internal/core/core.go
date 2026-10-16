@@ -24,8 +24,10 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -267,6 +269,9 @@ type Endpoint struct {
 	// cluster_ip.
 	Connectivity string
 	AllowedCIDRs []string
+	// Scheduling is the endpoint's own pod tolerations and topology spread
+	// constraints, as stored.
+	Scheduling Scheduling
 	// IngressDNSName is the name allocated to an ingress_* endpoint, read from
 	// its live allocation; empty for every other mode. Only a qualified name
 	// (deploy.PublishableDNSName) is published, and the documentdb gateway is
@@ -350,6 +355,79 @@ type EndpointDeploy struct {
 	// here because a redeploy renders from this record alone, and a dropped label
 	// is one helm strips from the live objects.
 	Labels map[string]string
+	// Scheduling carries the endpoint's tolerations and spread constraints into
+	// a redeploy, which renders from this record alone: dropped here, helm would
+	// strip them from the pod on the next fleet roll.
+	Scheduling Scheduling
+}
+
+// Scheduling is an endpoint's own pod scheduling rules: Kubernetes
+// `tolerations` and `topologySpreadConstraints` lists, each as canonical JSON in
+// Kubernetes' shape. The API validates and canonicalises them; below it they are
+// opaque and rendered verbatim into the pod spec. Nil means none.
+type Scheduling struct {
+	Tolerations               json.RawMessage
+	TopologySpreadConstraints json.RawMessage
+}
+
+// Config keys the scheduling lists are stored under in endpoints.config. The
+// SQL projections in pg.go and provision.go spell them literally.
+const (
+	ConfigTolerations               = "tolerations"
+	ConfigTopologySpreadConstraints = "topology_spread_constraints"
+)
+
+// schedulingConfigPatch splits an update into the config keys to remove (lists
+// given empty) and the object to merge over what remains (lists given
+// non-empty). A nil list is in neither, so it keeps its stored value.
+func schedulingConfigPatch(sch Scheduling) (drop []string, set []byte, err error) {
+	merge := map[string]json.RawMessage{}
+	for key, v := range map[string]json.RawMessage{
+		ConfigTolerations:               sch.Tolerations,
+		ConfigTopologySpreadConstraints: sch.TopologySpreadConstraints,
+	} {
+		switch {
+		case v == nil:
+		case IsEmptyJSONList(v):
+			drop = append(drop, key)
+		default:
+			merge[key] = v
+		}
+	}
+	sort.Strings(drop)
+	if drop == nil {
+		drop = []string{}
+	}
+	set, err = json.Marshal(merge)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal endpoint scheduling: %w", err)
+	}
+	return drop, set, nil
+}
+
+// Apply is UpdateEndpointScheduling's merge as a value: a nil list in patch
+// keeps s's, an empty one clears it.
+func (s Scheduling) Apply(patch Scheduling) Scheduling {
+	pick := func(old, v json.RawMessage) json.RawMessage {
+		switch {
+		case v == nil:
+			return old
+		case IsEmptyJSONList(v):
+			return nil
+		default:
+			return v
+		}
+	}
+	return Scheduling{
+		Tolerations:               pick(s.Tolerations, patch.Tolerations),
+		TopologySpreadConstraints: pick(s.TopologySpreadConstraints, patch.TopologySpreadConstraints),
+	}
+}
+
+// IsEmptyJSONList reports whether v is a JSON list with no items.
+func IsEmptyJSONList(v json.RawMessage) bool {
+	var l []json.RawMessage
+	return json.Unmarshal(v, &l) == nil && len(l) == 0
 }
 
 // DefaultBranchName is the name given to a cluster's default (root) branch. The

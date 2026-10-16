@@ -378,11 +378,19 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			"password applies to the writer created by with_writer; set with_writer, or create the endpoint separately"))}, nil
 	}
+	if !withWriter && (request.Body.Tolerations != nil || request.Body.TopologySpreadConstraints != nil) {
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"tolerations and topology_spread_constraints apply to the writer created by with_writer; set with_writer, or create the endpoint separately"))}, nil
+	}
 	var cpu, memory, connectivity, verifier string
 	var allowedCIDRs []string
+	var scheduling core.Scheduling
 	var apiErr *Error
 	if withWriter {
 		if connectivity, allowedCIDRs, apiErr = endpointConnectivity(request.Body.Connectivity, c.prov.Deployer); apiErr != nil {
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
+		}
+		if scheduling, apiErr = endpointScheduling(request.Body.Tolerations, request.Body.TopologySpreadConstraints, c.prov.Deployer); apiErr != nil {
 			return CreateCluster400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
 		}
 		oCPU, oMem, errMsg := parseResourceOverrides(request.Body.Resources)
@@ -433,6 +441,9 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		Extensions:       exts,
 		PasswordVerifier: verifier,
 		Tags:             tags,
+
+		Tolerations:               scheduling.Tolerations,
+		TopologySpreadConstraints: scheduling.TopologySpreadConstraints,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create cluster task: %w", err)
@@ -1197,6 +1208,12 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	if err := validateTags(tags); err != nil {
 		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", err.Error()))}, nil
 	}
+	var scheduling core.Scheduling
+	if request.Body != nil {
+		if scheduling, apiErr = endpointScheduling(request.Body.Tolerations, request.Body.TopologySpreadConstraints, c.prov.Deployer); apiErr != nil {
+			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
+		}
+	}
 
 	// Plan the work as an async task and return 202 + the Task. The endpoint row,
 	// its deploy, and the address record are all created by the worker's
@@ -1218,6 +1235,9 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		AllowedCIDRs:       allowedCIDRs,
 		PasswordVerifier:   verifier,
 		Tags:               tags,
+
+		Tolerations:               scheduling.Tolerations,
+		TopologySpreadConstraints: scheduling.TopologySpreadConstraints,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -1537,6 +1557,47 @@ func (c *Controllers) UpdateEndpointConnectivity(ctx context.Context, request Up
 		slog.Any("allowed_cidrs", cidrs))
 
 	return UpdateEndpointConnectivity202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
+// UpdateEndpointScheduling plans the replacement of an endpoint's tolerations
+// and/or topology spread constraints, validated by the create path's rules.
+func (c *Controllers) UpdateEndpointScheduling(ctx context.Context, request UpdateEndpointSchedulingRequestObject) (UpdateEndpointSchedulingResponseObject, error) {
+	if c.prov.Deployer == nil {
+		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
+	}
+	if request.Body == nil || (request.Body.Tolerations == nil && request.Body.TopologySpreadConstraints == nil) {
+		return UpdateEndpointScheduling400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"send tolerations and/or topology_spread_constraints; [] clears one"))}, nil
+	}
+	scheduling, apiErr := endpointScheduling(request.Body.Tolerations, request.Body.TopologySpreadConstraints, c.prov.Deployer)
+	if apiErr != nil {
+		return UpdateEndpointScheduling400JSONResponse{BadRequestJSONResponse(*apiErr)}, nil
+	}
+	if _, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId); errors.Is(err, core.ErrNotFound) {
+		return UpdateEndpointScheduling404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("get endpoint: %w", err)
+	}
+
+	t, err := c.tasks.UpdateEndpointScheduling(ctx, task.UpdateEndpointSchedulingInput{
+		ClusterID:                 request.ClusterId,
+		EndpointID:                request.EndpointId,
+		Tolerations:               scheduling.Tolerations,
+		TopologySpreadConstraints: scheduling.TopologySpreadConstraints,
+		YCPGeneration:             request.Body.YcpGeneration,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update endpoint scheduling task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "update endpoint scheduling task accepted",
+		slog.String(applog.KeyEndpointID, request.EndpointId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()))
+
+	return UpdateEndpointScheduling202JSONResponse{AcceptedJSONResponse{
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
@@ -2155,6 +2216,7 @@ func endpointToAPI(e core.Endpoint, gatewayReachable bool) Endpoint {
 		}
 		out.Connectivity = &conn
 	}
+	out.Tolerations, out.TopologySpreadConstraints = schedulingToAPI(e.Scheduling)
 	// The gateway is a sidecar in this endpoint's pod, so it answers on the
 	// endpoint's own host — but only where that host publishes it. Decided by
 	// the caller; here it is just "report it or not", plus the endpoint having

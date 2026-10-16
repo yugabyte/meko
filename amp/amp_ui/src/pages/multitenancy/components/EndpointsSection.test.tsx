@@ -96,6 +96,50 @@ describe("EndpointsSection", () => {
     expect(createEndpoint.mock.calls.at(-1)![3].password).toBe("hunter2hunter2");
   });
 
+  // Scheduling is opt-in: an untouched section sends neither list, so the
+  // controller's defaults (no tolerations, no spread) apply.
+  it("sends no scheduling fields unless some were set", async () => {
+    createEndpoint.mockResolvedValueOnce(endpoint);
+    renderSection();
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: "hunter2hunter2" } });
+    fireEvent.click(provisionBtn());
+
+    await waitFor(() => expect(createEndpoint).toHaveBeenCalled());
+    const body = createEndpoint.mock.calls.at(-1)![3];
+    expect(body).not.toHaveProperty("tolerations");
+    expect(body).not.toHaveProperty("topology_spread_constraints");
+  });
+
+  it("sends a spread constraint selecting this cluster", async () => {
+    createEndpoint.mockResolvedValueOnce(endpoint);
+    renderSection();
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: "hunter2hunter2" } });
+    fireEvent.click(screen.getByRole("button", { name: /scheduling \(advanced\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add spread constraint/i }));
+    fireEvent.click(provisionBtn());
+
+    await waitFor(() => expect(createEndpoint).toHaveBeenCalled());
+    const body = createEndpoint.mock.calls.at(-1)![3];
+    expect(body.topology_spread_constraints).toEqual([
+      {
+        maxSkew: 1,
+        topologyKey: "topology.kubernetes.io/zone",
+        whenUnsatisfiable: "ScheduleAnyway",
+        labelSelector: { matchLabels: { "amp.yugabyte.com/cluster-id": "cluster-1" } },
+      },
+    ]);
+    expect(body).not.toHaveProperty("tolerations");
+  });
+
+  it("blocks provisioning while the scheduling rules are invalid", () => {
+    renderSection();
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: "hunter2hunter2" } });
+    fireEvent.click(screen.getByRole("button", { name: /scheduling \(advanced\)/i }));
+    // A blank toleration has an empty key with operator Equal.
+    fireEvent.click(screen.getByRole("button", { name: /add toleration/i }));
+    expect(provisionBtn().disabled).toBe(true);
+  });
+
   // The compute's user lives in the branch's catalog, so only the writer sets
   // its password and the controller rejects one on a replica. With a writer
   // already present the form forces read-only, so the field goes away and the

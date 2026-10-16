@@ -1085,6 +1085,50 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/scheduling:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+      - $ref: '#/components/parameters/EndpointId'
+    post:
+      tags: [endpoints]
+      operationId: updateEndpointScheduling
+      summary: Replace an endpoint's tolerations / topology spread constraints
+      description: |
+        Plans an asynchronous `update_endpoint_scheduling` task that replaces the
+        lists given in the body and re-renders the endpoint's release, so the pod
+        is **recreated** under the new scheduling rules — clients are
+        disconnected, as on an upgrade. An omitted list is left as it is; `[]`
+        clears it. The lists are persisted only once the re-render has
+        succeeded, so a render the Kubernetes API server refuses leaves `GET`
+        as it was. A render it accepts whose pod never becomes ready fails the
+        task with the new lists already applied and `GET` still reporting the
+        old ones; resend the lists to recover. Returns `202` + the `Task` with
+        a `Location` header.
+
+        Validated as on create (`400`). Two in flight for one endpoint run one
+        after the other, under the endpoint lock, the later one winning.
+        A non-empty list needs the Kubernetes deploy driver
+        (`400 unsupported_scheduling` otherwise); `501` if deployment is off.
+        `404` if the pool / cluster / branch / endpoint does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEndpointSchedulingRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /endpoint-upgrades:
     post:
       tags: [endpoints]
@@ -2167,6 +2211,22 @@ components:
             controller whose endpoints apply a password, since that writer is the
             new root branch's first, and refused without `with_writer` for the
             same reason `connectivity` is.
+        tolerations:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/Toleration'
+          description: |
+            The writer's tolerations, as `createEndpoint`'s. Refused without
+            `with_writer`, like `connectivity`.
+        topology_spread_constraints:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/TopologySpreadConstraint'
+          description: |
+            The writer's topology spread constraints, as `createEndpoint`'s.
+            Refused without `with_writer`, like `connectivity`.
         engine:
           type: string
           enum: [postgres, aidb, oracle, sqlserver, documentdb]
@@ -2475,6 +2535,21 @@ components:
             The endpoint's client reachability, as stored. Absent for endpoints
             created before connectivity was configurable, which behave as
             `cluster_ip`.
+        tolerations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Toleration'
+          description: |
+            The tolerations on this endpoint's pod, as stored; absent when none
+            were set. Applied alongside the controller's own scheduling
+            configuration (`--deploy-node-selector`), never instead of it.
+        topology_spread_constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopologySpreadConstraint'
+          description: |
+            The topology spread constraints on this endpoint's pod, as stored;
+            absent when none were set.
         pageserver_settings:
           $ref: '#/components/schemas/DaemonSettings'
           description: This endpoint's pageserver overrides, as stored.
@@ -2881,6 +2956,27 @@ components:
           $ref: '#/components/schemas/EndpointResources'
         connectivity:
           $ref: '#/components/schemas/EndpointConnectivity'
+        tolerations:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/Toleration'
+          description: |
+            Kubernetes tolerations for the endpoint's pod, in Kubernetes' own
+            shape, e.g. to let it schedule onto a tainted dedicated pool. They
+            permit scheduling onto matching taints, they do not steer the pod
+            there. Change later with updateEndpointScheduling.
+        topology_spread_constraints:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/TopologySpreadConstraint'
+          description: |
+            Kubernetes topology spread constraints for the endpoint's pod. Each
+            endpoint is its own single-pod Deployment, so a constraint has an
+            effect only when its `labelSelector` matches OTHER endpoints' pods —
+            e.g. `amp.yugabyte.com/cluster-id: <id>` to spread a cluster's
+            endpoints across zones. Change later with updateEndpointScheduling.
         tags:
           allOf:
             - $ref: '#/components/schemas/Tags'
@@ -3062,6 +3158,121 @@ components:
             the deployment has source filtering on, an `ingress_*` one.
         ycp_generation:
           $ref: '#/components/schemas/YCPGenerationApplied'
+
+    UpdateEndpointSchedulingRequest:
+      type: object
+      description: |
+        Request to replace an existing endpoint's tolerations and/or topology
+        spread constraints. Each list given replaces the stored one whole; an
+        omitted list is left as it is, and `[]` clears it.
+      properties:
+        tolerations:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/Toleration'
+        topology_spread_constraints:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/TopologySpreadConstraint'
+        ycp_generation:
+          $ref: '#/components/schemas/YCPGenerationApplied'
+
+    Toleration:
+      type: object
+      description: |
+        A Kubernetes pod toleration (core/v1 `Toleration`), field names as
+        Kubernetes spells them. Validated by the same rules the API server
+        applies, so a bad one is a 400 here rather than a failed deploy.
+      properties:
+        key:
+          type: string
+          description: 'Taint key. Empty with `operator: Exists` tolerates every taint.'
+        operator:
+          type: string
+          enum: [Exists, Equal]
+          description: Defaults to `Equal`. `Exists` must not carry a `value`.
+        value:
+          type: string
+        effect:
+          type: string
+          enum: [NoSchedule, PreferNoSchedule, NoExecute, ""]
+          x-enum-varnames: [NoSchedule, PreferNoSchedule, NoExecute, AnyEffect]
+          description: Omitted or empty matches every effect.
+        tolerationSeconds:
+          type: integer
+          format: int64
+          description: 'Only with `effect: NoExecute`.'
+
+    TopologySpreadConstraint:
+      type: object
+      required: [maxSkew, topologyKey, whenUnsatisfiable, labelSelector]
+      description: |
+        A Kubernetes topology spread constraint (core/v1
+        `TopologySpreadConstraint`), field names as Kubernetes spells them.
+        `labelSelector` is required here though optional in Kubernetes: without
+        one the constraint matches no pods and does nothing. Endpoint pods carry
+        `amp.yugabyte.com/endpoint-id`, `branch-id`, `cluster-id`,
+        `storage-pool-id` and `ep-type`, plus their tags.
+      properties:
+        maxSkew:
+          type: integer
+          format: int32
+          minimum: 1
+        topologyKey:
+          type: string
+          minLength: 1
+          description: A node label, e.g. `topology.kubernetes.io/zone`.
+        whenUnsatisfiable:
+          type: string
+          enum: [DoNotSchedule, ScheduleAnyway]
+        labelSelector:
+          $ref: '#/components/schemas/LabelSelector'
+        minDomains:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 'Only with `whenUnsatisfiable: DoNotSchedule`.'
+        nodeAffinityPolicy:
+          type: string
+          enum: [Honor, Ignore]
+        nodeTaintsPolicy:
+          type: string
+          enum: [Honor, Ignore]
+        matchLabelKeys:
+          type: array
+          items:
+            type: string
+
+    LabelSelector:
+      type: object
+      description: A Kubernetes label selector (meta/v1 `LabelSelector`).
+      properties:
+        matchLabels:
+          type: object
+          additionalProperties:
+            type: string
+        matchExpressions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LabelSelectorRequirement'
+
+    LabelSelectorRequirement:
+      type: object
+      required: [key, operator]
+      properties:
+        key:
+          type: string
+          minLength: 1
+        operator:
+          type: string
+          enum: [In, NotIn, Exists, DoesNotExist]
+        values:
+          type: array
+          items:
+            type: string
+          description: Required for `In`/`NotIn`, refused for `Exists`/`DoesNotExist`.
 
     FleetVersion:
       type: object

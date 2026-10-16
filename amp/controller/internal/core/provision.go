@@ -305,7 +305,8 @@ const endpointDeploySelect = `SELECT e.id::text, e.branch_id::text, eb.cluster_i
 	        COALESCE(ish.hostname, ''), COALESCE(ish.record_type::text, ''),
 	        ec.tags || e.tags, ec.storage_pool_id::text, esp.name,
 	        ec.name, eb.name, COALESCE(e.name, ''),
-	        COALESCE(e.config->>'dns_name', '')
+	        COALESCE(e.config->>'dns_name', ''),
+	        e.config->'tolerations', e.config->'topology_spread_constraints'
 	   FROM amp_registry.endpoints e
 	   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
 	   JOIN amp_registry.clusters ec ON ec.id = eb.cluster_id
@@ -327,7 +328,8 @@ func scanEndpointDeploy(ctx context.Context, r scanRow) (EndpointDeploy, error) 
 		&d.Connectivity, &cidrsRaw, &extsRaw,
 		&d.IngressShard, &d.IngressPort, &d.IngressDNSName, &d.IngressShardHost, &d.IngressRecordType,
 		&labelsRaw, &poolID, &d.StoragePoolName,
-		&d.ClusterName, &d.BranchName, &d.Name, &d.DNSName); err != nil {
+		&d.ClusterName, &d.BranchName, &d.Name, &d.DNSName,
+		&d.Scheduling.Tolerations, &d.Scheduling.TopologySpreadConstraints); err != nil {
 		return EndpointDeploy{}, err
 	}
 	// Failed rather than tolerated like the two below: rendering without the

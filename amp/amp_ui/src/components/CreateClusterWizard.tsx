@@ -41,7 +41,9 @@ import {
 import { DB_ENGINES, EngineField, engineExtensions } from "@/components/ui/engine-field";
 import { ExtensionsField, useExtensionOptions } from "@/components/ui/extensions-field";
 import { useCreateClusterWithWriter } from "@/lib/api/queries";
+import { SchedulingSection } from "@/components/ui/scheduling-field";
 import { isValidMemory } from "@/lib/compute";
+import { buildScheduling, EMPTY_SCHEDULING, STORAGE_POOL_ID_LABEL } from "@/lib/scheduling";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY, type StoragePool } from "@/lib/api/types";
 
@@ -70,6 +72,8 @@ export function CreateClusterWizard({
   const [connectivity, setConnectivity] = useState<Connectivity>(DEFAULT_CONNECTIVITY);
   // The password for the writer's compute user. Required.
   const [password, setPassword] = useState("");
+  const [scheduling, setScheduling] = useState(EMPTY_SCHEDULING);
+  const builtScheduling = buildScheduling(scheduling);
 
   const navigate = useNavigate();
   const createCluster = useCreateClusterWithWriter();
@@ -85,6 +89,7 @@ export function CreateClusterWizard({
       setSize({ cpu: DEFAULT_ENDPOINT_CPU, memory: DEFAULT_ENDPOINT_MEMORY });
       setConnectivity(DEFAULT_CONNECTIVITY);
       setPassword("");
+      setScheduling(EMPTY_SCHEDULING);
     }
   }, [open]);
 
@@ -102,8 +107,13 @@ export function CreateClusterWizard({
     step === 0
       ? Boolean(trimmedName && poolId)
       : step === 2
-        ? Boolean(size.cpu.trim()) && isValidMemory(size.memory) && password.length > 0
+        ? Boolean(size.cpu.trim()) &&
+          isValidMemory(size.memory) &&
+          password.length > 0 &&
+          builtScheduling.ok
         : true;
+  const tolerations = builtScheduling.ok ? builtScheduling.value.tolerations : [];
+  const spread = builtScheduling.ok ? builtScheduling.value.topology_spread_constraints : [];
 
   function create() {
     // One composite call: the controller creates the cluster, its `main` branch,
@@ -122,6 +132,8 @@ export function CreateClusterWizard({
         // Required, and the Compute step will not advance without one, so it is
         // always a real value here.
         password,
+        tolerations,
+        topologySpreadConstraints: spread,
       },
       {
         onSuccess: () => {
@@ -145,7 +157,7 @@ export function CreateClusterWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Create cluster</DialogTitle>
           <DialogDescription>
@@ -246,6 +258,13 @@ export function CreateClusterWizard({
                   <p className="text-[11px] text-muted-foreground">{msg.passwordHint}</p>
                 </div>
               </div>
+              {/* The cluster has no id yet, so a new spread constraint selects
+                  the pool's endpoints instead. */}
+              <SchedulingSection
+                value={scheduling}
+                onChange={setScheduling}
+                defaultSelector={{ [STORAGE_POOL_ID_LABEL]: poolId }}
+              />
             </div>
           )}
 
@@ -271,6 +290,12 @@ export function CreateClusterWizard({
                 }
                 mono={connectivity.mode !== "cluster_ip"}
               />
+              {(tolerations.length > 0 || spread.length > 0) && (
+                <ReviewRow
+                  k="Scheduling"
+                  v={`${tolerations.length} toleration${tolerations.length === 1 ? "" : "s"} · ${spread.length} spread constraint${spread.length === 1 ? "" : "s"}`}
+                />
+              )}
             </div>
           )}
         </div>

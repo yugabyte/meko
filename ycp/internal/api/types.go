@@ -317,8 +317,10 @@ type ResourceStatus struct {
 	// endpoint's role, address, tailnet_address, documentdb_address, cpu, memory,
 	// connectivity_mode and connectivity_allowed_cidrs. A branch also reports its
 	// pg_settings and write_token_settings, an endpoint its pg_settings,
-	// pageserver_settings, safekeeper_settings and extended_config. Empty when the
-	// backend has none.
+	// pageserver_settings, safekeeper_settings and extended_config, and its
+	// tolerations and topology_spread_constraints — each one JSON ARRAY, "[]" when
+	// none, with the same absent-means-older-agent rule. Empty when the backend
+	// has none.
 	//
 	// Each settings surface is one JSON OBJECT, keys sorted, written whole rather
 	// than flattened per setting. Whole because that is the unit desired state

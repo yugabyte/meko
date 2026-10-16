@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,7 +32,15 @@ func TestEndpointSpecFromRendersEveryField(t *testing.T) {
 		IngressShardHost: "lb-0.example", IngressRecordType: "CNAME",
 		DNSName: "yb-ep-1.db.example.com",
 		Labels:  map[string]string{"team": "web"},
+		Scheduling: core.Scheduling{
+			Tolerations:               json.RawMessage(`[{"key":"dedicated","operator":"Exists"}]`),
+			TopologySpreadConstraints: json.RawMessage(`[{"maxSkew":1}]`),
+		},
 	}, yb, "http://sc:50051", mounts)
+	if string(spec.Scheduling.Tolerations) != `[{"key":"dedicated","operator":"Exists"}]` ||
+		string(spec.Scheduling.TopologySpreadConstraints) != `[{"maxSkew":1}]` {
+		t.Errorf("Scheduling = %+v, want the deploy record's: a redeploy that drops it strips the pod's tolerations", spec.Scheduling)
+	}
 
 	if spec.Name != EndpointName(epID) {
 		t.Errorf("Name = %q, want %q", spec.Name, EndpointName(epID))

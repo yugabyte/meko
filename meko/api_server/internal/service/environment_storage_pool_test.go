@@ -127,6 +127,30 @@ func TestSetResourcesByStoragePool_ValidationBeforeAnyWrite(t *testing.T) {
 			regions: []models.RegionResources{{Region: "us-east-1", Resources: []models.ResourcePatch{{Kind: "datapack", Name: poolUUID + "/d", Spec: []byte(`{}`)}}}},
 		},
 		{
+			name: "endpoint tolerations on MANAGED",
+			pool: poolUUID,
+			regions: []models.RegionResources{{Region: "us-east-1", Resources: []models.ResourcePatch{{
+				Kind: "endpoint", Name: poolUUID + "/c/main/rw",
+				Spec: []byte(`{"role":"read_write","tolerations":[{"operator":"Exists"}]}`),
+			}}}},
+		},
+		{
+			name: "endpoint spread constraints on MANAGED, even empty",
+			pool: poolUUID,
+			regions: []models.RegionResources{{Region: "us-east-1", Resources: []models.ResourcePatch{{
+				Kind: "endpoint", Name: poolUUID + "/c/main/rw",
+				Spec: []byte(`{"role":"read_write","topology_spread_constraints":[]}`), Update: true,
+			}}}},
+		},
+		{
+			name: "cluster writer tolerations on MANAGED",
+			pool: poolUUID,
+			regions: []models.RegionResources{{Region: "us-east-1", Resources: []models.ResourcePatch{{
+				Kind: "cluster", Name: poolUUID + "/c",
+				Spec: []byte(`{"with_writer":true,"tolerations":[{"operator":"Exists"}]}`),
+			}}}},
+		},
+		{
 			name:    "non-object spec",
 			pool:    poolUUID,
 			regions: []models.RegionResources{{Region: "us-east-1", Resources: []models.ResourcePatch{{Kind: "cluster", Name: poolUUID + "/c", Spec: []byte(`[1,2]`)}}}},

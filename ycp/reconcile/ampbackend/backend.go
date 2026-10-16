@@ -390,6 +390,8 @@ func endpointAttrs(ep ampclient.Endpoint, ca *ampclient.EndpointCaBundle) map[st
 	// declarable at create, so a spec disagreeing with the row is permanent drift,
 	// and without this there is nothing to see what it disagrees with.
 	m = attrPutSettings(m, "extended_config", ep.ExtendedConfig)
+	m = attrPutList(m, "tolerations", ep.Tolerations)
+	m = attrPutList(m, "topology_spread_constraints", ep.TopologySpreadConstraints)
 	m = attrPutAppliedGen(m, ep.YcpGeneration)
 	return m
 }
@@ -963,6 +965,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 	drift := driftSet{reasons: unappliedEndpoint(spec, ep)}
 	resizing := spec.Resources != nil
 	cidrs, recidr := cidrsToApply(spec, ep)
+	sched, resched := schedulingToApply(spec, ep)
 
 	// Before anything is issued, and before anything can claim a generation: the
 	// last update may have planned a task that is still running or has failed. See
@@ -983,7 +986,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 	// Drift excluded because there would be nothing to stamp: a spec that never fully
 	// lands claims no generation, so the call would carry an empty body and no
 	// generation either.
-	if !changed && !resizing && !recidr && !drift.any() && b.generationBehind(r, ep.YcpGeneration) {
+	if !changed && !resizing && !recidr && !resched && !drift.any() && b.generationBehind(r, ep.YcpGeneration) {
 		changed = true
 	}
 	if changed {
@@ -991,7 +994,7 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 		if drift.any() {
 			gen = 0 // claim nothing; see the drift note above
 		}
-		if !resizing && !recidr && gen > 0 {
+		if !resizing && !recidr && !resched && gen > 0 {
 			body.YcpGeneration = &gen
 		}
 		if err := b.patchSettings(ctx, func(c context.Context) (*http.Response, error) {
@@ -1013,8 +1016,8 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 
 	if recidr && !drift.any() {
 		gen := r.Generation
-		if resizing {
-			gen = 0 // the resize carries it, next tick
+		if resizing || resched {
+			gen = 0 // a later task carries it, next tick
 		}
 		// Pending on success; the resize, if any, follows once this task is done.
 		return b.applyUpdate(ctx, key, gen,
@@ -1025,6 +1028,40 @@ func (b *Backend) updateEndpoint(ctx context.Context, r api.DesiredResource) err
 				}
 				return b.api.UpdateEndpointConnectivity(c, poolID, clusterID, branchID, endpointID, req)
 			})
+	}
+
+	// Before the resize: the re-render recreates the pod, so an in-place resize
+	// issued first would be spent on a pod about to be replaced.
+	if resched && !drift.any() {
+		gen := r.Generation
+		if resizing {
+			gen = 0 // the resize carries it, next tick
+		}
+		return b.applyUpdate(ctx, key, gen,
+			func(c context.Context, gen int64) (*http.Response, error) {
+				req := sched
+				if gen > 0 {
+					req.YcpGeneration = &gen
+				}
+				return b.api.UpdateEndpointScheduling(c, poolID, clusterID, branchID, endpointID, req)
+			})
+	}
+
+	if resched && drift.any() {
+		// A drifted update is never re-issued (driftSet.fold), so this goes out now,
+		// and before the resize for the reason given above. The controller's
+		// endpoint lock serializes the tasks; it does not order them, but each
+		// renders from the stored record, so they converge either way.
+		resp, err := b.api.UpdateEndpointScheduling(ctx, poolID, clusterID, branchID, endpointID, sched)
+		if err == nil {
+			var taskID *openapi_types.UUID
+			if taskID, err = b.mutateTask(resp); err == nil && taskID != nil {
+				err = reconcile.Pending(fmt.Errorf("controller task %s planned for generation 0", *taskID))
+			}
+		}
+		if err != nil {
+			drift.fold(err)
+		}
 	}
 
 	if resizing {
@@ -1092,6 +1129,9 @@ type endpointSpec struct {
 	SafekeeperSettings *ampclient.DaemonSettings            `json:"safekeeper_settings"`
 	ExtendedConfig     *map[string]interface{}              `json:"extended_config"`
 	Tags               *map[string]string                   `json:"tags"`
+
+	Tolerations               *[]ampclient.Toleration               `json:"tolerations"`
+	TopologySpreadConstraints *[]ampclient.TopologySpreadConstraint `json:"topology_spread_constraints"`
 }
 
 func endpointSpecOf(r api.DesiredResource) (endpointSpec, error) {
@@ -1126,6 +1166,48 @@ func allowedCidrs(c *ampclient.EndpointConnectivity) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// schedulingToApply is the scheduling update a spec still needs: each declared
+// list that differs from the reported one, and whether there is any. An
+// undeclared list is unmanaged and never sent. The controller reports a list
+// exactly as it stored it and omits an empty one, so a declared `[]` matches an
+// absent report, and order is compared as given — the controller keeps it.
+func schedulingToApply(spec endpointSpec, ep ampclient.Endpoint) (ampclient.UpdateEndpointSchedulingRequest, bool) {
+	var req ampclient.UpdateEndpointSchedulingRequest
+	if spec.Tolerations != nil && !sameList(*spec.Tolerations, ep.Tolerations) {
+		req.Tolerations = spec.Tolerations
+	}
+	if spec.TopologySpreadConstraints != nil && !sameList(*spec.TopologySpreadConstraints, ep.TopologySpreadConstraints) {
+		req.TopologySpreadConstraints = spec.TopologySpreadConstraints
+	}
+	return req, req.Tolerations != nil || req.TopologySpreadConstraints != nil
+}
+
+func sameList[T any](declared []T, reported *[]T) bool {
+	r := []T{}
+	if reported != nil {
+		r = *reported
+	}
+	if declared == nil {
+		declared = []T{}
+	}
+	return sameJSON(declared, r)
+}
+
+// attrPutList reports a list as its canonical JSON, "[]" when the controller
+// reports none — written unconditionally for the reason attrPutSettings gives:
+// an absent attr means an agent that predates the field.
+func attrPutList[T any](m map[string]string, k string, reported *[]T) map[string]string {
+	list := []T{}
+	if reported != nil {
+		list = *reported
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return m
+	}
+	return attrSet(m, k, string(b))
 }
 
 // unappliedEndpoint names the endpoint-spec fields whose declared value the

@@ -162,6 +162,11 @@ type StateStore interface {
 	// them. Idempotent; an absent endpoint is a no-op.
 	UpdateEndpointAllowedCIDRs(ctx context.Context, endpointID uuid.UUID, cidrs []string) error
 
+	// UpdateEndpointScheduling replaces the non-nil scheduling lists in the
+	// endpoint's stored config; an empty list clears its key. Idempotent; an
+	// absent endpoint is a no-op.
+	UpdateEndpointScheduling(ctx context.Context, endpointID uuid.UUID, sch core.Scheduling) error
+
 	// SetEndpointYCPGeneration records the YCP desired-state generation fully
 	// applied to an endpoint. The worker calls it after every step of the task
 	// carrying it has succeeded, so the stored value means the work landed rather

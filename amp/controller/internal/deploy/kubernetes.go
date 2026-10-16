@@ -261,6 +261,9 @@ var (
 // local deployers do not implement it.
 func (k *KubernetesDeployer) SupportsConnectivity() bool { return true }
 
+// SupportsScheduling satisfies deploy.SchedulingSupporter.
+func (k *KubernetesDeployer) SupportsScheduling() bool { return true }
+
 // SupportsIngress reports whether this deployment routes endpoints through
 // shared ingress shards, satisfying deploy.IngressSupporter.
 //
@@ -1708,6 +1711,10 @@ type chartValues struct {
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 	// ServiceAccountName is omitted when empty, leaving the namespace's `default`.
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// Tolerations and TopologySpreadConstraints are the endpoint's own, as the
+	// API validated them; omitted leaves the chart's empty defaults.
+	Tolerations               json.RawMessage `json:"tolerations,omitempty"`
+	TopologySpreadConstraints json.RawMessage `json:"topologySpreadConstraints,omitempty"`
 	// LFC is nil (omitted) to leave prewarm and offload at the chart's default.
 	LFC *lfcValues `json:"lfc,omitempty"`
 	// CommonLabels are the endpoint's identity labels and tags, labelled onto
@@ -2244,6 +2251,8 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 		v.NodeSelector = k.cfg.NodeSelector
 	}
 	v.ServiceAccountName = k.cfg.EndpointServiceAccount
+	v.Tolerations = spec.Scheduling.Tolerations
+	v.TopologySpreadConstraints = spec.Scheduling.TopologySpreadConstraints
 	if k.cfg.LFCOffloadIntervalSeconds > 0 {
 		v.LFC = &lfcValues{
 			Autoprewarm:            true,

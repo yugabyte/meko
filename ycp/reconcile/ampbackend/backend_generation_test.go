@@ -102,15 +102,18 @@ type genServer struct {
 	registered []ampclient.Extension
 	extPuts    []ampclient.RegisterExtensionRequest
 
-	fleetRolls  int // POST /endpoint-upgrades calls
-	resizes     []ampclient.ResizeEndpointRequest
-	connUpdates []ampclient.UpdateEndpointConnectivityRequest
-	extAdds     []ampclient.AddBranchExtensionsRequest
-	epPatches   []ampclient.UpdateEndpointSettingsRequest
-	brPatches   []ampclient.UpdateBranchSettingsRequest
-	taskGets    int
-	epCreates   int // POST …/endpoints calls
-	clCreates   int // POST …/clusters calls
+	fleetRolls   int // POST /endpoint-upgrades calls
+	resizes      []ampclient.ResizeEndpointRequest
+	connUpdates  []ampclient.UpdateEndpointConnectivityRequest
+	schedUpdates []ampclient.UpdateEndpointSchedulingRequest
+	// mutations names each scheduling and resize call, in arrival order.
+	mutations []string
+	extAdds   []ampclient.AddBranchExtensionsRequest
+	epPatches []ampclient.UpdateEndpointSettingsRequest
+	brPatches []ampclient.UpdateBranchSettingsRequest
+	taskGets  int
+	epCreates int // POST …/endpoints calls
+	clCreates int // POST …/clusters calls
 }
 
 func (g *genServer) start(t *testing.T) *Backend {
@@ -212,12 +215,21 @@ func (g *genServer) start(t *testing.T) *Backend {
 			}
 			g.connUpdates = append(g.connUpdates, req)
 			g.writeMutateResponse(w)
+		case strings.HasSuffix(p, "/scheduling"):
+			var req ampclient.UpdateEndpointSchedulingRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode scheduling body: %v", err)
+			}
+			g.schedUpdates = append(g.schedUpdates, req)
+			g.mutations = append(g.mutations, "scheduling")
+			g.writeMutateResponse(w)
 		case strings.HasSuffix(p, "/resize"):
 			var req ampclient.ResizeEndpointRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Errorf("decode resize body: %v", err)
 			}
 			g.resizes = append(g.resizes, req)
+			g.mutations = append(g.mutations, "resize")
 			g.writeMutateResponse(w)
 		case strings.HasSuffix(p, "/settings") && strings.Contains(p, "/endpoints/"):
 			var req ampclient.UpdateEndpointSettingsRequest

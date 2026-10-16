@@ -10,6 +10,7 @@ import {
   getEndpointCaBundle,
   listEndpoints,
   resizeEndpoint,
+  updateEndpointScheduling,
   updateEndpointSettings,
   type ResizeResult,
 } from "@/lib/api/resources";
@@ -19,6 +20,9 @@ import type {
   EndpointConnectivityMode,
   EndpointRole,
   SettingsUpdateResult,
+  Toleration,
+  TopologySpreadConstraint,
+  UpdateEndpointSchedulingInput,
   UpdateEndpointSettingsInput,
 } from "@/lib/api/types";
 
@@ -75,6 +79,8 @@ export function useCreateEndpoint() {
       connectivity?: EndpointConnectivityMode;
       allowedCidrs?: string[];
       password?: string;
+      tolerations?: Toleration[];
+      topologySpreadConstraints?: TopologySpreadConstraint[];
     }): Promise<Endpoint> =>
       createEndpoint(input.poolId, input.clusterId, input.branchId, {
         role: input.role,
@@ -95,6 +101,10 @@ export function useCreateEndpoint() {
         // omitted block lets the controller apply its 2-core / 4Gi default.
         ...(input.cpu || input.memory
           ? { resources: { cpu: input.cpu, memory: input.memory } }
+          : {}),
+        ...(input.tolerations?.length ? { tolerations: input.tolerations } : {}),
+        ...(input.topologySpreadConstraints?.length
+          ? { topology_spread_constraints: input.topologySpreadConstraints }
           : {}),
       }),
     onSuccess: (_data, input) => {
@@ -140,6 +150,34 @@ export function useResizeEndpoint() {
       resizeEndpoint(input.poolId, input.clusterId, input.branchId, input.endpointId, {
         resources: { cpu: input.cpu, memory: input.memory },
       }),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({
+        queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
+      });
+    },
+  });
+}
+
+/** Replace one endpoint's tolerations / spread constraints. The task recreates
+ *  the pod, so this resolves only once it has run. Omitted lists are kept and
+ *  `[]` clears — the caller decides which to send. */
+export function useUpdateEndpointScheduling() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      poolId: string;
+      clusterId: string;
+      branchId: string;
+      endpointId: string;
+      scheduling: UpdateEndpointSchedulingInput;
+    }): Promise<Endpoint> =>
+      updateEndpointScheduling(
+        input.poolId,
+        input.clusterId,
+        input.branchId,
+        input.endpointId,
+        input.scheduling,
+      ),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
         queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),

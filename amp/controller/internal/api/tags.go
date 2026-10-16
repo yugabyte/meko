@@ -67,18 +67,33 @@ func validateTagKey(k string) error {
 	if reservedTagKeys[k] {
 		return fmt.Errorf("the endpoint chart sets this label itself")
 	}
+	if prefix, _, ok := strings.Cut(k, "/"); ok &&
+		(prefix == reservedTagDomain || strings.HasSuffix(prefix, "."+reservedTagDomain)) {
+		return fmt.Errorf("the %s prefix is reserved", reservedTagDomain)
+	}
+	return validateQualifiedName(k)
+}
+
+// validateQualifiedName checks a Kubernetes qualified name — a label key, taint
+// key or topology key: an optional DNS-subdomain prefix and a 63-character name.
+func validateQualifiedName(k string) error {
 	name := k
 	if prefix, rest, ok := strings.Cut(k, "/"); ok {
 		if len(prefix) > 253 || !dns1123SubdomainRE.MatchString(prefix) {
 			return fmt.Errorf("prefix must be a lowercase DNS subdomain of at most 253 characters")
 		}
-		if prefix == reservedTagDomain || strings.HasSuffix(prefix, "."+reservedTagDomain) {
-			return fmt.Errorf("the %s prefix is reserved", reservedTagDomain)
-		}
 		name = rest
 	}
 	if len(name) > 63 || !labelNameRE.MatchString(name) {
 		return fmt.Errorf("name must be 1-63 characters of alphanumerics, '-', '_' or '.', starting and ending with an alphanumeric")
+	}
+	return nil
+}
+
+// validateLabelValue checks a Kubernetes label value, where "" is allowed.
+func validateLabelValue(v string) error {
+	if len(v) > 63 || (v != "" && !labelNameRE.MatchString(v)) {
+		return fmt.Errorf("value %q must be at most 63 characters of alphanumerics, '-', '_' or '.', starting and ending with an alphanumeric", v)
 	}
 	return nil
 }

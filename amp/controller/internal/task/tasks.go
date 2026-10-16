@@ -69,6 +69,12 @@ var (
 	KindResizeEndpoint             = Kind{"resize_endpoint", "endpoint", "tasks_one_active_resize_per_endpoint", ErrResizeInProgress}
 	KindUpdateEndpointConnectivity = Kind{"update_endpoint_connectivity", "endpoint",
 		"tasks_one_active_connectivity_per_endpoint", ErrConnectivityInProgress}
+	// No lock index: the step re-renders from the stored record under the
+	// endpoint lock and persists only after the render, so two in flight
+	// serialize and the pod ends on whichever ran last, which is also what the
+	// row says. add_branch_extensions does not take the endpoint lock and can
+	// still redeploy from an older snapshot (meko#976).
+	KindUpdateEndpointScheduling = Kind{"update_endpoint_scheduling", "endpoint", "", nil}
 	// A fleet roll has no target_ref, so a partial unique index cannot constrain it
 	// — NULLs are distinct. Store.ActiveByKind is the plan-time gate instead, and
 	// the no-wait fleet lock is what actually decides.
@@ -91,6 +97,7 @@ var allKinds = []Kind{
 	KindCreateEndpoint,
 	KindResizeEndpoint,
 	KindUpdateEndpointConnectivity,
+	KindUpdateEndpointScheduling,
 	KindUpgradeEndpoints,
 	KindRerenderEndpoints,
 	KindDeleteEndpoint,
@@ -176,6 +183,10 @@ type CreateClusterInput struct {
 	// refuses that combination rather than letting it reach here.
 	Connectivity string   `json:"connectivity,omitempty"`
 	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	// Tolerations and TopologySpreadConstraints are the pod's scheduling lists,
+	// validated and canonicalised by the API; nil means none.
+	Tolerations               json.RawMessage `json:"tolerations,omitempty"`
+	TopologySpreadConstraints json.RawMessage `json:"topology_spread_constraints,omitempty"`
 	// PasswordVerifier is the writer's compute-user password in pg_authid's form.
 	// Ignored when WithWriter is false, for the same reason Connectivity is.
 	// `json:"-"` is
@@ -236,6 +247,9 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Ta
 			Connectivity:     in.Connectivity,
 			AllowedCIDRs:     in.AllowedCIDRs,
 			PasswordVerifier: in.PasswordVerifier,
+
+			Tolerations:               in.Tolerations,
+			TopologySpreadConstraints: in.TopologySpreadConstraints,
 		}))
 	}
 	// TargetRef is the new default branch: the UI pre-selects it once the task
@@ -342,6 +356,10 @@ type CreateEndpointInput struct {
 	// reach an nlb_* endpoint's load balancer. Both are validated by the API.
 	Connectivity string   `json:"connectivity,omitempty"`
 	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	// Tolerations and TopologySpreadConstraints are the pod's scheduling lists,
+	// validated and canonicalised by the API; nil means none.
+	Tolerations               json.RawMessage `json:"tolerations,omitempty"`
+	TopologySpreadConstraints json.RawMessage `json:"topology_spread_constraints,omitempty"`
 	// PasswordVerifier is the compute default user's password in pg_authid's form.
 	// `json:"-"` is
 	// load-bearing: this input is stored as the task's params and GET /tasks
@@ -378,6 +396,9 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			AllowedCIDRs:       in.AllowedCIDRs,
 			PasswordVerifier:   in.PasswordVerifier,
 			Tags:               in.Tags,
+
+			Tolerations:               in.Tolerations,
+			TopologySpreadConstraints: in.TopologySpreadConstraints,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ClusterID, endpointID.String(), steps)
@@ -437,6 +458,32 @@ func (s *Service) UpdateEndpointConnectivity(ctx context.Context, in UpdateEndpo
 		}),
 	}
 	return s.create(ctx, KindUpdateEndpointConnectivity, in, in.ClusterID, in.EndpointID.String(), steps)
+}
+
+// UpdateEndpointSchedulingInput is the request for an update_endpoint_scheduling
+// task. A nil list is left as stored; an empty one clears it.
+type UpdateEndpointSchedulingInput struct {
+	ClusterID                 uuid.UUID       `json:"cluster_id"`
+	EndpointID                uuid.UUID       `json:"endpoint_id"`
+	Tolerations               json.RawMessage `json:"tolerations,omitempty"`
+	TopologySpreadConstraints json.RawMessage `json:"topology_spread_constraints,omitempty"`
+	// YCPGeneration: see ResizeEndpointInput.
+	YCPGeneration *int64 `json:"ycp_generation,omitempty"`
+}
+
+func (in UpdateEndpointSchedulingInput) ycpGeneration() *int64 { return in.YCPGeneration }
+
+// UpdateEndpointScheduling records an update_endpoint_scheduling task: one step
+// that re-renders the endpoint's release with the new lists, then persists them.
+func (s *Service) UpdateEndpointScheduling(ctx context.Context, in UpdateEndpointSchedulingInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepUpdateEndpointScheduling, UpdateEndpointSchedulingArgs{
+			EndpointID:                in.EndpointID,
+			Tolerations:               in.Tolerations,
+			TopologySpreadConstraints: in.TopologySpreadConstraints,
+		}),
+	}
+	return s.create(ctx, KindUpdateEndpointScheduling, in, in.ClusterID, in.EndpointID.String(), steps)
 }
 
 // ErrFleetRollInProgress means a fleet roll is already under way and this one is

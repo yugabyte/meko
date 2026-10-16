@@ -583,7 +583,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a cluster. The ingress name is LEFT JOINed from the live
 // allocation, as in endpointDeploySelect; at most one is live per endpoint.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.tags, e.ycp_generation, COALESCE(ia.dns_name, ''), e.created_at
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), COALESCE(e.version, ''), COALESCE(e.target_version, ''), COALESCE(e.config->>'connectivity', ''), e.config->'allowed_cidrs', e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.tags, e.ycp_generation, COALESCE(ia.dns_name, ''), e.created_at, e.config->'tolerations', e.config->'topology_spread_constraints'
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
 	LEFT JOIN amp_registry.ingress_allocations ia
@@ -698,6 +698,25 @@ func (b *PgBackend) UpdateEndpointAllowedCIDRs(ctx context.Context, endpointID u
 		  WHERE id = $1::uuid`,
 		endpointID.String(), payload); err != nil {
 		return fmt.Errorf("update endpoint allowed cidrs: %w", err)
+	}
+	return nil
+}
+
+// UpdateEndpointScheduling replaces the scheduling lists that are non-nil,
+// leaving the other config fields — and a nil list — intact. An empty list
+// removes its key, so a cleared endpoint reads back exactly like one created
+// without it. Idempotent; an absent row is a no-op.
+func (b *PgBackend) UpdateEndpointScheduling(ctx context.Context, endpointID uuid.UUID, sch Scheduling) error {
+	drop, set, err := schedulingConfigPatch(sch)
+	if err != nil {
+		return err
+	}
+	if _, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints
+		    SET config = (COALESCE(config, '{}'::jsonb) - $2::text[]) || $3::jsonb
+		  WHERE id = $1::uuid`,
+		endpointID.String(), drop, set); err != nil {
+		return fmt.Errorf("update endpoint scheduling: %w", err)
 	}
 	return nil
 }
@@ -1063,7 +1082,8 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		ep          Endpoint
 	)
 	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &ep.Version, &ep.TargetVersion,
-		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &tagsRaw, &ycpGen, &ep.IngressDNSName, &ep.CreatedAt); err != nil {
+		&ep.Connectivity, &cidrsRaw, &settingsRaw, &psRaw, &skRaw, &ep.Extended, &tagsRaw, &ycpGen, &ep.IngressDNSName, &ep.CreatedAt,
+		&ep.Scheduling.Tolerations, &ep.Scheduling.TopologySpreadConstraints); err != nil {
 		return Endpoint{}, err
 	}
 	// A malformed allowed_cidrs is not worth failing the read over — the endpoint

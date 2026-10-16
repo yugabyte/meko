@@ -528,6 +528,9 @@ type fakeDeployer struct {
 	sourceRangesErr error
 }
 
+// SupportsScheduling stands in for the Kubernetes deployer, which renders the lists.
+func (f *fakeDeployer) SupportsScheduling() bool { return true }
+
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -45,6 +45,7 @@ type fakeStateStore struct {
 	endpointAddresses          map[uuid.UUID]string
 	endpointResources          map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
 	endpointCIDRs              map[uuid.UUID][]string  // endpoint id -> allowed cidrs last persisted
+	schedulingWrites           int
 	// The applied YCP generation the worker stamped, per resource. Monotonic, like
 	// the real GREATEST write, so a test can assert a late older task cannot regress it.
 	endpointYCPGeneration  map[uuid.UUID]int64
@@ -491,6 +492,19 @@ func (f *fakeStateStore) UpdateEndpointAllowedCIDRs(_ context.Context, endpointI
 		f.endpointCIDRs = map[uuid.UUID][]string{}
 	}
 	f.endpointCIDRs[endpointID] = append([]string(nil), cidrs...)
+	return nil
+}
+
+// UpdateEndpointScheduling writes the deploy record, the one place the
+// database keeps the lists, so a step that re-renders afterwards reads them.
+func (f *fakeStateStore) UpdateEndpointScheduling(_ context.Context, endpointID uuid.UUID, sch core.Scheduling) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.schedulingWrites++
+	if d, ok := f.endpointBranch[endpointID]; ok {
+		d.Scheduling = d.Scheduling.Apply(sch)
+		f.endpointBranch[endpointID] = d
+	}
 	return nil
 }
 

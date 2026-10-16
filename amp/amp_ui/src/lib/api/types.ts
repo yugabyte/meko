@@ -161,7 +161,56 @@ export type Endpoint = {
   pg_settings?: PgSettings;
   pageserver_settings?: DaemonSettings;
   safekeeper_settings?: DaemonSettings;
+  /** The pod's scheduling rules as stored; absent when none. */
+  tolerations?: Toleration[];
+  topology_spread_constraints?: TopologySpreadConstraint[];
   created_at: string;
+};
+
+/** Kubernetes core/v1 `Toleration`, field names verbatim. */
+export type TolerationOperator = "Exists" | "Equal";
+export type TaintEffect = "NoSchedule" | "PreferNoSchedule" | "NoExecute";
+export type Toleration = {
+  key?: string;
+  operator?: TolerationOperator;
+  value?: string;
+  effect?: TaintEffect;
+  tolerationSeconds?: number;
+};
+
+/** Kubernetes meta/v1 `LabelSelector`. */
+export type LabelSelectorOperator = "In" | "NotIn" | "Exists" | "DoesNotExist";
+export type LabelSelectorRequirement = {
+  key: string;
+  operator: LabelSelectorOperator;
+  values?: string[];
+};
+export type LabelSelector = {
+  matchLabels?: Record<string, string>;
+  matchExpressions?: LabelSelectorRequirement[];
+};
+
+/** Kubernetes core/v1 `TopologySpreadConstraint`, field names verbatim.
+ *  `labelSelector` is required and must select something: each endpoint is a
+ *  single-pod Deployment, so an empty selector would constrain nothing and the
+ *  controller refuses it. */
+export type WhenUnsatisfiable = "DoNotSchedule" | "ScheduleAnyway";
+export type TopologySpreadConstraint = {
+  maxSkew: number;
+  topologyKey: string;
+  whenUnsatisfiable: WhenUnsatisfiable;
+  labelSelector: LabelSelector;
+  minDomains?: number;
+  nodeAffinityPolicy?: "Honor" | "Ignore";
+  nodeTaintsPolicy?: "Honor" | "Ignore";
+  matchLabelKeys?: string[];
+};
+
+/** Replace an endpoint's scheduling lists. An omitted list is left alone; `[]`
+ *  clears it. Applying it recreates the pod. */
+export type UpdateEndpointSchedulingInput = {
+  tolerations?: Toleration[];
+  topology_spread_constraints?: TopologySpreadConstraint[];
 };
 
 /** A write-ahead task. The mutating endpoints (create cluster / branch /
@@ -261,6 +310,8 @@ export type CreateEndpointInput = {
    *  read_write endpoint — the controller mints none — and refused on a
    *  read_only one, which shares its branch's roles. */
   password?: string;
+  tolerations?: Toleration[];
+  topology_spread_constraints?: TopologySpreadConstraint[];
 };
 
 /** Change an existing endpoint's compute reservation. cpu/memory are applied

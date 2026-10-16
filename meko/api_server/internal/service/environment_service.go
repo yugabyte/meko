@@ -421,6 +421,9 @@ func (s *EnvironmentService) Register(
 		if err := checkKinds(kind, *req.Desired); err != nil {
 			return nil, err
 		}
+		if err := refuseByocOnlyResources(typ, *req.Desired); err != nil {
+			return nil, err
+		}
 	}
 	placement := req.Placement
 	if placement == "" {
@@ -1028,6 +1031,9 @@ func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []
 	if err := checkKinds(e.Kind, res); err != nil {
 		return true, err
 	}
+	if err := refuseByocOnlyResources(e.Type, res); err != nil {
+		return true, err
+	}
 	return true, s.repo.ReplaceDesired(e.UUID, res)
 }
 
@@ -1237,6 +1243,12 @@ func (s *EnvironmentService) SetResourcesByStoragePool(
 			if !underStoragePool(storagePool, p.Name) {
 				return nil, fmt.Errorf("%w: regions[%d].resources[%d] name %q is not under storage pool %q",
 					ErrValidation, ri, pi, p.Name, storagePool)
+			}
+			// Every environment this route reaches is MANAGED.
+			if !p.Delete {
+				if err := refuseByocOnlyFields(p.Kind, p.Spec); err != nil {
+					return nil, fmt.Errorf("regions[%d].resources[%d]: %w", ri, pi, err)
+				}
 			}
 		}
 	}

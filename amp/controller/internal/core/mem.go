@@ -701,6 +701,7 @@ func (m *MemBackend) endpointDeploy(id uuid.UUID, e Endpoint, pgVersion int) End
 		Extensions:      m.endpointExts[id],
 		DNSName:         m.endpointDNS[id],
 		Labels:          MergeTags(m.clusters[clusterID].Tags, e.Tags),
+		Scheduling:      e.Scheduling,
 	}
 }
 
@@ -861,6 +862,9 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		Connectivity string   `json:"connectivity"`
 		AllowedCIDRs []string `json:"allowed_cidrs"`
 		DNSName      string   `json:"dns_name"`
+
+		Tolerations               json.RawMessage `json:"tolerations"`
+		TopologySpreadConstraints json.RawMessage `json:"topology_spread_constraints"`
 	}
 	if len(config) > 0 {
 		_ = json.Unmarshal(config, &cfg)
@@ -893,6 +897,7 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		Memory:             cfg.Memory,
 		Connectivity:       cfg.Connectivity,
 		AllowedCIDRs:       cfg.AllowedCIDRs,
+		Scheduling:         Scheduling{Tolerations: cfg.Tolerations, TopologySpreadConstraints: cfg.TopologySpreadConstraints},
 		CreatedAt:          m.now(),
 	}
 	return nil
@@ -933,6 +938,20 @@ func (m *MemBackend) UpdateEndpointAllowedCIDRs(_ context.Context, endpointID uu
 		ep.AllowedCIDRs = append([]string(nil), cidrs...)
 		m.endpoints[endpointID] = ep
 	}
+	return nil
+}
+
+// UpdateEndpointScheduling mirrors PgBackend's config merge: a nil list keeps
+// its value, an empty one clears it. Absent endpoint is a no-op.
+func (m *MemBackend) UpdateEndpointScheduling(_ context.Context, endpointID uuid.UUID, sch Scheduling) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ep, ok := m.endpoints[endpointID]
+	if !ok {
+		return nil
+	}
+	ep.Scheduling = ep.Scheduling.Apply(sch)
+	m.endpoints[endpointID] = ep
 	return nil
 }
 

@@ -24,7 +24,9 @@ import {
   parseCidrs,
   type Connectivity,
 } from "@/components/ui/connectivity-field";
+import { SchedulingSection } from "@/components/ui/scheduling-field";
 import { isValidMemory } from "@/lib/compute";
+import { buildScheduling, CLUSTER_ID_LABEL, EMPTY_SCHEDULING } from "@/lib/scheduling";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeInstance } from "./ComputeInstance";
 
@@ -58,6 +60,8 @@ export function EndpointsSection({
   const [connectivity, setConnectivity] = useState<Connectivity>(DEFAULT_CONNECTIVITY);
   // The password for the compute's default user, set by the cluster's first writer.
   const [password, setPassword] = useState("");
+  const [scheduling, setScheduling] = useState(EMPTY_SCHEDULING);
+  const builtScheduling = buildScheduling(scheduling);
   const createEndpoint = useCreateEndpoint();
   // The controller rejects a memory quantity with no unit; block the click
   // instead of sending one and reporting the 400 back as a toast.
@@ -91,6 +95,12 @@ export function EndpointsSection({
         // Cluster-wide, so only the cluster's first writer sets it; sending one
         // on a read-only endpoint is a 400.
         ...(needsPassword ? { password } : {}),
+        ...(builtScheduling.ok
+          ? {
+              tolerations: builtScheduling.value.tolerations,
+              topologySpreadConstraints: builtScheduling.value.topology_spread_constraints,
+            }
+          : {}),
       },
       {
         onSuccess: (endpoint) => {
@@ -200,12 +210,21 @@ export function EndpointsSection({
           variant="outline"
           size="sm"
           onClick={provision}
-          disabled={createEndpoint.isPending || !memoryValid || !passwordValid}
+          disabled={
+            createEndpoint.isPending || !memoryValid || !passwordValid || !builtScheduling.ok
+          }
         >
           {createEndpoint.isPending ? "Provisioning…" : "Provision compute"}
         </Button>
       </div>
       <ConnectivityWarning value={connectivity} />
+      <div className="mt-2">
+        <SchedulingSection
+          value={scheduling}
+          onChange={setScheduling}
+          defaultSelector={{ [CLUSTER_ID_LABEL]: clusterId }}
+        />
+      </div>
       {!memoryValid && (
         <p id="ep-memory-hint" className="mt-1.5 text-[11px] text-destructive">
           {msg.memoryNeedsUnit}

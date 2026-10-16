@@ -1,9 +1,18 @@
 // One provisioned compute instance under a branch: address, role, resource tag,
-// in-place resize panel, settings, unprovision confirm, and copyable psql and
+// in-place resize panel, settings, scheduling, unprovision confirm, and copyable psql and
 // documentdb connect strings.
 
 import { useState } from "react";
-import { Check, Copy, Cpu, Server, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Cpu,
+  Network,
+  Server,
+  ShieldCheck,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { getEndpointCaBundle } from "@/lib/api/resources";
 import { Badge } from "@/components/ui/badge";
@@ -22,11 +31,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useDeleteEndpoint, useResizeEndpoint } from "@/hooks/useEndpoints";
 import { SettingsDialog } from "./SettingsDialog";
+import { SchedulingDialog } from "./SchedulingDialog";
 import { DocumentdbConnect } from "./DocumentdbConnect";
 import type { Endpoint } from "@/lib/api/types";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
 import { isValidMemory } from "@/lib/compute";
 import { downloadCaFile } from "@/lib/endpointTls";
+import { describeSpread, describeToleration } from "@/lib/scheduling";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeResourceTag } from "@/components/ResourceTag";
 
@@ -85,6 +96,9 @@ export function ComputeInstance({
   const resize = useResizeEndpoint();
   const [showResize, setShowResize] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showScheduling, setShowScheduling] = useState(false);
+  const tolerations = ep.tolerations ?? [];
+  const spread = ep.topology_spread_constraints ?? [];
   const [cpu, setCpu] = useState(ep.resources?.cpu || DEFAULT_ENDPOINT_CPU);
   const [memory, setMemory] = useState(ep.resources?.memory || DEFAULT_ENDPOINT_MEMORY);
   // A memory quantity with no unit is a 400 from the controller. The pre-fill is
@@ -211,6 +225,15 @@ export function ComputeInstance({
           <SlidersHorizontal className="h-3.5 w-3.5" />
           Settings
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowScheduling(true)}
+          className="h-7 gap-1 px-2 text-xs"
+        >
+          <Network className="h-3.5 w-3.5" />
+          Scheduling
+        </Button>
         {/* Unprovision is offered on forked branches only — the source (default)
             branch's compute can't be torn down from the UI for now. */}
         {!isDefaultBranch && (
@@ -226,6 +249,14 @@ export function ComputeInstance({
           </Button>
         )}
       </div>
+      {(tolerations.length > 0 || spread.length > 0) && (
+        <div className="mt-1.5 flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground">
+          {tolerations.length > 0 && (
+            <span>tolerations: {tolerations.map(describeToleration).join("; ")}</span>
+          )}
+          {spread.length > 0 && <span>spread: {spread.map(describeSpread).join("; ")}</span>}
+        </div>
+      )}
       {showResize && (
         <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-border bg-muted/30 p-2">
           <div className="flex flex-col gap-1">
@@ -331,6 +362,13 @@ export function ComputeInstance({
           pageserver_settings: ep.pageserver_settings,
           safekeeper_settings: ep.safekeeper_settings,
         }}
+        title={roleLabel}
+      />
+      <SchedulingDialog
+        open={showScheduling}
+        onOpenChange={setShowScheduling}
+        poolId={poolId}
+        ep={ep}
         title={roleLabel}
       />
     </li>

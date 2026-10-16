@@ -144,6 +144,30 @@ func (e EndpointHealthStatus) Valid() bool {
 	}
 }
 
+// Defines values for LabelSelectorRequirementOperator.
+const (
+	LabelSelectorRequirementOperatorDoesNotExist LabelSelectorRequirementOperator = "DoesNotExist"
+	LabelSelectorRequirementOperatorExists       LabelSelectorRequirementOperator = "Exists"
+	LabelSelectorRequirementOperatorIn           LabelSelectorRequirementOperator = "In"
+	LabelSelectorRequirementOperatorNotIn        LabelSelectorRequirementOperator = "NotIn"
+)
+
+// Valid indicates whether the value is a known member of the LabelSelectorRequirementOperator enum.
+func (e LabelSelectorRequirementOperator) Valid() bool {
+	switch e {
+	case LabelSelectorRequirementOperatorDoesNotExist:
+		return true
+	case LabelSelectorRequirementOperatorExists:
+		return true
+	case LabelSelectorRequirementOperatorIn:
+		return true
+	case LabelSelectorRequirementOperatorNotIn:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MigrationRunOperation.
 const (
 	Assess  MigrationRunOperation = "assess"
@@ -342,6 +366,102 @@ func (e TaskStatus) Valid() bool {
 	case TaskStatusRunning:
 		return true
 	case TaskStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TolerationEffect.
+const (
+	AnyEffect        TolerationEffect = ""
+	NoExecute        TolerationEffect = "NoExecute"
+	NoSchedule       TolerationEffect = "NoSchedule"
+	PreferNoSchedule TolerationEffect = "PreferNoSchedule"
+)
+
+// Valid indicates whether the value is a known member of the TolerationEffect enum.
+func (e TolerationEffect) Valid() bool {
+	switch e {
+	case AnyEffect:
+		return true
+	case NoExecute:
+		return true
+	case NoSchedule:
+		return true
+	case PreferNoSchedule:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TolerationOperator.
+const (
+	TolerationOperatorEqual  TolerationOperator = "Equal"
+	TolerationOperatorExists TolerationOperator = "Exists"
+)
+
+// Valid indicates whether the value is a known member of the TolerationOperator enum.
+func (e TolerationOperator) Valid() bool {
+	switch e {
+	case TolerationOperatorEqual:
+		return true
+	case TolerationOperatorExists:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TopologySpreadConstraintNodeAffinityPolicy.
+const (
+	TopologySpreadConstraintNodeAffinityPolicyHonor  TopologySpreadConstraintNodeAffinityPolicy = "Honor"
+	TopologySpreadConstraintNodeAffinityPolicyIgnore TopologySpreadConstraintNodeAffinityPolicy = "Ignore"
+)
+
+// Valid indicates whether the value is a known member of the TopologySpreadConstraintNodeAffinityPolicy enum.
+func (e TopologySpreadConstraintNodeAffinityPolicy) Valid() bool {
+	switch e {
+	case TopologySpreadConstraintNodeAffinityPolicyHonor:
+		return true
+	case TopologySpreadConstraintNodeAffinityPolicyIgnore:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TopologySpreadConstraintNodeTaintsPolicy.
+const (
+	TopologySpreadConstraintNodeTaintsPolicyHonor  TopologySpreadConstraintNodeTaintsPolicy = "Honor"
+	TopologySpreadConstraintNodeTaintsPolicyIgnore TopologySpreadConstraintNodeTaintsPolicy = "Ignore"
+)
+
+// Valid indicates whether the value is a known member of the TopologySpreadConstraintNodeTaintsPolicy enum.
+func (e TopologySpreadConstraintNodeTaintsPolicy) Valid() bool {
+	switch e {
+	case TopologySpreadConstraintNodeTaintsPolicyHonor:
+		return true
+	case TopologySpreadConstraintNodeTaintsPolicyIgnore:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TopologySpreadConstraintWhenUnsatisfiable.
+const (
+	DoNotSchedule  TopologySpreadConstraintWhenUnsatisfiable = "DoNotSchedule"
+	ScheduleAnyway TopologySpreadConstraintWhenUnsatisfiable = "ScheduleAnyway"
+)
+
+// Valid indicates whether the value is a known member of the TopologySpreadConstraintWhenUnsatisfiable enum.
+func (e TopologySpreadConstraintWhenUnsatisfiable) Valid() bool {
+	switch e {
+	case DoNotSchedule:
+		return true
+	case ScheduleAnyway:
 		return true
 	default:
 		return false
@@ -603,6 +723,14 @@ type CreateClusterRequest struct {
 	// replaces the cluster's on a key both set. Set at create only.
 	Tags *Tags `json:"tags,omitempty"`
 
+	// Tolerations The writer's tolerations, as `createEndpoint`'s. Refused without
+	// `with_writer`, like `connectivity`.
+	Tolerations *[]Toleration `json:"tolerations,omitempty"`
+
+	// TopologySpreadConstraints The writer's topology spread constraints, as `createEndpoint`'s.
+	// Refused without `with_writer`, like `connectivity`.
+	TopologySpreadConstraints *[]TopologySpreadConstraint `json:"topology_spread_constraints,omitempty"`
+
 	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
 	WithWriter *bool `json:"with_writer,omitempty"`
 }
@@ -784,6 +912,19 @@ type CreateEndpointRequest struct {
 	// set, this value is the one its objects are labelled with. Set at
 	// create only.
 	Tags *Tags `json:"tags,omitempty"`
+
+	// Tolerations Kubernetes tolerations for the endpoint's pod, in Kubernetes' own
+	// shape, e.g. to let it schedule onto a tainted dedicated pool. They
+	// permit scheduling onto matching taints, they do not steer the pod
+	// there. Change later with updateEndpointScheduling.
+	Tolerations *[]Toleration `json:"tolerations,omitempty"`
+
+	// TopologySpreadConstraints Kubernetes topology spread constraints for the endpoint's pod. Each
+	// endpoint is its own single-pod Deployment, so a constraint has an
+	// effect only when its `labelSelector` matches OTHER endpoints' pods —
+	// e.g. `amp.yugabyte.com/cluster-id: <id>` to spread a cluster's
+	// endpoints across zones. Change later with updateEndpointScheduling.
+	TopologySpreadConstraints *[]TopologySpreadConstraint `json:"topology_spread_constraints,omitempty"`
 }
 
 // CreateEndpointRequestDiskType Backing disk for the endpoint's data volume. `network` (the default)
@@ -1008,6 +1149,15 @@ type Endpoint struct {
 
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
 	TailnetAddress string `json:"tailnet_address"`
+
+	// Tolerations The tolerations on this endpoint's pod, as stored; absent when none
+	// were set. Applied alongside the controller's own scheduling
+	// configuration (`--deploy-node-selector`), never instead of it.
+	Tolerations *[]Toleration `json:"tolerations,omitempty"`
+
+	// TopologySpreadConstraints The topology spread constraints on this endpoint's pod, as stored;
+	// absent when none were set.
+	TopologySpreadConstraints *[]TopologySpreadConstraint `json:"topology_spread_constraints,omitempty"`
 
 	// Version The version this endpoint is recorded as running — an opaque string
 	// the deployer knows how to run (today the endpoint image tag). Absent
@@ -1343,6 +1493,24 @@ type FleetVersion struct {
 	// configured records none.
 	Version *string `json:"version,omitempty"`
 }
+
+// LabelSelector A Kubernetes label selector (meta/v1 `LabelSelector`).
+type LabelSelector struct {
+	MatchExpressions *[]LabelSelectorRequirement `json:"matchExpressions,omitempty"`
+	MatchLabels      *map[string]string          `json:"matchLabels,omitempty"`
+}
+
+// LabelSelectorRequirement defines model for LabelSelectorRequirement.
+type LabelSelectorRequirement struct {
+	Key      string                           `json:"key"`
+	Operator LabelSelectorRequirementOperator `json:"operator"`
+
+	// Values Required for `In`/`NotIn`, refused for `Exists`/`DoesNotExist`.
+	Values *[]string `json:"values,omitempty"`
+}
+
+// LabelSelectorRequirementOperator defines model for LabelSelectorRequirement.Operator.
+type LabelSelectorRequirementOperator string
 
 // Migration A migration and its derived status.
 type Migration struct {
@@ -1870,6 +2038,61 @@ type TaskListOrderedBy string
 // because a subtask is one step with durable status.
 type TaskStatus string
 
+// Toleration A Kubernetes pod toleration (core/v1 `Toleration`), field names as
+// Kubernetes spells them. Validated by the same rules the API server
+// applies, so a bad one is a 400 here rather than a failed deploy.
+type Toleration struct {
+	// Effect Omitted or empty matches every effect.
+	Effect *TolerationEffect `json:"effect,omitempty"`
+
+	// Key Taint key. Empty with `operator: Exists` tolerates every taint.
+	Key *string `json:"key,omitempty"`
+
+	// Operator Defaults to `Equal`. `Exists` must not carry a `value`.
+	Operator *TolerationOperator `json:"operator,omitempty"`
+
+	// TolerationSeconds Only with `effect: NoExecute`.
+	TolerationSeconds *int64  `json:"tolerationSeconds,omitempty"`
+	Value             *string `json:"value,omitempty"`
+}
+
+// TolerationEffect Omitted or empty matches every effect.
+type TolerationEffect string
+
+// TolerationOperator Defaults to `Equal`. `Exists` must not carry a `value`.
+type TolerationOperator string
+
+// TopologySpreadConstraint A Kubernetes topology spread constraint (core/v1
+// `TopologySpreadConstraint`), field names as Kubernetes spells them.
+// `labelSelector` is required here though optional in Kubernetes: without
+// one the constraint matches no pods and does nothing. Endpoint pods carry
+// `amp.yugabyte.com/endpoint-id`, `branch-id`, `cluster-id`,
+// `storage-pool-id` and `ep-type`, plus their tags.
+type TopologySpreadConstraint struct {
+	// LabelSelector A Kubernetes label selector (meta/v1 `LabelSelector`).
+	LabelSelector  LabelSelector `json:"labelSelector"`
+	MatchLabelKeys *[]string     `json:"matchLabelKeys,omitempty"`
+	MaxSkew        int32         `json:"maxSkew"`
+
+	// MinDomains Only with `whenUnsatisfiable: DoNotSchedule`.
+	MinDomains         *int32                                      `json:"minDomains,omitempty"`
+	NodeAffinityPolicy *TopologySpreadConstraintNodeAffinityPolicy `json:"nodeAffinityPolicy,omitempty"`
+	NodeTaintsPolicy   *TopologySpreadConstraintNodeTaintsPolicy   `json:"nodeTaintsPolicy,omitempty"`
+
+	// TopologyKey A node label, e.g. `topology.kubernetes.io/zone`.
+	TopologyKey       string                                    `json:"topologyKey"`
+	WhenUnsatisfiable TopologySpreadConstraintWhenUnsatisfiable `json:"whenUnsatisfiable"`
+}
+
+// TopologySpreadConstraintNodeAffinityPolicy defines model for TopologySpreadConstraint.NodeAffinityPolicy.
+type TopologySpreadConstraintNodeAffinityPolicy string
+
+// TopologySpreadConstraintNodeTaintsPolicy defines model for TopologySpreadConstraint.NodeTaintsPolicy.
+type TopologySpreadConstraintNodeTaintsPolicy string
+
+// TopologySpreadConstraintWhenUnsatisfiable defines model for TopologySpreadConstraint.WhenUnsatisfiable.
+type TopologySpreadConstraintWhenUnsatisfiable string
+
 // TotalCount The number of items matching the request across all pages (ignores limit/offset).
 type TotalCount = int
 
@@ -1919,6 +2142,30 @@ type UpdateEndpointConnectivityRequest struct {
 	// a CIDR with a prefix length, and only on an `nlb_*` endpoint or, where
 	// the deployment has source filtering on, an `ingress_*` one.
 	AllowedCidrs []string `json:"allowed_cidrs"`
+
+	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
+	// applies. Recorded on the target resource once the work has actually landed,
+	// and echoed back as the resource's `ycp_generation` — so the reconcile agent
+	// can tell an update that landed from one that never finished.
+	//
+	// Who records it follows what the call does. An **asynchronous** verb is
+	// stamped by the task worker, once every step of the task has succeeded; a
+	// **synchronous** one (the two settings PATCHes) is stamped by the handler as
+	// part of the same write, because there the handler *is* the work. Either way
+	// it is never recorded for a request that was refused: a `400` stores nothing
+	// and stamps nothing.
+	//
+	// Omit it: it is for the reconcile agent, and any other caller leaves the
+	// recorded value untouched.
+	YcpGeneration *YCPGenerationApplied `json:"ycp_generation,omitempty"`
+}
+
+// UpdateEndpointSchedulingRequest Request to replace an existing endpoint's tolerations and/or topology
+// spread constraints. Each list given replaces the stored one whole; an
+// omitted list is left as it is, and `[]` clears it.
+type UpdateEndpointSchedulingRequest struct {
+	Tolerations               *[]Toleration               `json:"tolerations,omitempty"`
+	TopologySpreadConstraints *[]TopologySpreadConstraint `json:"topology_spread_constraints,omitempty"`
 
 	// YcpGeneration The YCP (Yugabyte Control Plane) desired-state generation this call
 	// applies. Recorded on the target resource once the work has actually landed,
@@ -2317,6 +2564,9 @@ type UpdateEndpointConnectivityJSONRequestBody = UpdateEndpointConnectivityReque
 // ResizeEndpointJSONRequestBody defines body for ResizeEndpoint for application/json ContentType.
 type ResizeEndpointJSONRequestBody = ResizeEndpointRequest
 
+// UpdateEndpointSchedulingJSONRequestBody defines body for UpdateEndpointScheduling for application/json ContentType.
+type UpdateEndpointSchedulingJSONRequestBody = UpdateEndpointSchedulingRequest
+
 // UpdateEndpointSettingsJSONRequestBody defines body for UpdateEndpointSettings for application/json ContentType.
 type UpdateEndpointSettingsJSONRequestBody = UpdateEndpointSettingsRequest
 
@@ -2665,6 +2915,11 @@ type ClientInterface interface {
 	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateEndpointSchedulingWithBody request with any body
+	UpdateEndpointSchedulingWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateEndpointScheduling(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSchedulingJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UpdateEndpointSettingsWithBody request with any body
 	UpdateEndpointSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3298,6 +3553,30 @@ func (c *Client) ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clus
 
 func (c *Client) ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewResizeEndpointRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointSchedulingWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointSchedulingRequestWithBody(c.Server, poolId, clusterId, branchId, endpointId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointScheduling(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSchedulingJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointSchedulingRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -5273,6 +5552,74 @@ func NewResizeEndpointRequestWithBody(server string, poolId PoolId, clusterId Cl
 	return req, nil
 }
 
+// NewUpdateEndpointSchedulingRequest calls the generic UpdateEndpointScheduling builder with application/json body
+func NewUpdateEndpointSchedulingRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSchedulingJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateEndpointSchedulingRequestWithBody(server, poolId, clusterId, branchId, endpointId, "application/json", bodyReader)
+}
+
+// NewUpdateEndpointSchedulingRequestWithBody generates requests for UpdateEndpointScheduling with any type of body
+func NewUpdateEndpointSchedulingRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "endpointId", endpointId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s/scheduling", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewUpdateEndpointSettingsRequest calls the generic UpdateEndpointSettings builder with application/json body
 func NewUpdateEndpointSettingsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -6024,6 +6371,11 @@ type ClientWithResponsesInterface interface {
 	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
 
 	ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
+
+	// UpdateEndpointSchedulingWithBodyWithResponse request with any body
+	UpdateEndpointSchedulingWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSchedulingResponse, error)
+
+	UpdateEndpointSchedulingWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSchedulingJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSchedulingResponse, error)
 
 	// UpdateEndpointSettingsWithBodyWithResponse request with any body
 	UpdateEndpointSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
@@ -7282,6 +7634,40 @@ func (r ResizeEndpointResponse) ContentType() string {
 	return ""
 }
 
+type UpdateEndpointSchedulingResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateEndpointSchedulingResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateEndpointSchedulingResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateEndpointSchedulingResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type UpdateEndpointSettingsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -8085,6 +8471,23 @@ func (c *ClientWithResponses) ResizeEndpointWithResponse(ctx context.Context, po
 		return nil, err
 	}
 	return ParseResizeEndpointResponse(rsp)
+}
+
+// UpdateEndpointSchedulingWithBodyWithResponse request with arbitrary body returning *UpdateEndpointSchedulingResponse
+func (c *ClientWithResponses) UpdateEndpointSchedulingWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSchedulingResponse, error) {
+	rsp, err := c.UpdateEndpointSchedulingWithBody(ctx, poolId, clusterId, branchId, endpointId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointSchedulingResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateEndpointSchedulingWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSchedulingJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSchedulingResponse, error) {
+	rsp, err := c.UpdateEndpointScheduling(ctx, poolId, clusterId, branchId, endpointId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointSchedulingResponse(rsp)
 }
 
 // UpdateEndpointSettingsWithBodyWithResponse request with arbitrary body returning *UpdateEndpointSettingsResponse
@@ -10079,6 +10482,60 @@ func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, e
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateEndpointSchedulingResponse parses an HTTP response from a UpdateEndpointSchedulingWithResponse call
+func ParseUpdateEndpointSchedulingResponse(rsp *http.Response) (*UpdateEndpointSchedulingResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateEndpointSchedulingResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError

@@ -574,6 +574,48 @@ func TestKubernetesValuesServiceAccount(t *testing.T) {
 	}
 }
 
+// The endpoint's scheduling lists reach the chart verbatim, alongside the
+// deployer's node selector, and are omitted when the endpoint has none.
+func TestKubernetesValuesScheduling(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.NodeSelector = map[string]string{"pool": "amp"}
+	spec := testEndpointSpec()
+	spec.Scheduling = core.Scheduling{
+		Tolerations:               json.RawMessage(`[{"key":"dedicated","operator":"Exists","effect":"NoSchedule"}]`),
+		TopologySpreadConstraints: json.RawMessage(`[{"labelSelector":{"matchLabels":{"amp.yugabyte.com/cluster-id":"c1"}},"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]`),
+	}
+	data, err := json.Marshal(NewKubernetesDeployer(cfg, nil).values(spec, "yb-ep-rel"))
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	var got struct {
+		NodeSelector              map[string]string `json:"nodeSelector"`
+		Tolerations               json.RawMessage   `json:"tolerations"`
+		TopologySpreadConstraints json.RawMessage   `json:"topologySpreadConstraints"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Tolerations) != string(spec.Scheduling.Tolerations) {
+		t.Errorf("tolerations = %s, want %s", got.Tolerations, spec.Scheduling.Tolerations)
+	}
+	if string(got.TopologySpreadConstraints) != string(spec.Scheduling.TopologySpreadConstraints) {
+		t.Errorf("topologySpreadConstraints = %s, want %s", got.TopologySpreadConstraints, spec.Scheduling.TopologySpreadConstraints)
+	}
+	if got.NodeSelector["pool"] != "amp" {
+		t.Errorf("nodeSelector = %v, want the deployer's kept beside the endpoint's tolerations", got.NodeSelector)
+	}
+
+	data, _ = json.Marshal(NewKubernetesDeployer(testKubernetesConfig(), nil).values(testEndpointSpec(), "yb-ep-rel"))
+	var asMap map[string]any
+	_ = json.Unmarshal(data, &asMap)
+	for _, k := range []string{"tolerations", "topologySpreadConstraints"} {
+		if _, present := asMap[k]; present {
+			t.Errorf("%s should be omitted when unset, got %s", k, data)
+		}
+	}
+}
+
 // An endpoint's tags and identity labels reach the chart together as
 // commonLabels, and a spec with neither omits the key.
 func TestKubernetesValuesCommonLabels(t *testing.T) {

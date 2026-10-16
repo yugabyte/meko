@@ -73,7 +73,10 @@ function renderWizard() {
 
 // Walk Cluster -> Extensions -> Compute -> Review and submit. The Compute step
 // will not advance without a password, so filling it is part of the walk.
-async function fillAndCreate({ password = PASSWORD }: { password?: string } = {}) {
+async function fillAndCreate({
+  password = PASSWORD,
+  onCompute,
+}: { password?: string; onCompute?: () => void } = {}) {
   fireEvent.change(screen.getByLabelText(/cluster name/i), { target: { value: "orders" } });
   // The pool Select is a Radix trigger; the wizard needs a pool id before Next.
   fireEvent.click(screen.getByText(/select a pool/i));
@@ -92,6 +95,7 @@ async function fillAndCreate({ password = PASSWORD }: { password?: string } = {}
   if (password) {
     fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: password } });
   }
+  onCompute?.();
   await waitFor(() => {
     const b = screen.getByRole("button", { name: /next/i }) as HTMLButtonElement;
     expect(b.disabled).toBe(false);
@@ -145,5 +149,38 @@ describe("CreateClusterWizard", () => {
 
     await waitFor(() => expect(createClusterWithWriter).toHaveBeenCalled());
     expect(createClusterWithWriter.mock.calls.at(-1)![1].username).toBeUndefined();
+  });
+
+  it("sends no scheduling fields unless some were set", async () => {
+    createClusterWithWriter.mockResolvedValueOnce(task());
+    renderWizard();
+    await fillAndCreate();
+
+    await waitFor(() => expect(createClusterWithWriter).toHaveBeenCalled());
+    const body = createClusterWithWriter.mock.calls.at(-1)![1];
+    expect(body.tolerations ?? []).toEqual([]);
+    expect(body.topologySpreadConstraints ?? []).toEqual([]);
+  });
+
+  // The cluster has no id before the create, so the prefilled selector is the pool's.
+  it("sends a spread constraint added on the Compute step", async () => {
+    createClusterWithWriter.mockResolvedValueOnce(task());
+    renderWizard();
+    await fillAndCreate({
+      onCompute: () => {
+        fireEvent.click(screen.getByRole("button", { name: /scheduling \(advanced\)/i }));
+        fireEvent.click(screen.getByRole("button", { name: /add spread constraint/i }));
+      },
+    });
+
+    await waitFor(() => expect(createClusterWithWriter).toHaveBeenCalled());
+    expect(createClusterWithWriter.mock.calls.at(-1)![1].topologySpreadConstraints).toEqual([
+      {
+        maxSkew: 1,
+        topologyKey: "topology.kubernetes.io/zone",
+        whenUnsatisfiable: "ScheduleAnyway",
+        labelSelector: { matchLabels: { "amp.yugabyte.com/storage-pool-id": "pool-1" } },
+      },
+    ]);
   });
 });

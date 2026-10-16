@@ -25,7 +25,10 @@ import type {
   StoragePoolList,
   Task,
   TaskList,
+  Toleration,
+  TopologySpreadConstraint,
   UpdateBranchSettingsInput,
+  UpdateEndpointSchedulingInput,
   UpdateEndpointSettingsInput,
   UpdateStoragePoolInput,
   User,
@@ -193,6 +196,8 @@ export function createClusterWithWriter(
     connectivity?: EndpointConnectivityMode;
     allowedCidrs?: string[];
     password?: string;
+    tolerations?: Toleration[];
+    topologySpreadConstraints?: TopologySpreadConstraint[];
   },
 ): Promise<Task> {
   const body: Record<string, unknown> = { name: input.name, with_writer: true };
@@ -219,6 +224,10 @@ export function createClusterWithWriter(
   // mean the same to the controller, and absent is the quieter payload.
   if (input.extensions?.length) {
     body.extensions = input.extensions;
+  }
+  if (input.tolerations?.length) body.tolerations = input.tolerations;
+  if (input.topologySpreadConstraints?.length) {
+    body.topology_spread_constraints = input.topologySpreadConstraints;
   }
   return apiRequest<Task>(`/storage-pools/${poolId}/clusters`, {
     method: "POST",
@@ -376,6 +385,24 @@ export async function resizeEndpoint(
     outcome: result.in_place_resize ?? "completed",
     message: result.in_place_message ?? "",
   };
+}
+
+// Async: POST records an update_endpoint_scheduling task, which re-renders the
+// release and so RECREATES the pod; poll it, then read the endpoint back. Only
+// the lists the caller names are sent: omitted keeps, `[]` clears.
+export async function updateEndpointScheduling(
+  poolId: string,
+  clusterId: string,
+  branchId: string,
+  endpointId: string,
+  input: UpdateEndpointSchedulingInput,
+): Promise<Endpoint> {
+  const task = await apiRequest<Task>(
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}/scheduling`,
+    { method: "POST", body: input },
+  );
+  await pollTask(task.id);
+  return getEndpoint(poolId, clusterId, branchId, endpointId);
 }
 
 // Sync: the controller stores the settings, then pushes them to the running

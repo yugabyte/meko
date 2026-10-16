@@ -67,6 +67,10 @@ type CreateEndpointArgs struct {
 	// AllowedCIDRs restricts which sources may reach an nlb_* endpoint's load
 	// balancer (loadBalancerSourceRanges). Empty = unrestricted.
 	AllowedCIDRs []string `json:"allowed_cidrs,omitempty"`
+	// Tolerations and TopologySpreadConstraints are the pod's scheduling lists,
+	// stored in config so a redeploy renders them again.
+	Tolerations               json.RawMessage `json:"tolerations,omitempty"`
+	TopologySpreadConstraints json.RawMessage `json:"topology_spread_constraints,omitempty"`
 	// Extended is per-endpoint compute configuration the control plane passes
 	// through WITHOUT interpreting: extra Postgres settings, and for a locally
 	// deployed compute the ports it binds. Stored under config.extended, nested
@@ -152,6 +156,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		Version:      s.Version,
 		Connectivity: s.Connectivity,
 		AllowedCIDRs: s.AllowedCIDRs,
+		Scheduling:   core.Scheduling{Tolerations: s.Tolerations, TopologySpreadConstraints: s.TopologySpreadConstraints},
 	}, s.yb, s.scURL, exts)
 	// The create is the only deploy that carries a verifier; EndpointSpecFrom
 	// cannot supply one because nothing stores it.
@@ -480,6 +485,12 @@ func endpointConfig(args CreateEndpointArgs, extensions []string, dnsName string
 	}
 	if len(args.AllowedCIDRs) > 0 {
 		cfg["allowed_cidrs"] = args.AllowedCIDRs
+	}
+	if len(args.Tolerations) > 0 && !core.IsEmptyJSONList(args.Tolerations) {
+		cfg[core.ConfigTolerations] = args.Tolerations
+	}
+	if len(args.TopologySpreadConstraints) > 0 && !core.IsEmptyJSONList(args.TopologySpreadConstraints) {
+		cfg[core.ConfigTopologySpreadConstraints] = args.TopologySpreadConstraints
 	}
 	if len(extensions) > 0 {
 		cfg["extensions"] = extensions

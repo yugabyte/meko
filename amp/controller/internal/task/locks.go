@@ -355,6 +355,9 @@ func (s *resizeEndpointStep) Lock() ResourceLock { return EndpointLock(s.Endpoin
 func (s *updateEndpointConnectivityStep) Lock() ResourceLock {
 	return EndpointLock(s.EndpointID.String())
 }
+func (s *updateEndpointSchedulingStep) Lock() ResourceLock {
+	return EndpointLock(s.EndpointID.String())
+}
 func (s *upgradeEndpointStep) Lock() ResourceLock { return EndpointLock(s.EndpointID.String()) }
 func (s *deleteEndpointStep) Lock() ResourceLock  { return EndpointLock(s.EndpointID.String()) }
 
@@ -372,6 +375,7 @@ var (
 	_ Locking = (*createEndpointStep)(nil)
 	_ Locking = (*resizeEndpointStep)(nil)
 	_ Locking = (*updateEndpointConnectivityStep)(nil)
+	_ Locking = (*updateEndpointSchedulingStep)(nil)
 	_ Locking = (*upgradeEndpointStep)(nil)
 	_ Locking = (*rerenderEndpointStep)(nil)
 	_ Locking = (*planEndpointRerendersStep)(nil)

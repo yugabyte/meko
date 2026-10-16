@@ -82,7 +82,20 @@ export const dataBranchingMessages = {
     `${key} appears twice under ${label}. Edit the existing row instead of adding a second one.`,
   settingsInvalidValue: (label: string, key: string) => `${key} under ${label} needs a number.`,
 
-  // Unprovision (delete compute)
+  // Scheduling (tolerations + topology spread constraints)
+  schedulingTitle: "Scheduling",
+  schedulingSection: "Scheduling (advanced)",
+  schedulingDescription:
+    "Tolerations let this compute's pod run on tainted nodes. A spread constraint places it relative to the other pods its label selector matches — across zones, by default.",
+  schedulingRecreateWarning:
+    "Saving recreates this compute's pod under the new rules: every client connection is dropped, as on an upgrade.",
+  schedulingSaved: "Scheduling updated — the compute's pod was recreated",
+  schedulingError: "Failed to update scheduling",
+  schedulingNoTolerations: "No tolerations.",
+  schedulingNoSpread: "No spread constraints.",
+  schedulingExtraFields: (fields: string) => `Also sets ${fields} — switch to JSON to edit them.`,
+  schedulingFixBeforeSwitch: "Fix the error above before switching editors.",
+
   unprovisionTitle: (role: string) => `Unprovision ${role} compute?`,
   unprovisionConfirmReadWrite:
     "This removes the branch's read-write compute — the branch won't be writable until you provision read-write compute again. The branch and its data are untouched; any active connections are dropped.",

@@ -35,6 +35,8 @@ import type {
   SettingsUpdateResult,
   StoragePool,
   Task,
+  Toleration,
+  TopologySpreadConstraint,
   UpdateBranchSettingsInput,
   User,
   RegisterExtensionInput,
@@ -243,6 +245,8 @@ export function useCreateClusterWithWriter() {
       connectivity?: EndpointConnectivityMode;
       allowedCidrs?: string[];
       password?: string;
+      tolerations?: Toleration[];
+      topologySpreadConstraints?: TopologySpreadConstraint[];
     }) =>
       createClusterWithWriter(input.poolId, {
         name: input.name,
@@ -253,6 +257,8 @@ export function useCreateClusterWithWriter() {
         engine: input.engine,
         extensions: input.extensions,
         password: input.password,
+        tolerations: input.tolerations,
+        topologySpreadConstraints: input.topologySpreadConstraints,
       }),
     onSuccess: (_task, input) => {
       qc.invalidateQueries({ queryKey: qk.clusters(input.poolId) });

@@ -123,6 +123,10 @@ type EndpointSpec struct {
 	// own), rendered as labels on every object of its release. Only the
 	// Kubernetes deployer implements this.
 	Labels map[string]string
+	// Scheduling is the endpoint's own tolerations and topology spread
+	// constraints, rendered verbatim onto the pod. Only the Kubernetes deployer
+	// implements this.
+	Scheduling core.Scheduling
 	// Identity is IdentityLabels of the endpoint, rendered alongside Labels.
 	Identity map[string]string
 	// IdentityAnnotations is IdentityAnnotations of the endpoint, rendered on its
@@ -370,6 +374,7 @@ func EndpointSpecFrom(e core.EndpointDeploy, yb YBConn, controllerURL string, mo
 		DNSName:             e.DNSName,
 		Extensions:          mounts,
 		Labels:              e.Labels,
+		Scheduling:          e.Scheduling,
 		Identity:            IdentityLabels(e),
 		IdentityAnnotations: IdentityAnnotations(e),
 		// No PasswordVerifier: there is nowhere to read one from. The password is
@@ -457,6 +462,12 @@ type DocumentDBGatewayRouter interface {
 
 type ConnectivitySupporter interface {
 	SupportsConnectivity() bool
+}
+
+// SchedulingSupporter is implemented by a deployer that renders
+// EndpointDeploy.Scheduling onto the pod.
+type SchedulingSupporter interface {
+	SupportsScheduling() bool
 }
 
 // SourceRangesUpdater is implemented by a deployer that can replace an nlb_*
