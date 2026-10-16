@@ -17,7 +17,7 @@ import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, dotTitle, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, totalTokens, usageTitle } from '../util';
+import { approveLabel, cx, dotState, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
@@ -81,6 +81,7 @@ export function ProjectView({
   onOpenPr,
   onRename,
   onMenu,
+  showTabs,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -97,6 +98,8 @@ export function ProjectView({
   onRename: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
+  /** The wide layout's projects pane is hidden, taking the session list with it: show the tabs instead. */
+  showTabs: boolean;
   onError: (msg: string) => void;
 }) {
   const mobile = useIsMobile();
@@ -250,7 +253,8 @@ export function ProjectView({
     </span>
   );
 
-  // On a phone the tabs sit in the app bar, between the drawer button and the session's actions.
+  // On a phone the tabs sit in the app bar, between the drawer button and the session's actions. On a
+  // desktop the sessions are listed under their project in the rail, and the tabs show only while it's hidden.
   const tabs = (
     <div className="tabs" role="tablist" ref={tabsRef}>
       {sessions.map((s) => (
@@ -260,15 +264,8 @@ export function ProjectView({
           aria-selected={s.id === session?.id}
           className={cx('tab', s.id === session?.id && 'sel')}
           onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
-          // A double-click renames it (on a phone: Rename session in the ⋯ sheet).
           onDoubleClick={mobile ? undefined : () => onRename(s.id)}
-          title={[
-            s.name,
-            dotTitle(s) +
-              (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
-            STAGE_LABELS[s.stage],
-            `${formatTokens(totalTokens(s.usage))} tokens`,
-          ].join(' · ') + (mobile ? '' : '\nDouble-click to rename')}
+          title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
         >
           <StatusDot status={dotState(s)} phase={s.id} />
           <span className="tab-name">{s.name}</span>
@@ -367,7 +364,7 @@ export function ProjectView({
         />
       )}
 
-      {!mobile && tabs}
+      {!mobile && showTabs && tabs}
 
       <div className="workarea">
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with

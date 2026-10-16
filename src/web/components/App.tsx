@@ -17,6 +17,7 @@ import {
   lastOpenSession,
   lastSessionClosed,
   liveSessions,
+  openSessions,
   modKey,
   withCreated,
   withOpened,
@@ -235,7 +236,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   const currentProject =
     route.view === 'root' || route.view === 'usage' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
   const live = useMemo(
-    () => (currentProject ? liveSessions(currentProject).sort((a, b) => a.createdAt - b.createdAt) : []),
+    () => (currentProject ? openSessions(currentProject) : []),
     [currentProject],
   );
   const currentSession =
@@ -520,6 +521,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       <Rail
         projects={projects}
         currentId={currentProject?.id ?? null}
+        currentSessionId={currentSession?.id ?? null}
         usageOpen={route.view === 'usage'}
         onUsage={() => {
           navigate({ view: 'usage' }, { replace: isDrawerEntry() });
@@ -536,6 +538,15 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           goProject(p);
           closeDrawer();
         }}
+        onSelectSession={(s) => {
+          navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
+          closeDrawer();
+        }}
+        onNewSession={(projectId) => {
+          closeDrawer();
+          setModal({ kind: 'new-session', projectId });
+        }}
+        onRenameSession={(sessionId) => setModal({ kind: 'rename', sessionId })}
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
@@ -595,6 +606,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onMenu={openDrawer}
+            showTabs={railHidden}
             onError={showToast}
           />
         ) : (

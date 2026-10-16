@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
-import type { LimitWindow, PlanLimits, ProjectWithSessions } from '../../shared/types';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
+import { STAGE_LABELS, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth } from '../rail';
 import { ariaBinding, shortcutLabel } from '../shortcuts';
 import type { ThemePref } from '../theme';
-import { aggregateDot, cx, formatTokens, isMac, liveSessions, relativeTime, repoFolder, totalTokens } from '../util';
+import { aggregateDot, cx, dotState, formatTokens, isMac, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { StatusDot } from './common';
 
 export function Rail({
   projects,
   currentId,
+  currentSessionId,
   usageOpen,
   onUsage,
   username,
@@ -20,6 +21,9 @@ export function Rail({
   theme,
   onCycleTheme,
   onSelect,
+  onSelectSession,
+  onNewSession,
+  onRenameSession,
   onNewProject,
   onSettings,
   onLogout,
@@ -33,6 +37,8 @@ export function Rail({
 }: {
   projects: ProjectWithSessions[];
   currentId: string | null;
+  /** The session on screen, highlighted under its project. */
+  currentSessionId: string | null;
   /** The Usage page is showing. */
   usageOpen: boolean;
   onUsage: () => void;
@@ -46,6 +52,11 @@ export function Rail({
   theme: ThemePref;
   onCycleTheme: () => void;
   onSelect: (p: ProjectWithSessions) => void;
+  onSelectSession: (s: Session) => void;
+  /** New session in this project, offered under the project on screen. */
+  onNewSession: (projectId: string) => void;
+  /** Double-clicking a session renames it; touch screens use Rename session in the ⋯ sheet. */
+  onRenameSession: (sessionId: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
   /** Signs out; left out when there's no login (local access). */
@@ -71,6 +82,10 @@ export function Rail({
   const navRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
   const mod = isMac() ? '⌘' : 'Ctrl+';
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    listRef.current?.querySelector('.rail-sess.sel')?.scrollIntoView({ block: 'nearest' });
+  }, [currentSessionId]);
   const who = [
     onLogout ? `Signed in as ${username}` : username,
     serverName && ` on ${serverName}`,
@@ -101,44 +116,72 @@ export function Rail({
         <span className="rail-search-text">Ask AgentK</span>
         {!touch && paletteKey && <kbd aria-hidden="true">{shortcutLabel(paletteKey)}</kbd>}
       </button>
-      <div className="rail-list">
+      <div className="rail-list" ref={listRef}>
         {projects.map((p, i) => {
-          const count = liveSessions(p).length;
+          const sessions = openSessions(p);
+          const count = sessions.length;
+          const current = p.id === currentId;
+          // The project row is highlighted only when none of its sessions is: one highlight at a time.
+          const sessionShown = current && sessions.some((s) => s.id === currentSessionId);
           return (
-            <button
-              key={p.id}
-              className={cx('proj', p.id === currentId && 'sel', overId === p.id && dragId !== p.id && (dropAfter(p.id) ? 'drop-after' : 'drop-target'))}
-              onClick={() => onSelect(p)}
-              aria-current={p.id === currentId ? 'page' : undefined}
-              draggable={!touch}
-              onDragStart={(e) => {
-                setDragId(p.id);
-                e.dataTransfer.effectAllowed = 'move';
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setOverId(p.id);
-              }}
-              onDragLeave={() => setOverId((o) => (o === p.id ? null : o))}
-              onDrop={(e) => {
-                e.preventDefault();
-                drop(p.id);
-                setDragId(null);
-                setOverId(null);
-              }}
-              onDragEnd={() => {
-                setDragId(null);
-                setOverId(null);
-              }}
-              title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
-            >
-              {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
-              <span className="proj-text">
-                <span className="proj-name">{p.name}</span>
-                <span className="proj-repo">{repoFolder(p.repoPath)}</span>
-              </span>
-              <span className="n">{count}</span>
-            </button>
+            <Fragment key={p.id}>
+              <button
+                className={cx('proj', current && (sessionShown ? 'cur' : 'sel'), overId === p.id && dragId !== p.id && (dropAfter(p.id) ? 'drop-after' : 'drop-target'))}
+                onClick={() => onSelect(p)}
+                aria-current={current && !sessionShown ? 'page' : undefined}
+                draggable={!touch}
+                onDragStart={(e) => {
+                  setDragId(p.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setOverId(p.id);
+                }}
+                onDragLeave={() => setOverId((o) => (o === p.id ? null : o))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  drop(p.id);
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
+              >
+                {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
+                <span className="proj-text">
+                  <span className="proj-name">{p.name}</span>
+                  <span className="proj-repo">{repoFolder(p.repoPath)}</span>
+                </span>
+                <span className="n">{count}</span>
+              </button>
+              {(count > 0 || current) && (
+                <div className="rail-sessions" role="group" aria-label={`Sessions in ${p.name}`}>
+                  {sessions.map((s) => (
+                    <button
+                      key={s.id}
+                      className={cx('rail-sess', s.id === currentSessionId && 'sel')}
+                      onClick={() => onSelectSession(s)}
+                      onDoubleClick={touch ? undefined : () => onRenameSession(s.id)}
+                      aria-current={s.id === currentSessionId ? 'page' : undefined}
+                      title={sessionTabTitle(s) + (touch ? '' : '\nDouble-click to rename')}
+                    >
+                      <StatusDot status={dotState(s)} phase={s.id} />
+                      <span className="rail-sess-name">{s.name}</span>
+                      <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+                    </button>
+                  ))}
+                  {current && (
+                    <button className="rail-sess rail-sess-new" onClick={() => onNewSession(p.id)}>
+                      + New session
+                    </button>
+                  )}
+                </div>
+              )}
+            </Fragment>
           );
         })}
         <button className="rail-add" onClick={onNewProject}>

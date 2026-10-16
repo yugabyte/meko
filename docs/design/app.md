@@ -4,7 +4,12 @@ Part of the [AgentK Local design](../design.md).
 
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
-screen, use **Move up** / **Move down** in the project home's settings. The top tabs hold that project's sessions. The
+screen, use **Move up** / **Move down** in the project home's settings. Each project's open sessions
+are listed under it in the rail, oldest first, one row each with its status dot, its full name
+(wrapped, not cut off) and its stage, so many show at once and any can be opened with one click,
+in any project. The session on screen is highlighted (its project's name turns bold instead), and
+**+ New session** follows the sessions of the project on screen. The rail is 248 px wide so the
+names have room. The
 main pane is the live Claude terminal, and the footer shows where the session is working: branch,
 diff size, tokens, the project's Meko datapack (`Meko:<datapack>`) and stage. On a desktop, clicking
 the branch copies the full path of the session's worktree (its tooltip shows the path, and the label
@@ -16,9 +21,9 @@ are easy to tell apart. The server name is `[server] name` (set in Settings), el
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
 version moves below it first, then the user name is cut off before the server name.
 
-![The AgentK Local window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
+![The AgentK Local window: the project rail, the stage bar and a live Claude terminal](../screenshots/workbench.png)
 
-Session states, shown with a dot in the rail and on each tab:
+Session states, shown with a dot on each session (in the rail, and on a phone's tabs) and on its project:
 
 - **Working:** the dot's halo blinks
 - **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
@@ -36,7 +41,7 @@ Session states, shown with a dot in the rail and on each tab:
 - **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
   review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,
   turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
-  (`dotState()`). The tab's tooltip says what the gate waits on (a merge's from `queuedText()`;
+  (`dotState()`). The session's tooltip says what the gate waits on (a merge's from `queuedText()`;
   an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
@@ -59,12 +64,12 @@ interrupted turn's `/mod/turn`) and on a reset
   m whenever one of its sessions is calling Meko.
 - **How it looks:** the working dot drawn at 12 px (10 px in the layout, with `margin: -1px`, so the
   tab keeps its width as calls start and end), with `/meko-m.png` as an 8 px white mask. It keeps
-  the working blink. The tab's tooltip and the palette say *calling Meko*.
+  the working blink. The session's tooltip and the palette say *calling Meko*.
 - **Why the mod and not command hooks:** AgentK's hooks see the end of every tool call
   (`PostToolUse`) but the start of only a few. A `PreToolUse` matcher would add a process per call
   and leave a failed or interrupted call to a guess. The mod brackets each call exactly.
 
-**Renaming a session.** Double-click its tab (on a phone, **Rename session** in the ⋯ sheet; or
+**Renaming a session.** Double-click it in the rail (on a phone, **Rename session** in the ⋯ sheet; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
 changes: the branch, worktree, pane and Meko agent id were named from it once, at the start,
 and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
@@ -194,8 +199,9 @@ lets every bound key through to the app. The tab isn't shown in the phone layout
 
 **The projects pane.** In the wide layout, the shortcut, the pane button at the right of the
 rail's foot, or **Hide projects** in the palette shrinks the rail to a strip holding a button that
-shows it again (so a touch screen can too). Dragging the pane's right edge (or the arrow keys on
-it) sets its width, from 180 to 480 px; a double-click on the edge goes back to 228 px. Whether
+shows it again (so a touch screen can too). The rail lists the sessions, so while it's hidden the
+session tabs show above the terminal instead (double-click one to rename it). Dragging the pane's right edge (or the arrow keys on
+it) sets its width, from 180 to 480 px; a double-click on the edge goes back to 248 px. Whether
 it's hidden and its width are kept in this browser (`ak-rail-hidden`, `ak-rail-width`;
 `src/web/rail.ts`). In the phone layout the same shortcut and palette item open the drawer. To copy from the terminal, drag across the text and
 press `Ctrl+C` (`⌘C`), which
@@ -288,8 +294,9 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
 app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
-top of the screen, in place of `⌘K`). The app bar also holds the session tabs, between the drawer
-button and ⋯, so the session name isn't repeated above them (each tab shows its status and stage). The session header,
+top of the screen, in place of `⌘K`), and lists the sessions under their projects as on a desktop.
+The app bar also holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
+can switch sessions without opening the drawer (each tab shows its status and stage). The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a

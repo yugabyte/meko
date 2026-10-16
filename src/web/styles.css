@@ -671,8 +671,9 @@ textarea.input {
 /* ---------- Shell ---------- */
 .app {
   display: grid;
-  /* Wide enough for the rail's search bar ("Ask AgentK" beside Ctrl+K) and the projects' names. */
-  grid-template-columns: var(--rail-w, 228px) minmax(0, 1fr);
+  /* Wide enough for the rail's search bar ("Ask AgentK" beside Ctrl+K), the projects' names and,
+     under them, their sessions' names (which wrap rather than cut off). */
+  grid-template-columns: var(--rail-w, 248px) minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
@@ -800,6 +801,51 @@ textarea.input {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-size: 12px;
+}
+/* A project's sessions, indented under it. */
+.rail-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 4px 16px;
+}
+.rail-sess {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-sess:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+.rail-sess.sel {
+  color: var(--ink);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.rail-sess-name {
+  overflow-wrap: anywhere;
+}
+.rail-sess-new {
+  display: block;
+  padding-left: 27px;
+}
+.rail-sess-new:hover {
+  color: var(--accent);
+  background: transparent;
+}
+.proj.cur .proj-name {
+  font-weight: 600;
 }
 .rail-add {
   border: 0;
@@ -4680,6 +4726,9 @@ div[id^='dak-mermaid-'] .label {
   .proj,
   .rail-add {
     padding: 10px 8px;
+  }
+  .rail-sess {
+    min-height: 36px;
   }
   .rail-search {
     min-height: 40px;

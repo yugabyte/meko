@@ -3,7 +3,7 @@
 const HIDDEN_KEY = 'ak-rail-hidden';
 const WIDTH_KEY = 'ak-rail-width';
 
-export const RAIL_DEFAULT = 228;
+export const RAIL_DEFAULT = 248;
 export const RAIL_MIN = 180;
 export const RAIL_MAX = 480;
 

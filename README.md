@@ -73,7 +73,7 @@ your phone can connect.
 
 ## Features
 
-- **Projects** in a left rail: each is an effort to build or improve a feature, product or service,
+- **Projects** in a left rail, each with its open sessions listed under it: each is an effort to build or improve a feature, product or service,
   worked on in a git repo picked from your repos folder (`~/code` by default), cloned into it, or
   started there as a new repo (git init and a first commit). A repo with no commits yet, or an
   empty folder, gets the same empty first commit, so sessions have a base to branch from; a repo
@@ -188,7 +188,7 @@ your phone can connect.
   **Move on…**, and a session in review can go back to Code or Design. A move carries on from what the
   session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
   button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
-  (double-click its tab): its branch and worktree keep their names.
+  (double-click it in the rail): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
