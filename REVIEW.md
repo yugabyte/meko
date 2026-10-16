@@ -240,7 +240,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the transcript reader and recall at
       start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
       typed, into the project's dedicated datapack only, as AgentK in the project's conversation,
-      and a question is marked taught only once Meko took it. Queries stay in the database: the
+      and a question is marked taught only once Meko took it. A learn step marks only questions
+      still open when it writes, offered from Claude's own searches (never one asked only by
+      AgentK's search at start), the session's own first. Queries stay in the database: the
       usage report gets counts only. A reply too large for Claude is read for a search's quality
       only from the session's `tool-results` folder (`savedreply.ts`), and never changes what the
       usage counts (the notice is what Claude read).
