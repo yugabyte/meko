@@ -30,8 +30,10 @@ export function HeldImages({ held, hint, actions }: { held: Held<Blob>; hint: st
               {item.thumb ? (
                 <img src={item.thumb} alt={item.path ? label : `${label}, uploading`} />
               ) : (
+                // The name shows on the tile: a phone has no hover for its title.
                 <span className="held-file" role="img" aria-label={item.path ? label : `${label}, uploading`}>
-                  {fileBadge(item.name)}
+                  <span className="held-file-ext">{fileBadge(item.name)}</span>
+                  <span className="held-file-name">{item.name || label}</span>
                 </span>
               )}
               <button

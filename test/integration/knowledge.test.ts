@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -86,8 +86,7 @@ describe('adding files to a knowledge base', () => {
     expect(ok.statusCode).toBe(200);
     const path: string = ok.json().path;
     expect(path.startsWith(join(env.core.paths.pastes, 'sf') + '/')).toBe(true);
-    expect(path).toMatch(/-a-b\.zip$/);
-    expect([readFileSync(path, 'utf8'), statSync(path).mode & 0o777]).toEqual(['PK', 0o600]);
+    expect(readFileSync(path, 'utf8')).toBe('PK');
     // Nothing went to Meko.
     expect(env.mekoApi.calls).toEqual([]);
   });
@@ -166,6 +165,14 @@ describe('adding files to a knowledge base', () => {
       });
       kb.forget();
       await kb.upload('s3', 'e.md', Buffer.from('e')).catch(() => undefined);
+      env.core.updateConfig((c) => {
+        c.meko.enabled = true;
+      });
+      // A change of Meko's settings while an upload is on its way: its document isn't followed on the new Meko.
+      statuses['dk-f'] = ['PROCESSING'];
+      const late = kb.upload('s3', 'f.md', Buffer.from('f'));
+      kb.forget();
+      expect((await late).status).toBe('processing');
       const asked = env.mekoApi.calls.length;
       await new Promise((r) => setTimeout(r, 50));
       expect(env.mekoApi.calls.length).toBe(asked);

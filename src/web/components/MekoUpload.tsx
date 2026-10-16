@@ -12,6 +12,8 @@ import { Busy } from './common';
 export function MekoUpload({ term, datapack }: { term: SessionTerminal; datapack: string }) {
   const plan = mekoPlan(term.held.list);
   const { asking, sending } = term.meko;
+  // While held paths are being pasted to Claude, the files are theirs: Upload waits.
+  const busy = term.sending;
   if (sending.size) {
     return (
       <span className="held-meko" role="status">
@@ -22,7 +24,7 @@ export function MekoUpload({ term, datapack }: { term: SessionTerminal; datapack
   if (!plan.upload.length) return null;
   if (!asking) {
     return (
-      <button type="button" className="btn small held-meko" onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => term.askMeko(true)}>
+      <button type="button" className="btn small held-meko" disabled={busy} onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => term.askMeko(true)}>
         Upload to Meko
       </button>
     );
@@ -34,7 +36,7 @@ export function MekoUpload({ term, datapack }: { term: SessionTerminal; datapack
         <button type="button" className="btn small" onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => term.askMeko(false)}>
           Cancel
         </button>
-        <button type="button" className="btn small primary" onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => void term.uploadToMeko()}>
+        <button type="button" className="btn small primary" disabled={busy} onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => void term.uploadToMeko()}>
           Upload
         </button>
       </span>

@@ -221,16 +221,22 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   (409 off), the project's dedicated datapack (409 none: the one the UI names, so a running session
   after a switch still uploads where the question said), the name (its base name only, with a known
   extension, else 400), and the body (400 empty, 413 over 50 MB, the route's ceiling in Meko). It
-  doesn't look at the bytes: Meko checks them against the extension.
+  doesn't look at the bytes: Meko checks them against the extension. Upload to Meko sends what the
+  strip holds, and the strip holds files up to 20 MB (the paste limit), so from the UI a file goes
+  to Meko at 20 MB at most.
 - **Meko's route.** `MekoApi.uploadKnowledge()` posts `multipart/form-data` with a `file` part to
   `/datapacks/:id/knowledge-bases/upload` with the same key as MCP, and waits up to 2 minutes.
   Meko stores the file and starts indexing it, answering 202 `processing`, or 200
-  `already_uploaded` / `already_processed` for bytes it already has ("already there"). An answer with no document key, or a status AgentK doesn't know, is
-  `uploaded`: shown as added, and not followed. Meko lets only the datapack's owner and maintainers upload. Its refusals come
-  back in words: a 403 asks the owner for maintainer access; a 401 (or a key without write scope)
-  points at the Meko tab; a 404 without Meko's envelope means a Meko without the route; Meko's own
-  message for 400 and 413 (a plan's smaller file limit). The browser never gets a 401 from it,
-  which would sign it out. The upload is in the session's Meko call log (`knowledge_base_upload`).
+  `already_uploaded` / `already_processed` for bytes it already has ("already there"). An answer
+  with no document key, or a status AgentK doesn't know, is `uploaded`: shown as added, and not
+  followed. Meko lets only the datapack's owner and maintainers upload. Its refusals come back in
+  words that say what to do (`uploadError()`): a 403 asks the owner for maintainer access; a 401 (or
+  a key without write scope) points at the Meko tab; a 404 without Meko's envelope means a Meko
+  without the route (add the file in Meko's web app, or have that Meko updated); a 404 in it, a
+  datapack Meko doesn't have (check the project's datapack); Meko's own message for 400 and 413 (a
+  plan's smaller file limit); anything else, try again or use Meko's web app. Only 400, 403, 413
+  and 415 keep their status; the rest are 502, so the browser never gets a 401, which would sign it
+  out. The upload is in the session's Meko call log (`knowledge_base_upload`).
 - **Indexing.** For a `processing` upload the server follows
   `/datapacks/:id/knowledge-bases/document-status?document_key=` (its `document_status`) every
   5 seconds for a minute, then every 30, and gives up after 15 minutes. Waiting only covers what
@@ -240,4 +246,4 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   `/ws/events`, and a page showing that session's terminal says so in a notice ("notes.md is in
   the knowledge base"). With Meko turned off it makes no more calls, and a change of Meko's URL or
   key (`mekoChanged()`) drops the list, saying nothing, since the documents may not be on the new
-  Meko. The list is in memory only: a restart drops it too, and the files are in Meko all the same.
+  Meko; an upload still on its way then isn't followed either (a generation counter). The list is in memory only: a restart drops it too, and the files are in Meko all the same.

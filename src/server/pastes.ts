@@ -74,13 +74,18 @@ function writeImage(dir: string, image: { data: Buffer; ext: string }, now: Date
 
 /**
  * A pasted file's name made safe to keep in its saved name: no folders, only letters, digits,
- * dots, dashes and underscores (so the path pastes as one word), at most 60 characters, never
- * starting with a dot. Empty when nothing of it is left.
+ * dots, dashes and underscores (so the path pastes as one word), never starting with a dot. The
+ * extension is kept apart, since Claude's Read tool goes by it: a name whose stem has nothing safe
+ * left is `file.<ext>`. Empty when nothing of it is left.
  */
 export function safeFileName(name: unknown): string {
   if (typeof name !== 'string') return '';
   const base = name.split(/[/\\]/).pop() ?? '';
-  return base.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').slice(-60).replace(/^[.-]+/, '');
+  const dot = base.lastIndexOf('.');
+  const ext = dot > 0 ? base.slice(dot + 1).replace(/[^A-Za-z0-9]/g, '').slice(0, 10) : '';
+  const stem = (dot > 0 ? base.slice(0, dot) : base)
+    .replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 50);
+  return ext ? `${stem || 'file'}.${ext}` : stem;
 }
 
 /**

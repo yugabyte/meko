@@ -413,6 +413,8 @@ class SessionTerminal {
       for (const [i, p] of pastes.entries()) {
         // One paste at a time, so Claude Code makes each image path an [Image #N].
         if (i) await sleep(IMAGE_PASTE_GAP);
+        // Upload to Meko took it meanwhile: it's Meko's, not Claude's.
+        if (p.image && this.meko.sending.has(p.image.id)) continue;
         if (!this.send({ type: 'input', data: p.data })) return cutOff();
         sent = true;
         if (p.image) this.held.release([p.image]);
@@ -461,11 +463,14 @@ class SessionTerminal {
     e.dataTransfer.dropEffect = 'copy';
   };
 
-  /** Files dropped on the terminal, images or not, are held for Claude; the browser would otherwise open them. */
+  /**
+   * Files dropped on the terminal, images or not, are held for Claude (by the paste's rule for text
+   * alongside them); the browser would otherwise open them.
+   */
   private onDrop = (e: DragEvent) => {
     if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
-    this.holdFiles(Array.from(e.dataTransfer.files));
+    this.holdFiles(pastedFiles(e.dataTransfer));
   };
 
   /** Shows or hides Upload to Meko's question in the strip. Not while an upload runs. */
@@ -481,7 +486,7 @@ class SessionTerminal {
    * held. A notice sums it up.
    */
   async uploadToMeko() {
-    if (this.meko.sending.size) return;
+    if (this.meko.sending.size || this.sending) return;
     const items = mekoPlan(this.held.list).upload;
     if (!items.length) return;
     this.meko = { asking: false, sending: new Set(items.map((i) => i.id)) };

@@ -67,9 +67,13 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
     return new HttpError(403, `You can't add files to ${datapackName}: only its owner and maintainers can. Ask the owner for maintainer access.`);
   }
   // A 404 without Meko's envelope: the route itself isn't there (an older Meko).
-  if (e.status === 404 && e.code === 'HTTP_404') return new HttpError(502, "This Meko doesn't take uploads from AgentK yet.");
+  if (e.status === 404 && e.code === 'HTTP_404') {
+    return new HttpError(502, "This Meko doesn't take uploads from AgentK yet. Add the file from Meko's web app, or ask whoever runs that Meko server to update it.");
+  }
+  if (e.status === 404) return new HttpError(502, `Meko couldn't find ${datapackName}: ${e.message}. Check the project's datapack on its home page.`);
   if (e.status === 400 || e.status === 413 || e.status === 415) return new HttpError(e.status, e.message);
-  return new HttpError(502, e.message);
+  if (e.status === 0) return new HttpError(502, e.message);
+  return new HttpError(502, `Meko couldn't add the file: ${e.message} Try again in a minute; if it keeps failing, add it from Meko's web app.`);
 }
 
 /**
@@ -81,6 +85,8 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
 export class KnowledgeService {
   private followed = new Map<string, Followed>();
   private stopped = false;
+  /** Bumped by forget(): an upload that started before it doesn't follow its document on the new Meko. */
+  private generation = 0;
 
   constructor(private core: Core, private api: MekoApi, private timing: KnowledgeTiming = TIMING) {}
 
@@ -97,6 +103,7 @@ export class KnowledgeService {
     if (body.length > MAX_KB_UPLOAD_BYTES) throw new HttpError(413, `${filename} is over ${MAX_KB_UPLOAD_BYTES / 1024 / 1024} MB.`);
 
     const at = Date.now();
+    const generation = this.generation;
     let reply: KnowledgeUploadReply | null = null;
     let error: unknown = null;
     try {
@@ -114,7 +121,8 @@ export class KnowledgeService {
     // Followed only with a key to follow it by; any other answer is an upload AgentK can't report on.
     const status = reply.status === 'already_uploaded' || reply.status === 'already_processed' ? reply.status
       : reply.status === 'processing' && reply.documentKey ? 'processing' : 'uploaded';
-    if (status === 'processing') this.follow(row.id, dp.id, reply.documentKey, filename);
+    // Meko's settings changed while it uploaded: its document may not be on the Meko AgentK asks now.
+    if (status === 'processing' && generation === this.generation) this.follow(row.id, dp.id, reply.documentKey, filename);
     return { filename, documentKey: reply.documentKey, datapackName: dp.name, status };
   }
 
@@ -129,6 +137,7 @@ export class KnowledgeService {
    * so their datapack and document keys may not be on the Meko AgentK talks to now.
    */
   forget(): void {
+    this.generation++;
     for (const f of this.followed.values()) if (f.timer) clearTimeout(f.timer);
     this.followed.clear();
   }

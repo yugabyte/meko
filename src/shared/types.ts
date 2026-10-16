@@ -1446,7 +1446,11 @@ export interface PastedImage {
  */
 export const KB_UPLOAD_EXTS = ['pdf', 'txt', 'text', 'md', 'json', 'csv', 'xml', 'html', 'htm'] as const;
 
-/** The largest file AgentK sends to a knowledge base: the ceiling of Meko's upload route. Smaller plans get Meko's 413. */
+/**
+ * The largest file the knowledge route takes: the ceiling of Meko's upload route (smaller plans get
+ * Meko's 413). Upload to Meko sends files held in a terminal's strip, which holds files up to
+ * MAX_PASTE_BYTES, so from the UI that's the limit.
+ */
 export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /**
@@ -2141,7 +2145,8 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/knowledge?name=  file bytes → KnowledgeUpload   (the body is the file, as
 //        application/octet-stream, else 415; `name` is its base name, with an extension in KB_UPLOAD_EXTS, else 400;
 //        empty 400, over MAX_KB_UPLOAD_BYTES 413; 409 for an archived session, with Meko off, or a project with no
-//        dedicated datapack. Sent to Meko's knowledge-base upload route; Meko's refusals come back with their status)
+//        dedicated datapack. Sent to Meko's knowledge-base upload route. Meko's 400, 403, 413 and 415 come back with
+//        their status; anything else Meko answers (a refused key included), or Meko unreachable, is a 502)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)

@@ -4469,19 +4469,33 @@ div[id^='dak-mermaid-'] .label {
 .held.uploading img {
   opacity: 0.45;
 }
-/* A held file that isn't an image: its extension on a tile the size of a thumbnail. */
+/* A held file that isn't an image: a wider tile with its extension, and its name cut to fit. */
+.held.file {
+  width: 96px;
+}
 .held-file {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   width: 100%;
   height: 100%;
+  padding: 0 6px;
   border: 1px solid var(--rule);
   border-radius: 6px;
   background: var(--sunk);
   font-size: 10px;
+  color: var(--muted);
+}
+.held-file-ext {
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: var(--muted);
+}
+.held-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
 }
 .held.uploading .held-file {
   opacity: 0.45;

@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_PASTE_BYTES, MAX_START_IMAGES } from '../../src/shared/types.js';
 import {
-  STAGED_MAX_AGE_MS, checkStaged, claimStaged, claimedPath, imageExt, pasteDir, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage, stagedDir,
+  STAGED_MAX_AGE_MS, checkStaged, claimStaged, claimedPath, imageExt, pasteDir, removePastes, removeStaged, safeFileName, savePastedFile, savePastedImage, stageImage, stagedDir,
   sweepStaged,
 } from '../../src/server/pastes.js';
 import { tempDir } from '../helpers.js';
@@ -59,7 +59,9 @@ describe('pasted images', () => {
   it('saves a file of any type with its safe name kept, owner-only, and refuses what it must', () => {
     const path = savePastedFile(root, 's1', Buffer.from('%PDF-1'), '../My Spec (v2).pdf', new Date('2026-10-05T12:34:56.789Z'));
     expect(dirname(path)).toBe(pasteDir(root, 's1'));
-    expect(basename(path)).toMatch(/^20261005-123456-[0-9a-f]{8}-My-Spec-v2-\.pdf$/);
+    expect(basename(path)).toMatch(/^20261005-123456-[0-9a-f]{8}-My-Spec-v2\.pdf$/);
+    // The extension survives a name with nothing safe before it: Claude's Read goes by it.
+    expect(['отчёт.pdf', 'notes', '.bashrc', 'a..b.tar.gz', 'x.p d f'].map(safeFileName)).toEqual(['file.pdf', 'notes', 'bashrc', 'a..b.tar.gz', 'x.pdf']);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(basename(savePastedFile(root, 's1', Buffer.from('x'), '...'))).toMatch(/^\d{8}-\d{6}-[0-9a-f]{8}$/);
     const status = (data: unknown) => {
