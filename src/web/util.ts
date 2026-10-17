@@ -321,6 +321,14 @@ export function totalTokens(u: TokenUsage): number {
   return u.input + u.output + u.cacheRead + u.cacheWrite;
 }
 
+/**
+ * One of a usage row's token counts, or a dash for a Kiro-only row (credits and no tokens: Kiro's
+ * `auto` model counts none), so it doesn't read as zero use.
+ */
+export function rowTokens(u: TokenUsage, n: number): string {
+  return u.credits && totalTokens(u) === 0 ? '—' : formatTokens(n);
+}
+
 /** 950 → "950", 12_300 → "12.3k", 4_560_000 → "4.56M". */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
@@ -331,8 +339,22 @@ export function formatTokens(n: number): string {
 
 /** Kiro's credits: "0.42 credits", "12.5 credits", "1 credit". */
 export function formatCredits(n: number): string {
-  const v = n >= 100 ? Math.round(n) : n >= 10 ? Number(n.toFixed(1)) : Number(n.toFixed(2));
+  const v = roundCredits(n);
   return `${v.toLocaleString()} ${v === 1 ? 'credit' : 'credits'}`;
+}
+
+/** Kiro's credits as a bare number, for a column or tile already labelled Credits: "0.42", "12.5", "1,234". */
+export function creditsNumber(n: number): string {
+  return roundCredits(n).toLocaleString();
+}
+
+function roundCredits(n: number): number {
+  return n >= 100 ? Math.round(n) : n >= 10 ? Number(n.toFixed(1)) : Number(n.toFixed(2));
+}
+
+/** A plan bar's level in the rail (Claude's windows, Kiro's credits): amber from 80%, red from 95%. */
+export function limitLevel(percent: number): 'warn' | 'bad' | null {
+  return percent >= 95 ? 'bad' : percent >= 80 ? 'warn' : null;
 }
 
 /** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */

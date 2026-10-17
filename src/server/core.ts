@@ -20,6 +20,7 @@ import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir } from './claude.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
@@ -128,6 +129,8 @@ export class Core extends EventEmitter {
   readonly githubLinks: GithubLinkService;
   readonly askAgentk: AskAgentk;
   readonly limits: PlanLimitsStore;
+  /** Kiro's plan allowance for the rail. */
+  readonly kiroPlan: KiroPlanStore;
   readonly invites: InviteService;
   readonly knowledge: KnowledgeService;
   readonly mekoTools: MekoTools;
@@ -217,6 +220,14 @@ export class Core extends EventEmitter {
       harness: () => this.harnesses.defaultFor(this.cfg).id,
     });
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
+    this.kiroPlan = new KiroPlanStore({
+      db: this.db,
+      available: () => this.harnesses.of('kiro').status(this.cfg).available,
+      command: () => this.cfg.kiro.command,
+      cwd: join(this.paths.run, 'kiro-usage'),
+      changed: () => this.changed(),
+      log: this.log,
+    });
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
     this.claudeMeko = new MekoClaudeWatch({
       config: () => this.cfg,
@@ -380,6 +391,7 @@ export class Core extends EventEmitter {
       serverName: this.serverName(),
       serverHost: this.hostFull,
       limits: this.limits.current(),
+      kiroPlan: this.kiroPlan.current(),
       invites: this.invites.pending(),
       failedStarts: this.sessions.failedStarts(),
       claudeCode: this.claudeCode.status(),
@@ -397,7 +409,10 @@ export class Core extends EventEmitter {
     // files wait on their CLI (Kiro's version, its agent file), in the background.
     await this.harnesses.of('claude').prepare(this.paths, this.cfg);
     for (const h of this.harnesses.list()) {
-      if (h.id !== 'claude') void h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+      if (h.id === 'claude') continue;
+      const ready = h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+      // Kiro's plan is read once its version is known (whether it's available).
+      if (h.id === 'kiro' && this.timersOn) void ready.then(() => this.kiroPlan.refresh());
     }
     mkdirSync(this.paths.worktrees, { recursive: true });
     try {
@@ -449,6 +464,7 @@ export class Core extends EventEmitter {
       // Claude Code and Kiro update themselves: read their versions again once the last read is stale.
       this.every(60000, () => Promise.all(this.harnesses.list().map((h) => h.version(this.cfg))));
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
+      this.every(KIRO_PLAN_EVERY_MS, () => this.kiroPlan.refresh());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());

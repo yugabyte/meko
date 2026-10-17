@@ -150,11 +150,12 @@ your phone can connect.
   agent AgentK builds from your default Kiro agent (Meko's, after **Set up Kiro with this Meko**)
   with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
   and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod
-  (answering Claude's questions in AgentK, prompts sent mid-turn) and plan limits. Kiro writes its
+  (answering Claude's questions in AgentK, prompts sent mid-turn) and its 5-hour and weekly limits;
+  the rail shows Kiro's own plan instead (credits used of the plan, read hourly). Kiro writes its
   designs as markdown, AgentK types its prompts into its terminal, and since Kiro says nothing while
   it waits for a permission answer, the session shows as working until you answer in the terminal
   (or turn on **Let Kiro run any tool**). While your open sessions run on both, each session's tab
-  and row in the rail shows its agent's logo.
+  and row in the rail shows its agent's logo (turn that off in Settings › General).
 - **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
   another and that screen offers **Move to this screen**; it moves there by itself once the first
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
@@ -222,7 +223,8 @@ your phone can connect.
   always go to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
   subagents included, with its cost at API list prices; Kiro sessions count the credits Kiro billed,
-  beside the cost and never added to it. **Usage** in the left panel adds it up across every project, closed ones
+  beside the cost and never added to it, with a Credits column by session and model and a credits
+  bar beside each day's tokens. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
@@ -239,8 +241,8 @@ your phone can connect.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
   cost that Meko searches saved, how many sessions had something from Meko in their first
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home
-  and the Usage page. On Pro and Max plans, the rail also shows your 5-hour and weekly usage limits
-  and when they reset.
+  and the Usage page. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
+  and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account

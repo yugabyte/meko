@@ -548,6 +548,8 @@ export class SessionManager {
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
+    // The first session on Kiro shows Kiro's plan in the rail now, not at the next hourly read.
+    if (harness.id === 'kiro') this.core.kiroPlan.sessionCreated();
     // The images move into the session's folder now; only the ones that got there go to Claude.
     const missed = claimStaged(this.core.paths.pastes, projectId, images, id);
     const moved = images.filter((i) => !missed.includes(i)).map((i) => claimedPath(this.core.paths.pastes, id, i));

@@ -29,7 +29,10 @@ Settings is the exception, which also sets the default to Claude Code. Both choi
 projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions
 don't count), every session tab and every session row in the rail shows its agent's logo between
 its dot and its name (`HarnessLogo` in `common.tsx`, all in one 18 × 14 px box so names line up);
-while they all run on one, nothing is added. The logos are files in `src/web/public/`, never
+while they all run on one, nothing is added. Unticking **Show each session's agent logo beside its
+name** in Settings › General (offered while a second agent is turned on or open sessions still run
+on two; on by default, kept in this browser, `ak-harness-logos`) turns them off there; the agent
+pickers keep theirs. The logos are files in `src/web/public/`, never
 loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
 from `png/clawd.png` in [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
 (Apache-2.0), and `harness-kiro.svg` is Kiro's own `https://kiro.dev/icon.svg`. Both are colored
@@ -48,7 +51,8 @@ do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and th
 | System prompt | `--append-system-prompt` | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | `kiro-guard.sh`: exit 2, the reason on stderr |
 | Conversation id | chosen (`--session-id`) | Kiro's, from its hooks' `session_id`, else its session store |
-| AgentK's mod, Artifact designs, plan limits | yes | no |
+| AgentK's mod, Artifact designs | yes | no |
+| Plan limits in the rail | 5-hour and weekly, from the status line and the mod | credits this period, from `/usage` hourly |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | none |
 | Usage | transcript tokens, priced | credits from Kiro's session file |
 

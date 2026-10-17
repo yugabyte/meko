@@ -3,6 +3,7 @@ import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, Meko
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
+import { harnessLogosToggle } from '../toggle';
 import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
@@ -17,6 +18,7 @@ export function SettingsDialog({
   update,
   meko,
   harnesses,
+  twoAgents,
   initialTab = 'general',
   onClose,
 }: {
@@ -25,6 +27,8 @@ export function SettingsDialog({
   meko: MekoStatus;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
   harnesses: HarnessStatus[];
+  /** Open sessions run on more than one agent (`harnessLogos()`), so the logos would show. */
+  twoAgents: boolean;
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
@@ -48,6 +52,7 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
+          {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
           <GeneralTab harnesses={harnesses} />
         </div>
       )}
@@ -73,6 +78,24 @@ function RailSessionsSetting() {
         <span>List sessions under their project in the projects pane</span>
       </label>
       <span className="hint">In place of the tabs above the terminal. Kept in this browser.</span>
+    </div>
+  );
+}
+
+/**
+ * Saved in this browser as it's ticked, like the setting above. Offered while a second agent is
+ * turned on, or while open sessions run on two agents (the logos' own condition): turning an agent
+ * off leaves its open sessions, and their logos, in place.
+ */
+function HarnessLogosSetting() {
+  const on = harnessLogosToggle.use();
+  return (
+    <div className="field">
+      <label className="check">
+        <input id="set-harness-logos" type="checkbox" checked={on} onChange={(e) => harnessLogosToggle.save(e.target.checked)} />
+        <span>Show each session's agent logo beside its name</span>
+      </label>
+      <span className="hint">While your open sessions run on more than one agent. The tooltip names the agent either way. Kept in this browser.</span>
     </div>
   );
 }

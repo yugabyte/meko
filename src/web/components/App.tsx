@@ -8,6 +8,7 @@ import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, useRailSessions } from '../rail';
+import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import {
@@ -192,8 +193,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     () => sortedProjects(withCreated(withOpened(state?.projects ?? [], opened), created?.session ?? null)),
     [state, opened, created],
   );
-  // Logos beside session names in the tabs and the rail, while open sessions run on more than one harness.
-  const logos = useMemo(() => harnessLogos(projects), [projects]);
+  // Logos beside session names in the tabs and the rail, while open sessions run on more than one
+  // harness and the setting (Settings › General) is on.
+  const twoAgents = useMemo(() => harnessLogos(projects), [projects]);
+  const logos = harnessLogosToggle.use() && twoAgents;
   useEffect(() => {
     if (!created || !state || state === created.seen) return;
     const inState = state.projects.some((p) => p.sessions.some((s) => s.id === created.session.id));
@@ -487,6 +490,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         serverHost={state.serverHost ?? ''}
         version={state.version}
         limits={state.limits ?? null}
+        kiroPlan={state.kiroPlan ?? null}
         theme={theme}
         onCycleTheme={cycleTheme}
         onSelect={(p) => {
@@ -634,7 +638,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
       )}
       {modal.kind === 'palette' && (
         <CommandPalette
