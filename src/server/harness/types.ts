@@ -24,6 +24,8 @@ export interface LaunchInput {
   /** AgentK's session variables (AK_*, MEKO_*). */
   env: Record<string, string>;
   unsetEnv: string[];
+  /** The session works on a PR head whose code isn't trusted (headtrust.ts): leave out the repo's own config. */
+  untrusted: boolean;
 }
 
 /**

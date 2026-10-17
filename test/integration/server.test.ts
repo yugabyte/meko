@@ -454,6 +454,18 @@ describe('web app: manifest and icons for the installed app', () => {
     expect((await app.inject({ method: 'HEAD', url: '/' })).statusCode).toBe(200);
     expect((await app.inject({ method: 'POST', url: '/' })).statusCode).toBe(404);
   });
+
+  it("sends every page a policy that keeps other servers' images, connections, plugins and framing out", async () => {
+    for (const url of ['/', '/p/demo/s/s1', '/index.html']) {
+      const csp = String((await app.inject({ url, headers: { host: 'box:7777' } })).headers['content-security-policy']);
+      expect(csp, url).toContain("img-src 'self' data: blob: https://github.com https://*.githubusercontent.com");
+      expect(csp, url).toContain("connect-src 'self' wss://box:7777 ws://box:7777;");
+      expect(csp, url).toContain("object-src 'none'");
+      expect(csp, url).toContain("frame-ancestors 'none'");
+      // No script-src: the design panel's Artifact frame takes this policy too, and runs scripts of its own.
+      expect(csp, url).not.toContain('script-src');
+    }
+  });
 });
 
 describe('stampVersion', () => {

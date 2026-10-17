@@ -83,6 +83,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
 - [ ] Writes and WebSocket upgrades still pass the origin check; cookies stay `HttpOnly`,
       `SameSite=Strict`, and `Secure` under TLS.
+- [ ] Nothing from a session's worktree that its repo's author controls (settings, scripts, prompts,
+      agent or MCP config) runs or is used unless `repoConfigTrusted(row)` says so (`headtrust.ts`):
+      on a public repo's PR head, anyone can have written it. A PR found by its branch's name must
+      have its head where the branch is pushed (`pickPr`).
+- [ ] A saved secret (the Meko key) is never sent to a URL the browser just set without the secret
+      being typed again with it.
 - [ ] No user input reaches a shell. `execFile`/`spawn` take argument arrays; launcher values go
       through `shq()`.
 - [ ] Secrets never land in logs, `config.toml` (unless the user typed them), the database, or the repo.

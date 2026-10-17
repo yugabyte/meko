@@ -285,6 +285,18 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(env.core.state().meko).toMatchObject({ webUrl: null });
     expect(env.mekoTools.calls.filter((c) => c.name === 'checkApi')).toEqual([]);
 
+    // The saved key goes only where it already goes: a new server takes it typed again, and gets nothing meanwhile.
+    const sent = env.mekoTools.calls.length;
+    const elsewhere = await call('PUT', '/api/settings', { meko: { url: 'https://other.example.org/mcp' } });
+    expect(elsewhere.statusCode).toBe(400);
+    expect(elsewhere.json().error).toBe('Enter the Meko API key again to use it with https://other.example.org: AgentK sends a saved key only to a Meko server it already uses. Nothing was saved.');
+    expect(env.mekoTools.calls.length).toBe(sent);
+    // Nor with Meko turned off first: a URL saved while it's off would get the key once it's back on.
+    const off = await call('PUT', '/api/settings', { meko: { enabled: false, url: 'https://other.example.org/mcp' } });
+    expect(off.statusCode).toBe(400);
+    expect(env.core.config.meko).toMatchObject({ enabled: true, url: 'https://meko.example.com/mcp' });
+    expect(env.mekoTools.calls.length).toBe(sent);
+
     // Back on Meko Cloud, its web app and API URLs are worked out and trusted: the API URL isn't checked.
     const cloud = await call('PUT', '/api/settings', { meko: { url: 'https://mcp.mekodata.ai/mcp' } });
     expect(cloud.statusCode).toBe(200);
@@ -293,15 +305,17 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(env.core.state().meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai' });
 
     // A typed web app URL moves the API URL: that is checked (without the key), and nothing reconnects.
+    // On another server, the key the API is sent is typed again.
     const checks = env.mekoTools.calls.length;
     const resets = env.meko.calls.filter((c) => c.name === 'reset').length;
-    expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://meko.example.com/' } })).json().meko.effectiveWebUrl).toBe('https://meko.example.com');
+    expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://meko.example.com/' } })).statusCode).toBe(400);
+    expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://meko.example.com/', apiKey: 'mko_tkn_newkey000000' } })).json().meko.effectiveWebUrl).toBe('https://meko.example.com');
     expect(env.mekoTools.calls.slice(checks)).toEqual([{ name: 'checkApi', args: ['https://meko.example.com/api/v1'] }]);
     expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(resets);
 
     // A typed API URL that doesn't answer like Meko's API isn't saved.
     env.mekoTools.state.apiError = "it answered 404, not like Meko's API";
-    const badApi = await call('PUT', '/api/settings', { meko: { apiUrl: 'https://typo.example.com/api/v1' } });
+    const badApi = await call('PUT', '/api/settings', { meko: { apiUrl: 'https://typo.example.com/api/v1', apiKey: 'mko_tkn_newkey000000' } });
     expect(badApi.statusCode).toBe(400);
     expect(badApi.json().error).toMatch(/doesn't look like Meko's API: it answered 404/);
     expect(env.core.config.meko.apiUrl).toBe('');
@@ -310,7 +324,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     env.mekoTools.state.apiError = null;
     env.mekoApi.handle((c) => (c.path === '/datapacks/incoming-shares' ? { body: { data: [] } } : undefined));
     const synced = env.mekoApi.calls.filter((c) => c.path === '/datapacks/incoming-shares').length;
-    expect((await call('PUT', '/api/settings', { meko: { apiUrl: 'https://api.example.com/api/v1' } })).statusCode).toBe(200);
+    expect((await call('PUT', '/api/settings', { meko: { apiUrl: 'https://api.example.com/api/v1', apiKey: 'mko_tkn_newkey000000' } })).statusCode).toBe(200);
     await waitFor(() => env.mekoApi.calls.filter((c) => c.path === '/datapacks/incoming-shares').length, (n) => n > synced, 5000, 'the invite sync');
   });
 
@@ -326,8 +340,8 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
       });
       return checkApi(u);
     };
-    expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://meko.example.com' } })).statusCode).toBe(200);
-    expect(env.core.config.meko).toMatchObject({ webUrl: 'https://meko.example.com', apiKey: '' });
+    expect((await call('PUT', '/api/settings', { meko: { webUrl: 'https://cloud.mekodata.ai/eu' } })).statusCode).toBe(200);
+    expect(env.core.config.meko).toMatchObject({ webUrl: 'https://cloud.mekodata.ai/eu', apiKey: '' });
   });
 
   it("shows when Claude Code's Meko differs, and changes Claude Code only when asked", async () => {
@@ -383,7 +397,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(env.core.state().meko.claude.gaps).toEqual([]);
 
     // Moving AgentK to another Meko shows the difference; nothing changes Claude Code.
-    expect((await call('PUT', '/api/settings', { meko: { url: 'https://meko.example.com/mcp' } })).statusCode).toBe(200);
+    expect((await call('PUT', '/api/settings', { meko: { url: 'https://meko.example.com/mcp', apiKey: 'mko_tkn_abcdefghij1234' } })).statusCode).toBe(200);
     await env.core.claudeMeko.refresh();
     expect(env.core.state().meko.claude.gaps).toEqual([
       "Claude Code's settings point at mcp.mekodata.ai, not meko.example.com.",

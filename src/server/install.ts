@@ -110,7 +110,8 @@ function localDbLocation(): string {
   const user = userInfo().username;
   const xdg = process.env.XDG_STATE_HOME;
   if (xdg) {
-    mkdirSync(join(xdg, 'agent-k-local'), { recursive: true });
+    mkdirSync(join(xdg, 'agent-k-local'), { recursive: true, mode: 0o700 });
+    chmodSync(join(xdg, 'agent-k-local'), 0o700);
     if (!isNetworkFs(join(xdg, 'agent-k-local'))) return join(xdg, 'agent-k-local', 'state.db');
   }
   const dir = join('/var/tmp', user, 'agent-k-local');

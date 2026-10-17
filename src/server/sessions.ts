@@ -9,11 +9,12 @@ import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffBase, diffStat, suggestBase } from './changes.js';
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
-  fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
+  fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, remoteRepo, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
   worktreeClean, type BranchSource, type SyncResult,
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
-import { findPr, isRepoName, issueText, prInfo, type PrInfo } from './github.js';
+import { findPr, isRepoName, issueText, prInfo, repoVisibility, type PrInfo } from './github.js';
+import { HeadTrust, UNTRUSTED_TEXT, prHead, repoConfigTrusted } from './headtrust.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -278,6 +279,9 @@ export class SessionManager {
   clearStartup(id: string): void {
     if (this.startup.delete(id)) this.core.changed();
   }
+
+  /** Whether a PR head's code is trusted, by its repo's visibility (headtrust.ts). */
+  readonly headTrust = new HeadTrust((repo) => repoVisibility(this.core.paths.home, repo));
 
   constructor(private core: Core) {}
 
@@ -621,7 +625,8 @@ export class SessionManager {
 
     // The first prompt says where the PR's design is, if it came in time; one that comes later is still shown.
     if (design) await within(design, PR_DESIGN_TIMEOUT_MS);
-    const row = this.row(id);
+    // Before the first prompt, which a trusted repo's .agent-k/stages may write.
+    const row = await this.checkHead(id);
     const first = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     const told = review && first ? prDesignSource(this.core, id) : null;
     if (told) markPrDesignTold(this.core, id, told.ref.sha256);
@@ -838,7 +843,7 @@ export class SessionManager {
     const row = this.row(id);
     let pr: Awaited<ReturnType<typeof findPr>>;
     try {
-      pr = await findPr(row.worktree_path, row.branch, row.created_at, true);
+      pr = await findPr(row.worktree_path, row.branch, row.created_at, true, await remoteRepo(row.worktree_path, row.push_remote ?? 'origin'));
     } catch (e) {
       this.core.log.warn(`couldn't look for the open PR of ${row.branch} for ${id}`, errMsg(e));
       return;
@@ -911,7 +916,8 @@ export class SessionManager {
         notes: reviewNotes(row),
       }
       : {};
-    const text = render(loadPrompt(this.db, name, row.worktree_path), {
+    // A PR's .agent-k/stages can't stand in for AgentK's prompts until its code is known to be trusted.
+    const text = render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
       task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
@@ -964,7 +970,8 @@ export class SessionManager {
     return {
       // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
       // Set even when empty: empty means the user has none, unset means a session from before this.
-      ...(claude ? { AK_USER_STATUSLINE: userStatusLine(row.worktree_path, statusLineScriptPath(this.core.paths))?.command ?? '' } : {}),
+      // Not a PR's own status line when its code isn't trusted: the relay runs it with sh.
+      ...(claude ? { AK_USER_STATUSLINE: userStatusLine(repoConfigTrusted(row) ? row.worktree_path : null, statusLineScriptPath(this.core.paths))?.command ?? '' } : {}),
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
@@ -1104,6 +1111,8 @@ export class SessionManager {
    * Meko conversation id under way (a new session names it early).
    */
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
+    // Read again at every launch: a private repo can be made public.
+    row = await this.checkHead(row.id);
     const h = this.harness(row);
     if (h.id === 'claude') {
       // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
@@ -1135,6 +1144,7 @@ export class SessionManager {
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env(row, !!mod),
       unsetEnv: SESSION_ENV_UNSET,
+      untrusted: !repoConfigTrusted(row),
     }));
     const pane = (await this.core.host.panes()).get(row.tmux_name);
     // Archived (or its project deleted) while it was starting: Claude must not start behind its back.
@@ -1152,6 +1162,23 @@ export class SessionManager {
       throw e;
     }
     this.recoverRetryAt.delete(row.id);
+  }
+
+  /**
+   * Reads again whether the session's PR head is trusted (headtrust.ts) and keeps it on the row,
+   * saying so in its log when that changes: NULL with no PR head, so a PR linked later isn't
+   * taken as checked (`repoConfigTrusted`) before this runs again (adoptPr does).
+   */
+  async checkHead(id: string): Promise<SessionRow> {
+    const row = this.row(id);
+    const why = await this.headTrust.untrusted(row);
+    const untrusted = !prHead(row) ? null : why ? 1 : 0;
+    if (row.untrusted !== untrusted) {
+      this.update(id, { untrusted });
+      if (why) this.event(id, 'untrusted', `${why}, ${UNTRUSTED_TEXT}.`);
+      else if (row.untrusted === 1) this.event(id, 'untrusted', "The PR's repo is private or internal now: the session runs with the repo's own config again.");
+    }
+    return this.row(id);
   }
 
   /**
@@ -1771,6 +1798,8 @@ export class SessionManager {
     const cont = wasWorking && autoContinue && !tooSoon && !parked;
     const resume = this.transcriptExists(row);
 
+    // Before the prompt, which a trusted repo's .agent-k/stages may write (launch reads it again).
+    row = await this.checkHead(row.id);
     let prompt: string | null = null;
     if (!resume) prompt = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     else if (cont) prompt = this.prompt(row, row.stage === 'review' ? 'continue-review' : 'continue');
@@ -1979,6 +2008,7 @@ export class SessionManager {
       });
     }
     const resume = this.transcriptExists(row);
+    row = await this.checkHead(row.id);
     const firstPrompt = resume ? null : this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     this.setStatus(row.id, 'starting', 'Resuming');
     this.startup.delete(row.id);
