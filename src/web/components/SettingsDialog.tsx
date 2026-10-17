@@ -419,8 +419,8 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
             labelledBy="set-agent-label"
           />
           <span className="hint">
-            New sessions and Ask AgentK run on it (on another available agent while it isn't); the New session dialog can pick another. A
-            session keeps the agent it started on.
+            New sessions and Ask AgentK run on it; the New session dialog can pick another. A session keeps the agent it
+            started on.
           </span>
         </div>
       )}
