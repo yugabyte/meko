@@ -154,10 +154,12 @@ smaller fall is taken for two status line runs that reached the server out of or
 in the background), so it changes nothing; a smaller reset shows with the session's next reading.
 A repeat changes nothing, so an idle session re-running its status line with an old reading can't
 pull the number back. A session's first reading only raises the number, since it may be old.
-The reading and each session's last one are kept in the `kv` table (`plan_limits`, `plan_limits_seen`; a session's is dropped once its windows reset), so they hold across a restart, and the rail shows each window with a bar, its reset time and how old the reading is,
-turning amber at 80% and red at 95%. A window disappears once its reset time passes. The numbers
-only move when a session gets a reply, so the rail says when they were last reported. Each row
-names its agent: **Claude 5-hour**, **Claude weekly**.
+The reading and each session's last one are kept in the `kv` table (`plan_limits`, `plan_limits_seen`; a session's is dropped once its windows reset), so they hold across a restart. The rail shows the plan limits as a row per agent, led by its
+logo: Claude's row has a ring for each window side by side (the percent in the middle, blue,
+amber at 80% and red at 95%, its name marked ▲ when amber or red), with its name and reset time
+beside it. A window disappears once its reset time passes. The numbers only move when a session
+gets a reply, so each ring's tooltip says when they were last reported; the age has no line of its
+own, to keep the block small. Each meter names its agent: **Claude 5-hour**, **Claude weekly**.
 
 **Kiro's plan.** Kiro has no status line, but `kiro-cli chat --no-interactive --output-format
 stream-json /usage` prints the account's credits this period (about 4 s; it bills nothing):
@@ -177,11 +179,11 @@ with `bonus` and two numbers, `remaining` or `left` meaning what's left; a line 
 first amount that isn't money or a percentage, and `enabled`/`disabled`), and each is kept with the
 line as Kiro printed it. The reading is kept in `kv` (`kiro_plan`) and sent as `AppState.kiroPlan`;
 a read that fails (signed out, say) keeps the last one and logs once. The rail shows **Kiro
-credits**: a bar of used over covered in Kiro's violet (amber at 80%, red at 95%; past 100%,
-**Over plan**, red, or amber while overage is on, since Kiro then bills the rest and goes on),
-`36 of 50 · Free · resets Nov 1`, a line for bonus and overage when Kiro printed them, Kiro's own
-lines quoted under it (since how they're read is a guess), and its own line saying it's Kiro's
-estimate of all your Kiro use, with its age. The reading is dropped once its reset day has come (UTC midnight), and while
+credits** on Kiro's row: a ring of used over covered in Kiro's violet (amber at 80%, red at 95%;
+past 100%, **Over plan**, red, or amber while overage is on, since Kiro then bills the rest and
+goes on), `36 of 50 · Free · resets Nov 1` beside it, then a line for bonus and overage when Kiro
+printed them and Kiro's own lines quoted under it (since how they're read is a guess). Its tooltip
+says it's Kiro's estimate of all your Kiro use, with its age. The reading is dropped once its reset day has come (UTC midnight), and while
 Kiro isn't available.
 
 - **Where it shows.** The session footer and tab tooltip show the session's total and output

@@ -4,7 +4,7 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { HarnessLogo, StatusDot } from './common';
+import { HarnessLogo, Ring, StatusDot } from './common';
 
 export function Rail({
   projects,
@@ -278,8 +278,9 @@ function resetLabel(ms: number, now: number): string {
 }
 
 /**
- * The plan limits, each named by its agent: Claude's 5-hour and weekly windows (the newest status
- * line report of any session) and Kiro's credits this period (its `/usage`, read hourly).
+ * The plan limits, a row per agent that has a reading, each row led by the agent's logo: Claude's
+ * 5-hour and weekly windows side by side (the newest status line report of any session), and
+ * Kiro's credits this period (its `/usage`, read hourly). How old a reading is goes in the tooltips.
  */
 function Limits({ limits, kiroPlan }: { limits: PlanLimits | null; kiroPlan: KiroPlan | null }) {
   const [now, setNow] = useState(Date.now());
@@ -290,49 +291,82 @@ function Limits({ limits, kiroPlan }: { limits: PlanLimits | null; kiroPlan: Kir
   // A window or period whose reset time has passed no longer applies, even before the server says so.
   const rows = (
     [
-      ['Claude 5-hour', limits?.fiveHour ?? null],
-      ['Claude weekly', limits?.sevenDay ?? null],
+      ['5-hour', limits?.fiveHour ?? null],
+      ['Weekly', limits?.sevenDay ?? null],
     ] as [string, LimitWindow | null][]
   ).filter((r): r is [string, LimitWindow] => !!r[1] && r[1].resetsAt > now);
   const kiro = kiroPlan && !(kiroPlan.resetsOn && Date.parse(kiroPlan.resetsOn) <= now) ? kiroPlan : null;
   if (!rows.length && !kiro) return null;
+  const asOf = limits ? ` As of ${relativeTime(limits.updatedAt, now).toLowerCase()}.` : '';
   return (
     <div className="limits" aria-label="Plan usage limits">
-      {rows.map(([label, w]) => {
-        const pct = Math.round(w.usedPercent);
-        return (
-          <LimitBar key={label} label={label} pct={pct} level={limitLevel(pct)} title={`${label} limit: ${pct}% used, resets ${new Date(w.resetsAt).toLocaleString()}`}>
-            <div className="lim-reset">Resets {resetLabel(w.resetsAt, now)}</div>
-          </LimitBar>
-        );
-      })}
-      {rows.length > 0 && limits && <div className="lim-age">As of {relativeTime(limits.updatedAt, now).toLowerCase()}</div>}
+      {rows.length > 0 && (
+        <div className="lim-row">
+          <AgentMark harness="claude" />
+          {rows.map(([label, w]) => {
+            const pct = Math.round(w.usedPercent);
+            const name = `Claude ${label.toLowerCase()}`;
+            return (
+              <LimitRing key={label} label={label} name={name} pct={pct} title={`${name} limit: ${pct}% used, resets ${new Date(w.resetsAt).toLocaleString()}.${asOf}`}>
+                <span className="lim-reset">{resetLabel(w.resetsAt, now)}</span>
+              </LimitRing>
+            );
+          })}
+        </div>
+      )}
       {kiro && <KiroLimit plan={kiro} now={now} />}
     </div>
   );
 }
 
-function LimitBar({ label, pct, level, title, className, children }: {
+/** The agent's logo at the start of its row of limits; its name is in each meter's label. */
+function AgentMark({ harness }: { harness: 'claude' | 'kiro' }) {
+  return (
+    <span className="lim-agent" title={harness === 'kiro' ? 'Kiro' : 'Claude'}>
+      <HarnessLogo harness={harness} />
+    </span>
+  );
+}
+
+/** The plan limits' ring, in px: its view box too, so the percent sits at its centre. */
+const LIMIT_RING = 26;
+
+/**
+ * One limit: a ring with the percent in it (amber from 80%, red from 95%, unless the caller says
+ * otherwise), then its name, marked ▲ when amber or red, and what `children` say under it.
+ */
+export function LimitRing({ label, name, pct, level = limitLevel(pct), title, className, children }: {
   label: string;
+  /** The limit's full name, agent included, for the meter. */
+  name: string;
   pct: number;
-  level: 'warn' | 'bad' | null;
+  level?: 'warn' | 'bad' | null;
   title: string;
   className?: string;
   children: ReactNode;
 }) {
+  const arc = Math.min(pct, 100);
+  const c = LIMIT_RING / 2;
   return (
     <div className={cx('lim', className, level)} title={title}>
-      <div className="lim-hd">
-        <span>{label}</span>
-        <span className="lim-pct">
-          {level && <span aria-hidden="true">▲ </span>}
-          {pct}%
+      <span role="meter" aria-label={`${name} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={arc}>
+        <Ring className="lim-ring" arc={arc} px={LIMIT_RING} box={LIMIT_RING} r={c - 2.5} stroke={3}>
+          <text x={c} y={c} textAnchor="middle" dominantBaseline="central" className={pct > 99 ? 'long' : undefined}>
+            {pct}
+          </text>
+        </Ring>
+      </span>
+      <span className="lim-tx">
+        <span>
+          {level && (
+            <span className="lim-flag" aria-hidden="true">
+              ▲
+            </span>
+          )}
+          {label}
         </span>
-      </div>
-      <div className="lim-bar" role="meter" aria-label={`${label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(pct, 100)}>
-        <i style={{ width: `${Math.min(100, Math.max(pct, 2))}%` }} />
-      </div>
-      {children}
+        {children}
+      </span>
     </div>
   );
 }
@@ -352,24 +386,35 @@ function KiroLimit({ plan, now }: { plan: KiroPlan; now: number }) {
   const said = [plan.bonus?.line, plan.overage?.line].filter((l): l is string => !!l);
   return (
     <>
-      <LimitBar
-        label="Kiro credits"
-        pct={pct}
-        level={level}
-        className="kiro"
-        title={`Kiro credits: ${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)} in the plan used${resets ? `, resets ${resets}` : ''}`}
-      >
-        <div className="lim-reset">
-          {[over ? 'Over plan' : null, `${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)}`, plan.plan, resets && `resets ${resets}`].filter(Boolean).join(' · ')}
+      <div className="lim-row">
+        <AgentMark harness="kiro" />
+        <LimitRing
+          label="Kiro credits"
+          name="Kiro credits"
+          pct={pct}
+          level={level}
+          className="kiro"
+          title={`Kiro credits: ${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)} in the plan used${resets ? `, resets ${resets}` : ''}. Kiro's estimate of all your Kiro use, as of ${relativeTime(plan.updatedAt, now).toLowerCase()}.`}
+        >
+          <span className="lim-reset">
+            {[over ? 'Over plan' : null, `${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)}`, plan.plan, resets && `resets ${resets}`]
+              .filter(Boolean)
+              // Each part keeps its words, and the dot after it, together when the line wraps.
+              .map((part, i, parts) => (
+                <Fragment key={i}>
+                  {i > 0 && ' '}
+                  <span>{i < parts.length - 1 ? `${part} ·` : part}</span>
+                </Fragment>
+              ))}
+          </span>
+        </LimitRing>
+      </div>
+      {extra.length > 0 && <div className="lim-more">{extra.join(' · ')}</div>}
+      {said.map((l) => (
+        <div key={l} className="lim-more lim-said">
+          Kiro: {l}
         </div>
-        {extra.length > 0 && <div className="lim-reset">{extra.join(' · ')}</div>}
-        {said.map((l) => (
-          <div key={l} className="lim-said">
-            Kiro: {l}
-          </div>
-        ))}
-      </LimitBar>
-      <div className="lim-age">Kiro's estimate of all your Kiro use, as of {relativeTime(plan.updatedAt, now).toLowerCase()}</div>
+      ))}
     </>
   );
 }
