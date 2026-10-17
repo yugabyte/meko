@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
-import { STAGE_LABELS, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
+import { STAGE_LABELS, type KiroPlan, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
-import { aggregateDot, cx, dotState, formatTokens, isMac, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, StatusDot } from './common';
 
 export function Rail({
@@ -17,6 +17,7 @@ export function Rail({
   serverHost,
   version,
   limits,
+  kiroPlan,
   theme,
   onCycleTheme,
   onSelect,
@@ -48,6 +49,8 @@ export function Rail({
   serverHost: string;
   version: string;
   limits: PlanLimits | null;
+  /** Kiro's plan allowance, once Kiro has been used here. */
+  kiroPlan: KiroPlan | null;
   theme: ThemePref;
   onCycleTheme: () => void;
   onSelect: (p: ProjectWithSessions) => void;
@@ -160,7 +163,7 @@ export function Rail({
                     setDragId(null);
                     setOverId(null);
                   }}
-                  title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used`}
+                  title={`${p.name}${i < 9 ? ` (${mod}${i + 1})` : ''} · ${p.repoPath} · ${formatTokens(totalTokens(p.usage))} tokens used${p.usage.credits ? ` · ${formatCredits(p.usage.credits)} on Kiro` : ''}`}
                 >
                   {count > 0 ? <StatusDot status={aggregateDot(p)} phase={p.id} /> : <i className="dot idle" />}
                   <span className="proj-text">
@@ -223,7 +226,7 @@ export function Rail({
         </button>
       </div>
       <div className="rail-foot">
-        <Limits limits={limits} />
+        <Limits limits={limits} kiroPlan={kiroPlan} />
         <div className="rail-actions">
           <button className="icon-btn" onClick={onSettings} title="Settings" aria-label="Settings">
             <Icon d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
@@ -274,47 +277,107 @@ function resetLabel(ms: number, now: number): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-/** The account's 5-hour and weekly plan limits, from the newest status line report of any session. */
-function Limits({ limits }: { limits: PlanLimits | null }) {
+/**
+ * The plan limits, each named by its agent: Claude's 5-hour and weekly windows (the newest status
+ * line report of any session) and Kiro's credits this period (its `/usage`, read hourly).
+ */
+function Limits({ limits, kiroPlan }: { limits: PlanLimits | null; kiroPlan: KiroPlan | null }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  if (!limits) return null;
-  // A window whose reset time has passed no longer applies, even before the server says so.
+  // A window or period whose reset time has passed no longer applies, even before the server says so.
   const rows = (
     [
-      ['5-hour', limits.fiveHour],
-      ['Weekly', limits.sevenDay],
+      ['Claude 5-hour', limits?.fiveHour ?? null],
+      ['Claude weekly', limits?.sevenDay ?? null],
     ] as [string, LimitWindow | null][]
   ).filter((r): r is [string, LimitWindow] => !!r[1] && r[1].resetsAt > now);
-  if (!rows.length) return null;
+  const kiro = kiroPlan && !(kiroPlan.resetsOn && Date.parse(kiroPlan.resetsOn) <= now) ? kiroPlan : null;
+  if (!rows.length && !kiro) return null;
   return (
     <div className="limits" aria-label="Plan usage limits">
       {rows.map(([label, w]) => {
         const pct = Math.round(w.usedPercent);
-        const level = pct >= 95 ? 'bad' : pct >= 80 ? 'warn' : null;
-        const reset = resetLabel(w.resetsAt, now);
         return (
-          <div key={label} className={cx('lim', level)} title={`${label} limit: ${pct}% used, resets ${new Date(w.resetsAt).toLocaleString()}`}>
-            <div className="lim-hd">
-              <span>{label}</span>
-              <span className="lim-pct">
-                {level && <span aria-hidden="true">▲ </span>}
-                {pct}%
-              </span>
-            </div>
-            <div className="lim-bar" role="meter" aria-label={`${label} limit used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-              <i style={{ width: `${Math.max(pct, 2)}%` }} />
-            </div>
-            <div className="lim-reset">Resets {reset}</div>
-          </div>
+          <LimitBar key={label} label={label} pct={pct} level={limitLevel(pct)} title={`${label} limit: ${pct}% used, resets ${new Date(w.resetsAt).toLocaleString()}`}>
+            <div className="lim-reset">Resets {resetLabel(w.resetsAt, now)}</div>
+          </LimitBar>
         );
       })}
-      <div className="lim-age">As of {relativeTime(limits.updatedAt, now).toLowerCase()}</div>
+      {rows.length > 0 && limits && <div className="lim-age">As of {relativeTime(limits.updatedAt, now).toLowerCase()}</div>}
+      {kiro && <KiroLimit plan={kiro} now={now} />}
     </div>
   );
+}
+
+function LimitBar({ label, pct, level, title, className, children }: {
+  label: string;
+  pct: number;
+  level: 'warn' | 'bad' | null;
+  title: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cx('lim', className, level)} title={title}>
+      <div className="lim-hd">
+        <span>{label}</span>
+        <span className="lim-pct">
+          {level && <span aria-hidden="true">▲ </span>}
+          {pct}%
+        </span>
+      </div>
+      <div className="lim-bar" role="meter" aria-label={`${label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(pct, 100)}>
+        <i style={{ width: `${Math.min(100, Math.max(pct, 2))}%` }} />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Kiro's credits this period, of what the plan covers, with its bonus and overage when Kiro printed them. */
+function KiroLimit({ plan, now }: { plan: KiroPlan; now: number }) {
+  const pct = plan.covered > 0 ? Math.round((plan.used / plan.covered) * 100) : plan.used > 0 ? 100 : 0;
+  const over = plan.used > plan.covered;
+  // Past the plan, Kiro stops unless overage is on; with it on, Kiro bills the rest and goes on, so amber.
+  const level = over && plan.overage?.enabled ? 'warn' : limitLevel(pct);
+  const resets = plan.resetsOn ? dayLabel(plan.resetsOn) : null;
+  const extra = [
+    plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
+    plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
+  ].filter(Boolean);
+  // Kiro's own words for the bonus and overage, shown as it printed them, since how they're read is a guess.
+  const said = [plan.bonus?.line, plan.overage?.line].filter((l): l is string => !!l);
+  return (
+    <>
+      <LimitBar
+        label="Kiro credits"
+        pct={pct}
+        level={level}
+        className="kiro"
+        title={`Kiro credits: ${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)} in the plan used${resets ? `, resets ${resets}` : ''}`}
+      >
+        <div className="lim-reset">
+          {[over ? 'Over plan' : null, `${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)}`, plan.plan, resets && `resets ${resets}`].filter(Boolean).join(' · ')}
+        </div>
+        {extra.length > 0 && <div className="lim-reset">{extra.join(' · ')}</div>}
+        {said.map((l) => (
+          <div key={l} className="lim-said">
+            Kiro: {l}
+          </div>
+        ))}
+      </LimitBar>
+      <div className="lim-age">Kiro's estimate of all your Kiro use, as of {relativeTime(plan.updatedAt, now).toLowerCase()}</div>
+    </>
+  );
+}
+
+/** A YYYY-MM-DD day as "Nov 1", in the local calendar. */
+function dayLabel(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 /** 18px stroke icon from one or more path segments. */

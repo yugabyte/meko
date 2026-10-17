@@ -487,6 +487,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         serverHost={state.serverHost ?? ''}
         version={state.version}
         limits={state.limits ?? null}
+        kiroPlan={state.kiroPlan ?? null}
         theme={theme}
         onCycleTheme={cycleTheme}
         onSelect={(p) => {

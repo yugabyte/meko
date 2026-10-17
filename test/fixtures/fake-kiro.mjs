@@ -33,6 +33,19 @@ if (args[0] === 'chat' && args[1] === '--delete-session') {
   log('deleted.jsonl', { id: args[2], cwd: process.cwd() });
   process.exit(0);
 }
+// Like `kiro-cli chat --no-interactive --output-format stream-json /usage`: the plan's usage, the
+// text from `usage.txt` in the fake's dir when there is one; records the run in `usage.jsonl`.
+if (args.includes('--no-interactive') && args.at(-1) === '/usage') {
+  log('usage.jsonl', { args, cwd: process.cwd() });
+  const f = join(dir, 'usage.txt');
+  const finalText = existsSync(f) ? readFileSync(f, 'utf8') : 'Estimated Usage | resets on 2099-01-01 | KIRO FREE\nCredits (12.5 of 50 covered in plan), 25.0%\n';
+  const events = [
+    { type: 'runStarted', data: { payloadSchema: 'acp', acpProtocolVersion: 1, engine: 'v2' } },
+    { type: 'runFinished', data: { sessionId: randomUUID(), status: 'success', stopReason: 'end_turn', finalText } },
+  ];
+  process.stdout.write(events.map((e) => JSON.stringify(e)).join('\n') + '\n', () => process.exit(0));
+  await new Promise(() => undefined);
+}
 // Like `kiro-cli chat --no-interactive --output-format stream-json` (Ask AgentK): records what it got
 // and prints `ask-reply.jsonl` from the fake's dir.
 if (args.includes('--no-interactive')) {
