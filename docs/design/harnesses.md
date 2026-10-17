@@ -19,8 +19,13 @@ version, Kiro: 2.32.0). Each one's command is set only in `config.toml` (`[claud
 command`). A create that names one that isn't is a 400 that says what to do; the dialog always names
 the agent it shows (none while no agent has answered yet, just after a start: the server then picks).
 A default that isn't available never decides: a request that names no harness, and Ask AgentK, start
-on the first available one in `HARNESS_IDS` order (`Harnesses.defaultFor`), and Settings offers only
-an available agent as the default. Before refusing, `pick` reads again the version of any agent
+on the first available one in `HARNESS_IDS` order (`Harnesses.defaultFor`). Settings' **Default
+agent**, like New session's **Agent**, offers only available agents and shows only while two or more
+are: with one, there's nothing to choose (`defaultAgentChoice()` in `util.ts`). A stored default that
+goes unavailable some other way (not installed, too old, or turned off in config.toml) stays stored,
+and decides again once it's available; turning **Offer Claude Code / Kiro** off in Settings is the
+exception, which moves the default to another available agent. Both choices are `AgentPicker` in
+`common.tsx`, each agent's logo then its name. Before refusing, `pick` reads again the version of any agent
 that's turned on but has none, so an agent installed since the last read (or a read that failed
 once) doesn't wait ten minutes. The session's harness is `sessions.harness` (`Session.harness`).
 
@@ -72,7 +77,8 @@ do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and th
 | System prompt | `--append-system-prompt` | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | `kiro-guard.sh`: exit 2, the reason on stderr |
 | Conversation id | chosen (`--session-id`) | Kiro's, from its hooks' `session_id`, else its session store |
-| AgentK's mod, Artifact designs, plan limits | yes | no |
+| AgentK's mod, Artifact designs | yes | no |
+| Plan limits in the rail | 5-hour and weekly, from the status line and the mod | credits this period, from `/usage` hourly |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | none |
 | Usage | transcript tokens, priced | credits from Kiro's session file |
 

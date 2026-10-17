@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { HarnessStatus, Project } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
+import { defaultAgentChoice } from '../../src/web/util.js';
 
 const project = { id: 'p', name: 'Demo', repoPath: '/code/demo', defaultBranch: 'main', settings: { branchPrefix: 'ak/' } } as unknown as Project;
 const status = (id: HarnessStatus['id'], o: Partial<HarnessStatus> = {}): HarnessStatus => ({
@@ -16,10 +17,15 @@ const render = (harnesses: HarnessStatus[], harness?: HarnessStatus['id']) =>
     onClose: () => undefined, onCreated: () => undefined,
   }));
 
-/** The Agent choice's buttons in the dialog. */
+/**
+ * The Agent choice's buttons in the dialog: each one's id, `*` when it's picked, and ` (no logo)`
+ * when it doesn't show its agent's logo.
+ */
 function agents(harnesses: HarnessStatus[], harness?: HarnessStatus['id']) {
   const html = render(harnesses, harness);
-  return [...html.matchAll(/<button[^>]*id="ns-agent-(\w+)"[^>]*aria-checked="(true|false)"/g)].map(([, id, on]) => `${id}${on === 'true' ? '*' : ''}`);
+  return [...html.matchAll(/<button[^>]*id="ns-agent-(\w+)"[^>]*aria-checked="(true|false)"[^>]*>(.*?)<\/button>/g)].map(
+    ([, id, on, inner]) => `${id}${on === 'true' ? '*' : ''}${inner.includes(`src="/harness-${id}.svg"`) ? '' : ' (no logo)'}`,
+  );
 }
 
 describe("the New session dialog's Agent choice", () => {
@@ -37,5 +43,15 @@ describe("the New session dialog's Agent choice", () => {
   ])('with no agent available, %s', (_, harnesses, said) => {
     const html = render(harnesses);
     expect(html.includes('No coding agent is available')).toBe(said);
+  });
+});
+
+describe("Settings' Default agent", () => {
+  it.each([
+    ['is left out while Kiro is off', [status('claude'), status('kiro', { enabled: false, available: false })], 'claude' as const, null],
+    ['is left out, not offered disabled, while Kiro is too old', [status('claude'), status('kiro', { available: false })], 'kiro' as const, null],
+    ['offers the available agents with the stored default picked', [status('claude'), status('kiro')], 'kiro' as const, { agents: ['claude', 'kiro'], value: 'kiro' }],
+  ])('%s', (_, harnesses, stored, shown) => {
+    expect(defaultAgentChoice(harnesses, stored)).toEqual(shown);
   });
 });

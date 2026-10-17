@@ -2,7 +2,7 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { kiroArgs, normalizeKiro } from '../../src/server/harness/kiro.js';
-import { agentkAgent, findKiroSession, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
+import { agentkAgent, findKiroSession, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
 import { kiroMekoGaps } from '../../src/server/mekokiro.js';
 import { tempDir } from '../helpers.js';
 
@@ -110,6 +110,27 @@ describe("Kiro's one-shot answer", () => {
     const failed = [{ type: 'runFinished', data: { sessionId: 'a-2', status: 'error', finalText: '' } }];
     expect(readKiroRun(JSON.stringify(failed[0]))).toMatchObject({ ok: false, error: 'the run ended with error' });
     expect(readKiroRun('')).toMatchObject({ ok: false, text: '', sessionId: null });
+  });
+});
+
+describe("Kiro's plan usage (/usage)", () => {
+  const NOW = Date.parse('2026-10-17T00:00:00Z');
+  const FREE = 'Estimated Usage | resets on 2026-11-01 | KIRO FREE\nCredits (36.02 of 50 covered in plan), 72.0%\nManage your plan at https://app.kiro.dev/account/usage\n';
+  const base = { plan: 'Free', used: 36.02, covered: 50, resetsOn: '2026-11-01', bonus: null, overage: null, updatedAt: NOW };
+  // Only the free plan's text has been seen (kiro-cli 2.32.0); the paid plans' lines are guesses.
+  it.each([
+    ['the free plan, as kiro-cli 2.32 prints it', FREE, base],
+    ['colors and thousands', '\x1b[1mEstimated Usage | resets on 2026-11-01 | KIRO PRO+\x1b[0m\nCredits (1,200.5 of 2,000 covered in plan), 60%', { ...base, plan: 'Pro+', used: 1200.5, covered: 2000 }],
+    ['no reset or plan', 'Credits (3 of 50 covered in plan)', { ...base, plan: null, used: 3, resetsOn: null }],
+    ['bonus credits used, with an expiry date', `${FREE}Bonus credits: 380.00/500 (expires 2026-11-30)`,
+      { ...base, bonus: { used: 380, total: 500, expires: '2026-11-30', line: 'Bonus credits: 380.00/500 (expires 2026-11-30)' } }],
+    ['bonus credits left, expiring in days', `${FREE}Bonus credits (120 of 500 remaining), expires in 3 days`,
+      { ...base, bonus: { used: 380, total: 500, expires: '2026-10-20', line: 'Bonus credits (120 of 500 remaining), expires in 3 days' } }],
+    ['overage billed', `${FREE}Overages: 14.20 credits ($0.57), enabled`, { ...base, overage: { credits: 14.2, enabled: true, line: 'Overages: 14.20 credits ($0.57), enabled' } }],
+    ['overage turned off', `${FREE}Overage: Disabled`, { ...base, overage: { credits: null, enabled: false, line: 'Overage: Disabled' } }],
+    ['no credits line', 'Estimated Usage | resets on 2026-11-01 | KIRO FREE', null],
+  ])('reads %s', (_, text, want) => {
+    expect(parseKiroPlan(text, NOW)).toEqual(want);
   });
 });
 
