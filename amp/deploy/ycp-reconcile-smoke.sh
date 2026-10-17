@@ -30,6 +30,9 @@
 #      the resource settles back to ready instead of being re-issued. It does not
 #      catch a controller that stamped on the 202 rather than on completion —
 #      that window is not sampled, and is covered by the unit tests (meko#985);
+#   5b. reads the api-server's access log: the agent's desired-state reads are held
+#      for their wait, and -- checked after the last write below -- the writes wake
+#      held reads early (AMP-103);
 #   6. declares pg_settings on the branch and on the endpoint and asserts both
 #      converge: the controller's own rows carry them, a branch spec that declares
 #      ONLY settings still gets its generation stamped (the settings PATCH is
@@ -134,6 +137,8 @@ env_json() {
   curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$CP/environments" |
     jq -c --arg id "$YCP_ENV_ID" '.data.items[]|select(.id==$id)' 2>/dev/null
 }
+# cp_logs — the control plane's log; one replica (amp/deploy/ycp/controlplane.yaml).
+cp_logs() { kubectl -n "$NS" logs -l app=meko-api-server --tail=-1 2>/dev/null; }
 # set_desired <resources-json-array> — replace the environment's desired state.
 set_desired() {
   curl -sf -X POST "$CP/environments/${YCP_ENV_ID}/desired" \
@@ -241,6 +246,8 @@ else
     --arg cpu "$cur_cpu" --arg mem "$cur_mem" \
     '[ $r[] | if .kind=="endpoint" and .name==$n
               then .spec.resources={cpu:$cpu, memory:$mem} else . end ]')
+  # The api-server's access log up to this write, for the long-poll check below.
+  LP_BEFORE=$(cp_logs)
   set_desired "$RESIZED" && ok "desired state updated with the endpoint's own size" ||
     bad "POST desired (resize) failed"
   # Later edits build on this, not on the original: re-posting DESIRED would drop
@@ -273,6 +280,53 @@ else
     ok "environment READY and endpoint state=ready after the update settled" ||
     bad "environment=$state endpoint=$estate after the update (want READY/ready)"
 fi
+
+# --- the agent long-polls desired state (AMP-103) ---
+# Read off the api-server's access log, which records each agent read's since/wait
+# and how long it was held. A read held for its whole wait shows the agent asks and
+# the server holds. The log reads are diffed rather than split by time so that
+# runner/cluster clock skew cannot misfile a line. Whether a write WAKES a held read
+# is judged after the last desired-state write below (lp_check_woken), across every
+# write this script makes.
+lp_reads() {
+  LP_TEXT="$1" python3 - <<'PY'
+import os, re
+pat = re.compile(r'agent/desired-state\?since=\d+&wait=([0-9.a-zµ]+)"? .*?latency=([0-9.a-zµ]+)')
+unit = {"h": 3600, "m": 60, "s": 1, "ms": 1e-3, "us": 1e-6, "µs": 1e-6, "ns": 1e-9}
+def secs(d):
+    return sum(float(n) * unit[u] for n, u in re.findall(r'([0-9.]+)(h|ms|m|s|us|µs|ns)', d))
+for w, l in pat.findall(os.environ["LP_TEXT"]):
+    print(secs(w), secs(l))
+PY
+}
+hdr "the agent long-polls desired state"
+if [ -z "${LP_BEFORE:-}" ]; then
+  bad "no access log was captured before the spec edit (it did not run)"
+else
+  lp_held=$(lp_reads "$LP_BEFORE" | awk '$1 >= 1 && $2 >= 0.8 * $1' | wc -l)
+  [ "$lp_held" -gt 0 ] && ok "the agent's desired-state reads are held ($lp_held held for their full wait)" ||
+    bad "no agent desired-state read was held for its wait before the edit — is the agent long-polling?"
+  lp_fallback=$(kubectl -n "$NS" logs deploy/amp-reconcile-agent --tail=-1 2>/dev/null |
+    grep -E 'does not hold desired-state reads|desired-state long-poll:|answered at once, unchanged' | head -3)
+  [ -z "$lp_fallback" ] && ok "the agent never fell back to plain ticking" ||
+    bad "the agent fell back to plain ticking: $lp_fallback"
+fi
+
+# lp_check_woken: some held read was answered before its wait ran out. A hold that
+# times out takes at least its whole wait, and the agent never hangs up on one, so
+# an early answer is a write waking it. One write is not enough to look for: one
+# landing in the last poll interval (250ms) of a hold is outrun by the hold's own
+# deadline and read by the agent's next tick instead -- just as quickly, but with
+# no wake to see. Across every write this script makes, missing all of them is
+# not a real outcome.
+lp_check_woken() {
+  [ -n "${LP_BEFORE:-}" ] || return 0
+  local after woken
+  after=$(cp_logs | grep -vxF -f <(printf '%s\n' "$LP_BEFORE"))
+  woken=$(lp_reads "$after" | awk '$2 < $1 - 0.05' | wc -l)
+  [ "$woken" -gt 0 ] && ok "desired-state writes woke held reads ($woken answered before their wait ran out)" ||
+    bad "no held desired-state read was answered early across this script's writes — writes did not wake the agent"
+}
 
 # --- branch + endpoint settings ---
 #
@@ -787,6 +841,9 @@ for ((i = 0; i < 48; i++)); do
 done
 [ "$gone" = 1 ] && ok "agent deleted the cluster subtree (cascade)" ||
   bad "cluster/endpoint still present after withdrawal (count=${left:-?})"
+
+hdr "desired-state writes wake the agent's held reads"
+lp_check_woken
 
 # --- telemetry actually flows -------------------------------------------------
 # The chart's preflight only WARNS (it exits 0 whatever it finds), and the control

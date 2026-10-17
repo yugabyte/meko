@@ -132,6 +132,34 @@ cluster.
    a desired state that was actually read: the agent cannot know what an operator
    withdrew from a response it never got.
 
+   **A tick starts `RECONCILE_INTERVAL` (10s) after the last one, or as soon as desired
+   state changes.** Between ticks the agent long-polls
+   `/agent/desired-state?since=<change_token>&wait=<rest of the interval>`.
+   - **The token:** `meko_system.environment_desired_revs.rev`. The repository bumps
+     it after every desired-state write that changed a row commits, so it moves on
+     creates and deletes, which the response's `revision` (the max generation) does
+     not. After the commit rather than inside it: inside, the counter row would stay
+     locked until commit, serializing every writer to the environment and letting two
+     multi-environment storage-pool PATCHes deadlock on it. A bump that is missed (a
+     crash between commit and bump, an older replica mid-rollout, a hand edit in SQL)
+     costs only latency, since the tick still reads desired state.
+     `TestEveryDesiredWriterBumpsTheChangeToken` fails for a new writer that forgets.
+   - **The hold:** while the token still equals `since`, the api-server re-reads it
+     every 250ms, for at most 25s, then answers with the current state either way. It
+     re-reads the database rather than waiting on a notification, so any replica can
+     serve the hold.
+   - **On a change:** the next tick reconciles the state the hold returned, with no
+     second fetch.
+   - **Old control plane:** one that predates this ignores `since`/`wait` and answers
+     at once without `long_poll`. The agent then reads once per tick and re-probes
+     every 5 minutes.
+   - **A failed hold:** for example, a proxy cutting the request. It pauses
+     long-polling for a minute. A hold is cut 2s past the tick, so one that stalls
+     cannot delay the tick by the HTTP client's timeout.
+   - **A hold answered at once, unchanged:** something in front of the control plane
+     dropped `since`/`wait`. Treated like an old control plane: a read per tick, and a
+     re-probe every 5 minutes.
+
    The mirror of that rule applies to **actual**, and a backend author implementing
    `List` has to know it: the engine derives creates from a resource's *absence*
    from actual and deletes from its *presence*, so a reading that is missing part

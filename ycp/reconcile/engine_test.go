@@ -871,3 +871,61 @@ func TestReconcileFailingSpansBackoff(t *testing.T) {
 		t.Fatalf("tick3: failing=%v, want none after the retry succeeded", res.Failing)
 	}
 }
+
+// waiterSource is a Source whose WaitChange answers from a script, one per call.
+type waiterSource struct {
+	oneShotSource
+	changed []bool
+	waits   []time.Duration
+}
+
+func (s *waiterSource) WaitChange(_ context.Context, d time.Duration) bool {
+	s.waits = append(s.waits, d)
+	if len(s.changed) == 0 {
+		return false
+	}
+	c := s.changed[0]
+	s.changed = s.changed[1:]
+	return c
+}
+
+// A change ends the wait between ticks at once; without one the tick keeps its
+// interval. With an hour-long interval, a second tick inside the test's lifetime can
+// only have been started by WaitChange.
+func TestRunStartsTheNextTickWhenTheWaiterSeesAChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := 0
+	e := New(newFake(), Options{OnTick: func(Result, error, time.Duration) {
+		if ticks++; ticks == 2 {
+			cancel()
+		}
+	}})
+	src := &waiterSource{changed: []bool{true}}
+	done := make(chan struct{})
+	go func() { e.Run(ctx, src, nil, time.Hour, nil); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("the second tick never came: a change did not end the wait")
+	}
+	if len(src.waits) != 1 || src.waits[0] <= 0 || src.waits[0] > time.Hour {
+		t.Errorf("WaitChange got %v, want one call bounded by what is left of the interval", src.waits)
+	}
+}
+
+func TestRunWaitsOutTheIntervalWhenNothingChanged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := 0
+	e := New(newFake(), Options{OnTick: func(Result, error, time.Duration) { ticks++ }})
+	src := &waiterSource{changed: []bool{false}}
+	done := make(chan struct{})
+	go func() { e.Run(ctx, src, nil, time.Hour, nil); close(done) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+	if ticks != 1 {
+		t.Errorf("ticks = %d, want 1: an unchanged wait must not start a tick early", ticks)
+	}
+}

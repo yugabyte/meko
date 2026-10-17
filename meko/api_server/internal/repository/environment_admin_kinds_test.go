@@ -139,9 +139,10 @@ func TestUpsertAdminDesired_WritesUnderTheGenerationRule(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectQuery(`INSERT INTO meko_system\.environment_desired_resources .* `+
-		`WHEN meko_system\.environment_desired_resources\.spec IS DISTINCT FROM EXCLUDED\.spec .* RETURNING generation`).
+		`WHERE meko_system\.environment_desired_resources\.spec IS DISTINCT FROM EXCLUDED\.spec RETURNING generation`).
 		WithArgs(envUUID, KindController, ControllerName, []byte(`{"version":"2.1.0"}`)).
 		WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(int64(4)))
+	expectBump(mock)
 
 	d, err := NewEnvironmentRepo(db).UpsertAdminDesired(envUUID, models.DesiredResource{
 		Kind: KindController, Name: ControllerName, Spec: []byte(`{"version":"2.1.0"}`),
@@ -179,7 +180,7 @@ func TestApplyDesiredPatchesTx_RefusesAdminOnlyKinds(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin: %v", err)
 			}
-			err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+			_, err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 				{Kind: "branch", Name: "pool-a/db/feature", Delete: true}, p,
 			}, nil)
 			if !errors.Is(err, ErrAdminOnlyKind) {
@@ -215,7 +216,7 @@ func TestApplyDesiredPatchesTx_CascadeSparesTheAdminDeclarations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+	if _, err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-a", Delete: true},
 	}, nil); err != nil {
 		t.Fatalf("applyDesiredPatchesTx: %v", err)

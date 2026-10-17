@@ -326,6 +326,12 @@ type agent struct {
 	lastGood api.DesiredState
 	haveGood bool
 
+	// prefetched is a desired state WaitChange read and the next Desired hands out,
+	// so a tick a change starts costs one fetch, not two. noLongPollUntil holds
+	// long-polling off after a control plane that cannot hold, or a failed hold.
+	prefetched      *api.DesiredState
+	noLongPollUntil time.Time
+
 	// tasks relays the controller's task log so the console can see what is running
 	// and what failed. Its own reader, not part of the reconcile engine: the engine
 	// only cares about tasks it planned for a resource it is converging, while the
@@ -409,6 +415,11 @@ func (a *agent) enrollWithRetry(ctx context.Context, st state) error {
 // 401 is logged loudly and not retried within the tick: the key the agent holds
 // is the only credential it has, so re-asking cannot change the answer.
 func (a *agent) Desired(ctx context.Context) (api.DesiredState, bool, error) {
+	if p := a.prefetched; p != nil {
+		a.prefetched = nil
+		a.lastGood, a.haveGood = *p, true
+		return *p, true, nil
+	}
 	ds, err := a.ycp.Desired(ctx)
 	if err != nil {
 		if errors.Is(err, ycpclient.ErrUnauthorized) {
@@ -423,6 +434,87 @@ func (a *agent) Desired(ctx context.Context) (api.DesiredState, bool, error) {
 	a.metrics.fetched("ok")
 	a.lastGood, a.haveGood = ds, true
 	return ds, true, nil
+}
+
+// Long-poll bounds. longPollMaxHold matches the control plane's own cap, so a longer
+// RECONCILE_INTERVAL is covered by consecutive holds rather than one the server would
+// cut short. The back-offs keep a control plane that cannot hold, or a path that cuts
+// held requests, at one plain read per tick instead of two.
+var longPollMaxHold = 25 * time.Second // a var so a test can shorten it
+
+const (
+	longPollReprobe  = 5 * time.Minute
+	longPollErrPause = time.Minute
+	// longPollSlack is how far past d a hold may run for the answer to arrive. The
+	// request is cut there, so a hop that stalls rather than failing cannot delay
+	// the tick by the HTTP client's whole timeout.
+	longPollSlack = 2 * time.Second
+)
+
+// WaitChange implements reconcile.Waiter. It long-polls the control plane for a
+// desired state whose change token differs from the last one read, for at most d,
+// and keeps a changed answer for the next Desired.
+//
+// It returns false -- the tick then waits out its interval, as it would without
+// long-polling -- when there is no last-good state to compare against, when the
+// control plane predates long-polling (it answers at once without LongPoll), when a
+// hold is answered at once without a change, and on any error. All but the first
+// hold long-polling off for a while.
+func (a *agent) WaitChange(ctx context.Context, d time.Duration) bool {
+	if !a.haveGood || time.Now().Before(a.noLongPollUntil) {
+		return false
+	}
+	since := a.lastGood.ChangeToken
+	deadline := time.Now().Add(d)
+	for {
+		hold := min(time.Until(deadline), longPollMaxHold)
+		if hold <= 0 {
+			return false
+		}
+		start := time.Now()
+		hctx, cancel := context.WithDeadline(ctx, deadline.Add(longPollSlack))
+		ds, err := a.ycp.DesiredSince(hctx, since, hold)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			if errors.Is(err, ycpclient.ErrUnauthorized) {
+				a.metrics.fetched("unauthorized")
+			} else {
+				a.metrics.fetched("error")
+			}
+			log.Printf("desired-state long-poll: %v; reading once per tick for %s", err, longPollErrPause)
+			a.noLongPollUntil = time.Now().Add(longPollErrPause)
+			return false
+		}
+		a.metrics.fetched("ok")
+		if !ds.LongPoll {
+			log.Printf("the control plane does not hold desired-state reads; reading once per tick, "+
+				"re-checking in %s", longPollReprobe)
+			a.noLongPollUntil = time.Now().Add(longPollReprobe)
+			if ds.Revision != a.lastGood.Revision {
+				a.prefetched = &ds
+				return true
+			}
+			return false
+		}
+		if ds.ChangeToken != since {
+			a.prefetched = &ds
+			return true
+		}
+		// Unchanged. A hold that ran its course is followed by another until d is
+		// spent. One answered early without a change means something between here
+		// and the control plane dropped since/wait: it would only repeat, two reads
+		// per tick, so hold long-polling off as for a control plane that cannot hold.
+		if time.Since(start) < hold/2 {
+			log.Printf("a held desired-state read was answered at once, unchanged: something in front of "+
+				"the control plane is dropping ?since=&wait=; reading once per tick, re-checking in %s",
+				longPollReprobe)
+			a.noLongPollUntil = time.Now().Add(longPollReprobe)
+			return false
+		}
+	}
 }
 
 func (a *agent) fallback(err error) (api.DesiredState, bool, error) {

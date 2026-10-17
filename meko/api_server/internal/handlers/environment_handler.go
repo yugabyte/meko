@@ -3,7 +3,9 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -299,14 +301,20 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 }
 
 // AgentDesiredState returns the generic desired-state resources, the admin-only kinds
-// included.
+// included. With ?since=<change_token>&wait=<duration> it is a long-poll; see
+// EnvironmentService.AgentDesired. Without both it answers at once, as it always has.
 func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 	e := h.resolveAgent(c)
 	if e == nil {
 		return nil
 	}
-	res, err := h.svc.DesiredForAgent(e.UUID)
+	since, wait, hold := longPollParams(c)
+	ctx := c.Request().Context()
+	token, res, err := h.svc.AgentDesired(ctx, e.UUID, since, wait, hold)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil // the agent hung up; nobody is reading an answer
+		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	if res == nil {
@@ -314,6 +322,8 @@ func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 	}
 	// Revision tracks the desired set as a whole: the max per-resource generation,
 	// so the agent's reported AppliedRevision advances whenever any spec changes.
+	// A create or a delete does not move it, which is why the long-poll keys on
+	// change_token instead.
 	var revision int64 = 1
 	for _, d := range res {
 		if d.Generation > revision {
@@ -322,9 +332,34 @@ func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 	}
 	return ok(c, http.StatusOK, map[string]any{
 		"revision":        revision,
+		"change_token":    token,
+		"long_poll":       true, // tells the agent this server holds; an older one ignores since/wait
 		"target_versions": map[string]string{"agent": "v1.4.2", "mcp": "v1.4.2", "rag": "v1.4.2"},
 		"resources":       res,
 	})
+}
+
+// longPollParams reads since and wait. wait is a Go duration ("25s") or a bare number
+// of seconds. hold is false unless both are present and valid, so a malformed request
+// degrades to an immediate answer rather than an error.
+func longPollParams(c echo.Context) (since int64, wait time.Duration, hold bool) {
+	s, w := c.QueryParam("since"), c.QueryParam("wait")
+	if s == "" || w == "" {
+		return 0, 0, false
+	}
+	since, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	if n, nerr := strconv.Atoi(w); nerr == nil {
+		wait = time.Duration(n) * time.Second
+	} else if wait, err = time.ParseDuration(w); err != nil {
+		return 0, 0, false
+	}
+	if wait <= 0 {
+		return 0, 0, false
+	}
+	return since, wait, true
 }
 
 // AgentStatus ingests a status report.

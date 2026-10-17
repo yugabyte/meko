@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,8 +102,28 @@ func (c *Client) Enroll(ctx context.Context, req api.EnrollRequest) (api.EnrollR
 
 // Desired fetches the environment's desired state. Returns ErrUnauthorized on a 401.
 func (c *Client) Desired(ctx context.Context) (api.DesiredState, error) {
+	return c.desired(ctx, c.http, "/agent/desired-state")
+}
+
+// DesiredSince is Desired as a long-poll: the control plane holds the request until
+// the environment's change token differs from since, or wait runs out, and answers
+// with the current state either way. The request's HTTP timeout is stretched by wait,
+// or the client's own would cut the hold off.
+//
+// A control plane that predates long-polling ignores both parameters and answers at
+// once without LongPoll set; telling the two apart is the caller's job.
+func (c *Client) DesiredSince(ctx context.Context, since int64, wait time.Duration) (api.DesiredState, error) {
+	hc := *c.http
+	if hc.Timeout > 0 {
+		hc.Timeout += wait
+	}
+	q := url.Values{"since": {strconv.FormatInt(since, 10)}, "wait": {wait.Truncate(time.Millisecond).String()}}
+	return c.desired(ctx, &hc, "/agent/desired-state?"+q.Encode())
+}
+
+func (c *Client) desired(ctx context.Context, hc *http.Client, path string) (api.DesiredState, error) {
 	var ds api.DesiredState
-	code, _, err := c.do(ctx, http.MethodGet, "/agent/desired-state", nil, &ds)
+	code, _, err := c.doWith(ctx, hc, http.MethodGet, path, nil, &ds)
 	if err != nil {
 		return api.DesiredState{}, err
 	}
@@ -175,6 +197,10 @@ func (c *Client) PostExtensions(ctx context.Context, cat api.ExtensionCatalog) e
 // come from the control plane's own checks or from anything between, and only the
 // code says which. Its message is what a caller passes through to an operator.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) (int, apiErr, error) {
+	return c.doWith(ctx, c.http, method, path, body, out)
+}
+
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, body, out any) (int, apiErr, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -196,7 +222,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (in
 	} else {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return 0, apiErr{}, fmt.Errorf("ycp: %s %s: %w", method, path, err)
 	}

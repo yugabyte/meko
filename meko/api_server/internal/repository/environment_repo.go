@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -422,24 +424,17 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 	}
 
 	desired := make(map[key]bool, len(res))
+	changed := false
 	for _, d := range res {
 		spec := d.Spec
 		if len(spec) == 0 {
 			spec = json.RawMessage("{}")
 		}
-		if _, err := tx.Exec(
-			`INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
-			 VALUES ($1,$2,$3,$4,0)
-			 ON CONFLICT (env_uuid, kind, name) DO UPDATE
-			   SET spec = EXCLUDED.spec,
-			       generation = CASE
-			         WHEN meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec
-			         THEN meko_system.environment_desired_resources.generation + 1
-			         ELSE meko_system.environment_desired_resources.generation
-			       END`,
-			envUUID, d.Kind, d.Name, []byte(spec)); err != nil {
+		n, err := execRows(tx, upsertDesiredSQL, envUUID, d.Kind, d.Name, []byte(spec))
+		if err != nil {
 			return fmt.Errorf("upsert desired: %w", err)
 		}
+		changed = changed || n > 0
 		desired[key{d.Kind, d.Name}] = true
 	}
 	for k := range existing {
@@ -448,11 +443,19 @@ func (r *EnvironmentRepo) ReplaceDesired(envUUID string, res []models.DesiredRes
 		}
 		const prune = `DELETE FROM meko_system.environment_desired_resources
 			 WHERE env_uuid=$1 AND kind=$2 AND name=$3`
-		if _, err := tx.Exec(prune, envUUID, k.kind, k.name); err != nil {
+		n, err := execRows(tx, prune, envUUID, k.kind, k.name)
+		if err != nil {
 			return fmt.Errorf("prune desired %s/%s: %w", k.kind, k.name, err)
 		}
+		changed = changed || n > 0
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if changed {
+		r.bumpDesiredRev(envUUID)
+	}
+	return nil
 }
 
 // UpsertDesired writes one desired resource, replacing its spec whole, under
@@ -478,20 +481,20 @@ func (r *EnvironmentRepo) upsertDesired(envUUID string, d models.DesiredResource
 	if len(spec) == 0 {
 		spec = json.RawMessage("{}")
 	}
-	err := r.db.QueryRow(
-		`INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
-		 VALUES ($1,$2,$3,$4,0)
-		 ON CONFLICT (env_uuid, kind, name) DO UPDATE
-		   SET spec = EXCLUDED.spec,
-		       generation = CASE
-		         WHEN meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec
-		         THEN meko_system.environment_desired_resources.generation + 1
-		         ELSE meko_system.environment_desired_resources.generation
-		       END
-		 RETURNING generation`,
+	err := r.db.QueryRow(upsertDesiredSQL+` RETURNING generation`,
 		envUUID, d.Kind, d.Name, []byte(spec)).Scan(&d.Generation)
+	changed := err == nil
+	if errors.Is(err, sql.ErrNoRows) {
+		// The spec was unchanged, so the row was not written; read back its generation.
+		err = r.db.QueryRow(
+			`SELECT generation FROM meko_system.environment_desired_resources
+			 WHERE env_uuid=$1 AND kind=$2 AND name=$3`, envUUID, d.Kind, d.Name).Scan(&d.Generation)
+	}
 	if err != nil {
 		return models.DesiredResource{}, fmt.Errorf("upsert desired %s/%s: %w", d.Kind, d.Name, err)
+	}
+	if changed {
+		r.bumpDesiredRev(envUUID)
 	}
 	d.Spec = spec
 	return d, nil
@@ -506,10 +509,14 @@ func (r *EnvironmentRepo) DeleteDesired(envUUID, kind, name string) error {
 	if IsAdminOnlyKind(kind) {
 		return fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, kind, name)
 	}
-	if _, err := r.db.Exec(
+	n, err := execRows(r.db,
 		`DELETE FROM meko_system.environment_desired_resources WHERE env_uuid=$1 AND kind=$2 AND name=$3`,
-		envUUID, kind, name); err != nil {
+		envUUID, kind, name)
+	if err != nil {
 		return fmt.Errorf("delete desired %s/%s: %w", kind, name, err)
+	}
+	if n > 0 {
+		r.bumpDesiredRev(envUUID)
 	}
 	return nil
 }
@@ -533,37 +540,39 @@ func (r *EnvironmentRepo) DeleteDesired(envUUID, kind, name string) error {
 // removes one.
 func applyDesiredPatchesTx(
 	tx *sql.Tx, envUUID, storagePool string, patches []models.ResourcePatch, guard UpdateGuard,
-) error {
+) (changed bool, err error) {
 	for _, p := range patches {
 		if IsAdminOnlyKind(p.Kind) {
-			return fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, p.Kind, p.Name)
+			return false, fmt.Errorf("%w: %s/%s", ErrAdminOnlyKind, p.Kind, p.Name)
 		}
 	}
 	for _, p := range patches {
 		if p.Delete {
-			if _, err := tx.Exec(deleteDesiredSubtree, envUUID, p.Name); err != nil {
-				return fmt.Errorf("delete desired subtree %s: %w", p.Name, err)
+			n, err := execRows(tx, deleteDesiredSubtree, envUUID, p.Name)
+			if err != nil {
+				return false, fmt.Errorf("delete desired subtree %s: %w", p.Name, err)
 			}
+			changed = changed || n > 0
 			continue
 		}
 		merged, before, existed, err := mergeDesiredSpec(tx, envUUID, p.Kind, p.Name, p.Spec)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if p.Update && !existed {
-			return fmt.Errorf("%w: %s/%s", ErrResourceNotFound, p.Kind, p.Name)
+			return false, fmt.Errorf("%w: %s/%s", ErrResourceNotFound, p.Kind, p.Name)
 		}
 		if p.Create {
 			if p.Kind == "cluster" {
 				inUse, cerr := clusterNameInPool(tx, storagePool, p.Name)
 				if cerr != nil {
-					return cerr
+					return false, cerr
 				}
 				if inUse {
-					return fmt.Errorf("%w: %s", ErrClusterNameInUse, p.Name)
+					return false, fmt.Errorf("%w: %s", ErrClusterNameInUse, p.Name)
 				}
 			} else if existed {
-				return fmt.Errorf("%w: %s/%s", ErrResourceExists, p.Kind, p.Name)
+				return false, fmt.Errorf("%w: %s/%s", ErrResourceExists, p.Kind, p.Name)
 			}
 		}
 		// After the create guard, so a create colliding with an existing resource is
@@ -572,24 +581,16 @@ func applyDesiredPatchesTx(
 			kind, name := p.Kind, p.Name
 			observed := func() (*ObservedResource, error) { return observedResource(tx, envUUID, kind, name) }
 			if err := guard(p.Kind, p.Name, before, merged, observed); err != nil {
-				return err
+				return false, err
 			}
 		}
-		if _, err := tx.Exec(
-			`INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
-			 VALUES ($1,$2,$3,$4,0)
-			 ON CONFLICT (env_uuid, kind, name) DO UPDATE
-			   SET spec = EXCLUDED.spec,
-			       generation = CASE
-			         WHEN meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec
-			         THEN meko_system.environment_desired_resources.generation + 1
-			         ELSE meko_system.environment_desired_resources.generation
-			       END`,
-			envUUID, p.Kind, p.Name, []byte(merged)); err != nil {
-			return fmt.Errorf("upsert desired %s/%s: %w", p.Kind, p.Name, err)
+		n, err := execRows(tx, upsertDesiredSQL, envUUID, p.Kind, p.Name, []byte(merged))
+		if err != nil {
+			return false, fmt.Errorf("upsert desired %s/%s: %w", p.Kind, p.Name, err)
 		}
+		changed = changed || n > 0
 	}
-	return nil
+	return changed, nil
 }
 
 // deleteDesiredSubtree removes a resource AND every descendant (endpoints under a
@@ -755,6 +756,94 @@ func (r *EnvironmentRepo) ListDesired(envUUID string) ([]models.DesiredResource,
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// upsertDesiredSQL writes one desired row, bumping its generation when the spec
+// changes -- semantically, by JSONB comparison, so key order and whitespace do not
+// count. An unchanged row is not written at all, so the affected-row count says
+// whether anything changed, which is what decides whether the change token moves.
+const upsertDesiredSQL = `INSERT INTO meko_system.environment_desired_resources (env_uuid, kind, name, spec, generation)
+	 VALUES ($1,$2,$3,$4,0)
+	 ON CONFLICT (env_uuid, kind, name) DO UPDATE
+	   SET spec = EXCLUDED.spec,
+	       generation = meko_system.environment_desired_resources.generation + 1
+	 WHERE meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec`
+
+// bumpDesiredRevSQL selects through environments so that bumping an environment
+// deleted since the write is a no-op rather than a foreign-key error.
+const bumpDesiredRevSQL = `INSERT INTO meko_system.environment_desired_revs (env_uuid, rev)
+	 SELECT uuid, 1 FROM meko_system.environments WHERE uuid = $1
+	 ON CONFLICT (env_uuid) DO UPDATE SET rev = meko_system.environment_desired_revs.rev + 1`
+
+// desiredRevBumpTimeout bounds one bump. It runs after the request's write committed,
+// so it must not hold the response up for long.
+const desiredRevBumpTimeout = 2 * time.Second
+
+// bumpDesiredRev moves each environment's desired-state change token, which an
+// agent's long-poll on GET /agent/desired-state waits on. Call it only AFTER the write
+// commits: bumped first, a held read could wake, read the old rows under the new
+// token, and then miss the change.
+//
+// It runs outside the write's transaction on purpose. Inside it, the counter row is
+// locked until commit, which serializes every writer to the environment and lets
+// two multi-environment storage-pool PATCHes lock the counters in opposite order and
+// deadlock.
+//
+// Best effort: the write has already committed, so a failure is logged, not returned.
+// A missed bump costs the agent nothing but latency -- it reads desired state every
+// RECONCILE_INTERVAL regardless. Its own context, so a client that hangs up after
+// the commit does not cancel it.
+func (r *EnvironmentRepo) bumpDesiredRev(envUUIDs ...string) {
+	seen := make(map[string]bool, len(envUUIDs))
+	for _, env := range envUUIDs {
+		if seen[env] {
+			continue
+		}
+		seen[env] = true
+		if desiredRevBumped != nil {
+			desiredRevBumped(env)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), desiredRevBumpTimeout)
+		_, err := r.db.ExecContext(ctx, bumpDesiredRevSQL, env)
+		cancel()
+		if err != nil {
+			slog.Warn("desired-state change token not bumped; the agent sees the change on its next tick",
+				"env_uuid", env, "error", err)
+		}
+	}
+}
+
+// desiredRevBumped, when set, sees each environment bumpDesiredRev bumps. A test
+// hook: a bump's failure is swallowed, so without it a test cannot see a bump that
+// should not have happened, or one issued before the commit.
+var desiredRevBumped func(envUUID string)
+
+// execRows runs a write and returns how many rows it touched.
+func execRows(db interface {
+	Exec(string, ...any) (sql.Result, error)
+}, query string, args ...any) (int64, error) {
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DesiredRev returns the environment's desired-state change token: a counter a
+// counter bumpDesiredRev moves after every write to its desired rows that changed one. It is the
+// long-poll's cheap "has anything changed" read, so it is a single primary-key lookup.
+// An environment whose desired state was never written reads as 0.
+func (r *EnvironmentRepo) DesiredRev(envUUID string) (int64, error) {
+	var rev int64
+	err := r.db.QueryRow(
+		`SELECT rev FROM meko_system.environment_desired_revs WHERE env_uuid = $1`, envUUID).Scan(&rev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read desired rev: %w", err)
+	}
+	return rev, nil
 }
 
 // GetDesired returns one desired resource, or (nil, nil) when it is not declared.

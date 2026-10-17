@@ -143,3 +143,29 @@ func TestEnvironmentRepo_ReplaceDesired(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+// An environment whose desired state was never written has no counter row; it must
+// read as 0, a token like any other, not as an error that fails the agent's read.
+func TestEnvironmentRepo_DesiredRev(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+	const env = "11111111-1111-1111-1111-111111111111"
+
+	mock.ExpectQuery(`SELECT rev FROM meko_system\.environment_desired_revs WHERE env_uuid = \$1`).
+		WithArgs(env).WillReturnRows(sqlmock.NewRows([]string{"rev"}))
+	if rev, err := repo.DesiredRev(env); err != nil || rev != 0 {
+		t.Errorf("no row: DesiredRev = %d, %v; want 0, nil", rev, err)
+	}
+	mock.ExpectQuery(`SELECT rev FROM meko_system\.environment_desired_revs`).
+		WithArgs(env).WillReturnRows(sqlmock.NewRows([]string{"rev"}).AddRow(int64(12)))
+	if rev, err := repo.DesiredRev(env); err != nil || rev != 12 {
+		t.Errorf("DesiredRev = %d, %v; want 12, nil", rev, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}

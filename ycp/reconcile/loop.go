@@ -554,22 +554,30 @@ type Source interface {
 	Desired(ctx context.Context) (state api.DesiredState, fresh bool, err error)
 }
 
+// Waiter is a Source that can end the wait between ticks early. WaitChange blocks for
+// at most d and reports whether desired state changed in that time: on true Run starts
+// the next tick at once, otherwise it sleeps out what is left of the interval. A
+// Source without it is read every interval.
+type Waiter interface {
+	WaitChange(ctx context.Context, d time.Duration) bool
+}
+
 // Reporter receives each tick's result (e.g. to post a status heartbeat).
 type Reporter interface {
 	Report(ctx context.Context, state api.DesiredState, res Result) error
 }
 
 // Run drives the loop until ctx is cancelled: fetch desired, reconcile, report,
-// sleep interval. Fetch/report errors are returned to the caller's log via the
+// then wait for the next tick, which starts interval after this one did, or sooner
+// when the Source is a Waiter and desired state changes. Fetch/report errors are returned to the caller's log via the
 // returned error channel semantics being folded into the tick — a fetch error
 // falls back to skipping the tick's deletes rather than aborting the loop.
 func (e *Engine) Run(ctx context.Context, src Source, rep Reporter, interval time.Duration, logf func(string, ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
 	for {
+		next := time.Now().Add(interval)
 		state, fresh, err := src.Desired(ctx)
 		if err != nil {
 			logf("reconcile: fetch desired: %v", err)
@@ -608,10 +616,28 @@ func (e *Engine) Run(ctx context.Context, src Source, rep Reporter, interval tim
 				e.onReported(res, e.now().Sub(start))
 			}
 		}
-		select {
-		case <-ctx.Done():
+		if !waitNextTick(ctx, src, next) {
 			return
-		case <-t.C:
 		}
+	}
+}
+
+// waitNextTick returns once the next tick is due, false when ctx ended first.
+func waitNextTick(ctx context.Context, src Source, next time.Time) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if w, ok := src.(Waiter); ok {
+		if d := time.Until(next); d > 0 && w.WaitChange(ctx, d) {
+			return ctx.Err() == nil
+		}
+	}
+	t := time.NewTimer(time.Until(next))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }

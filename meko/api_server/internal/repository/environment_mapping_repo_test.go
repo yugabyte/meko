@@ -543,3 +543,95 @@ func TestListStoragePoolEnvs(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+// The bump follows the commit (sqlmock matches in order) and covers only the
+// environments whose rows the PATCH changed: east's cluster is new, west's spec is
+// unchanged, so only east's agent is woken.
+func TestApplyStoragePoolPatches_BumpsChangedEnvironmentsAfterCommit(t *testing.T) {
+	const envWest = "88888888-8888-8888-8888-888888888888"
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+
+	mock.ExpectBegin()
+	expectPoolLock(mock)
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs("acct-1", "us-east-1").
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs("acct-1", "us-west-2").
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envWest, "READY"))
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envUUID, "acct-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envUUID, "cluster", "acct-1/east-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
+		WithArgs(envUUID, "cluster", "acct-1/east-db", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envWest, "acct-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envWest, "cluster", "acct-1/west-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}).AddRow(`{}`))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
+		WithArgs(envWest, "cluster", "acct-1/west-db", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // unchanged: not written
+	mock.ExpectCommit()
+	bumped := recordBumps(t, mock)
+
+	if _, err := repo.ApplyStoragePoolPatches("acct-1",
+		[]models.RegionResources{
+			{Region: "us-east-1", Resources: []models.ResourcePatch{
+				{Kind: "cluster", Name: "acct-1/east-db", Spec: []byte(`{}`)},
+			}},
+			{Region: "us-west-2", Resources: []models.ResourcePatch{
+				{Kind: "cluster", Name: "acct-1/west-db", Spec: []byte(`{}`)},
+			}},
+		},
+		[]byte(`{"owner":"x"}`), nil,
+	); err != nil {
+		t.Fatalf("ApplyStoragePoolPatches: %v", err)
+	}
+	wantBumps(t, bumped, envUUID)
+}
+
+// A PATCH that does not commit bumps nothing: its writes never happened.
+func TestApplyStoragePoolPatches_AFailedCommitBumpsNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+
+	mock.ExpectBegin()
+	expectPoolLock(mock)
+	mock.ExpectQuery(`SELECT m\.environment_id, e\.state`).
+		WithArgs("acct-1", poolRegion).
+		WillReturnRows(sqlmock.NewRows([]string{"environment_id", "state"}).AddRow(envUUID, "READY"))
+	mock.ExpectQuery(`SELECT EXISTS`).WithArgs(envUUID, "acct-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`SELECT COALESCE\(spec::text`).
+		WithArgs(envUUID, "cluster", "acct-1/main-db").
+		WillReturnRows(sqlmock.NewRows([]string{"spec"}))
+	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
+		WithArgs(envUUID, "cluster", "acct-1/main-db", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit().WillReturnError(errors.New("connection reset"))
+	bumped := recordBumps(t, mock)
+
+	if _, err := repo.ApplyStoragePoolPatches("acct-1",
+		[]models.RegionResources{{
+			Region:    poolRegion,
+			Resources: []models.ResourcePatch{{Kind: "cluster", Name: "acct-1/main-db", Spec: []byte(`{}`)}},
+		}},
+		[]byte(`{"owner":"x"}`), nil,
+	); err == nil {
+		t.Fatal("ApplyStoragePoolPatches succeeded on a failed commit")
+	}
+	wantBumps(t, bumped)
+}

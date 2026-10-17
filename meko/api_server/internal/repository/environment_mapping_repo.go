@@ -117,6 +117,7 @@ func (r *EnvironmentRepo) applyStoragePoolPatches(
 	// Phase 2: apply each region's batch. Body order, so the response mirrors the
 	// request; the returned assignments feed the read-back.
 	assignments := make([]StoragePoolAssignment, 0, len(regions))
+	var changedEnvs []string
 	for i, rr := range regions {
 		envUUID := envByIdx[i]
 		patches := rr.Resources
@@ -130,14 +131,19 @@ func (r *EnvironmentRepo) applyStoragePoolPatches(
 				Kind: "storage-pool", Name: storagePool, Spec: poolSpec,
 			}}, patches...)
 		}
-		if err := applyDesiredPatchesTx(tx, envUUID, storagePool, patches, guard); err != nil {
+		changed, err := applyDesiredPatchesTx(tx, envUUID, storagePool, patches, guard)
+		if err != nil {
 			return nil, err
+		}
+		if changed {
+			changedEnvs = append(changedEnvs, envUUID)
 		}
 		assignments = append(assignments, StoragePoolAssignment{EnvUUID: envUUID, Region: rr.Region})
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
+	r.bumpDesiredRev(changedEnvs...)
 	return assignments, nil
 }
 

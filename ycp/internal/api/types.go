@@ -210,6 +210,13 @@ type DesiredState struct {
 	Revision       int               `json:"revision"`
 	TargetVersions map[string]string `json:"target_versions"`
 	Resources      []DesiredResource `json:"resources"`
+	// ChangeToken moves on every write to the environment's desired state, creates
+	// and deletes included, which Revision does not. The agent long-polls on it
+	// (?since=). 0 from a control plane that predates it.
+	ChangeToken int64 `json:"change_token,omitempty"`
+	// LongPoll says the control plane honours ?since=&wait=. An older one ignores
+	// them and answers at once, which is how the agent tells the two apart.
+	LongPoll bool `json:"long_poll,omitempty"`
 }
 
 // DesiredResource is one declarative item of desired state.

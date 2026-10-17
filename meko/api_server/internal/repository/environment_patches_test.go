@@ -44,7 +44,7 @@ func TestApplyDesiredPatchesTx_Batch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+	if _, err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "cluster", Name: "pool-a/main-db", Spec: []byte(`{"pg_version":17}`)},
 		{Kind: "branch", Name: "pool-a/main-db/feature-x", Delete: true},
 	}, nil); err != nil {
@@ -79,7 +79,7 @@ func TestApplyDesiredPatchesTx_MissingRowBecomesTheSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
+	if _, err := applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"aws"}`)},
 	}, nil); err != nil {
 		t.Fatalf("applyDesiredPatchesTx: %v", err)
@@ -118,7 +118,7 @@ func TestApplyDesiredPatchesTx_RollsBackOnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
+	if _, err := applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"aws"}`)},
 		{Kind: "cluster", Name: "pool-b/reporting", Spec: []byte(`{"pg_version":17}`)},
 	}, nil); err == nil {
@@ -151,7 +151,7 @@ func TestApplyDesiredPatchesTx_CreateOnExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	err = applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
+	_, err = applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"gcp"}`), Create: true},
 	}, nil)
 	if !errors.Is(err, ErrResourceExists) {
@@ -183,7 +183,7 @@ func TestApplyDesiredPatchesTx_UpdateOnMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	err = applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
+	_, err = applyDesiredPatchesTx(tx, envUUID, "pool-b", []models.ResourcePatch{
 		{Kind: "storage-pool", Name: "pool-b", Spec: []byte(`{"cloud":"aws"}`), Update: true},
 	}, nil)
 	if !errors.Is(err, ErrResourceNotFound) {
@@ -222,7 +222,7 @@ func TestApplyDesiredPatchesTx_ClusterNameInPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+	_, err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "cluster", Name: "pool-a/main-db", Spec: []byte(`{"pg_version":17}`), Create: true},
 	}, nil)
 	if !errors.Is(err, ErrClusterNameInUse) {
@@ -260,7 +260,7 @@ func TestApplyDesiredPatchesTx_ClusterCreateSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+	if _, err := applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "cluster", Name: "pool-a/main-db", Spec: []byte(`{"pg_version":17}`), Create: true},
 	}, nil); err != nil {
 		t.Fatalf("applyDesiredPatchesTx: %v", err)
@@ -310,7 +310,7 @@ func TestApplyDesiredPatchesTx_GuardVetsAnUpdate(t *testing.T) {
 	}
 
 	tx, _ := db.Begin()
-	err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+	_, err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "endpoint", Name: guardEndpoint, Spec: []byte(`{"role":"read_only"}`), Update: true},
 	}, guard)
 	if !errors.Is(err, refused) {
@@ -347,7 +347,7 @@ func TestApplyDesiredPatchesTx_GuardDoesNotRunOnACreate(t *testing.T) {
 		return nil
 	}
 	tx, _ := db.Begin()
-	err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
+	_, err = applyDesiredPatchesTx(tx, envUUID, "pool-a", []models.ResourcePatch{
 		{Kind: "endpoint", Name: guardEndpoint, Spec: []byte(`{"role":"read_only"}`), Create: true},
 	}, guard)
 	if !errors.Is(err, ErrResourceExists) {

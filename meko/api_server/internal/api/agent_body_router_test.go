@@ -108,6 +108,9 @@ func TestAgentDesiredState_IsNotRejectedForHavingNoBody(t *testing.T) {
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]", nil, "BYOC", false,
 		))
+	mock.ExpectQuery(`FROM meko_system\.environment_desired_revs`).
+		WithArgs(envUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"rev"}))
 	mock.ExpectQuery(`FROM meko_system\.environment_desired_resources`).
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "name", "spec", "generation"}))

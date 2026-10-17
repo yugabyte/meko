@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -1051,6 +1052,69 @@ func (s *EnvironmentService) Desired(envUUID string) ([]models.DesiredResource, 
 // DesiredForAgent is Desired with the admin-only kinds, which the agent converges.
 func (s *EnvironmentService) DesiredForAgent(envUUID string) ([]models.DesiredResource, error) {
 	return s.repo.ListDesired(envUUID)
+}
+
+// Long-poll bounds for AgentDesired. Vars so tests can shorten them. The cap keeps a
+// held request inside the ~30s the YBM pass-through allows.
+var (
+	DesiredPollEvery = 250 * time.Millisecond
+	DesiredMaxWait   = 25 * time.Second
+)
+
+// AgentDesired is the agent's desired-state read: its change token and its rows, the
+// admin-only kinds included.
+//
+// With hold, while the token still equals since, it waits -- re-reading the token
+// every DesiredPollEvery -- until the token moves or wait (capped at DesiredMaxWait)
+// runs out, and returns the current state either way. Re-reading the database rather
+// than listening for a notification is what lets any replica serve the hold. It
+// returns ctx's error if ctx ends first.
+//
+// The token is read before the rows. A write landing between the two then hands the
+// agent newer rows under an older token, which costs it one early wakeup; the other
+// order would hand it a token newer than its rows, and the change is lost.
+func (s *EnvironmentService) AgentDesired(
+	ctx context.Context, envUUID string, since int64, wait time.Duration, hold bool,
+) (int64, []models.DesiredResource, error) {
+	token, err := s.repo.DesiredRev(envUUID)
+	if err != nil {
+		return 0, nil, err
+	}
+	if hold && token == since {
+		if token, err = s.awaitDesiredChange(ctx, envUUID, since, min(wait, DesiredMaxWait)); err != nil {
+			return 0, nil, err
+		}
+	}
+	res, err := s.repo.ListDesired(envUUID)
+	if err != nil {
+		return 0, nil, err
+	}
+	return token, res, nil
+}
+
+func (s *EnvironmentService) awaitDesiredChange(
+	ctx context.Context, envUUID string, since int64, wait time.Duration,
+) (int64, error) {
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	poll := time.NewTicker(DesiredPollEvery)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-deadline.C:
+			return since, nil
+		case <-poll.C:
+		}
+		token, err := s.repo.DesiredRev(envUUID)
+		if err != nil {
+			return 0, err
+		}
+		if token != since {
+			return token, nil
+		}
+	}
 }
 
 // listResourcesForEnv filters an already-resolved environment's resources into two

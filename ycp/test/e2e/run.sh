@@ -21,6 +21,8 @@
 #   4e. an amp environment's controller and fleet-version are declared and read only
 #      through the admin tier; every public desired-state write refuses them (400)
 #      and none removes them, the public read omits them, the agent's carries them,
+#   4f. GET /agent/desired-state long-polls: a create or a delete wakes a held read,
+#      an unchanged replace does not,
 #   5. the agent surface refuses a non-JSON content type (415), an empty body (400)
 #      and a blank state (400) -- and leaves the environment's state untouched
 #      when it does.
@@ -618,6 +620,71 @@ agent_rows="$(printf '%s' "$BODY" | python3 -c 'import json,sys; d=json.load(sys
   die "the agent's desired state reads '$agent_rows', want revision 2 with controller@2 and fleet@0"
 api DELETE /api/v1/environments/upg-check >/dev/null 2>&1 || true
 echo "    the region PATCH refuses them too, and the agent's desired state still carries them"
+sleep 2
+
+# 4f. The agent's desired-state read is a long-poll keyed on the change token, which
+#     the repository bumps after each committed change. A create and a delete each
+#     wake a held read -- neither moves revision -- and a replace that changes nothing
+#     does not. This is the bump against real Postgres and the hold through the real
+#     middleware; the agent side is unit-tested.
+log "checking the desired-state long-poll"
+lp_key="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+api POST /api/v1/environments -H 'content-type: application/json' \
+  -d '{"name":"lp-check","kind":"meko","placement":"cloud","region":"local",
+       "api_key_id":"'"$lp_key"'","desired":[{"kind":"agent","name":"a"}]}' >/dev/null ||
+  die "registering lp-check failed"
+# poll <query> prints "<seconds> <change_token> <long_poll>".
+poll() {
+  curl -fsS -w '\n%{time_total}' "http://127.0.0.1:$PORT$BASE/api/v1/agent/desired-state$1" \
+    -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H "X-Meko-Api-Key-ID: $lp_key" |
+    python3 -c 'import json,sys
+body, took = sys.stdin.read().rsplit("\n", 1)
+d = json.loads(body)["data"]
+print(took, d.get("change_token"), d.get("long_poll"))'
+}
+set_lp() {
+  api POST /api/v1/environments/lp-check/desired -H 'content-type: application/json' \
+    -d "{\"resources\":$1}" >/dev/null || die "writing lp-check desired state failed"
+}
+# held_wake <wait> <resources>: hold a read on the current token for <wait>, write
+# <resources> a second in, and print the read's "<seconds> <token>".
+held_wake() {
+  local out pid
+  out="$(mktemp)"
+  poll "?since=$token&wait=$1" >"$out" &
+  pid=$!
+  sleep 1
+  set_lp "$2"
+  wait "$pid" || die "the held desired-state read failed"
+  cut -d' ' -f1,2 "$out"
+  rm -f "$out"
+}
+read -r _ token lp <<<"$(poll '')"
+[ "$lp" = "True" ] || die "GET /agent/desired-state does not say long_poll (got $lp)"
+[ "$token" -gt 0 ] || die "change_token is $token after registration declared a resource, want > 0"
+
+read -r took got _ <<<"$(poll "?since=$((token - 1))&wait=20s")"
+python3 -c "import sys; sys.exit(float('$took') >= 5)" ||
+  die "a stale since was held ${took}s, want an immediate answer"
+read -r took got _ <<<"$(poll "?since=$token&wait=2s")"
+python3 -c "import sys; sys.exit(float('$took') < 1.9)" ||
+  die "an unchanged hold returned after ${took}s, want the 2s it asked for"
+[ "$got" = "$token" ] || die "an unchanged hold returned token $got, want $token"
+
+for step in 'a create:[{"kind":"agent","name":"a"},{"kind":"agent","name":"b"}]' \
+  'a delete:[{"kind":"agent","name":"a"}]'; do
+  read -r took got <<<"$(held_wake 20s "${step#*:}")"
+  python3 -c "import sys; sys.exit(float('$took') >= 5)" ||
+    die "${step%%:*} woke the held read after ${took}s, want about 1s"
+  [ "$got" -gt "$token" ] || die "${step%%:*} left change_token at $got, want > $token"
+  token="$got"
+done
+read -r took got <<<"$(held_wake 3s '[{"kind":"agent","name":"a"}]')"
+[ "$got" = "$token" ] || die "an unchanged replace moved change_token $token -> $got"
+python3 -c "import sys; sys.exit(float('$took') < 2.9)" ||
+  die "an unchanged replace woke the held read after ${took}s"
+api DELETE /api/v1/environments/lp-check >/dev/null 2>&1 || true
+echo "    a create and a delete each wake a held read; an unchanged replace and a quiet hold do not"
 sleep 2
 
 # 5. The agent surface refuses a request it cannot read, and — the part that matters

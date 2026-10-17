@@ -140,6 +140,7 @@ func TestAgentDesiredState_ServesAdminOnlyKinds(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 	expectResolveAmpAgent(mock)
+	expectDesiredRev(mock, 7)
 	mock.ExpectQuery(`FROM meko_system\.environment_desired_resources`).
 		WithArgs(envUUID).WillReturnRows(adminOnlyDesiredRows())
 

@@ -543,17 +543,23 @@ paths:
       operationId: agentDesiredState
       description: |
         Returns the components, datapack specs, and target versions the agent should reconcile
-        toward. Supports long-poll via `wait`. Datapack specs reference secret *names* only —
-        never secret values. Carries every declared resource, `controller` and
-        `fleet-version` included — the only non-admin read that does — and `revision` covers
-        them.
+        toward. Datapack specs reference secret *names* only — never secret values. Carries
+        every declared resource, `controller` and `fleet-version` included — the only
+        non-admin read that does — and `revision` covers them.
+
+        A long-poll when both `since` and `wait` are given: while the environment's
+        `change_token` still equals `since`, the request is held until it moves or `wait`
+        runs out (capped at 25s), and then answered `200` with the current state either way.
+        Without both, or with either malformed, it is answered at once.
       security: [{ agentAPIKey: [] }]
       parameters:
-        - { name: since, in: query, description: Last revision the agent has applied., schema: { type: integer } }
-        - { name: wait, in: query, description: Long-poll seconds., schema: { type: integer, default: 30, maximum: 90 } }
+        - { name: since, in: query, description: The `change_token` of the desired state the agent last read., schema: { type: integer, format: int64 } }
+        - name: wait
+          in: query
+          description: How long to hold, as a Go duration (`25s`) or a bare number of seconds. Capped at 25s.
+          schema: { type: string }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DesiredState' } } } }
-        '304': { description: No change since `since`. }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/v1/agent/status:
@@ -899,6 +905,13 @@ components:
         needs only a new agent-side reconciler for that Kind, not a schema change.
       properties:
         revision: { type: integer }
+        change_token:
+          type: integer
+          format: int64
+          description: Moves on every committed change to the environment's desired state, creates and deletes included, which `revision` does not. The agent long-polls on it.
+        long_poll:
+          type: boolean
+          description: The server holds a read given `since` and `wait`. Absent from one that predates long-polling, which answers at once.
         target_versions: { type: object, properties: { agent: { type: string }, mcp: { type: string }, rag: { type: string } } }
         resources:
           type: array
