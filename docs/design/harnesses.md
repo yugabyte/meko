@@ -25,7 +25,7 @@ projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; ar
 don't count), every session tab and every session row in the rail shows its agent's logo between
 its dot and its name (`HarnessLogo` in `common.tsx`, all in one 18 × 14 px box so names line up);
 while they all run on one, nothing is added. Unticking **Show each session's agent logo beside its
-name** in Settings › General (offered once a second agent is turned on; on by default, kept in
+name** in Settings › General (offered while a second agent is turned on or open sessions still run on two; on by default, kept in
 this browser, `ak-harness-logos`) turns them off. The logos are files in `src/web/public/`, never
 loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
 from `png/clawd.png` in [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)

@@ -195,8 +195,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   );
   // Logos beside session names in the tabs and the rail, while open sessions run on more than one
   // harness and the setting (Settings › General) is on.
-  const logosOn = harnessLogosToggle.use();
-  const logos = useMemo(() => logosOn && harnessLogos(projects), [logosOn, projects]);
+  const twoAgents = useMemo(() => harnessLogos(projects), [projects]);
+  const logos = harnessLogosToggle.use() && twoAgents;
   useEffect(() => {
     if (!created || !state || state === created.seen) return;
     const inState = state.projects.some((p) => p.sessions.some((s) => s.id === created.session.id));
@@ -637,7 +637,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
       )}
       {modal.kind === 'palette' && (
         <CommandPalette

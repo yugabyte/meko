@@ -18,6 +18,7 @@ export function SettingsDialog({
   update,
   meko,
   harnesses,
+  twoAgents,
   initialTab = 'general',
   onClose,
 }: {
@@ -26,6 +27,8 @@ export function SettingsDialog({
   meko: MekoStatus;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
   harnesses: HarnessStatus[];
+  /** Open sessions run on more than one agent (`harnessLogos()`), so the logos would show. */
+  twoAgents: boolean;
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
@@ -49,7 +52,7 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
-          {harnesses.some((h) => h.id !== 'claude' && h.enabled) && <HarnessLogosSetting />}
+          {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
           <GeneralTab harnesses={harnesses} />
         </div>
       )}
@@ -79,7 +82,11 @@ function RailSessionsSetting() {
   );
 }
 
-/** Saved in this browser as it's ticked, like the setting above. Offered once a second agent is turned on. */
+/**
+ * Saved in this browser as it's ticked, like the setting above. Offered while a second agent is
+ * turned on, or while open sessions run on two agents (the logos' own condition): turning an agent
+ * off leaves its open sessions, and their logos, in place.
+ */
 function HarnessLogosSetting() {
   const on = harnessLogosToggle.use();
   return (

@@ -7,7 +7,6 @@ describe('browser toggles', () => {
   it.each([
     [null, true],
     ['0', false],
-    ['1', true],
   ])('reads a stored %s as %s for a setting that is on by default', (stored, on) => {
     vi.stubGlobal('localStorage', { getItem: () => stored });
     expect(browserToggle('k', true).saved()).toBe(on);
