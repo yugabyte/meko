@@ -88,6 +88,9 @@ function harnessNote(h: HarnessStatus | undefined, command: string): string {
 function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [s, setS] = useState<Settings | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // Local copy of harness statuses, updated by the Refresh button and kept in sync with the WS push.
+  const [localHarnesses, setLocalHarnesses] = useState(harnesses);
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
@@ -97,6 +100,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => { setLocalHarnesses(harnesses); }, [harnesses]);
 
   useEffect(() => {
     api
@@ -113,7 +118,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
-  const kiro = harnesses.find((h) => h.id === 'kiro');
+  const kiro = localHarnesses.find((h) => h.id === 'kiro');
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -287,6 +292,21 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           <span>Offer Kiro for new sessions</span>
         </label>
         <span className="hint">{harnessNote(kiro, s.kiroCommand)}</span>
+        <div className="settings-actions">
+          <button
+            type="button"
+            id="set-kiro-refresh"
+            className="btn small"
+            disabled={refreshing}
+            onClick={() => {
+              setRefreshing(true);
+              setError(null);
+              api.refreshHarnesses().then((next) => setLocalHarnesses(next)).catch((err) => setError(errorMessage(err))).finally(() => setRefreshing(false));
+            }}
+          >
+            {refreshing ? <Busy label="Refreshing" /> : 'Refresh'}
+          </button>
+        </div>
       </div>
       {s.kiroEnabled && (
         <>

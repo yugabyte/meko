@@ -2222,6 +2222,8 @@ export type TermServerMessage =
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,
 //                                                           only when the user asks; then checks Kiro's Meko again)
+// POST   /api/harnesses/refresh               → HarnessStatus[]   (reads every harness's version again (force=true),
+//        pushes updated AppState to all connected clients; replaces the removed 60-second polling timer)
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`kiro-cli update`), then
 //        reads its version again; Claude Code keeps POST /api/claude/update; 409 while one runs)
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
