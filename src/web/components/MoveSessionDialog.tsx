@@ -81,7 +81,7 @@ export function MoveSessionDialog({ session, preset, onClose }: { session: Sessi
           <span className="label" id="mv-stage-label">
             Stage
           </span>
-          <div className="seg move-stages" role="group" aria-labelledby="mv-stage-label">
+          <div className="seg" role="group" aria-labelledby="mv-stage-label">
             {moveTargets(session.kind).map((t) => (
               <button
                 key={t}

@@ -516,7 +516,7 @@ export function NewSessionDialog({
                     <span className="label" id="ns-work-on-label">
                       Work on
                     </span>
-                    <div className="seg work-on" role="radiogroup" aria-labelledby="ns-work-on-label">
+                    <div className="seg" role="radiogroup" aria-labelledby="ns-work-on-label">
                       {WORK_ON.map((w) => (
                         <button
                           key={w.value}

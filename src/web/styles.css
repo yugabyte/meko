@@ -348,6 +348,14 @@ textarea.input {
   color: var(--accent);
   font-weight: 600;
 }
+/* A segmented control in a column (a field, a form) is as wide as its buttons, not the column:
+   stretched, its empty end looked like a button and did nothing. It wraps on a narrow phone. */
+.field > .seg,
+.stack > .seg {
+  align-self: flex-start;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
 /* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
    Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
 .starts {
@@ -426,12 +434,7 @@ textarea.input {
 .gate-group > .btn.gate-note {
   flex: 0 0 auto;
 }
-/* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
-.move-stages {
-  align-self: flex-start;
-  max-width: 100%;
-  flex-wrap: wrap;
-}
+/* The Move to another stage dialog: what the move will do. */
 .move-effect {
   margin: 0;
   padding: 8px 10px;
@@ -5286,12 +5289,6 @@ div[id^='dak-mermaid-'] .label {
     height: 1px;
     background: var(--rule);
   }
-}
-/* The New session dialog's Work on control (Advanced): one row, wrapping on a narrow phone. */
-.work-on {
-  align-self: flex-start;
-  max-width: 100%;
-  flex-wrap: wrap;
 }
 /* The PR picker in the New session dialog. */
 .pr-pick {
