@@ -18,10 +18,12 @@ enabled`, 2.32.0). A create that names one that isn't is a 400 that says what to
 always names the agent it shows. A default that isn't available any more never decides: a request
 that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`). Settings'
 **Default agent**, like New session's **Agent**, offers only available agents and shows only while
-two or more are: with one, there's nothing to choose. A stored default that isn't available is
-kept, not rewritten, and decides again once it is. Both choices are `AgentPicker` in
-`common.tsx`, each agent's logo then its name. The session's harness is `sessions.harness`
-(`Session.harness`).
+two or more are: with one, there's nothing to choose (`defaultAgentChoice()` in `util.ts`). A
+stored default that goes unavailable (Kiro missing, too old, or `[kiro] enabled` turned off in
+config.toml) stays stored, and decides again once it's available; turning **Offer Kiro** off in
+Settings is the exception, which also sets the default to Claude Code. Both choices are
+`AgentPicker` in `common.tsx`, each agent's logo then its name. The session's harness is
+`sessions.harness` (`Session.harness`).
 
 **Telling them apart.** Each session's tooltip names its agent. While the open sessions across all
 projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions

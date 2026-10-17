@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { HarnessStatus, Project } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
+import { defaultAgentChoice } from '../../src/web/util.js';
 
 const project = { id: 'p', name: 'Demo', repoPath: '/code/demo', defaultBranch: 'main', settings: { branchPrefix: 'ak/' } } as unknown as Project;
 const status = (id: HarnessStatus['id'], o: Partial<HarnessStatus> = {}): HarnessStatus => ({
@@ -30,5 +31,15 @@ describe("the New session dialog's Agent choice", () => {
     ['keeps the agent a failed start asked for', [status('claude'), status('kiro')], 'kiro' as const, ['claude', 'kiro*']],
   ])('%s', (_, harnesses, harness, shown) => {
     expect(agents(harnesses, harness)).toEqual(shown);
+  });
+});
+
+describe("Settings' Default agent", () => {
+  it.each([
+    ['is left out while Kiro is off', [status('claude'), status('kiro', { enabled: false, available: false })], 'claude' as const, null],
+    ['is left out, not offered disabled, while Kiro is too old', [status('claude'), status('kiro', { available: false })], 'kiro' as const, null],
+    ['offers the available agents with the stored default picked', [status('claude'), status('kiro')], 'kiro' as const, { agents: ['claude', 'kiro'], value: 'kiro' }],
+  ])('%s', (_, harnesses, stored, shown) => {
+    expect(defaultAgentChoice(harnesses, stored)).toEqual(shown);
   });
 });

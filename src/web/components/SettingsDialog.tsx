@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
-import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
@@ -113,10 +113,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const kiro = harnesses.find((h) => h.id === 'kiro');
-  // Default agent offers only the agents that are available, and shows only while there's a
-  // choice. A stored default that isn't available is kept, and shows as the first available
-  // (in HARNESS_IDS order, as AppState lists them), which the server starts on meanwhile.
-  const agents = harnesses.filter((h) => h.available).map((h) => h.id);
+  const defaultAgent = defaultAgentChoice(harnesses, s.defaultHarness);
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -253,15 +250,15 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
-      {agents.length > 1 && (
+      {defaultAgent && (
         <div className="field">
           <span className="label" id="set-agent-label">
             Default agent
           </span>
           <AgentPicker
             idPrefix="set-agent"
-            agents={agents}
-            value={agents.includes(s.defaultHarness) ? s.defaultHarness : agents[0]}
+            agents={defaultAgent.agents}
+            value={defaultAgent.value}
             onChange={(id) => setS({ ...s, defaultHarness: id })}
             labelledBy="set-agent-label"
           />
