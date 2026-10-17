@@ -29,7 +29,9 @@ restarts in it, so what matters is the version the next launch gets. While `[cla
 that version is older than 2.1.287, a banner says so, and that AgentK types its prompts instead:
 
 - **Update Claude Code** runs `claude update`, Claude Code's own updater (`POST /api/claude/update`,
-  one at a time, stopped after 5 minutes), then reads the version again;
+  one at a time, stopped after 5 minutes), then reads the version again; Settings › Harness's Claude
+  Code panel has the same button whenever Claude Code is available (`POST /api/harnesses/claude/update`),
+  and its progress and outcome show in these banners too (they show only while `[claude] mod` is on);
 - the outcome shows as its own banner: updated (running sessions keep their version until Claude
   restarts in them), nothing newer found (its release channel or the organization's settings may
   hold it back), or failed, with the last lines it printed and what to run on the host instead;

@@ -670,7 +670,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());
-  // Check again (Settings → General): a version that changed reaches every page through `changed()`.
+  // Check again (Settings → Harness): a version that changed reaches every page through `changed()`.
   app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.harnesses.refresh(core.config, true));
   app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req) => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');

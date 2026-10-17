@@ -1,8 +1,9 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { HarnessStatus, Project } from '../../src/shared/types.js';
+import type { HarnessStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
+import { AgentSettings, HarnessBar } from '../../src/web/components/SettingsDialog.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
 
 const project = { id: 'p', name: 'Demo', repoPath: '/code/demo', defaultBranch: 'main', settings: { branchPrefix: 'ak/' } } as unknown as Project;
@@ -53,5 +54,30 @@ describe("Settings' Default agent", () => {
     ['offers the available agents with the stored default picked', [status('claude'), status('kiro')], 'kiro' as const, { agents: ['claude', 'kiro'], value: 'kiro' }],
   ])('%s', (_, harnesses, stored, shown) => {
     expect(defaultAgentChoice(harnesses, stored)).toEqual(shown);
+  });
+});
+
+describe('Settings › Harness', () => {
+  it('lists every agent in its bar, an agent that is off too', () => {
+    const html = renderToStaticMarkup(createElement(HarnessBar, { value: 'kiro', onChange: () => undefined }));
+    const tabs = [...html.matchAll(/id="set-harness-tab-(\w+)"[^>]*aria-selected="(true|false)"/g)].map(([, id, on]) => `${id}${on === 'true' ? '*' : ''}`);
+    expect(tabs).toEqual(['claude', 'kiro*']);
+  });
+
+  const settings = { claudeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
+  /** The ids of the controls an agent's panel shows. */
+  const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>) =>
+    [...renderToStaticMarkup(createElement(AgentSettings, {
+      id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false,
+      onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
+    })).matchAll(/<(?:input|button)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
+
+  it.each([
+    ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update']],
+    ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust']],
+    ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust']],
+    ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro']],
+  ])("%s: the panel shows only that agent's settings", (_, id, s, st, shown) => {
+    expect(controls(id, s, st)).toEqual(shown);
   });
 });
