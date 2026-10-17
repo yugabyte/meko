@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -37,6 +37,23 @@ export function liveSessions(p: ProjectWithSessions): Session[] {
  */
 export function harnessLogos(projects: ProjectWithSessions[]): boolean {
   return new Set(projects.flatMap((p) => liveSessions(p).map((s) => harnessOf(s.harness)))).size > 1;
+}
+
+/**
+ * What the last `claude update` came to (`ClaudeCodeStatus.lastUpdate`), for its banner and, while
+ * `[claude] mod` is off and the banners don't show, Settings › Harness's Claude Code panel.
+ */
+export function claudeUpdateText(c: ClaudeCodeStatus, serverName: string): { ok: boolean; text: string } | null {
+  const last = c.lastUpdate;
+  if (!last) return null;
+  const text = !last.ok
+    ? `Couldn’t update Claude Code${last.message ? `: ${last.message}` : ''}. Run claude update on ${serverName}, or update it the way it was installed.`
+    : last.from && last.to && last.from !== last.to
+      ? `Claude Code was updated to ${last.to} (from ${last.from}). Running sessions keep their version until Claude restarts in them.`
+      : c.supportsMod === false
+        ? `claude update found nothing newer than ${last.to ?? 'this version'}. Its release channel, or your organization’s settings, may be holding it back.`
+        : `Claude Code is up to date${last.to ? ` (${last.to})` : ''}.`;
+  return { ok: last.ok, text };
 }
 
 /**

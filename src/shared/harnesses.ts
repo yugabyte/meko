@@ -30,7 +30,7 @@ export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */
 export const NO_AGENT =
-  'No coding agent is available: install Claude Code or Kiro CLI where AgentK Local runs, or turn one on in Settings → General.';
+  'No coding agent is available: install Claude Code or Kiro CLI where AgentK Local runs, or turn one on in Settings → Harness.';
 
 export function isHarnessId(v: unknown): v is HarnessId {
   return typeof v === 'string' && (HARNESS_IDS as readonly string[]).includes(v);

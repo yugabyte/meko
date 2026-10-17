@@ -1,4 +1,4 @@
-// On/off settings kept in this browser (Settings › General): stored only while they differ from
+// On/off settings kept in this browser (Settings › General and Harness): stored only while they differ from
 // their default, and applied as they're ticked, here and in the browser's other tabs.
 import { useEffect, useState } from 'react';
 

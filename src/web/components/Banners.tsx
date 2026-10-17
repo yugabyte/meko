@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import type { Conn } from '../hooks/useEvents';
-import { noAgent } from '../util';
+import { claudeUpdateText, noAgent } from '../util';
 import { Busy } from './common';
 
 const DISMISS_KEY = 'ak-dismissed-updated-from';
@@ -37,8 +37,8 @@ function ClaudeCodeBanners({ state, onError }: { state: AppState; onError: (m: s
   const [updateDismissed, setUpdateDismissed] = useState(() => readDismissed(CLAUDE_UPDATE_KEY));
   const [starting, setStarting] = useState(false);
   if (!c?.modEnabled) return null;
-  const last = c.lastUpdate;
-  const lastKey = last ? String(last.at) : null;
+  const last = claudeUpdateText(c, state.serverName);
+  const lastKey = c.lastUpdate ? String(c.lastUpdate.at) : null;
   const old = c.supportsMod === false && !!c.version && oldDismissed !== c.version;
   const update = async () => {
     setStarting(true);
@@ -61,15 +61,7 @@ function ClaudeCodeBanners({ state, onError }: { state: AppState; onError: (m: s
       )}
       {!c.updating && last && lastKey !== updateDismissed && (
         <div className={last.ok ? 'banner info' : 'banner warn'} role={last.ok ? undefined : 'alert'}>
-          <span className="banner-text">
-            {!last.ok
-              ? `Couldn’t update Claude Code${last.message ? `: ${last.message}` : ''}. Run claude update on ${state.serverName}, or update it the way it was installed.`
-              : last.from && last.to && last.from !== last.to
-                ? `Claude Code was updated to ${last.to} (from ${last.from}). Running sessions keep their version until Claude restarts in them.`
-                : c.supportsMod === false
-                  ? `claude update found nothing newer than ${last.to ?? 'this version'}. Its release channel, or your organization’s settings, may be holding it back.`
-                  : `Claude Code is up to date${last.to ? ` (${last.to})` : ''}.`}
-          </span>
+          <span className="banner-text">{last.text}</span>
           <button
             className="link-btn"
             onClick={() => {
