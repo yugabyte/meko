@@ -422,24 +422,46 @@ export function ContextRing({ percent, showPercent = false, agent = 'Claude' }: 
       title={`Context ${percent}% full, measured after each turn.${CONTEXT_LEVEL_TEXT[level]} ${agent} compacts the conversation when it fills up.`}
     >
       context
-      <svg className={cx('ctx-ring', level !== 'ok' && level)} width="14" height="14" viewBox="0 0 16 16" fill="none" strokeWidth="2.5" aria-hidden="true">
-        <circle className="track" cx="8" cy="8" r="6" />
-        {/* A circle's stroke starts at 3 o'clock and runs clockwise; reflecting it across the
-            bottom-left to top-right diagonal starts it at 12 and runs it counter-clockwise.
-            A full ring drops the dashes, since a 100/100 dash can leave a hairline where the
-            ends meet. */}
-        <circle
-          className="arc"
-          cx="8"
-          cy="8"
-          r="6"
-          transform="matrix(0 -1 -1 0 16 16)"
-          pathLength={100}
-          strokeDasharray={arc < 100 ? `${arc} 100` : undefined}
-        />
-      </svg>
+      <Ring className={cx('ctx-ring', level !== 'ok' && level)} arc={arc} px={14} box={16} r={6} stroke={2.5} />
       {showPercent ? `${percent}%` : <span className="ctx-pct" aria-hidden="true">{percent}%</span>}
     </span>
+  );
+}
+
+/**
+ * A ring that fills from 12 o'clock counter-clockwise to `arc` out of 100 (a C at half, an O when
+ * full): the context ring, and the plan limits in the rail. Drawn in a `box` × `box` view shown at
+ * `px`; the caller's class colors `.track` and `.arc`. `children` are drawn over it (the limits'
+ * percent). Decorative: the caller holds the meter.
+ */
+export function Ring({ arc, px, box, r, stroke, className, children }: {
+  arc: number;
+  px: number;
+  box: number;
+  r: number;
+  stroke: number;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const c = box / 2;
+  return (
+    <svg className={className} width={px} height={px} viewBox={`0 0 ${box} ${box}`} fill="none" strokeWidth={stroke} aria-hidden="true">
+      <circle className="track" cx={c} cy={c} r={r} />
+      {/* A circle's stroke starts at 3 o'clock and runs clockwise; reflecting it across the
+          bottom-left to top-right diagonal starts it at 12 and runs it counter-clockwise.
+          A full ring drops the dashes, since a 100/100 dash can leave a hairline where the
+          ends meet. */}
+      <circle
+        className="arc"
+        cx={c}
+        cy={c}
+        r={r}
+        transform={`matrix(0 -1 -1 0 ${box} ${box})`}
+        pathLength={100}
+        strokeDasharray={arc < 100 ? `${arc} 100` : undefined}
+      />
+      {children}
+    </svg>
   );
 }
 
