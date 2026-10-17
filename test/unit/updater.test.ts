@@ -28,6 +28,7 @@ import {
   Updater,
   verifySha256,
   hostVersionDir,
+  HttpsReleaseSource,
   notesRange,
   versionsToPrune,
   type Release,
@@ -388,6 +389,8 @@ describe('Updater', () => {
   it('reports the previous version from boot, and markHealthy then clears the pending update', () => {
     writeFileSync(fx.paths.updatePending, JSON.stringify({ from: '0.0.9', to: '0.1.0', attempts: 1, at: 1 }));
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
+    // Recorded before the server starts, so a version that crashes while starting still counts.
+    expect(fx.kv.get('update.lastUpdatedFrom')).toBe('0.0.9');
     u.start();
     u.stop();
     // The "Updated to" banner doesn't wait for the healthy check; the rollback stays armed until it.
@@ -431,6 +434,24 @@ describe('Updater', () => {
     expect(compare).toHaveBeenCalledWith(fx.cfg.update.repo, 'v0.0.9', 'v0.1.0');
     expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/v0.0.9...v0.1.0' });
     expect(n.sections).toEqual([{ title: 'Fixes', items: [expect.objectContaining({ summary: 'the newer fix' }), expect.objectContaining({ summary: 'the older fix' })] }]);
+  });
+
+  it.each([
+    { status: 404, token: undefined, hint: true },
+    { status: 403, token: undefined, hint: true },
+    { status: 404, token: 't', hint: false },
+    { status: 500, token: undefined, hint: false },
+  ])('names the sign-in only when it can be why GitHub refused a comparison ($status, token $token)', async ({ status, token, hint }) => {
+    vi.stubEnv('GITHUB_TOKEN', token);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status })));
+    try {
+      const err = await new HttpsReleaseSource().compare('o/r', 'v0.0.9', 'v0.1.0').catch((e: Error) => e);
+      expect(String(err)).toContain(`GitHub API returned ${status}`);
+      expect(String(err).includes('gh auth login')).toBe(hint);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([

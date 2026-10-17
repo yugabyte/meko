@@ -687,7 +687,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     try {
       return await opts.updater.notes(from, to);
     } catch (e) {
-      throw new HttpError(502, `${errMsg(e).replace(/\.?$/, '.')} Check that gh is signed in (gh auth login) or GITHUB_TOKEN is set, then try again.`);
+      throw new HttpError(502, errMsg(e).replace(/\.?$/, '.'));
     }
   });
 

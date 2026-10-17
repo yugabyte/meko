@@ -4843,6 +4843,13 @@ div[id^='dak-mermaid-'] .label {
     align-items: center;
     min-height: 36px;
   }
+  /* What's new: each change's PR or commit link. */
+  .whats-new li a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 4px;
+  }
   /* The footer's diff button keeps the footer thin: a larger tap area without a larger box.
      (The ⋯ sheet also has a full-size Changes row.) */
   .foot-btn {

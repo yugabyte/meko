@@ -26,6 +26,8 @@ export function WhatsNewDialog({ from, to, onClose }: { from: string; to: string
 
   const changes = notes?.sections.filter((s) => s.title !== 'Breaking changes').reduce((n, s) => n + s.items.length, 0) ?? 0;
   const compareUrl = notes?.compareUrl ?? null;
+  // GitHub gives at most 250 commits for one comparison: the rest may hold changes.
+  const cut = !!notes && notes.commits < notes.totalCommits;
 
   return (
     <Dialog
@@ -46,11 +48,13 @@ export function WhatsNewDialog({ from, to, onClose }: { from: string; to: string
         <>
           <p className="muted">
             Since v{from}: {changes} {changes === 1 ? 'change' : 'changes'} in {notes.totalCommits} {notes.totalCommits === 1 ? 'commit' : 'commits'}.
-            {notes.commits < notes.totalCommits && ` Showing the changes in the first ${notes.commits}; see the rest on GitHub.`}
+            {cut && ` Showing the changes in the first ${notes.commits}; see the rest on GitHub.`}
           </p>
           {notes.sections.length === 0 && (
             <p>
-              Nothing user-facing changed between v{from} and v{to}.
+              {cut
+                ? `Nothing user-facing changed in the first ${notes.commits} commits. See the rest on GitHub.`
+                : `Nothing user-facing changed between v${from} and v${to}.`}
             </p>
           )}
           {notes.sections.map((s) => (

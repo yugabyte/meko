@@ -106,9 +106,13 @@ comparison; past that the dialog says so, and **See every commit on GitHub** ope
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.
 It opens from the "Updated to" banner (the version updated from → this one), the "Version X is
 available" banner and Settings while an update is on offer (this version → the offered one), and
-otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, kept after the
-update's first boot; no link on an install that has never updated, or after a rollback). This is
-why release pruning keeps the tags.
+otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, written when the
+`Updater` is made, before the server starts, so a version that crashes while starting still
+counts, and kept after the update's first boot; no link on an install that has never updated, or
+after a rollback, when that version is no longer older than the running one). A failed comparison
+shows GitHub's error; it names the sign-in only for the HTTPS source with no `GITHUB_TOKEN` and a
+401, 403 or 404 (the `gh` source is used only once `gh auth status` passes). This is why release
+pruning keeps the tags.
 
 **Open pages reload themselves.** The server stamps its version into every page it serves
 (`<meta name="ak-version">`, and the page is sent with `Cache-Control: no-cache`). When a page's

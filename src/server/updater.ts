@@ -201,7 +201,11 @@ export class HttpsReleaseSource implements ReleaseSource {
       headers: this.headers(),
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
     });
-    if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+    if (!res.ok) {
+      // Without gh signed in or a token, a private repo reads as missing and the rate limit is low.
+      const signIn = !process.env.GITHUB_TOKEN && [401, 403, 404].includes(res.status);
+      throw new Error(`GitHub API returned ${res.status}${signIn ? '. gh isn’t signed in and GITHUB_TOKEN isn’t set: run gh auth login, or set GITHUB_TOKEN' : ''}`);
+    }
     return toComparison((await res.json()) as GhComparison);
   }
 
@@ -415,6 +419,17 @@ export class Updater {
     this.lastCheckedAt = Number.isFinite(checked) && checked > 0 ? checked : null;
     if (!this.appDir) this.lastError = DISABLED;
     this.dropBadLatest();
+    // Recorded before the server starts (cli.ts makes the Updater first): a version that crashes
+    // while starting, the case a rollback is for, still counts as the last update, and once it's
+    // rolled back lastUpdatedFrom() drops it.
+    const from = this.updatedFrom();
+    if (from) deps.kvSet(KV_LAST_FROM, from);
+  }
+
+  /** The version this boot updated from: an update was switched to and this is its first boot. */
+  private updatedFrom(): string | null {
+    const p = this.readPending();
+    return p && this.isRunning(p.to) && p.from && !this.isRunning(p.from) ? p.from : null;
   }
 
   /** A remembered latest version that was rolled back since (it's in bad-versions) is no longer offered. */
@@ -431,11 +446,9 @@ export class Updater {
 
   start(): void {
     // "Updated to vX" is shown for the first boot of a new version, from the moment it's up.
-    const p = this.readPending();
-    const from = p && this.isRunning(p.to) && p.from && !this.isRunning(p.from) ? p.from : null;
+    const from = this.updatedFrom();
     this.justUpdatedFrom = from;
     this.deps.kvSet(KV_JUST, from ?? '');
-    if (from) this.deps.kvSet(KV_LAST_FROM, from);
     if (!this.enabled) return;
     void this.check();
     this.schedule();
