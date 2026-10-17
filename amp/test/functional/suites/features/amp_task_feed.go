@@ -7,8 +7,10 @@ package features
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
@@ -19,7 +21,7 @@ const (
 	taskFeedOrderedByFeed    = "updated_at_asc"
 	taskFeedOrderedByDefault = "created_at_desc"
 	taskFeedFastTasks        = 3
-	taskFeedAttempts         = 3
+	taskFeedAttempts         = 5
 )
 
 func init() {
@@ -94,24 +96,40 @@ func (a *ampFeatureRun) taskFeed(ctx context.Context) error {
 		}
 		epTaskID = controller.TaskRef(epTask, epLoc)
 
-		forkIDs = make([]string, 0, taskFeedFastTasks)
-		var lastFork time.Time
-		for i := 0; i < taskFeedFastTasks; i++ {
-			name := fmt.Sprintf("feed-%s-%d-%d", a.f.suffix(), attempt, i)
-			task, loc, err := cl.CreateBranch(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
-				Name: name, ParentBranchID: proj.branchID, ForkPointLSN: lsn,
-			})
-			if err != nil {
-				return fmt.Errorf("fork %s: %w", name, err)
-			}
-			id := controller.TaskRef(task, loc)
-			done, err := cl.WaitTask(ctx, id)
-			if err != nil {
-				return fmt.Errorf("fork %s task %s: %w", name, id, err)
-			}
-			forkIDs = append(forkIDs, id)
-			lastFork = done.UpdatedAt
+		// Serial forks add up to more than the ~15s endpoint deploy, so they go out
+		// together. A single call stalled ~30s on the exec relay still loses the
+		// attempt, which taskFeedAttempts absorbs.
+		forkIDs = make([]string, taskFeedFastTasks)
+		dones := make([]controller.Task, taskFeedFastTasks)
+		errs := make([]error, taskFeedFastTasks)
+		var wg sync.WaitGroup
+		for i := range taskFeedFastTasks {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				name := fmt.Sprintf("feed-%s-%d-%d", a.f.suffix(), attempt, i)
+				task, loc, err := cl.CreateBranch(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
+					Name: name, ParentBranchID: proj.branchID, ForkPointLSN: lsn,
+				})
+				if err != nil {
+					errs[i] = fmt.Errorf("fork %s: %w", name, err)
+					return
+				}
+				forkIDs[i] = controller.TaskRef(task, loc)
+				if dones[i], err = cl.WaitTask(ctx, forkIDs[i]); err != nil {
+					errs[i] = fmt.Errorf("fork %s task %s: %w", name, forkIDs[i], err)
+				}
+			}()
 		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			return err
+		}
+		sort.Slice(dones, func(i, j int) bool { return dones[i].UpdatedAt.Before(dones[j].UpdatedAt) })
+		for i, d := range dones {
+			forkIDs[i] = d.ID
+		}
+		lastFork := dones[len(dones)-1].UpdatedAt
 
 		// A deploy that lands before the last fork leaves nothing above the
 		// watermark to look for; that is timing, not a feed defect.

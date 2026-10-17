@@ -866,6 +866,9 @@ func TestDeployExternalBackingSkipsYugabytedAndEnsuresDB(t *testing.T) {
 	if !hasCall(calls, `--set-string controller.databaseUrl=postgres://yugabyte@yb-0.db.example.com:5433\,yb-1.db.example.com:5433\,yb-2.db.example.com:5433/yb_storage?sslmode=disable`) {
 		t.Errorf("helm template must set controller.databaseUrl to the multi-host external DSN\ncalls: %v", calls)
 	}
+	if !hasCall(calls, `--set-string podAnnotations.cluster-autoscaler\.kubernetes\.io/safe-to-evict=false`) {
+		t.Errorf("helm template must keep the cluster autoscaler from evicting the controller\ncalls: %v", calls)
+	}
 	// The controller still deploys and the port-forward/health still run.
 	if info.ControllerURL != "http://127.0.0.1:18080" {
 		t.Errorf("controller url = %q", info.ControllerURL)

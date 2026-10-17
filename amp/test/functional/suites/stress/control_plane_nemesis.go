@@ -190,18 +190,24 @@ func runControlPlaneNemesis(t *core.T) error {
 			}
 			s.Set("tasks_fired", len(fired))
 
+			// One list per poll: a GetTask per fired task can stall ~30s each on the
+			// relay, and a pass over six outlasts the endpoint creates it is watching.
+			firedIDs := make(map[string]bool, len(fired))
+			for _, f := range fired {
+				firedIDs[f.ID] = true
+			}
 			running := 0
 			_ = t.WaitFor("at least one fired task to be claimed and running", params.InFlightBudget, time.Second,
 				func() (bool, error) {
 					running = 0
-					for _, f := range fired {
-						task, err := cl.GetTask(t.Context, f.ID)
-						if err != nil {
-							pollErrs++
-							lastPollErr = err
-							return false, nil
-						}
-						if task.Status == controller.TaskRunning {
+					list, err := cl.ListTasks(t.Context, controller.ListTasksOptions{Status: controller.TaskRunning, Limit: 100})
+					if err != nil {
+						pollErrs++
+						lastPollErr = err
+						return false, nil
+					}
+					for _, task := range list.Tasks {
+						if firedIDs[task.ID] {
 							running++
 						}
 					}

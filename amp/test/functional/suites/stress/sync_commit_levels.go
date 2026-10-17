@@ -4,6 +4,7 @@ package stress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -39,6 +40,8 @@ type syncLevel struct {
 	PerTxn  bool
 	Durable bool
 }
+
+const levelConnectBudget = 5 * time.Minute
 
 var allSyncLevels = []syncLevel{
 	{Name: "on", Setting: "on", Durable: true},
@@ -120,6 +123,21 @@ func (w *levelWriter) record(lw levelWrite) {
 	w.writes = append(w.writes, lw)
 }
 
+func (w *levelWriter) windowSummary(since time.Time) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	var longest time.Duration
+	for _, lw := range w.writes {
+		if lw.Issued.Before(since) {
+			continue
+		}
+		n++
+		longest = max(longest, lw.Returned.Sub(lw.Issued))
+	}
+	return fmt.Sprintf("%d writes returned, the longest after %s, last error: %s", n, longest.Round(time.Millisecond), orNone(w.Journal.LastErr()))
+}
+
 func (w *levelWriter) snapshot() []levelWrite {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -173,7 +191,12 @@ func runSyncCommitLevels(t *core.T) error {
 	ten := &fleet.Tenants[0]
 
 	if err := t.Step("baseline_every_level_commits", func(s *core.StepHandle) error {
-		runLevelWriters(t.Context, env, ten, writers, params.BaselineDuration, params.PayloadBytes)
+		conns, err := connectLevelWriters(t.Context, env, ten, writers)
+		if err != nil {
+			return err
+		}
+		start := time.Now()
+		runLevelWriters(t.Context, env, ten, writers, conns, params.BaselineDuration, params.PayloadBytes)
 		var silent []string
 		for _, w := range writers {
 			ws := w.snapshot()
@@ -184,7 +207,7 @@ func runSyncCommitLevels(t *core.T) error {
 				t.Metric("commit_p99_ms_"+w.Level.Name, p99, "ms")
 			}
 			if acked == 0 {
-				silent = append(silent, fmt.Sprintf("%s (last error: %s)", w.Level.Name, orNone(w.Journal.LastErr())))
+				silent = append(silent, fmt.Sprintf("%s (%s)", w.Level.Name, w.windowSummary(start)))
 			}
 		}
 		if len(silent) > 0 {
@@ -237,11 +260,16 @@ func runSyncCommitLevels(t *core.T) error {
 		for i, w := range writers {
 			before[i] = w.Journal.Counts().Acked
 		}
-		runLevelWriters(t.Context, env, ten, writers, params.ResumeDuration, params.PayloadBytes)
+		conns, err := connectLevelWriters(t.Context, env, ten, writers)
+		if err != nil {
+			return err
+		}
+		start := time.Now()
+		runLevelWriters(t.Context, env, ten, writers, conns, params.ResumeDuration, params.PayloadBytes)
 		var silent []string
 		for i, w := range writers {
 			if w.Journal.Counts().Acked == before[i] {
-				silent = append(silent, w.Level.Name)
+				silent = append(silent, fmt.Sprintf("%s (%s)", w.Level.Name, w.windowSummary(start)))
 			}
 		}
 		if len(silent) > 0 {
@@ -268,13 +296,17 @@ func freezeThenCrash(t *core.T, s *core.StepHandle, env ampTenantEnv, kube *k8s.
 	}
 	ex := kube.ForPod(pod, "")
 
+	conns, err := connectLevelWriters(t.Context, env, ten, writers)
+	if err != nil {
+		return err
+	}
 	window := params.FreezeLead + params.FreezeDuration + params.SettleTimeout
 	wctx, stopWriters := context.WithTimeout(t.Context, window)
 	defer stopWriters()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLevelWriters(wctx, env, ten, writers, window, params.PayloadBytes)
+		runLevelWriters(wctx, env, ten, writers, conns, window, params.PayloadBytes)
 	}()
 
 	if err := sleepCtx(t.Context, params.FreezeLead); err != nil {
@@ -363,11 +395,15 @@ func crashUnderLoad(t *core.T, s *core.StepHandle, env ampTenantEnv, kube *k8s.K
 	if err != nil {
 		return err
 	}
+	conns, err := connectLevelWriters(t.Context, env, ten, writers)
+	if err != nil {
+		return err
+	}
 	window := params.CrashLead + params.CrashTail
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLevelWriters(t.Context, env, ten, writers, window, params.PayloadBytes)
+		runLevelWriters(t.Context, env, ten, writers, conns, window, params.PayloadBytes)
 	}()
 	if err := sleepCtx(t.Context, params.CrashLead); err != nil {
 		<-done
@@ -437,28 +473,80 @@ func readLevelRows(ctx context.Context, conn *pg.Client, table string) (map[int6
 	return present, nil
 }
 
-func runLevelWriters(ctx context.Context, env ampTenantEnv, ten *tenant, writers []*levelWriter, d time.Duration, payload int) {
+type levelConn struct {
+	client *pg.Client
+	sess   pg.Session
+}
+
+// Each writer connects before the window starts: a port-forward can take longer
+// to open than the whole window, and that is no commit going unacknowledged.
+func connectLevelWriters(ctx context.Context, env ampTenantEnv, ten *tenant, writers []*levelWriter) ([]levelConn, error) {
+	conns := make([]levelConn, len(writers))
+	errs := make([]error, len(writers))
+	var wg sync.WaitGroup
+	for i, w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cctx, cancel := context.WithTimeout(ctx, levelConnectBudget)
+			defer cancel()
+			// A connected client keeps its port-forward until Teardown, so only the
+			// pin is retried on it.
+			var client *pg.Client
+			for {
+				var err error
+				if client == nil {
+					client, err = env.ConnectEndpoint(cctx, ten.Endpoint)
+				}
+				if err == nil {
+					var sess pg.Session
+					if sess, err = pinLevelSession(cctx, client, w.Level); err == nil {
+						conns[i] = levelConn{client: client, sess: sess}
+						return
+					}
+				}
+				if sleepCtx(cctx, time.Second) != nil {
+					if client != nil {
+						client.Close()
+					}
+					errs[i] = fmt.Errorf("connect the synchronous_commit %s writer within %s: %w", w.Level.Name, levelConnectBudget, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		for _, c := range conns {
+			if c.sess != nil {
+				c.sess.Close()
+				c.client.Close()
+			}
+		}
+		return nil, err
+	}
+	return conns, nil
+}
+
+func runLevelWriters(ctx context.Context, env ampTenantEnv, ten *tenant, writers []*levelWriter, conns []levelConn, d time.Duration, payload int) {
 	wctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var wg sync.WaitGroup
-	for _, w := range writers {
+	for i, w := range writers {
 		wg.Add(1)
-		go func(w *levelWriter) {
+		go func() {
 			defer wg.Done()
-			levelWriteFor(wctx, env, ten, w, payload)
-		}(w)
+			levelWriteFor(wctx, env, ten, w, conns[i], payload)
+		}()
 	}
 	wg.Wait()
 }
 
 // A client per level so the levels never queue on one pool, and a fresh
 // session after an error, because a pool that reconnected silently forgot the SET.
-func levelWriteFor(ctx context.Context, env ampTenantEnv, ten *tenant, w *levelWriter, payload int) {
+func levelWriteFor(ctx context.Context, env ampTenantEnv, ten *tenant, w *levelWriter, conn levelConn, payload int) {
 	base := int64(w.Index) * tenantIDSpan
-	var (
-		client *pg.Client
-		sess   pg.Session
-	)
+	client, sess := conn.client, conn.sess
 	defer func() {
 		if sess != nil {
 			sess.Close()

@@ -64,6 +64,46 @@ func TestDaemonPIDsEmptyOnNoMatch(t *testing.T) {
 	}
 }
 
+// kubectl names the container it picked on stderr whenever the pod has several.
+func TestDaemonPIDsEmptyOnNoMatchInAMultiContainerPod(t *testing.T) {
+	sp := &scriptedPod{results: []execpkg.Result{
+		{ExitCode: 1, Stderr: "Defaulted container \"endpoint\" out of: endpoint, postgres-exporter\ncommand terminated with exit code 1\n"},
+	}}
+	pids, err := daemonPIDs(context.Background(), sp.kube(), "compute_ctl")
+	if err != nil {
+		t.Fatalf("daemonPIDs: %v", err)
+	}
+	if len(pids) != 0 || len(sp.cmds) != 1 {
+		t.Errorf("pids = %v after %d command(s), want none after only the pgrep", pids, len(sp.cmds))
+	}
+}
+
+func TestDaemonPIDsReportsEnvWhenTheExecKeepsFailing(t *testing.T) {
+	var fails []execpkg.Result
+	for range pidListAttempts {
+		fails = append(fails, execpkg.Result{ExitCode: 1, Stderr: "error: unable to upgrade connection"})
+	}
+	sp := &scriptedPod{results: fails}
+	_, err := daemonPIDs(context.Background(), sp.kube(), "compute_ctl")
+	if !core.IsEnvFailure(err) {
+		t.Fatalf("err = %v, want an env failure", err)
+	}
+	if len(sp.cmds) != pidListAttempts {
+		t.Errorf("ran %d command(s), want %d pgreps", len(sp.cmds), pidListAttempts)
+	}
+}
+
+func TestDaemonPIDsRetriesAFailedExec(t *testing.T) {
+	sp := &scriptedPod{results: []execpkg.Result{
+		{ExitCode: 1, Stderr: "error: unable to upgrade connection"},
+		{ExitCode: 1, Stderr: "command terminated with exit code 1\n"},
+	}}
+	pids, err := daemonPIDs(context.Background(), sp.kube(), "compute_ctl")
+	if err != nil || len(pids) != 0 || len(sp.cmds) != 2 {
+		t.Errorf("pids = %v, err = %v after %d command(s), want none after 2 pgreps", pids, err, len(sp.cmds))
+	}
+}
+
 // A container without procps must not read as "the daemon is gone".
 func TestDaemonPIDsFallsBackToProcScan(t *testing.T) {
 	sp := &scriptedPod{results: []execpkg.Result{

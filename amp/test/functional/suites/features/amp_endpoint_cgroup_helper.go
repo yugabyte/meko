@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -12,16 +13,35 @@ import (
 // cgroupProbe prints the container's cpu and memory limits, cgroup v2 first.
 const cgroupProbe = `cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo "$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us) $(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"; cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes`
 
+const (
+	cgroupProbeAttempts = 5
+	cgroupProbeRetry    = 3 * time.Second
+)
+
 // podCgroupLimits reads the live cpu (millicores, -1 unlimited) and memory
 // (bytes, -1 unlimited) limits of the pod's default container.
 func podCgroupLimits(ctx context.Context, kube *k8s.Kubectl, pod string) (int64, int64, error) {
-	res, err := kube.ForPod(pod, "").Run(ctx, cgroupProbe)
-	if err != nil {
-		return 0, 0, fmt.Errorf("read cgroup limits in pod %s: %w", pod, err)
-	}
-	lines := strings.Split(strings.TrimSpace(res.Stdout), "\n")
-	if res.ExitCode != 0 || len(lines) != 2 {
-		return 0, 0, fmt.Errorf("cgroup probe in pod %s exited %d with %q", pod, res.ExitCode, res.Stdout)
+	var lines []string
+	for attempt := 1; ; attempt++ {
+		res, err := kube.ForPod(pod, "").Run(ctx, cgroupProbe)
+		if err != nil {
+			return 0, 0, fmt.Errorf("read cgroup limits in pod %s: %w", pod, err)
+		}
+		lines = strings.Split(strings.TrimSpace(res.Stdout), "\n")
+		if res.ExitCode == 0 && len(lines) == 2 {
+			break
+		}
+		// The probe always prints two lines, so a failed exec on the kubectl
+		// relay is the only way to get nothing back.
+		if attempt == cgroupProbeAttempts {
+			return 0, 0, fmt.Errorf("cgroup probe in pod %s exited %d %d times, last stdout %q, stderr %q",
+				pod, res.ExitCode, attempt, res.Stdout, strings.TrimSpace(res.Stderr))
+		}
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(cgroupProbeRetry):
+		}
 	}
 	cpu, err := parseCgroupCPU(lines[0])
 	if err != nil {

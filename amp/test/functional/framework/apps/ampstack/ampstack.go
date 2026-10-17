@@ -1430,6 +1430,9 @@ func (a *App) helmTemplateArgs(apiVersions []string) []string {
 	}
 	argv = append(argv, "--set-string", "controller.endpoint.ybHostPorts="+helmEscape(a.backingHostPorts()))
 	argv = append(argv, "--set-string", "controller.databaseUrl="+helmEscape(a.dbURL()))
+	// The controller is one replica, so a node scale-down mid-test refuses every
+	// call until the new pod is up.
+	argv = append(argv, "--set-string", `podAnnotations.cluster-autoscaler\.kubernetes\.io/safe-to-evict=false`)
 	for _, v := range apiVersions {
 		argv = append(argv, "--api-versions", v)
 	}

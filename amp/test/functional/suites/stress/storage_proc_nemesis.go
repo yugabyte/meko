@@ -77,6 +77,8 @@ const killConfirmTimeout = 30 * time.Second
 // pidPollInterval is how often the pod is asked for the daemon's pids.
 const pidPollInterval = time.Second
 
+const pidListAttempts = 5
+
 type storageProcParams struct {
 	Tenants          int
 	BaselineDuration time.Duration
@@ -371,14 +373,21 @@ func killDaemonOnce(t *core.T, ex *k8s.Kubectl, daemon string) (killRecord, erro
 	}
 
 	start := time.Now()
+	var listErr error
 	err = t.WaitFor(fmt.Sprintf("%s pid(s) %s to disappear", daemon, joinPIDs(before, ",")),
 		killConfirmTimeout, pidPollInterval, func() (bool, error) {
 			now, err := daemonPIDs(t.Context, ex, daemonProcess(daemon))
-			if err != nil {
-				return false, err
+			if listErr = err; err != nil {
+				// A kill past the restart budget restarts the container, and the
+				// exec fails until it is back.
+				return false, nil
 			}
 			return len(intersectPIDs(before, now)) == 0, nil
 		})
+	if err != nil && listErr != nil {
+		return rec, core.AsEnvFailure(fmt.Errorf("could not list %s in the pod for %s after the SIGKILL to pid(s) %s: %w",
+			daemon, killConfirmTimeout, joinPIDs(before, ","), listErr))
+	}
 	if err != nil {
 		return rec, fmt.Errorf("SIGKILL to %s pid(s) %s left them running after %s, so no fault was injected: %w",
 			daemon, joinPIDs(before, ","), killConfirmTimeout, err)
@@ -515,11 +524,24 @@ func procScanCommand(daemon string) string {
 	return fmt.Sprintf(`for d in /proc/[0-9]*; do [ "$(cat $d/comm 2>/dev/null)" = %q ] && echo "${d#/proc/}"; done; exit 0`, daemon)
 }
 
-// daemonPIDs lists the pids of one storage daemon inside the pod. pgrep exits 1
-// when nothing matched, which is an answer; any other failure falls back to a
-// /proc scan so a missing procps is not read as "the daemon is gone".
+// daemonPIDs lists the pids of one storage daemon inside the pod. kubectl exits 1
+// both when pgrep matched nothing and when the exec itself failed, so exit 1 means
+// no process only when stderr holds nothing but kubectl's notices for a remote
+// exit. Exit 1 with other stderr is retried and then reported as env. Any other
+// exit code falls back to a /proc scan, so a missing procps is not read as "the
+// daemon is gone".
 func daemonPIDs(ctx context.Context, ex *k8s.Kubectl, daemon string) ([]int, error) {
 	res, err := ex.Run(ctx, "pgrep -x "+daemon)
+	for attempt := 1; err == nil && res.ExitCode == 1 && execStderr(res.Stderr) != ""; attempt++ {
+		if attempt == pidListAttempts {
+			return nil, core.AsEnvFailure(fmt.Errorf("listing %s processes in the pod: kubectl exec exited 1 %d times: %s",
+				daemon, attempt, execStderr(res.Stderr)))
+		}
+		if err := sleepCtx(ctx, pidPollInterval); err != nil {
+			return nil, err
+		}
+		res, err = ex.Run(ctx, "pgrep -x "+daemon)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("listing %s processes in the pod: %w", daemon, err)
 	}
@@ -538,6 +560,17 @@ func daemonPIDs(ctx context.Context, ex *k8s.Kubectl, daemon string) ([]int, err
 			daemon, res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return parsePIDs(res.Stdout), nil
+}
+
+func execStderr(stderr string) string {
+	var kept []string
+	for _, l := range strings.Split(stderr, "\n") {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "Defaulted container ") && l != "command terminated with exit code 1" {
+			kept = append(kept, l)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func parsePIDs(out string) []int {
