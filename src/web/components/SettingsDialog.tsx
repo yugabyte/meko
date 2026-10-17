@@ -78,9 +78,9 @@ function RailSessionsSetting() {
 }
 
 /** What Settings says about a harness's CLI: its version, or why it isn't offered. */
-function harnessNote(h: HarnessStatus | undefined, command: string): string {
+function harnessNote(h: HarnessStatus | undefined): string {
   if (!h?.enabled) return 'Off.';
-  if (h.version === null) return `${command} didn't answer: install Kiro CLI, or set the command it's run with.`;
+  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml.`;
   if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
   return `Version ${h.version}.`;
 }
@@ -138,7 +138,6 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
         resolveConflicts: s.resolveConflicts,
         defaultHarness: s.defaultHarness,
         kiroEnabled: s.kiroEnabled,
-        kiroCommand: s.kiroCommand.trim(),
         kiroTrustTools: s.kiroTrustTools,
       });
       setS(next);
@@ -286,13 +285,10 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           />
           <span>Offer Kiro for new sessions</span>
         </label>
-        <span className="hint">{harnessNote(kiro, s.kiroCommand)}</span>
+        <span className="hint">{harnessNote(kiro)}</span>
       </div>
       {s.kiroEnabled && (
         <>
-          <Field label="Kiro command" hint="How Kiro CLI is run: a command name on your PATH, or a full path.">
-            <input id="set-kiro-command" className="input mono" value={s.kiroCommand} onChange={(e) => setS({ ...s, kiroCommand: e.target.value })} />
-          </Field>
           <div className="field">
             <label className="check">
               <input id="set-kiro-trust" type="checkbox" checked={s.kiroTrustTools} onChange={(e) => setS({ ...s, kiroTrustTools: e.target.checked })} />
