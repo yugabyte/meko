@@ -20,6 +20,16 @@ that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultF
 offers only an available agent as the default. The session's harness is `sessions.harness`
 (`Session.harness`).
 
+**Telling them apart.** Each session's tooltip names its agent. While the open sessions across all
+projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions
+don't count), every session tab and every session row in the rail shows its agent's logo between
+its dot and its name (`HarnessLogo` in `common.tsx`, all in one 18 × 14 px box so names line up);
+while they all run on one, nothing is added. The logos are files in `src/web/public/`, never
+loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
+from `png/clawd.png` in [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
+(Apache-2.0), and `harness-kiro.svg` is Kiro's own `https://kiro.dev/icon.svg`. Both are colored
+marks that read in either theme.
+
 ## The adapter
 
 Everything Claude-specific sits behind one interface, `Harness` in `src/server/harness/`, with an

@@ -363,6 +363,14 @@ textarea.input {
   color: var(--accent);
   font-weight: 600;
 }
+/* A segmented control in a column (a field, a form) is as wide as its buttons, not the column:
+   stretched, its empty end looked like a button and did nothing. It wraps on a narrow phone. */
+.field > .seg,
+.stack > .seg {
+  align-self: flex-start;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
 /* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
    Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
 .starts {
@@ -441,12 +449,7 @@ textarea.input {
 .gate-group > .btn.gate-note {
   flex: 0 0 auto;
 }
-/* The Move to another stage dialog: the stages as one segmented control, and what the move will do. */
-.move-stages {
-  align-self: flex-start;
-  max-width: 100%;
-  flex-wrap: wrap;
-}
+/* The Move to another stage dialog: what the move will do. */
 .move-effect {
   margin: 0;
   padding: 8px 10px;
@@ -850,6 +853,14 @@ textarea.input {
 .rail-sess-new:hover {
   color: var(--accent);
   background: transparent;
+}
+/* With harness logos (open sessions on more than one harness): a column for the logo, and
+   + New session indented to line up with the names. */
+.rail-sessions.logos .rail-sess {
+  grid-template-columns: 14px 18px minmax(0, 1fr) auto;
+}
+.rail-sessions.logos .rail-sess-new {
+  padding-left: 52px;
 }
 .proj.cur .proj-name {
   font-weight: 600;
@@ -1295,6 +1306,13 @@ textarea.input {
 .tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* A session's harness logo (HarnessLogo): every logo fits one 18 x 14 box, so names line up. */
+.harness-logo {
+  width: 18px;
+  height: 14px;
+  object-fit: contain;
+  flex: none;
 }
 .stchip {
   font-size: 10px;
@@ -5301,12 +5319,6 @@ div[id^='dak-mermaid-'] .label {
     height: 1px;
     background: var(--rule);
   }
-}
-/* The New session dialog's Work on control (Advanced): one row, wrapping on a narrow phone. */
-.work-on {
-  align-self: flex-start;
-  max-width: 100%;
-  flex-wrap: wrap;
 }
 /* The PR picker in the New session dialog. */
 .pr-pick {

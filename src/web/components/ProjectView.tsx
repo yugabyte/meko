@@ -22,7 +22,7 @@ import { disposeTerminal } from '../terminals';
 import { approveLabel, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, HarnessLogo, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -85,6 +85,7 @@ export function ProjectView({
   onRename,
   onMenu,
   showTabs,
+  harnessLogos,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -103,6 +104,8 @@ export function ProjectView({
   onMenu: () => void;
   /** Show the session tabs above the terminal (the wide layout): the rail doesn't list the sessions, or is hidden. */
   showTabs: boolean;
+  /** Show each session's harness logo in its tab: open sessions run on more than one harness. */
+  harnessLogos: boolean;
   onError: (msg: string) => void;
 }) {
   const mobile = useIsMobile();
@@ -298,6 +301,7 @@ export function ProjectView({
           title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
         >
           <StatusDot status={dotState(s)} phase={s.id} />
+          {harnessLogos && <HarnessLogo harness={s.harness} />}
           <span className="tab-name">{s.name}</span>
           <span className="stchip">{STAGE_LABELS[s.stage]}</span>
         </button>
