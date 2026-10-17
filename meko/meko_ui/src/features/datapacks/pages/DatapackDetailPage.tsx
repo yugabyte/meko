@@ -34,6 +34,7 @@ import {
 import {
   isDatapackGrantEligibleForWorkbenchLM,
   isDatapackGrantEligibleToAddKnowledgeBase,
+  isDatapackGrantEligibleToCreateCluster,
   isDatapackGrantEligibleToDelete,
   isDatapackGrantEligibleToEdit,
   isDatapackGrantEligibleToShare,
@@ -444,9 +445,10 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
       <AppWorkspaceHeader />
 
       {/* Tighter mobile padding + vertical rhythm (16px gap) so sections
-          aren't stretched apart on a 375px viewport; desktop restores
-          the original `space-y-8` and `pt-6 pl-1 pr-1` look. */}
-      <main className="flex-1 px-3 pt-4 pb-3 max-w-7xl mx-auto w-full space-y-5 md:px-1 md:pt-6 md:space-y-8">
+          aren't stretched apart on a 375px viewport; desktop uses `md:px-8`
+          so the content has a real gutter and doesn't sit flush against the
+          sidebar border (MEKO-911). */}
+      <main className="flex-1 px-3 pt-4 pb-3 max-w-7xl mx-auto w-full space-y-5 md:px-8 md:pt-6 md:space-y-8">
         {freeTier.hasHitKbStorageFileSize ? <FreeTierLimitBanner kind="kbStorage" /> : null}
 
         {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = Share (if eligible), upload dialog, settings menu (maintainer/owner only).
@@ -671,8 +673,21 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
               knowledgeFileCount={knowledgeFileCount ?? undefined}
               knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
               onSelectSection={handlePipelineSelect}
-              onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
-              onCreateCluster={isAmpEnabled() ? () => setIsCreateClusterOpen(true) : undefined}
+              // KB upload is owner/maintainer-only (viewer & contributor can't
+              // write knowledge — the API already enforces it); omit the handler
+              // so the pipeline hides the button for them.
+              onUploadKnowledgeFiles={
+                isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })
+                  ? () => setIsUploadOpen(true)
+                  : undefined
+              }
+              // Cluster creation is owner-only (the create route is owner-only
+              // server-side); hide it for everyone else.
+              onCreateCluster={
+                isAmpEnabled() && isDatapackGrantEligibleToCreateCluster({ grant: datapackGrant })
+                  ? () => setIsCreateClusterOpen(true)
+                  : undefined
+              }
               statusLoading={statusLoading}
             />
 
@@ -705,7 +720,14 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
                 onOpenConnect={() => setIsConnectOpen(true)}
               />
-              {isAmpEnabled() ? <DatapackDetailClustersTile datapackId={routeDatapackId} /> : null}
+              {isAmpEnabled() ? (
+                <DatapackDetailClustersTile
+                  datapackId={routeDatapackId}
+                  canCreateCluster={isDatapackGrantEligibleToCreateCluster({
+                    grant: datapackGrant,
+                  })}
+                />
+              ) : null}
               <DatapackDetailArtifactsTile datapackId={routeDatapackId} />
             </div>
           </TabsContent>

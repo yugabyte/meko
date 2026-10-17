@@ -71,6 +71,18 @@ export function isDatapackGrantEligibleToAddKnowledgeBase(dp: {
   return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
 }
 
+/**
+ * Only the datapack owner may provision an AMP cluster (a Postgres database on
+ * branchable storage). The create route is owner-only server-side
+ * (`RequireDatapackOwnership`), so this keeps the UI from offering a control the
+ * API would reject for maintainer/contributor/viewer.
+ */
+export function isDatapackGrantEligibleToCreateCluster(dp: {
+  grant?: DatapackShareGrant | null;
+}): boolean {
+  return dp.grant === DATAPACK_SHARE_GRANT_OWNER;
+}
+
 export function isDatapackGrantEligibleToPromoteMemoryToKnowledge(dp: {
   grant?: DatapackShareGrant | null;
 }): boolean {

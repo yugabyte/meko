@@ -11,6 +11,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { useAmpCoreBudget, useClusters } from "@/features/datapacks/hooks/useAmpClusters";
+import { useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
+import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { CreateClusterWizard } from "./dialogs/CreateClusterWizard";
 import { ClusterRow } from "./datapack-clusters/ClusterRow";
 
@@ -25,6 +27,13 @@ type Props = { datapackId: string; className?: string };
 export function DatapackClustersPanel({ datapackId, className }: Props) {
   const clustersQuery = useClusters(datapackId);
   const budgetQuery = useAmpCoreBudget(datapackId);
+  // Cluster creation is owner-only (the create route is owner-only server-side).
+  // Read the caller's grant from the shared datapacks list so a non-owner never
+  // sees the button; hidden while the list loads (grant unknown).
+  const { data: datapacks = [] } = useDatapacks();
+  const canCreateCluster = isDatapackListGrantOwner(
+    datapacks.find((d) => d.datapack_id === datapackId) ?? {},
+  );
   const atLimit = budgetQuery.data?.at_limit ?? false;
   const clusters = clustersQuery.data ?? [];
   const loading = clustersQuery.isLoading;
@@ -51,7 +60,7 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
         {!loading && !error ? (
           <span className="text-xs text-muted-foreground">{clusters.length}</span>
         ) : null}
-        {atLimit ? (
+        {!canCreateCluster ? null : atLimit ? (
           // At the tier vCPU cap: grey the button (Radix tooltips don't fire on
           // a disabled element, so the span is the hover target) and point to
           // Settings to upgrade. The create path still enforces server-side.
@@ -112,7 +121,9 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
           </p>
         ) : clusters.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No clusters yet. Create one to spin up a Postgres cluster in this datapack.
+            {canCreateCluster
+              ? "No clusters yet. Create one to spin up a Postgres cluster in this datapack."
+              : "No clusters yet."}
           </p>
         ) : filtered.length === 0 ? (
           <p className="text-sm text-muted-foreground">No clusters match “{search}”.</p>

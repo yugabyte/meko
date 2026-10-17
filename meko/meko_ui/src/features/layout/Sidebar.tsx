@@ -139,9 +139,6 @@ export default function Sidebar() {
     location.pathname.startsWith(`${ROUTES.onboarding}/`);
   const onConnectRoute =
     location.pathname === ROUTES.connect || location.pathname.startsWith(`${ROUTES.connect}/`);
-  const onWorkbenchLMRoute =
-    location.pathname === ROUTES.workbenchLm ||
-    location.pathname.startsWith(`${ROUTES.workbenchLm}/`);
   const activeDatapackId = (new URLSearchParams(location.search).get("datapack_id") ?? "").trim();
   // Datapack mutations (create/delete/rename) dispatch
   // `DATAPACKS_LIST_UPDATED_EVENT` to signal "the list you have is now
@@ -161,12 +158,6 @@ export default function Sidebar() {
       setDatapacksExpanded(true);
     }
   }, [location.pathname]);
-
-  useEffect(() => {
-    if (onWorkbenchLMRoute) {
-      setIsCollapsed(true);
-    }
-  }, [onWorkbenchLMRoute]);
 
   const expandSidebar = () => setIsCollapsed(false);
 
@@ -249,7 +240,10 @@ export default function Sidebar() {
           // Desktop (>= md): static positioning, user-controlled collapse
           // restores the original behavior. `md:transition-all` swaps the
           // width-only transition back in once we leave mobile.
-          "md:static md:translate-x-0 md:z-auto md:transition-all",
+          // md:z-30 lifts the rail above the sibling content column so the
+          // collapse pill, which overhangs the right border (-right-4), is not
+          // painted over / clipped by that column (MEKO-911).
+          "md:static md:translate-x-0 md:z-30 md:transition-all",
           isCollapsed ? "md:w-[68px]" : "md:w-[240px]",
         )}
       >

@@ -11,6 +11,9 @@ const PREVIEW_LIMIT = 3;
 type Props = {
   datapackId: string;
   className?: string;
+  // Owner-only: drives whether the empty state points at the (owner-gated)
+  // "Create cluster" button or just says there are none.
+  canCreateCluster?: boolean;
 };
 
 /**
@@ -19,7 +22,11 @@ type Props = {
  * SHOW_PG_AMP at the call site. Shares the clusters query cache with the panel,
  * so creating a cluster elsewhere refreshes this tile automatically.
  */
-export function DatapackDetailClustersTile({ datapackId, className }: Props) {
+export function DatapackDetailClustersTile({
+  datapackId,
+  className,
+  canCreateCluster = false,
+}: Props) {
   const clustersQuery = useClusters(datapackId);
   const clusters = clustersQuery.data ?? [];
   const status = clustersQuery.isLoading ? "loading" : clustersQuery.error ? "error" : "ready";
@@ -54,7 +61,9 @@ export function DatapackDetailClustersTile({ datapackId, className }: Props) {
           </li>
         ) : clusters.length === 0 ? (
           <li className="px-2 py-4 text-center text-xs leading-relaxed text-muted-foreground">
-            No clusters yet. Use “Create cluster” above to spin one up.
+            {canCreateCluster
+              ? "No clusters yet. Use “Create cluster” above to spin one up."
+              : "No clusters yet."}
           </li>
         ) : (
           preview.map((db) => (
