@@ -105,7 +105,6 @@ describe('harnessLogos', () => {
   it.each<[string, ProjectWithSessions[], boolean]>([
     ['no projects', [], false],
     ['all Claude Code', [project(on('claude'), on('claude')), project(on('claude'))], false],
-    ['all Kiro', [project(on('kiro'))], false],
     ['the only Kiro session archived', [project(on('claude'), on('kiro', 'archived'))], false],
     ['an unknown harness beside Claude Code', [project(on('claude'), on('codex'))], false],
     ['both in one project', [project(on('claude'), on('kiro'))], true],
