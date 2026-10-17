@@ -29,7 +29,7 @@ pass `--author` or change the identity.
 
 The release workflow reads commit subjects: a push to `main` with any `feat`, `fix`, `perf` or
 `deps` commit since the last release cuts a new version (`0.YYYYMMDD.N`), and those subjects
-become the release notes. Every other type lands without a release. Use exactly one of these
+become the release notes (and the app's **What's new**). Every other type lands without a release. Use exactly one of these
 nine types:
 
 | Type | Releases? | Use for |

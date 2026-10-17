@@ -836,7 +836,41 @@ export interface UpdateStatus {
   lastError: string | null;
   /** Set for one boot after a successful update, for the "Updated to vX" notice. */
   justUpdatedFrom: string | null;
+  /** The version the last update came from, kept after that first boot (What's new in Settings); null before any update. */
+  lastUpdatedFrom: string | null;
+  /** The GitHub release page of `latest`. Pages before What's new linked to it; the UI no longer does. */
   releaseUrl: string | null;
+}
+
+/** One change in What's new: a commit subject with a releasing type (see scripts/release-notes.sh). */
+export interface ReleaseNoteItem {
+  /** The component in the subject's parentheses, if any. */
+  component: string | null;
+  summary: string;
+  /** The PR it was merged in, from "(#123)" at the end of its subject. */
+  pr: number | null;
+  /** The commit, shortened. */
+  sha: string;
+  /** The PR when there is one, else the commit. */
+  url: string;
+}
+
+export interface ReleaseNoteSection {
+  /** Breaking changes, Features, Fixes, Performance or Dependencies; empty ones are left out. */
+  title: string;
+  items: ReleaseNoteItem[];
+}
+
+/** What changed between two versions (GET /api/update/notes), from the commits between their tags. */
+export interface ReleaseNotes {
+  from: string;
+  to: string;
+  sections: ReleaseNoteSection[];
+  /** The commits read, at most 250 (GitHub's limit for one comparison); `totalCommits` is all of them. */
+  commits: number;
+  totalCommits: number;
+  /** The comparison on GitHub, every commit included. */
+  compareUrl: string;
 }
 
 export interface MekoStatus {
@@ -2266,3 +2300,6 @@ export type TermServerMessage =
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus
 // POST   /api/update/apply                     → UpdateStatus
+// GET    /api/update/notes?from=&to=           → ReleaseNotes   (What's new: the feat, fix, perf and deps commits between
+//        tags v<from> and v<to>, from GitHub; 400 unless both are versions and from is older, 409 from a source checkout,
+//        502 when GitHub can't compare them)

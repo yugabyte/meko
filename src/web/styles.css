@@ -2153,6 +2153,18 @@ div[id^='dak-mermaid-'] .label {
   padding: 12px 18px;
   border-top: 1px solid var(--rule);
 }
+/* What's new: a list of changes per type (WhatsNewDialog). */
+.whats-new ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.whats-new li {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
 .alt-links {
   display: flex;
   gap: 16px;
@@ -4830,6 +4842,13 @@ div[id^='dak-mermaid-'] .label {
     display: inline-flex;
     align-items: center;
     min-height: 36px;
+  }
+  /* What's new: each change's PR or commit link. */
+  .whats-new li a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 4px;
   }
   /* The footer's diff button keeps the footer thin: a larger tap area without a larger box.
      (The ⋯ sheet also has a full-size Changes row.) */
