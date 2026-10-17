@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { type ReactElement } from "react";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CreateClusterWizard } from "./CreateClusterWizard";
-import { ampCreateCluster } from "@/lib/api/ampApi";
+import { ampCreateCluster, type AmpCluster } from "@/lib/api/ampApi";
 
 // The wizard's contract: PostgreSQL/AI Database/Oracle/SQL Server/DocumentDB are
 // selectable engines, an Extensions step seeds the
@@ -117,6 +117,42 @@ describe("CreateClusterWizard", () => {
     expect(next().disabled).toBe(true);
     enterCustomPassword("pw-abcdefgh");
     expect(next().disabled).toBe(false);
+  });
+
+  // While the composite create task is in flight, the wizard swaps the step body
+  // for a provisioning panel (spinner, not a hung button) and LOCKS the dialog:
+  // the close X is hidden and Esc can't dismiss it until the task resolves.
+  it("locks the dialog and shows a provisioning state while the create task runs", async () => {
+    let resolveCreate: (v: AmpCluster) => void = () => {};
+    mockCreate.mockImplementationOnce(() => new Promise<AmpCluster>((r) => (resolveCreate = r)));
+    const onOpenChange = vi.fn();
+    renderWizard(<CreateClusterWizard open onOpenChange={onOpenChange} datapackId="dp" />);
+    fireEvent.change(screen.getByLabelText("Cluster name"), { target: { value: "orders" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Cluster → Extensions
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Extensions → Compute
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Compute → Credentials
+    enterCustomPassword("pw-abcdefgh");
+    fireEvent.click(screen.getByRole("button", { name: "Next" })); // Credentials → Review
+    const createBtn = screen.getByRole("button", { name: "Create cluster" }) as HTMLButtonElement;
+    await waitFor(() => expect(createBtn.disabled).toBe(false));
+    fireEvent.click(createBtn);
+
+    // Provisioning panel shown, review content gone, and the button really spins
+    // (the Spinner carries aria-label "Loading").
+    const creatingBtn = await screen.findByRole("button", { name: /creating/i });
+    expect(screen.getByText(/Provisioning your cluster/i)).toBeTruthy();
+    expect(within(creatingBtn).getByLabelText("Loading")).toBeTruthy();
+    expect(screen.queryByText("Writer compute")).toBeNull();
+
+    // Locked: Escape doesn't dismiss it (onOpenChange stays uncalled). (The X is
+    // also hidden via a CSS class, which jsdom can't evaluate, so that's a visual
+    // check — the functional guard is what's asserted here.)
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // Once the task resolves, the wizard closes itself.
+    resolveCreate({ id: "c1", name: "orders" } as AmpCluster);
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 });
 

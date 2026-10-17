@@ -2,8 +2,9 @@
 // Fires ONE composite call (create_cluster with_writer) that provisions the
 // database, its `main` branch (seeded with the picked extensions), and a
 // read_write endpoint as a single background task; api_server polls it to
-// completion and returns the created cluster (well under a minute), then we
-// toast + close. Mirrors amp_ui's wizard, minus the pool step (a datapack has
+// completion and returns the created cluster (this can take up to a minute,
+// which the wizard shows a provisioning state for), then we toast + close.
+// Mirrors amp_ui's wizard, minus the pool step (a datapack has
 // exactly one AMP pool, resolved server-side).
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { Stepper } from "@/components/ui/stepper";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
@@ -146,8 +148,26 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-card border-border text-foreground sm:p-8">
+    <Dialog
+      open={open}
+      // While the composite create task runs, swallow every close request
+      // (Esc, overlay click, X) so the user can't dismiss the dialog mid-provision.
+      onOpenChange={(nextOpen) => {
+        if (pending && !nextOpen) return;
+        onOpenChange(nextOpen);
+      }}
+    >
+      <DialogContent
+        className={cn(
+          // p-4 base keeps the shared dialog's phone fix (no 24px gutters on a
+          // narrow viewport); sm:p-8 gives desktop room.
+          "w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto bg-card border-border text-foreground p-4 sm:p-8",
+          // Hide the built-in close (X) while provisioning — the task must finish.
+          pending && "[&>button]:hidden",
+        )}
+        onEscapeKeyDown={(e) => pending && e.preventDefault()}
+        onInteractOutside={(e) => pending && e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="text-xl text-foreground">Create cluster</DialogTitle>
           <DialogDescription className="text-muted-foreground">
@@ -156,182 +176,199 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
           </DialogDescription>
         </DialogHeader>
 
-        <Stepper steps={STEPS} current={step} className="my-4" />
+        {/* DialogContent is a `grid gap-4`, so the stepper and body already get
+            even 16px rhythm from their siblings — no extra vertical margin. */}
+        {!pending ? <Stepper steps={STEPS} current={step} /> : null}
 
-        <div className="min-h-[220px]">
-          {step === 0 ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label>Engine</Label>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {DB_ENGINES.map((e) => {
-                    const selected = engine === e.id;
-                    const seeds = engineExtensions(e.id);
-                    return (
-                      <button
-                        key={e.id}
-                        type="button"
-                        aria-pressed={selected}
-                        disabled={e.comingSoon}
-                        onClick={() => pickEngine(e.id)}
-                        className={cn(
-                          "rounded-lg border px-3 py-2.5 text-left transition-colors",
-                          selected
-                            ? "border-brand bg-brand/10 ring-1 ring-brand"
-                            : "border-border bg-background hover:bg-muted/50",
-                          e.comingSoon && "cursor-not-allowed opacity-60 hover:bg-background",
-                        )}
-                      >
-                        <span className="block text-sm font-medium text-foreground">
-                          {e.label}
-                          {e.sub ? (
-                            <span className="ml-1 text-xs text-muted-foreground">{e.sub}</span>
-                          ) : null}
-                        </span>
-                        {e.comingSoon ? (
-                          <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-muted-foreground">
-                            Coming soon
-                          </span>
-                        ) : seeds.length ? (
-                          <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
-                            {seeds.join(" · ")}
-                          </span>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="wiz-name">Cluster name</Label>
-                <Input
-                  id="wiz-name"
-                  autoFocus
-                  placeholder="e.g. orders"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && stepValid) next();
-                  }}
-                />
-              </div>
-            </div>
-          ) : null}
-
-          {step === 1 ? (
-            <div className="space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Enabled on the cluster's <code>main</code> branch — every compute on it mounts them.
-                Pick them now: they can't be changed after the cluster is created.
-                {fromEngine.length
-                  ? ` ${engineLabel(engine)} includes ${fromEngine.join(", ")}.`
-                  : ""}
+        <div className={cn("min-h-[220px]", pending && "flex items-center justify-center")}>
+          {pending ? (
+            <div className="flex flex-col items-center gap-3 px-4 text-center" role="status">
+              <Spinner className="h-7 w-7 text-brand" />
+              <p className="text-sm font-medium text-foreground">Provisioning your cluster…</p>
+              <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+                Creating the database, its <code>main</code> branch, and a read-write endpoint. This
+                can take up to a minute — keep this dialog open.
               </p>
-              <div className="space-y-2">
-                {AMP_EXTENSIONS.map((x) => {
-                  const isLocked = locked.has(x.name);
-                  const on = isLocked || extensions.includes(x.name);
-                  return (
-                    <button
-                      key={x.name}
-                      type="button"
-                      role="checkbox"
-                      aria-checked={on}
-                      disabled={isLocked}
-                      onClick={() => toggleExtension(x.name)}
-                      className={cn(
-                        "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
-                        on
-                          ? "border-brand bg-brand/10"
-                          : "border-border bg-background hover:bg-muted/50",
-                        isLocked && "cursor-not-allowed opacity-80 hover:bg-brand/10",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                          // primary is the orange fill with navy text in BOTH themes (~6.9:1);
-                          // brand-foreground is white in light mode (~2.74:1, fails WCAG AA —
-                          // index.css:124-125), so it can't be used on an orange fill.
-                          on
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "border-border",
-                        )}
-                        aria-hidden
-                      >
-                        {on ? "✓" : ""}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="flex items-baseline gap-2">
-                          <span className="font-mono text-sm text-foreground">{x.name}</span>
-                          <span className="text-[10px] text-muted-foreground">{x.version}</span>
-                          {isLocked ? (
-                            <span className="text-[10px] uppercase tracking-wide text-brand">
-                              Enabled
+            </div>
+          ) : (
+            <>
+              {step === 0 ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Engine</Label>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {DB_ENGINES.map((e) => {
+                        const selected = engine === e.id;
+                        const seeds = engineExtensions(e.id);
+                        return (
+                          <button
+                            key={e.id}
+                            type="button"
+                            aria-pressed={selected}
+                            disabled={e.comingSoon}
+                            onClick={() => pickEngine(e.id)}
+                            className={cn(
+                              "rounded-lg border px-4 py-3 text-left transition-colors",
+                              selected
+                                ? "border-brand bg-brand/10 ring-1 ring-brand"
+                                : "border-border bg-background hover:bg-muted/50",
+                              e.comingSoon && "cursor-not-allowed opacity-60 hover:bg-background",
+                            )}
+                          >
+                            <span className="block text-sm font-medium text-foreground">
+                              {e.label}
+                              {e.sub ? (
+                                <span className="ml-1 text-xs text-muted-foreground">{e.sub}</span>
+                              ) : null}
                             </span>
-                          ) : null}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">{x.description}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          {step === 2 ? (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label htmlFor="wiz-cpu">vCPU</Label>
-                  <Input
-                    id="wiz-cpu"
-                    value={cpu}
-                    onChange={(e) => budget.setCpu(e.target.value)}
-                    placeholder={DEFAULT_CPU}
-                  />
+                            {e.comingSoon ? (
+                              <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-muted-foreground">
+                                Coming soon
+                              </span>
+                            ) : seeds.length ? (
+                              <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                                {seeds.join(" · ")}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="wiz-name">Cluster name</Label>
+                    <Input
+                      id="wiz-name"
+                      autoFocus
+                      placeholder="e.g. orders"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && stepValid) next();
+                      }}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="wiz-mem">Memory</Label>
-                  <Input
-                    id="wiz-mem"
-                    value={memory}
-                    onChange={(e) => budget.setMemory(e.target.value)}
-                    placeholder={DEFAULT_MEMORY}
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Sizes the cluster's read-write endpoint on the <code>main</code> branch. Kubernetes
-                quantities (e.g. 2 / 4Gi); memory tracks AMP's {MEMORY_GIB_PER_VCPU} GiB-per-vCPU
-                minimum.
-              </p>
-              {budget.overBudget ? (
-                <p className="text-xs text-red-700 dark:text-red-300" role="alert">
-                  {overBudgetMessage(budget.remaining)}
-                </p>
               ) : null}
-            </div>
-          ) : null}
 
-          {step === 3 ? <AmpCredentialsStep creds={creds} clusterName={trimmedName} /> : null}
+              {step === 1 ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Enabled on the cluster's <code>main</code> branch — every compute on it mounts
+                    them. Pick them now: they can't be changed after the cluster is created.
+                    {fromEngine.length
+                      ? ` ${engineLabel(engine)} includes ${fromEngine.join(", ")}.`
+                      : ""}
+                  </p>
+                  <div className="space-y-2">
+                    {AMP_EXTENSIONS.map((x) => {
+                      const isLocked = locked.has(x.name);
+                      const on = isLocked || extensions.includes(x.name);
+                      return (
+                        <button
+                          key={x.name}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={on}
+                          disabled={isLocked}
+                          onClick={() => toggleExtension(x.name)}
+                          className={cn(
+                            "flex w-full items-start gap-3 rounded-lg border px-4 py-3 text-left transition-colors",
+                            on
+                              ? "border-brand bg-brand/10"
+                              : "border-border bg-background hover:bg-muted/50",
+                            isLocked && "cursor-not-allowed opacity-80 hover:bg-brand/10",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                              // primary is the orange fill with navy text in BOTH themes (~6.9:1);
+                              // brand-foreground is white in light mode (~2.74:1, fails WCAG AA —
+                              // index.css:124-125), so it can't be used on an orange fill.
+                              on
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border",
+                            )}
+                            aria-hidden
+                          >
+                            {on ? "✓" : ""}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="flex items-baseline gap-2">
+                              <span className="font-mono text-sm text-foreground">{x.name}</span>
+                              <span className="text-[10px] text-muted-foreground">{x.version}</span>
+                              {isLocked ? (
+                                <span className="text-[10px] uppercase tracking-wide text-brand">
+                                  Enabled
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
+                              {x.description}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
-          {step === 4 ? (
-            <div className="rounded-lg border border-border">
-              <ReviewRow k="Name" v={trimmedName || "—"} mono />
-              <ReviewRow k="Engine" v={engineLabel(engine)} />
-              <ReviewRow
-                k="Extensions"
-                v={allExtensions.length ? allExtensions.join(", ") : "None"}
-              />
-              <ReviewRow k="Writer compute" v={`${cpu} vCPU · ${memory}`} mono />
-              <ReviewRow
-                k="Credentials"
-                v={`cloud_admin · ${creds.mode === "generate" ? "generated" : "custom"} password`}
-              />
-            </div>
-          ) : null}
+              {step === 2 ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="wiz-cpu">vCPU</Label>
+                      <Input
+                        id="wiz-cpu"
+                        value={cpu}
+                        onChange={(e) => budget.setCpu(e.target.value)}
+                        placeholder={DEFAULT_CPU}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="wiz-mem">Memory</Label>
+                      <Input
+                        id="wiz-mem"
+                        value={memory}
+                        onChange={(e) => budget.setMemory(e.target.value)}
+                        placeholder={DEFAULT_MEMORY}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Sizes the cluster's read-write endpoint on the <code>main</code> branch.
+                    Kubernetes quantities (e.g. 2 / 4Gi); memory tracks AMP's {MEMORY_GIB_PER_VCPU}{" "}
+                    GiB-per-vCPU minimum.
+                  </p>
+                  {budget.overBudget ? (
+                    <p className="text-xs text-red-700 dark:text-red-300" role="alert">
+                      {overBudgetMessage(budget.remaining)}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {step === 3 ? <AmpCredentialsStep creds={creds} clusterName={trimmedName} /> : null}
+
+              {step === 4 ? (
+                <div className="rounded-lg border border-border">
+                  <ReviewRow k="Name" v={trimmedName || "—"} mono />
+                  <ReviewRow k="Engine" v={engineLabel(engine)} />
+                  <ReviewRow
+                    k="Extensions"
+                    v={allExtensions.length ? allExtensions.join(", ") : "None"}
+                  />
+                  <ReviewRow k="Writer compute" v={`${cpu} vCPU · ${memory}`} mono />
+                  <ReviewRow
+                    k="Credentials"
+                    v={`cloud_admin · ${creds.mode === "generate" ? "generated" : "custom"} password`}
+                  />
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
 
         {error?.upgrade ? (
@@ -366,7 +403,16 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
             // reads null while loading → the guard is briefly off).
             disabled={!stepValid || pending || (step === STEPS.length - 1 && budget.isLoading)}
           >
-            {step < STEPS.length - 1 ? "Next" : pending ? "Creating…" : "Create cluster"}
+            {step < STEPS.length - 1 ? (
+              "Next"
+            ) : pending ? (
+              <>
+                <Spinner className="mr-2 h-4 w-4" />
+                Creating…
+              </>
+            ) : (
+              "Create cluster"
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -376,7 +422,7 @@ export function CreateClusterWizard({ open, onOpenChange, datapackId }: CreateCl
 
 function ReviewRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-2.5 text-sm last:border-b-0">
+    <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 text-sm last:border-b-0">
       <span className="text-muted-foreground">{k}</span>
       <span className={mono ? "font-mono text-foreground" : "font-medium text-foreground"}>
         {v}
