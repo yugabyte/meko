@@ -356,6 +356,12 @@ textarea.input {
   max-width: 100%;
   flex-wrap: wrap;
 }
+/* The agent pickers (AgentPicker): each agent's logo, then its name. */
+.seg.agents button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 /* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
    Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
 .starts {

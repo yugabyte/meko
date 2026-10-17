@@ -1,11 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
-import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { harnessLogosToggle } from '../toggle';
-import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
 export type SettingsTab = 'general' | 'meko' | 'account' | 'updates';
@@ -137,6 +136,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const kiro = harnesses.find((h) => h.id === 'kiro');
+  const defaultAgent = defaultAgentChoice(harnesses, s.defaultHarness);
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -273,31 +273,24 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
-      <div className="field">
-        <span className="label" id="set-agent-label">
-          Default agent
-        </span>
-        <div className="seg" role="radiogroup" aria-labelledby="set-agent-label">
-          {HARNESS_IDS.map((id: HarnessId) => (
-            <button
-              key={id}
-              id={`set-agent-${id}`}
-              type="button"
-              role="radio"
-              aria-checked={s.defaultHarness === id}
-              disabled={id !== 'claude' && s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
-              className={cx(s.defaultHarness === id && 'on')}
-              onClick={() => setS({ ...s, defaultHarness: id })}
-            >
-              {HARNESS_CAPS[id].label}
-            </button>
-          ))}
+      {defaultAgent && (
+        <div className="field">
+          <span className="label" id="set-agent-label">
+            Default agent
+          </span>
+          <AgentPicker
+            idPrefix="set-agent"
+            agents={defaultAgent.agents}
+            value={defaultAgent.value}
+            onChange={(id) => setS({ ...s, defaultHarness: id })}
+            labelledBy="set-agent-label"
+          />
+          <span className="hint">
+            New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+            session keeps the agent it started on.
+          </span>
         </div>
-        <span className="hint">
-          New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
-          session keeps the agent it started on.
-        </span>
-      </div>
+      )}
       <div className="field">
         <label className="check">
           <input

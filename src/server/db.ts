@@ -1,6 +1,6 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, rmSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 export type Db = DatabaseSync;
 type Param = null | number | bigint | string | Uint8Array;
@@ -601,10 +601,30 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN agent_session_id TEXT;
   ALTER TABLE usage_messages ADD COLUMN credits REAL;
   `,
+  // 38: untrusted: 1 when the session works on a PR's head on a public repo (or one whose visibility
+  // gh couldn't read), so it runs without the repo's own config (headtrust.ts); 0 when that head is
+  // trusted; NULL when it has no PR head, or until it's checked (at its next launch).
+  `
+  ALTER TABLE sessions ADD COLUMN untrusted INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
+  if (path !== ':memory:') {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    // Owner-only whatever its folder is: it holds the login's password hash and TOTP secret.
+    // SQLite gives the -wal and -shm files the database's mode; ones made before this, and the
+    // snapshots taken before updates (snapshotDb), are fixed too.
+    closeSync(openSync(path, 'a', 0o600));
+    const snapshots = readdirSync(dirname(path)).filter((f) => f.startsWith(`${basename(path)}.bak-`)).map((f) => join(dirname(path), f));
+    for (const f of [path, `${path}-wal`, `${path}-shm`, ...snapshots]) {
+      try {
+        chmodSync(f, 0o600);
+      } catch {
+        /* not there yet */
+      }
+    }
+  }
   const db = new DatabaseSync(path);
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -686,5 +706,8 @@ export function audit(db: Db, action: string, detail?: unknown): void {
 /** Consistent copy of the live database (used before updates). */
 export function snapshotDb(db: Db, dest: string): void {
   rmSync(dest, { force: true }); // VACUUM INTO refuses to overwrite
+  // Owner-only from the start, as the database is: VACUUM INTO takes an empty file, and keeps its mode.
+  closeSync(openSync(dest, 'wx', 0o600));
   db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+  chmodSync(dest, 0o600);
 }

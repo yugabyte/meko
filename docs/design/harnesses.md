@@ -16,17 +16,23 @@ one it asked for (`CreateSessionRequest.harness`). A harness is *available* when
 its `--version` answers with its minimum version or later (`AppState.harnesses`; Kiro: `[kiro]
 enabled`, 2.32.0). A create that names one that isn't is a 400 that says what to do; the dialog
 always names the agent it shows. A default that isn't available any more never decides: a request
-that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`), and Settings
-offers only an available agent as the default. The session's harness is `sessions.harness`
-(`Session.harness`).
+that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`). Settings'
+**Default agent**, like New session's **Agent**, offers only available agents and shows only while
+two or more are: with one, there's nothing to choose (`defaultAgentChoice()` in `util.ts`). A
+stored default that goes unavailable (Kiro missing, too old, or `[kiro] enabled` turned off in
+config.toml) stays stored, and decides again once it's available; turning **Offer Kiro** off in
+Settings is the exception, which also sets the default to Claude Code. Both choices are
+`AgentPicker` in `common.tsx`, each agent's logo then its name. The session's harness is
+`sessions.harness` (`Session.harness`).
 
 **Telling them apart.** Each session's tooltip names its agent. While the open sessions across all
 projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions
 don't count), every session tab and every session row in the rail shows its agent's logo between
 its dot and its name (`HarnessLogo` in `common.tsx`, all in one 18 × 14 px box so names line up);
 while they all run on one, nothing is added. Unticking **Show each session's agent logo beside its
-name** in Settings › General (offered while a second agent is turned on or open sessions still run on two; on by default, kept in
-this browser, `ak-harness-logos`) turns them off. The logos are files in `src/web/public/`, never
+name** in Settings › General (offered while a second agent is turned on or open sessions still run
+on two; on by default, kept in this browser, `ak-harness-logos`) turns them off there; the agent
+pickers keep theirs. The logos are files in `src/web/public/`, never
 loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
 from `png/clawd.png` in [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
 (Apache-2.0), and `harness-kiro.svg` is Kiro's own `https://kiro.dev/icon.svg`. Both are colored
@@ -86,7 +92,11 @@ it. Meko's capture hooks (`kiro-handler.js`) are left out
 while `[meko] capture_transcripts` is off. The file is written only when it changes, at server start
 (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of its own), before every
 launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
-AgentK's, and `readKiroAgent` never takes it as a base.
+AgentK's, and `readKiroAgent` never takes it as a base. Kiro uses a workspace agent of the same
+name (`<worktree>/.kiro/agents/*.json` named `agentk`) over this one, and the agent loads a
+workspace's `.kiro/settings/mcp.json`, with no flag to skip either; so a session on a public repo's
+PR head ([Code from public repos](security.md#code-from-public-repos)) refuses to start on Kiro while
+its worktree has either (`kiroWorkspaceConfig()` in `headtrust.ts`, checked in the launcher).
 
 **Starting and resuming.** The first prompt is a positional argument, never after `--`: with
 `--agent`, kiro-cli 2.32 drops a prompt given after `--`; one starting with `-` gets a leading space
