@@ -19,7 +19,7 @@ function claude(o: { settings?: string | null; server?: string | null; settingsU
 const OK = (datapacks: string[]): TokenTry => ({ ok: true, datapacks });
 
 /** A watch over stand-ins: AgentK on Meko Cloud with key `agentk`, two projects' datapacks. */
-function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?: string[] | Error; key?: string } = {}) {
+function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?: string[] | Error; key?: string; available?: boolean } = {}) {
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
   cfg.meko.apiKey = o.key ?? 'agentk';
   const tried: string[] = [];
@@ -33,9 +33,11 @@ function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?
     tokens: o.tokens ?? {},
     own: o.own ?? ['dp1', 'dp2'],
     registered: true as boolean | null,
+    available: o.available ?? true,
   };
   const watch = new MekoClaudeWatch({
     config: () => t.cfg,
+    available: () => t.available,
     read: () => t.claude,
     mcpRegistered: async () => (registeredCalls++, t.registered),
     projectDatapacks: () => [{ id: 'dp1', name: 'adlc/proj/repo/one' }, { id: 'dp2', name: 'adlc/proj/repo/two' }, { id: 'gone', name: 'adlc/proj/repo/gone' }],
@@ -59,11 +61,15 @@ function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?
 }
 
 describe("Claude Code's Meko: the watch", () => {
-  it('reports nothing and calls nothing while Meko is off', async () => {
-    const s = setup({ key: '', claude: claude({ settings: 'x', server: 'y' }) });
+  it.each([
+    ['Meko is off', { key: '' }],
+    ["Claude Code isn't available", { available: false }],
+  ])('reports nothing and calls nothing while %s', async (_, o) => {
+    const s = setup({ ...o, claude: claude({ settings: 'x', server: 'y' }) });
     await s.watch.refresh();
     expect(s.watch.status).toEqual({ gaps: [], unchecked: [], checking: false });
     expect(s.tried).toEqual([]);
+    expect(s.registeredCalls()).toBe(0);
   });
 
   it("doesn't try tokens that are AgentK's own", async () => {
@@ -194,6 +200,7 @@ describe("Claude Code's Meko: the watch", () => {
     s.t.tokens.mine = OK(['dp1', 'dp2']);
     const slow = new MekoClaudeWatch({
       config: () => s.t.cfg,
+      available: () => true,
       read: () => s.t.claude,
       mcpRegistered: async () => true,
       projectDatapacks: () => [],

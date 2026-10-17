@@ -25,11 +25,11 @@ export interface Config {
   meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
   state: { dbPath: string };
   /**
-   * command: how Claude Code is run. mod: load AgentK's mod into sessions (Claude Code 2.1.287 or
-   * later), which takes AgentK's prompts and reports the context fill; off, prompts are typed into
-   * the terminal.
+   * command: how Claude Code is run. enabled: offer it for new sessions when `<command> --version`
+   * answers. mod: load AgentK's mod into sessions (Claude Code 2.1.287 or later), which takes AgentK's
+   * prompts and reports the context fill; off, prompts are typed into the terminal.
    */
-  claude: { command: string; mod: boolean };
+  claude: { command: string; enabled: boolean; mod: boolean };
   /** default: the harness new sessions start on (`claude` or `kiro`) unless the New session dialog picks another. */
   agents: { default: HarnessId };
   /**
@@ -71,7 +71,7 @@ export const DEFAULT_CONFIG: Config = {
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
   meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
-  claude: { command: 'claude', mod: true },
+  claude: { command: 'claude', enabled: true, mod: true },
   agents: { default: DEFAULT_HARNESS },
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },

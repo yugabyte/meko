@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -178,6 +178,11 @@ export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack:
 }
 
 export { agentName } from '../shared/harnesses';
+
+/** Every agent that's turned on has answered, and none can run a session (`AppState.harnesses`). */
+export function noAgent(harnesses: HarnessStatus[]): boolean {
+  return harnesses.length > 0 && harnesses.every((h) => h.checked && !h.available);
+}
 
 /** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {

@@ -345,8 +345,9 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     env.core.updateConfig((c) => {
       c.meko.apiKey = 'mko_tkn_abcdefghij1234';
     });
-    // Claude Code is on another Meko.
+    // Claude Code is on another Meko (and installed: checked only once its version is in).
     writeClaude('https://other.example.org/mcp', 'claude-token');
+    await env.core.harnesses.of('claude').version(env.core.config);
     await env.core.claudeMeko.refresh();
     expect(env.core.state().meko.claude).toEqual({
       gaps: [

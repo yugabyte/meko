@@ -7,8 +7,11 @@
 #
 # Options (pass through `sh -s -- ...` when piping):
 #   --version <X.Y.Z>   install a specific version instead of the latest
-#   --install-deps      install missing tools (git, curl, gh, Claude Code, and Meko's
-#                       Claude Code setup) without asking
+#   --install-deps      install missing tools (git, curl, gh, a coding agent, and Meko's
+#                       setup for the agents) without asking
+#   --agent <claude|kiro>
+#                       the coding agent to install when neither Claude Code nor Kiro CLI is
+#                       there (default: ask, or Claude Code when there's no one to ask)
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK Local is already installed
@@ -17,9 +20,10 @@
 #                       --no-service); Meko is optional: without a key the install goes on without it
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
-# (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and
-# Claude Code with Anthropic's installer from claude.ai over HTTPS (it publishes no checksum for
-# that script), into ~/.local/bin. The installer shows the exact commands and asks first; with
+# (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and a
+# coding agent when neither Claude Code nor Kiro CLI is installed: Claude Code with Anthropic's
+# installer from claude.ai, or Kiro CLI with Kiro's from cli.kiro.dev, both over HTTPS (neither
+# publishes a checksum for its script), into ~/.local/bin. The installer shows the exact commands and asks first; with
 # --non-interactive it installs only with --install-deps. With GITHUB_TOKEN set, a missing gh
 # is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
 # it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
@@ -35,6 +39,7 @@ set -eu
 repo=${AK_REPO:-yugabyte/agent-k-local}
 ak_home=${AK_HOME:-$HOME/.agent-k-local}
 version=""
+agent=""
 install_deps=ask
 deps_only=false
 reinstall=false
@@ -62,6 +67,8 @@ while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
     --version=*) version=${1#--version=}; version=${version#v}; shift ;;
+    --agent) [ $# -ge 2 ] || die "--agent needs a value: claude or kiro"; agent=$2; shift 2 ;;
+    --agent=*) agent=${1#--agent=}; shift ;;
     --install-deps) install_deps=yes; shift ;;
     --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
@@ -70,6 +77,7 @@ while [ $# -gt 0 ]; do
     *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
 done
+case $agent in ''|claude|kiro) ;; *) die "--agent takes claude or kiro (got $agent)" ;; esac
 
 # ---- platform ----
 case $(uname -s) in
@@ -105,7 +113,7 @@ ask() {
   case $answer in ''|[Yy]*) return 0 ;; *) return 1 ;; esac
 }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but was not found on PATH. $2"; }
-# Claude Code's installer, gh (as installed here) and agent-k-local itself live in ~/.local/bin,
+# The agents' installers, gh (as installed here) and agent-k-local itself live in ~/.local/bin,
 # which a fresh shell may not have on PATH yet: look there too, so they aren't installed twice.
 # The user's own PATH, to tell them later whether their shell will find agent-k-local.
 user_path=$PATH
@@ -167,9 +175,13 @@ git_ok() {
   [ "$platform" != darwin ] || xcode-select -p >/dev/null 2>&1 || [ -x "$(brew --prefix 2>/dev/null)/bin/git" ]
 }
 
+say ""
+say "${b}AgentK Local installer${n}"
+say ""
+
 # What's missing, and the plan to install it: `plan` is shown to the user, `pkgs` goes to the
 # package manager, `gh_download` fetches gh from its GitHub release (Linux).
-missing="" pkgs="" plan="" gh_download=false claude_install=false
+missing="" pkgs="" plan="" gh_download=false claude_install=false kiro_install=false
 add_missing() { missing="${missing:+$missing, }$1"; }
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
@@ -183,7 +195,26 @@ if ! command -v gh >/dev/null 2>&1; then
     if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
   fi
 fi
-command -v claude >/dev/null 2>&1 || { add_missing "Claude Code"; claude_install=true; }
+# Sessions run on Claude Code or Kiro CLI: one of them is enough. With neither, one is installed:
+# the one --agent names, else the one picked here, else Claude Code.
+if ! command -v claude >/dev/null 2>&1 && ! command -v kiro-cli >/dev/null 2>&1; then
+  if [ -z "$agent" ] && $interactive && [ "$install_deps" != no ]; then
+    say "${b}Coding agent${n}"
+    warn "Missing" "AgentK Local runs sessions on Claude Code or Kiro CLI, and neither is installed"
+    printf '    Install Claude Code (1) or Kiro CLI (2)? %s[1]%s ' "$d" "$n" >&2
+    read -r answer </dev/tty || answer=""
+    case $answer in ''|1|[Cc]*) agent=claude ;; 2|[Kk]*) agent=kiro ;; *) die "pick 1 (Claude Code) or 2 (Kiro CLI), or pass --agent claude or --agent kiro." ;; esac
+  fi
+  if [ "$agent" = kiro ]; then
+    add_missing "Kiro CLI"; kiro_install=true
+    # Kiro's installer unpacks a zip on Linux.
+    [ "$platform" = darwin ] || command -v unzip >/dev/null 2>&1 || { add_missing unzip; pkgs="$pkgs unzip"; }
+  elif [ "$agent" = claude ]; then
+    add_missing "Claude Code"; claude_install=true
+  else
+    add_missing "Claude Code (or Kiro CLI, with --agent kiro)"; claude_install=true
+  fi
+fi
 
 sudo=""
 if [ "$platform" = darwin ]; then
@@ -226,9 +257,11 @@ else
   $gh_download && plan="$plan
       download gh from github.com/cli/cli releases into ~/.local/bin (no root needed)"
 fi
-# Anthropic's own installer, the same on Linux and macOS: into ~/.local/bin, no root.
+# The agents' own installers, the same on Linux and macOS: no root.
 $claude_install && plan="$plan
       curl -fsSL https://claude.ai/install.sh | bash      (Claude Code, into ~/.local/bin)"
+$kiro_install && plan="$plan
+      curl -fsSL https://cli.kiro.dev/install | bash      (Kiro CLI, into ~/.local/bin)"
 
 install_system_pkgs() {
   # shellcheck disable=SC2086 # intentional word splitting of package lists
@@ -279,9 +312,6 @@ install_gh() {
   return $rc
 }
 
-say ""
-say "${b}AgentK Local installer${n}"
-say ""
 if [ -n "$plan" ]; then
   say "${b}Tools${n}"
   warn "Missing" "$missing"
@@ -326,21 +356,44 @@ if [ -n "$plan" ]; then
       { rm -rf "$cc_tmp"; die "Claude Code's installer failed (see the output above). Install it yourself: https://claude.com/claude-code"; }
     rm -rf "$cc_tmp"
   fi
-  # gh and Claude Code land here; `agent-k-local install` (run below) needs them too.
+  if $kiro_install; then
+    command -v bash >/dev/null 2>&1 || die "Kiro CLI's installer needs bash, which wasn't found. Install Kiro CLI yourself: https://kiro.dev/cli/"
+    # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
+    kiro_tmp=$(mktemp -d)
+    { curl -fsSL -o "$kiro_tmp/install.sh" https://cli.kiro.dev/install && bash "$kiro_tmp/install.sh" </dev/null; } ||
+      { rm -rf "$kiro_tmp"; die "Kiro CLI's installer failed (see the output above). Install it yourself: https://kiro.dev/cli/"; }
+    rm -rf "$kiro_tmp"
+  fi
+  # gh and the agents land here; `agent-k-local install` (run below) needs them too.
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
   hash -r 2>/dev/null || true
   # (Homebrew's gh was checked with the other packages.)
   ! $gh_download || command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
-  command -v claude >/dev/null 2>&1 || die "Claude Code is still not available after installing it."
+  ! $claude_install || command -v claude >/dev/null 2>&1 || die "Claude Code is still not available after installing it."
+  ! $kiro_install || command -v kiro-cli >/dev/null 2>&1 || die "Kiro CLI is still not available after installing it."
   ok "Installed" "$missing"
 fi
 
-# Claude Code has to be signed in before AgentK Local can run sessions.
-if ! claude auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
-  if $interactive && ask "  Claude Code isn't signed in. Sign in now (claude auth login)?"; then
-    claude auth login </dev/tty || warn "Claude Code" "sign-in didn't finish; run 'claude auth login' later"
-  else
-    warn "Claude Code" "not signed in: run 'claude auth login' before starting sessions"
+# Each agent there has to be signed in before AgentK Local can run sessions on it.
+agents=""
+if command -v claude >/dev/null 2>&1; then
+  agents="Claude Code"
+  if ! claude auth status --json 2>/dev/null | grep -q '"loggedIn": *true'; then
+    if $interactive && ask "  Claude Code isn't signed in. Sign in now (claude auth login)?"; then
+      claude auth login </dev/tty || warn "Claude Code" "sign-in didn't finish; run 'claude auth login' later"
+    else
+      warn "Claude Code" "not signed in: run 'claude auth login' before starting sessions"
+    fi
+  fi
+fi
+if command -v kiro-cli >/dev/null 2>&1; then
+  agents="${agents:+$agents, }Kiro"
+  if ! kiro-cli whoami >/dev/null 2>&1; then
+    if $interactive && ask "  Kiro isn't signed in. Sign in now (kiro-cli login)?"; then
+      kiro-cli login </dev/tty || warn "Kiro" "sign-in didn't finish; run 'kiro-cli login' later"
+    else
+      warn "Kiro" "not signed in: run 'kiro-cli login' before starting sessions"
+    fi
   fi
 fi
 
@@ -356,7 +409,7 @@ elif ! gh auth status >/dev/null 2>&1; then
 fi
 
 if $deps_only; then
-  ok "Tools" "git, curl, gh, Claude Code"
+  ok "Tools" "git, curl, gh, $agents"
   exit 0
 fi
 
@@ -364,7 +417,7 @@ have_gh=false
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then have_gh=true; fi
 
 say "${b}Download${n}"
-ok "Prerequisites" "git, curl, gh, Claude Code"
+ok "Prerequisites" "git, curl, gh, $agents"
 
 # ---- resolve version ----
 if [ -z "$version" ]; then

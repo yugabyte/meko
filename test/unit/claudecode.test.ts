@@ -24,10 +24,22 @@ function setup(installed: string | null, update: (c: { installed: string | null 
 }
 
 describe('the Claude Code sessions launch with', () => {
+  it("runs no claude --version while it's turned off, and has no version then", async () => {
+    const { cc, cfg, state } = setup('2.1.290');
+    await cc.version();
+    cfg.claude.enabled = false;
+    expect(await cc.version(true)).toBeNull();
+    expect(state.reads).toBe(1);
+    expect(cc.checked()).toBe(true);
+    expect(cc.status().version).toBeNull();
+  });
+
   it('reports its version and whether it runs the mod, reading it again only once the last read is stale', async () => {
     const { cc, state } = setup('2.1.290');
     expect(cc.status()).toMatchObject({ version: null, supportsMod: null, minModVersion: MIN_MOD_CLAUDE, modEnabled: true });
+    expect(cc.checked()).toBe(false);
     expect(await cc.supportsMod()).toBe(true);
+    expect(cc.checked()).toBe(true);
     expect(cc.status()).toMatchObject({ version: '2.1.290', supportsMod: true, updating: false, lastUpdate: null });
     expect(state.changes).toBe(1);
     await cc.version();

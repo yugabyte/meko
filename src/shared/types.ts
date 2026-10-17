@@ -895,7 +895,7 @@ export interface AppState {
   claudeCode: ClaudeCodeStatus;
   /** Each harness sessions can run on, in HARNESS_IDS order, and the default for new sessions. */
   harnesses: HarnessStatus[];
-  /** `[ask_agentk] enabled`: the command palette offers Ask AgentK. */
+  /** `[ask_agentk] enabled` and a coding agent available to answer: the command palette offers Ask AgentK. */
   askAgentk: boolean;
   /** The session host that runs every Claude, as it last answered. */
   sessionHost: SessionHostStatus;
@@ -904,7 +904,7 @@ export interface AppState {
 /** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[kiro]` in config.toml). */
 export interface HarnessStatus {
   id: HarnessId;
-  /** The CLI is turned on in the config (Claude Code always is). */
+  /** The CLI is turned on in the config (`[claude] enabled`, `[kiro] enabled`). */
   enabled: boolean;
   /** What `<command> --version` printed, or null when it can't be read (or hasn't been yet). */
   version: string | null;
@@ -912,6 +912,11 @@ export interface HarnessStatus {
   minVersion: string | null;
   /** New sessions can start on it: enabled, and its version read and new enough. */
   available: boolean;
+  /**
+   * Its version has been read (or tried) for the command it's run with since it was turned on, so
+   * `available: false` means it really isn't there rather than not asked yet. True while it's off.
+   */
+  checked: boolean;
   /** `[agents] default`: new sessions start on it unless the New session dialog picks another. */
   isDefault: boolean;
   /** Its update command is running (POST /api/harnesses/:id/update). */
@@ -1406,6 +1411,8 @@ export interface Settings {
   resolveConflicts: boolean;
   /** `[agents] default`: the harness new sessions start on unless the New session dialog picks another. */
   defaultHarness: HarnessId;
+  /** `[claude] enabled`: offer Claude Code for new sessions when its CLI answers. */
+  claudeEnabled: boolean;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
@@ -2120,7 +2127,8 @@ export type TermServerMessage =
 //        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
 //        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)
 // POST   /api/ask-agentk AskAgentkRequest  → AskAgentkResult   (an instruction in plain words, answered by one `claude -p`
-//        with no tools; 400 for empty or too long text, 403 when [ask_agentk] is off, 429 with two asks already running,
+//        with no tools, or Kiro's one-shot chat; 400 for empty or too long text, 403 when [ask_agentk] is off, 409 when no
+//        coding agent is available, 429 with two asks already running,
 //        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
 //        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
@@ -2214,7 +2222,9 @@ export type TermServerMessage =
 //                                                           '' goes back to the host name; callHomeEnabled and
 //                                                           resolveConflicts are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
-//                                                           Ask AgentK that name none start on Claude Code))
+//                                                           Ask AgentK that name none start on the first available one);
+//                                                           claudeEnabled and kiroEnabled are booleans; the agents'
+//                                                           commands are set in config.toml)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,

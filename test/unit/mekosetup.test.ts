@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoInClaude, envKeyGap, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoSetup, envKeyGap, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
   sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
 
@@ -176,7 +176,7 @@ describe('the install step for Meko in Claude Code', () => {
   function step(o: Partial<{ canAsk: boolean; installDeps: boolean; noInstallDeps: boolean }>, d: { before?: string[]; after?: string[]; answer?: string; code?: number } = {}) {
     const calls: string[] = [];
     let ran = false;
-    const promise = ensureMekoInClaude(
+    const promise = ensureMekoSetup(
       { url: 'https://meko.example/mcp', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: false, ...o },
       {
         gaps: async () => (ran ? (d.after ?? []) : (d.before ?? ['The meko-agent-skills plugin isn\'t installed in Claude Code.'])),
@@ -213,7 +213,7 @@ describe('the install step for Meko in Claude Code', () => {
 
   it('says it in a few words, not the list of gaps', async () => {
     const warned: string[] = [];
-    await ensureMekoInClaude(
+    await ensureMekoSetup(
       { url: 'u', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true },
       { gaps: async () => ['Claude Code has no meko MCP server.'], latest: async () => PKG, run: async () => 0, ask: async () => 'y', say: () => undefined, warn: (l, t) => warned.push(`${l}: ${t}`) },
     ).catch(() => undefined);

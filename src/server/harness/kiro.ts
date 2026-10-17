@@ -98,6 +98,8 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
   const readVersion = deps.readVersion ?? claudeVersion;
   let ver: { command: string; at: number; read: Promise<string | null> } | null = null;
   let value: string | null = null;
+  /** The command the last finished read was for (`checked`). */
+  let readFor: string | null = null;
   let updating = false;
 
   const version = (cfg: Config, force = false): Promise<string | null> => {
@@ -106,8 +108,9 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     const now = Date.now();
     if (force || !ver || ver.command !== command || now - ver.at > VERSION_TTL_MS) {
       const read = readVersion(command).then((v) => {
-        if (ver?.read === read && v !== value) {
+        if (ver?.read === read && (v !== value || readFor !== command)) {
           value = v;
+          readFor = command;
           deps.changed();
         }
         return v;
@@ -117,10 +120,10 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     return ver.read;
   };
   const status = (cfg: Config): HarnessStatus => {
-    const v = cfg.kiro.enabled ? value : null;
+    const v = cfg.kiro.enabled && readFor === cfg.kiro.command ? value : null;
     return {
       id: 'kiro', enabled: cfg.kiro.enabled, version: v, minVersion: MIN_KIRO, available: !!v && versionAtLeast(v, MIN_KIRO),
-      isDefault: cfg.agents.default === 'kiro', updating,
+      checked: !cfg.kiro.enabled || readFor === cfg.kiro.command, isDefault: cfg.agents.default === 'kiro', updating,
     };
   };
   const refreshAgent = (paths: Paths, cfg: Config) => {

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
-import { installMeko, type InstallMekoDeps } from '../../src/server/install.js';
+import { installMeko, settleAgents, type InstallMekoDeps } from '../../src/server/install.js';
 import { MekoSetupError } from '../../src/server/mekosetup.js';
 
 /** The installer's Meko step with scripted answers, recording what it said. */
-function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; setupError?: string } = {}) {
+function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; setupError?: string; agents?: ('claude' | 'kiro')[] } = {}) {
+  const agents = o.agents ?? ['claude'];
   const said: string[] = [];
   const answers = [...(o.answers ?? [])];
   const calls: string[] = [];
@@ -18,8 +19,12 @@ function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; se
       calls.push('check');
       return o.checkError ? { ok: false, error: o.checkError } : { ok: true };
     },
-    ensureInClaude: async (_url, _key, keyFromEnv) => {
+    ensureInClaude: !agents.includes('claude') ? undefined : async (_url, _key, keyFromEnv) => {
       calls.push(keyFromEnv ? 'claude (key from env)' : 'claude');
+      if (o.setupError) throw new MekoSetupError(o.setupError);
+    },
+    ensureInKiro: !agents.includes('kiro') ? undefined : async () => {
+      calls.push('kiro');
       if (o.setupError) throw new MekoSetupError(o.setupError);
     },
     ui: {
@@ -124,11 +129,40 @@ describe('installer: Meko is optional', () => {
     }
   });
 
+  it.each([
+    ['only Claude Code', ['claude' as const], ['check', 'claude'], 'ok Meko in Claude'],
+    ['only Kiro', ['kiro' as const], ['check', 'kiro'], 'ok Meko in Kiro'],
+  ])("sets Meko up in the agents that are installed: %s", async (_, agents, expected, line) => {
+    const { d, said, calls } = deps({ agents });
+    expect(await installMeko(cfg(), { keyArg: 'mko_tkn_good', noMeko: false }, d)).toBe(true);
+    expect(calls).toEqual(expected);
+    expect(said.filter((l) => l.startsWith('ok Meko in')).map((l) => l.slice(0, line.length))).toEqual([line]);
+  });
+
   it("only warns when Meko's setup for Claude Code is declined", async () => {
     const c = cfg();
     const { d, said } = deps({ canAsk: false, setupError: "Meko isn't set up for Claude Code. Run: npx …" });
     expect(await installMeko(c, { keyArg: 'mko_tkn_good', noMeko: false }, d)).toBe(true);
     expect(said.join('\n')).toMatch(/warn Meko in Claude Meko isn't set up for Claude Code\. Run: npx … AgentK uses Meko/);
     expect(said.some((s) => s.startsWith('ok Meko in Claude'))).toBe(false);
+  });
+});
+
+describe('installer: the coding agents', () => {
+  it.each([
+    ['keeps a default that is installed', { claude: '2.1.300', kiro: '2.32.0' }, 'kiro' as const, ['claude', 'kiro'], 'kiro'],
+    ['starts sessions on Kiro where only Kiro is installed', { claude: null, kiro: '2.32.0' }, 'claude' as const, ['kiro'], 'kiro'],
+    ['leaves out a Kiro too old to run sessions', { claude: '2.1.300', kiro: '2.10.0' }, 'kiro' as const, ['claude'], 'claude'],
+  ])('%s', (_, versions, def, found, after) => {
+    const c = cfg();
+    c.agents.default = def;
+    expect(settleAgents(c, versions)).toEqual(found);
+    expect(c.agents.default).toBe(after);
+  });
+
+  it('stops, saying what to install, when no agent is installed and turned on', () => {
+    const c = cfg();
+    c.kiro.enabled = false;
+    expect(() => settleAgents(c, { claude: null, kiro: '2.32.0' })).toThrow(/^no coding agent found\. Install Claude Code .* or Kiro CLI 2\.32\.0 or later/);
   });
 });

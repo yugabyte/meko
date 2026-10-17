@@ -543,6 +543,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     callHomeEnabled: core.config.callHome.enabled,
     resolveConflicts: core.config.pr.resolveConflicts,
     defaultHarness: core.config.agents.default,
+    claudeEnabled: core.config.claude.enabled,
     kiroEnabled: core.config.kiro.enabled,
     kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
@@ -573,10 +574,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
-    for (const k of ['kiroEnabled', 'kiroTrustTools'] as const) {
+    for (const k of ['claudeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
-    const kiroBefore = { enabled: core.config.kiro.enabled };
+    const enabledBefore = { claude: core.config.claude.enabled, kiro: core.config.kiro.enabled };
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -592,14 +593,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
+      if (b.claudeEnabled !== undefined) c.claude.enabled = b.claudeEnabled;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
-    // Kiro turned on: its version and agent file follow, in the background.
-    if (core.config.kiro.enabled && !kiroBefore.enabled) {
-      const kiro = core.harnesses.of('kiro');
-      void kiro.version(core.config, true).then(() => kiro.prepare(core.paths, core.config)).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
+    // An agent turned on: its version (and Kiro's agent file) follow, in the background.
+    for (const id of HARNESS_IDS) {
+      if (!core.config[id].enabled || enabledBefore[id]) continue;
+      const h = core.harnesses.of(id);
+      void h.version(core.config, true).then(() => h.prepare(core.paths, core.config)).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
     }
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
     const cleanup = (what: string, fn: () => Promise<void>) => void fn().catch((e) => core.log.warn(`${what} failed`, errMsg(e)));

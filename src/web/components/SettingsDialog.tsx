@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
@@ -51,7 +51,13 @@ export function SettingsDialog({
           <GeneralTab harnesses={harnesses} />
         </div>
       )}
-      {tab === 'meko' && <MekoTab status={meko} kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false} />}
+      {tab === 'meko' && (
+        <MekoTab
+          status={meko}
+          claude={harnesses.find((h) => h.id === 'claude')?.available ?? false}
+          kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false}
+        />
+      )}
       {tab === 'account' && (
         <div className="stack">
           {auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />}
@@ -78,9 +84,13 @@ function RailSessionsSetting() {
 }
 
 /** What Settings says about a harness's CLI: its version, or why it isn't offered. */
-function harnessNote(h: HarnessStatus | undefined): string {
+function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
   if (!h?.enabled) return 'Off.';
-  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml.`;
+  if (h.version === null) {
+    if (!h.checked) return <Busy label="Looking for it" />;
+    const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
+    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml.`;
+  }
   if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
   return `Version ${h.version}.`;
 }
@@ -114,6 +124,9 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const kiro = harnesses.find((h) => h.id === 'kiro');
+  // Turning off the default agent moves the default to another available one, if there is one.
+  const defaultWithout = (off: HarnessId): HarnessId =>
+    s.defaultHarness !== off ? s.defaultHarness : (harnesses.find((h) => h.id !== off && h.available)?.id ?? s.defaultHarness);
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -137,6 +150,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
         idleWorktreeDays: clampIdleDays(),
         resolveConflicts: s.resolveConflicts,
         defaultHarness: s.defaultHarness,
+        claudeEnabled: s.claudeEnabled,
         kiroEnabled: s.kiroEnabled,
         kiroTrustTools: s.kiroTrustTools,
       });
@@ -262,7 +276,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
               type="button"
               role="radio"
               aria-checked={s.defaultHarness === id}
-              disabled={id !== 'claude' && s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
+              disabled={s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
               className={cx(s.defaultHarness === id && 'on')}
               onClick={() => setS({ ...s, defaultHarness: id })}
             >
@@ -271,9 +285,21 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           ))}
         </div>
         <span className="hint">
-          New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+          New sessions and Ask AgentK run on it (on another available agent while it isn't); the New session dialog can pick another. A
           session keeps the agent it started on.
         </span>
+      </div>
+      <div className="field">
+        <label className="check">
+          <input
+            id="set-claude"
+            type="checkbox"
+            checked={s.claudeEnabled}
+            onChange={(e) => setS({ ...s, claudeEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : defaultWithout('claude') })}
+          />
+          <span>Offer Claude Code for new sessions</span>
+        </label>
+        <span className="hint">{harnessNote('claude', harnesses.find((h) => h.id === 'claude'))}</span>
       </div>
       <div className="field">
         <label className="check">
@@ -281,11 +307,11 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
             id="set-kiro"
             type="checkbox"
             checked={s.kiroEnabled}
-            onChange={(e) => setS({ ...s, kiroEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : 'claude' })}
+            onChange={(e) => setS({ ...s, kiroEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : defaultWithout('kiro') })}
           />
           <span>Offer Kiro for new sessions</span>
         </label>
-        <span className="hint">{harnessNote(kiro)}</span>
+        <span className="hint">{harnessNote('kiro', kiro)}</span>
       </div>
       {s.kiroEnabled && (
         <>
@@ -355,7 +381,7 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
 };
 
 /** The Meko server and key AgentK uses, its links, and whether Claude Code's (and Kiro's) sessions use the same. */
-function MekoTab({ status, kiro }: { status: MekoStatus; kiro: boolean }) {
+function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claude: boolean; kiro: boolean }) {
   const [s, setS] = useState<Settings | null>(null);
   const [url, setUrl] = useState('');
   const [key, setKey] = useState('');
@@ -562,7 +588,7 @@ function MekoTab({ status, kiro }: { status: MekoStatus; kiro: boolean }) {
           {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
           {status.configured && <span className="hint">A new URL or key is checked with Meko when you save it.</span>}
         </div>
-        {status.configured && (
+        {status.configured && claudeOn && (
           <div className="meko-status-row">
             <span>Claude Code</span>
             <span className={cx('tag', claudeTag !== 'matches' && 'shared')}>{claudeTag}</span>

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
-import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
+import { HARNESS_CAPS, NO_AGENT, type HarnessId } from '../../shared/harnesses';
 import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
-import { cx, repoFolder, slugify } from '../util';
+import { cx, noAgent, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
 import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { HeldImages } from './HeldImages';
@@ -73,12 +73,14 @@ export function NewSessionDialog({
   const [busy, setBusy] = useState(false);
   const inProjectRepo = repoPath === project.repoPath;
   // The agent: the default (Settings → General) unless picked here; a retry keeps the one it asked for.
-  // Always sent, so a default that isn't available any more never decides for the dialog.
+  // Always sent while one is shown, so a default that isn't available any more never decides for the
+  // dialog; with none available yet (just after a start), the server picks.
   const agents = harnesses.filter((h) => h.available);
-  const [harness, setHarness] = useState<HarnessId>(
-    () => (agents.find((h) => h.id === initial?.harness) ?? agents.find((h) => h.isDefault) ?? agents[0])?.id ?? 'claude',
-  );
+  const [chosen, setHarness] = useState<HarnessId | null>(initial?.harness ?? null);
+  const harness = (agents.find((h) => h.id === chosen) ?? agents.find((h) => h.isDefault) ?? agents[0])?.id ?? null;
+  const agentCaps = harness ? HARNESS_CAPS[harness] : null;
   const pickAgent = agents.length > 1;
+  const none = noAgent(harnesses);
 
   // Images for the first prompt (a review's notes): each uploads as it's added, kept under the
   // project until the session is created with it.
@@ -257,7 +259,7 @@ export function NewSessionDialog({
   const reviewBranch = picked ? `${prefix}review-pr-${picked.number}` : '';
   const typedExists = workOn === 'new' && !!branch.trim() && !!branches?.includes(branch.trim());
   const ready = workOn === 'branch' ? !!existing.trim() : workOn === 'pr' ? !!taskPr : true;
-  const canStart = review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches && ready;
+  const canStart = !none && (review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches && ready);
   const chooseRepo = (path: string) => {
     setRepoPath(path);
     // Another repo has other PRs.
@@ -283,7 +285,7 @@ export function NewSessionDialog({
         review && picked
           ? {
             name: name.trim(),
-            harness,
+            harness: harness ?? undefined,
             prompt: prompt.trim() || undefined,
             kind: 'review-pr',
             repoPath: inProjectRepo ? undefined : repoPath,
@@ -292,7 +294,7 @@ export function NewSessionDialog({
           }
           : {
             name: name.trim(),
-            harness,
+            harness: harness ?? undefined,
             prompt: prompt.trim() || undefined,
             baseBranch: workOn === 'pr' ? undefined : baseBranch,
             kind: 'task',
@@ -333,6 +335,11 @@ export function NewSessionDialog({
           if (canStart) create();
         }}
       >
+        {none && (
+          <p className="confirm-warn" role="alert">
+            {NO_AGENT}
+          </p>
+        )}
         <Field label="Name">
           <input
             id="ns-name"
@@ -450,7 +457,7 @@ export function NewSessionDialog({
             <b>Advanced</b>
             {!advanced && (
               <span className="advanced-summary mono">
-                {pickAgent && `${HARNESS_CAPS[harness].label} · `}
+                {pickAgent && agentCaps && `${agentCaps.label} · `}
                 {review
                   ? `${repoFolder(repoPath)}${picked ? ` · PR #${picked.number} · ${reviewBranch}` : ''}`
                   : `${repoFolder(repoPath)} · ${workSummary}`}
@@ -479,9 +486,9 @@ export function NewSessionDialog({
                       </button>
                     ))}
                   </div>
-                  {!HARNESS_CAPS[harness].artifacts && (
+                  {agentCaps && !agentCaps.artifacts && (
                     <span className="hint">
-                      {HARNESS_CAPS[harness].label} writes its designs as markdown, and AgentK types its prompts into the terminal.
+                      {agentCaps.label} writes its designs as markdown, and AgentK types its prompts into the terminal.
                     </span>
                   )}
                 </div>

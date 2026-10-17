@@ -521,6 +521,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
           onMekoSettings={() => setModal({ kind: 'settings', tab: 'meko' })}
+          onSettings={() => setModal({ kind: 'settings', tab: 'general' })}
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
