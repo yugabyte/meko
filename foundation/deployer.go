@@ -632,9 +632,9 @@ func (d *Deployer) pruneDeclared(ctx context.Context) error {
 }
 
 func (d *Deployer) ensureNamespace(ctx context.Context) error {
-	// The namespace is SHARED with the consumer's own workloads (the amp
-	// controller and its endpoints run here too), so it is created if absent and
-	// otherwise left exactly as it is. The managed-by label records only that a
+	// The namespace may be SHARED with the consumer's own workloads (amp keeps
+	// them apart, in FOUNDATION_NS; other consumers need not), so it is created
+	// if absent and otherwise left exactly as it is. The managed-by label records only that a
 	// foundation lives here; it is deliberately not an ownership claim, because
 	// Down must never delete a namespace holding someone else's pods.
 	res, err := d.kubectlCluster(ctx, nil, "get", "namespace", d.spec.Namespace, "-o", "name")

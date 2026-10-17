@@ -246,6 +246,9 @@ jobs:
       # amp-control-plane-gke-cleanup.yml sweeps ci-pr-*, so a hard-cancelled run
       # still gets its namespace collected.
       NS: ci-pr-fnd-${{ github.event.pull_request.number || github.run_id }}
+      # The Foundation, YBA and the universe, apart from the amp stack in NS
+      # (CLOUDGA-37479). Still ci-pr-*, so the reaper collects it too.
+      FNS: ci-pr-fnd-${{ github.event.pull_request.number || github.run_id }}-foundation
       PULL_SECRET: quay-pull-secret
       TAG: ${{ needs.images.outputs.tag }}
       FOUNDATION_CR: foundation/examples/foundation-cr.yaml
@@ -274,7 +277,7 @@ jobs:
       # on the provider's zones, and the provider's wins, so parsing one path
       # would check the wrong class.
       # The foundation as a POD, which is what this lane exists to exercise:
-      # the CRD once per cluster, the controller in this namespace, and a
+      # the CRD once per cluster, the controller in FNS, and a
       # Foundation object it converges onto. No `foundation` CLI anywhere —
       # the same Go runs, reached through the loop instead.
       #
@@ -283,18 +286,18 @@ jobs:
       # BEFORE the chart, because the foundation image is private and the chart
       # names this secret: without it the pod sits in ImagePullBackOff and the
       # install times out on --wait with nothing but "context deadline exceeded".
-      # up-gke.sh mints the same secret later for the amp images; applying it
-      # here first is idempotent, and the yugaware chart the POD installs reads
-      # it too (yba.values.image.pullSecret).
+      # The yugaware chart the POD installs reads it too
+      # (yba.values.image.pullSecret). The amp images get their own copy in NS,
+      # minted by ycp-up.sh and up-gke.sh.
       - name: Namespace and pull secret
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
         run: |
-          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace "$FNS" --dry-run=client -o yaml | kubectl apply -f -
           AUTH=$(printf '%s' "$QUAY_TOKEN" | base64 -w0)
           CFG=$(mktemp)
           printf '{"auths":{"quay.io":{"auth":"%s"}}}' "$AUTH" > "$CFG"
-          kubectl -n "$NS" create secret generic "$PULL_SECRET" \
+          kubectl -n "$FNS" create secret generic "$PULL_SECRET" \
             --type=kubernetes.io/dockerconfigjson \
             --from-file=.dockerconfigjson="$CFG" \
             --dry-run=client -o yaml | kubectl apply -f -
@@ -305,11 +308,11 @@ jobs:
           helm upgrade --install meko-foundation-crd \
             foundation/deploy/helm/meko-foundation-crd --wait
           helm upgrade --install fdn foundation/deploy/helm/meko-foundation \
-            -n "$NS" \
+            -n "$FNS" \
             --set image.tag="$TAG" \
             --set "imagePullSecrets[0].name=$PULL_SECRET" \
             --wait --timeout 5m
-          kubectl -n "$NS" rollout status deploy/fdn-meko-foundation --timeout=5m
+          kubectl -n "$FNS" rollout status deploy/fdn-meko-foundation --timeout=5m
 
       # The trust root BEFORE the object: YBA reads the YBCertificate's Secret as
       # it applies the CR, and signs node certificates from the ClusterIssuer the
@@ -319,7 +322,7 @@ jobs:
       - name: Certificate trust root, and the CA for YBA
         run: |
           TLS_ISSUER_NAME=amp-ca TLS_ISSUER_KIND=ClusterIssuer \
-          TLS_ISSUER_GROUP=cert-manager.io TLS_TRUST_NAMESPACES="$NS" \
+          TLS_ISSUER_GROUP=cert-manager.io TLS_TRUST_NAMESPACES="$FNS" \
             amp/deploy/tls/trust-root.sh
 
           # trust-manager publishes the CA as a ConfigMap and a CR can only name
@@ -327,10 +330,10 @@ jobs:
           # back: command substitution strips it and YBA rejects a PEM without
           # one, writing the reason to the YBCertificate's status where nothing
           # else would look.
-          CA=$(kubectl -n "$NS" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')
-          [ -n "$CA" ] || { echo "::error::amp-ca-bundle has no ca.crt in $NS"; exit 1; }
+          CA=$(kubectl -n "$FNS" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')
+          [ -n "$CA" ] || { echo "::error::amp-ca-bundle has no ca.crt in $FNS"; exit 1; }
           F=$(mktemp); printf '%s\n' "$CA" > "$F"
-          kubectl -n "$NS" create secret generic amp-ca-bundle-tls \
+          kubectl -n "$FNS" create secret generic amp-ca-bundle-tls \
             --from-file=ca.crt="$F" --dry-run=client -o yaml | kubectl apply -f -
           rm -f "$F"
 
@@ -424,16 +427,16 @@ jobs:
 
       - name: Apply the Foundation and wait for it
         run: |
-          kubectl apply -n "$NS" -f "$FOUNDATION_CR"
+          kubectl apply -n "$FNS" -f "$FOUNDATION_CR"
           # Ready means REACHABLE, not merely applied: every declared CR is
           # ready AND there is an address. A spec the pod's preflight rejects
           # never gets there, so the dump below prints the conditions, which is
           # where that reason lands.
           if ! kubectl wait --for=jsonpath='{.status.phase}'=Ready \
-                 -n "$NS" foundation/foundation --timeout=50m; then
+                 -n "$FNS" foundation/foundation --timeout=50m; then
             echo "::error::the Foundation never became Ready"
-            kubectl -n "$NS" get foundation foundation -o yaml || true
-            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=200 || true
+            kubectl -n "$FNS" get foundation foundation -o yaml || true
+            kubectl -n "$FNS" logs deploy/fdn-meko-foundation --tail=200 || true
             exit 1
           fi
 
@@ -443,11 +446,11 @@ jobs:
       # encryption flags imply. Both are what a consumer would read.
       - name: Read the address off the Foundation
         run: |
-          UNIVERSE_NS=$(kubectl -n "$NS" get foundation foundation \
+          UNIVERSE_NS=$(kubectl -n "$FNS" get foundation foundation \
             -o jsonpath='{.status.address.universe_namespace}')
-          YB_HOST_PORTS=$(kubectl -n "$NS" get foundation foundation \
+          YB_HOST_PORTS=$(kubectl -n "$FNS" get foundation foundation \
             -o jsonpath='{.status.address.ysql_host_ports}')
-          YB_SSLMODE=$(kubectl -n "$NS" get foundation foundation \
+          YB_SSLMODE=$(kubectl -n "$FNS" get foundation foundation \
             -o jsonpath='{.status.address.ssl_mode}')
           for v in UNIVERSE_NS YB_HOST_PORTS YB_SSLMODE; do
             eval "val=\$$v"
@@ -489,6 +492,28 @@ jobs:
           YCP_DATADOG_API_KEY="$YCP_DATADOG_API_KEY" \
           EXTRA_HELM_SET="controller.endpoint.userSplit=true" \
           amp/deploy/up-gke.sh
+
+      # CLOUDGA-37479: nothing of the foundation's in the namespace endpoints run
+      # in, and nothing of amp's beside YBA. Secrets by name, since a copied one
+      # works and so would never otherwise be noticed.
+      - name: The foundation and amp share no namespace
+        run: |
+          [ "$UNIVERSE_NS" = "$FNS" ] || {
+            echo "::error::the universe is in $UNIVERSE_NS, want $FNS"; exit 1; }
+          # Every read is its own assignment, so a kubectl error fails the step
+          # under `bash -e` instead of reading as "nothing there".
+          PODS=$(kubectl -n "$NS" get pods -o name)
+          BAD=$(printf '%s\n' "$PODS" | grep -E 'yugaware|yb-(master|tserver)' || true)
+          [ -z "$BAD" ] || { echo "::error::foundation pods in $NS: $BAD"; exit 1; }
+          GOT=$(kubectl -n "$NS" get secret amp-ca-bundle-tls --ignore-not-found -o name)
+          [ -z "$GOT" ] || { echo "::error::foundation Secret $GOT is in $NS"; exit 1; }
+          for S in datadog-api amp-agent-api-key; do
+            GOT=$(kubectl -n "$FNS" get secret "$S" --ignore-not-found -o name)
+            [ -z "$GOT" ] || { echo "::error::amp Secret $GOT is in $FNS"; exit 1; }
+          done
+          DEPLOYS=$(kubectl -n "$FNS" get deploy -o name)
+          BAD=$(printf '%s\n' "$DEPLOYS" | grep -E 'amp-|reconcile-agent' || true)
+          [ -z "$BAD" ] || { echo "::error::amp workloads in $FNS: $BAD"; exit 1; }
 
       # What the foundation is FOR: the agent declares desired state through YCP
       # and the controller builds it on the operator-managed universe. This is
@@ -640,7 +665,7 @@ jobs:
       # DB_NS because the universe lands in the provider zones' kubeNamespace,
       # which on this path is whatever that resolved to.
       - name: Check YugabyteDB metrics export is on
-        run: NS="$NS" DB_NS="$UNIVERSE_NS" amp/deploy/yb-metrics-smoke.sh
+        run: NS="$FNS" DB_NS="$UNIVERSE_NS" amp/deploy/yb-metrics-smoke.sh
 
       # An explicit down, then proof it reclaimed the cluster-scoped RBAC. The
       # chart names a ClusterRole and ClusterRoleBinding after the helm release,
@@ -652,12 +677,12 @@ jobs:
       - name: kubectl get and describe show the foundation
         run: |
           echo "== kubectl get foundation"
-          kubectl -n "$NS" get foundation
+          kubectl -n "$FNS" get foundation
           # Two guards, because a broken column fails two different ways. A
           # path that resolves to nothing prints <none>, which keeps the field
           # count right — so the per-column checks catch that; a path kubectl
           # cannot evaluate drops the cell entirely, which the count catches.
-          ROW=$(kubectl -n "$NS" get foundation --no-headers)
+          ROW=$(kubectl -n "$FNS" get foundation --no-headers)
           echo "   row: $ROW"
           set -- $ROW
           # NAME PHASE YBA UNIVERSE PROVIDER READY AGE
@@ -669,7 +694,7 @@ jobs:
           [ "$6" = "True" ]  || { echo "::error::READY is '$6', want True"; exit 1; }
 
           echo "== kubectl describe foundation"
-          kubectl -n "$NS" describe foundation foundation
+          kubectl -n "$FNS" describe foundation foundation
           # Events are the record of what happened; the conditions only say
           # what is true now. An operator looks here first, so an empty Events
           # section is a real gap however good the status is.
@@ -677,12 +702,12 @@ jobs:
           # events.k8s.io/v1 Events with `regarding`, which the core v1 API
           # surfaces as involvedObject — reading it this way does not depend on
           # which of the two kubectl picked.
-          REASONS=$(kubectl -n "$NS" get events -o jsonpath='{range .items[?(@.involvedObject.kind=="Foundation")]}{.reason}{" "}{end}')
+          REASONS=$(kubectl -n "$FNS" get events -o jsonpath='{range .items[?(@.involvedObject.kind=="Foundation")]}{.reason}{" "}{end}')
           echo "   event reasons: ${REASONS:-<none>}"
           EV=$(printf '%s' "$REASONS" | wc -w)
           [ "$EV" -gt 0 ] || {
             echo "::error::no events were recorded about the Foundation"
-            kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
+            kubectl -n "$FNS" get events --sort-by=.lastTimestamp | tail -30 || true
             exit 1
           }
 
@@ -702,22 +727,22 @@ jobs:
           wait_for() {
             local path="$1" want="$2" secs="${3:-180}" got=
             for _ in $(seq 1 $((secs / 5))); do
-              got=$(kubectl -n "$NS" get foundation foundation -o jsonpath="$path" 2>/dev/null || true)
+              got=$(kubectl -n "$FNS" get foundation foundation -o jsonpath="$path" 2>/dev/null || true)
               [ "$got" = "$want" ] && { echo "   $path = $got"; return 0; }
               sleep 5
             done
             echo "::error::$path was '$got' after ${secs}s, want '$want'"
-            kubectl -n "$NS" get foundation foundation -o yaml || true
-            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=120 || true
+            kubectl -n "$FNS" get foundation foundation -o yaml || true
+            kubectl -n "$FNS" logs deploy/fdn-meko-foundation --tail=120 || true
             return 1
           }
 
-          GEN_BEFORE=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.metadata.generation}')
+          GEN_BEFORE=$(kubectl -n "$FNS" get foundation foundation -o jsonpath='{.metadata.generation}')
           echo "generation before the bad edit: $GEN_BEFORE"
 
           # `test` first, so a reordered resources list fails loudly here rather
           # than silently patching the wrong CR.
-          kubectl -n "$NS" patch foundation foundation --type=json -p '[
+          kubectl -n "$FNS" patch foundation foundation --type=json -p '[
             {"op":"test","path":"/spec/resources/2/kind","value":"YBUniverse"},
             {"op":"add","path":"/spec/resources/2/spec/numNodez","value":3}]'
 
@@ -729,9 +754,9 @@ jobs:
           # what this step did on its first run.
           echo "== waiting for the rejection to be reported"
           wait_for '{.status.conditions[?(@.type=="Converged")].reason}' ConvergeFailed 240
-          STATUS=$(kubectl -n "$NS" get foundation foundation \
+          STATUS=$(kubectl -n "$FNS" get foundation foundation \
             -o jsonpath='{.status.conditions[?(@.type=="Converged")].status}')
-          MSG=$(kubectl -n "$NS" get foundation foundation \
+          MSG=$(kubectl -n "$FNS" get foundation foundation \
             -o jsonpath='{.status.conditions[?(@.type=="Converged")].message}')
           echo "   status=$STATUS"
           echo "   message=$MSG"
@@ -745,14 +770,14 @@ jobs:
           esac
           # The universe is untouched: a rejected apply must not take the
           # foundation's address away from the consumer that is using it.
-          ADDR=$(kubectl -n "$NS" get foundation foundation \
+          ADDR=$(kubectl -n "$FNS" get foundation foundation \
             -o jsonpath='{.status.address.ysql_host_ports}')
           [ "$ADDR" = "$YB_HOST_PORTS" ] || {
             echo "::error::the address changed under a rejected edit: '$ADDR'"; exit 1; }
           echo "   address still $ADDR"
 
           echo "== fixing the spec"
-          kubectl -n "$NS" patch foundation foundation --type=json -p '[
+          kubectl -n "$FNS" patch foundation foundation --type=json -p '[
             {"op":"remove","path":"/spec/resources/2/spec/numNodez"}]'
 
           # A new generation clears the backoff, so this must NOT wait out the
@@ -762,8 +787,8 @@ jobs:
           wait_for '{.status.conditions[?(@.type=="Converged")].status}' True 60
           wait_for '{.status.phase}' Ready 300
 
-          GEN=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.metadata.generation}')
-          OBS=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.status.observedGeneration}')
+          GEN=$(kubectl -n "$FNS" get foundation foundation -o jsonpath='{.metadata.generation}')
+          OBS=$(kubectl -n "$FNS" get foundation foundation -o jsonpath='{.status.observedGeneration}')
           echo "generation=$GEN observedGeneration=$OBS (was $GEN_BEFORE)"
           [ "$GEN" != "$GEN_BEFORE" ] || {
             echo "::error::the edits did not bump metadata.generation"; exit 1; }
@@ -783,20 +808,20 @@ jobs:
       # release record would prove only that we can parse what we wrote.
       - name: A wedged helm release is rolled back, not retried forever
         run: |
-          REL="${NS}-yugaware"
-          CHART=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.spec.yba.chart}')
-          BEFORE=$(helm history "$REL" -n "$NS" -o json | python3 -c \
+          REL="${FNS}-yugaware"
+          CHART=$(kubectl -n "$FNS" get foundation foundation -o jsonpath='{.spec.yba.chart}')
+          BEFORE=$(helm history "$REL" -n "$FNS" -o json | python3 -c \
             'import json,sys; print(json.load(sys.stdin)[-1]["revision"])')
           echo "last revision before: $BEFORE"
 
           # --reuse-values so the attempt that gets killed cannot change what
           # the release holds; all it is here for is the pending record helm
           # writes before it starts work.
-          helm upgrade "$REL" "$CHART" -n "$NS" --reuse-values --wait --timeout 15m &
+          helm upgrade "$REL" "$CHART" -n "$FNS" --reuse-values --wait --timeout 15m &
           HPID=$!
           STUCK=""
           for _ in $(seq 1 40); do
-            ST=$(helm history "$REL" -n "$NS" -o json 2>/dev/null | python3 -c \
+            ST=$(helm history "$REL" -n "$FNS" -o json 2>/dev/null | python3 -c \
               'import json,sys; print(json.load(sys.stdin)[-1]["status"])' 2>/dev/null || true)
             case "$ST" in pending-*) STUCK="$ST"; break ;; esac
             sleep 2
@@ -805,7 +830,7 @@ jobs:
           wait "$HPID" 2>/dev/null || true
           [ -n "$STUCK" ] || {
             echo "::error::could not wedge the release; helm never reported a pending revision"
-            helm history "$REL" -n "$NS" || true
+            helm history "$REL" -n "$FNS" || true
             exit 1
           }
           echo "release is wedged at $STUCK"
@@ -814,7 +839,7 @@ jobs:
           # Redirected, NOT piped into tee: `if cmd | tee` tests the exit status
           # of tee, which is always 0, so the refusal this is looking for read as
           # an acceptance and failed the step on its own evidence.
-          if helm upgrade "$REL" "$CHART" -n "$NS" --reuse-values --timeout 30s \
+          if helm upgrade "$REL" "$CHART" -n "$FNS" --reuse-values --timeout 30s \
                > /tmp/wedged.txt 2>&1; then
             cat /tmp/wedged.txt
             echo "::error::helm accepted an upgrade, so the release was not wedged"; exit 1
@@ -826,22 +851,22 @@ jobs:
           # A generation bump is what makes the loop converge now rather than on
           # its own schedule. An unknown key under yba.values: helm passes it
           # through and the chart ignores it, so the universe is untouched.
-          kubectl -n "$NS" patch foundation foundation --type=json -p '[
+          kubectl -n "$FNS" patch foundation foundation --type=json -p '[
             {"op":"add","path":"/spec/yba/values/ciWedgeProbe","value":"1"}]'
 
           echo "== waiting for the loop to clear it and converge"
           for _ in $(seq 1 90); do
-            PHASE=$(kubectl -n "$NS" get foundation foundation -o jsonpath='{.status.phase}' 2>/dev/null || true)
-            LAST=$(helm history "$REL" -n "$NS" -o json 2>/dev/null | python3 -c \
+            PHASE=$(kubectl -n "$FNS" get foundation foundation -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            LAST=$(helm history "$REL" -n "$FNS" -o json 2>/dev/null | python3 -c \
               'import json,sys; print(json.load(sys.stdin)[-1]["status"])' 2>/dev/null || true)
             [ "$PHASE" = "Ready" ] && [ "$LAST" = "deployed" ] && break
             sleep 10
           done
-          helm history "$REL" -n "$NS" || true
+          helm history "$REL" -n "$FNS" || true
           [ "$PHASE" = "Ready" ] || {
             echo "::error::the foundation never recovered from the wedged release (phase=$PHASE)"
-            kubectl -n "$NS" get foundation foundation -o yaml || true
-            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=200 || true
+            kubectl -n "$FNS" get foundation foundation -o yaml || true
+            kubectl -n "$FNS" logs deploy/fdn-meko-foundation --tail=200 || true
             exit 1
           }
           [ "$LAST" = "deployed" ] || {
@@ -849,7 +874,7 @@ jobs:
 
           # It has to have ROLLED BACK rather than uninstalled: an uninstall
           # takes the operator holding every CR's finalizer with it.
-          kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=400 > /tmp/fdnlog.txt || true
+          kubectl -n "$FNS" logs deploy/fdn-meko-foundation --tail=400 > /tmp/fdnlog.txt || true
           grep -q "rolling back to revision" /tmp/fdnlog.txt || {
             echo "::error::the release was cleared some other way than a rollback:"
             grep -iE "wedg|rollback|uninstall" /tmp/fdnlog.txt || true
@@ -866,7 +891,7 @@ jobs:
       # finalizer tracking the policy rather than being set once.
       - name: Delete the Foundation (tears the universe down)
         run: |
-          kubectl -n "$NS" patch foundation foundation --type=merge \
+          kubectl -n "$FNS" patch foundation foundation --type=merge \
             -p '{"spec":{"deletionPolicy":"Delete"}}'
 
           # WAIT for the finalizer before deleting. The loop adds it on its next
@@ -878,31 +903,31 @@ jobs:
           #
           # Waiting also ASSERTS the finalizer is added, which nothing else does.
           for i in $(seq 1 60); do
-            FIN=$(kubectl -n "$NS" get foundation foundation \
+            FIN=$(kubectl -n "$FNS" get foundation foundation \
               -o jsonpath='{.metadata.finalizers}' 2>/dev/null || true)
             case "$FIN" in *meko.yugabyte.com/teardown*) break ;; esac
             [ "$i" -lt 60 ] || {
               echo "::error::the loop never added its finalizer after the policy changed to Delete"
-              kubectl -n "$NS" get foundation foundation -o yaml || true
-              kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=100 || true
+              kubectl -n "$FNS" get foundation foundation -o yaml || true
+              kubectl -n "$FNS" logs deploy/fdn-meko-foundation --tail=100 || true
               exit 1
             }
             sleep 5
           done
           echo "finalizer present; deleting"
 
-          if ! kubectl -n "$NS" delete foundation foundation --timeout=25m; then
+          if ! kubectl -n "$FNS" delete foundation foundation --timeout=25m; then
             echo "::error::the Foundation did not go; its finalizer is still held"
-            kubectl -n "$NS" get foundation foundation -o yaml || true
-            kubectl -n "$NS" logs deploy/fdn-meko-foundation --tail=200 || true
+            kubectl -n "$FNS" get foundation foundation -o yaml || true
+            kubectl -n "$FNS" logs deploy/fdn-meko-foundation --tail=200 || true
             exit 1
           fi
-          helm uninstall fdn -n "$NS" || true
+          helm uninstall fdn -n "$FNS" || true
 
       - name: Assert nothing leaked
         run: |
           LEAKED=$(kubectl get clusterrole,clusterrolebinding -o name \
-            | grep -- "${NS}-yugaware" || true)
+            | grep -- "${FNS}-yugaware" || true)
           if [ -n "$LEAKED" ]; then
             echo "::error::foundation down left cluster-scoped objects behind:"; echo "$LEAKED"
             exit 1
@@ -921,9 +946,9 @@ jobs:
           KINDS=$(kubectl api-resources --api-group=operator.yugabyte.io \
             --namespaced=true -o name 2>/dev/null | paste -sd, -)
           [ -n "$KINDS" ] || { echo "::error::could not list operator.yugabyte.io kinds"; exit 1; }
-          LEFT=$(kubectl -n "$NS" get "$KINDS" -o name 2>/dev/null || true)
+          LEFT=$(kubectl -n "$FNS" get "$KINDS" -o name 2>/dev/null || true)
           if [ -n "$LEFT" ]; then
-            echo "::error::foundation down left CRs behind; their finalizers will strand $NS:"
+            echo "::error::foundation down left CRs behind; their finalizers will strand $FNS:"
             echo "$LEFT"
             exit 1
           fi
@@ -935,7 +960,7 @@ jobs:
           # race YBA, and a Namespaced service is shared across releases by
           # design). This is the check that YBA actually does reclaim it; if it
           # does not, the Service has to be deleted explicitly instead.
-          if [ -n "$(kubectl -n "${UNIVERSE_NS:-$NS}" get svc -l serviceName=yb-tserver-conn,scope=Namespaced \
+          if [ -n "$(kubectl -n "${UNIVERSE_NS:-$FNS}" get svc -l serviceName=yb-tserver-conn,scope=Namespaced \
                        -o name 2>/dev/null)" ]; then
             echo "::error::YBA did not reclaim the tserver-conn Service on universe delete;"
             echo "::error::foundation down must delete it explicitly (see down.go)"
@@ -947,14 +972,16 @@ jobs:
         if: failure()
         run: |
           kubectl -n "$NS" get all || true
+          kubectl -n "$FNS" get all || true
           # status.actions[] on either CR is where YBA puts the failing task and
           # its message; a rejected spec explains itself there and nowhere else.
-          kubectl -n "$NS" get ybprovider,ybuniverse,ybcertificate -o yaml || true
+          kubectl -n "$FNS" get ybprovider,ybuniverse,ybcertificate -o yaml || true
           # cert-manager's side of an encrypted universe: the Certificate YBA
           # asked for, the request it turned into, and the issuer's own log.
           kubectl -n "$UNIVERSE_NS" get certificate,certificaterequest -o wide || true
           kubectl -n cert-manager logs deploy/cert-manager --tail=100 || true
           kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -60 || true
+          kubectl -n "$FNS" get events --sort-by=.lastTimestamp | tail -60 || true
           kubectl -n "$NS" logs deploy/amp-controller --tail=200 || true
           kubectl -n "$NS" logs deploy/amp-reconcile-agent --tail=200 || true
           kubectl -n "$NS" logs deploy/meko-api-server --tail=200 || true
@@ -967,9 +994,9 @@ jobs:
           # old Helm labels, and a selector that matches nothing makes
           # `kubectl logs -l` exit 0 with no output — so this step looked fine
           # while dumping nothing at all.
-          kubectl -n "$NS" logs "statefulset/${NS}-yugaware-yugaware" \
+          kubectl -n "$FNS" logs "statefulset/${FNS}-yugaware-yugaware" \
             --tail=300 --all-containers --prefix || \
-            kubectl -n "$NS" logs -l "release=${NS}-yugaware" --tail=300 --all-containers || true
+            kubectl -n "$FNS" logs -l "release=${FNS}-yugaware" --tail=300 --all-containers || true
 
       # Belt and braces over the explicit `down` above: a run cancelled or failed
       # earlier never reaches it, and the reaper only collects namespaces.
@@ -1006,9 +1033,9 @@ jobs:
           # a budget shorter than the task guarantees the warning below on
           # every failed run rather than only on a genuinely stuck one.
           for KIND in ybuniverses $KINDS ybproviders; do
-            kubectl -n "$NS" delete "$KIND" --all --wait=false --ignore-not-found || true
+            kubectl -n "$FNS" delete "$KIND" --all --wait=false --ignore-not-found || true
             for _ in $(seq 1 72); do
-              kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q . || break
+              kubectl -n "$FNS" get "$KIND" -o name 2>/dev/null | grep -q . || break
               sleep 5
             done
             # Last resort, and deliberately destructive. Only the operator can
@@ -1018,20 +1045,20 @@ jobs:
             # a namespace it cannot create into. Orphaning whatever the
             # finalizer was tearing down is the lesser harm: the namespace is
             # going away regardless, and this runs only on the way out.
-            if kubectl -n "$NS" get "$KIND" -o name 2>/dev/null | grep -q .; then
+            if kubectl -n "$FNS" get "$KIND" -o name 2>/dev/null | grep -q .; then
               echo "::warning::$KIND still present after 6m; removing its finalizer so the namespace can drain"
-              for OBJ in $(kubectl -n "$NS" get "$KIND" -o name); do
-                kubectl -n "$NS" patch "$OBJ" --type merge \
+              for OBJ in $(kubectl -n "$FNS" get "$KIND" -o name); do
+                kubectl -n "$FNS" patch "$OBJ" --type merge \
                   -p '{"metadata":{"finalizers":null}}' || true
               done
             fi
           done
 
           helm -n "$NS" uninstall yb-amp-controller || true
-          helm -n "$NS" uninstall "${NS}-yugaware" || true
+          helm -n "$FNS" uninstall "${FNS}-yugaware" || true
           # By name only. The chart renders its ClusterRole with NO labels at
           # all, so no label selector can reach it — an earlier
           # app.kubernetes.io/instance selector here was a silent no-op.
-          kubectl delete clusterrole "${NS}-yugaware" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${NS}-yugaware" --ignore-not-found || true
-          kubectl delete ns "$NS" --wait=false || true
+          kubectl delete clusterrole "${FNS}-yugaware" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FNS}-yugaware" --ignore-not-found || true
+          kubectl delete ns "$NS" "$FNS" --wait=false || true

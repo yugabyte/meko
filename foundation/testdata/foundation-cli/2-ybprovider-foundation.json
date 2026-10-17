@@ -6,7 +6,7 @@
       "app.kubernetes.io/managed-by": "meko-foundation"
     },
     "name": "foundation",
-    "namespace": "amp"
+    "namespace": "amp-foundation"
   },
   "spec": {
     "cloudInfo": {
@@ -22,7 +22,7 @@
               "certManagerIssuerGroup": "cert-manager.io",
               "certManagerIssuerKind": "ClusterIssuer",
               "certManagerIssuerName": "amp-ca",
-              "kubeNamespace": "amp",
+              "kubeNamespace": "amp-foundation",
               "kubernetesStorageClass": "yb-standard"
             },
             "code": "us-west1-b"

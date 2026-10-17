@@ -17,7 +17,8 @@
 #      yugabyted (default) a single-node StatefulSet + headless Service, or with
 #                          TLS=1 the certificate trust root (deploy/tls/trust-root.sh)
 #                          and the upstream `yugabyte` chart on cert-manager certificates
-#      operator            an operator-managed universe, via foundation/
+#      operator            an operator-managed universe, via foundation/, in its
+#                          own namespace (FOUNDATION_NS)
 #   5. the yb_storage database (the controller connects to it at startup), plus the
 #      amp_storage role in TLS mode
 #   6. the amp controller (+ MCP + UI) via the yb-amp-controller Helm chart
@@ -92,6 +93,11 @@ PULL_SECRET_DOCKERCONFIGJSON="${PULL_SECRET_DOCKERCONFIGJSON:-}" # raw docker co
 # on-demand workflow rather than by every deploy.
 FOUNDATION="${FOUNDATION:-yugabyted}"
 FOUNDATION_SPEC="${FOUNDATION_SPEC:-${REPO_ROOT}/../foundation/examples/foundation-cli.yaml}"
+# FOUNDATION=operator only. YBA, its operator, the CRs and the DB pods go here,
+# never in NS: endpoints run in NS, and a namespace is the boundary for Secrets
+# and RBAC, so sharing one would put YBA's admin credentials beside customer
+# compute (CLOUDGA-37479). Overrides the spec's own `namespace:`.
+FOUNDATION_NS="${FOUNDATION_NS:-${NS}-foundation}"
 
 # shellcheck source=../scripts/versions.sh
 . "${SCRIPT_DIR}/../scripts/versions.sh"
@@ -234,6 +240,27 @@ yugabyted) ;;
 operator)
   command -v go >/dev/null 2>&1 || die "FOUNDATION=operator runs the foundation CLI from source; go not found on PATH"
   [ -f "${FOUNDATION_SPEC}" ] || die "FOUNDATION_SPEC=${FOUNDATION_SPEC} not found"
+  [ "${FOUNDATION_NS}" != "${NS}" ] ||
+    die "FOUNDATION_NS must differ from NS (${NS}): YBA's credentials must not share a namespace with the endpoints"
+  # A deployment from before the split has its universe, and the controller's
+  # yb_storage, in NS. Carrying on would stand up a second, empty universe in
+  # FOUNDATION_NS and repoint the controller at it, stranding every endpoint's
+  # data in the old one. A universe cannot change namespace without being
+  # recreated, so there is nothing to do but stop.
+  _err="$(mktemp)"
+  if _old="$(kubectl -n "${NS}" get ybuniverses.operator.yugabyte.io -o name 2>"${_err}")"; then
+    :
+  elif grep -q "doesn't have a resource type" "${_err}"; then
+    _old="" # no operator CRDs on this cluster, so no universe anywhere
+  else
+    die "cannot check ${NS} for a foundation from before the split: $(cat "${_err}")"
+  fi
+  rm -f "${_err}"
+  _old_rel="$(helm list -n "${NS}" -q --filter "^${NS}-yugaware\$")" ||
+    die "cannot list helm releases in ${NS}"
+  if [ -n "${_old}${_old_rel}" ]; then
+    die "${NS} already holds a foundation (${_old:-}${_old:+ }${_old_rel:+release ${_old_rel}}) from before YBA moved to its own namespace. Re-running would create a second, empty universe in ${FOUNDATION_NS} and point the controller at it. This lane cannot redeploy that environment; it needs a migration (CLOUDGA-37479)."
+  fi
   # Absolutise it: the deployer runs from a subshell cd'd into foundation/, so
   # a relative path would resolve there instead of here — passing preflight
   # and then failing with a confusing "not found".
@@ -245,7 +272,7 @@ operator)
   # `validate` is offline and runs before anything reaches the cluster, which
   # is what lets the trust root be stood up first.
   _fnd_tls="$(cd "${REPO_ROOT}/../foundation" &&
-    go run ./cmd/foundation validate -c "${FOUNDATION_SPEC}" --namespace "${NS}" --json)" ||
+    go run ./cmd/foundation validate -c "${FOUNDATION_SPEC}" --namespace "${FOUNDATION_NS}" --json)" ||
     die "foundation validate failed for ${FOUNDATION_SPEC}"
   _spec_tls="$(printf '%s' "${_fnd_tls}" | sed -n 's/.*"clientToNode":[[:space:]]*\([a-z]*\).*/\1/p')"
   _spec_n2n="$(printf '%s' "${_fnd_tls}" | sed -n 's/.*"nodeToNode":[[:space:]]*\([a-z]*\).*/\1/p')"
@@ -321,6 +348,7 @@ echo "   registry     : ${REGISTRY}   (host ${REG_HOST})"
 echo "   tag          : ${TAG}   (build=${BUILD})"
 echo "   expose       : ${CONTROLLER_EXPOSE}   endpoints=${ENDPOINT_SERVICE_TYPE}"
 echo "   foundation   : ${FOUNDATION}"
+[ "${FOUNDATION}" = "operator" ] && echo "   foundation ns: ${FOUNDATION_NS}"
 if [ "${TLS}" = "1" ] && [ "${FOUNDATION}" = "operator" ]; then
   echo "   tls          : on, from the spec (permissive=${TLS_PERMISSIVE}, issuer=${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
 elif [ "${TLS}" = "1" ]; then
@@ -362,49 +390,74 @@ if [ "${BUILD}" = "1" ]; then
   fi
 fi
 
-# --- 2. namespace ---
-say "namespace ${NS}"
-kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f -
+# --- 2. namespace(s) ---
+# yugaware pulls from the same private registry, so the operator lane mints the
+# pull secret into both namespaces.
+PULL_NAMESPACES=("${NS}")
+[ "${FOUNDATION}" = "operator" ] && PULL_NAMESPACES+=("${FOUNDATION_NS}")
+for _ns in "${PULL_NAMESPACES[@]}"; do
+  say "namespace ${_ns}"
+  kubectl create namespace "${_ns}" --dry-run=client -o yaml | kubectl apply -f -
+done
+# Created here, before `foundation up`, so the deployer finds it existing and
+# does not label it — and `foundation down` deletes only a labelled namespace.
+# Nothing but the foundation lives in it, so the claim is true.
+if [ "${FOUNDATION}" = "operator" ]; then
+  kubectl label namespace "${FOUNDATION_NS}" app.kubernetes.io/managed-by=meko-foundation --overwrite
+fi
 
 # --- 3. pull secret ---
 # See the PULL_SECRET / GCR_KEY_FILE / PULL_SECRET_DOCKERCONFIGJSON modes in the
-# config block above. The mint paths run against the namespace created just above,
+# config block above. The mint paths run against the namespaces created just above,
 # so nothing has to exist beforehand (the CI case: a fresh per-run namespace).
-if [ -z "${PULL_SECRET}" ]; then
-  say "pull secret: none (relying on the GKE node service account for GCR pulls)"
-elif [ -n "${GCR_KEY_FILE}" ]; then
-  [ -f "${GCR_KEY_FILE}" ] || die "GCR_KEY_FILE=${GCR_KEY_FILE} not found"
-  say "GCR pull secret '${PULL_SECRET}' (minting from ${GCR_KEY_FILE})"
-  kubectl -n "${NS}" create secret docker-registry "${PULL_SECRET}" \
-    --docker-server="${REG_HOST}" \
-    --docker-username=_json_key \
-    --docker-password="$(cat "${GCR_KEY_FILE}")" \
-    --docker-email="amp@yugabyte.com" \
-    --dry-run=client -o yaml | kubectl apply -f -
-elif [ -n "${PULL_SECRET_DOCKERCONFIGJSON}" ]; then
-  say "pull secret '${PULL_SECRET}' (creating from PULL_SECRET_DOCKERCONFIGJSON)"
-  # Route the config.json through a temp file rather than --from-literal so the
-  # credential never lands in argv / a process listing.
-  _dcj="$(mktemp)"
-  printf '%s' "${PULL_SECRET_DOCKERCONFIGJSON}" >"${_dcj}"
-  kubectl -n "${NS}" create secret generic "${PULL_SECRET}" \
-    --type=kubernetes.io/dockerconfigjson \
-    --from-file=.dockerconfigjson="${_dcj}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-  rm -f "${_dcj}"
-else
-  say "pull secret: using existing '${PULL_SECRET}' in namespace ${NS}"
-  kubectl -n "${NS}" get secret "${PULL_SECRET}" >/dev/null 2>&1 ||
-    die "pull secret '${PULL_SECRET}' not found in namespace ${NS} (create it, pass GCR_KEY_FILE=<key> or PULL_SECRET_DOCKERCONFIGJSON=<json> to mint it, or unset PULL_SECRET to use the node SA)"
-fi
+for _ns in "${PULL_NAMESPACES[@]}"; do
+  if [ -z "${PULL_SECRET}" ]; then
+    say "pull secret: none (relying on the GKE node service account for GCR pulls)"
+    break
+  elif [ -n "${GCR_KEY_FILE}" ]; then
+    [ -f "${GCR_KEY_FILE}" ] || die "GCR_KEY_FILE=${GCR_KEY_FILE} not found"
+    say "GCR pull secret '${PULL_SECRET}' in ${_ns} (minting from ${GCR_KEY_FILE})"
+    kubectl -n "${_ns}" create secret docker-registry "${PULL_SECRET}" \
+      --docker-server="${REG_HOST}" \
+      --docker-username=_json_key \
+      --docker-password="$(cat "${GCR_KEY_FILE}")" \
+      --docker-email="amp@yugabyte.com" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  elif [ -n "${PULL_SECRET_DOCKERCONFIGJSON}" ]; then
+    say "pull secret '${PULL_SECRET}' in ${_ns} (creating from PULL_SECRET_DOCKERCONFIGJSON)"
+    # Route the config.json through a temp file rather than --from-literal so the
+    # credential never lands in argv / a process listing.
+    _dcj="$(mktemp)"
+    printf '%s' "${PULL_SECRET_DOCKERCONFIGJSON}" >"${_dcj}"
+    kubectl -n "${_ns}" create secret generic "${PULL_SECRET}" \
+      --type=kubernetes.io/dockerconfigjson \
+      --from-file=.dockerconfigjson="${_dcj}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    rm -f "${_dcj}"
+  else
+    if [ "${_ns}" != "${NS}" ] && ! kubectl -n "${_ns}" get secret "${PULL_SECRET}" >/dev/null 2>&1; then
+      # FOUNDATION_NS is this script's to name, so nobody can be expected to
+      # have put the Secret there: copy the one NS was checked to hold.
+      say "pull secret: copying '${PULL_SECRET}' from ${NS} to ${_ns}"
+      kubectl -n "${NS}" get secret "${PULL_SECRET}" -o json |
+        python3 -c 'import json,sys; d=json.load(sys.stdin); d["metadata"]={"name":d["metadata"]["name"],"namespace":sys.argv[1]}; json.dump(d,sys.stdout)' "${_ns}" |
+        kubectl apply -f -
+      continue
+    fi
+    say "pull secret: using existing '${PULL_SECRET}' in namespace ${_ns}"
+    kubectl -n "${_ns}" get secret "${PULL_SECRET}" >/dev/null 2>&1 ||
+      die "pull secret '${PULL_SECRET}' not found in namespace ${_ns} (create it, pass GCR_KEY_FILE=<key> or PULL_SECRET_DOCKERCONFIGJSON=<json> to mint it, or unset PULL_SECRET to use the node SA)"
+  fi
+done
 
 # --- 4. the backing YugabyteDB ---
 if [ "${FOUNDATION}" = "operator" ]; then
   # An operator-managed universe, stood up by the foundation/ deployer: CRDs,
   # the yugaware chart with the Kubernetes operator enabled, a YBUniverse CR and
-  # the tserver Service. It takes the namespace this script already created, so
-  # the amp pods stay co-located with the DB. yb_storage is ours to create,
-  # below.
+  # the tserver Service, all in FOUNDATION_NS. The DB pods land there too (the
+  # provider zones' kubeNamespace defaults to it), and amp reaches them across
+  # namespaces through the Service FQDN connstr hands back. yb_storage is ours
+  # to create, below.
   CONNSTR_ARGS=()
   if [ "${TLS}" = "1" ]; then
     # BEFORE the universe: YBA references the ClusterIssuer when it creates it,
@@ -412,23 +465,23 @@ if [ "${FOUNDATION}" = "operator" ]; then
     # the trust root up afterwards would leave the universe signed by nothing.
     say "certificate trust root (${TLS_ISSUER_KIND}/${TLS_ISSUER_NAME:-amp-ca})"
     TLS_ISSUER_NAME="${TLS_ISSUER_NAME}" TLS_ISSUER_KIND="${TLS_ISSUER_KIND}" \
-      TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" TLS_TRUST_NAMESPACES="${NS}" \
+      TLS_ISSUER_GROUP="${TLS_ISSUER_GROUP}" TLS_TRUST_NAMESPACES="${NS} ${FOUNDATION_NS}" \
       "${SCRIPT_DIR}/tls/trust-root.sh"
     TLS_ISSUER_NAME="${TLS_ISSUER_NAME:-amp-ca}"
 
     # trust-manager publishes the CA as a ConfigMap, and a CR can only name a
     # Secret, so copy it. One hop, here rather than in the spec, because the CA
     # belongs to the cluster and not to this universe.
-    say "CA for YBA (Secret ${YB_CA_SECRET} in ${NS})"
-    _ca_pem="$(kubectl -n "${NS}" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')"
-    [ -n "${_ca_pem}" ] || die "ConfigMap amp-ca-bundle in ${NS} has no ca.crt; trust-root.sh did not label this namespace"
+    say "CA for YBA (Secret ${YB_CA_SECRET} in ${FOUNDATION_NS})"
+    _ca_pem="$(kubectl -n "${FOUNDATION_NS}" get configmap amp-ca-bundle -o jsonpath='{.data.ca\.crt}')"
+    [ -n "${_ca_pem}" ] || die "ConfigMap amp-ca-bundle in ${FOUNDATION_NS} has no ca.crt; trust-root.sh did not label this namespace"
     # Through a FILE, and with the trailing newline put back. Command
     # substitution strips it, and YBA rejects a PEM without one — "Failed to
     # process certificate: Certificate must end with a newline", written to the
     # YBCertificate's status where nothing else would have looked.
     _ca_file="$(mktemp)"
     printf '%s\n' "${_ca_pem}" >"${_ca_file}"
-    kubectl -n "${NS}" create secret generic "${YB_CA_SECRET}" \
+    kubectl -n "${FOUNDATION_NS}" create secret generic "${YB_CA_SECRET}" \
       --from-file=ca.crt="${_ca_file}" \
       --dry-run=client -o yaml | kubectl apply -f -
     rm -f "${_ca_file}"
@@ -442,7 +495,7 @@ if [ "${FOUNDATION}" = "operator" ]; then
   fi
 
   say "YugabyteDB (operator-managed universe via foundation/)"
-  FOUNDATION_ARGS=(-c "${FOUNDATION_SPEC}" --namespace "${NS}")
+  FOUNDATION_ARGS=(-c "${FOUNDATION_SPEC}" --namespace "${FOUNDATION_NS}")
   [ -n "${CLUSTER}" ] && FOUNDATION_ARGS+=(--kube-context "${CLUSTER}")
   (cd "${REPO_ROOT}/../foundation" && go run ./cmd/foundation up "${FOUNDATION_ARGS[@]}")
 
@@ -462,9 +515,9 @@ if [ "${FOUNDATION}" = "operator" ]; then
   echo "   YB_HOST_PORTS : ${YB_HOST_PORTS}"
   echo "   DB_URL        : ${DB_URL}"
 
-  # connstr exports the namespace the DB pods are in, which differs from ours
-  # whenever a provider zone names its own kubeNamespace.
-  _univ_ns="${YB_UNIVERSE_NAMESPACE:-${NS}}"
+  # connstr exports the namespace the DB pods are in, which differs from
+  # FOUNDATION_NS whenever a provider zone names its own kubeNamespace.
+  _univ_ns="${YB_UNIVERSE_NAMESPACE:-${FOUNDATION_NS}}"
 
   # The controller's db.Connect targets yb_storage at startup, so it must exist
   # before the controller rolls out. The foundation deployer no longer creates
@@ -758,12 +811,16 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   # at all, so nothing reaches the door untagged.
   if [ "${FOUNDATION}" = "operator" ]; then
     say "enabling YugabyteDB metrics export on the foundation"
+    # YBA's TelemetryProvider reads the same password, from its own namespace.
+    kubectl -n "${FOUNDATION_NS}" create secret generic byoc-metrics-auth \
+      --from-literal=password="${YCP_BYOC_PASSWORD}" \
+      --dry-run=client -o yaml | kubectl apply -f -
     FOUNDATION_TELEMETRY_SPEC="$(mktemp -t foundation-telemetry.XXXXXX.yaml)"
     YCP_ENV_ID="${YCP_ENV_ID}" YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL}" \
       python3 "${REPO_ROOT}/deploy/foundation-telemetry.py" \
       "${FOUNDATION_SPEC}" "${FOUNDATION_TELEMETRY_SPEC}" ||
       die "could not write a telemetry-enabled foundation spec"
-    TELEMETRY_ARGS=(-c "${FOUNDATION_TELEMETRY_SPEC}" --namespace "${NS}")
+    TELEMETRY_ARGS=(-c "${FOUNDATION_TELEMETRY_SPEC}" --namespace "${FOUNDATION_NS}")
     [ -n "${CLUSTER}" ] && TELEMETRY_ARGS+=(--kube-context "${CLUSTER}")
     (cd "${REPO_ROOT}/../foundation" &&
       go run ./cmd/foundation validate -c "${FOUNDATION_TELEMETRY_SPEC}") ||

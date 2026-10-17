@@ -6,7 +6,7 @@
       "app.kubernetes.io/managed-by": "meko-foundation"
     },
     "name": "foundation",
-    "namespace": "amp"
+    "namespace": "amp-foundation"
   },
   "spec": {
     "enableClientToNodeEncrypt": true,

@@ -6,7 +6,7 @@
       "app.kubernetes.io/managed-by": "meko-foundation"
     },
     "name": "amp-ca",
-    "namespace": "amp"
+    "namespace": "amp-foundation"
   },
   "spec": {
     "certType": "K8S_CERT_MANAGER",

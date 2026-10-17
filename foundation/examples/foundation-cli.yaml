@@ -1,5 +1,6 @@
 # The foundation the amp controller runs on: one YugabyteDB universe managed by
-# the YugabyteDB Kubernetes Operator, in the same namespace as the amp stack.
+# the YugabyteDB Kubernetes Operator, in a namespace of its own: never the amp
+# stack's, which holds customer endpoints.
 #
 #   foundation render -c examples/foundation-cli.yaml -o manifests/   # manifests, no cluster
 #   foundation up     -c examples/foundation-cli.yaml                 # first bring-up
@@ -30,7 +31,7 @@
 # since the yugaware that chart installs bundles only its own DB release.
 
 kubeContext: ""            # empty = current context
-namespace: amp             # yugaware + operator + CRs + DB pods + amp pods
+namespace: amp-foundation  # yugaware + operator + CRs + DB pods; amp runs in `amp`
 
 # Doubles as the release-bucket key and as the git ref for the CRD bundle, so
 # it must resolve as both. A full build resolves as both when the build was

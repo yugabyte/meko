@@ -36,7 +36,8 @@ encryption flags are create-time only in the CRD, so the foundation spec decides
 encrypted spec is refused. The rows above still hold, with three differences: the
 universe's certificates are issued by YBA under its cert-manager type rather than by
 `yugabyte-tls.sh` (the CA reaches it as a `YBCertificate` naming Secret
-`amp-ca-bundle-tls`, which `up-gke.sh` copies from the trust bundle), `TLS_ISSUER_KIND`
+`amp-ca-bundle-tls`, which `up-gke.sh` copies from the trust bundle into
+`FOUNDATION_NS`), `TLS_ISSUER_KIND`
 must be `ClusterIssuer` because YBA deploys into its own namespace, and the node
 certificates carry the endpoint Service's name through
 `kubernetesOverrides.tls.extraSANs` — without it the Service is in no SAN and every

@@ -181,8 +181,8 @@ func TestHelmSets(t *testing.T) {
 		t.Error("kubernetesOperatorEnabled is not true; without it there is no operator and no CR reconciliation")
 	}
 	// The operator watches the release namespace, not a separate one: yugaware,
-	// the operator, the CR, the DB pods and the amp pods all share one
-	// namespace, which is what up-gke.sh already does.
+	// the operator, the CRs and the DB pods share one namespace. The amp pods
+	// do not (up-gke.sh's FOUNDATION_NS).
 	if got := sets["yugaware.kubernetesOperatorNamespace"]; got != spec.Namespace {
 		t.Errorf("kubernetesOperatorNamespace = %q, want the release namespace %q", got, spec.Namespace)
 	}

@@ -343,9 +343,9 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
     `/etc/amp/tls/ca/ca.crt`);
   - `up-gke.sh` with **`FOUNDATION=operator`** brings up an operator-managed universe and
     takes the address from `foundation connstr` — the chart-created ClusterIP
-    `<universe>-<suffix>-yb-tserver-conn.$NS.svc.cluster.local:5433`, which carries YSQL on
+    `<universe>-<suffix>-yb-tserver-conn.$FOUNDATION_NS.svc.cluster.local:5433`, which carries YSQL on
     5433 and the tserver RPC port on 9100. The name carries a YBA-generated suffix, so find
-    it with `kubectl -n "$NS" get svc -l serviceName=yb-tserver-conn,scope=Namespaced`
+    it with `kubectl -n "$FOUNDATION_NS" get svc -l serviceName=yb-tserver-conn,scope=Namespaced`
     rather than guessing.
 
   Running `redeploy.sh` standalone with the default DB URL against any of the others is the
@@ -413,7 +413,7 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   times out.** Not the DB image — the chart's own. A chart bump can move an image to a
   registry the pull secret does not cover: 2026.1.2 switched the postgres init container
   from Docker Hub to `quay.io/yugabyte/hardened-postgres` AND `hardened-prometheus`. Read
-  which image off the pod (`kubectl -n "$NS" describe pod -l release=$NS-yugaware`), then
+  which image off the pod (`kubectl -n "$FOUNDATION_NS" describe pod -l release=$FOUNDATION_NS-yugaware`), then
   either grant the robot behind `quay-pull-secret` access to that repo, or override it in
   the spec's `yba.values` — the checked-in spec does both under `image:`.
 
@@ -439,10 +439,10 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   repo, not a name mismatch — do **not** add
   `kubernetesOverrides.Image.pullSecretName` in the universe body, which would name a Secret that need
   not exist where the DB pods run. Read the reason off the CRs, which is where YBA puts it:
-  `kubectl -n "$NS" get ybprovider,ybuniverse -o yaml` (`status.actions[]` carries the
+  `kubectl -n "$FOUNDATION_NS" get ybprovider,ybuniverse -o yaml` (`status.actions[]` carries the
   failing task and its message), then the operator's own log —
-  `kubectl -n "$NS" logs "statefulset/$NS-yugaware-yugaware" -c yugaware --tail=300`.
-  Select on `release=$NS-yugaware` if you need a selector: the yugaware chart sets no
+  `kubectl -n "$FOUNDATION_NS" logs "statefulset/$FOUNDATION_NS-yugaware-yugaware" -c yugaware --tail=300`.
+  Select on `release=$FOUNDATION_NS-yugaware` if you need a selector: the yugaware chart sets no
   `app.kubernetes.io/*` labels, and `kubectl logs -l` with a selector that matches nothing
   exits 0 with no output, which reads as an empty log.
 - **A single-host DB URL single-homes the control plane.** pgx dials only what the DSN lists, in

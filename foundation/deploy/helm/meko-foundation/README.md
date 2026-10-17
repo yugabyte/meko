@@ -11,8 +11,8 @@ helm install meko-foundation-crd oci://quay.io/yugabyte/charts/meko-foundation-c
 
 # once per foundation
 helm install fdn oci://quay.io/yugabyte/charts/meko-foundation \
-  --namespace amp --create-namespace
-kubectl -n amp apply -f foundation-cr.yaml
+  --namespace amp-foundation --create-namespace
+kubectl -n amp-foundation apply -f foundation-cr.yaml
 ```
 
 No `--set image.tag`: the chart's `appVersion` names the image built in the same
@@ -104,11 +104,11 @@ the setting that puts a finalizer on the object. Know two things before using it
   it before deleting:
 
   ```bash
-  kubectl -n amp patch foundation foundation --type=merge \
+  kubectl -n amp-foundation patch foundation foundation --type=merge \
     -p '{"spec":{"deletionPolicy":"Delete"}}'
-  kubectl -n amp get foundation foundation \
+  kubectl -n amp-foundation get foundation foundation \
     -o jsonpath='{.metadata.finalizers}'      # until it lists .../teardown
-  kubectl -n amp delete foundation foundation
+  kubectl -n amp-foundation delete foundation foundation
   ```
 
 `helm uninstall` of this chart removes the controller and nothing else: the

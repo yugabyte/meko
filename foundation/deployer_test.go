@@ -136,13 +136,13 @@ func TestInstallYBAArgv(t *testing.T) {
 	// upgrade --install, not install: a converge re-runs this and must be a
 	// no-op rather than an error on an unchanged spec.
 	for _, want := range []string{
-		"upgrade --install amp-yugaware yugabytedb/yugaware",
-		"--namespace amp",
+		"upgrade --install amp-foundation-yugaware yugabytedb/yugaware",
+		"--namespace amp-foundation",
 		"--wait",
 		"--version " + repoChartVersion,
 		"--set-string yugaware.defaultUser.enabled=true",
 		"--set-string yugaware.kubernetesOperatorEnabled=true",
-		"--set-string yugaware.kubernetesOperatorNamespace=amp",
+		"--set-string yugaware.kubernetesOperatorNamespace=amp-foundation",
 	} {
 		if !strings.Contains(upgrade, want) {
 			t.Errorf("helm argv is missing %q\n  got: %s", want, upgrade)
@@ -151,7 +151,7 @@ func TestInstallYBAArgv(t *testing.T) {
 	// The release name carries the namespace because the chart's ClusterRole
 	// and ClusterRoleBinding are named after the release, and cluster-scoped
 	// objects have no namespace to isolate them.
-	if spec.HelmRelease() != "amp-yugaware" {
+	if spec.HelmRelease() != "amp-foundation-yugaware" {
 		t.Errorf("HelmRelease = %q, want it to carry the namespace", spec.HelmRelease())
 	}
 }
@@ -507,13 +507,13 @@ func TestConnectBuildsTheConsumerContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	if want := ybaServiceName + ".amp.svc.cluster.local:5433"; info.YSQLHostPorts != want {
+	if want := ybaServiceName + ".amp-foundation.svc.cluster.local:5433"; info.YSQLHostPorts != want {
 		t.Errorf("YSQLHostPorts = %q, want %q", info.YSQLHostPorts, want)
 	}
 	// The same host on 9100: the direct-RPC lane derives its address from the
 	// YSQL host rather than being configured, because the deploy path cannot set
 	// tserver_rpc_addrs. Reported for diagnostics only.
-	if want := ybaServiceName + ".amp.svc.cluster.local:9100"; info.RPCHostPorts != want {
+	if want := ybaServiceName + ".amp-foundation.svc.cluster.local:9100"; info.RPCHostPorts != want {
 		t.Errorf("RPCHostPorts = %q, want %q", info.RPCHostPorts, want)
 	}
 	if !strings.Contains(info.DBURL, "/yb_storage?sslmode=verify-full") {
@@ -744,7 +744,7 @@ func TestAddressIsTheChartsService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	if want := ybaServiceName + ".amp.svc.cluster.local:5433"; info.YSQLHostPorts != want {
+	if want := ybaServiceName + ".amp-foundation.svc.cluster.local:5433"; info.YSQLHostPorts != want {
 		t.Errorf("YSQLHostPorts = %q, want %q", info.YSQLHostPorts, want)
 	}
 }
@@ -1796,7 +1796,7 @@ func TestCustomerCountOverHTTPInCluster(t *testing.T) {
 	if err := d.checkYBACustomer(context.Background()); err != nil {
 		t.Fatalf("checkYBACustomer: %v", err)
 	}
-	want := "http://amp-yugaware-yugaware-ui.amp.svc.cluster.local/api/v1/customer_count"
+	want := "http://amp-foundation-yugaware-yugaware-ui.amp-foundation.svc.cluster.local/api/v1/customer_count"
 	if got != want {
 		t.Errorf("GET %q, want %q", got, want)
 	}

@@ -227,11 +227,24 @@ Key overrides: `REGISTRY` (base registry+path, default `gcr.io/yugabyte`), `TAG`
 | `yugabyted` (default) | the inlined single-node StatefulSet. RF-1, no rolling upgrade, no backups — fine for a dev or CI stack, and what every deploy path here still uses. |
 | `operator` | a real universe managed by the YugabyteDB Kubernetes Operator, via the [`foundation/`](../../foundation) deployer ([architecture](../../foundation/ARCHITECTURE.md)): CRDs, the `yugaware` chart with the operator enabled, a `YBProvider` and `YBUniverse` CR and the tserver RPC Service. The database is `yb-database.sh`'s, run straight after — the deployer stopped creating it, and YBA creates it itself on a build carrying `yb.universe.create_yb_storage_db`. Needs `go` on PATH; `FOUNDATION_SPEC` points at the spec (default `foundation/examples/foundation-cli.yaml`). |
 
+Under `operator` everything the foundation owns — yugaware, the operator, the
+CRs, the DB pods, the CA Secret YBA reads and YBA's copies of the pull and
+metrics-export Secrets — goes in `FOUNDATION_NS` (default `<NS>-foundation`),
+never in `NS`. Endpoints run in `NS`, and a namespace is the boundary for
+Secrets and RBAC, so sharing one would put YBA's admin credentials beside
+customer compute ([CLOUDGA-37479](https://yugabyte.atlassian.net/browse/CLOUDGA-37479)).
+amp reaches the universe across namespaces through the Service FQDN `connstr`
+returns. The script refuses `FOUNDATION_NS=NS`, and refuses to run at all
+against an `NS` that already holds a universe or a `<NS>-yugaware` release —
+an environment from before the split, which would otherwise get a second,
+empty universe and a controller pointed at it. A bring-your-own `PULL_SECRET`
+is copied from `NS` into `FOUNDATION_NS` when it is not already there.
+
 The spec stands up a **3-node RF3** universe on `yb-standard`, placed explicitly
 on itest-dev's single zone, with the MAGE gflag seeded at create (it is
 start-time on both processes, so gaining it later is a rolling restart). The
 `provider` block carries the DB image registry, the per-zone storage class and
-the namespace the DB lands in (`kubeNamespace`, defaulted to this one), none of
+the namespace the DB lands in (`kubeNamespace`, defaulted to `FOUNDATION_NS`), none of
 which the operator's auto-provider can infer. The DB image's pull secret is
 YBA's to place: it derives one from its own (`yba.values.image.pullSecret`,
 `quay-pull-secret` — what this script mints) and copies it beside the DB pods,

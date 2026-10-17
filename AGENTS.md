@@ -346,6 +346,12 @@ Things a reader will otherwise re-derive the hard way:
   namespace because that is the one the operator watches. The zones must agree on one
   namespace — those lookups run in exactly one, and a per-zone address is a different
   feature.
+- **The foundation never shares a namespace with its consumer.** amp endpoints are
+  customer compute, and Secrets and RBAC are namespace-scoped, so YBA's admin credentials
+  must not sit beside them (CLOUDGA-37479). `up-gke.sh` puts the operator lane in
+  `FOUNDATION_NS` (default `<NS>-foundation`) and refuses `FOUNDATION_NS=NS`; the CI lane
+  uses `$FNS`. A Secret both sides read — the pull secret, `byoc-metrics-auth` — is
+  created in each namespace, not shared.
 - **The DB image's pull secret is YBA's to place, not ours.** YBA derives it from its own
   (`yba.values.image.pullSecret`) and propagates it into the namespace it deploys nodes
   into. That is the only thing that can work: the `YBProvider` CRD has no field for

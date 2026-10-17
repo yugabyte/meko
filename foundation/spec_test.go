@@ -16,8 +16,9 @@ import (
 func TestLoadExampleAmp(t *testing.T) {
 	spec := loadExample(t, "foundation-cli.yaml")
 
-	if spec.Namespace != "amp" {
-		t.Errorf("namespace = %q, want amp", spec.Namespace)
+	// Never the amp stack's own namespace, which holds customer endpoints.
+	if spec.Namespace != "amp-foundation" {
+		t.Errorf("namespace = %q, want amp-foundation", spec.Namespace)
 	}
 	if n, _ := intField(spec.universe(), "numNodes"); n != 3 {
 		t.Errorf("universe.numNodes = %d, want 3", n)
