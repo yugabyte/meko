@@ -831,3 +831,21 @@ func TestRunStdinTypesAnUnreachableKubeletOnceTheBudgetIsSpent(t *testing.T) {
 		t.Fatalf("err = %v after %d attempts, want a KubeletUnreachableError after %d", err, attempts, kubeletDialAttempts)
 	}
 }
+
+func TestRunStdinRetriesADialFailureAfterTheContainerNotice(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	attempts := 0
+	k := New(Config{Namespace: "ns", Pod: "p"}).WithRunner(
+		func(context.Context, io.Reader, []string) (execpkg.Result, error) {
+			attempts++
+			if attempts == 1 {
+				return execpkg.Result{ExitCode: 1, Stderr: "Defaulted container \"yb-tserver\" out of: yb-tserver, yb-cleanup\n" + execDialFail}, nil
+			}
+			return execpkg.Result{Stdout: "0"}, nil
+		})
+	res, err := k.Run(context.Background(), "true")
+	if err != nil || res.Stdout != "0" || attempts != 2 {
+		t.Fatalf("Run = %+v, %v after %d attempts, want the second attempt's result", res, err, attempts)
+	}
+}

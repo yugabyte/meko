@@ -46,8 +46,14 @@ const kubeletDialAttempts = 10
 var kubeletRetryDelay = 3 * time.Second
 
 // The API server could not reach the node's kubelet, so the exec never started.
+// kubectl prints its container-default notice ahead of that error.
 func kubeletUnreachable(stderr string) bool {
-	return strings.HasPrefix(strings.TrimSpace(stderr), "Error from server: error dialing backend")
+	for _, l := range strings.Split(stderr, "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "Defaulted container ") {
+			return strings.HasPrefix(l, "Error from server: error dialing backend")
+		}
+	}
+	return false
 }
 
 // kubectl port-forward and cp print no remote output, so a substring is safe here.

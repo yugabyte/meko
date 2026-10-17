@@ -100,12 +100,10 @@ func (a *ampFeatureRun) gcDropDatabaseUnderFork(ctx context.Context) error {
 		return fmt.Errorf("database %s (oid %d) never reached amp_storage.pages on branch %s: %w", dropDBName, dbOID, parentID, err)
 	}
 
-	lsn, err := currentLSN(ctx, c)
-	if err != nil {
-		return err
-	}
+	// At the head, not a captured LSN: with a 1 KiB gc_horizon the parent's cutoff
+	// passes a captured LSN within seconds and the controller refuses the fork.
 	forkName := "dropdb-fork-" + a.f.suffix()
-	fc, err := forkChildAt(ctx, cl, proj, proj.branchID, lsn, forkName, a.f.endpointSQL)
+	fc, err := forkChildAt(ctx, cl, proj, proj.branchID, "", forkName, a.f.endpointSQL)
 	if err != nil {
 		return err
 	}

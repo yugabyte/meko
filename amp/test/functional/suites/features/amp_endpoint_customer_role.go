@@ -352,10 +352,10 @@ func (r *customerRoleRun) switchOff(ctx context.Context) error {
 	if err := r.expectRemoteAuth(ctx, "unset", "switched off again"); err != nil {
 		return err
 	}
-	if err := r.refused(ctx, r.ep, "cloud_admin", "cloud_admin after the setting was switched off"); err != nil {
+	if err := r.logsIn(ctx, r.ep, r.role, "the customer role after the setting was switched off"); err != nil {
 		return err
 	}
-	if err := r.logsIn(ctx, r.ep, r.role, "the customer role after the setting was switched off"); err != nil {
+	if err := r.refused(ctx, r.ep, "cloud_admin", "cloud_admin after the setting was switched off"); err != nil {
 		return err
 	}
 	admin, err := r.a.f.endpointSQL(ctx, r.ep)

@@ -39,6 +39,9 @@ type faultMetricSpec struct {
 	// Labelled: exported only from its first increment, so its absence from an
 	// exposition that answered before the fault reads as zero.
 	Labelled bool
+	// ExportOnly: the fault does not have to move it, so only its presence in
+	// the exposition is asserted.
+	ExportOnly bool
 }
 
 type faultMetricsWatch struct {
@@ -61,7 +64,9 @@ func safekeeperFaultMetrics() (metrics.Source, []faultMetricSpec) {
 		},
 	}
 	return src, []faultMetricSpec{
-		{Title: "WAL consumer batch retries", Raw: "safekeeper_wal_consumer_batch_retries_total",
+		// wal_tail_nemesis writes nothing while the backing is down, so no batch
+		// is in flight to fail, and a SIGKILLed safekeeper restarts the counter.
+		{Title: "WAL consumer batch retries", Raw: "safekeeper_wal_consumer_batch_retries_total", ExportOnly: true,
 			Means: "batch flushes into amp_storage.wals that failed and were retried, so WAL durability is not advancing"},
 	}
 }
@@ -190,6 +195,9 @@ func (w *faultMetricsWatch) Assert(t *core.T) error {
 			s.Set(spec.Raw+"_baseline_samples", m.pre)
 			s.Set(spec.Raw+"_peak", round4(m.peak))
 			s.Set(spec.Raw+"_settled", round4(m.settled))
+			if spec.ExportOnly {
+				continue
+			}
 			if m.pre == 0 && !(spec.Labelled && w.sampler.AbsentBefore(w.src.Tag, spec.Raw, start)) {
 				blind = append(blind, fmt.Sprintf("%s carries no sample before the fault, so a rise over its baseline would mean nothing (%s)", spec.Raw, spec.Means))
 				continue
