@@ -1,5 +1,6 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { harnessOf } from '../shared/harnesses.js';
 import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
@@ -357,15 +358,23 @@ function localDay(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Totals per agent and model, most tokens first, for one project or all of them. The same model id
+ * under two agents is two rows, and a row whose session is gone counts as Claude Code's.
+ */
+function usageByModel(db: Db, projectId?: string): ModelUsage[] {
+  return all<SumRow & { harness: string; model: string }>(db,
+    `SELECT COALESCE(s.harness, 'claude') AS harness, u.model, ${SUMS} FROM usage_messages u LEFT JOIN sessions s ON s.id = u.session_id
+     ${projectId ? 'WHERE s.project_id = ?' : ''} GROUP BY 1, u.model`, ...(projectId ? [projectId] : []))
+    .map((r) => ({ harness: harnessOf(r.harness), model: r.model, usage: toUsage(r) }))
+    .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
+}
+
 /** Usage breakdown for the project home: totals, by model, by session, and the last `days` days. */
 export function projectUsage(db: Db, projectId: string, days = 14, now = Date.now()): ProjectUsage {
   const total = toUsage(get<SumRow>(db,
     `SELECT ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.project_id = ?`, projectId));
-  const byModel: ModelUsage[] = all<SumRow & { model: string }>(db,
-    `SELECT u.model, ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id
-     WHERE s.project_id = ? GROUP BY u.model`, projectId)
-    .map((r) => ({ model: r.model, usage: toUsage(r) }))
-    .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
+  const byModel = usageByModel(db, projectId);
   const calls = mekoCalls(db, projectId);
   const bySessionMeko = mekoBy(calls, (r) => r.session_id);
   const bySession: SessionUsage[] = all<SumRow & { id: string; name: string; stage: string; desired: string }>(db,
@@ -460,9 +469,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
     .filter((p) => !p.deleted || p.sessions > 0)
     .sort((a, b) => Number(a.deleted) - Number(b.deleted) || totalTokens(b.usage) - totalTokens(a.usage));
 
-  const byModel: ModelUsage[] = all<SumRow & { model: string }>(db, `SELECT model, ${SUMS} FROM usage_messages GROUP BY model`)
-    .map((r) => ({ model: r.model, usage: toUsage(r) }))
-    .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
+  const byModel = usageByModel(db);
   const sum = (f: (p: ProjectUsageSummary) => number) => byProject.reduce((n, p) => n + f(p), 0);
   return {
     total: toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages`)),

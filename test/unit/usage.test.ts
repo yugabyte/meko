@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, openDb, run } from '../../src/server/db.js';
 import { pruneSessionEvents } from '../../src/server/store.js';
-import { ingestSessionUsage, parsePushLine, parseUsageLine, projectUsage, sessionUsage, totalTokens, usageByProject, usageBySession, usageOverview } from '../../src/server/usage.js';
+import { ingestSessionUsage, parsePushLine, parseUsageLine, projectUsage, recordKiroTurns, sessionUsage, totalTokens, usageByProject, usageBySession, usageOverview } from '../../src/server/usage.js';
 
 function line(id: string, usage: Record<string, number>, opts: { model?: string; at?: string; type?: string } = {}): string {
   return JSON.stringify({
@@ -79,12 +79,19 @@ describe('token usage from transcripts', () => {
     writeFileSync(join(dir, 's2.jsonl'), line('c', u, { at: yesterday }));
     ingestSessionUsage(db, 's1', join(dir, 's1.jsonl'));
     ingestSessionUsage(db, 's2', join(dir, 's2.jsonl'));
+    // A Kiro session's turns, from before the 14 days, on Kiro's `auto` and on a model Claude Code also ran.
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at, harness) VALUES ('s3', 'p', 's3', 'S3', 'c', 'b', 'main', '/w', 't', 'tok-s3', 'running', 'idle', 'code', 0, 'kiro')`);
+    const turn = { at: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, credits: 0.5, contextPercent: null };
+    recordKiroTurns(db, 's3', 'k', [{ ...turn, key: 't1', model: 'auto' }, { ...turn, key: 't2', model: 'claude-sonnet-5' }]);
 
-    expect(usageByProject(db).get('p')!.messages).toBe(3);
+    expect(usageByProject(db).get('p')!.messages).toBe(5);
     const pu = projectUsage(db, 'p', 14, now);
     expect(pu.total.output).toBe(30);
-    expect(pu.byModel.map((m) => m.model)).toEqual(['claude-opus-5-5', 'claude-sonnet-5']);
-    expect(pu.bySession.map((s) => [s.sessionId, s.archived])).toEqual([['s1', false], ['s2', true]]);
+    expect(pu.byModel.map((m) => [m.harness, m.model])).toEqual([
+      ['claude', 'claude-opus-5-5'], ['claude', 'claude-sonnet-5'], ['kiro', 'auto'], ['kiro', 'claude-sonnet-5'],
+    ]);
+    expect(pu.bySession.map((s) => [s.sessionId, s.archived])).toEqual([['s1', false], ['s2', true], ['s3', false]]);
     expect(pu.daily).toHaveLength(14);
     expect(pu.daily.at(-1)).toEqual({ day: '2026-09-24', usage: { input: 1, output: 10, cacheRead: 100, cacheWrite: 0, messages: 1 } });
     expect(pu.daily.at(-2)!.usage.messages).toBe(2);
@@ -171,7 +178,7 @@ describe('usage across projects', () => {
     expect(o.byProject[1]).toMatchObject({ sessions: 1, mergedPrs: 1, directPushes: 0, directCommits: 0 });
     expect(o).toMatchObject({ mergedPrs: 2, directPushes: 2, directCommits: 3 });
     expect(o.total.output).toBe(530);
-    expect(o.byModel).toEqual([{ model: 'm', usage: expect.objectContaining({ output: 530, messages: 3 }) }]);
+    expect(o.byModel).toEqual([{ harness: 'claude', model: 'm', usage: expect.objectContaining({ output: 530, messages: 3 }) }]);
     expect(o.daily).toHaveLength(14);
     expect(o.daily.at(-1)!.usage.output).toBe(530);
   });
@@ -218,6 +225,15 @@ describe('token formatting (web)', () => {
     expect(formatCost(241.4)).toBe('$241');
     expect(formatCost(1234.5)).toBe('$1,235');
     expect(formatCost(-2.75)).toBe('−$2.75');
+  });
+
+  it.each([
+    ['claude', 'claude-opus-5-5', 'claude-opus-5-5'],
+    ['kiro', 'auto', 'Kiro · auto'],
+    ['kiro', 'claude-sonnet-4.5', 'Kiro · claude-sonnet-4.5'],
+  ] as const)('names a %s row on %s by model', async (harness, model, label) => {
+    const { modelLabel } = await import('../../src/web/util.js');
+    expect(modelLabel({ harness, model, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 } })).toBe(label);
   });
 
   it('marks a cost that leaves out unpriced models as a lower bound', async () => {

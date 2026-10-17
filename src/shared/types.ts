@@ -171,6 +171,8 @@ export interface TokenUsage {
 }
 
 export interface ModelUsage {
+  /** The agent the responses came from: the same model id under two agents is two rows. */
+  harness: HarnessId;
   model: string;
   usage: TokenUsage;
 }

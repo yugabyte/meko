@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
-import { creditsNumber, cx, formatCostOf, formatTokens, rowTokens, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, formatTokens, modelLabel, rowTokens, totalTokens, usageTitle } from '../util';
 import { MekoUsageSection } from './MekoUsageSection';
 
 /**
@@ -111,8 +111,8 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
               </thead>
               <tbody>
                 {usage.byModel.map((m) => (
-                  <tr key={m.model} title={usageTitle(m.usage)}>
-                    <td className="mono small">{m.model}</td>
+                  <tr key={`${m.harness}:${m.model}`} title={usageTitle(m.usage)}>
+                    <td className="mono small">{modelLabel(m)}</td>
                     <TokenCells usage={m.usage} />
                     {modelCredits && <CreditsCell usage={m.usage} />}
                   </tr>

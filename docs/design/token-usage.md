@@ -35,7 +35,10 @@ credits, so credits are never mixed into it: `TokenUsage.credits` sums them per 
 model and day, the session footer shows **Kiro · <n> credits**, and the usage views show **Kiro
 credits** beside **Est. cost**, with a **Credits** column on the by-project, by-session, by-model
 and daily tables once any of their rows has some. A Kiro row with credits and no tokens (its `auto`
-model counts none) shows a dash for its tokens, not 0. The 14-day chart gives each day a Kiro
+model counts none) shows a dash for its tokens, not 0. The by-model tables group by agent and model
+(`ModelUsage.harness`, from the session's `harness`), and name a Kiro row with the agent first,
+**Kiro · auto** (`modelLabel`): Kiro's default model is just `auto`, and Kiro never records which
+model it picked, so the row can say whose it is but not which model ran. The 14-day chart gives each day a Kiro
 credits bar beside its tokens bar, on a second axis on the right (tokens and credits don't share
 a scale), with a legend naming each bar's axis, once any of the 14 days has credits; without
 any it's unchanged. The rail's tooltip on a project adds its credits. The last turn's context fill is the session's context ring, as the mod's measurement is for
