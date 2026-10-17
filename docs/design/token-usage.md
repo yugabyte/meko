@@ -33,8 +33,12 @@ the session as read, so the backfill at start leaves it alone. Only the session'
 is read ([Agents](harnesses.md#kiro)), never another session's in the same pooled worktree. Cost is priced only from rows without
 credits, so credits are never mixed into it: `TokenUsage.credits` sums them per session, project,
 model and day, the session footer shows **Kiro · <n> credits**, and the usage views show **Kiro
-credits** beside **Est. cost** (a **Credits** column on the all-projects table once any project has
-some). The last turn's context fill is the session's context ring, as the mod's measurement is for
+credits** beside **Est. cost**, with a **Credits** column on the by-project, by-session, by-model
+and daily tables once any of their rows has some. A Kiro row with credits and no tokens (its `auto`
+model counts none) shows a dash for its tokens, not 0. The 14-day chart gives each day a Kiro
+credits bar beside its tokens bar, on a second axis on the right (tokens and credits don't share
+a scale), with a legend naming each bar's axis, once any of the 14 days has credits; without
+any it's unchanged. The rail's tooltip on a project adds its credits. The last turn's context fill is the session's context ring, as the mod's measurement is for
 Claude.
 
 **Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
@@ -152,7 +156,29 @@ A repeat changes nothing, so an idle session re-running its status line with an 
 pull the number back. A session's first reading only raises the number, since it may be old.
 The reading and each session's last one are kept in the `kv` table (`plan_limits`, `plan_limits_seen`; a session's is dropped once its windows reset), so they hold across a restart, and the rail shows each window with a bar, its reset time and how old the reading is,
 turning amber at 80% and red at 95%. A window disappears once its reset time passes. The numbers
-only move when a session gets a reply, so the rail says when they were last reported.
+only move when a session gets a reply, so the rail says when they were last reported. Each row
+names its agent: **Claude 5-hour**, **Claude weekly**.
+
+**Kiro's plan.** Kiro has no status line, but `kiro-cli chat --no-interactive --output-format
+stream-json /usage` prints the account's credits this period (about 4 s; it bills nothing):
+`Estimated Usage | resets on 2026-11-01 | KIRO FREE` and `Credits (36.02 of 50 covered in plan),
+72.0%` on kiro-cli 2.32.0. `KiroPlanStore` (`src/server/kiroplan.ts`) runs it at start (once Kiro's
+version is read), hourly, and when the first Kiro session is created, so that session's plan shows
+without waiting for the hour; never after turns. It runs only while Kiro is available and some
+session (archived ones too) has run on it, so an install that never uses Kiro in AgentK never
+runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most; Kiro keeps the run as an
+empty session, which AgentK deletes (`chat --delete-session`). `parseKiroPlan` (`src/server/kiro.ts`)
+reads the plan name, the reset day and the credits line, and returns nothing without the credits
+line. Paid plans' bonus and overage lines haven't been seen, so they're matched loosely (a line
+with `bonus` and two numbers, `remaining` or `left` meaning what's left; a line with `overage`, its
+first amount that isn't money or a percentage, and `enabled`/`disabled`), and each is kept with the
+line as Kiro printed it. The reading is kept in `kv` (`kiro_plan`) and sent as `AppState.kiroPlan`;
+a read that fails (signed out, say) keeps the last one and logs once. The rail shows **Kiro
+credits**: a bar of used over covered in Kiro's violet (amber at 80%, red at 95%, and red past
+100% unless overage is on), `36 of 50 · Free · resets Nov 1`, a line for bonus and overage when
+Kiro printed them (the tooltip quotes Kiro's lines, since how they're read is a guess), and its
+own **As of** line. The reading is dropped once its reset day has come (UTC midnight), and while
+Kiro isn't available.
 
 - **Where it shows.** The session footer and tab tooltip show the session's total and output
   tokens. The rail tooltip shows the project total. The project home has a **Token usage**

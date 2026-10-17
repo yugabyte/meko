@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { KiroPlan } from '../shared/types.js';
 import type { Paths } from './paths.js';
 
 /**
@@ -330,6 +331,71 @@ export function readKiroRun(stdout: string): { text: string; ok: boolean; sessio
     sessionId,
     error: error ?? (finished && typeof finished.status === 'string' && finished.status !== 'success' ? `the run ended with ${finished.status}` : null),
   };
+}
+
+/** The arguments for reading Kiro's plan allowance: its `/usage` command in a one-shot run, which bills nothing. */
+export function kiroUsageArgs(): string[] {
+  return ['chat', '--no-interactive', '--output-format', 'stream-json', '/usage'];
+}
+
+/** A number as Kiro prints one: `36.02`, `1,000`. */
+const NUM = String.raw`\d[\d,]*(?:\.\d+)?`;
+const toNum = (s: string) => Number(s.replace(/,/g, ''));
+const DAY = /\b(\d{4}-\d{2}-\d{2})\b/;
+
+/**
+ * Kiro's plan allowance from what its `/usage` command printed, checked against kiro-cli 2.32.0 on
+ * the free plan:
+ *
+ *     Estimated Usage | resets on 2026-11-01 | KIRO FREE
+ *     Credits (36.02 of 50 covered in plan), 72.0%
+ *
+ * Null without the credits line. Paid plans' bonus and overage lines haven't been seen, so they're
+ * matched loosely (a `bonus` line with two numbers, an `overage` line), each left null when absent.
+ */
+export function parseKiroPlan(text: string, now: number): KiroPlan | null {
+  // eslint-disable-next-line no-control-regex
+  const lines = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const credits = new RegExp(String.raw`credits\s*\(\s*(${NUM})\s+of\s+(${NUM})\s+covered`, 'i');
+  const main = lines.map((l) => (/bonus/i.test(l) ? null : credits.exec(l))).find((m) => m);
+  if (!main) return null;
+  const head = lines.find((l) => /resets on/i.test(l));
+  const plan = head?.split('|').at(-1)?.trim().replace(/^kiro\s+/i, '') ?? '';
+  const bonusLine = lines.find((l) => /bonus/i.test(l));
+  const pair = bonusLine && new RegExp(String.raw`(${NUM})\s*(?:/|of)\s*(${NUM})`, 'i').exec(bonusLine);
+  const overLine = lines.find((l) => /overage/i.test(l) && !/bonus/i.test(l));
+  return {
+    plan: plan && !/resets on|usage/i.test(plan) ? plan.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()) : null,
+    used: toNum(main[1]),
+    covered: toNum(main[2]),
+    resetsOn: (head && /resets on\s+(\d{4}-\d{2}-\d{2})/i.exec(head)?.[1]) ?? null,
+    bonus: bonusLine && pair ? {
+      // "120 of 500 remaining" counts what's left; anything else, what's used.
+      used: /remaining|left/i.test(bonusLine) ? Math.max(0, toNum(pair[2]) - toNum(pair[1])) : toNum(pair[1]),
+      total: toNum(pair[2]),
+      expires: DAY.exec(bonusLine)?.[1] ?? inDays(/expires? in\s+(\d+)\s+days?/i.exec(bonusLine)?.[1], now),
+      line: bonusLine.slice(0, 200),
+    } : null,
+    overage: overLine ? {
+      credits: firstAmount(overLine),
+      enabled: /\benabled\b|:\s*on\b/i.test(overLine) ? true : /\bdisabled\b|:\s*off\b/i.test(overLine) ? false : null,
+      line: overLine.slice(0, 200),
+    } : null,
+    updatedAt: now,
+  };
+}
+
+/** The first number on a line that isn't money or a percentage: 14.2 in "Overages: 14.20 credits ($0.57)". */
+function firstAmount(line: string): number | null {
+  for (const m of line.matchAll(new RegExp(NUM, 'g'))) {
+    if (line[m.index - 1] !== '$' && line[m.index + m[0].length] !== '%') return toNum(m[0]);
+  }
+  return null;
+}
+
+/** The day `n` days from `now` (YYYY-MM-DD, UTC), or null without `n`. */
+function inDays(n: string | undefined, now: number): string | null {
+  return n ? new Date(now + Number(n) * 86_400_000).toISOString().slice(0, 10) : null;
 }
 
 /** Deletes one of Kiro's saved sessions (an Ask AgentK run's), in the background; never throws. */

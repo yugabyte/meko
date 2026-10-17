@@ -43,7 +43,8 @@ do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and th
 | System prompt | `--append-system-prompt` | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | `kiro-guard.sh`: exit 2, the reason on stderr |
 | Conversation id | chosen (`--session-id`) | Kiro's, from its hooks' `session_id`, else its session store |
-| AgentK's mod, Artifact designs, plan limits | yes | no |
+| AgentK's mod, Artifact designs | yes | no |
+| Plan limits in the rail | 5-hour and weekly, from the status line and the mod | credits this period, from `/usage` hourly |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | none |
 | Usage | transcript tokens, priced | credits from Kiro's session file |
 

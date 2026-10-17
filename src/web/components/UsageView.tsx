@@ -4,16 +4,16 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { cx, formatCostOf, formatCredits, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
-import { CostStat, CreditsStat, DailyChart, DailyTable, Stat } from './UsagePanel';
+import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, Stat, TokenCells } from './UsagePanel';
 import { Busy } from './common';
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
 type ProjectKey = 'name' | 'sessions' | 'mergedPrs' | 'directCommits' | 'output' | 'total' | 'cost' | 'credits' | 'meko' | 'saved';
-type ModelKey = 'model' | 'output' | 'total';
+type ModelKey = 'model' | 'output' | 'total' | 'credits';
 
 const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string => {
   switch (k) {
@@ -39,7 +39,7 @@ const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
   }
 };
 const modelValue = (m: ModelUsage, k: ModelKey): number | string =>
-  k === 'model' ? m.model : k === 'output' ? m.usage.output : totalTokens(m.usage);
+  k === 'model' ? m.model : k === 'output' ? m.usage.output : k === 'credits' ? (m.usage.credits ?? 0) : totalTokens(m.usage);
 
 /**
  * Usage across every project, closed ones included: tokens and their cost by project, model and
@@ -59,8 +59,8 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
   const projectHeader = (key: ProjectKey, label: string, opts: { text?: boolean; className?: string; title?: string } = {}) => (
     <SortHeader sort={projectSort} col={key} text={opts.text} className={opts.className} title={opts.title} label={label} onSort={() => setProjectSort((cur) => nextSort(cur, key, !!opts.text))} />
   );
-  const modelHeader = (key: ModelKey, label: string, opts: { text?: boolean; className?: string } = {}) => (
-    <SortHeader sort={modelSort} col={key} text={opts.text} className={opts.className} label={label} onSort={() => setModelSort((cur) => nextSort(cur, key, !!opts.text))} />
+  const modelHeader = (key: ModelKey, label: string, opts: { text?: boolean; className?: string; title?: string } = {}) => (
+    <SortHeader sort={modelSort} col={key} text={opts.text} className={opts.className} title={opts.title} label={label} onSort={() => setModelSort((cur) => nextSort(cur, key, !!opts.text))} />
   );
 
   useEffect(() => {
@@ -76,13 +76,16 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
   const t = usage?.total;
   // Kiro's credits get a column once any project has some.
   const showCredits = !!usage?.total.credits;
+  const modelCredits = !!usage?.byModel.some((m) => m.usage.credits);
   const showMeko = !!usage && (usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || usage.mekoLearning.runs > 0 || mekoConfigured);
   return (
     <div className="home-view">
       {mobile && <TopBar onMenu={onMenu} title="Usage" />}
       <header className="home-hd">
         {!mobile && <h1>Usage</h1>}
-        <span className="muted small">Every project, closed ones included. Tokens come from Claude Code transcripts, subagents included.</span>
+        <span className="muted small">
+          Every project, closed ones included. Tokens come from Claude Code transcripts, subagents included{showCredits ? ", and credits from Kiro's sessions" : ''}.
+        </span>
       </header>
       <div className="home-scroll">
         {error && <p className="error-text">{error}</p>}
@@ -108,7 +111,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                 />
               </div>
               <div className="usage-chart-hd">
-                <span className="small">Total tokens per day, last 14 days</span>
+                <span className="small">{chartHeading(usage.daily)}</span>
                 <button className="link-btn small" onClick={() => setShowTable((v) => !v)} aria-expanded={showTable}>
                   {showTable ? 'Show chart' : 'Show table'}
                 </button>
@@ -178,7 +181,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                             >
                               {formatCostOf(p.cost)}
                             </td>
-                            {showCredits && <td className="num opt">{p.usage.credits ? formatCredits(p.usage.credits).replace(/ credits?$/, '') : '—'}</td>}
+                            {showCredits && <td className="num opt">{p.usage.credits ? creditsNumber(p.usage.credits) : '—'}</td>}
                             {showMeko && <td className="num opt">{p.meko.lookups > 0 ? `${p.meko.found}/${p.meko.lookups}` : '—'}</td>}
                             {showMeko && (
                               <td
@@ -210,14 +213,15 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                       {modelHeader('model', 'Model', { text: true })}
                       {modelHeader('output', 'Output', { className: 'num' })}
                       {modelHeader('total', 'Total', { className: 'num' })}
+                      {modelCredits && modelHeader('credits', 'Credits', { className: 'num', title: "What Kiro billed for its sessions' turns" })}
                     </tr>
                   </thead>
                   <tbody>
                     {models.map((m) => (
                       <tr key={m.model} title={usageTitle(m.usage)}>
                         <td className="mono small">{m.model}</td>
-                        <td className="num">{formatTokens(m.usage.output)}</td>
-                        <td className="num">{formatTokens(totalTokens(m.usage))}</td>
+                        <TokenCells usage={m.usage} />
+                        {modelCredits && <CreditsCell usage={m.usage} />}
                       </tr>
                     ))}
                   </tbody>

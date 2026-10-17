@@ -319,8 +319,22 @@ export function formatTokens(n: number): string {
 
 /** Kiro's credits: "0.42 credits", "12.5 credits", "1 credit". */
 export function formatCredits(n: number): string {
-  const v = n >= 100 ? Math.round(n) : n >= 10 ? Number(n.toFixed(1)) : Number(n.toFixed(2));
+  const v = roundCredits(n);
   return `${v.toLocaleString()} ${v === 1 ? 'credit' : 'credits'}`;
+}
+
+/** Kiro's credits as a bare number, for a column or tile already labelled Credits: "0.42", "12.5", "1,234". */
+export function creditsNumber(n: number): string {
+  return roundCredits(n).toLocaleString();
+}
+
+function roundCredits(n: number): number {
+  return n >= 100 ? Math.round(n) : n >= 10 ? Number(n.toFixed(1)) : Number(n.toFixed(2));
+}
+
+/** A plan bar's level in the rail (Claude's windows, Kiro's credits): amber from 80%, red from 95%. */
+export function limitLevel(percent: number): 'warn' | 'bad' | null {
+  return percent >= 95 ? 'bad' : percent >= 80 ? 'warn' : null;
 }
 
 /** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */

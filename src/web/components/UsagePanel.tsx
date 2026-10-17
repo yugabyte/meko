@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
-import { cx, formatCostOf, formatCredits, formatTokens, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, formatTokens, totalTokens, usageTitle } from '../util';
 import { MekoUsageSection } from './MekoUsageSection';
 
 /**
@@ -16,6 +16,9 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
   const empty = t.messages === 0;
   const showMeko = usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || usage.mekoLearning.runs > 0 || mekoOn;
   const mekoColumn = usage.bySession.some((s) => s.meko.lookups + s.meko.saves > 0);
+  // Kiro's credits get a column once any session (or model) has some.
+  const sessionCredits = usage.bySession.some((s) => s.usage.credits);
+  const modelCredits = usage.byModel.some((m) => m.usage.credits);
   return (
     <section className="box usage-box">
       <div className="usage-hd">
@@ -41,7 +44,7 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
           </div>
 
           <div className="usage-chart-hd">
-            <span className="small">Total tokens per day, last 14 days</span>
+            <span className="small">{chartHeading(usage.daily)}</span>
             <button className="link-btn small" onClick={() => setShowTable((v) => !v)} aria-expanded={showTable}>
               {showTable ? 'Show chart' : 'Show table'}
             </button>
@@ -67,6 +70,7 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
                   {mekoColumn && <th className="num" title="Meko lookups that found something, of all lookups">Meko</th>}
                   <th className="num">Output</th>
                   <th className="num">Total</th>
+                  {sessionCredits && <CreditsHeader />}
                 </tr>
               </thead>
               <tbody>
@@ -90,8 +94,8 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
                         {s.meko.lookups > 0 ? `${s.meko.found}/${s.meko.lookups}` : '—'}
                       </td>
                     )}
-                    <td className="num">{formatTokens(s.usage.output)}</td>
-                    <td className="num">{formatTokens(totalTokens(s.usage))}</td>
+                    <TokenCells usage={s.usage} />
+                    {sessionCredits && <CreditsCell usage={s.usage} />}
                   </tr>
                 ))}
               </tbody>
@@ -102,14 +106,15 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
                   <th>Model</th>
                   <th className="num">Output</th>
                   <th className="num">Total</th>
+                  {modelCredits && <CreditsHeader />}
                 </tr>
               </thead>
               <tbody>
                 {usage.byModel.map((m) => (
                   <tr key={m.model} title={usageTitle(m.usage)}>
                     <td className="mono small">{m.model}</td>
-                    <td className="num">{formatTokens(m.usage.output)}</td>
-                    <td className="num">{formatTokens(totalTokens(m.usage))}</td>
+                    <TokenCells usage={m.usage} />
+                    {modelCredits && <CreditsCell usage={m.usage} />}
                   </tr>
                 ))}
               </tbody>
@@ -149,10 +154,39 @@ export function CreditsStat({ usage }: { usage: TokenUsage }) {
   if (!usage.credits) return null;
   return (
     <div className="usage-stat" title="What Kiro billed for its sessions' turns. Not part of the cost, which prices Claude Code's tokens.">
-      <span className="usage-num">{formatCredits(usage.credits).replace(/ credits?$/, '')}</span>
+      <span className="usage-num">{creditsNumber(usage.credits)}</span>
       <span className="usage-lbl">Kiro credits</span>
     </div>
   );
+}
+
+/** A row's output and total tokens; a dash for each in a Kiro row with credits and no tokens (its `auto` model counts none). */
+export function TokenCells({ usage }: { usage: TokenUsage }) {
+  const none = !!usage.credits && totalTokens(usage) === 0;
+  return (
+    <>
+      <td className="num">{none ? '—' : formatTokens(usage.output)}</td>
+      <td className="num">{none ? '—' : formatTokens(totalTokens(usage))}</td>
+    </>
+  );
+}
+
+function CreditsHeader() {
+  return (
+    <th className="num" title="What Kiro billed for its sessions' turns">
+      Credits
+    </th>
+  );
+}
+
+/** The credits Kiro billed, in a table's Credits column; a dash for Claude Code's rows. */
+export function CreditsCell({ usage }: { usage: TokenUsage }) {
+  return <td className="num">{usage.credits ? creditsNumber(usage.credits) : '—'}</td>;
+}
+
+/** The 14-day chart's heading: tokens, and Kiro's credits beside them once any day has some. */
+export function chartHeading(daily: DailyUsage[]): string {
+  return daily.some((d) => d.usage.credits) ? 'Tokens and Kiro credits per day, last 14 days' : 'Total tokens per day, last 14 days';
 }
 
 /** Rounds up to 1, 2 or 5 × 10^k so the top gridline is a readable number. */
@@ -171,48 +205,82 @@ function dayLabel(day: string, style: 'short' | 'long'): string {
     : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+/**
+ * Total tokens per day; once any day has Kiro credits, each day also gets a credits bar beside its
+ * tokens bar, on a second axis on the right (tokens and credits don't share a scale).
+ */
 export function DailyChart({ daily }: { daily: DailyUsage[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const totals = daily.map((d) => totalTokens(d.usage));
+  const credits = daily.map((d) => d.usage.credits ?? 0);
+  const kiro = credits.some((c) => c > 0);
   const max = niceMax(Math.max(...totals));
+  const cmax = niceMax(Math.max(...credits));
   const ticks = [max, max / 2, 0];
   const h = hover === null ? null : daily[hover];
+  const said = (i: number) => `${totals[i].toLocaleString()} tokens${credits[i] ? `, ${creditsNumber(credits[i])} Kiro credits` : ''}`;
   return (
-    <div className="chart" role="img" aria-label={`Daily token totals: ${daily.map((d, i) => `${d.day} ${totals[i]}`).join(', ')}`}>
-      <div className="chart-y" aria-hidden="true">
-        {ticks.map((t) => (
-          <span key={t}>{formatTokens(t)}</span>
-        ))}
-      </div>
-      <div className="chart-plot" onMouseLeave={() => setHover(null)}>
-        <div className="chart-grid" aria-hidden="true">
+    <>
+      <div
+        className={cx('chart', kiro && 'dual')}
+        role="img"
+        aria-label={`Daily ${kiro ? 'token and Kiro credit' : 'token'} totals: ${daily.map((d, i) => `${d.day} ${said(i)}`).join('; ')}`}
+      >
+        <div className="chart-y" aria-hidden="true">
           {ticks.map((t) => (
-            <span key={t} />
+            <span key={t}>{formatTokens(t)}</span>
           ))}
         </div>
-        <div className="chart-bars">
+        <div className="chart-plot" onMouseLeave={() => setHover(null)}>
+          <div className="chart-grid" aria-hidden="true">
+            {ticks.map((t) => (
+              <span key={t} />
+            ))}
+          </div>
+          <div className="chart-bars">
+            {daily.map((d, i) => (
+              <div
+                key={d.day}
+                className={cx('chart-col', hover === i && 'hover')}
+                onMouseEnter={() => setHover(i)}
+                onFocus={() => setHover(i)}
+                onBlur={() => setHover(null)}
+                tabIndex={0}
+                aria-label={`${dayLabel(d.day, 'long')}: ${said(i)}`}
+              >
+                <div className="chart-bar" style={{ height: `${(totals[i] / max) * 100}%` }} />
+                {kiro && <div className="chart-bar kiro" style={{ height: `${(credits[i] / cmax) * 100}%` }} />}
+              </div>
+            ))}
+          </div>
+          {h && hover !== null && <Tooltip day={h.day} usage={h.usage} index={hover} count={daily.length} />}
+        </div>
+        {kiro && (
+          <div className="chart-y right" aria-hidden="true">
+            {[cmax, cmax / 2, 0].map((t) => (
+              <span key={t}>{creditsNumber(t)}</span>
+            ))}
+          </div>
+        )}
+        <div className="chart-x" aria-hidden="true">
           {daily.map((d, i) => (
-            <div
-              key={d.day}
-              className={cx('chart-col', hover === i && 'hover')}
-              onMouseEnter={() => setHover(i)}
-              onFocus={() => setHover(i)}
-              onBlur={() => setHover(null)}
-              tabIndex={0}
-              aria-label={`${dayLabel(d.day, 'long')}: ${totals[i].toLocaleString()} tokens`}
-            >
-              <div className="chart-bar" style={{ height: `${(totals[i] / max) * 100}%` }} />
-            </div>
+            <span key={d.day}>{i % 2 === daily.length % 2 ? '' : dayLabel(d.day, 'short')}</span>
           ))}
         </div>
-        {h && hover !== null && <Tooltip day={h.day} usage={h.usage} index={hover} count={daily.length} />}
       </div>
-      <div className="chart-x" aria-hidden="true">
-        {daily.map((d, i) => (
-          <span key={d.day}>{i % 2 === daily.length % 2 ? '' : dayLabel(d.day, 'short')}</span>
-        ))}
-      </div>
-    </div>
+      {kiro && (
+        <div className="chart-legend" aria-hidden="true">
+          <span>
+            <i />
+            Tokens (left axis)
+          </span>
+          <span>
+            <i className="kiro" />
+            Kiro credits (right axis)
+          </span>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -246,12 +314,19 @@ function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage;
         <dd>{f(usage.cacheRead)}</dd>
         <dt>Responses</dt>
         <dd>{f(usage.messages)}</dd>
+        {!!usage.credits && (
+          <>
+            <dt>Kiro credits</dt>
+            <dd>{creditsNumber(usage.credits)}</dd>
+          </>
+        )}
       </dl>
     </div>
   );
 }
 
 export function DailyTable({ daily }: { daily: DailyUsage[] }) {
+  const kiro = daily.some((d) => d.usage.credits);
   return (
     <div className="table-scroll">
       <table className="usage-table">
@@ -263,6 +338,7 @@ export function DailyTable({ daily }: { daily: DailyUsage[] }) {
             <th className="num">Cache write</th>
             <th className="num">Cache read</th>
             <th className="num">Total</th>
+            {kiro && <CreditsHeader />}
           </tr>
         </thead>
         <tbody>
@@ -274,6 +350,7 @@ export function DailyTable({ daily }: { daily: DailyUsage[] }) {
               <td className="num">{formatTokens(d.usage.cacheWrite)}</td>
               <td className="num">{formatTokens(d.usage.cacheRead)}</td>
               <td className="num">{formatTokens(totalTokens(d.usage))}</td>
+              {kiro && <CreditsCell usage={d.usage} />}
             </tr>
           ))}
         </tbody>
