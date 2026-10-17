@@ -9,6 +9,7 @@ import {
 } from './mekosetup.js';
 import { claudeConfigPath } from './trust.js';
 import { claudeUserDir } from './claude.js';
+import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { HttpError } from './projects.js';
 
 /** What the Meko tab needs to talk to Meko and to set up Claude Code; tests swap them out. */
@@ -18,6 +19,8 @@ export interface MekoTools {
   checkApi: (apiUrl: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   /** Runs Meko's setup for Claude Code against this server and key; rejects when it doesn't finish. */
   setUpClaude: (url: string, apiKey: string, log: (line: string) => void, claudeCommand: string) => Promise<void>;
+  /** Runs Meko's setup for Kiro (`--client kiro`) against this server and key; rejects when it doesn't finish. */
+  setUpKiro: (url: string, apiKey: string, log: (line: string) => void) => Promise<void>;
   /** Tries one of Claude Code's tokens on a Meko server: the datapacks it sees, or why not. */
   tryToken: (url: string, token: string) => Promise<TokenTry>;
   /**
@@ -41,6 +44,17 @@ export const defaultMekoTools: MekoTools = {
     const left = mekoClaudeGaps(c, url, () => registered);
     if (code !== 0 || left.length) {
       throw new Error(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} Run it yourself: ${manual}`);
+    }
+  },
+  async setUpKiro(url, apiKey, log) {
+    const manual = manualMekoSetup(url, 'kiro');
+    const pkg = await latestMekoSetup().catch((e: unknown) => {
+      throw new Error(`Couldn't look up Meko's setup on npm (${errMsg(e)}). Run it yourself: ${manual}`);
+    });
+    const code = await runMekoSetup(pkg, { url, apiKey, client: 'kiro', log });
+    const left = kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
+    if (code !== 0 || left.length) {
+      throw new Error(`Meko's setup for Kiro didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} Run it yourself: ${manual}`);
     }
   },
   tryToken: tryMekoToken,
@@ -182,4 +196,26 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<voi
     });
   }
   core.log.info(`set up Meko for Claude Code (${meko.url})`);
+}
+
+/**
+ * Runs Meko's setup for Kiro with AgentK's Meko: its MCP server and key in Kiro's MCP config, and
+ * its agent with the capture hooks as Kiro's default (which Kiro sessions' `agentk` agent is built
+ * from). AgentK's own config is left as it is: Kiro keeps its key in its own file.
+ */
+export async function setUpKiroMeko(core: Core, tools: MekoTools): Promise<void> {
+  const meko = resolveMeko(core.config);
+  if (!meko.apiKey) throw new HttpError(400, 'Set a Meko API key first.');
+  const tail: string[] = [];
+  try {
+    await tools.setUpKiro(meko.url, meko.apiKey, (line) => {
+      core.log.info(`meko setup (kiro): ${line}`);
+      tail.push(line);
+      if (tail.length > 5) tail.shift();
+    });
+  } catch (e) {
+    const why = errMsg(e).replace(/([^.!?])$/, '$1.');
+    throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);
+  }
+  core.log.info(`set up Meko for Kiro (${meko.url})`);
 }

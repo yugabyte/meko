@@ -13,6 +13,7 @@ import type {
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
 import { MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
+import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import {
   COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
@@ -25,7 +26,7 @@ import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError } from './mekoapi.js';
-import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko } from './mekosettings.js';
+import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
@@ -541,6 +542,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     idleWorktreeDays: core.worktrees.idleDays(),
     callHomeEnabled: core.config.callHome.enabled,
     resolveConflicts: core.config.pr.resolveConflicts,
+    defaultHarness: core.config.agents.default,
+    kiroEnabled: core.config.kiro.enabled,
+    kiroCommand: core.config.kiro.command,
+    kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => {
@@ -568,6 +573,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
+    if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
+    for (const k of ['kiroEnabled', 'kiroTrustTools'] as const) {
+      if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
+    }
+    // eslint-disable-next-line no-control-regex
+    if (b.kiroCommand !== undefined && (typeof b.kiroCommand !== 'string' || !b.kiroCommand.trim() || b.kiroCommand.length > 512 || /[\u0000-\u001f\u007f]/.test(b.kiroCommand))) {
+      throw new HttpError(400, "Kiro's command must be a command name or a path, on one line.");
+    }
+    const kiroBefore = { enabled: core.config.kiro.enabled, command: core.config.kiro.command };
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -582,8 +596,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
+      if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
+      if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
+      if (b.kiroCommand !== undefined) c.kiro.command = b.kiroCommand.trim();
+      if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
+    // Kiro turned on or run another way: its version and agent file follow, in the background.
+    if (core.config.kiro.enabled && (!kiroBefore.enabled || kiroBefore.command !== core.config.kiro.command)) {
+      const kiro = core.harnesses.of('kiro');
+      void kiro.version(core.config, true).then(() => kiro.prepare(core.paths, core.config)).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
+    }
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
     const cleanup = (what: string, fn: () => Promise<void>) => void fn().catch((e) => core.log.warn(`${what} failed`, errMsg(e)));
     if (core.worktrees.cap() < before.cap) cleanup('trimming idle worktrees', () => core.worktrees.trimAll());
@@ -609,8 +632,25 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return settings();
   });
 
+  app.post('/api/settings/meko/kiro-setup', async (): Promise<Settings> => {
+    try {
+      await setUpKiroMeko(core, core.mekoTools);
+      audit(db, 'meko_kiro_setup', { url: mekoSettings(core.config).effectiveUrl });
+    } finally {
+      core.kiroMeko(true);
+      // Meko's setup makes its agent Kiro's default: Kiro sessions' agent is built from it again.
+      await core.harnesses.of('kiro').prepare(core.paths, core.config).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
+      core.changed();
+    }
+    return settings();
+  });
+
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());
+  app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req) => {
+    if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
+    return core.harnesses.of(req.params.id).update(core.config);
+  });
   app.get('/api/update', async () => (opts.updater ? opts.updater.status() : core.updateStatus()));
   app.post('/api/update/check', async () => (opts.updater ? opts.updater.check() : core.updateStatus()));
   app.post('/api/update/apply', async () => {

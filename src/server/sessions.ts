@@ -29,9 +29,12 @@ import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
-import {
-  EDIT_TOOLS, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeLauncher,
-} from './claude.js';
+import { modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine } from './claude.js';
+import { HARNESS_CAPS, agentName, harnessOf } from '../shared/harnesses.js';
+import type { Harness } from './harness/index.js';
+import { findKiroConversation, kiroConversation } from './harness/kiro.js';
+import { kiroSessionFile, kiroTurns } from './kiro.js';
+import { writeLauncher } from './launcher.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
 import { DESIGN_READY } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
@@ -40,7 +43,7 @@ import {
   type MergeInfo, type SessionRow, type SessionRuntime,
 } from './store.js';
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
-import { ZERO_USAGE, ingestSessionUsage, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
+import { ZERO_USAGE, ingestSessionUsage, recordKiroTurns, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
 import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
 import { claudePath } from './paths.js';
 
@@ -121,6 +124,8 @@ const HOUR = 60 * 60 * 1000;
  * missed its hooks (reconcile's followTranscript).
  */
 export const MISSED_START_MS = 20_000;
+/** How long after a Kiro turn's end its session file is read again for the turn's usage. */
+const USAGE_REREAD_MS = 3000;
 /** A transcript written this recently means the turn is still going. */
 const TRANSCRIPT_ACTIVE_MS = 15_000;
 /** How long stopping a session waits for its last turns to reach Meko. */
@@ -245,8 +250,10 @@ export class SessionManager {
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
   /** Each session's link to AgentK's mod in its Claude (modlink.ts): prompts go through it while it's live. */
   readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped), Date.now, () => this.core.changed());
-  /** How full each session's context window is (percent), from the mod's measurements. */
+  /** How full each session's context window is (percent), from the mod's measurements (Kiro's: its session file). */
   private contextFill = new Map<string, number>();
+  /** Each session's system-prompt lines at its last launch, for a harness that takes them from its context hook. */
+  private systemLines = new Map<string, string>();
   /**
    * Sessions with a turn running: from its UserPromptSubmit to its Stop (or Claude's end). Kept in
    * memory: after a restart a turn counts as running only while the session shows as working.
@@ -384,7 +391,7 @@ export class SessionManager {
   setStatus(id: string, status: SessionStatus, detail: string | null = null): void {
     this.update(id, { status, status_detail: detail, last_event_at: Date.now() });
     // However Claude was found gone (its SessionEnd, a dead pane at startup, a failed restart), the turn a queued Open PR waited for is over.
-    if (status === 'exited') this.core.lifecycle.dropQueued(id, detail ?? 'Claude exited', 'open-pr');
+    if (status === 'exited') this.core.lifecycle.dropQueued(id, detail ?? `${agentName(sessionRow(this.db, id) ?? { harness: 'claude' })} exited`, 'open-pr');
   }
 
   event(id: string, kind: string, text: string | null, payload?: unknown): void {
@@ -434,6 +441,8 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
+    // Checked first: a harness that isn't available starts nothing.
+    const harness = this.core.harnesses.pick(this.core.config, req.harness);
     const images = checkStaged(this.core.paths.pastes, projectId, req.images);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
@@ -497,7 +506,7 @@ export class SessionManager {
     }
     // What Try again fills the New session dialog with, should the start fail.
     const request: CreateSessionRequest = {
-      name, prompt: (req.prompt ?? '').trim() || undefined, kind, start: review ? undefined : start,
+      name, harness: harness.id, prompt: (req.prompt ?? '').trim() || undefined, kind, start: review ? undefined : start,
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
       existingBranch: existing || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
@@ -523,12 +532,12 @@ export class SessionManager {
       if (wanted) this.checkBranchFree(repo, wanted);
       const claimed = pool.claim(repo, id);
       const path = claimed ?? pool.add(repo, id);
-      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, repo_path, branch_reused,
+      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
                       pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        id, projectId, slug, name, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
-        randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug }),
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
+        randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
         push?.remote ?? null, push ? push.branch : null);
@@ -622,7 +631,7 @@ export class SessionManager {
       this.startup.delete(id);
       if (e instanceof HttpError && e.status === 409) throw e;
       this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
-      throw new HttpError(500, `Claude couldn't be started: ${errMsg(e)}`);
+      throw new HttpError(500, `${agentName(row)} couldn't be started: ${errMsg(e)}`);
     }
     this.setStartup(id, 'loading');
     this.core.log.info(`session created: ${id}`);
@@ -948,10 +957,11 @@ export class SessionManager {
   private env(row: SessionRow, mod: boolean): Record<string, string> {
     const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
-    // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
-    // Set even when empty: empty means the user has none, unset means a session from before this.
+    const claude = harnessOf(row.harness) === 'claude';
     return {
-      AK_USER_STATUSLINE: userStatusLine(row.worktree_path, statusLineScriptPath(this.core.paths))?.command ?? '',
+      // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
+      // Set even when empty: empty means the user has none, unset means a session from before this.
+      ...(claude ? { AK_USER_STATUSLINE: userStatusLine(row.worktree_path, statusLineScriptPath(this.core.paths))?.command ?? '' } : {}),
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
@@ -988,7 +998,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This Claude Code session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
+      `This ${HARNESS_CAPS[harnessOf(row.harness)].label} session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
     if (row.kind !== 'review-pr' && row.branch_reused) {
       lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
@@ -1012,8 +1022,32 @@ export class SessionManager {
     return lines.join('\n');
   }
 
+  /** The session's conversation is on disk, so a launch resumes it rather than starting over. */
   private transcriptExists(row: SessionRow): boolean {
-    return (!!row.transcript_path && existsSync(row.transcript_path)) || existsSync(transcriptPathFor(row.worktree_path, row.claude_session_id));
+    if (harnessOf(row.harness) === 'kiro') this.kiroId(row);
+    return this.harness(row).canResume(row);
+  }
+
+  /**
+   * A Kiro session's own conversation id: the one its hooks gave, else (no hook ever came) the
+   * newest Kiro started in its worktree since the session was created, looked for only while the
+   * session runs and owns the worktree (pooled worktrees keep earlier sessions' conversations), and
+   * kept once found so the choice doesn't move. Null when it has none.
+   */
+  private kiroId(row: SessionRow): string | null {
+    const known = kiroConversation(row);
+    if (known || row.desired !== 'running' || !this.ownsWorktree(row)) return known;
+    const found = findKiroConversation(row);
+    if (found) {
+      run(this.db, 'UPDATE sessions SET agent_session_id = ? WHERE id = ?', found, row.id);
+      row.agent_session_id = found;
+    }
+    return found;
+  }
+
+  /** The harness a session runs on. */
+  harness(row: { harness: string }): Harness {
+    return this.core.harnesses.of(row.harness);
   }
 
   /**
@@ -1067,40 +1101,43 @@ export class SessionManager {
    * Meko conversation id under way (a new session names it early).
    */
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
-    // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
-    const repo = sessionRepo(this.db, row);
-    if (repo) await this.trustRepo(repo);
-    // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
-    // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
-    const cwd = claudePath(row.worktree_path);
-    if (cwd !== row.worktree_path) await this.trustRepo(cwd, true);
+    const h = this.harness(row);
+    if (h.id === 'claude') {
+      // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
+      const repo = sessionRepo(this.db, row);
+      if (repo) await this.trustRepo(repo);
+      // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
+      // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
+      const cwd = claudePath(row.worktree_path);
+      if (cwd !== row.worktree_path) await this.trustRepo(cwd, true);
+    }
+    h.beforeLaunch?.(this.core.paths, this.core.config);
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
-    const mod = await this.modDir();
+    const mod = h.caps.mod ? await this.modDir() : null;
     const conversation = await this.launchConversation(row, opts.conversation);
-    const script = writeLauncher(this.core.paths, {
-      sessionId: row.id,
-      worktree: row.worktree_path,
-      claudeCommand: this.core.config.claude.command,
-      claudeSessionId: row.claude_session_id,
+    const systemPrompt = this.systemPrompt(row, conversation);
+    // A harness with no flag for it gets these lines from its context hook, at every start.
+    this.systemLines.set(row.id, systemPrompt);
+    const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
+      row,
       resume: opts.resume,
-      name: row.name,
-      planMode: row.stage === 'design' && !!row.plan_mode,
+      prompt: opts.prompt,
+      systemPrompt,
       addDirs: [designDir],
       pluginDirs: mod ? [mod] : [],
-      appendSystemPrompt: this.systemPrompt(row, conversation),
-      prompt: opts.prompt,
+      planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env(row, !!mod),
       unsetEnv: SESSION_ENV_UNSET,
-    });
+    }));
     const pane = (await this.core.host.panes()).get(row.tmux_name);
     // Archived (or its project deleted) while it was starting: Claude must not start behind its back.
     if (sessionRow(this.db, row.id)?.desired !== 'running') throw new HttpError(409, 'This session was archived while it was starting.');
     // Never replace a live Claude (the host refuses to as well).
-    if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
+    if (pane && !pane.dead) throw new HttpError(409, `${agentName(row)} is already running in this session.`);
     this.awaitingStart.add(row.id);
     // A new Claude process: the last one's mod and measurements are gone with it.
     this.forgetClaude(row.id);
@@ -1170,40 +1207,45 @@ export class SessionManager {
 
   /**
    * Design-stage guard, asked before every file edit: nothing in the repo (worktree or main
-   * checkout) changes until the design is approved. Returns Claude Code's deny decision, or
-   * null to let the edit go ahead.
+   * checkout) changes until the design is approved. Returns the harness's deny decision (Claude
+   * Code's JSON, Kiro's reason), or null to let the edit go ahead.
    */
-  guard(token: string, p: HookPayload): GuardDecision {
+  guard(token: string, raw: HookPayload): GuardDecision {
     const row = this.byToken(token);
-    if (!row || row.stage !== 'design' || row.plan_mode || !EDIT_TOOLS.includes(p.tool_name ?? '')) return null;
-    const raw = p.tool_input?.file_path ?? p.tool_input?.notebook_path;
-    if (typeof raw !== 'string' || !raw) return null;
-    const file = resolve(p.cwd || row.worktree_path, raw);
+    if (!row || row.stage !== 'design' || row.plan_mode) return null;
+    const h = this.harness(row);
+    const p = h.normalize(raw);
+    const paths = p && h.editedPaths(p);
+    if (!p || !paths?.length) return null;
     const repo = sessionRepo(this.db, row);
-    // Claude reaches the worktree by its local spelling (claudePath), which realpath doesn't give.
+    // The agent reaches the worktree by its local spelling (claudePath), which realpath doesn't give.
     const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
-    if (!roots.some((d) => file === d || file.startsWith(d + sep))) return null;
-    return {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason:
-          `This session is in the Design stage: AgentK Local blocks changes to the repo until the user approves the design. ` +
-          `Publish the design as an Artifact, or write it to ${this.designFile(row)}.`,
-      },
-    };
+    const inRepo = (file: string) => roots.some((d) => file === d || file.startsWith(d + sep));
+    if (!paths.some((f) => inRepo(resolve(p.cwd || row.worktree_path, f)))) return null;
+    return h.deny(
+      `This session is in the Design stage: AgentK Local blocks changes to the repo until the user approves the design. ` +
+      (h.caps.artifacts ? `Publish the design as an Artifact, or write it to ${this.designFile(row)}.` : `Write the design to ${this.designFile(row)}.`),
+    );
   }
 
   /**
-   * Context for a new session's SessionStart hook: what AgentK's Meko search found for the task,
-   * waiting briefly for a search still running. Only for a fresh start: on a resume it's already
-   * in the transcript, and after /clear the user has moved on.
+   * Context for a session's start hook: what AgentK's Meko search found for a new session's task,
+   * waiting briefly for a search still running. For Claude Code, only for a fresh start: on a
+   * resume it's already in the transcript, and after /clear the user has moved on. A harness with no
+   * system-prompt flag (Kiro) gets the session's system-prompt lines here first, at every start.
    */
-  async context(token: string, p: HookPayload): Promise<HookContext> {
+  async context(token: string, raw: HookPayload): Promise<HookContext> {
     const row = this.byToken(token);
-    if (!row || row.desired !== 'running' || p.source !== 'startup') return null;
-    const text = await this.recall.take(row.id, HOOK_WAIT_MS);
-    return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : null;
+    if (!row || row.desired !== 'running') return null;
+    const h = this.harness(row);
+    if (!h.systemPromptByContext) {
+      if (raw.source !== 'startup') return null;
+      const text = await this.recall.take(row.id, HOOK_WAIT_MS);
+      return text ? h.context(text) : null;
+    }
+    const lines = this.systemLines.get(row.id) ?? this.systemPrompt(row, null);
+    const found = await this.recall.take(row.id, HOOK_WAIT_MS);
+    return h.context(found ? `${lines}\n\n${found}` : lines);
   }
 
   /**
@@ -1414,14 +1456,23 @@ export class SessionManager {
     }
     this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
+    // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
+    if (this.harness(row).caps.usage === 'credits') setTimeout(() => this.ingestUsage(id), USAGE_REREAD_MS).unref();
     await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
   }
 
-  async onHook(token: string, p: HookPayload): Promise<void> {
+  async onHook(token: string, raw: HookPayload): Promise<void> {
     const row = this.byToken(token);
     if (!row || row.desired !== 'running') return;
+    const p = this.harness(row).normalize(raw);
+    if (!p) return;
     const id = row.id;
     this.hookless.delete(id);
+    // A harness that picks its own conversation id (Kiro) says it on its events: Resume continues that one.
+    if (typeof p.agent_session_id === 'string' && /^[\w-]{1,100}$/.test(p.agent_session_id) && p.agent_session_id !== row.agent_session_id) {
+      run(this.db, 'UPDATE sessions SET agent_session_id = ? WHERE id = ?', p.agent_session_id, id);
+      row.agent_session_id = p.agent_session_id;
+    }
     const ev = p.hook_event_name ?? '';
     const now = Date.now();
     run(this.db, 'UPDATE sessions SET last_event_at = ? WHERE id = ?', now, id);
@@ -1435,7 +1486,7 @@ export class SessionManager {
         if (p.source === 'clear') this.contextFill.delete(id);
         if (typeof p.session_id === 'string' && /^[\w-]{1,100}$/.test(p.session_id) && p.session_id !== row.claude_session_id) {
           run(this.db, 'UPDATE sessions SET claude_session_id = ? WHERE id = ?', p.session_id, id);
-          this.event(id, 'conversation', 'Claude moved to a new conversation; Resume continues that one');
+          this.event(id, 'conversation', `${agentName(row)} moved to a new conversation; Resume continues that one`);
         }
         const trustPrompt = row.status === 'needs_input' && row.status_detail === TRUST_DETAIL;
         const st = this.startup.get(id);
@@ -1513,7 +1564,7 @@ export class SessionManager {
         this.clearStartup(id);
         if (this.stopping.has(id)) break;
         if (row.status === 'working') this.update(id, { interrupted: 1 });
-        this.setStatus(id, 'exited', p.reason ? `Claude exited (${p.reason})` : 'Claude exited');
+        this.setStatus(id, 'exited', p.reason ? `Claude exited (${String(p.reason)})` : 'Claude exited');
         break;
     }
     this.core.changed();
@@ -1558,7 +1609,7 @@ export class SessionManager {
         continue;
       }
       if (pane && pane.dead) {
-        if (row.status !== 'exited') this.setStatus(row.id, 'exited', 'Claude exited while the server was down');
+        if (row.status !== 'exited') this.setStatus(row.id, 'exited', `${agentName(row)} exited while the server was down`);
         continue;
       }
       await this.tryRecover(row);
@@ -1584,7 +1635,7 @@ export class SessionManager {
       const now = sessionRow(this.db, row.id);
       if (now?.desired !== 'running') return;
       if (now.status === 'working') this.update(row.id, { interrupted: 1 });
-      this.setStatus(row.id, 'exited', gone ? errMsg(e) : `Couldn't restart Claude: ${errMsg(e)}. AgentK Local tries again in 5 minutes, or Resume it now.`);
+      this.setStatus(row.id, 'exited', gone ? errMsg(e) : `Couldn't restart ${agentName(row)}: ${errMsg(e)}. AgentK Local tries again in 5 minutes, or Resume it now.`);
     }
   }
 
@@ -1624,11 +1675,13 @@ export class SessionManager {
         if (row.status === 'working') this.update(row.id, { interrupted: 1 });
         this.planPending.delete(row.id);
         this.busy.delete(row.id);
-        // No SessionEnd came (Claude crashed, or its pane was killed).
-        this.forgetClaude(row.id, 'Claude exited before taking the prompt', 'Claude exited');
-        this.setStatus(row.id, 'exited', pane.exitStatus ? `Claude exited with status ${pane.exitStatus}` : 'Claude exited');
-        this.event(row.id, 'exited', 'Claude exited');
-        this.notifyUser(row.id, 'Exited', 'Claude exited. Resume it from the session header.');
+        // No SessionEnd came (Claude crashed, or its pane was killed; Kiro has no such hook at all).
+        const name = agentName(row);
+        this.forgetClaude(row.id, `${name} exited before taking the prompt`, `${name} exited`);
+        this.setStatus(row.id, 'exited', pane.exitStatus ? `${name} exited with status ${pane.exitStatus}` : `${name} exited`);
+        this.event(row.id, 'exited', `${name} exited`);
+        this.notifyUser(row.id, 'Exited', `${name} exited. Resume it from the session header.`);
+        if (harnessOf(row.harness) !== 'claude') this.ingestUsage(row.id);
       }
     }
   }
@@ -1647,7 +1700,7 @@ export class SessionManager {
     this.clearStartup(row.id);
     this.awaitingStart.delete(row.id);
     this.hookless.add(row.id);
-    this.event(row.id, 'started', "Claude started, but its hooks never reached AgentK; its status follows the transcript until they do");
+    this.event(row.id, 'started', `${agentName(row)} started, but its hooks never reached AgentK; its status follows the transcript until they do`);
     this.syncFromTranscript(row);
     return true;
   }
@@ -1663,7 +1716,10 @@ export class SessionManager {
 
   /** When the session's transcript was last written (ms), or 0 when there is none yet. */
   private transcriptWrittenAt(row: SessionRow): number {
-    const files = [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)];
+    const kiro = harnessOf(row.harness) === 'kiro' ? this.kiroId(row) : null;
+    const files = harnessOf(row.harness) === 'kiro'
+      ? (kiro ? [kiroSessionFile(kiro), kiroSessionFile(kiro).replace(/\.json$/, '.jsonl')] : [])
+      : [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)];
     return Math.max(0, ...files.map((f) => {
       try {
         return f ? statSync(f).mtimeMs : 0;
@@ -1906,7 +1962,7 @@ export class SessionManager {
       await sleep(100);
       pane = (await this.core.host.panes()).get(row.tmux_name);
     }
-    if (pane && !pane.dead) throw new HttpError(409, 'Claude is already running in this session.');
+    if (pane && !pane.dead) throw new HttpError(409, `${agentName(row)} is already running in this session.`);
     const p = projectRow(this.db, row.project_id);
     if (p) {
       await restoreWorktree(sessionRepo(this.db, row) ?? p.repo_path, row.worktree_path, row.branch).catch((e: unknown) => {
@@ -2230,7 +2286,8 @@ export class SessionManager {
   /** Sends the session's new turns to its Meko conversation. Never throws. */
   captureTranscript(id: string): Promise<void> {
     const r = sessionRow(this.db, id);
-    if (!r || !this.core.mekoStatus.configured) return Promise.resolve();
+    // Kiro's turns reach Meko through Meko's own Kiro hooks.
+    if (!r || !this.core.mekoStatus.configured || harnessOf(r.harness) !== 'claude') return Promise.resolve();
     return this.core.capture.capture(id, sessionTranscript(r, transcriptPathFor));
   }
 
@@ -2311,12 +2368,16 @@ export class SessionManager {
 
   // ---- token usage ----
 
-  /** Reads any new transcript lines for a session and updates its token totals. */
+  /** Reads any new transcript lines for a session (Kiro's: its session file) and updates its token totals. */
   ingestUsage(id: string): void {
     this.loadUsage();
     const r = sessionRow(this.db, id);
     if (!r) return;
     this.usageReadAt.set(id, Date.now());
+    if (harnessOf(r.harness) === 'kiro') {
+      this.ingestKiro(r);
+      return;
+    }
     try {
       if (!ingestSessionUsage(this.db, id, sessionTranscript(r, transcriptPathFor), r.base_branch)) return;
     } catch (e) {
@@ -2326,6 +2387,33 @@ export class SessionManager {
     this.usage.set(id, sessionUsage(this.db, id));
     this.core.changed();
     void this.countPushedCommits(r);
+  }
+
+  /** A Kiro session's finished turns (credits, tokens) and its context fill after the last one, from its session file. */
+  private ingestKiro(r: SessionRow): void {
+    const conv = this.kiroId(r);
+    if (!conv) return;
+    const turns = kiroTurns(conv);
+    let changed = false;
+    try {
+      changed = recordKiroTurns(this.db, r.id, conv, turns);
+      // Marks the session as read, so backfillUsage leaves it alone at the next start.
+      run(this.db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
+                    ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, r.id, kiroSessionFile(conv), turns.length);
+    } catch (e) {
+      this.core.log.warn(`reading Kiro's usage for ${r.id} failed`, errMsg(e));
+    }
+    const pct = turns.at(-1)?.contextPercent;
+    if (typeof pct === 'number') {
+      const fill = Math.round(Math.min(100, Math.max(0, pct)));
+      if (this.contextFill.get(r.id) !== fill) {
+        this.contextFill.set(r.id, fill);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.usage.set(r.id, sessionUsage(this.db, r.id));
+    this.core.changed();
   }
 
   /**

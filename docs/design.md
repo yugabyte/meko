@@ -10,6 +10,7 @@ The design is split by area. Read this page first, then the part you need:
 | Part | Read it for |
 |---|---|
 | [Architecture](design/architecture.md) | The server, the session host, hooks, the state directory, and how they fit together |
+| [Agents: Claude Code and Kiro](design/harnesses.md) | The harness a session runs on: the adapter interface, how a Kiro session is launched, hooked, resumed and counted, and what stays Claude-only |
 | [AgentK's mod in Claude](design/mod.md) | The Claude Code plugin AgentK loads into sessions: prompts, questions, Meko calls, learn steps |
 | [The app](design/app.md) | The UI: layout, Changes, review comments, side panels, Starting, keyboard, notifications, the phone layout |
 | [Open project and New session](design/open-project-and-new-session.md) | The two dialogs that start work |
@@ -36,6 +37,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Topic | Decision |
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
+| Agents | A session runs on Claude Code or Kiro CLI, picked when it starts (default in Settings). Everything Claude-specific sits behind one adapter per CLI; features only Claude Code has (the mod, Artifact designs, plan limits) stay with it. Codex and Cursor CLI later. |
 | Process host | AgentK's own session host (`agent-k-local host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
 | Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL or start a new one there. |
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |

@@ -22,6 +22,7 @@
         "node": { "$ref": "#/$defs/version" },
         "tmux": { "$ref": "#/$defs/optionalVersion", "description": "Sent only by versions before the session host (no longer by current ones); kept so their reports still validate." },
         "claudeCode": { "$ref": "#/$defs/optionalVersion" },
+        "kiro": { "$ref": "#/$defs/optionalVersion", "description": "Kiro CLI's version; left out while Kiro is off or unreadable." },
         "access": { "enum": ["local", "remote"] },
         "service": { "enum": ["systemd", "launchd", "none"] },
         "meko": {
@@ -61,6 +62,14 @@
             "open": { "$ref": "#/$defs/count" },
             "archived": { "$ref": "#/$defs/count" },
             "byKind": { "$ref": "#/$defs/kindCounts" },
+            "byHarness": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "claude": { "$ref": "#/$defs/count" },
+                "kiro": { "$ref": "#/$defs/count" }
+              }
+            },
             "openByStage": { "$ref": "#/$defs/stageCounts" }
           }
         },
@@ -132,6 +141,16 @@
           "fileTypes": { "type": "array", "maxItems": 26, "items": { "$ref": "#/$defs/fileType" } },
           "tokensByModel": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/modelTokens" } },
           "meko": { "$ref": "#/$defs/meko" },
+          "kiro": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sessionsCreated", "turns", "credits"],
+            "properties": {
+              "sessionsCreated": { "$ref": "#/$defs/count" },
+              "turns": { "$ref": "#/$defs/count" },
+              "credits": { "type": "number", "minimum": 0, "maximum": 1000000000 }
+            }
+          },
           "askAgentk": {
             "type": "object",
             "additionalProperties": false,

@@ -4,6 +4,7 @@ import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
+import { agentName } from '../util';
 import { Busy, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -308,7 +309,7 @@ export function SessionSheet({
         )}
         {session.status === 'exited' && (
           <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('resume'))}>
-            Resume Claude
+            Resume {agentName(session)}
           </SheetItem>
         )}
         {canDesign && (

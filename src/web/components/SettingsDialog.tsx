@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { AuthStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
+import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
+import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
@@ -15,12 +16,15 @@ export function SettingsDialog({
   auth,
   update,
   meko,
+  harnesses,
   initialTab = 'general',
   onClose,
 }: {
   auth: AuthStatus;
   update: UpdateStatus;
   meko: MekoStatus;
+  /** The coding agents sessions can run on (`AppState.harnesses`). */
+  harnesses: HarnessStatus[];
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
@@ -44,10 +48,10 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
-          <GeneralTab />
+          <GeneralTab harnesses={harnesses} />
         </div>
       )}
-      {tab === 'meko' && <MekoTab status={meko} />}
+      {tab === 'meko' && <MekoTab status={meko} kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false} />}
       {tab === 'account' && (
         <div className="stack">
           {auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />}
@@ -73,8 +77,17 @@ function RailSessionsSetting() {
   );
 }
 
-function GeneralTab() {
+/** What Settings says about a harness's CLI: its version, or why it isn't offered. */
+function harnessNote(h: HarnessStatus | undefined, command: string): string {
+  if (!h?.enabled) return 'Off.';
+  if (h.version === null) return `${command} didn't answer: install Kiro CLI, or set the command it's run with.`;
+  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
+  return `Version ${h.version}.`;
+}
+
+function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [s, setS] = useState<Settings | null>(null);
+  const [updating, setUpdating] = useState(false);
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
@@ -100,6 +113,7 @@ function GeneralTab() {
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
+  const kiro = harnesses.find((h) => h.id === 'kiro');
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -122,6 +136,10 @@ function GeneralTab() {
         idleWorktreesPerRepo: clampIdle(),
         idleWorktreeDays: clampIdleDays(),
         resolveConflicts: s.resolveConflicts,
+        defaultHarness: s.defaultHarness,
+        kiroEnabled: s.kiroEnabled,
+        kiroCommand: s.kiroCommand.trim(),
+        kiroTrustTools: s.kiroTrustTools,
       });
       setS(next);
       setRoots(next.reposRoots);
@@ -233,6 +251,77 @@ function GeneralTab() {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
+      <div className="field">
+        <span className="label" id="set-agent-label">
+          Default agent
+        </span>
+        <div className="seg" role="radiogroup" aria-labelledby="set-agent-label">
+          {HARNESS_IDS.map((id: HarnessId) => (
+            <button
+              key={id}
+              id={`set-agent-${id}`}
+              type="button"
+              role="radio"
+              aria-checked={s.defaultHarness === id}
+              disabled={id !== 'claude' && s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
+              className={cx(s.defaultHarness === id && 'on')}
+              onClick={() => setS({ ...s, defaultHarness: id })}
+            >
+              {HARNESS_CAPS[id].label}
+            </button>
+          ))}
+        </div>
+        <span className="hint">
+          New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+          session keeps the agent it started on.
+        </span>
+      </div>
+      <div className="field">
+        <label className="check">
+          <input
+            id="set-kiro"
+            type="checkbox"
+            checked={s.kiroEnabled}
+            onChange={(e) => setS({ ...s, kiroEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : 'claude' })}
+          />
+          <span>Offer Kiro for new sessions</span>
+        </label>
+        <span className="hint">{harnessNote(kiro, s.kiroCommand)}</span>
+      </div>
+      {s.kiroEnabled && (
+        <>
+          <Field label="Kiro command" hint="How Kiro CLI is run: a command name on your PATH, or a full path.">
+            <input id="set-kiro-command" className="input mono" value={s.kiroCommand} onChange={(e) => setS({ ...s, kiroCommand: e.target.value })} />
+          </Field>
+          <div className="field">
+            <label className="check">
+              <input id="set-kiro-trust" type="checkbox" checked={s.kiroTrustTools} onChange={(e) => setS({ ...s, kiroTrustTools: e.target.checked })} />
+              <span>Let Kiro run any tool without asking</span>
+            </label>
+            <span className="hint">
+              Kiro says nothing to AgentK while it waits for a permission answer, so the session shows as working until you answer in its terminal. On,
+              Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Takes effect when a session next starts or
+              resumes.
+            </span>
+          </div>
+          {kiro?.available && (
+            <div className="settings-actions">
+              <button
+                type="button"
+                id="set-kiro-update"
+                className="btn small"
+                disabled={updating || kiro.updating}
+                onClick={() => {
+                  setUpdating(true);
+                  api.updateHarness('kiro').catch((err) => setError(errorMessage(err))).finally(() => setUpdating(false));
+                }}
+              >
+                {updating || kiro.updating ? <Busy label="Updating Kiro" /> : 'Update Kiro'}
+              </button>
+            </div>
+          )}
+        </>
+      )}
       <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
         <input
           id="set-server-name"
@@ -269,8 +358,8 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
   claude: 'from Claude Code’s settings',
 };
 
-/** The Meko server and key AgentK uses, its links, and whether Claude Code's sessions use the same. */
-function MekoTab({ status }: { status: MekoStatus }) {
+/** The Meko server and key AgentK uses, its links, and whether Claude Code's (and Kiro's) sessions use the same. */
+function MekoTab({ status, kiro }: { status: MekoStatus; kiro: boolean }) {
   const [s, setS] = useState<Settings | null>(null);
   const [url, setUrl] = useState('');
   const [key, setKey] = useState('');
@@ -279,8 +368,9 @@ function MekoTab({ status }: { status: MekoStatus }) {
   const [confirmHost, setConfirmHost] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState<'save' | 'claude' | null>(null);
+  const [busy, setBusy] = useState<'save' | 'claude' | 'kiro' | null>(null);
   const [claudeDone, setClaudeDone] = useState(false);
+  const [kiroDone, setKiroDone] = useState(false);
 
   const show = (x: Settings) => {
     setS(x);
@@ -341,6 +431,22 @@ function MekoTab({ status }: { status: MekoStatus }) {
       setBusy(null);
     }
   };
+
+  const setUpKiro = async () => {
+    setBusy('kiro');
+    setError(null);
+    setKiroDone(false);
+    try {
+      show(await api.mekoKiroSetup());
+      setKiroDone(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+  // Worked out by the server (MekoStatus.kiro): Kiro's Meko MCP server is this one and sends a key.
+  const kiroGaps = status.kiro?.gaps ?? [];
 
   // Worked out by the server (MekoStatus.claude): the same server in both of Claude Code's places, tokens that work there.
   const claude = status.claude;
@@ -477,6 +583,23 @@ function MekoTab({ status }: { status: MekoStatus }) {
               </button>
             )}
             {claudeDone && !claudeProblems.length && <span className="ok-text">Claude Code now uses this Meko.</span>}
+          </div>
+        )}
+        {status.configured && kiro && status.kiro && (
+          <div className="meko-status-row">
+            <span>Kiro</span>
+            <span className={cx('tag', kiroGaps.length > 0 && 'shared')}>{kiroGaps.length ? 'differs' : 'matches'}</span>
+            <span className="hint">
+              {kiroGaps.length
+                ? `${kiroGaps.join(' ')} Meko's setup for Kiro adds its MCP server and its agent, which Kiro sessions are built from.`
+                : `Kiro sessions use ${m.effectiveUrl}.`}
+            </span>
+            {kiroGaps.length > 0 && (
+              <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpKiro()}>
+                {busy === 'kiro' ? <Busy label="Setting up" /> : 'Set up Kiro with this Meko'}
+              </button>
+            )}
+            {kiroDone && !kiroGaps.length && <span className="ok-text">Kiro now uses this Meko.</span>}
           </div>
         )}
       </div>

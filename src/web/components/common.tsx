@@ -356,7 +356,7 @@ const CONTEXT_LEVEL_TEXT = { ok: '', warn: ' Getting full.', bad: ' Nearly full.
  * ring on a touch screen, and popped up over it as soon as a mouse is on it (the tooltip takes a
  * second). `showPercent` always writes it after the ring, for the phone's ⋯ sheet.
  */
-export function ContextRing({ percent, showPercent = false }: { percent: number; showPercent?: boolean }) {
+export function ContextRing({ percent, showPercent = false, agent = 'Claude' }: { percent: number; showPercent?: boolean; agent?: string }) {
   const level = contextLevel(percent);
   const arc = contextArc(percent);
   return (
@@ -367,7 +367,7 @@ export function ContextRing({ percent, showPercent = false }: { percent: number;
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={arc}
-      title={`Context ${percent}% full, measured after each turn.${CONTEXT_LEVEL_TEXT[level]} Claude compacts the conversation when it fills up.`}
+      title={`Context ${percent}% full, measured after each turn.${CONTEXT_LEVEL_TEXT[level]} ${agent} compacts the conversation when it fills up.`}
     >
       context
       <svg className={cx('ctx-ring', level !== 'ok' && level)} width="14" height="14" viewBox="0 0 16 16" fill="none" strokeWidth="2.5" aria-hidden="true">

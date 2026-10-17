@@ -23,6 +23,20 @@ A model with no known price adds tokens but no cost; the cost then reads `≥ $�
 partial**), and the tooltip says how many responses were left out. Model ids match with a date
 (`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).
 
+**Kiro's credits.** A [Kiro session](harnesses.md) has no Claude transcript: Kiro keeps each session in
+`~/.kiro/sessions/cli/<id>.json`, with every finished turn's token counts (0 under its `auto` model),
+the credits it billed (`metering_usage`) and how full the context was. After each turn (its `stop`
+hook, and again 3 seconds later, since Kiro may write the turn just after) and when the session
+exits, AgentK stores each new turn as a `usage_messages` row keyed `kiro:<Kiro's id>:<when it ended>`
+with `credits` set; Claude Code's rows leave it NULL. A `usage_files` row for the session file marks
+the session as read, so the backfill at start leaves it alone. Only the session's own conversation
+is read ([Agents](harnesses.md#kiro)), never another session's in the same pooled worktree. Cost is priced only from rows without
+credits, so credits are never mixed into it: `TokenUsage.credits` sums them per session, project,
+model and day, the session footer shows **Kiro · <n> credits**, and the usage views show **Kiro
+credits** beside **Est. cost** (a **Credits** column on the all-projects table once any project has
+some). The last turn's context fill is the session's context ring, as the mod's measurement is for
+Claude.
+
 **Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
 (`mcp__meko__<tool>`, or a plugin's `mcp__plugin_…_meko__<tool>`) and their results, in the main
 transcript and subagents: `meko_calls(session_id, tool_use_id, agent, tool, kind, at, outcome,

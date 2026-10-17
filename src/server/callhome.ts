@@ -17,6 +17,7 @@ import {
 } from './mekousage.js';
 import { gapMarks, type GapMark } from './mekogaps.js';
 import { usageOverview } from './usage.js';
+import { HARNESS_IDS, harnessOf, type HarnessId } from '../shared/harnesses.js';
 
 // Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each install
 // sends counts to a collector run by the AgentK Local team: no names, paths, prompts, code or
@@ -260,23 +261,38 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     .filter((r) => currentIds.has(r.project_id));
 
   // Sessions.
-  const sessions = all<{ kind: string; first_stage: string | null; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
-    `SELECT kind, (SELECT stage FROM session_stages WHERE session_id = sessions.id ORDER BY entered_at, rowid LIMIT 1) AS first_stage,
+  const sessions = all<{ kind: string; harness: string; first_stage: string | null; stage: string; desired: string; created_at: number; archived_at: number | null }>(db,
+    `SELECT kind, harness, (SELECT stage FROM session_stages WHERE session_id = sessions.id ORDER BY entered_at, rowid LIMIT 1) AS first_stage,
             stage, desired, created_at, archived_at FROM sessions`);
   const kinds = byKind();
+  const harnesses = Object.fromEntries(HARNESS_IDS.map((h) => [h, 0])) as Record<HarnessId, number>;
   const openByStage = byStage();
   for (const s of sessions) {
     const kind = callHomeKind(s.kind, s.first_stage);
     if (kind) kinds[kind]++;
+    const harness = harnessOf(s.harness);
+    harnesses[harness]++;
     if (s.desired === 'running' && (STAGES as string[]).includes(s.stage)) openByStage[s.stage as Stage]++;
     const c = dayOf(s.created_at);
     if (c && kind) c.sessionsCreated[kind]++;
+    if (c && harness === 'kiro') (c.kiro ??= { sessionsCreated: 0, turns: 0, credits: 0 }).sessionsCreated++;
     const a = s.archived_at != null ? dayOf(s.archived_at) : undefined;
     if (a) a.sessionsArchived++;
   }
   for (const r of all<{ stage: string; entered_at: number }>(db, 'SELECT stage, entered_at FROM session_stages WHERE entered_at >= ?', start)) {
     const d = dayOf(r.entered_at);
     if (d && (STAGES as string[]).includes(r.stage)) d.stageEntries[r.stage as Stage]++;
+  }
+
+  // Kiro's turns and the credits they billed, on the day each ended.
+  for (const r of all<{ day: string; turns: number; credits: number }>(db,
+    `SELECT ${DAY_SQL} AS day, COUNT(*) AS turns, SUM(u.credits) AS credits FROM usage_messages u
+     WHERE u.at >= ? AND u.credits IS NOT NULL GROUP BY day`, start)) {
+    const d = days.get(r.day);
+    if (!d) continue;
+    const k = (d.kiro ??= { sessionsCreated: 0, turns: 0, credits: 0 });
+    k.turns = n(r.turns);
+    k.credits = Math.round((Number(r.credits) || 0) * 1000) / 1000;
   }
 
   // Session events (kept 30 days, except `merged`).
@@ -384,11 +400,12 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
         open: sessions.filter((s) => s.desired === 'running').length,
         archived: sessions.filter((s) => s.desired === 'archived').length,
         byKind: kinds,
+        byHarness: harnesses,
         openByStage,
       },
       shipped: { mergedPrs: overview.mergedPrs, directPushes: overview.directPushes, directCommits: overview.directCommits, ...shipped },
       fileTypes: sumFileTypes(allFiles),
-      tokens: { ...overview.total },
+      tokens: { input: overview.total.input, output: overview.total.output, cacheRead: overview.total.cacheRead, cacheWrite: overview.total.cacheWrite, messages: overview.total.messages },
       worktrees: { idle: get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM worktrees WHERE session_id IS NULL')?.n ?? 0 },
       meko: callHomeMeko(overview.meko, toolCounts(calls), starts, { sentByTool: toolSent(calls), learns, agentk: own, capture: captures, marks }),
       mekoFirstTurn: overview.mekoFirstTurn,
@@ -432,6 +449,7 @@ export interface InstallInputs {
 export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   const probe = o.probe ?? defaultProbe;
   const claudeCode = await probeVersion(probe, o.config.claude.command, ['--version'], /(\d+\.\d+\.\d+)/);
+  const kiro = o.config.kiro.enabled ? await probeVersion(probe, o.config.kiro.command, ['--version'], /(\d+\.\d+\.\d+)/) : '';
   const meko = mekoConfigured(o.config);
   return {
     version: reportVersion(o.version),
@@ -440,6 +458,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     arch: process.arch,
     node: reportVersion(process.versions.node),
     claudeCode,
+    ...(kiro ? { kiro } : {}),
     access: isLoopback(o.config.server.bind) ? 'local' : 'remote',
     service: serviceKind(),
     meko: {

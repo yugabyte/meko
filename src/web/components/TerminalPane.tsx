@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '../../shared/types';
 import { useTouch } from '../hooks/useMedia';
 import { getTerminal, screenLabel } from '../terminals';
+import { agentName } from '../util';
 import { AskBar } from './AskSheet';
 import { Busy } from './common';
 import { HeldImages } from './HeldImages';
@@ -103,12 +104,12 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
           </div>
         )}
         {status === 'exited' && (
-          <div className="term-overlay">Claude exited. Use Resume to continue this conversation in the same worktree.</div>
+          <div className="term-overlay">{agentName(session)} exited. Use Resume to continue this conversation in the same worktree.</div>
         )}
       </div>
       {/* Touch screens show held images and files above the compose box instead. */}
       {!touch && <HeldImages held={term.held} hint="sent with your next Enter" actions={mekoTo && <MekoUpload term={term} datapack={mekoTo} />} />}
-      {touch && <TermKeys term={term} sessionId={sessionId} disabled={status === 'exited'} mekoTo={mekoTo} />}
+      {touch && <TermKeys term={term} sessionId={sessionId} agent={agentName(session)} disabled={status === 'exited'} mekoTo={mekoTo} />}
     </div>
   );
 }

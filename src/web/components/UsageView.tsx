@@ -4,15 +4,15 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { cx, formatCostOf, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
+import { cx, formatCostOf, formatCredits, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
-import { CostStat, DailyChart, DailyTable, Stat } from './UsagePanel';
+import { CostStat, CreditsStat, DailyChart, DailyTable, Stat } from './UsagePanel';
 import { Busy } from './common';
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
-type ProjectKey = 'name' | 'sessions' | 'mergedPrs' | 'directCommits' | 'output' | 'total' | 'cost' | 'meko' | 'saved';
+type ProjectKey = 'name' | 'sessions' | 'mergedPrs' | 'directCommits' | 'output' | 'total' | 'cost' | 'credits' | 'meko' | 'saved';
 type ModelKey = 'model' | 'output' | 'total';
 
 const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string => {
@@ -25,6 +25,8 @@ const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
       return totalTokens(p.usage);
     case 'cost':
       return p.cost.usd;
+    case 'credits':
+      return p.usage.credits ?? 0;
     case 'meko':
       return p.meko.found;
     case 'saved': {
@@ -72,6 +74,8 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
   }, []);
 
   const t = usage?.total;
+  // Kiro's credits get a column once any project has some.
+  const showCredits = !!usage?.total.credits;
   const showMeko = !!usage && (usage.meko.calls > 0 || usage.meko.savings.seeds > 0 || usage.mekoLearning.runs > 0 || mekoConfigured);
   return (
     <div className="home-view">
@@ -91,6 +95,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
               <div className="usage-stats">
                 <Stat label="Total tokens" value={totalTokens(t)} strong />
                 <CostStat cost={usage.cost} />
+                <CreditsStat usage={t} />
                 <Stat label="Output" value={t.output} />
                 <Stat label="Input" value={t.input} />
                 <Stat label="Cache write" value={t.cacheWrite} />
@@ -134,6 +139,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                           {projectHeader('output', 'Output', { className: 'num opt' })}
                           {projectHeader('total', 'Total', { className: 'num' })}
                           {projectHeader('cost', 'Cost', { className: 'num opt', title: "What the tokens would cost at Anthropic's API list prices" })}
+                          {showCredits && projectHeader('credits', 'Credits', { className: 'num opt', title: "What Kiro billed for its sessions' turns" })}
                           {showMeko && projectHeader('meko', 'Meko', { className: 'num opt', title: 'Meko lookups that found something, of all lookups' })}
                           {showMeko && projectHeader('saved', 'Est. saved', { className: 'num opt', title: 'Estimated from the Meko searches that found something and the seeds AgentK passed at session start' })}
                         </tr>
@@ -172,6 +178,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                             >
                               {formatCostOf(p.cost)}
                             </td>
+                            {showCredits && <td className="num opt">{p.usage.credits ? formatCredits(p.usage.credits).replace(/ credits?$/, '') : '—'}</td>}
                             {showMeko && <td className="num opt">{p.meko.lookups > 0 ? `${p.meko.found}/${p.meko.lookups}` : '—'}</td>}
                             {showMeko && (
                               <td

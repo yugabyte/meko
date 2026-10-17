@@ -12,13 +12,14 @@ import {
   type Stage,
 } from '../../shared/types';
 import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
+import { HARNESS_CAPS, agentName, harnessOf } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import { approveDesign } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, designApprovalBlocker, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, NotesIcon, StatusDot } from './common';
@@ -241,14 +242,19 @@ export function ProjectView({
       {copiedPath?.id === session.id ? 'path copied' : branchLabel}
     </button>
   ));
-  const tokensText = session && (
+  // Kiro bills credits; its token counts are often zero, so a Kiro session shows its credits and its agent.
+  const tokensText = session && (HARNESS_CAPS[harnessOf(session.harness)].usage === 'credits' ? (
+    <span title={`${HARNESS_CAPS.kiro.label} · ${session.usage.messages} turns`}>
+      {HARNESS_CAPS.kiro.short} · {formatCredits(session.usage.credits ?? 0)}
+    </span>
+  ) : (
     <span title={usageTitle(session.usage)}>
       tokens {formatTokens(totalTokens(session.usage))} · {formatTokens(session.usage.output)} out
     </span>
-  );
+  ));
   // Measured by AgentK's mod after each turn; null without it. The phone's sheet has no tooltips, so it writes the percent too.
   const contextText = (showPercent: boolean) =>
-    session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} />;
+    session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} agent={agentName(session)} />;
   const mekoText = (
     <span title="The project's Meko datapack">
       Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}

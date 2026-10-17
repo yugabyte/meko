@@ -23,7 +23,7 @@ import {
   DEFAULT_PROMPTS, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
-import { shq } from '../../src/server/claude.js';
+import { shq } from '../../src/server/launcher.js';
 import { repoFolder } from '../../src/server/worktrees.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
 
@@ -521,6 +521,12 @@ describe('config and db', () => {
 const V10_COLUMNS = ['pending_prompts', 'ci_fix_head', 'ci_fixes', 'agentk_seen'];
 
 /** Undoes migration 36 (held reviews; the reviewer modes it filled in stay), for tests that rewind the schema. */
+/** Undoes migration 37 (sessions on other harnesses, and Kiro's credits), for tests that rewind the schema. */
+function dropV37(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'harness', 'agent_session_id');
+  db.exec('ALTER TABLE usage_messages DROP COLUMN credits');
+}
+
 function dropV36(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE held_reviews');
 }
@@ -652,8 +658,8 @@ const V11_COLUMNS = ['kind'];
 
 /** Undoes migrations 36 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36];
-  for (let v = 36; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37];
+  for (let v = 37; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

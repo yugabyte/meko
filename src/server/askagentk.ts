@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
+import type { HarnessId } from '../shared/harnesses.js';
 import { parseGithubRef } from '../shared/github-refs.js';
 import { MOVE_TARGETS, moveBlockedIn, moveError } from '../shared/stages.js';
 import {
@@ -8,6 +9,7 @@ import {
   type AskAgentkAction, type AskAgentkRequest, type AskAgentkResult, type AskAgentkTurn, type MoveTarget, type Session, type StartStage,
 } from '../shared/types.js';
 import type { Config } from './config.js';
+import { ASK_AGENT, askAgent, deleteKiroSession, readKiroRun, writeKiroAgent } from './kiro.js';
 import { HttpError } from './projects.js';
 
 /** The most actions an answer offers; Claude's later ones are dropped. */
@@ -80,6 +82,16 @@ export function askArgs(model: string): string[] {
     '--no-session-persistence',
     '--system-prompt', SYSTEM_PROMPT,
   ];
+}
+
+/** The arguments for one ask on Kiro: as the `agentk-ask` agent (no tools, no MCP servers, no hooks), the answer as JSON events. */
+export function kiroAskArgs(): string[] {
+  return ['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', ASK_AGENT];
+}
+
+/** The `agentk-ask` agent's instructions: Claude's system prompt, and the answer's shape (Kiro has no JSON schema option). */
+export function kiroAskPrompt(): string {
+  return `${SYSTEM_PROMPT}\n\nAnswer with one JSON object and nothing else (no prose, no code fence), in this JSON schema's shape: ${JSON.stringify(ANSWER_SCHEMA)}`;
 }
 
 const ANSWER_SCHEMA = {
@@ -252,6 +264,38 @@ export function readAnswer(run: AskRun, cmd: string, timeoutSeconds: number): { 
   return { reply: answer.reply.trim(), actions: answer.actions };
 }
 
+/** The JSON object in a model's text answer: as it is, or inside a code fence or other text. */
+function jsonIn(text: string): Record<string, unknown> | null {
+  for (const t of [text.trim(), text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)]) {
+    try {
+      const v = JSON.parse(t) as unknown;
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+/** What Kiro printed (`readKiroRun`), as an answer, or the error the palette shows. */
+export function readKiroAnswer(run: AskRun, cmd: string, timeoutSeconds: number): { reply: string; actions: unknown; sessionId: string | null } {
+  if (run.spawnError) throw new HttpError(503, `Kiro couldn't be run (${cmd}): install it, or set [kiro] command in config.toml.`);
+  if (run.timedOut) throw new HttpError(504, `AgentK didn't answer in ${timeoutSeconds} seconds. Try again, or use a command.`);
+  const r = readKiroRun(run.stdout);
+  if (!r.ok || run.code !== 0) {
+    const said = r.error || run.stderr.trim().split('\n').filter(Boolean).at(-1) || '';
+    if (/not logged in|log ?in|authenticat|expired/i.test(said)) {
+      throw new HttpError(502, "Kiro isn't signed in. Run kiro-cli login in a terminal, then ask again.");
+    }
+    throw new HttpError(502, `Kiro failed${said ? `: ${oneLine(said, 300)}` : ` (exit ${run.code ?? 'unknown'})`}. Try again.`);
+  }
+  const answer = jsonIn(r.text);
+  if (!answer || typeof answer.reply !== 'string') {
+    throw new HttpError(502, "AgentK's answer couldn't be read. Try again, or say it another way.");
+  }
+  return { reply: answer.reply.trim(), actions: answer.actions, sessionId: r.sessionId };
+}
+
 /** The request as the browser sent it, checked: the text, the last turns of history, what's on screen. */
 export function checkRequest(b: unknown): { text: string; history: AskAgentkTurn[]; projectId: string | null; sessionId: string | null } {
   const r = (b && typeof b === 'object' ? b : {}) as Partial<Record<keyof AskAgentkRequest, unknown>>;
@@ -272,6 +316,8 @@ export interface AskAgentkDeps {
   projects: () => AskProject[];
   /** One ask that ran Claude, for the usage report. */
   record: (r: { at: number; ok: boolean; actions: number; ms: number }) => void;
+  /** The harness asks run on: `[agents] default` when it's available, else Claude Code. */
+  harness?: () => HarnessId;
   run?: AskRunner;
 }
 
@@ -299,13 +345,25 @@ export class AskAgentk {
     try {
       const timeoutSeconds = Math.min(300, Math.max(5, Math.round(cfg.askAgentk.timeoutSeconds) || 45));
       mkdirSync(this.deps.cwd, { recursive: true });
-      const run = await this.run(cfg.claude.command, askArgs(cfg.askAgentk.model.trim()), {
+      const kiro = this.deps.harness?.() === 'kiro';
+      // Kiro finds the ask's agent in the folder it runs in, so it never shows in the user's agent list.
+      if (kiro) writeKiroAgent(askAgent(kiroAskPrompt()), join(this.deps.cwd, '.kiro'));
+      const cmd = kiro ? cfg.kiro.command : cfg.claude.command;
+      const run = await this.run(cmd, kiro ? kiroAskArgs() : askArgs(cfg.askAgentk.model.trim()), {
         input: askMessage(req, this.deps.projects()), cwd: this.deps.cwd, timeoutMs: timeoutSeconds * 1000, signal,
       });
       // The user closed the palette: nobody reads the answer, and it isn't counted.
       if (run.aborted) throw new HttpError(499, 'The ask was cancelled.');
       outcome = { ok: false, actions: 0 };
-      const answer = readAnswer(run, cfg.claude.command, timeoutSeconds);
+      let answer: { reply: string; actions: unknown };
+      if (kiro) {
+        const k = readKiroAnswer(run, cmd, timeoutSeconds);
+        // Kiro keeps every run as a session; an ask's isn't one anyone resumes.
+        if (k.sessionId) deleteKiroSession(cmd, k.sessionId, this.deps.cwd);
+        answer = k;
+      } else {
+        answer = readAnswer(run, cmd, timeoutSeconds);
+      }
       // Checked against the state as it is now, not as it was when Claude started.
       const { actions, notes } = checkActions(answer.actions, this.deps.projects());
       outcome = { ok: true, actions: actions.length };
