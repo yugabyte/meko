@@ -266,6 +266,7 @@ export const api = {
   mekoClaudeSetup: () => post<Settings>('/api/settings/meko/claude-setup'),
   mekoKiroSetup: () => post<Settings>('/api/settings/meko/kiro-setup'),
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
+  refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
   update: () => get<UpdateStatus>('/api/update'),
   checkUpdate: () => post<UpdateStatus>('/api/update/check'),

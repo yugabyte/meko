@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
@@ -641,6 +641,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());
+  app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => {
+    await Promise.all(core.harnesses.list().map((h) => h.version(core.config, true)));
+    core.changed();
+    return core.harnesses.status(core.config);
+  });
   app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req) => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
     return core.harnesses.of(req.params.id).update(core.config);

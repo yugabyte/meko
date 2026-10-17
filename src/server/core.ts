@@ -446,8 +446,6 @@ export class Core extends EventEmitter {
       this.every(60000, () => this.retireTmux());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
-      // Claude Code and Kiro update themselves: read their versions again once the last read is stale.
-      this.every(60000, () => Promise.all(this.harnesses.list().map((h) => h.version(this.cfg))));
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
