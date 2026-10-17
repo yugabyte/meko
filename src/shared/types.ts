@@ -836,7 +836,41 @@ export interface UpdateStatus {
   lastError: string | null;
   /** Set for one boot after a successful update, for the "Updated to vX" notice. */
   justUpdatedFrom: string | null;
+  /** The version the last update came from, kept after that first boot (What's new in Settings); null before any update. */
+  lastUpdatedFrom: string | null;
+  /** The GitHub release page of `latest`. Pages before What's new linked to it; the UI no longer does. */
   releaseUrl: string | null;
+}
+
+/** One change in What's new: a commit subject with a releasing type (see scripts/release-notes.sh). */
+export interface ReleaseNoteItem {
+  /** The component in the subject's parentheses, if any. */
+  component: string | null;
+  summary: string;
+  /** The PR it was merged in, from "(#123)" at the end of its subject. */
+  pr: number | null;
+  /** The commit, shortened. */
+  sha: string;
+  /** The PR when there is one, else the commit. */
+  url: string;
+}
+
+export interface ReleaseNoteSection {
+  /** Breaking changes, Features, Fixes, Performance or Dependencies; empty ones are left out. */
+  title: string;
+  items: ReleaseNoteItem[];
+}
+
+/** What changed between two versions (GET /api/update/notes), from the commits between their tags. */
+export interface ReleaseNotes {
+  from: string;
+  to: string;
+  sections: ReleaseNoteSection[];
+  /** The commits read, at most 250 (GitHub's limit for one comparison); `totalCommits` is all of them. */
+  commits: number;
+  totalCommits: number;
+  /** The comparison on GitHub, every commit included. */
+  compareUrl: string;
 }
 
 export interface MekoStatus {
@@ -897,7 +931,7 @@ export interface AppState {
   claudeCode: ClaudeCodeStatus;
   /** Each harness sessions can run on, in HARNESS_IDS order, and the default for new sessions. */
   harnesses: HarnessStatus[];
-  /** `[ask_agentk] enabled`: the command palette offers Ask AgentK. */
+  /** `[ask_agentk] enabled` and a coding agent available to answer: the command palette offers Ask AgentK. */
   askAgentk: boolean;
   /** The session host that runs every Claude, as it last answered. */
   sessionHost: SessionHostStatus;
@@ -906,7 +940,7 @@ export interface AppState {
 /** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[kiro]` in config.toml). */
 export interface HarnessStatus {
   id: HarnessId;
-  /** The CLI is turned on in the config (Claude Code always is). */
+  /** The CLI is turned on in the config (`[claude] enabled`, `[kiro] enabled`). */
   enabled: boolean;
   /** What `<command> --version` printed, or null when it can't be read (or hasn't been yet). */
   version: string | null;
@@ -914,6 +948,12 @@ export interface HarnessStatus {
   minVersion: string | null;
   /** New sessions can start on it: enabled, and its version read and new enough. */
   available: boolean;
+  /**
+   * Its version has been read (or tried) for the command it's run with since it was last turned on
+   * (turning it off forgets the read), so `available: false` means it really isn't there rather than
+   * not asked yet. True while it's off.
+   */
+  checked: boolean;
   /** `[agents] default`: new sessions start on it unless the New session dialog picks another. */
   isDefault: boolean;
   /** Its update command is running (POST /api/harnesses/:id/update). */
@@ -1428,6 +1468,8 @@ export interface Settings {
   resolveConflicts: boolean;
   /** `[agents] default`: the harness new sessions start on unless the New session dialog picks another. */
   defaultHarness: HarnessId;
+  /** `[claude] enabled`: offer Claude Code for new sessions when its CLI answers. */
+  claudeEnabled: boolean;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
@@ -1881,7 +1923,11 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
-  /** The harness the session runs on; it must be available (`AppState.harnesses`). Left out, `[agents] default` while that's available, else Claude Code. */
+  /**
+   * The harness the session runs on; it must be available (`AppState.harnesses`). Left out,
+   * `[agents] default` while that's available, else the first available one (HARNESS_IDS order),
+   * else the create is a 409 (NO_AGENT).
+   */
   harness?: HarnessId;
   /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
@@ -2142,7 +2188,8 @@ export type TermServerMessage =
 //        task on an issue, in `projectId` or in a project it opens (cloning the repo if needed); 400 for a PR that isn't
 //        open, 409 for a PR a running session reviews; then as POST /api/projects/:id/sessions)
 // POST   /api/ask-agentk AskAgentkRequest  → AskAgentkResult   (an instruction in plain words, answered by one `claude -p`
-//        with no tools; 400 for empty or too long text, 403 when [ask_agentk] is off, 429 with two asks already running,
+//        with no tools, or Kiro's one-shot chat; 400 for empty or too long text, 403 when [ask_agentk] is off, 409 when no
+//        coding agent is available, 429 with two asks already running,
 //        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
 //        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
@@ -2152,7 +2199,8 @@ export type TermServerMessage =
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a harness that isn't available, a bad branch name, a
 //        base branch neither the repo nor its origin has, a repo that isn't a scanned one, an `existingBranch` that doesn't exist, or a task's
-//        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has. Review a PR:
+//        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has, or
+//        when no coding agent is available (NO_AGENT). Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
 //        `images` that aren't this project's staged images, or more than MAX_START_IMAGES). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
@@ -2236,11 +2284,15 @@ export type TermServerMessage =
 //                                                           '' goes back to the host name; callHomeEnabled and
 //                                                           resolveConflicts are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
-//                                                           Ask AgentK that name none start on Claude Code))
+//                                                           Ask AgentK that name none start on the first available one);
+//                                                           claudeEnabled and kiroEnabled are booleans; the agents'
+//                                                           commands are set in config.toml)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,
 //                                                           only when the user asks; then checks Kiro's Meko again)
+// POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
+//        that's turned on again now (Kiro's isn't read while it's off); a change is pushed to every page)
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`kiro-cli update`), then
 //        reads its version again; Claude Code keeps POST /api/claude/update; 409 while one runs)
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
@@ -2248,3 +2300,6 @@ export type TermServerMessage =
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus
 // POST   /api/update/apply                     → UpdateStatus
+// GET    /api/update/notes?from=&to=           → ReleaseNotes   (What's new: the feat, fix, perf and deps commits between
+//        tags v<from> and v<to>, from GitHub; 400 unless both are versions and from is older, 409 from a source checkout,
+//        502 when GitHub can't compare them)

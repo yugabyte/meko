@@ -94,7 +94,8 @@ sorts higher.
    `install.sh`, and attests build provenance where the plan allows.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
-   Tags are kept, so release notes and version numbering are unaffected.
+   Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
+   between two tags) are unaffected.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
    a "Version X is available" banner. Its **Update to the latest version** button checks again and
    installs the newest release then (which may be newer than X), without interrupting sessions. Once a version has been healthy for 5 minutes, the
@@ -138,10 +139,14 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
   | sh -s -- --version 0.2.0 --non-interactive --repos-root ~/code
 ```
 
-Before anything else, the installer checks for git, curl, gh and Claude Code and offers to
-install the missing ones (and `agent-k-local install` offers Meko's own setup for Claude Code),
-showing the commands and asking first (`--install-deps` to skip the question,
-`--no-install-deps` to never install, `--deps-only` to stop after that step). Where AgentK Local
+Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code or
+Kiro CLI: either one is enough) and offers to install the missing ones, showing the commands and
+asking first. With neither agent there it asks which to install (`--agent claude|kiro` picks one
+without asking; Kiro CLI comes from its own installer at cli.kiro.dev), and it stops when no agent
+ends up installed. `agent-k-local install` then offers Meko's own setup for each agent it finds
+(Claude Code, Kiro), asking first. `--install-deps` skips the questions (and installs Claude Code
+when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and
+`--deps-only` stops after that step. Where AgentK Local
 is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agent-k-local`,
 and both services enabled or loaded), it says so and stops before any of that, unless given
 `--reinstall`, `--deps-only`, a `--version` other than the installed one, or options for

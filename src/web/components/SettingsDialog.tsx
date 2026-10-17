@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
+import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
@@ -21,6 +22,7 @@ export function SettingsDialog({
   twoAgents,
   initialTab = 'general',
   onClose,
+  onWhatsNew,
 }: {
   auth: AuthStatus;
   update: UpdateStatus;
@@ -32,6 +34,8 @@ export function SettingsDialog({
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
+  /** Opens What's new from one version to another, in place of Settings. */
+  onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   return (
@@ -56,14 +60,20 @@ export function SettingsDialog({
           <GeneralTab harnesses={harnesses} />
         </div>
       )}
-      {tab === 'meko' && <MekoTab status={meko} kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false} />}
+      {tab === 'meko' && (
+        <MekoTab
+          status={meko}
+          claude={harnesses.find((h) => h.id === 'claude')?.available ?? false}
+          kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false}
+        />
+      )}
       {tab === 'account' && (
         <div className="stack">
           {auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />}
           <UsageStatsCheck />
         </div>
       )}
-      {tab === 'updates' && <UpdatesTab initial={update} />}
+      {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={onWhatsNew} />}
     </Dialog>
   );
 }
@@ -101,16 +111,23 @@ function HarnessLogosSetting() {
 }
 
 /** What Settings says about a harness's CLI: its version, or why it isn't offered. */
-function harnessNote(h: HarnessStatus | undefined): string {
+function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
   if (!h?.enabled) return 'Off.';
-  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml.`;
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
+  if (h.version === null) {
+    if (!h.checked) return <Busy label="Looking for it" />;
+    const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
+    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml, then check again.`;
+  }
+  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
   return `Version ${h.version}.`;
 }
 
 function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [s, setS] = useState<Settings | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // What Check again answered, until the next state push replaces it.
+  const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
@@ -120,6 +137,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => setRechecked(null), [harnesses]);
 
   useEffect(() => {
     api
@@ -136,8 +155,36 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
-  const kiro = harnesses.find((h) => h.id === 'kiro');
-  const defaultAgent = defaultAgentChoice(harnesses, s.defaultHarness);
+  const agents = rechecked ?? harnesses;
+  const claude = agents.find((h) => h.id === 'claude');
+  const kiro = agents.find((h) => h.id === 'kiro');
+  const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
+  // Turning off the default agent moves the default to another available one, if there is one.
+  const defaultWithout = (off: HarnessId): HarnessId =>
+    s.defaultHarness !== off ? s.defaultHarness : (agents.find((h) => h.id !== off && h.available)?.id ?? s.defaultHarness);
+  // Under an agent that's on: reads every agent's version again (nothing polls them).
+  const checkAgain = (h: HarnessStatus | undefined) =>
+    h?.enabled && (
+      <div className="settings-actions">
+        <button
+          type="button"
+          id={`set-${h.id}-check`}
+          className="btn small"
+          disabled={checking}
+          onClick={() => {
+            setChecking(true);
+            setError(null);
+            api
+              .refreshHarnesses()
+              .then(setRechecked)
+              .catch((err) => setError(errorMessage(err)))
+              .finally(() => setChecking(false));
+          }}
+        >
+          {checking ? <Busy label="Checking" /> : 'Check again'}
+        </button>
+      </div>
+    );
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -161,6 +208,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
         idleWorktreeDays: clampIdleDays(),
         resolveConflicts: s.resolveConflicts,
         defaultHarness: s.defaultHarness,
+        claudeEnabled: s.claudeEnabled,
         kiroEnabled: s.kiroEnabled,
         kiroTrustTools: s.kiroTrustTools,
       });
@@ -288,7 +336,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
             labelledBy="set-agent-label"
           />
           <span className="hint">
-            New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+            New sessions and Ask AgentK run on it (on another available agent while it isn't); the New session dialog can pick another. A
             session keeps the agent it started on.
           </span>
         </div>
@@ -296,14 +344,28 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
       <div className="field">
         <label className="check">
           <input
+            id="set-claude"
+            type="checkbox"
+            checked={s.claudeEnabled}
+            onChange={(e) => setS({ ...s, claudeEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : defaultWithout('claude') })}
+          />
+          <span>Offer Claude Code for new sessions</span>
+        </label>
+        <span className="hint">{harnessNote('claude', claude)}</span>
+        {checkAgain(claude)}
+      </div>
+      <div className="field">
+        <label className="check">
+          <input
             id="set-kiro"
             type="checkbox"
             checked={s.kiroEnabled}
-            onChange={(e) => setS({ ...s, kiroEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : 'claude' })}
+            onChange={(e) => setS({ ...s, kiroEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : defaultWithout('kiro') })}
           />
           <span>Offer Kiro for new sessions</span>
         </label>
-        <span className="hint">{harnessNote(kiro)}</span>
+        <span className="hint">{harnessNote('kiro', kiro)}</span>
+        {checkAgain(kiro)}
       </div>
       {s.kiroEnabled && (
         <>
@@ -401,7 +463,7 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
 };
 
 /** The Meko server and key AgentK uses, its links, and whether Claude Code's (and Kiro's) sessions use the same. */
-function MekoTab({ status, kiro }: { status: MekoStatus; kiro: boolean }) {
+function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claude: boolean; kiro: boolean }) {
   const [s, setS] = useState<Settings | null>(null);
   const [url, setUrl] = useState('');
   const [key, setKey] = useState('');
@@ -608,7 +670,7 @@ function MekoTab({ status, kiro }: { status: MekoStatus; kiro: boolean }) {
           {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
           {status.configured && <span className="hint">A new URL or key is checked with Meko when you save it.</span>}
         </div>
-        {status.configured && (
+        {status.configured && claudeOn && (
           <div className="meko-status-row">
             <span>Claude Code</span>
             <span className={cx('tag', claudeTag !== 'matches' && 'shared')}>{claudeTag}</span>
@@ -892,8 +954,15 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
   );
 }
 
-function UpdatesTab({ initial }: { initial: UpdateStatus }) {
+function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew: (from: string, to: string) => void }) {
   const [u, setU] = useState(initial);
+  // What the update on offer brings, else what the last update brought (none on an install never updated).
+  const whatsNew =
+    u.available && u.latest
+      ? { from: u.current, to: u.latest, label: `What’s in v${u.latest}` }
+      : u.lastUpdatedFrom
+        ? { from: u.lastUpdatedFrom, to: u.current, label: `What’s new in v${u.current}` }
+        : null;
   const [busy, setBusy] = useState<'check' | 'apply' | 'channel' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -961,10 +1030,10 @@ function UpdatesTab({ initial }: { initial: UpdateStatus }) {
             {busy === 'apply' || u.applying ? <Busy label="Updating" /> : 'Update to the latest version'}
           </button>
         )}
-        {u.releaseUrl && (
-          <a href={u.releaseUrl} target="_blank" rel="noreferrer" className="link-btn">
-            Release notes
-          </a>
+        {whatsNew && (
+          <button className="link-btn" onClick={() => onWhatsNew(whatsNew.from, whatsNew.to)}>
+            {whatsNew.label}
+          </button>
         )}
       </div>
     </div>

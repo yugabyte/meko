@@ -238,6 +238,8 @@ export class SessionManager {
   private usage = new Map<string, TokenUsage>();
   private usageLoaded = false;
   private usageReadAt = new Map<string, number>();
+  /** Kiro turns' second usage reads, cleared by `stop()` so none runs after the database closes. */
+  private rereads = new Set<NodeJS.Timeout>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
   /**
@@ -445,9 +447,10 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
-    // Checked first: a harness that isn't available starts nothing.
-    const harness = this.core.harnesses.pick(this.core.config, req.harness);
+    // Before the first await, so an image swept meanwhile is left out at the move, not refused here.
     const images = checkStaged(this.core.paths.pastes, projectId, req.images);
+    // A harness that isn't available starts nothing.
+    const harness = await this.core.harnesses.pick(this.core.config, req.harness);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
@@ -1486,7 +1489,13 @@ export class SessionManager {
     this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
     // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
-    if (this.harness(row).caps.usage === 'credits') setTimeout(() => this.ingestUsage(id), USAGE_REREAD_MS).unref();
+    if (this.harness(row).caps.usage === 'credits') {
+      const t = setTimeout(() => {
+        this.rereads.delete(t);
+        this.ingestUsage(id);
+      }, USAGE_REREAD_MS).unref();
+      this.rereads.add(t);
+    }
     await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
   }
 
@@ -2399,6 +2408,12 @@ export class SessionManager {
   }
 
   // ---- token usage ----
+
+  /** At server stop: drops the usage reads still waiting (a Kiro session's next turn reads its file again anyway). */
+  stop(): void {
+    for (const t of this.rereads) clearTimeout(t);
+    this.rereads.clear();
+  }
 
   /** Reads any new transcript lines for a session (Kiro's: its session file) and updates its token totals. */
   ingestUsage(id: string): void {

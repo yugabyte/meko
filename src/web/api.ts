@@ -47,6 +47,7 @@ import type {
   LinkPlan,
   StartFromLinkRequest,
   StartFromLinkResult,
+  ReleaseNotes,
   ReviewComment,
   SearchResult,
   SessionMatch,
@@ -266,10 +267,12 @@ export const api = {
   mekoClaudeSetup: () => post<Settings>('/api/settings/meko/claude-setup'),
   mekoKiroSetup: () => post<Settings>('/api/settings/meko/kiro-setup'),
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
+  refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
   update: () => get<UpdateStatus>('/api/update'),
   checkUpdate: () => post<UpdateStatus>('/api/update/check'),
   applyUpdate: () => post<UpdateStatus>('/api/update/apply'),
+  updateNotes: (from: string, to: string) => get<ReleaseNotes>(`/api/update/notes?${new URLSearchParams({ from, to })}`),
 };
 
 /** The machine-readable `code` of an API error (DATAPACK_LIMIT, MEKO_OFF, …), if it has one. */

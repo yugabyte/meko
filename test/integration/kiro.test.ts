@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
@@ -74,7 +74,15 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(lines(env, 'argv.jsonl')[1].args).toEqual(['chat', '--agent', 'agentk', '--resume-id', row.agent_session_id]);
   });
 
-  it('refuses a new session on a harness that is turned off', async () => {
+  it("refuses a new session on a harness that isn't available, reading its version again first", async () => {
+    // Kiro read as too old, then updated: a create that names it reads the version again before refusing.
+    const version = join(process.env.FAKE_KIRO_DIR!, 'version');
+    writeFileSync(version, 'kiro-cli 2.0.0\n');
+    await env.core.harnesses.refresh(env.core.config, true);
+    expect(env.core.state().harnesses.find((h) => h.id === 'kiro')!.available).toBe(false);
+    rmSync(version);
+    expect((await env.core.harnesses.pick(env.core.config, 'kiro')).id).toBe('kiro');
+
     env.core.updateConfig((c) => {
       c.kiro.enabled = false;
     });
@@ -84,7 +92,30 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     env.core.updateConfig((c) => {
       c.agents.default = 'kiro';
     });
-    expect(env.core.harnesses.pick(env.core.config, undefined).id).toBe('claude');
+    expect((await env.core.harnesses.pick(env.core.config, undefined)).id).toBe('claude');
+  });
+
+  it('runs without Claude Code: sessions and Ask AgentK on Kiro, and nothing at all with neither', async () => {
+    // Claude Code is the default but isn't installed: AgentK's hook files are there all the same.
+    env.core.updateConfig((c) => {
+      c.claude.command = join(env.home, 'no-such-claude');
+    });
+    expect(existsSync(join(env.core.paths.run, 'hook.sh'))).toBe(true);
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'No Claude', prompt: 'hi', start: 'code' });
+    expect(s.harness).toBe('kiro');
+    expect(env.core.state().harnesses.find((h) => h.id === 'claude')).toMatchObject({ available: false, checked: true, version: null });
+    expect(env.core.state().meko.claude.gaps).toEqual([]);
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'ask-reply.jsonl'), JSON.stringify({ type: 'runFinished', data: { sessionId: 'ask-2', status: 'success', finalText: '{"reply":"ok","actions":[]}' } }));
+    expect((await env.core.askAgentk.ask({ text: 'hello' })).reply).toBe('ok');
+
+    // Neither agent: nothing starts, and the palette doesn't offer Ask AgentK.
+    env.core.updateConfig((c) => {
+      c.kiro.enabled = false;
+    });
+    expect(env.core.state().askAgentk).toBe(false);
+    await expect(env.core.sessions.create(p.id, { name: 'none' })).rejects.toThrow(/^No coding agent is available: install Claude Code or Kiro CLI/);
+    await expect(env.core.askAgentk.ask({ text: 'hello' })).rejects.toThrow(/^No coding agent is available/);
   });
 
   it("answers Ask AgentK on Kiro when it's the default, as a tool-less agent, and deletes the run's session", async () => {

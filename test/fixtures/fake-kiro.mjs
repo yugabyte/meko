@@ -16,8 +16,10 @@ const home = process.env.KIRO_HOME;
 mkdirSync(dir, { recursive: true });
 const log = (file, v) => appendFileSync(join(dir, file), JSON.stringify(v) + '\n');
 
+// The version a test put in `version` (an install or update since the last read), else 2.32.0.
 if (args[0] === '--version') {
-  process.stdout.write('kiro-cli 2.32.0\n');
+  const v = join(dir, 'version');
+  process.stdout.write(existsSync(v) ? readFileSync(v, 'utf8') : 'kiro-cli 2.32.0\n');
   process.exit(0);
 }
 // Like `kiro-cli agent create <name> --from kiro_default --directory <dir>`: Kiro's built-in default.

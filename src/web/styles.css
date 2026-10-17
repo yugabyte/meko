@@ -965,67 +965,113 @@ textarea.input {
   order: 1;
   margin-left: auto;
 }
-/* Plan usage limits (5-hour and weekly), above the rail's buttons. */
+/* Plan usage limits, above the rail's buttons: a row per agent, its logo then a ring per limit. */
 .limits {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   padding: 2px 4px 6px;
   border-bottom: 1px solid var(--rule);
 }
-.lim {
+.lim-row {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11.5px;
+  align-items: center;
+  gap: 6px;
 }
-.lim-hd {
+.lim-agent {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex: none;
+}
+/* Claude's two windows share their row by how much each has to say; Kiro's credits take all of theirs. */
+.lim {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
   color: var(--ink);
 }
-.lim-pct {
+.lim [role='meter'] {
+  display: flex;
+  flex: none;
+}
+.lim-ring .track {
+  stroke: var(--rule);
+}
+.lim-ring .arc {
+  stroke: var(--accent);
+}
+.lim.kiro .lim-ring .arc {
+  stroke: var(--chart-kiro);
+}
+.lim.warn .lim-ring .arc {
+  stroke: var(--warn);
+}
+.lim.bad .lim-ring .arc {
+  stroke: var(--bad);
+}
+.lim-ring text {
+  fill: currentColor;
   font-family: var(--mono);
+  font-size: 9.5px;
   font-variant-numeric: tabular-nums;
 }
-.lim-bar {
-  height: 5px;
-  border-radius: 3px;
-  background: var(--sunk);
-  border: 1px solid var(--rule);
-  overflow: hidden;
+/* Three digits (100% and over) still fit inside the ring. */
+.lim-ring text.long {
+  font-size: 8px;
 }
-.lim-bar i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
+/* The ▲ that marks amber and red without relying on color, kept small so both names still fit. */
+.lim-flag {
+  font-size: 8px;
+  margin-right: 2px;
+  vertical-align: 1px;
 }
-.lim.kiro .lim-bar i {
-  background: var(--chart-kiro);
+/* Amber or red: the percent in bold, and the name in color (not bold, so it still fits). */
+.lim.warn [role='meter'],
+.lim.bad [role='meter'] {
+  font-weight: 600;
 }
-.lim.warn .lim-pct {
+.lim.warn [role='meter'],
+.lim.warn .lim-tx > :first-child {
   color: var(--warn);
-  font-weight: 600;
 }
-.lim.warn .lim-bar i {
-  background: var(--warn);
-}
-.lim.bad .lim-pct {
+.lim.bad [role='meter'],
+.lim.bad .lim-tx > :first-child {
   color: var(--bad);
-  font-weight: 600;
 }
-.lim.bad .lim-bar i {
-  background: var(--bad);
+.lim-tx {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
 }
-.lim-reset,
-.lim-age {
+/* A name or reset time that doesn't fit is cut, since the tooltip has it in full. Kiro's line
+   wraps instead, between its parts. */
+.lim-tx > :first-child,
+.lim-reset {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lim-reset {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
+}
+.lim.kiro .lim-reset {
+  white-space: normal;
+}
+.lim-reset > span {
+  white-space: nowrap;
+}
+/* Kiro's bonus and overage, under its row and lined up with its text. */
+.lim-more {
+  color: var(--muted);
+  font-size: 10.5px;
+  padding-left: 54px;
 }
 /* Kiro's own bonus and overage lines, quoted under what AgentK read from them. */
 .lim-said {
-  color: var(--muted);
   font-family: var(--mono);
   font-size: 10.5px;
   overflow-wrap: anywhere;
@@ -2167,6 +2213,18 @@ div[id^='dak-mermaid-'] .label {
   gap: 12px;
   padding: 12px 18px;
   border-top: 1px solid var(--rule);
+}
+/* What's new: a list of changes per type (WhatsNewDialog). */
+.whats-new ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.whats-new li {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .alt-links {
   display: flex;
@@ -4845,6 +4903,13 @@ div[id^='dak-mermaid-'] .label {
     display: inline-flex;
     align-items: center;
     min-height: 36px;
+  }
+  /* What's new: each change's PR or commit link. */
+  .whats-new li a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 4px;
   }
   /* The footer's diff button keeps the footer thin: a larger tap area without a larger box.
      (The ⋯ sheet also has a full-size Changes row.) */

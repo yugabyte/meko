@@ -31,7 +31,9 @@ your phone.
 
 ## Install
 
-You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon. A
+You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a coding agent:
+[Claude Code](https://claude.com/claude-code), [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or
+both. A
 [Meko](https://mekodata.ai) account and API key are optional: they give projects datapacks
 (shared memory) and let you share projects. Without one, press Enter at the key prompt (or pass
 `--no-meko`) and add a key later on the Meko tab in Settings, which links to Meko's sign-up and
@@ -42,8 +44,8 @@ installer is fetched with `gh`:
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
-It offers to install anything that's missing (git, gh, Claude Code) and to set up Meko for
-Claude Code, asking first. It asks for **local** access (this computer only, no login) or
+It offers to install anything that's missing (git, gh, and Claude Code or Kiro CLI when neither is
+there: it asks which, or pass `--agent kiro`) and to set up Meko for each agent, asking first. It asks for **local** access (this computer only, no login) or
 **remote** access (other devices too, like your phone, over HTTPS with a login); remote is the
 default over SSH or on a machine with no display. Then it prints the address, or for remote
 access a one-time setup link that creates your login. Local access trusts everyone who can log
@@ -145,8 +147,10 @@ your phone can connect.
   running when you disconnect or the server updates. You can still attach from iTerm:
   `agent-k-local attach <session>` (`Ctrl+\` detaches).
 - **Claude Code or Kiro, per session.** New sessions start on the default agent (Settings →
-  General), or pick **Agent** under **Advanced** in New session once [Kiro CLI](https://kiro.dev/cli/)
-  2.32 or later is installed and signed in (`kiro-cli login`). A Kiro session runs as `agentk`, an
+  General), or pick **Agent** under **Advanced** in New session once both Claude Code and
+  [Kiro CLI](https://kiro.dev/cli/) 2.32 or later are installed and signed in (`kiro-cli login`).
+  Either one alone is enough: with only Kiro, every session runs on Kiro, and Settings can stop
+  offering an agent you have installed but don't want (**Offer Claude Code / Kiro for new sessions**). A Kiro session runs as `agentk`, an
   agent AgentK builds from your default Kiro agent (Meko's, after **Set up Kiro with this Meko**)
   with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
   and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod

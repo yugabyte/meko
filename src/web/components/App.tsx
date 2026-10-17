@@ -43,6 +43,7 @@ import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
 import { MekoCallsView } from './MekoCallsView';
 import { MekoGapsView } from './MekoGapsView';
+import { WhatsNewDialog } from './WhatsNewDialog';
 
 type Modal =
   | { kind: 'none' }
@@ -61,7 +62,9 @@ type Modal =
   | { kind: 'move'; sessionId: string; preset?: MovePreset }
   /** Open PR with instructions for AgentK. */
   | { kind: 'open-pr'; sessionId: string }
-  | { kind: 'rename'; sessionId: string };
+  | { kind: 'rename'; sessionId: string }
+  /** What's new from one version to another (the update banners, Settings). */
+  | { kind: 'whats-new'; from: string; to: string };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
@@ -525,6 +528,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
           onMekoSettings={() => setModal({ kind: 'settings', tab: 'meko' })}
+          onSettings={() => setModal({ kind: 'settings', tab: 'general' })}
+          onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })}
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
@@ -638,8 +643,9 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
       )}
+      {modal.kind === 'whats-new' && <WhatsNewDialog from={modal.from} to={modal.to} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'palette' && (
         <CommandPalette
           projects={projects}

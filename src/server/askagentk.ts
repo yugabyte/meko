@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { HarnessId } from '../shared/harnesses.js';
+import { NO_AGENT, type HarnessId } from '../shared/harnesses.js';
 import { parseGithubRef } from '../shared/github-refs.js';
 import { MOVE_TARGETS, moveBlockedIn, moveError } from '../shared/stages.js';
 import {
@@ -316,8 +316,8 @@ export interface AskAgentkDeps {
   projects: () => AskProject[];
   /** One ask that ran Claude, for the usage report. */
   record: (r: { at: number; ok: boolean; actions: number; ms: number }) => void;
-  /** The harness asks run on: `[agents] default` when it's available, else Claude Code. */
-  harness?: () => HarnessId;
+  /** The harness asks run on: `[agents] default` when it's available, else the first available one, else null (none is). */
+  harness?: () => Promise<HarnessId | null>;
   run?: AskRunner;
 }
 
@@ -338,6 +338,8 @@ export class AskAgentk {
     const cfg = this.deps.config();
     if (!cfg.askAgentk.enabled) throw new HttpError(403, 'Ask AgentK is turned off ([ask_agentk] enabled = false in config.toml).');
     const req = checkRequest(body);
+    const harness = this.deps.harness ? await this.deps.harness() : 'claude';
+    if (!harness) throw new HttpError(409, NO_AGENT);
     if (this.inFlight >= ASK_MAX_IN_FLIGHT) throw new HttpError(429, 'AgentK is answering two asks already. Try again in a moment.');
     this.inFlight++;
     const started = Date.now();
@@ -345,7 +347,7 @@ export class AskAgentk {
     try {
       const timeoutSeconds = Math.min(300, Math.max(5, Math.round(cfg.askAgentk.timeoutSeconds) || 45));
       mkdirSync(this.deps.cwd, { recursive: true });
-      const kiro = this.deps.harness?.() === 'kiro';
+      const kiro = harness === 'kiro';
       // Kiro finds the ask's agent in the folder it runs in, so it never shows in the user's agent list.
       if (kiro) writeKiroAgent(askAgent(kiroAskPrompt()), join(this.deps.cwd, '.kiro'));
       const cmd = kiro ? cfg.kiro.command : cfg.claude.command;

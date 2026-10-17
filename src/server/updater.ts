@@ -3,9 +3,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import type { UpdateStatus } from '../shared/types.js';
+import type { ReleaseNotes, UpdateStatus } from '../shared/types.js';
 import { dbPath, type Config } from './config.js';
 import type { Paths } from './paths.js';
+import { releaseNotes, type NoteCommit } from './releasenotes.js';
 
 const run = promisify(execFile);
 
@@ -101,8 +102,17 @@ export interface Release {
   assets: string[];
 }
 
+/** The commits between two refs, oldest first, as GitHub's compare returns them (at most 250). */
+export interface Comparison {
+  totalCommits: number;
+  url: string;
+  commits: NoteCommit[];
+}
+
 export interface ReleaseSource {
   listReleases(repo: string): Promise<Release[]>;
+  /** The commits between two tags (What's new). */
+  compare(repo: string, base: string, head: string): Promise<Comparison>;
   /** Download one asset into destDir and return its path. */
   download(repo: string, tag: string, asset: string, destDir: string): Promise<string>;
 }
@@ -114,6 +124,22 @@ interface GhRelease {
   html_url: string;
   assets: { name: string; url: string; browser_download_url: string }[];
 }
+
+interface GhComparison {
+  total_commits: number;
+  html_url: string;
+  commits: { sha: string; html_url: string; commit: { message: string } }[];
+}
+
+function toComparison(c: GhComparison): Comparison {
+  return {
+    totalCommits: c.total_commits,
+    url: c.html_url,
+    commits: c.commits.map((x) => ({ sha: x.sha, message: x.commit.message, url: x.html_url })),
+  };
+}
+
+const compareRoute = (repo: string, base: string, head: string) => `repos/${repo}/compare/${base}...${head}`;
 
 function toRelease(r: GhRelease): Release {
   return {
@@ -131,6 +157,13 @@ export class GhReleaseSource implements ReleaseSource {
   async listReleases(repo: string): Promise<Release[]> {
     const { stdout } = await run('gh', ['api', `repos/${repo}/releases?per_page=30`], { maxBuffer: 16 << 20, timeout: LIST_TIMEOUT_MS });
     return (JSON.parse(stdout) as GhRelease[]).map(toRelease);
+  }
+
+  async compare(repo: string, base: string, head: string): Promise<Comparison> {
+    // Only what the notes need: the comparison's files carry every patch.
+    const jq = '{total_commits, html_url, commits: [.commits[] | {sha, html_url, commit: {message: .commit.message}}]}';
+    const { stdout } = await run('gh', ['api', compareRoute(repo, base, head), '--jq', jq], { maxBuffer: 16 << 20, timeout: LIST_TIMEOUT_MS });
+    return toComparison(JSON.parse(stdout) as GhComparison);
   }
 
   async download(repo: string, tag: string, asset: string, destDir: string): Promise<string> {
@@ -161,6 +194,19 @@ export class HttpsReleaseSource implements ReleaseSource {
     const list = (await res.json()) as GhRelease[];
     this.cache.set(repo, list);
     return list.map(toRelease);
+  }
+
+  async compare(repo: string, base: string, head: string): Promise<Comparison> {
+    const res = await fetch(`https://api.github.com/${compareRoute(repo, base, head)}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      // Without gh signed in or a token, a private repo reads as missing and the rate limit is low.
+      const signIn = !process.env.GITHUB_TOKEN && [401, 403, 404].includes(res.status);
+      throw new Error(`GitHub API returned ${res.status}${signIn ? '. gh isn’t signed in and GITHUB_TOKEN isn’t set: run gh auth login, or set GITHUB_TOKEN' : ''}`);
+    }
+    return toComparison((await res.json()) as GhComparison);
   }
 
   async download(repo: string, tag: string, asset: string, destDir: string): Promise<string> {
@@ -338,6 +384,15 @@ const KV_CHECKED = 'update.lastCheckedAt';
 const KV_LATEST = 'update.latest';
 const KV_URL = 'update.releaseUrl';
 const KV_JUST = 'update.justUpdatedFrom';
+const KV_LAST_FROM = 'update.lastUpdatedFrom';
+
+/** A version as its tag names it after the `v`, nothing around it. */
+const BARE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** Whether What's new can show the changes from `from` to `to`: both bare versions, `from` the older. */
+export function notesRange(from: string, to: string): boolean {
+  return BARE_VERSION.test(from) && BARE_VERSION.test(to) && compareSemver(from, to) < 0;
+}
 
 export class Updater {
   private timer: NodeJS.Timeout | null = null;
@@ -353,6 +408,8 @@ export class Updater {
   /** The update being checked for or installed: a second click while it runs gets its result. */
   private applyRun: Promise<UpdateStatus> | null = null;
   private readonly appDir: string | undefined;
+  /** What's new by range: the commits between two tags never change. */
+  private notesCache = new Map<string, Promise<ReleaseNotes>>();
 
   constructor(private deps: UpdaterDeps) {
     this.appDir = deps.appDir ?? process.env.AK_APP_DIR ?? undefined;
@@ -362,6 +419,17 @@ export class Updater {
     this.lastCheckedAt = Number.isFinite(checked) && checked > 0 ? checked : null;
     if (!this.appDir) this.lastError = DISABLED;
     this.dropBadLatest();
+    // Recorded before the server starts (cli.ts makes the Updater first): a version that crashes
+    // while starting, the case a rollback is for, still counts as the last update, and once it's
+    // rolled back lastUpdatedFrom() drops it.
+    const from = this.updatedFrom();
+    if (from) deps.kvSet(KV_LAST_FROM, from);
+  }
+
+  /** The version this boot updated from: an update was switched to and this is its first boot. */
+  private updatedFrom(): string | null {
+    const p = this.readPending();
+    return p && this.isRunning(p.to) && p.from && !this.isRunning(p.from) ? p.from : null;
   }
 
   /** A remembered latest version that was rolled back since (it's in bad-versions) is no longer offered. */
@@ -378,8 +446,7 @@ export class Updater {
 
   start(): void {
     // "Updated to vX" is shown for the first boot of a new version, from the moment it's up.
-    const p = this.readPending();
-    const from = p && this.isRunning(p.to) && p.from && !this.isRunning(p.from) ? p.from : null;
+    const from = this.updatedFrom();
     this.justUpdatedFrom = from;
     this.deps.kvSet(KV_JUST, from ?? '');
     if (!this.enabled) return;
@@ -413,7 +480,48 @@ export class Updater {
       lastCheckedAt: this.lastCheckedAt,
       lastError: this.lastError,
       justUpdatedFrom: this.justUpdatedFrom,
+      lastUpdatedFrom: this.lastUpdatedFrom(),
       releaseUrl: this.releaseUrl,
+    };
+  }
+
+  /** The last update's version, while it's older than this one (not after a rollback or a switch back). */
+  private lastUpdatedFrom(): string | null {
+    const from = this.deps.kvGet(KV_LAST_FROM) || null;
+    return from && notesRange(from, this.deps.version) ? from : null;
+  }
+
+  /**
+   * What changed from `from` to `to` (checked with notesRange first): the releasing commits
+   * between their tags, from GitHub. A range is asked for once; a failed ask is tried again.
+   */
+  notes(from: string, to: string): Promise<ReleaseNotes> {
+    const key = `${from}...${to}`;
+    let p = this.notesCache.get(key);
+    if (!p) {
+      p = this.fetchNotes(from, to);
+      this.notesCache.set(key, p);
+      p.catch(() => this.notesCache.delete(key));
+    }
+    return p;
+  }
+
+  private async fetchNotes(from: string, to: string): Promise<ReleaseNotes> {
+    const { repo } = this.deps.config().update;
+    let c: Comparison;
+    try {
+      c = await (await this.source()).compare(repo, `v${from}`, `v${to}`);
+    } catch (e) {
+      const why = ((e as { stderr?: string }).stderr || (e as Error).message).trim();
+      throw new Error(`GitHub couldn't compare v${from} and v${to}: ${why}`, { cause: e });
+    }
+    return {
+      from,
+      to,
+      sections: releaseNotes([...c.commits].reverse(), repo),
+      commits: c.commits.length,
+      totalCommits: c.totalCommits,
+      compareUrl: c.url,
     };
   }
 

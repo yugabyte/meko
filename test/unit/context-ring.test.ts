@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ContextRing } from '../../src/web/components/common.js';
+import { LimitRing } from '../../src/web/components/Rail.js';
 import { contextArc, contextLevel } from '../../src/web/util.js';
 
 const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8');
@@ -47,5 +48,17 @@ describe('ContextRing', () => {
     const html = renderToStaticMarkup(createElement(ContextRing, { percent: 80, showPercent: true }));
     expect(html).not.toContain('ctx-pct');
     expect(html).toMatch(/<\/svg>80%<\/span>$/);
+  });
+});
+
+describe('LimitRing', () => {
+  // The percent in the ring as it is, the meter and the arc kept to 100, amber from 80% and red from 95%.
+  it.each<[number, string | null, number]>([[42, null, 42], [79, null, 79], [80, 'warn', 80], [95, 'bad', 95], [130, 'bad', 100]])('at %s%% is %s, its meter at %s', (pct, level, value) => {
+    const html = renderToStaticMarkup(createElement(LimitRing, { label: '5-hour', name: 'Claude 5-hour', pct, title: '', children: 'Fri 9:00 AM' }));
+    expect(html).toMatch(new RegExp(`^<div class="lim${level ? ` ${level}` : ''}"`));
+    expect(html).toContain(`aria-label="Claude 5-hour used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"`);
+    expect(html).toContain(`>${pct}</text>`);
+    expect(html.match(/stroke-dasharray="([\d.]+) 100"/)?.[1]).toBe(value < 100 ? String(value) : undefined);
+    expect(html.includes('▲')).toBe(level !== null);
   });
 });

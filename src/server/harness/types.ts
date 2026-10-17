@@ -41,9 +41,9 @@ export interface Harness {
   /** Turned on in the config. */
   enabled(cfg: Config): boolean;
   /**
-   * Writes the files its sessions are launched with (hook scripts, settings, agent files). Called at
-   * server start. Claude Code's throws when its hook files can't be written (the server doesn't
-   * start); the others log and go on.
+   * Writes the files its sessions are launched with (AgentK's mod, Kiro's agent file) and reads its
+   * version. Called at server start, in the background: AgentK's shared hook files are written by
+   * Core first, and a harness that fails here only logs.
    */
   prepare(paths: Paths, cfg: Config): Promise<void>;
   /** Before each launch: refreshes what may have changed since `prepare` (Kiro's derived agent). Never throws. */

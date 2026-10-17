@@ -147,6 +147,21 @@ describe('install.sh: installing missing tools', () => {
     expect(existsSync(join(home, '.local', 'bin', 'claude'))).toBe(true);
   });
 
+  it('installs Kiro CLI instead with --agent kiro, and no Claude Code with it', () => {
+    stub(bin, 'unzip', 'exit 0');
+    have('git', 'curl', 'gh');
+    rmSync(join(bin, 'claude'));
+    stub(repo, 'kiro-cli', `echo "kiro-cli $*" >> "${log}"; exit 0`);
+    writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/kiro-cli" "$HOME/.local/bin/kiro-cli"; echo "kiro installer ran" >> "${log}"\n`);
+    const plan = run(['--non-interactive']);
+    expect(plan.code).toBe(1);
+    expect(plan.err).toContain('missing: Claude Code (or Kiro CLI, with --agent kiro)');
+    const r = run(['--non-interactive', '--install-deps', '--agent', 'kiro']);
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual(['curl https://cli.kiro.dev/install', 'kiro installer ran', 'kiro-cli whoami']);
+    expect(r.err).toMatch(/Tools\s+git, curl, gh, Kiro/);
+  });
+
   it('finds tools in ~/.local/bin even when it is not on PATH, and shows root commands plainly without sudo', () => {
     have('git', 'curl');
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
@@ -244,21 +259,25 @@ describe('install.sh: installing missing tools', () => {
     expect(no.calls).toEqual([]);
   });
 
-  /** Runs the script in a terminal, answering its question with `answer`. */
-  function runInTerminal(answer: string, prompt = 'Install them now?'): Promise<{ code: number; out: string; calls: string[] }> {
+  /** Runs the script in a terminal, answering its question with `answer` (and then the `more` questions, in order). */
+  function runInTerminal(answer: string, prompt = 'Install them now?', more: [string, string][] = []): Promise<{ code: number; out: string; calls: string[] }> {
     return new Promise((resolve) => {
       // Once the script ends, a shell keeps the terminal open until its last output is read: a pty
       // whose program has exited can lose what it wrote just before.
       const wrap = 'sh "$0" --deps-only; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
       const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
       let out = '';
-      let asked = false;
+      const questions: [string, string][] = [[prompt, answer], ...more];
+      let seen = 0;
       let ended = false;
       p.onData((d) => {
         out += d;
-        if (!asked && out.includes(prompt)) {
-          asked = true;
-          p.write(`${answer}\r`);
+        const next = questions[0];
+        // Each question is looked for in what came after the last one answered.
+        if (next && out.indexOf(next[0], seen) >= 0) {
+          seen = out.indexOf(next[0], seen) + next[0].length;
+          questions.shift();
+          p.write(`${next[1]}\r`);
         }
         if (!ended && /\[exited \d+\]/.test(out)) {
           ended = true;
@@ -291,6 +310,19 @@ describe('install.sh: installing missing tools', () => {
     const r = await runInTerminal('y', 'Sign in now (gh auth login)?');
     expect(r.code).toBe(0);
     expect(r.calls).toEqual(['gh auth status', 'gh auth login']);
+  });
+
+  it('asks which agent to install when neither is there, and installs Kiro CLI when picked', async () => {
+    have('git', 'curl', 'gh');
+    rmSync(join(bin, 'claude'));
+    stub(repo, 'unzip', 'exit 0');
+    stub(repo, 'kiro-cli', `echo "kiro-cli $*" >> "${log}"; exit 0`);
+    writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/kiro-cli" "$HOME/.local/bin/kiro-cli"; echo "kiro installer ran" >> "${log}"\n`);
+    const r = await runInTerminal('2', 'Install Claude Code (1) or Kiro CLI (2)?', [['Install them now?', 'y']]);
+    expect(r.out).toContain('curl -fsSL https://cli.kiro.dev/install | bash');
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual(['sudo dnf install -y unzip', 'dnf install -y unzip', 'curl https://cli.kiro.dev/install', 'kiro installer ran', 'kiro-cli whoami']);
+    expect(r.out).toContain('git, curl, gh, Kiro');
   });
 
   it('offers to sign Claude Code in', async () => {

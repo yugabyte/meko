@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
@@ -32,7 +32,7 @@ import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
-import type { Updater } from './updater.js';
+import { notesRange, type Updater } from './updater.js';
 import { usageOverview } from './usage.js';
 import { taskPrs } from './taskprs.js';
 import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
@@ -567,6 +567,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     callHomeEnabled: core.config.callHome.enabled,
     resolveConflicts: core.config.pr.resolveConflicts,
     defaultHarness: core.config.agents.default,
+    claudeEnabled: core.config.claude.enabled,
     kiroEnabled: core.config.kiro.enabled,
     kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
@@ -597,10 +598,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
-    for (const k of ['kiroEnabled', 'kiroTrustTools'] as const) {
+    for (const k of ['claudeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
-    const kiroBefore = { enabled: core.config.kiro.enabled };
+    const enabledBefore = { claude: core.config.claude.enabled, kiro: core.config.kiro.enabled };
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -616,14 +617,18 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
+      if (b.claudeEnabled !== undefined) c.claude.enabled = b.claudeEnabled;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
-    // Kiro turned on: its version and agent file follow, in the background.
-    if (core.config.kiro.enabled && !kiroBefore.enabled) {
-      const kiro = core.harnesses.of('kiro');
-      void kiro.version(core.config, true).then(() => kiro.prepare(core.paths, core.config)).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
+    // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
+    // off forgets its last read, so it isn't offered on that read once it's turned on again.
+    for (const id of HARNESS_IDS) {
+      if (core.config[id].enabled === enabledBefore[id]) continue;
+      const h = core.harnesses.of(id);
+      if (!core.config[id].enabled) void h.version(core.config);
+      else void h.version(core.config, true).then(() => h.prepare(core.paths, core.config)).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
     }
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
     const cleanup = (what: string, fn: () => Promise<void>) => void fn().catch((e) => core.log.warn(`${what} failed`, errMsg(e)));
@@ -665,6 +670,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());
+  // Check again (Settings → General): a version that changed reaches every page through `changed()`.
+  app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.harnesses.refresh(core.config, true));
   app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req) => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
     return core.harnesses.of(req.params.id).update(core.config);
@@ -674,6 +681,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post('/api/update/apply', async () => {
     if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
     return opts.updater.apply();
+  });
+  app.get<{ Querystring: { from?: string; to?: string } }>('/api/update/notes', async (req) => {
+    if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
+    const { from, to } = req.query;
+    if (typeof from !== 'string' || typeof to !== 'string' || !notesRange(from, to)) throw new HttpError(400, 'Give two versions, the older one first.');
+    try {
+      return await opts.updater.notes(from, to);
+    } catch (e) {
+      throw new HttpError(502, errMsg(e).replace(/\.?$/, '.'));
+    }
   });
 
   // ---- websockets ----
@@ -775,6 +792,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!wsGuard(socket, req)) return;
     clients.add(socket);
     socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+    // A page opening is when stale versions are read again (nothing polls them); a change is pushed.
+    void core.harnesses.refresh(core.config).catch((e) => core.log.warn('reading the agents\' versions failed', errMsg(e)));
     // A page checking that its socket is still there (src/web/events.ts).
     socket.on('message', (data) => {
       let msg: EventsClientMessage | null;
