@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { kiroHome } from './kiro.js';
+import { kiroDefaultAgentName, kiroHome, readKiroAgent } from './kiro.js';
 import { mekoUrlHost, sameMekoUrl } from './mekosetup.js';
 
 /** A Meko MCP server in Kiro's MCP config: its URL, and whether it sends a token. */
@@ -37,13 +37,28 @@ export function readKiroMeko(home = kiroHome()): KiroMekoServer[] {
 }
 
 /**
- * What keeps Kiro's sessions off the Meko AgentK uses (`url`), one sentence each; empty when a
- * Meko server there is AgentK's and sends a token. What Meko's setup for Kiro fixes.
+ * Whether the agent Kiro sessions are built from (the user's default; Kiro's built-in one loads it)
+ * loads Kiro's MCP config, where Meko's setup puts its server, or names a Meko server itself.
  */
-export function kiroMekoGaps(servers: KiroMekoServer[], url: string): string[] {
+export function kiroAgentLoadsMcp(home = kiroHome()): boolean {
+  const name = kiroDefaultAgentName(home);
+  const agent = name ? readKiroAgent(name, home) : null;
+  if (!agent || agent.includeMcpJson !== false) return true;
+  const own = agent.mcpServers && typeof agent.mcpServers === 'object' ? Object.keys(agent.mcpServers) : [];
+  return own.some((k) => /^meko/i.test(k));
+}
+
+/**
+ * What keeps Kiro's sessions off the Meko AgentK uses (`url`), one sentence each; empty when a
+ * Meko server there is AgentK's, sends a token, and the agent Kiro sessions are built from loads it
+ * (`loadsMcp`). What Meko's setup for Kiro fixes. Meko's capture hooks aren't checked: they run
+ * only with `[meko] capture_transcripts` on, and Meko's setup puts them in the agent it makes default.
+ */
+export function kiroMekoGaps(servers: KiroMekoServer[], url: string, loadsMcp = true): string[] {
   const ours = servers.filter((s) => sameMekoUrl(s.url, url));
   if (!servers.length) return ['Kiro has no Meko MCP server.'];
   if (!ours.length) return [`Kiro's Meko MCP server points at ${mekoUrlHost(servers[0].url)}, not ${mekoUrlHost(url)}.`];
   if (!ours.some((s) => s.token)) return ["Kiro's Meko MCP server sends no API key."];
+  if (!loadsMcp) return ["Kiro's default agent doesn't load your MCP servers (includeMcpJson is off), so Kiro sessions don't get Meko's tools."];
   return [];
 }

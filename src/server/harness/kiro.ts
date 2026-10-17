@@ -45,29 +45,44 @@ export function agentkHooks(paths: Paths): KiroHooks {
 
 /**
  * Writes the `agentk` agent from the user's default agent (Meko's `meko-default` when Meko's setup
- * for Kiro ran, else Kiro's built-in one) with AgentK's hooks added, every tool allowed with
- * `[kiro] trust_tools`, and Meko's capture hooks only with `[meko] capture_transcripts`. True when it changed.
+ * for Kiro ran, else Kiro's built-in one) with AgentK's hooks added, and Meko's capture hooks only
+ * with `[meko] capture_transcripts`. True when it changed.
  */
 export function writeAgentkAgent(paths: Paths, cfg: Config): boolean {
   const name = kiroDefaultAgentName();
   const base = (name && name !== AGENTK_AGENT ? readKiroAgent(name) : null) ?? builtinKiroAgent(paths);
-  return writeKiroAgent(agentkAgent(base, agentkHooks(paths), { trustTools: cfg.kiro.trustTools, mekoCapture: cfg.meko.captureTranscripts }));
+  return writeKiroAgent(agentkAgent(base, agentkHooks(paths), { mekoCapture: cfg.meko.captureTranscripts }));
 }
 
-/** The command line of a Kiro session: as the `agentk` agent, its conversation resumed by id when Kiro has one for it. */
-export function kiroArgs(o: { resume: boolean; conversation: string | null; prompt: string | null }): string[] {
+/**
+ * The command line of a Kiro session: as the `agentk` agent, its own conversation resumed by id
+ * (never `--resume`, Kiro's newest in the folder, which can be an earlier session's in a reused
+ * worktree). `trustTools` (`[kiro] trust_tools`) trusts every tool for this run only, so nothing in
+ * Kiro's home grants it: `--trust-tools=*`, not `--trust-all-tools`, which makes Kiro 2.32 ask on
+ * screen whether to go on with "No, exit" first (a typed prompt's Enter would pick it).
+ */
+export function kiroArgs(o: { conversation: string | null; trustTools: boolean; prompt: string | null }): string[] {
   const args = ['chat', '--agent', AGENTK_AGENT];
-  if (o.resume) args.push(...(o.conversation ? ['--resume-id', o.conversation] : ['--resume']));
+  if (o.trustTools) args.push('--trust-tools=*');
+  if (o.conversation) args.push('--resume-id', o.conversation);
   // Not after "--": with --agent, Kiro 2.32 then drops the first prompt. A leading space keeps a
   // prompt that starts with "-" (such as "---" front matter) from being read as an option.
   if (o.prompt) args.push(o.prompt.startsWith('-') ? ` ${o.prompt}` : o.prompt);
   return args;
 }
 
-/** The Kiro conversation a session resumes: the id a hook gave, while Kiro still has it, else the newest in its worktree. */
+/** The session's own Kiro conversation, while Kiro still has it: the id a hook gave, or `findKiroConversation` found. */
 export function kiroConversation(row: SessionRow): string | null {
-  if (row.agent_session_id && existsSync(kiroSessionFile(row.agent_session_id))) return row.agent_session_id;
-  return findKiroSession([row.worktree_path, claudePath(row.worktree_path)]);
+  return row.agent_session_id && existsSync(kiroSessionFile(row.agent_session_id)) ? row.agent_session_id : null;
+}
+
+/**
+ * The Kiro conversation a session that has none yet (no hook said its id) started in its worktree:
+ * the newest Kiro started there since the session was created. Callers ask only while the session
+ * owns the worktree, and keep what it finds, so a later session's conversation is never taken.
+ */
+export function findKiroConversation(row: SessionRow): string | null {
+  return findKiroSession([row.worktree_path, claudePath(row.worktree_path)], row.created_at);
 }
 
 /** A Kiro hook payload as AgentK's event: Kiro's id moves to `agent_session_id`, since `session_id` is Claude Code's. */
@@ -134,7 +149,7 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       sessionId: l.row.id,
       worktree: l.row.worktree_path,
       command: cfg.kiro.command,
-      args: kiroArgs({ resume: l.resume, conversation: l.resume ? kiroConversation(l.row) : null, prompt: l.prompt }),
+      args: kiroArgs({ conversation: l.resume ? kiroConversation(l.row) : null, trustTools: cfg.kiro.trustTools, prompt: l.prompt }),
       env: l.env,
       unsetEnv: l.unsetEnv,
     }),

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { sessionAgentId } from '../../src/server/meko.js';
+import { get } from '../../src/server/db.js';
 
 const lines = (env: TestEnv, file: string) => {
   const f = join(process.env.FAKE_KIRO_DIR!, file);
@@ -45,6 +46,8 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     // Kiro's id came with its hooks; its credits and context fill from its session file.
     expect(row.agent_session_id).toBe(lines(env, 'spawn.jsonl')[0].sessionId);
     const usage = await waitFor(() => env.core.sessions.get(s.id).usage, (u) => u.credits === 0.5, 10000, 'credits');
+    // Read once: the next start's backfill leaves the session alone.
+    expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM usage_files WHERE session_id = ?', s.id)).toEqual({ n: 1 });
     expect(usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1, credits: 0.5 });
     expect(env.core.sessions.get(s.id).contextPercent).toBe(13);
     // Credits aren't priced: the project's cost stays at zero, its credits are summed beside it.
@@ -72,6 +75,11 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     });
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
     await expect(env.core.sessions.create(p.id, { name: 'x', harness: 'kiro' })).rejects.toThrow(/^Kiro isn't available for new sessions: turn it on in Settings/);
+    // A default that isn't available any more never decides: a request that names no harness starts on Claude Code.
+    env.core.updateConfig((c) => {
+      c.agents.default = 'kiro';
+    });
+    expect(env.core.harnesses.pick(env.core.config, undefined).id).toBe('claude');
   });
 
   it("answers Ask AgentK on Kiro when it's the default, as a tool-less agent, and deletes the run's session", async () => {

@@ -34,13 +34,20 @@ export class Harnesses {
     return this.list().map((h) => h.status(cfg));
   }
 
+  /** `[agents] default` while it's available, else Claude Code (always available): what runs when nobody picks. */
+  defaultFor(cfg: Config): Harness {
+    const h = this.of(cfg.agents.default);
+    return h.status(cfg).available ? h : this.all.claude;
+  }
+
   /**
-   * The harness a new session starts on: the one asked for, else `[agents] default`. 400 when it
-   * isn't available (turned off, not installed, or too old), naming what to do.
+   * The harness a new session starts on: the one asked for, else the default (`defaultFor`). 400
+   * when the one asked for isn't available (turned off, not installed, or too old), naming what to do.
    */
   pick(cfg: Config, asked: unknown): Harness {
     if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(' or ')}.`);
-    const h = this.of(asked ?? cfg.agents.default);
+    if (asked == null) return this.defaultFor(cfg);
+    const h = this.of(asked);
     const s = h.status(cfg);
     if (s.available) return h;
     const how = !s.enabled

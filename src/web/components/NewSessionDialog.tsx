@@ -73,6 +73,7 @@ export function NewSessionDialog({
   const [busy, setBusy] = useState(false);
   const inProjectRepo = repoPath === project.repoPath;
   // The agent: the default (Settings → General) unless picked here; a retry keeps the one it asked for.
+  // Always sent, so a default that isn't available any more never decides for the dialog.
   const agents = harnesses.filter((h) => h.available);
   const [harness, setHarness] = useState<HarnessId>(
     () => (agents.find((h) => h.id === initial?.harness) ?? agents.find((h) => h.isDefault) ?? agents[0])?.id ?? 'claude',
@@ -282,7 +283,7 @@ export function NewSessionDialog({
         review && picked
           ? {
             name: name.trim(),
-            ...(pickAgent ? { harness } : {}),
+            harness,
             prompt: prompt.trim() || undefined,
             kind: 'review-pr',
             repoPath: inProjectRepo ? undefined : repoPath,
@@ -291,7 +292,7 @@ export function NewSessionDialog({
           }
           : {
             name: name.trim(),
-            ...(pickAgent ? { harness } : {}),
+            harness,
             prompt: prompt.trim() || undefined,
             baseBranch: workOn === 'pr' ? undefined : baseBranch,
             kind: 'task',

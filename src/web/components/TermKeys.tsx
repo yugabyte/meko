@@ -167,8 +167,8 @@ export function TermKeys({ term, sessionId, agent, disabled, mekoTo }: { term: S
           {/* A phone has no paste or drop of files into the terminal: pick them instead. */}
           <button
             className="key"
-            title="Attach an image or file for Claude"
-            aria-label="Attach an image or file for Claude"
+            title={`Attach an image or file for ${agent}`}
+            aria-label={`Attach an image or file for ${agent}`}
             disabled={disabled}
             onPointerDown={keepFocus}
             onMouseDown={keepFocus}
@@ -213,7 +213,7 @@ export function TermKeys({ term, sessionId, agent, disabled, mekoTo }: { term: S
           data-reload-safe=""
           rows={1}
           placeholder={disabled ? `Resume the session to message ${agent}` : `Message ${agent}…`}
-          aria-label="Message Claude"
+          aria-label={`Message ${agent}`}
           value={text}
           disabled={disabled}
           enterKeyHint="enter"
@@ -257,8 +257,8 @@ export function TermKeys({ term, sessionId, agent, disabled, mekoTo }: { term: S
         <button
           type="submit"
           className="compose-send"
-          aria-label="Send to Claude"
-          title="Send to Claude"
+          aria-label={`Send to ${agent}`}
+          title={`Send to ${agent}`}
           disabled={!canSend}
           onPointerDown={keepFocus}
           onMouseDown={keepFocus}

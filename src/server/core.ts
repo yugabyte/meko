@@ -19,7 +19,7 @@ import { all, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir } from './claude.js';
 import { Harnesses } from './harness/index.js';
-import { kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
@@ -214,10 +214,7 @@ export class Core extends EventEmitter {
       cwd: join(this.paths.run, 'ask'),
       projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
-      harness: () => {
-        const h = this.harnesses.of(this.cfg.agents.default);
-        return h.status(this.cfg).available ? h.id : 'claude';
-      },
+      harness: () => this.harnesses.defaultFor(this.cfg).id,
     });
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
@@ -281,7 +278,7 @@ export class Core extends EventEmitter {
     if (!mekoConfigured(this.cfg) || !this.harnesses.of('kiro').status(this.cfg).available) return null;
     const now = Date.now();
     if (force || !this.kiroMekoAt || now - this.kiroMekoAt.at > KIRO_MEKO_TTL_MS) {
-      this.kiroMekoAt = { at: now, value: { gaps: kiroMekoGaps(readKiroMeko(), resolveMeko(this.cfg).url) } };
+      this.kiroMekoAt = { at: now, value: { gaps: kiroMekoGaps(readKiroMeko(), resolveMeko(this.cfg).url, kiroAgentLoadsMcp()) } };
     }
     return this.kiroMekoAt.value;
   }
@@ -395,9 +392,13 @@ export class Core extends EventEmitter {
   async start(): Promise<void> {
     this.stopped = false;
     this.tmuxMoved = false;
-    // Each harness's hook files, settings and agents. What a launch needs is written before this
-    // returns; what waits on a CLI (Kiro's version, its agent file) follows in the background.
-    for (const h of this.harnesses.list()) void h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+    // Claude Code's hook files and settings: a server that can't write them doesn't start, since
+    // every session's --settings file and the Design guard depend on them. The other harnesses'
+    // files wait on their CLI (Kiro's version, its agent file), in the background.
+    await this.harnesses.of('claude').prepare(this.paths, this.cfg);
+    for (const h of this.harnesses.list()) {
+      if (h.id !== 'claude') void h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+    }
     mkdirSync(this.paths.worktrees, { recursive: true });
     try {
       if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);

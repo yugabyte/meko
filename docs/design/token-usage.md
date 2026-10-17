@@ -28,7 +28,9 @@ partial**), and the tooltip says how many responses were left out. Model ids mat
 the credits it billed (`metering_usage`) and how full the context was. After each turn (its `stop`
 hook, and again 3 seconds later, since Kiro may write the turn just after) and when the session
 exits, AgentK stores each new turn as a `usage_messages` row keyed `kiro:<Kiro's id>:<when it ended>`
-with `credits` set; Claude Code's rows leave it NULL. Cost is priced only from rows without
+with `credits` set; Claude Code's rows leave it NULL. A `usage_files` row for the session file marks
+the session as read, so the backfill at start leaves it alone. Only the session's own conversation
+is read ([Agents](harnesses.md#kiro)), never another session's in the same pooled worktree. Cost is priced only from rows without
 credits, so credits are never mixed into it: `TokenUsage.credits` sums them per session, project,
 model and day, the session footer shows **Kiro · <n> credits**, and the usage views show **Kiro
 credits** beside **Est. cost** (a **Credits** column on the all-projects table once any project has

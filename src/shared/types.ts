@@ -855,10 +855,11 @@ export interface MekoStatus {
    */
   claude: MekoClaudeStatus;
   /**
-   * Whether Kiro's sessions reach the Meko AgentK uses, through Meko's own setup for Kiro: its MCP
-   * server in `~/.kiro/settings/mcp.json` with a token, and its agent (`meko-default`, with the
-   * capture hooks) as Kiro's default. Null when Kiro isn't available or Meko is off. Fixed only when
-   * the user asks (POST /api/settings/meko/kiro-setup).
+   * Whether Kiro's sessions reach the Meko AgentK uses, through Meko's own setup for Kiro: a Meko
+   * MCP server in `~/.kiro/settings/mcp.json` at AgentK's URL, sending a token, that the agent Kiro
+   * sessions are built from loads (its `includeMcpJson`). Meko's capture hooks aren't checked. Null
+   * when Kiro isn't available or Meko is off. Fixed only when the user asks (POST
+   * /api/settings/meko/kiro-setup).
    */
   kiro: { gaps: string[] } | null;
 }
@@ -1409,7 +1410,7 @@ export interface Settings {
   kiroEnabled: boolean;
   /** `[kiro] command`: how Kiro CLI is run. */
   kiroCommand: string;
-  /** `[kiro] trust_tools`: AgentK's Kiro agent allows every tool, so Kiro runs any tool without asking. */
+  /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
   meko: MekoSettings;
 }
@@ -1860,7 +1861,7 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
-  /** The harness the session runs on; left out, `[agents] default`. It must be available (`AppState.harnesses`). */
+  /** The harness the session runs on; it must be available (`AppState.harnesses`). Left out, `[agents] default` while that's available, else Claude Code. */
   harness?: HarnessId;
   /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
@@ -2213,8 +2214,10 @@ export type TermServerMessage =
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
 //                                                           '' goes back to the host name; callHomeEnabled and
-//                                                           resolveConflicts are booleans; defaultHarness must be an
-//                                                           available harness; kiroCommand is a command name or path)
+//                                                           resolveConflicts are booleans; defaultHarness must be a
+//                                                           known harness (while it isn't available, new sessions and
+//                                                           Ask AgentK that name none start on Claude Code); kiroCommand
+//                                                           is a command name or path)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,

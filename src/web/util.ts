@@ -1,5 +1,4 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
-import { HARNESS_CAPS, harnessOf } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
 import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
@@ -169,12 +168,9 @@ export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack:
   return datapack && mekoConfigured && s.status !== 'exited' && !s.discarding;
 }
 
-/** Last segment of a repo path: /home/me/code/api → api. */
-/** The short name of a session's agent, for its process and terminal: "Claude", "Kiro". */
-export function agentName(s: Pick<Session, 'harness'>): string {
-  return HARNESS_CAPS[harnessOf(s.harness)].short;
-}
+export { agentName } from '../shared/harnesses';
 
+/** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;
 }

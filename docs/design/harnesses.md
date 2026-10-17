@@ -14,8 +14,11 @@ Resume work the same on both. Codex and Cursor CLI are left for later; the inter
 **Advanced** once more than one harness is available, and a failed start's **Try again** keeps the
 one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on and
 its `--version` answers with its minimum version or later (`AppState.harnesses`; Kiro: `[kiro]
-enabled`, 2.32.0). A create on one that isn't is a 400 that says what to do. The session's
-harness is `sessions.harness` (`Session.harness`).
+enabled`, 2.32.0). A create that names one that isn't is a 400 that says what to do; the dialog
+always names the agent it shows. A default that isn't available any more never decides: a request
+that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`), and Settings
+offers only an available agent as the default. The session's harness is `sessions.harness`
+(`Session.harness`).
 
 ## The adapter
 
@@ -25,7 +28,7 @@ do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and th
 
 | | Claude Code | Kiro |
 |---|---|---|
-| Launch | `claude --settings … --session-id/--resume …` | `kiro-cli chat --agent agentk [--resume-id <id> \| --resume] [prompt]` |
+| Launch | `claude --settings … --session-id/--resume …` | `kiro-cli chat --agent agentk [--trust-tools=*] [--resume-id <id>] [prompt]` |
 | Hooks | `run/hooks.json` via `--settings` | the `agentk` agent's inline hooks |
 | System prompt | `--append-system-prompt` | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | `kiro-guard.sh`: exit 2, the reason on stderr |
@@ -53,8 +56,8 @@ either).
 
 Checked against kiro-cli 2.32.0. Its default engine runs only the selected agent's inline hooks,
 each given the event as JSON on stdin (`hook_event_name`, `cwd`, `session_id`, and `tool_name`,
-`tool_input` for tools); a `preToolUse` hook that exits 2 denies the call, with `--trust-all-tools`
-or an allowed tool too; `agentSpawn`'s stdout goes into the model's context.
+`tool_input` for tools); a `preToolUse` hook that exits 2 denies the call, with every tool trusted
+too; `agentSpawn`'s stdout goes into the model's context.
 
 **The `agentk` agent.** AgentK writes `~/.kiro/agents/agentk.json` (`KIRO_HOME` honoured) built
 from the user's default agent (`chat.defaultAgent` in `~/.kiro/settings/cli.json`; Meko's
@@ -62,10 +65,12 @@ from the user's default agent (`chat.defaultAgent` in `~/.kiro/settings/cli.json
 agent create --from kiro_default` into the run folder (`run/kiro-default.json`). The base keeps its
 tools, MCP servers, resources and hooks; AgentK adds its own after them: `hook.sh` on every event it
 follows and `context.sh` on `agentSpawn`, `kiro-guard.sh` on `preToolUse` for `fs_write` (Kiro's
-`write` tool), `postToolUse` on every tool. Those exit at once without `AK_HOOK_TOKEN`, so the agent
-does nothing outside AgentK. `[kiro] trust_tools` sets `allowedTools: ["*"]` in it, not
-`--trust-all-tools`: that flag makes Kiro ask on screen whether to go on, with **No, exit** first, and
-the next prompt AgentK types would pick it. Meko's capture hooks (`kiro-handler.js`) are left out
+`write` tool), `postToolUse` on every tool. Those exit at once without `AK_HOOK_TOKEN`, and the agent
+grants nothing its base doesn't, so outside AgentK it behaves as the user's own agent. `[kiro]
+trust_tools` is a flag on AgentK's launch instead, `--trust-tools=*` (every tool trusted for that run),
+so a chat someone starts as `agentk` themselves still asks; not `--trust-all-tools`, which makes Kiro
+ask on screen whether to go on, with **No, exit** first, and the next prompt AgentK types would pick
+it. Meko's capture hooks (`kiro-handler.js`) are left out
 while `[meko] capture_transcripts` is off. The file is written only when it changes, at server start
 (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of its own), before every
 launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
@@ -75,10 +80,13 @@ AgentK's, and `readKiroAgent` never takes it as a base.
 `--agent`, kiro-cli 2.32 drops a prompt given after `--`; one starting with `-` gets a leading space
 instead. The session's system-prompt lines come back from `context.sh` at every spawn (with AgentK's
 Meko recall on a new session's first), since Kiro has no flag for them. Kiro picks the conversation
-id; AgentK saves it from the first hook that carries it, or finds the newest
-`~/.kiro/sessions/cli/*.json` whose `cwd` is the worktree (either spelling). Resume and recovery run
-`--resume-id <id>`, or `--resume` (the newest in the worktree, which is the session's own) before
-the id is known.
+id; AgentK saves it (`agent_session_id`) from the first hook that carries it. With no hook (Kiro died
+before `agentSpawn`, say), it takes the newest `~/.kiro/sessions/cli/*.json` in the worktree (either
+spelling) that Kiro says started (`created_at`) after the session was created, only while the session
+runs and owns the worktree, and keeps it: worktrees are pooled, so Kiro's store holds earlier
+sessions' conversations under the same folder. Resume and recovery run `--resume-id <id>`; a session
+with no conversation of its own starts again with its first prompt, never `--resume` (Kiro's newest
+in the folder, which can be an earlier session's).
 
 **Status.** Kiro fires no hook when it waits for a permission answer, when you interrupt a turn,
 or when it exits. A session waiting on a permission prompt shows as working until you answer in the

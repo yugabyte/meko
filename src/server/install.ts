@@ -24,7 +24,7 @@ import { SessionHost } from './hostclient.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
-import { removeKiroAgents } from './kiro.js';
+import { removeKiroAgent } from './kiro.js';
 
 // Linux names from `stat -f -c %T`; macOS names from `mount`.
 const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs', 'afpfs', 'webdav', 'macfuse', 'osxfuse']);
@@ -611,7 +611,7 @@ export async function runUninstall(args: string[]): Promise<void> {
       // not installed there
     }
     // The Kiro agent AgentK wrote is its own: Kiro sessions ran as it.
-    removeKiroAgents();
+    removeKiroAgent();
     if (purge) {
       const db = dbPath(paths, loadConfig(paths));
       const kept = purgeHome(paths, deleteWork);

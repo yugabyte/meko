@@ -9,7 +9,7 @@ import {
 } from './mekosetup.js';
 import { claudeConfigPath } from './trust.js';
 import { claudeUserDir } from './claude.js';
-import { kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { HttpError } from './projects.js';
 
 /** What the Meko tab needs to talk to Meko and to set up Claude Code; tests swap them out. */
@@ -52,7 +52,7 @@ export const defaultMekoTools: MekoTools = {
       throw new Error(`Couldn't look up Meko's setup on npm (${errMsg(e)}). Run it yourself: ${manual}`);
     });
     const code = await runMekoSetup(pkg, { url, apiKey, client: 'kiro', log });
-    const left = kiroMekoGaps(readKiroMeko(), url);
+    const left = kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
     if (code !== 0 || left.length) {
       throw new Error(`Meko's setup for Kiro didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} Run it yourself: ${manual}`);
     }

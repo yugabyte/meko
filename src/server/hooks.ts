@@ -63,7 +63,8 @@ export interface ModReply {
  * Receives the hook events of every session's agent (Claude Code, Kiro) on a unix socket (mode 0600). Hooks never
  * touch the network port. Each request carries the session's hook token.
  * `/hook` events are answered at once and handled afterwards; `/guard` and `/context`
- * requests wait for the answer, which is returned as JSON (204 when there is none).
+ * requests wait for the answer: JSON for Claude Code, plain text for a harness whose hook prints
+ * what it gets (Kiro's guard reason and context), 204 when there is none.
  * The `/mod/*` routes are AgentK's mod in Claude: `onMod` answers them, and may hold a
  * `/mod/poll` open (its signal aborts when the mod's connection closes).
  *

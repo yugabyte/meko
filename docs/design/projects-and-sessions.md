@@ -65,12 +65,13 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
 
 [agents]
-# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → General); claude by default
+# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → General); claude by default,
+                             # and Claude Code while the one named isn't available
 
 [kiro]
 # command = "kiro-cli"       # how Kiro CLI is run
 # enabled = false            # don't offer Kiro for new sessions; on by default (offered once `kiro-cli --version` answers 2.32.0 or later)
-# trust_tools = true         # AgentK's Kiro agent allows every tool (allowedTools ["*"]), so Kiro never asks; off by default
+# trust_tools = true         # Kiro sessions start with every tool trusted (--trust-tools=*), so Kiro never asks; off by default
 
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default

@@ -14,8 +14,6 @@ describe("Kiro's agentk agent", () => {
     };
     const ours = { agentSpawn: [{ command: '/run/hook.sh' }], preToolUse: [{ matcher: 'fs_write', command: '/run/kiro-guard.sh' }] };
     const a = agentkAgent(meko, ours);
-    // [kiro] trust_tools: every tool allowed in the agent, never --trust-all-tools (Kiro asks on screen, "No, exit" first).
-    expect(agentkAgent(meko, ours, { trustTools: true }).allowedTools).toEqual(['*']);
     // [meko] capture_transcripts off: Meko's capture hooks are left out, as Claude's sessions run without Meko's plugin.
     expect(agentkAgent(meko, ours, { mekoCapture: false }).hooks).toEqual({ agentSpawn: [{ command: '/run/hook.sh' }], stop: [], preToolUse: ours.preToolUse });
     expect(a).toEqual({
@@ -42,10 +40,11 @@ describe("Kiro's agentk agent", () => {
 
 describe("a Kiro session's command line", () => {
   it.each([
-    ['a new session with its first prompt, never after "--" (Kiro drops it there)', { resume: false, conversation: null, prompt: 'do it' }, ['do it']],
-    ['a first prompt that starts with a dash, kept from being read as an option', { resume: false, conversation: null, prompt: '---\nfront' }, [' ---\nfront']],
-    ['a resume of a conversation Kiro gave an id', { resume: true, conversation: 'k-1', prompt: null }, ['--resume-id', 'k-1']],
-    ['a resume before Kiro said its id: the newest in the worktree', { resume: true, conversation: null, prompt: 'continue' }, ['--resume', 'continue']],
+    ['a new session with its first prompt, never after "--" (Kiro drops it there)', { conversation: null, trustTools: false, prompt: 'do it' }, ['do it']],
+    ['a first prompt that starts with a dash, kept from being read as an option', { conversation: null, trustTools: false, prompt: '---\nfront' }, [' ---\nfront']],
+    ["a resume of the session's own conversation, by id", { conversation: 'k-1', trustTools: false, prompt: null }, ['--resume-id', 'k-1']],
+    // Never --resume (the newest in the folder can be an earlier session's) nor --trust-all-tools (Kiro asks on screen, "No, exit" first).
+    ['tools trusted for this run only ([kiro] trust_tools)', { conversation: 'k-1', trustTools: true, prompt: 'continue' }, ['--trust-tools=*', '--resume-id', 'k-1', 'continue']],
   ])('%s', (_, o, rest) => {
     expect(kiroArgs(o)).toEqual(['chat', '--agent', 'agentk', ...rest]);
   });
@@ -83,7 +82,7 @@ describe("Kiro's session store", () => {
     expect(parseKiroTurns('not json')).toEqual([]);
   });
 
-  it('finds the newest session started in a folder, by any of its spellings', () => {
+  it('finds the newest session started in a folder since a time, by any of its spellings, by when Kiro says it started', () => {
     const home = tempDir('akl-kiro-');
     const dir = join(home, 'sessions', 'cli');
     mkdirSync(dir, { recursive: true });
@@ -97,6 +96,10 @@ describe("Kiro's session store", () => {
     expect(findKiroSession(['/w', '/net/host/w'], 0, home)).toBe('new');
     expect(findKiroSession(['/net/host/w'], 0, home)).toBe('old');
     expect(findKiroSession(['/w'], 2_500_000, home)).toBeNull();
+    // Kiro's own start time wins over the file's: an earlier session's file written to later doesn't count as new.
+    writeFileSync(join(dir, 'earlier.json'), JSON.stringify({ session_id: 'earlier', cwd: '/w', created_at: '1970-01-01T00:16:40Z' }));
+    utimesSync(join(dir, 'earlier.json'), 9000, 9000);
+    expect(findKiroSession(['/w'], 1_500_000, home)).toBe('new');
   });
 });
 
@@ -119,5 +122,9 @@ describe("Kiro's Meko setup", () => {
     [[{ name: 'meko', url: `${url}/`, token: true }], []],
   ])('%j', (servers, gaps) => {
     expect(kiroMekoGaps(servers, url)).toEqual(gaps);
+  });
+
+  it("says so when the agent Kiro sessions are built from doesn't load Kiro's MCP config", () => {
+    expect(kiroMekoGaps([{ name: 'meko', url, token: true }], url, false)).toEqual([expect.stringMatching(/^Kiro's default agent doesn't load your MCP servers/)]);
   });
 });

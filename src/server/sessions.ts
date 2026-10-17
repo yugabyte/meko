@@ -30,9 +30,9 @@ import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, save
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
 import { modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine } from './claude.js';
-import { HARNESS_CAPS, harnessOf } from '../shared/harnesses.js';
+import { HARNESS_CAPS, agentName, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
-import { kiroConversation } from './harness/kiro.js';
+import { findKiroConversation, kiroConversation } from './harness/kiro.js';
 import { kiroSessionFile, kiroTurns } from './kiro.js';
 import { writeLauncher } from './launcher.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
@@ -49,11 +49,6 @@ import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
 const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
-
-/** The short name of a session's agent, for its process and terminal: "Claude", "Kiro". */
-function agentName(row: { harness: string }): string {
-  return HARNESS_CAPS[harnessOf(row.harness)].short;
-}
 
 /** A session's Meko conversation title. */
 function conversationTitle(session: string, project: string): string {
@@ -1029,7 +1024,25 @@ export class SessionManager {
 
   /** The session's conversation is on disk, so a launch resumes it rather than starting over. */
   private transcriptExists(row: SessionRow): boolean {
+    if (harnessOf(row.harness) === 'kiro') this.kiroId(row);
     return this.harness(row).canResume(row);
+  }
+
+  /**
+   * A Kiro session's own conversation id: the one its hooks gave, else (no hook ever came) the
+   * newest Kiro started in its worktree since the session was created, looked for only while the
+   * session runs and owns the worktree (pooled worktrees keep earlier sessions' conversations), and
+   * kept once found so the choice doesn't move. Null when it has none.
+   */
+  private kiroId(row: SessionRow): string | null {
+    const known = kiroConversation(row);
+    if (known || row.desired !== 'running' || !this.ownsWorktree(row)) return known;
+    const found = findKiroConversation(row);
+    if (found) {
+      run(this.db, 'UPDATE sessions SET agent_session_id = ? WHERE id = ?', found, row.id);
+      row.agent_session_id = found;
+    }
+    return found;
   }
 
   /** The harness a session runs on. */
@@ -1444,7 +1457,7 @@ export class SessionManager {
     this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
     // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
-    if (harnessOf(row.harness) !== 'claude') setTimeout(() => this.ingestUsage(id), USAGE_REREAD_MS).unref();
+    if (this.harness(row).caps.usage === 'credits') setTimeout(() => this.ingestUsage(id), USAGE_REREAD_MS).unref();
     await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
   }
 
@@ -1703,7 +1716,7 @@ export class SessionManager {
 
   /** When the session's transcript was last written (ms), or 0 when there is none yet. */
   private transcriptWrittenAt(row: SessionRow): number {
-    const kiro = harnessOf(row.harness) === 'kiro' ? kiroConversation(row) : null;
+    const kiro = harnessOf(row.harness) === 'kiro' ? this.kiroId(row) : null;
     const files = harnessOf(row.harness) === 'kiro'
       ? (kiro ? [kiroSessionFile(kiro), kiroSessionFile(kiro).replace(/\.json$/, '.jsonl')] : [])
       : [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)];
@@ -2378,12 +2391,15 @@ export class SessionManager {
 
   /** A Kiro session's finished turns (credits, tokens) and its context fill after the last one, from its session file. */
   private ingestKiro(r: SessionRow): void {
-    const conv = kiroConversation(r);
+    const conv = this.kiroId(r);
     if (!conv) return;
     const turns = kiroTurns(conv);
     let changed = false;
     try {
       changed = recordKiroTurns(this.db, r.id, conv, turns);
+      // Marks the session as read, so backfillUsage leaves it alone at the next start.
+      run(this.db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
+                    ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, r.id, kiroSessionFile(conv), turns.length);
     } catch (e) {
       this.core.log.warn(`reading Kiro's usage for ${r.id} failed`, errMsg(e));
     }

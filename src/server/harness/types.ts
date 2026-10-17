@@ -38,7 +38,11 @@ export interface Harness {
   command(cfg: Config): string;
   /** Turned on in the config. */
   enabled(cfg: Config): boolean;
-  /** Writes the files its sessions are launched with (hook scripts, settings, agent files). Called at server start; never throws. */
+  /**
+   * Writes the files its sessions are launched with (hook scripts, settings, agent files). Called at
+   * server start. Claude Code's throws when its hook files can't be written (the server doesn't
+   * start); the others log and go on.
+   */
   prepare(paths: Paths, cfg: Config): Promise<void>;
   /** Before each launch: refreshes what may have changed since `prepare` (Kiro's derived agent). Never throws. */
   beforeLaunch?(paths: Paths, cfg: Config): void;

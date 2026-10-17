@@ -263,7 +263,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
               type="button"
               role="radio"
               aria-checked={s.defaultHarness === id}
-              disabled={id === 'kiro' && !s.kiroEnabled}
+              disabled={id !== 'claude' && s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
               className={cx(s.defaultHarness === id && 'on')}
               onClick={() => setS({ ...s, defaultHarness: id })}
             >
@@ -272,7 +272,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           ))}
         </div>
         <span className="hint">
-          New sessions and Ask AgentK run on it; the New session dialog can pick another. A session keeps the agent it started on.
+          New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+          session keeps the agent it started on.
         </span>
       </div>
       <div className="field">
@@ -299,7 +300,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
             </label>
             <span className="hint">
               Kiro says nothing to AgentK while it waits for a permission answer, so the session shows as working until you answer in its terminal. On,
-              Kiro runs every tool, shell commands included, without asking. Takes effect when a session next starts or resumes.
+              Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Takes effect when a session next starts or
+              resumes.
             </span>
           </div>
           {kiro?.available && (

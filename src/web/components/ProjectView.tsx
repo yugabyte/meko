@@ -12,7 +12,7 @@ import {
   type Stage,
 } from '../../shared/types';
 import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages';
-import { HARNESS_CAPS } from '../../shared/harnesses';
+import { HARNESS_CAPS, agentName, harnessOf } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import { approveDesign } from '../design-answers';
@@ -243,7 +243,7 @@ export function ProjectView({
     </button>
   ));
   // Kiro bills credits; its token counts are often zero, so a Kiro session shows its credits and its agent.
-  const tokensText = session && (session.harness === 'kiro' ? (
+  const tokensText = session && (HARNESS_CAPS[harnessOf(session.harness)].usage === 'credits' ? (
     <span title={`${HARNESS_CAPS.kiro.label} · ${session.usage.messages} turns`}>
       {HARNESS_CAPS.kiro.short} · {formatCredits(session.usage.credits ?? 0)}
     </span>
@@ -254,7 +254,7 @@ export function ProjectView({
   ));
   // Measured by AgentK's mod after each turn; null without it. The phone's sheet has no tooltips, so it writes the percent too.
   const contextText = (showPercent: boolean) =>
-    session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} />;
+    session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} agent={agentName(session)} />;
   const mekoText = (
     <span title="The project's Meko datapack">
       Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}

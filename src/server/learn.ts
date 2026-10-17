@@ -12,6 +12,7 @@ import { HttpError } from './projects.js';
 import { SAVING_RULE } from './prompts.js';
 import type { DatapackRef } from '../shared/types.js';
 import { sessionDatapack, sessionRepo, sessionRow, type SessionRow } from './store.js';
+import { agentName } from '../shared/harnesses.js';
 
 export type LearnTrigger = 'merge' | 'manual' | 'discard';
 export type LearnPath = 'mod' | 'turn' | 'none';
@@ -328,10 +329,10 @@ export class Learner {
   /** Why a learn step can't run in the session's Claude now, or null when it can. */
   private notNow(row: SessionRow): string | null {
     if (row.desired !== 'running') return 'This session is archived.';
-    if (row.status === 'exited') return 'Claude has exited in this session. Resume it, then try again.';
-    if (row.status === 'starting') return 'Claude is still starting. Try again in a moment.';
+    if (row.status === 'exited') return `${agentName(row)} has exited in this session. Resume it, then try again.`;
+    if (row.status === 'starting') return `${agentName(row)} is still starting. Try again in a moment.`;
     if ((row.status !== 'idle' && row.status !== 'recovered') || this.core.sessions.runtime(row.id).busy) {
-      return 'Claude is busy. Try again when its turn has ended.';
+      return `${agentName(row)} is busy. Try again when its turn has ended.`;
     }
     return null;
   }

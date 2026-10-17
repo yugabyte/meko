@@ -147,14 +147,13 @@ export type KiroHooks = Partial<Record<'agentSpawn' | 'userPromptSubmit' | 'preT
 /**
  * The agent Kiro sessions run as: the user's default agent (`base`, which is Meko's `meko-default`
  * when Meko's setup for Kiro ran, so its MCP server and capture hooks carry over) with AgentK's hooks
- * added to each event's list, its own kept first. Kiro's upgrade bookkeeping is left out. With
- * `trustTools` every tool is allowed without asking: in the agent, since `--trust-all-tools` makes
- * Kiro 2.32 ask on screen whether to go on, with "No, exit" first (a typed prompt's Enter picks it).
+ * added to each event's list, its own kept first. Kiro's upgrade bookkeeping is left out. It grants
+ * nothing the base doesn't: `[kiro] trust_tools` is a flag on AgentK's launch (kiroArgs), so a chat
+ * someone starts as `agentk` outside AgentK asks as their own agent would.
  */
-export function agentkAgent(base: Json, hooks: KiroHooks, o: { trustTools?: boolean; mekoCapture?: boolean } = {}): Json {
+export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean } = {}): Json {
   const { kiroUpgrade: _upgrade, ...rest } = base;
   void _upgrade;
-  const trustTools = !!o.trustTools;
   const merged: Record<string, unknown[]> = {};
   const own = isObject(base.hooks) ? base.hooks : {};
   // Meko's capture hooks send the session's turns to Meko: left out with `[meko] capture_transcripts`
@@ -163,7 +162,7 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { trustTools?: bool
   for (const [event, list] of Object.entries(own)) if (Array.isArray(list)) merged[event] = list.filter(keep);
   for (const [event, list] of Object.entries(hooks)) merged[event] = [...(merged[event] ?? []), ...(list ?? [])];
   const from = typeof base.name === 'string' ? ` Based on ${base.name}.` : '';
-  return { ...rest, ...(trustTools ? { allowedTools: ['*'] } : {}), name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  return { ...rest, name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
 }
 
 /** Meko's hook handler for Kiro (its `meko-default` agent's hooks run it). */
@@ -201,9 +200,12 @@ export function writeKiroAgent(agent: Json, home = kiroHome()): boolean {
   return true;
 }
 
-/** Removes the agent files AgentK wrote (uninstall). */
-export function removeKiroAgents(home = kiroHome()): void {
-  for (const name of [AGENTK_AGENT, ASK_AGENT]) rmSync(join(home, 'agents', `${name}.json`), { force: true });
+/**
+ * Removes the agent AgentK wrote in Kiro's home (uninstall). Ask AgentK's `agentk-ask` is a
+ * workspace agent in AgentK's own run folder, which goes with the home.
+ */
+export function removeKiroAgent(home = kiroHome()): void {
+  rmSync(join(home, 'agents', `${AGENTK_AGENT}.json`), { force: true });
 }
 
 /** Kiro's file for one of its sessions (`<session id>.json`, beside its `.jsonl` history). */
@@ -214,8 +216,10 @@ export function kiroSessionFile(id: string, home = kiroHome()): string {
 const SESSION_ID = /^[\w-]{1,100}$/;
 
 /**
- * The newest Kiro session started in `cwd` (any of its spellings) since `since` (ms), by Kiro's
- * session store; null when there is none. What a Kiro session's id is found by when no hook said it.
+ * The newest Kiro session started in `cwd` (any of its spellings) at `since` (ms) or later, by when
+ * Kiro says it started (its `created_at`; the file's time when it has none), in Kiro's session store;
+ * null when there is none. What a Kiro session's id is found by when no hook said it. A worktree
+ * outlives its sessions, so `since` keeps out the conversations of the sessions that used it before.
  */
 export function findKiroSession(cwds: string[], since = 0, home = kiroHome()): string | null {
   const dir = join(home, 'sessions', 'cli');
@@ -229,15 +233,18 @@ export function findKiroSession(cwds: string[], since = 0, home = kiroHome()): s
   for (const f of files) {
     const id = f.slice(0, -'.json'.length);
     if (!SESSION_ID.test(id)) continue;
-    let at: number;
-    try {
-      at = statSync(join(dir, f)).mtimeMs;
-    } catch {
-      continue;
+    const s = readJson(join(dir, f));
+    if (!s || typeof s.cwd !== 'string' || !cwds.includes(s.cwd)) continue;
+    let at = typeof s.created_at === 'string' ? Date.parse(s.created_at) : NaN;
+    if (!Number.isFinite(at)) {
+      try {
+        at = statSync(join(dir, f)).mtimeMs;
+      } catch {
+        continue;
+      }
     }
     if (at < since || (best && at <= best.at)) continue;
-    const s = readJson(join(dir, f));
-    if (s && typeof s.cwd === 'string' && cwds.includes(s.cwd)) best = { id, at };
+    best = { id, at };
   }
   return best?.id ?? null;
 }

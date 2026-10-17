@@ -28,6 +28,7 @@ import {
 import { MOVE_TARGETS, kindOf, moveBlockedIn, moveError, movesStep, offersPrompt, promptByDefault } from '../shared/stages.js';
 import { parseSettings, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, type MergeInfo, type SessionRow } from './store.js';
 import { pushLine, workflowLine } from './sessions.js';
+import { agentName } from '../shared/harnesses.js';
 
 /**
  * The `owner/name` a session's PR is in, from its URL, for gh's `--repo`: the clone's default repo
@@ -489,7 +490,7 @@ export class Lifecycle {
     if (!get(this.db, 'SELECT 1 AS x FROM designs WHERE session_id = ?', row.id)) {
       throw new HttpError(409, "AgentK hasn't written a design yet. Wait for it to finish, or ask it in the terminal.");
     }
-    if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+    if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
     if (row.status === 'starting') throw new HttpError(409, 'AgentK is still working. Wait for the turn to finish.');
     // Answers sent during a turn wait in Claude, and run before anything sent now: the approval
     // would move to Code while AgentK revises the design.
@@ -750,7 +751,7 @@ export class Lifecycle {
   private checkPromptable(row: SessionRow): void {
     this.checkBetweenTurns(row);
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
-    if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+    if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
   }
 
   private checkBetweenTurns(row: SessionRow): void {
@@ -1754,7 +1755,7 @@ export class Lifecycle {
       if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (cur.status === 'working' || cur.status === 'starting' || this.sessions.runtime(cur.id).busy) throw new HttpError(409, 'Wait for AgentK to finish its turn.');
       if (cur.status === 'needs_input') throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
-      if (cur.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session first.');
+      if (cur.status === 'exited') throw new HttpError(409, `${agentName(cur)} has exited. Resume the session first.`);
       const n = cur.pr_number!;
       const old = cur.review_sha!;
       const repo = sessionRepo(this.db, cur);

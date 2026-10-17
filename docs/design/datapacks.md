@@ -175,7 +175,8 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   setup package as the installer does (without blocking the server; its output goes to the log).
 >   New sessions pick that up; running ones keep what they started with. With Kiro available, a
 >   **Kiro** row says whether Kiro's sessions reach this Meko (`MekoStatus.kiro`, `mekokiro.ts`: a
->   `meko…` server in `~/.kiro/settings/mcp.json` at this URL, sending an `Authorization` header),
+>   `meko…` server in `~/.kiro/settings/mcp.json` at this URL, sending an `Authorization` header,
+>   that the agent Kiro sessions are built from loads (`includeMcpJson`); capture hooks aren't checked),
 >   and **Set up Kiro with this Meko** runs the same package with `--client kiro`. That writes Meko's
 >   MCP server, skill, steering and capture hooks for Kiro, and makes its `meko-default` agent Kiro's
 >   default, which AgentK's `agentk` agent is then built from, so Kiro sessions get Meko's tools and
