@@ -34,8 +34,9 @@ and name (`HarnessBar`, a tab list), off or not installed ones too, since that's
 turned on. It starts on the default agent, and the agent picked there shows its own settings under
 it (`AgentSettings` in `SettingsDialog.tsx`): **Offer … for new sessions** with its version or why it
 isn't offered, **Check again**, **Update Claude Code** or **Update Kiro** while it's available
-(`POST /api/harnesses/:id/update`: `claude update`, `kiro-cli update`), and for Kiro **Let Kiro run
-any tool without asking** while Kiro is on. Edits are kept while the bar switches agents, and one
+(`POST /api/claude/update`, whose answer carries the outcome, and `POST /api/harnesses/kiro/update`;
+each agent's update runs on its own, so one running doesn't hold up the other's button), and for
+Kiro **Let Kiro run any tool without asking** while Kiro is on. Edits are kept while the bar switches agents, and one
 Save sends the tab's fields (`defaultHarness`, `claudeEnabled`, `kiroEnabled`, `kiroTrustTools`).
 The no-agent banner's **Settings** opens this tab. The Meko tab keeps each agent's Meko row.
 

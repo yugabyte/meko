@@ -4,7 +4,7 @@ import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesse
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { harnessLogosToggle } from '../toggle';
-import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { AgentLabel, AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
@@ -20,6 +20,7 @@ export function SettingsDialog({
   meko,
   harnesses,
   twoAgents,
+  serverName,
   initialTab = 'general',
   onClose,
   onWhatsNew,
@@ -31,6 +32,8 @@ export function SettingsDialog({
   harnesses: HarnessStatus[];
   /** Open sessions run on more than one agent (`harnessLogos()`), so the logos would show. */
   twoAgents: boolean;
+  /** `AppState.serverName`, for what to do when Claude Code's update fails. */
+  serverName: string;
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
@@ -59,7 +62,7 @@ export function SettingsDialog({
           <GeneralTab />
         </div>
       )}
-      {tab === 'harness' && <HarnessTab harnesses={harnesses} twoAgents={twoAgents} />}
+      {tab === 'harness' && <HarnessTab harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} />}
       {tab === 'meko' && (
         <MekoTab
           status={meko}
@@ -319,12 +322,15 @@ const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'kiroEnabled'> = { claude
  * The coding agents: the default agent and the logos, then a bar that picks one agent, with that
  * agent's settings under it. Edits are kept while the bar switches, and one Save sends them all.
  */
-function HarnessTab({ harnesses, twoAgents }: { harnesses: HarnessStatus[]; twoAgents: boolean }) {
+function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessStatus[]; twoAgents: boolean; serverName: string }) {
   const [s, setS] = useState<Settings | null>(null);
   // The agent the bar shows: the default agent when the tab opens, so a new default doesn't move it.
   const [shown, setShown] = useState<HarnessId>('claude');
   const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
+  // The agent whose update this page started, until its request answers (each agent updates on its own).
+  const [updating, setUpdating] = useState<HarnessId | null>(null);
+  // What Claude Code's update came to, while `[claude] mod` is off and so its banners don't show.
+  const [claudeOutcome, setClaudeOutcome] = useState<{ ok: boolean; text: string } | null>(null);
   // What Check again answered, until the next state push replaces it.
   const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -364,13 +370,16 @@ function HarnessTab({ harnesses, twoAgents }: { harnesses: HarnessStatus[]; twoA
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setChecking(false));
   };
+  // A failed `claude update` is an outcome, not an error: it comes back in `lastUpdate`.
   const update = (id: HarnessId) => {
-    setUpdating(true);
+    setUpdating(id);
     setError(null);
-    api
-      .updateHarness(id)
-      .catch((err) => setError(errorMessage(err)))
-      .finally(() => setUpdating(false));
+    if (id === 'claude') setClaudeOutcome(null);
+    const run =
+      id === 'claude'
+        ? api.updateClaude().then((c) => setClaudeOutcome(c.modEnabled ? null : claudeUpdateText(c, serverName)))
+        : api.updateHarness(id);
+    run.catch((err) => setError(errorMessage(err))).finally(() => setUpdating(null));
   };
 
   const save = async (e: FormEvent) => {
@@ -423,7 +432,8 @@ function HarnessTab({ harnesses, twoAgents }: { harnesses: HarnessStatus[]; twoA
           s={s}
           status={agents.find((h) => h.id === shown)}
           checking={checking}
-          updating={updating}
+          updating={updating === shown}
+          outcome={shown === 'claude' ? claudeOutcome : null}
           onEnable={(on) => enable(shown, on)}
           onChange={(patch) => setS({ ...s, ...patch })}
           onCheck={checkAgain}
@@ -470,6 +480,7 @@ export function AgentSettings({
   status,
   checking,
   updating,
+  outcome = null,
   onEnable,
   onChange,
   onCheck,
@@ -480,8 +491,10 @@ export function AgentSettings({
   status: HarnessStatus | undefined;
   /** Check again is reading the versions. */
   checking: boolean;
-  /** This page started an update that hasn't answered yet. */
+  /** This page started this agent's update, and it hasn't answered yet. */
   updating: boolean;
+  /** What this page's update of it came to, when nothing else says so (Claude Code with the mod off). */
+  outcome?: { ok: boolean; text: string } | null;
   onEnable: (on: boolean) => void;
   onChange: (patch: Partial<Settings>) => void;
   onCheck: () => void;
@@ -508,6 +521,11 @@ export function AgentSettings({
               </button>
             )}
           </div>
+        )}
+        {outcome && (
+          <span id={`set-${id}-outcome`} className={outcome.ok ? 'ok-text' : 'error-text'} role="status">
+            {outcome.text}
+          </span>
         )}
       </div>
       {id === 'kiro' && enabled && (

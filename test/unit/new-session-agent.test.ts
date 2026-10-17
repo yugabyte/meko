@@ -65,19 +65,20 @@ describe('Settings › Harness', () => {
   });
 
   const settings = { claudeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
-  /** The ids of the controls an agent's panel shows. */
-  const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>) =>
+  /** The ids of the controls (and the update outcome) an agent's panel shows. */
+  const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null) =>
     [...renderToStaticMarkup(createElement(AgentSettings, {
-      id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false,
+      id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false, outcome,
       onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
-    })).matchAll(/<(?:input|button)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
+    })).matchAll(/<(?:input|button|span)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
 
   it.each([
-    ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update']],
-    ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust']],
-    ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust']],
-    ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro']],
-  ])("%s: the panel shows only that agent's settings", (_, id, s, st, shown) => {
-    expect(controls(id, s, st)).toEqual(shown);
+    ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update'], null],
+    ['Claude Code, after an update the banners leave out', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-outcome'], { ok: false, text: 'x' }],
+    ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust'], null],
+    ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust'], null],
+    ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro'], null],
+  ])("%s: the panel shows only that agent's settings", (_, id, s, st, shown, outcome) => {
+    expect(controls(id, s, st, outcome)).toEqual(shown);
   });
 });
