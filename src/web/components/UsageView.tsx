@@ -4,7 +4,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { creditsNumber, cx, formatCostOf, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, modelLabel, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, Stat, TokenCells } from './UsagePanel';
@@ -39,7 +39,7 @@ const projectValue = (p: ProjectUsageSummary, k: ProjectKey): number | string =>
   }
 };
 const modelValue = (m: ModelUsage, k: ModelKey): number | string =>
-  k === 'model' ? m.model : k === 'output' ? m.usage.output : k === 'credits' ? (m.usage.credits ?? 0) : totalTokens(m.usage);
+  k === 'model' ? modelLabel(m) : k === 'output' ? m.usage.output : k === 'credits' ? (m.usage.credits ?? 0) : totalTokens(m.usage);
 
 /**
  * Usage across every project, closed ones included: tokens and their cost by project, model and
@@ -218,8 +218,8 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                   </thead>
                   <tbody>
                     {models.map((m) => (
-                      <tr key={m.model} title={usageTitle(m.usage)}>
-                        <td className="mono small">{m.model}</td>
+                      <tr key={`${m.harness}:${m.model}`} title={usageTitle(m.usage)}>
+                        <td className="mono small">{modelLabel(m)}</td>
                         <TokenCells usage={m.usage} />
                         {modelCredits && <CreditsCell usage={m.usage} />}
                       </tr>

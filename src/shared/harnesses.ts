@@ -21,11 +21,13 @@ export interface HarnessCaps {
   artifacts: boolean;
   /** What its usage is counted in: tokens priced at API list prices, or the credits it bills. */
   usage: 'tokens' | 'credits';
+  /** A by-model usage row names it before the model ("Kiro · auto"): its model ids don't say which agent ran them. */
+  labelModels: boolean;
 }
 
 export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
-  claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens' },
-  kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits' },
+  claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens', labelModels: false },
+  kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits', labelModels: true },
 };
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */

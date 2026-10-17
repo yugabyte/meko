@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -350,6 +350,15 @@ export function totalTokens(u: TokenUsage): number {
  */
 export function rowTokens(u: TokenUsage, n: number): string {
   return u.credits && totalTokens(u) === 0 ? '—' : formatTokens(n);
+}
+
+/**
+ * A by-model row's name: the model id, with the agent's name first when its ids don't say which
+ * agent ran them (`HarnessCaps.labelModels`: "Kiro · auto", since Kiro's default model is just `auto`).
+ */
+export function modelLabel(m: ModelUsage): string {
+  const caps = HARNESS_CAPS[m.harness];
+  return caps.labelModels ? `${caps.short} · ${m.model}` : m.model;
 }
 
 /** 950 → "950", 12_300 → "12.3k", 4_560_000 → "4.56M". */
