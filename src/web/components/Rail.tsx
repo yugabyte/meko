@@ -328,6 +328,9 @@ function AgentMark({ harness }: { harness: 'claude' | 'kiro' }) {
   );
 }
 
+/** The plan limits' ring, in px: its view box too, so the percent sits at its centre. */
+const LIMIT_RING = 26;
+
 /**
  * One limit: a ring with the percent in it (amber from 80%, red from 95%, unless the caller says
  * otherwise), then its name, marked ▲ when amber or red, and what `children` say under it.
@@ -343,11 +346,12 @@ export function LimitRing({ label, name, pct, level = limitLevel(pct), title, cl
   children: ReactNode;
 }) {
   const arc = Math.min(pct, 100);
+  const c = LIMIT_RING / 2;
   return (
     <div className={cx('lim', className, level)} title={title}>
       <span role="meter" aria-label={`${name} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={arc}>
-        <Ring className="lim-ring" arc={arc} px={26} box={26} r={10.5} stroke={3}>
-          <text x="13" y="13" textAnchor="middle" dominantBaseline="central" className={pct > 99 ? 'long' : undefined}>
+        <Ring className="lim-ring" arc={arc} px={LIMIT_RING} box={LIMIT_RING} r={c - 2.5} stroke={3}>
+          <text x={c} y={c} textAnchor="middle" dominantBaseline="central" className={pct > 99 ? 'long' : undefined}>
             {pct}
           </text>
         </Ring>

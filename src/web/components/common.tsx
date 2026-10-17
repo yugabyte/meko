@@ -11,8 +11,9 @@ const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg'
 
 /**
  * A harness's logo: beside a session's name in the tabs and the rail, while open sessions run on
- * more than one harness (`harnessLogos()`) and its setting is on (`harnessLogosToggle`), and in
- * `AgentPicker`. An 18 × 14 box that every logo fits, so names line up. Decorative, with no title
+ * more than one harness (`harnessLogos()`) and its setting is on (`harnessLogosToggle`), in
+ * `AgentPicker`, and always at the start of each agent's row of plan limits in the rail (`Limits`
+ * in `Rail.tsx`, whatever the setting says). An 18 × 14 box that every logo fits, so names line up. Decorative, with no title
  * of its own: the tab's tooltip (or the button's text) names the harness, and a title here would
  * replace that tooltip while the pointer is over the logo.
  */
