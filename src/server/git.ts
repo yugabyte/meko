@@ -631,6 +631,16 @@ export async function isFreshRepo(dir: string): Promise<boolean> {
 // ---- Review a PR ----
 
 /**
+ * GitHub's `owner/name` of <repo>'s remote <name> (`origin`): from its URL as configured, else as
+ * `insteadOf` rewrites it (a short form like `gh:me/demo`). Null when neither names a GitHub repo
+ * (an SSH host alias, a GitHub Enterprise host).
+ */
+export async function remoteRepo(repo: string, name: string): Promise<string | null> {
+  const raw = githubRepo((await tryGit(repo, 'config', '--get', `remote.${name}.url`))?.trim() || null);
+  return raw ?? githubRepo((await tryGit(repo, 'remote', 'get-url', name))?.trim() || null);
+}
+
+/**
  * The remote of <repo> that is GitHub's <ghRepo> (`owner/name`): `upstream` first (a fork whose
  * PRs are upstream), then `origin`. Null when neither is.
  */

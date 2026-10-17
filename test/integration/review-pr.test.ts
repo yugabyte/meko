@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FoundPr, PrInfo, PrPeople, PrWatch } from '../../src/server/github.js';
+import type { FoundPr, PrInfo, PrPeople, PrWatch, RepoVisibility } from '../../src/server/github.js';
 
 // GitHub is mocked; git (with "GitHub" repos as local bare repos), the session host and the fake claude are real.
 const gh = vi.hoisted(() => ({
@@ -13,6 +13,8 @@ const gh = vi.hoisted(() => ({
   people: new Map<string, PrPeople>(),
   profiles: new Map<string, { name: string | null; email: string | null }>(),
   searchFails: false,
+  /** Who can see each repo (`owner/name`); private when not set. */
+  visibility: new Map<string, RepoVisibility>(),
 }));
 
 vi.mock('../../src/server/github.js', async (orig) => {
@@ -34,6 +36,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
     userProfile: async (_cwd: string, login: string) => gh.profiles.get(login) ?? { name: null, email: null },
     viewerLogin: async () => 'me',
     issueText: async () => ({ title: '', body: '' }),
+    repoVisibility: async (_cwd: string, repo: string) => gh.visibility.get(repo) ?? 'private',
   };
 });
 
@@ -90,6 +93,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
 
   beforeEach(async () => {
     gh.info.clear();
+    gh.visibility.clear();
     gh.watch.clear();
     gh.found.clear();
     gh.people.clear();
@@ -162,6 +166,31 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     expect(sys).toContain('search Meko before answering questions about why the code is the way it is');
     // Nobody can move it to another stage.
     await expect(env.core.sessions.move(s.id, { stage: 'code' })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it.each([
+    ['public', true],
+    ['private', false],
+  ] as const)("on a %s repo, leaves the PR's own config out of the review: %s", async (visibility, untrusted) => {
+    const p = await project();
+    // The PR brings a status line (which AgentK's relay runs with sh) and a prompt of its own.
+    mkdirSync(join(author, '.claude'), { recursive: true });
+    writeFileSync(join(author, '.claude', 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'echo from-the-pr' } }));
+    mkdirSync(join(author, '.agent-k', 'stages'), { recursive: true });
+    writeFileSync(join(author, '.agent-k', 'stages', 'review-pr.md'), 'A prompt the PR wrote.');
+    pushToPr(7, 'widget.ts');
+    pr(7);
+    gh.visibility.set('acme/demo', visibility);
+    const s = await env.core.sessions.create(p.id, { name: '', kind: 'review-pr', repoPath: clone, pr: { repo: 'acme/demo', number: 7 } });
+    await idle(s.id, 'first turn');
+    const args = launchArgs().at(-1)!.args;
+    expect(args.includes('--setting-sources') && args[args.indexOf('--setting-sources') + 1] === 'user').toBe(untrusted);
+    expect(readFileSync(join(env.core.paths.run, `${s.id}.sh`), 'utf8').includes('echo from-the-pr')).toBe(!untrusted);
+    expect(transcript(s.id).includes('A prompt the PR wrote.')).toBe(!untrusted);
+    expect(event(s.id, 'untrusted')).toBe(untrusted
+      ? "acme/demo is public, so anyone can have written this PR's code: the session runs without the repo's own config "
+        + '(its .claude settings, hooks, status line and MCP servers, its Kiro agents, and its .agent-k/stages prompts).'
+      : undefined);
   });
 
   it('leaves the Meko lines out with Meko off', async () => {

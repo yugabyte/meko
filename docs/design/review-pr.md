@@ -25,6 +25,12 @@ datapack the project doesn't have offers **Attach it**, as a shared datapack, so
 searched. The name fills in as `Review #21 <title>` until you edit it, and **Advanced** shows the
 repo (the PR's clone, changeable to another clone of it); the base and branch come from the PR.
 
+**A public repo's PR.** Anyone can open a PR on a public repo, so a review of one runs without
+the repo's own config: Claude Code loads only your user settings (none of the PR's `.claude/`
+settings, hooks, status line or `.mcp.json` servers), and the PR's `.agent-k/stages/` prompts aren't
+used. On Kiro, a PR that brings its own `agentk` agent or MCP servers can't be reviewed. A private
+or internal repo's PR runs as any session does. See [Code from public repos](security.md#code-from-public-repos).
+
 **Starting.** `CreateSessionRequest.pr` names the PR (`{ repo: 'owner/name', number }`), with
 `repoPath` its clone. The server checks that the clone's `upstream` or `origin` is the PR's repo
 and that the PR is open (400 otherwise, with nothing started). Then, after the dialog has closed

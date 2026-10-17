@@ -1,11 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
-import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
-import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
 export type SettingsTab = 'general' | 'meko' | 'account' | 'updates';
@@ -79,9 +78,9 @@ function RailSessionsSetting() {
 }
 
 /** What Settings says about a harness's CLI: its version, or why it isn't offered. */
-function harnessNote(h: HarnessStatus | undefined, command: string): string {
+function harnessNote(h: HarnessStatus | undefined): string {
   if (!h?.enabled) return 'Off.';
-  if (h.version === null) return `${command} didn't answer: install Kiro CLI, or set the command it's run with.`;
+  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml.`;
   if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
   return `Version ${h.version}.`;
 }
@@ -115,6 +114,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const kiro = harnesses.find((h) => h.id === 'kiro');
+  const defaultAgent = defaultAgentChoice(harnesses, s.defaultHarness);
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -139,7 +139,6 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
         resolveConflicts: s.resolveConflicts,
         defaultHarness: s.defaultHarness,
         kiroEnabled: s.kiroEnabled,
-        kiroCommand: s.kiroCommand.trim(),
         kiroTrustTools: s.kiroTrustTools,
       });
       setS(next);
@@ -253,31 +252,24 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
-      <div className="field">
-        <span className="label" id="set-agent-label">
-          Default agent
-        </span>
-        <div className="seg" role="radiogroup" aria-labelledby="set-agent-label">
-          {HARNESS_IDS.map((id: HarnessId) => (
-            <button
-              key={id}
-              id={`set-agent-${id}`}
-              type="button"
-              role="radio"
-              aria-checked={s.defaultHarness === id}
-              disabled={id !== 'claude' && s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
-              className={cx(s.defaultHarness === id && 'on')}
-              onClick={() => setS({ ...s, defaultHarness: id })}
-            >
-              {HARNESS_CAPS[id].label}
-            </button>
-          ))}
+      {defaultAgent && (
+        <div className="field">
+          <span className="label" id="set-agent-label">
+            Default agent
+          </span>
+          <AgentPicker
+            idPrefix="set-agent"
+            agents={defaultAgent.agents}
+            value={defaultAgent.value}
+            onChange={(id) => setS({ ...s, defaultHarness: id })}
+            labelledBy="set-agent-label"
+          />
+          <span className="hint">
+            New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+            session keeps the agent it started on.
+          </span>
         </div>
-        <span className="hint">
-          New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
-          session keeps the agent it started on.
-        </span>
-      </div>
+      )}
       <div className="field">
         <label className="check">
           <input
@@ -288,13 +280,10 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           />
           <span>Offer Kiro for new sessions</span>
         </label>
-        <span className="hint">{harnessNote(kiro, s.kiroCommand)}</span>
+        <span className="hint">{harnessNote(kiro)}</span>
       </div>
       {s.kiroEnabled && (
         <>
-          <Field label="Kiro command" hint="How Kiro CLI is run: a command name on your PATH, or a full path.">
-            <input id="set-kiro-command" className="input mono" value={s.kiroCommand} onChange={(e) => setS({ ...s, kiroCommand: e.target.value })} />
-          </Field>
           <div className="field">
             <label className="check">
               <input id="set-kiro-trust" type="checkbox" checked={s.kiroTrustTools} onChange={(e) => setS({ ...s, kiroTrustTools: e.target.checked })} />

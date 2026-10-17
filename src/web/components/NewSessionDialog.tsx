@@ -7,7 +7,7 @@ import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
 import { cx, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
-import { Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
+import { AgentPicker, Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
 import { HeldImages } from './HeldImages';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
@@ -464,21 +464,13 @@ export function NewSessionDialog({
                   <span className="label" id="ns-agent-label">
                     Agent
                   </span>
-                  <div className="seg" role="radiogroup" aria-labelledby="ns-agent-label">
-                    {agents.map((h) => (
-                      <button
-                        key={h.id}
-                        id={`ns-agent-${h.id}`}
-                        type="button"
-                        role="radio"
-                        aria-checked={harness === h.id}
-                        className={cx(harness === h.id && 'on')}
-                        onClick={() => setHarness(h.id)}
-                      >
-                        {HARNESS_CAPS[h.id].label}
-                      </button>
-                    ))}
-                  </div>
+                  <AgentPicker
+                    idPrefix="ns-agent"
+                    agents={agents.map((h) => h.id)}
+                    value={harness}
+                    onChange={setHarness}
+                    labelledBy="ns-agent-label"
+                  />
                   {!HARNESS_CAPS[harness].artifacts && (
                     <span className="hint">
                       {HARNESS_CAPS[harness].label} writes its designs as markdown, and AgentK types its prompts into the terminal.

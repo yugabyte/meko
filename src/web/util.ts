@@ -1,8 +1,8 @@
-import { HARNESS_CAPS, harnessOf } from '../shared/harnesses';
+import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -37,6 +37,18 @@ export function liveSessions(p: ProjectWithSessions): Session[] {
  */
 export function harnessLogos(projects: ProjectWithSessions[]): boolean {
   return new Set(projects.flatMap((p) => liveSessions(p).map((s) => harnessOf(s.harness)))).size > 1;
+}
+
+/**
+ * Settings' Default agent: the agents it offers (only available ones) and the one it shows picked,
+ * or null while there's no choice (fewer than two available), when Settings leaves it out. A stored
+ * default that isn't available shows as the first available (`AppState.harnesses` is in
+ * `HARNESS_IDS` order), which the server starts on meanwhile; it stays stored, so it decides again
+ * once it's available (unless Kiro is turned off in Settings, which resets it to Claude Code).
+ */
+export function defaultAgentChoice(harnesses: HarnessStatus[], stored: HarnessId): { agents: HarnessId[]; value: HarnessId } | null {
+  const agents = harnesses.filter((h) => h.available).map((h) => h.id);
+  return agents.length > 1 ? { agents, value: agents.includes(stored) ? stored : agents[0] } : null;
 }
 
 /** A project's open sessions in the order the rail and the phone's tabs list them: oldest first. */

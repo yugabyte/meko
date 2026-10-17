@@ -44,6 +44,28 @@ const ACTIONS: SessionAction[] = [
   'learn',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
+/**
+ * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
+ * srcdoc iframe, which takes this policy on top of its own (design-frame.ts), and Artifacts run
+ * inline scripts and scripts from two CDNs. What it does stop: images from anywhere but here,
+ * data:, blob: and GitHub (a remote image in an outsider's review would tell its author who read
+ * it, and when), connections to other servers, plugins, a <base> or a form that points elsewhere,
+ * and framing. `host`: the page's Host, for its WebSockets (older Safari doesn't take 'self' for them).
+ */
+export function appCsp(host: string | undefined): string {
+  const ws = host && /^[A-Za-z0-9.:[\]-]+$/.test(host) ? ` wss://${host} ws://${host}` : '';
+  return [
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    `connect-src 'self'${ws}`,
+    "img-src 'self' data: blob: https://github.com https://*.githubusercontent.com",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  ].join('; ');
+}
+
 /** How long a closing server waits for a browser's socket to answer its close before dropping it. */
 export const SHUTDOWN_CLOSE_MS = 1000;
 
@@ -100,6 +122,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'same-origin');
     if (isApi(req)) reply.header('Cache-Control', 'no-store');
+    // Every app page (`/`, an app route, or /index.html by name) gets the same policy.
+    else if (/^text\/html/.test(String(reply.getHeader('content-type') ?? ''))) reply.header('Content-Security-Policy', appCsp(req.headers.host));
     return payload;
   });
 
@@ -544,7 +568,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     resolveConflicts: core.config.pr.resolveConflicts,
     defaultHarness: core.config.agents.default,
     kiroEnabled: core.config.kiro.enabled,
-    kiroCommand: core.config.kiro.command,
     kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
   });
@@ -577,11 +600,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
-    // eslint-disable-next-line no-control-regex
-    if (b.kiroCommand !== undefined && (typeof b.kiroCommand !== 'string' || !b.kiroCommand.trim() || b.kiroCommand.length > 512 || /[\u0000-\u001f\u007f]/.test(b.kiroCommand))) {
-      throw new HttpError(400, "Kiro's command must be a command name or a path, on one line.");
-    }
-    const kiroBefore = { enabled: core.config.kiro.enabled, command: core.config.kiro.command };
+    const kiroBefore = { enabled: core.config.kiro.enabled };
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -598,12 +617,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
-      if (b.kiroCommand !== undefined) c.kiro.command = b.kiroCommand.trim();
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
-    // Kiro turned on or run another way: its version and agent file follow, in the background.
-    if (core.config.kiro.enabled && (!kiroBefore.enabled || kiroBefore.command !== core.config.kiro.command)) {
+    // Kiro turned on: its version and agent file follow, in the background.
+    if (core.config.kiro.enabled && !kiroBefore.enabled) {
       const kiro = core.harnesses.of('kiro');
       void kiro.version(core.config, true).then(() => kiro.prepare(core.paths, core.config)).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
     }

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { harnessOf, type HarnessId } from '../../shared/harnesses';
+import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
@@ -10,14 +10,52 @@ import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, c
 const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', kiro: '/harness-kiro.svg' };
 
 /**
- * A session's harness logo beside its name, in the tabs and the rail, while open sessions run on
- * more than one harness (`harnessLogos()`). An 18 × 14 box that every logo fits, so names line up.
- * Decorative, with no title of its own: the tab's tooltip names the harness, and a title here
- * would replace that tooltip while the pointer is over the logo.
+ * A harness's logo: beside a session's name in the tabs and the rail, while open sessions run on
+ * more than one harness (`harnessLogos()`), and in `AgentPicker`. An 18 × 14 box that every logo
+ * fits, so names line up. Decorative, with no title of its own: the tab's tooltip (or the
+ * button's text) names the harness, and a title here would replace that tooltip while the pointer
+ * is over the logo.
  */
 export function HarnessLogo({ harness }: { harness: string }) {
   const id = harnessOf(harness);
   return <img className="harness-logo" src={HARNESS_LOGOS[id]} alt="" width={18} height={14} />;
+}
+
+/**
+ * Pick one of the available agents (New session's Agent, Settings' Default agent): each one's
+ * logo, then its name. Callers show it only while two or more are available.
+ */
+export function AgentPicker({
+  idPrefix,
+  agents,
+  value,
+  onChange,
+  labelledBy,
+}: {
+  idPrefix: string;
+  agents: HarnessId[];
+  value: HarnessId;
+  onChange: (id: HarnessId) => void;
+  labelledBy: string;
+}) {
+  return (
+    <div className="seg agents" role="radiogroup" aria-labelledby={labelledBy}>
+      {agents.map((id) => (
+        <button
+          key={id}
+          id={`${idPrefix}-${id}`}
+          type="button"
+          role="radio"
+          aria-checked={value === id}
+          className={cx(value === id && 'on')}
+          onClick={() => onChange(id)}
+        >
+          <HarnessLogo harness={id} />
+          {HARNESS_CAPS[id].label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /**
