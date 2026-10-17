@@ -80,7 +80,7 @@ function RailSessionsSetting() {
 /** What Settings says about a harness's CLI: its version, or why it isn't offered. */
 function harnessNote(h: HarnessStatus | undefined): string {
   if (!h?.enabled) return 'Off.';
-  if (h.version === null) return `kiro-cli didn't answer: install Kiro CLI (kiro-cli login to sign in).`;
+  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml.`;
   if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
   return `Version ${h.version}.`;
 }
