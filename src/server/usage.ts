@@ -9,6 +9,7 @@ import {
 } from './mekousage.js';
 import { openGapCounts } from './mekogaps.js';
 import { readSavedReplySync } from './savedreply.js';
+import type { KiroTurn } from './kiro.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -18,7 +19,11 @@ export function totalTokens(u: TokenUsage): number {
 }
 
 export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return { input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite, messages: a.messages + b.messages };
+  const credits = (a.credits ?? 0) + (b.credits ?? 0);
+  return {
+    input: a.input + b.input, output: a.output + b.output, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite,
+    messages: a.messages + b.messages, ...(credits ? { credits } : {}),
+  };
 }
 
 const CHUNK = 1024 * 1024;
@@ -286,14 +291,20 @@ interface SumRow {
   cache_read: number | null;
   cache_write: number | null;
   messages: number;
+  credits: number | null;
 }
 
 const SUMS = `COALESCE(SUM(input), 0) AS input, COALESCE(SUM(output), 0) AS output,
-  COALESCE(SUM(cache_read), 0) AS cache_read, COALESCE(SUM(cache_write), 0) AS cache_write, COUNT(*) AS messages`;
+  COALESCE(SUM(cache_read), 0) AS cache_read, COALESCE(SUM(cache_write), 0) AS cache_write, COUNT(*) AS messages,
+  COALESCE(SUM(credits), 0) AS credits`;
 
 function toUsage(r: SumRow | undefined): TokenUsage {
   if (!r) return { ...ZERO_USAGE };
-  return { input: r.input ?? 0, output: r.output ?? 0, cacheRead: r.cache_read ?? 0, cacheWrite: r.cache_write ?? 0, messages: r.messages };
+  return {
+    input: r.input ?? 0, output: r.output ?? 0, cacheRead: r.cache_read ?? 0, cacheWrite: r.cache_write ?? 0, messages: r.messages,
+    // Only Kiro's turns bill credits: Claude Code's usage leaves the field out.
+    ...(r.credits ? { credits: r.credits } : {}),
+  };
 }
 
 interface CostRow {
@@ -308,6 +319,9 @@ interface CostRow {
 
 const COST_SUMS = `u.model AS model, SUM(u.input) AS input, SUM(u.output) AS output, SUM(u.cache_read) AS cache_read,
   SUM(u.cache_write) AS cache_write, SUM(u.cache_write_1h) AS cache_write_1h, COUNT(*) AS messages`;
+
+/** Rows priced from their tokens: Claude Code's responses. Kiro's turns carry the credits it billed instead. */
+const PRICED = 'u.credits IS NULL';
 
 /** API-price cost of per-model sums. */
 function toCost(rows: CostRow[]): UsageCost {
@@ -363,7 +377,7 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
     }))
     .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
   const cost = toCost(all<CostRow>(db,
-    `SELECT ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.project_id = ? GROUP BY u.model`, projectId));
+    `SELECT ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.project_id = ? AND ${PRICED} GROUP BY u.model`, projectId));
 
   const daily = dailyUsage(db, days, now, projectId);
   return {
@@ -383,8 +397,8 @@ function dailyUsage(db: Db, days: number, now: number, projectId?: string): Dail
     d.setDate(start.getDate() + i);
     buckets.set(localDay(d.getTime()), { ...ZERO_USAGE });
   }
-  const rows = all<{ at: number; input: number; output: number; cache_read: number; cache_write: number }>(db,
-    `SELECT u.at, u.input, u.output, u.cache_read, u.cache_write FROM usage_messages u JOIN sessions s ON s.id = u.session_id
+  const rows = all<{ at: number; input: number; output: number; cache_read: number; cache_write: number; credits: number | null }>(db,
+    `SELECT u.at, u.input, u.output, u.cache_read, u.cache_write, u.credits FROM usage_messages u JOIN sessions s ON s.id = u.session_id
      WHERE u.at >= ?${projectId ? ' AND s.project_id = ?' : ''}`, ...(projectId ? [start.getTime(), projectId] : [start.getTime()]));
   for (const r of rows) {
     const b = buckets.get(localDay(r.at));
@@ -394,6 +408,7 @@ function dailyUsage(db: Db, days: number, now: number, projectId?: string): Dail
     b.cacheRead += r.cache_read;
     b.cacheWrite += r.cache_write;
     b.messages += 1;
+    if (r.credits) b.credits = (b.credits ?? 0) + r.credits;
   }
   return [...buckets].map(([day, usage]) => ({ day, usage }));
 }
@@ -420,7 +435,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
     'SELECT s.project_id, MAX(u.at) AS at FROM usage_messages u JOIN sessions s ON s.id = u.session_id GROUP BY s.project_id');
   const costRows = new Map<string, CostRow[]>();
   for (const r of all<CostRow & { project_id: string }>(db,
-    `SELECT s.project_id, ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id GROUP BY s.project_id, u.model`)) {
+    `SELECT s.project_id, ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE ${PRICED} GROUP BY s.project_id, u.model`)) {
     costRows.set(r.project_id, [...(costRows.get(r.project_id) ?? []), r]);
   }
   const meko = mekoBy(calls, (r) => r.project_id);
@@ -451,7 +466,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
   const sum = (f: (p: ProjectUsageSummary) => number) => byProject.reduce((n, p) => n + f(p), 0);
   return {
     total: toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages`)),
-    cost: toCost(all<CostRow>(db, `SELECT ${COST_SUMS} FROM usage_messages u GROUP BY u.model`)),
+    cost: toCost(all<CostRow>(db, `SELECT ${COST_SUMS} FROM usage_messages u WHERE ${PRICED} GROUP BY u.model`)),
     meko: summarizeMeko(calls),
     mekoFirstTurn: firstTurnMeko(db),
     mekoLearning: learningOf(learnRuns(db)),
@@ -462,6 +477,24 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
     byModel,
     daily: dailyUsage(db, days, now),
   };
+}
+
+/**
+ * Records a Kiro session's finished turns as usage rows (one per turn, keyed by the conversation and
+ * when the turn ended, so reading the file again changes nothing), with the credits Kiro billed.
+ * True when a turn was new.
+ */
+export function recordKiroTurns(db: Db, sessionId: string, conversation: string, turns: KiroTurn[]): boolean {
+  let added = 0;
+  tx(db, () => {
+    for (const t of turns) {
+      const r = run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, credits)
+        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, message_id) DO NOTHING`,
+      sessionId, `kiro:${conversation}:${t.key}`, t.model, t.at, t.input, t.output, t.cacheRead, t.cacheWrite, t.credits);
+      added += Number(r.changes);
+    }
+  });
+  return added > 0;
 }
 
 /** Where a session's main transcript is, preferring the path Claude reported. */

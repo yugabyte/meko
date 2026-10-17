@@ -9,6 +9,7 @@ import type {
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
 import { DEFAULT_BRANCH_PREFIX } from '../shared/branches.js';
+import { harnessOf } from '../shared/harnesses.js';
 
 /**
  * What new task sessions store in `sessions.kind` (see StoredKind): a name a release or page from
@@ -43,7 +44,12 @@ export interface SessionRow {
   project_id: string;
   slug: string;
   name: string;
+  /** The harness the session runs on (`HarnessId`; `harnessOf()` reads an unknown one as Claude Code). */
+  harness: string;
+  /** AgentK's key for the conversation: Claude Code's session id, and the Meko conversation's key for every harness. */
   claude_session_id: string;
+  /** The conversation id a harness picks itself (Kiro's session id), once AgentK has learned it; null for Claude Code. */
+  agent_session_id: string | null;
   transcript_path: string | null;
   branch: string;
   base_branch: string;
@@ -241,6 +247,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     id: r.id,
     projectId: r.project_id,
     name: r.name,
+    harness: harnessOf(r.harness),
     claudeSessionId: r.claude_session_id,
     branch: r.branch,
     baseBranch: r.base_branch,

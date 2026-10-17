@@ -2,8 +2,8 @@
 
 # AgentK Local
 
-The agentic coder for ADLC. AgentK Local lets you manage many projects and [Claude Code](https://claude.com/claude-code) sessions at 
-once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
+The agentic coder for ADLC. AgentK Local lets you manage many projects and [Claude Code](https://claude.com/claude-code) or
+[Kiro CLI](https://kiro.dev/cli/) sessions at once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
 datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
@@ -23,6 +23,9 @@ your phone.
   <tr>
     <td width="50%"><img src="docs/screenshots/changes-comments.png" alt="Changes panel with a draft review comment and a new comment on a range of lines"><br><sub><b>Review comments.</b> Comment on lines of the diff, then send them all to Claude at once.</sub></td>
     <td width="50%"><img src="docs/screenshots/mobile.png" alt="A session on a phone: app bar, one-line stage bar, the terminal, its key bar and a compose box"><br><sub><b>On a phone.</b> The terminal with a key bar and a compose box, and the stage gate in reach.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/kiro-session.png" alt="A session running on Kiro CLI in the Design stage: Kiro's terminal with the design it wrote and its open questions, the markdown design in the design panel waiting for approval, and the footer showing the credits Kiro billed"><br><sub><b>Sessions on Kiro.</b> The same stages, gates and design review with Kiro CLI as the agent; the footer shows the credits it billed.</sub></td>
   </tr>
 </table>
 
@@ -125,7 +128,7 @@ your phone can connect.
   the author's new commits and sums up what changed.
 - **Ask AgentK in plain words:** type an instruction into **Ask AgentK** (`⌘K`), such as "start a
   design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
-  AgentK asks Claude Code (one quick call with no tools) and offers what to do: start a task at
+  AgentK asks the default agent (one quick call with no tools) and offers what to do: start a task at
   Explore, Design or Code with a prompt, go to a session, move one to another stage, or open its PR.
   Nothing runs until you pick it, a single "go to" included, and you can reply to refine it.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp
@@ -141,6 +144,16 @@ your phone can connect.
   in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
   `agent-k-local attach <session>` (`Ctrl+\` detaches).
+- **Claude Code or Kiro, per session.** New sessions start on the default agent (Settings →
+  General), or pick **Agent** under **Advanced** in New session once [Kiro CLI](https://kiro.dev/cli/)
+  2.32 or later is installed and signed in (`kiro-cli login`). A Kiro session runs as `agentk`, an
+  agent AgentK builds from your default Kiro agent (Meko's, after **Set up Kiro with this Meko**)
+  with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
+  and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod
+  (answering Claude's questions in AgentK, prompts sent mid-turn) and plan limits. Kiro writes its
+  designs as markdown, AgentK types its prompts into its terminal, and since Kiro says nothing while
+  it waits for a permission answer, the session shows as working until you answer in the terminal
+  (or turn on **Let Kiro run any tool**).
 - **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
   another and that screen offers **Move to this screen**; it moves there by itself once the first
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
@@ -207,7 +220,8 @@ your phone can connect.
   send it to AgentK or dismiss it, and Merge & Close waits until you decide. Your own reviews
   always go to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
-  subagents included, with its cost at API list prices. **Usage** in the left panel adds it up across every project, closed ones
+  subagents included, with its cost at API list prices; Kiro sessions count the credits Kiro billed,
+  beside the cost and never added to it. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn

@@ -50,7 +50,7 @@ function SendKey({ term, k, disabled }: { term: SessionTerminal; k: { key: BarKe
  * in the ▾ row) wait above the box and go with the message. The terminal font size is in the session sheet.
  */
 /** `mekoTo`: the datapack Upload to Meko sends held files to, or null when there's none (Meko off, or no datapack). */
-export function TermKeys({ term, sessionId, disabled, mekoTo }: { term: SessionTerminal; sessionId: string; disabled: boolean; mekoTo: string | null }) {
+export function TermKeys({ term, sessionId, agent, disabled, mekoTo }: { term: SessionTerminal; sessionId: string; agent: string; disabled: boolean; mekoTo: string | null }) {
   const [text, setText] = useState(() => readDraft(sessionId));
   /** The row of more keys (Ctrl, Esc, Shift+Tab…) is open. */
   const [more, setMore] = useState(false);
@@ -167,8 +167,8 @@ export function TermKeys({ term, sessionId, disabled, mekoTo }: { term: SessionT
           {/* A phone has no paste or drop of files into the terminal: pick them instead. */}
           <button
             className="key"
-            title="Attach an image or file for Claude"
-            aria-label="Attach an image or file for Claude"
+            title={`Attach an image or file for ${agent}`}
+            aria-label={`Attach an image or file for ${agent}`}
             disabled={disabled}
             onPointerDown={keepFocus}
             onMouseDown={keepFocus}
@@ -212,8 +212,8 @@ export function TermKeys({ term, sessionId, disabled, mekoTo }: { term: SessionT
           // Its draft is kept in sessionStorage, so an update's reload doesn't wait on it (reload.ts).
           data-reload-safe=""
           rows={1}
-          placeholder={disabled ? 'Resume the session to message Claude' : 'Message Claude…'}
-          aria-label="Message Claude"
+          placeholder={disabled ? `Resume the session to message ${agent}` : `Message ${agent}…`}
+          aria-label={`Message ${agent}`}
           value={text}
           disabled={disabled}
           enterKeyHint="enter"
@@ -257,8 +257,8 @@ export function TermKeys({ term, sessionId, disabled, mekoTo }: { term: SessionT
         <button
           type="submit"
           className="compose-send"
-          aria-label="Send to Claude"
-          title="Send to Claude"
+          aria-label={`Send to ${agent}`}
+          title={`Send to ${agent}`}
           disabled={!canSend}
           onPointerDown={keepFocus}
           onMouseDown={keepFocus}

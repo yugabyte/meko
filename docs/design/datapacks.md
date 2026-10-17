@@ -173,7 +173,16 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   on the old one. The tab also says whether Claude Code's sessions reach this Meko (the same
 >   list as the banner, below), and when they don't, **Set up Claude Code with this Meko** runs Meko's
 >   setup package as the installer does (without blocking the server; its output goes to the log).
->   New sessions pick that up; running ones keep what they started with.
+>   New sessions pick that up; running ones keep what they started with. With Kiro available, a
+>   **Kiro** row says whether Kiro's sessions reach this Meko (`MekoStatus.kiro`, `mekokiro.ts`: a
+>   `meko…` server in `~/.kiro/settings/mcp.json` at this URL, sending an `Authorization` header,
+>   that the agent Kiro sessions are built from loads (`includeMcpJson`); capture hooks aren't checked),
+>   and **Set up Kiro with this Meko** runs the same package with `--client kiro`. That writes Meko's
+>   MCP server, skill, steering and capture hooks for Kiro, and makes its `meko-default` agent Kiro's
+>   default, which AgentK's `agentk` agent is then built from, so Kiro sessions get Meko's tools and
+>   capture with the session's `MEKO_AGENT_ID` (`kiro:<slug>-<hash>`) and `MEKO_DATAPACK_ID`, as
+>   Claude's plugin does; its capture hooks are left out of `agentk` while `capture_transcripts` is
+>   off, as Claude's sessions run without the plugin then. AgentK writes no Meko config for Kiro itself.
 > - **Claude Code on AgentK's Meko:** Claude Code keeps its own copy of the Meko server and token
 >   in two places: its settings' `env` (`MEKO_MCP_URL`, unset meaning Meko Cloud, and
 >   `MEKO_API_KEY`), which the Meko hooks read, and the user-scope `meko` MCP server in

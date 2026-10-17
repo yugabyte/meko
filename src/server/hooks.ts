@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { Server as NetServer } from 'node:net';
 import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -34,11 +34,21 @@ export function socketId(path: string): string | null {
   }
 }
 
-/** What a guard hook prints for Claude Code; null lets the tool call go ahead. */
-export type GuardDecision = Record<string, unknown> | null;
+/**
+ * What a guard hook prints: JSON for Claude Code, plain text (the reason) for a harness that denies
+ * by exit code (Kiro's guard script); null lets the tool call go ahead.
+ */
+export type GuardDecision = Record<string, unknown> | string | null;
 
-/** What the SessionStart context hook prints for Claude Code; null adds nothing. */
-export type HookContext = Record<string, unknown> | null;
+/** What the context hook prints: JSON for Claude Code's SessionStart, plain text for Kiro's agentSpawn; null adds nothing. */
+export type HookContext = Record<string, unknown> | string | null;
+
+/** Answers a guard or context request: JSON, plain text, or 204 for nothing. */
+function answer(res: ServerResponse, v: Record<string, unknown> | string | null): void {
+  if (typeof v === 'string' && v) res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }).end(v);
+  else if (v && typeof v === 'object') res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(v));
+  else res.writeHead(204).end();
+}
 
 /** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
 export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/held', '/mod/ask', '/mod/ask/done', '/mod/questions', '/mod/learn', '/mod/learn/start', '/mod/meko', '/mod/turn'];
@@ -50,10 +60,11 @@ export interface ModReply {
 }
 
 /**
- * Receives Claude Code hook events on a unix socket (mode 0600). Hooks never
+ * Receives the hook events of every session's agent (Claude Code, Kiro) on a unix socket (mode 0600). Hooks never
  * touch the network port. Each request carries the session's hook token.
  * `/hook` events are answered at once and handled afterwards; `/guard` and `/context`
- * requests wait for the answer, which is returned as JSON (204 when there is none).
+ * requests wait for the answer: JSON for Claude Code, plain text for a harness whose hook prints
+ * what it gets (Kiro's guard reason and context), 204 when there is none.
  * The `/mod/*` routes are AgentK's mod in Claude: `onMod` answers them, and may hold a
  * `/mod/poll` open (its signal aborts when the mod's connection closes).
  *
@@ -112,8 +123,7 @@ export function startHookServer(
         } catch {
           /* malformed payload: no decision */
         }
-        if (decision) res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(decision));
-        else res.writeHead(204).end();
+        answer(res, decision);
         return;
       }
       if (req.url === '/context') {
@@ -123,11 +133,8 @@ export function startHookServer(
         } catch {
           /* malformed payload: no context */
         }
-        const answer = token && payload ? onContext(token, payload).catch((): HookContext => null) : Promise.resolve(null);
-        void answer.then((ctx) => {
-          if (ctx) res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(ctx));
-          else res.writeHead(204).end();
-        });
+        const context = token && payload ? onContext(token, payload).catch((): HookContext => null) : Promise.resolve(null);
+        void context.then((ctx) => answer(res, ctx));
         return;
       }
       res.writeHead(204).end();

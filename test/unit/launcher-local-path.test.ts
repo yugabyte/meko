@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { hooksSettingsPath, shq, transcriptPathFor, writeHookFiles, writeLauncher } from '../../src/server/claude.js';
+import { claudeLauncher, hooksSettingsPath, transcriptPathFor, writeHookFiles } from '../../src/server/claude.js';
+import { shq, writeLauncher } from '../../src/server/launcher.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
 
@@ -41,11 +42,11 @@ describe('paths Claude is started with, for a home it reaches by another spellin
     chmodSync(fake, 0o755);
     const worktree = join(view.from, 'ak', 'worktrees', 'repo.1a2b3c4d', 'wt-1');
     mkdirSync(worktree.replace(view.from, view.to), { recursive: true });
-    const script = writeLauncher(paths, {
+    const script = writeLauncher(paths, claudeLauncher(paths, {
       sessionId: 'demo--x', worktree, claudeCommand: fake, claudeSessionId: 'c0ffee', resume: true, name: 'x', planMode: false,
       addDirs: [join(paths.designs, 'demo--x')], pluginDirs: [join(paths.run, 'mod', 'agentk'), '/elsewhere/plugin'],
       appendSystemPrompt: '', prompt: null, env: {},
-    });
+    }));
     execFileSync('sh', [script], { env: { ...process.env, HOME: root }, stdio: 'ignore' });
     const local = (p: string) => p.replace(view.from, view.to);
     expect(readFileSync(out + '.pwd', 'utf8')).toBe(local(worktree));

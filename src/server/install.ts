@@ -24,6 +24,7 @@ import { SessionHost } from './hostclient.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
+import { removeKiroAgent } from './kiro.js';
 
 // Linux names from `stat -f -c %T`; macOS names from `mount`.
 const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs', 'afpfs', 'webdav', 'macfuse', 'osxfuse']);
@@ -578,7 +579,7 @@ export async function runUninstall(args: string[]): Promise<void> {
   }
   const { ask, close } = makePrompter(!values['non-interactive']);
   try {
-    say('This stops AgentK Local and ends every running Claude session it hosts.');
+    say('This stops AgentK Local and ends every running session it hosts (Claude Code or Kiro).');
     if (purge) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
     const wt = tildify(paths.worktrees);
     if (deleteWork) {
@@ -609,6 +610,8 @@ export async function runUninstall(args: string[]): Promise<void> {
     } catch {
       // not installed there
     }
+    // The Kiro agent AgentK wrote is its own: Kiro sessions ran as it.
+    removeKiroAgent();
     if (purge) {
       const db = dbPath(paths, loadConfig(paths));
       const kept = purgeHome(paths, deleteWork);

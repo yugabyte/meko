@@ -4,6 +4,7 @@ import { parse, stringify } from 'smol-toml';
 import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
+import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -29,6 +30,14 @@ export interface Config {
    * the terminal.
    */
   claude: { command: string; mod: boolean };
+  /** default: the harness new sessions start on (`claude` or `kiro`) unless the New session dialog picks another. */
+  agents: { default: HarnessId };
+  /**
+   * Kiro CLI (src/server/harness/kiro.ts). command: how it's run. enabled: offer it for new sessions when
+   * `<command> --version` answers. trustTools: Kiro sessions start with every tool trusted (`--trust-tools=*`,
+   * from a session's next launch or resume), so Kiro runs any tool without asking.
+   */
+  kiro: { command: string; enabled: boolean; trustTools: boolean };
   /**
    * idlePerRepo: worktrees each repo keeps for the next session, build outputs and all (0 to 20; 0 removes them).
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
@@ -63,6 +72,8 @@ export const DEFAULT_CONFIG: Config = {
   meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
   state: { dbPath: '' },
   claude: { command: 'claude', mod: true },
+  agents: { default: DEFAULT_HARNESS },
+  kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '' },
   pr: { resolveConflicts: true },
@@ -112,6 +123,10 @@ function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   // Older versions wrote every default, so a Meko URL equal to the default was never chosen:
   // leave it unset so MEKO_MCP_URL or Claude Code's settings can still name the server.
   if (cfg.meko.url === DEFAULT_MEKO_URL) cfg.meko.url = '';
+  if (!isHarnessId(cfg.agents.default)) {
+    warn(`config.toml: agents.default should be one of ${HARNESS_IDS.join(', ')}; using ${DEFAULT_HARNESS}`);
+    cfg.agents.default = DEFAULT_HARNESS;
+  }
   return cfg;
 }
 

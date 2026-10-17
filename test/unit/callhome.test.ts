@@ -328,7 +328,7 @@ describe('the usage stats report', () => {
     expect(r.totals).toEqual({
       projects: { current: 2, deleted: 1, withDatapack: 1, sharedDatapacks: 1, repos: 1 },
       sessions: {
-        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1, 'review-pr': 0 },
+        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1, 'review-pr': 0 }, byHarness: { claude: 4, kiro: 0 },
         openByStage: { explore: 1, design: 0, code: 0, pr: 0, review: 1, merge: 0, done: 0, 'reviewing-pr': 0 },
       },
       shipped: { mergedPrs: 2, directPushes: 2, directCommits: 2, prCommits: 3, prAdditions: 100, prDeletions: 20 },
@@ -344,6 +344,18 @@ describe('the usage stats report', () => {
     });
     expect(r.totals.shipped).toMatchObject({ mergedPrs: overview.mergedPrs, directPushes: overview.directPushes, directCommits: overview.directCommits });
     expect(r).toMatchObject({ schema: 1, installId: INSTALL_ID, sentAt: '2026-09-28T12:00:00.000Z', install: INSTALL });
+  });
+
+  it("counts sessions by harness, and Kiro's turns and the credits they billed on their day, apart from tokens", () => {
+    const db = seeded();
+    run(db, `UPDATE sessions SET harness = 'kiro' WHERE id = 's1'`);
+    run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, credits)
+             VALUES ('s1', 'kiro:c:1', NULL, 'auto', ?, 0, 0, 0, 0, 0.25)`, at('2026-09-27T17:00:00Z'));
+    const r = report(db);
+    expect(r.totals.sessions.byHarness).toEqual({ claude: 3, kiro: 1 });
+    expect(r.days.find((d) => d.day === '2026-09-27')!.kiro).toEqual({ sessionsCreated: 1, turns: 1, credits: 0.25 });
+    expect(r.days.find((d) => d.day === '2026-09-26')!.kiro).toBeUndefined();
+    expect(r.totals.tokens).not.toHaveProperty('credits');
   });
 
   it('counts Meko use, all time and on the day of each call and search at start', () => {

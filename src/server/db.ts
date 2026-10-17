@@ -592,6 +592,15 @@ const MIGRATIONS: string[] = [
     WHERE NOT json_valid(settings_json) OR json_type(settings_json, '$.reviewer') IS NULL;
   INSERT OR REPLACE INTO kv(key, value) VALUES ('held-reviews-since', CAST(CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS TEXT));
   `,
+  // 37: sessions on other coding agents (src/shared/harnesses.ts). harness: the one a session runs
+  // on, Claude Code for every session before this. agent_session_id: the conversation id a harness
+  // picks itself (Kiro's), learned after it starts, for Resume. usage_messages.credits: what Kiro
+  // billed for a turn (NULL for Claude Code's responses, which are priced from their tokens).
+  `
+  ALTER TABLE sessions ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude';
+  ALTER TABLE sessions ADD COLUMN agent_session_id TEXT;
+  ALTER TABLE usage_messages ADD COLUMN credits REAL;
+  `,
 ];
 
 export function openDb(path: string): Db {

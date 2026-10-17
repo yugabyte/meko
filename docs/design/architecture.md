@@ -122,7 +122,9 @@ per move with its reason.
 in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no
 name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 
-**Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file.
+**Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file
+(a Kiro session as the `agentk` agent, whose inline hooks run the same scripts; its events are
+mapped onto Claude Code's by its adapter: see [Agents](harnesses.md)).
 The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 `Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
 which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or

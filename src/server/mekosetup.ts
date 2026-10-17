@@ -222,15 +222,18 @@ export function matchesIntegrity(data: Buffer, integrity: string): boolean {
   });
 }
 
+/** The coding agents Meko's setup package sets up (its `--client`). */
+export type MekoSetupClient = 'claude-code' | 'kiro';
+
 /**
- * Downloads, verifies and runs Meko's setup for Claude Code. The API key goes in the
+ * Downloads, verifies and runs Meko's setup for Claude Code (or `client`). The API key goes in the
  * environment (the package reads MEKO_API_KEY), never on the command line where `ps` shows it.
  * Returns the exit code. Its own output goes straight to the terminal, or line by line to `log`
  * when given (the server has no terminal).
  */
 export async function runMekoSetup(
   pkg: MekoSetupPackage,
-  opts: { url: string; apiKey: string; fetchImpl?: Fetch; node?: string; log?: (line: string) => void },
+  opts: { url: string; apiKey: string; client?: MekoSetupClient; fetchImpl?: Fetch; node?: string; log?: (line: string) => void },
 ): Promise<number> {
   const res = await (opts.fetchImpl ?? fetch)(pkg.tarball, { signal: AbortSignal.timeout(120_000) });
   if (!res.ok) throw new Error(`downloading ${MEKO_SETUP_PACKAGE} ${pkg.version} failed (${res.status})`);
@@ -243,7 +246,7 @@ export async function runMekoSetup(
     if (untar.status !== 0) throw new Error(`couldn't unpack ${MEKO_SETUP_PACKAGE} ${pkg.version}`);
     return await new Promise<number>((resolve, reject) => {
       const log = opts.log;
-      const child = spawn(opts.node ?? process.execPath, [join(dir, 'package', 'bin', 'create-meko-setup.mjs'), '--client', 'claude-code', '--url', opts.url, '--yes'], {
+      const child = spawn(opts.node ?? process.execPath, [join(dir, 'package', 'bin', 'create-meko-setup.mjs'), '--client', opts.client ?? 'claude-code', '--url', opts.url, '--yes'], {
         stdio: ['ignore', log ? 'pipe' : 'inherit', log ? 'pipe' : 'inherit'],
         env: { ...process.env, MEKO_API_KEY: opts.apiKey },
         timeout: 10 * 60_000,
@@ -268,9 +271,9 @@ export async function runMekoSetup(
   }
 }
 
-/** The command to set up Meko for Claude Code by hand, against the server the key belongs to. */
-export function manualMekoSetup(url: string): string {
-  return `npx ${MEKO_SETUP_PACKAGE} --client claude-code --url ${url}`;
+/** The command to set up Meko for Claude Code (or `client`) by hand, against the server the key belongs to. */
+export function manualMekoSetup(url: string, client: MekoSetupClient = 'claude-code'): string {
+  return `npx ${MEKO_SETUP_PACKAGE} --client ${client} --url ${url}`;
 }
 
 export class MekoSetupError extends Error {}

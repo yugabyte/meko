@@ -4,6 +4,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { harnessOf, type HarnessId } from '../shared/harnesses.js';
 import type { MekoDatapack, SearchResult } from '../shared/types.js';
 
 export interface MekoCreds {
@@ -21,14 +22,18 @@ export interface MekoDatapackRow extends MekoDatapack {
 /** Agent id of AgentK's own Meko calls: its service conversation, a project's conversation and search. */
 export const AGENTK_AGENT_ID = 'agent-k-local';
 
+/** The client part of a session's agent id, by its harness (Meko's `<client>:<project>` convention). */
+const AGENT_ID_CLIENTS: Record<HarnessId, string> = { claude: 'claude_code', kiro: 'kiro' };
+
 /**
- * Agent id of a session's Meko calls, capture and datapack pin: its slug, with a short hash of
- * its id since a slug is only unique within its project. It doesn't name the project: Meko reads
- * memories across agents within a datapack, so the id only says which session wrote one, and
- * every session of the project sees what the others saved.
+ * Agent id of a session's Meko calls, capture and datapack pin: its harness's client name and its
+ * slug, with a short hash of its id since a slug is only unique within its project. It doesn't name
+ * the project: Meko reads memories across agents within a datapack, so the id only says which
+ * session wrote one, and every session of the project sees what the others saved.
  */
-export function sessionAgentId(session: { id: string; slug: string }): string {
-  return `claude_code:${session.slug}-${createHash('sha256').update(session.id).digest('hex').slice(0, 8)}`;
+export function sessionAgentId(session: { id: string; slug: string; harness?: string }): string {
+  const client = AGENT_ID_CLIENTS[harnessOf(session.harness)];
+  return `${client}:${session.slug}-${createHash('sha256').update(session.id).digest('hex').slice(0, 8)}`;
 }
 
 /**

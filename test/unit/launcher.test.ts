@@ -3,9 +3,9 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, st
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  claudeVersion, hooksSettingsPath, loginShellCommand, modDirPath, shq, versionAtLeast, writeHookFiles, writeLauncher,
-  writeModFiles, type LaunchSpec,
+  claudeLauncher, claudeVersion, hooksSettingsPath, modDirPath, versionAtLeast, writeHookFiles, writeModFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
+import { loginShellCommand, shq, writeLauncher } from '../../src/server/launcher.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { paneName } from '../../src/server/hostclient.js';
 import { tempDir } from '../helpers.js';
@@ -75,7 +75,7 @@ describe('writeLauncher (run through the login shell)', () => {
     writeFileSync(fake, `#!/bin/sh
 for a in "$@"; do printf '%s\\0' "$a"; done > ${shq(out + '.args')}
 printf '%s' "$PATH" > ${shq(out + '.path')}
-for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECKPOINT_INTERVAL-unset}" "\${AK_HOME-unset}" "\${CLAUDECODE-unset}" "\${AK_TRICKY-unset}"; do printf '%s\\0' "$v"; done > ${shq(out + '.env')}
+for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECKPOINT_INTERVAL-unset}" "\${AK_HOME-unset}" "\${CLAUDECODE-unset}" "\${KIRO_SESSION_ID-unset}" "\${AK_TRICKY-unset}"; do printf '%s\\0' "$v"; done > ${shq(out + '.env')}
 `);
     chmodSync(fake, 0o755);
     const worktree = join(home, "it's a \"worktree\" $HOME `x`");
@@ -90,8 +90,9 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
   }
 
   function run(s: LaunchSpec): { args: string[]; env: string[] } {
-    const script = writeLauncher(paths, s);
-    execFileSync('sh', [script], { env: { ...process.env, HOME: home, AK_HOME: '/live/install', CLAUDECODE: '1' }, stdio: 'ignore' });
+    const script = writeLauncher(paths, claudeLauncher(paths, s));
+    // Started from inside Claude Code or Kiro: neither's markers reach the session.
+    execFileSync('sh', [script], { env: { ...process.env, HOME: home, AK_HOME: '/live/install', CLAUDECODE: '1', KIRO_SESSION_ID: 'k-1' }, stdio: 'ignore' });
     const split = (f: string) => readFileSync(f, 'utf8').split('\0').slice(0, -1);
     return { args: split(out + '.args'), env: split(out + '.env') };
   }
@@ -103,7 +104,7 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
       '--settings', join(paths.run, 'hooks.json'), '--session-id', 'c0ffee', '--name', 'Fix "it" now',
       '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--append-system-prompt', s.appendSystemPrompt, '--', s.prompt,
     ]);
-    expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
+    expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
     // ~/.local/bin is where the installer puts Claude Code and gh, even when the profile leaves it out.
     expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
   });
