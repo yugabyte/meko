@@ -143,12 +143,14 @@ AgentK's mod reports the same windows after each turn (`session.measure`), whate
 All sessions share one account, so reports are merged per window: a window that has reset is
 ignored, a later window replaces an earlier one, and a report missing a window keeps the last one.
 Within a window, what counts is whether the reading is new: the server keeps each session's last
-reading (in memory, dropped when its Claude ends). A reading that changed since that session's
-last one is new data and replaces the window even when lower, since an early reset by Anthropic
-keeps the reset time and only lowers the use. A repeat changes nothing, so an idle session
-re-running its status line with an old reading can't pull the number back. A session's first
-reading only raises the number, since it may be old; after a server restart, an early reset shows
-once a session reads a changed number. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,
+reading of each window (a report without a window keeps the last one of it). A reading that rose
+since that session's last one, or fell by more than 10 points, is new data and replaces the window
+even when lower, since an early reset by Anthropic keeps the reset time and only lowers the use. A
+smaller fall is taken for two status line runs that reached the server out of order (each is sent
+in the background), so it changes nothing; a smaller reset shows with the session's next reading.
+A repeat changes nothing, so an idle session re-running its status line with an old reading can't
+pull the number back. A session's first reading only raises the number, since it may be old.
+The reading and each session's last one are kept in the `kv` table (`plan_limits`, `plan_limits_seen`; a session's is dropped once its windows reset), so they hold across a restart, and the rail shows each window with a bar, its reset time and how old the reading is,
 turning amber at 80% and red at 95%. A window disappears once its reset time passes. The numbers
 only move when a session gets a reply, so the rail says when they were last reported.
 

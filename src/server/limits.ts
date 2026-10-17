@@ -2,6 +2,15 @@ import type { LimitWindow, PlanLimits } from '../shared/types.js';
 import { kvGet, kvSet, type Db } from './db.js';
 
 const KV_KEY = 'plan_limits';
+/** Each session's last reading of each window, so a server restart doesn't turn repeats into first readings. */
+const SEEN_KEY = 'plan_limits_seen';
+/**
+ * How far below a session's own last reading a reading must be to count as new: two status
+ * line runs can reach the server out of order (each is sent in the background), and the older
+ * one is at most a reply's use lower. An early reset drops the use by more; a smaller drop
+ * shows with the session's next reading, which is higher than this one.
+ */
+const DRIFT = 10;
 /** An unchanged reading is re-saved and re-broadcast at most this often, so "as of" stays close. */
 const QUIET_MS = 60_000;
 
@@ -52,9 +61,8 @@ const sameWindow = (a: LimitWindow | null, b: LimitWindow | null) =>
 
 /**
  * The better of two readings of one window: the later window (the earlier one has reset or is
- * a stale report), and within the same window the higher use, since use only grows until reset.
- * `fresh` (`b` is new data, see `PlanLimitsStore`) lets a lower reading of the same window win:
- * an early reset by Anthropic keeps the reset time and only lowers the use.
+ * a stale report), and within the same window the higher use, unless `b` is `fresh` (new data,
+ * see `PlanLimitsStore`): an early reset by Anthropic keeps the reset time and only lowers the use.
  */
 function newerWindow(a: LimitWindow | null, b: LimitWindow | null, fresh = false): LimitWindow | null {
   if (!a || !b) return a ?? b;
@@ -62,27 +70,32 @@ function newerWindow(a: LimitWindow | null, b: LimitWindow | null, fresh = false
   return fresh || b.usedPercent > a.usedPercent ? b : a;
 }
 
+type Seen = Record<string, Pick<PlanLimits, 'fiveHour' | 'sevenDay'>>;
+
 /**
  * The account's plan limits. Every session reports the same account, but an idle session can
  * re-run its status line with an old reading, or one without a window, so reports are merged
- * per window instead of replacing each other. A reading of a window that changed since the
- * same session's last one is new data and replaces that window, even when lower; one that
- * didn't changes nothing, and a session's first (since the server started or its Claude did)
- * only raises it, since it may be old. Kept in the kv table so they show again after a
- * restart, until they reset.
+ * per window instead of replacing each other. Each session's last reading of each window tells
+ * new data from a repeat: a reading that rose since it, or fell by more than `DRIFT`, is new
+ * and replaces the window even when lower; one that didn't change changes nothing; and a
+ * session's first only raises it, since it may be old. Both are kept in the kv table so they
+ * hold across a restart, until they reset.
  */
 export class PlanLimitsStore {
   private last: PlanLimits | null = null;
   private savedAt = 0;
-  /** Each session's last reading, to tell new data from a repeat. */
-  private seen = new Map<string, PlanLimits>();
+  private seen: Seen = {};
 
   constructor(private db: Db, private changed: () => void) {
-    try {
-      this.last = JSON.parse(kvGet(db, KV_KEY) ?? 'null') as PlanLimits | null;
-    } catch {
-      this.last = null;
-    }
+    const read = <T>(key: string, empty: T): T => {
+      try {
+        return (JSON.parse(kvGet(db, key) ?? 'null') as T | null) ?? empty;
+      } catch {
+        return empty;
+      }
+    };
+    this.last = read<PlanLimits | null>(KV_KEY, null);
+    this.seen = read<Seen>(SEEN_KEY, {});
   }
 
   /** Takes a session's status line input (see `take`). */
@@ -95,11 +108,6 @@ export class PlanLimitsStore {
     this.take(session, parseMeasuredLimits(rateLimits, now), now);
   }
 
-  /** A session's Claude ended: its next reading is a first one again. */
-  forget(session: string): void {
-    this.seen.delete(session);
-  }
-
   /**
    * Takes a reading; saves and broadcasts when the merged numbers moved, or when a reading
    * confirms them and a minute has passed (so "as of" stays close).
@@ -107,15 +115,16 @@ export class PlanLimitsStore {
   private take(session: string, reading: PlanLimits | null, now: number): void {
     const reported = currentLimits(reading, now);
     if (!reported) return; // nothing, or only windows that have already reset
-    const before = this.seen.get(session);
-    this.seen.set(session, reported);
+    const before = this.seen[session];
     const prev = currentLimits(this.last, now);
     const merged = (k: 'fiveHour' | 'sevenDay') => {
       const was = before?.[k];
       const read = reported[k];
-      if (was && read && sameWindow(was, read)) return prev?.[k] ?? read; // the session's repeat says nothing new
-      return newerWindow(prev?.[k] ?? null, read, !!was && !!read);
+      if (!was || !read || was.resetsAt !== read.resetsAt) return newerWindow(prev?.[k] ?? null, read);
+      if (read.usedPercent === was.usedPercent) return prev?.[k] ?? read; // the session's repeat says nothing new
+      return newerWindow(prev?.[k] ?? null, read, read.usedPercent > was.usedPercent || was.usedPercent - read.usedPercent > DRIFT);
     };
+    this.remember(session, reported, now);
     const next: PlanLimits = { fiveHour: merged('fiveHour'), sevenDay: merged('sevenDay'), updatedAt: now };
     const moved = !prev || !sameWindow(prev.fiveHour, next.fiveHour) || !sameWindow(prev.sevenDay, next.sevenDay);
     if (!moved) {
@@ -127,6 +136,19 @@ export class PlanLimitsStore {
     this.savedAt = now;
     kvSet(this.db, KV_KEY, JSON.stringify(next));
     this.changed();
+  }
+
+  /** Keeps a session's reading of each window it has (a report without one keeps the last). */
+  private remember(session: string, reported: PlanLimits, now: number): void {
+    const before = this.seen[session];
+    const fiveHour = reported.fiveHour ?? before?.fiveHour ?? null;
+    const sevenDay = reported.sevenDay ?? before?.sevenDay ?? null;
+    if (before && sameWindow(before.fiveHour, fiveHour) && sameWindow(before.sevenDay, sevenDay)) return;
+    const seen: Seen = { [session]: { fiveHour, sevenDay } };
+    // Readings of sessions whose windows have all reset are no use any more.
+    for (const [id, l] of Object.entries(this.seen)) if (id !== session && currentLimits({ ...l, updatedAt: 0 }, now)) seen[id] = l;
+    this.seen = seen;
+    kvSet(this.db, SEEN_KEY, JSON.stringify(seen));
   }
 
   current(now = Date.now()): PlanLimits | null {

@@ -137,29 +137,27 @@ describe('PlanLimitsStore', () => {
     store.report('busy', input({ used_percentage: 50, resets_at: s + 3600 }, null), NOW + 400_000);
     expect(changes).toBe(3);
     expect(new PlanLimitsStore(db, () => undefined).current(NOW + 400_000)).toMatchObject({ fiveHour: { usedPercent: 2 }, sevenDay: { usedPercent: 20 } });
-    db.close();
-  });
 
-  it('takes a lower use in the same window once a session reads it, as after an early reset', () => {
-    const db = openDb(':memory:');
-    const store = new PlanLimitsStore(db, () => undefined);
-    const week = (pct: number) => [{ kind: 'seven_day', percentUsed: pct, resetsAt: new Date(NOW + 86_400_000).toISOString() }];
-    const weekly = (t: number) => store.current(t)?.sevenDay?.usedPercent;
-    store.reportMeasured('idle', week(100), NOW);
-    store.report('busy', input(undefined, { used_percentage: 99, resets_at: NOW / 1000 + 86_400 }), NOW + 1000);
-    // A session's first reading only raises the number: it may be an old one.
-    expect(weekly(NOW + 1000)).toBe(100);
-    // The use dropped with the reset time unchanged: Anthropic reset the week early.
-    store.report('busy', input(undefined, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 }), NOW + 2000);
-    expect(weekly(NOW + 2000)).toBe(5);
-    // The idle session repeating what it read before the reset changes nothing.
-    store.reportMeasured('idle', week(100), NOW + 3000);
-    expect(weekly(NOW + 3000)).toBe(5);
-    // After its Claude restarts, the idle session's first reading counts as a first one again.
-    store.forget('idle');
-    store.reportMeasured('idle', week(4), NOW + 4000);
-    store.reportMeasured('idle', week(6), NOW + 5000);
-    expect(weekly(NOW + 5000)).toBe(6);
+    // Anthropic resets the week early: the use drops and the reset time stays.
+    const week = (pct: number) => [{ kind: 'seven_day', percentUsed: pct, resetsAt: new Date((s + 86_400) * 1000).toISOString() }];
+    const weekly = (st: PlanLimitsStore) => st.current(NOW + 500_000)?.sevenDay?.usedPercent;
+    store.reportMeasured('idle', week(100), NOW + 410_000);
+    expect(weekly(store)).toBe(100);
+    store.reportMeasured('busy', week(5), NOW + 420_000);
+    expect(weekly(store)).toBe(5);
+    // The idle session repeating its old reading changes nothing, even after a report without that window.
+    store.report('idle', input({ used_percentage: 2, resets_at: s + 7200 }, null), NOW + 430_000);
+    store.reportMeasured('idle', week(100), NOW + 440_000);
+    expect(weekly(store)).toBe(5);
+    // Two runs that arrive out of order: the older one, a little lower, is old news.
+    store.reportMeasured('busy', week(7), NOW + 450_000);
+    store.reportMeasured('busy', week(6), NOW + 451_000);
+    expect(weekly(store)).toBe(7);
+    // After a restart, the idle session's repeat still changes nothing, and a new session's first reading only raises.
+    const again = new PlanLimitsStore(db, () => undefined);
+    again.reportMeasured('idle', week(100), NOW + 460_000);
+    again.reportMeasured('new', week(3), NOW + 470_000);
+    expect(weekly(again)).toBe(7);
     db.close();
   });
 });
