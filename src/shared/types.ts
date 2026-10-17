@@ -1408,8 +1408,6 @@ export interface Settings {
   defaultHarness: HarnessId;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
-  /** `[kiro] command`: how Kiro CLI is run. */
-  kiroCommand: string;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
   meko: MekoSettings;
@@ -2216,8 +2214,7 @@ export type TermServerMessage =
 //                                                           '' goes back to the host name; callHomeEnabled and
 //                                                           resolveConflicts are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
-//                                                           Ask AgentK that name none start on Claude Code); kiroCommand
-//                                                           is a command name or path)
+//                                                           Ask AgentK that name none start on Claude Code))
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,

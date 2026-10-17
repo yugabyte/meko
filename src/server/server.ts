@@ -544,7 +544,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     resolveConflicts: core.config.pr.resolveConflicts,
     defaultHarness: core.config.agents.default,
     kiroEnabled: core.config.kiro.enabled,
-    kiroCommand: core.config.kiro.command,
     kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
   });
@@ -577,11 +576,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
-    // eslint-disable-next-line no-control-regex
-    if (b.kiroCommand !== undefined && (typeof b.kiroCommand !== 'string' || !b.kiroCommand.trim() || b.kiroCommand.length > 512 || /[\u0000-\u001f\u007f]/.test(b.kiroCommand))) {
-      throw new HttpError(400, "Kiro's command must be a command name or a path, on one line.");
-    }
-    const kiroBefore = { enabled: core.config.kiro.enabled, command: core.config.kiro.command };
+    const kiroBefore = { enabled: core.config.kiro.enabled };
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
@@ -598,12 +593,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
-      if (b.kiroCommand !== undefined) c.kiro.command = b.kiroCommand.trim();
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
-    // Kiro turned on or run another way: its version and agent file follow, in the background.
-    if (core.config.kiro.enabled && (!kiroBefore.enabled || kiroBefore.command !== core.config.kiro.command)) {
+    // Kiro turned on: its version and agent file follow, in the background.
+    if (core.config.kiro.enabled && !kiroBefore.enabled) {
       const kiro = core.harnesses.of('kiro');
       void kiro.version(core.config, true).then(() => kiro.prepare(core.paths, core.config)).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
     }
