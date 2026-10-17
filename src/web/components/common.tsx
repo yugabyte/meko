@@ -22,6 +22,16 @@ export function HarnessLogo({ harness }: { harness: string }) {
   return <img className="harness-logo" src={HARNESS_LOGOS[id]} alt="" width={18} height={14} />;
 }
 
+/** An agent's logo, then its name: the buttons of the agent pickers and of Settings › Harness's bar. */
+export function AgentLabel({ harness }: { harness: HarnessId }) {
+  return (
+    <>
+      <HarnessLogo harness={harness} />
+      {HARNESS_CAPS[harness].label}
+    </>
+  );
+}
+
 /**
  * Pick one of the available agents (New session's Agent, Settings' Default agent): each one's
  * logo, then its name. Callers show it only while two or more are available.
@@ -51,8 +61,7 @@ export function AgentPicker({
           className={cx(value === id && 'on')}
           onClick={() => onChange(id)}
         >
-          <HarnessLogo harness={id} />
-          {HARNESS_CAPS[id].label}
+          <AgentLabel harness={id} />
         </button>
       ))}
     </div>

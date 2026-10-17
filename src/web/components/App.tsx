@@ -197,7 +197,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     [state, opened, created],
   );
   // Logos beside session names in the tabs and the rail, while open sessions run on more than one
-  // harness and the setting (Settings › General) is on.
+  // harness and the setting (Settings › Harness) is on.
   const twoAgents = useMemo(() => harnessLogos(projects), [projects]);
   const logos = harnessLogosToggle.use() && twoAgents;
   useEffect(() => {
@@ -528,7 +528,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
           onMekoSettings={() => setModal({ kind: 'settings', tab: 'meko' })}
-          onSettings={() => setModal({ kind: 'settings', tab: 'general' })}
+          onSettings={() => setModal({ kind: 'settings', tab: 'harness' })}
           onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })}
         />
         {route.view === 'usage' ? (
@@ -643,7 +643,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
       )}
       {modal.kind === 'whats-new' && <WhatsNewDialog from={modal.from} to={modal.to} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'palette' && (

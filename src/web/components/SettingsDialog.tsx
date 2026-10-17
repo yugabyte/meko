@@ -1,18 +1,19 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
-import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
+import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { harnessLogosToggle } from '../toggle';
-import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { AgentLabel, AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
-export type SettingsTab = 'general' | 'meko' | 'account' | 'updates';
+export type SettingsTab = 'general' | 'harness' | 'meko' | 'account' | 'updates';
 type Tab = SettingsTab;
 
-const TAB_LABEL: Record<Tab, string> = { general: 'General', meko: 'Meko', account: 'Account', updates: 'Updates' };
+const TABS: Tab[] = ['general', 'harness', 'meko', 'account', 'updates'];
+const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', meko: 'Meko', account: 'Account', updates: 'Updates' };
 
 export function SettingsDialog({
   auth,
@@ -20,6 +21,7 @@ export function SettingsDialog({
   meko,
   harnesses,
   twoAgents,
+  serverName,
   initialTab = 'general',
   onClose,
   onWhatsNew,
@@ -31,6 +33,8 @@ export function SettingsDialog({
   harnesses: HarnessStatus[];
   /** Open sessions run on more than one agent (`harnessLogos()`), so the logos would show. */
   twoAgents: boolean;
+  /** `AppState.serverName`, for what to do when Claude Code's update fails. */
+  serverName: string;
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
@@ -45,7 +49,7 @@ export function SettingsDialog({
       onClose={onClose}
       aside={
         <div className="seg" role="tablist">
-          {(['general', 'meko', 'account', 'updates'] as Tab[]).map((t) => (
+          {TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={cx(tab === t && 'on')} onClick={() => setTab(t)}>
               {TAB_LABEL[t]}
             </button>
@@ -56,10 +60,10 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
-          {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
-          <GeneralTab harnesses={harnesses} />
+          <GeneralTab />
         </div>
       )}
+      {tab === 'harness' && <HarnessTab harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} />}
       {tab === 'meko' && (
         <MekoTab
           status={meko}
@@ -93,7 +97,7 @@ function RailSessionsSetting() {
 }
 
 /**
- * Saved in this browser as it's ticked, like the setting above. Offered while a second agent is
+ * Saved in this browser as it's ticked, apart from Settings › Harness's Save. Offered while a second agent is
  * turned on, or while open sessions run on two agents (the logos' own condition): turning an agent
  * off leaves its open sessions, and their logos, in place.
  */
@@ -110,24 +114,8 @@ function HarnessLogosSetting() {
   );
 }
 
-/** What Settings says about a harness's CLI: its version, or why it isn't offered. */
-function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
-  if (!h?.enabled) return 'Off.';
-  if (h.version === null) {
-    if (!h.checked) return <Busy label="Looking for it" />;
-    const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
-    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml, then check again.`;
-  }
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
-  return `Version ${h.version}.`;
-}
-
-function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
+function GeneralTab() {
   const [s, setS] = useState<Settings | null>(null);
-  const [updating, setUpdating] = useState(false);
-  const [checking, setChecking] = useState(false);
-  // What Check again answered, until the next state push replaces it.
-  const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
@@ -137,8 +125,6 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => setRechecked(null), [harnesses]);
 
   useEffect(() => {
     api
@@ -155,36 +141,6 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
-  const agents = rechecked ?? harnesses;
-  const claude = agents.find((h) => h.id === 'claude');
-  const kiro = agents.find((h) => h.id === 'kiro');
-  const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
-  // Turning off the default agent moves the default to another available one, if there is one.
-  const defaultWithout = (off: HarnessId): HarnessId =>
-    s.defaultHarness !== off ? s.defaultHarness : (agents.find((h) => h.id !== off && h.available)?.id ?? s.defaultHarness);
-  // Under an agent that's on: reads every agent's version again (nothing polls them).
-  const checkAgain = (h: HarnessStatus | undefined) =>
-    h?.enabled && (
-      <div className="settings-actions">
-        <button
-          type="button"
-          id={`set-${h.id}-check`}
-          className="btn small"
-          disabled={checking}
-          onClick={() => {
-            setChecking(true);
-            setError(null);
-            api
-              .refreshHarnesses()
-              .then(setRechecked)
-              .catch((err) => setError(errorMessage(err)))
-              .finally(() => setChecking(false));
-          }}
-        >
-          {checking ? <Busy label="Checking" /> : 'Check again'}
-        </button>
-      </div>
-    );
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -207,10 +163,6 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
         idleWorktreesPerRepo: clampIdle(),
         idleWorktreeDays: clampIdleDays(),
         resolveConflicts: s.resolveConflicts,
-        defaultHarness: s.defaultHarness,
-        claudeEnabled: s.claudeEnabled,
-        kiroEnabled: s.kiroEnabled,
-        kiroTrustTools: s.kiroTrustTools,
       });
       setS(next);
       setRoots(next.reposRoots);
@@ -323,81 +275,6 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
-      {defaultAgent && (
-        <div className="field">
-          <span className="label" id="set-agent-label">
-            Default agent
-          </span>
-          <AgentPicker
-            idPrefix="set-agent"
-            agents={defaultAgent.agents}
-            value={defaultAgent.value}
-            onChange={(id) => setS({ ...s, defaultHarness: id })}
-            labelledBy="set-agent-label"
-          />
-          <span className="hint">
-            New sessions and Ask AgentK run on it (on another available agent while it isn't); the New session dialog can pick another. A
-            session keeps the agent it started on.
-          </span>
-        </div>
-      )}
-      <div className="field">
-        <label className="check">
-          <input
-            id="set-claude"
-            type="checkbox"
-            checked={s.claudeEnabled}
-            onChange={(e) => setS({ ...s, claudeEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : defaultWithout('claude') })}
-          />
-          <span>Offer Claude Code for new sessions</span>
-        </label>
-        <span className="hint">{harnessNote('claude', claude)}</span>
-        {checkAgain(claude)}
-      </div>
-      <div className="field">
-        <label className="check">
-          <input
-            id="set-kiro"
-            type="checkbox"
-            checked={s.kiroEnabled}
-            onChange={(e) => setS({ ...s, kiroEnabled: e.target.checked, defaultHarness: e.target.checked ? s.defaultHarness : defaultWithout('kiro') })}
-          />
-          <span>Offer Kiro for new sessions</span>
-        </label>
-        <span className="hint">{harnessNote('kiro', kiro)}</span>
-        {checkAgain(kiro)}
-      </div>
-      {s.kiroEnabled && (
-        <>
-          <div className="field">
-            <label className="check">
-              <input id="set-kiro-trust" type="checkbox" checked={s.kiroTrustTools} onChange={(e) => setS({ ...s, kiroTrustTools: e.target.checked })} />
-              <span>Let Kiro run any tool without asking</span>
-            </label>
-            <span className="hint">
-              Kiro says nothing to AgentK while it waits for a permission answer, so the session shows as working until you answer in its terminal. On,
-              Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Takes effect when a session next starts or
-              resumes.
-            </span>
-          </div>
-          {kiro?.available && (
-            <div className="settings-actions">
-              <button
-                type="button"
-                id="set-kiro-update"
-                className="btn small"
-                disabled={updating || kiro.updating}
-                onClick={() => {
-                  setUpdating(true);
-                  api.updateHarness('kiro').catch((err) => setError(errorMessage(err))).finally(() => setUpdating(false));
-                }}
-              >
-                {updating || kiro.updating ? <Busy label="Updating Kiro" /> : 'Update Kiro'}
-              </button>
-            </div>
-          )}
-        </>
-      )}
       <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
         <input
           id="set-server-name"
@@ -453,6 +330,248 @@ function TerminalColors() {
         ))}
       </select>
     </Field>
+  );
+}
+
+/** What Settings says about a harness's CLI: its version, or why it isn't offered. */
+function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
+  if (!h?.enabled) return 'Off.';
+  if (h.version === null) {
+    if (!h.checked) return <Busy label="Looking for it" />;
+    const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
+    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml, then check again.`;
+  }
+  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
+  return `Version ${h.version}.`;
+}
+
+/** Which `Settings` field turns each agent on: its Offer … for new sessions box. */
+const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'kiroEnabled'> = { claude: 'claudeEnabled', kiro: 'kiroEnabled' };
+
+/**
+ * The coding agents: the default agent and the logos, then a bar that picks one agent, with that
+ * agent's settings under it. Edits are kept while the bar switches, and one Save sends them all.
+ */
+function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessStatus[]; twoAgents: boolean; serverName: string }) {
+  const [s, setS] = useState<Settings | null>(null);
+  // The agent the bar shows: the default agent when the tab opens, so a new default doesn't move it.
+  const [shown, setShown] = useState<HarnessId>('claude');
+  const [checking, setChecking] = useState(false);
+  // The agent whose update this page started, until its request answers (each agent updates on its own).
+  const [updating, setUpdating] = useState<HarnessId | null>(null);
+  // What Claude Code's update came to, while `[claude] mod` is off and so its banners don't show.
+  const [claudeOutcome, setClaudeOutcome] = useState<{ ok: boolean; text: string } | null>(null);
+  // What Check again answered, until the next state push replaces it.
+  const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setRechecked(null), [harnesses]);
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((x) => {
+        setS(x);
+        setShown(x.defaultHarness);
+      })
+      .catch((e) => setError(errorMessage(e)));
+  }, []);
+
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+
+  const agents = rechecked ?? harnesses;
+  const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
+  // Turning off the default agent moves the default to another available one, if there is one.
+  const enable = (id: HarnessId, on: boolean) =>
+    setS({
+      ...s,
+      [ENABLED_KEY[id]]: on,
+      defaultHarness: on || s.defaultHarness !== id ? s.defaultHarness : (agents.find((h) => h.id !== id && h.available)?.id ?? s.defaultHarness),
+    });
+  // Reads every agent's version again (nothing polls them).
+  const checkAgain = () => {
+    setChecking(true);
+    setError(null);
+    api
+      .refreshHarnesses()
+      .then(setRechecked)
+      .catch((err) => setError(errorMessage(err)))
+      .finally(() => setChecking(false));
+  };
+  // A failed `claude update` is an outcome, not an error: it comes back in `lastUpdate`.
+  const update = (id: HarnessId) => {
+    setUpdating(id);
+    setError(null);
+    if (id === 'claude') setClaudeOutcome(null);
+    const run =
+      id === 'claude'
+        ? api.updateClaude().then((c) => setClaudeOutcome(c.modEnabled ? null : claudeUpdateText(c, serverName)))
+        : api.updateHarness(id);
+    run.catch((err) => setError(errorMessage(err))).finally(() => setUpdating(null));
+  };
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      setS(
+        await api.saveSettings({
+          defaultHarness: s.defaultHarness,
+          claudeEnabled: s.claudeEnabled,
+          kiroEnabled: s.kiroEnabled,
+          kiroTrustTools: s.kiroTrustTools,
+        }),
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="stack" onSubmit={save}>
+      {defaultAgent && (
+        <div className="field">
+          <span className="label" id="set-agent-label">
+            Default agent
+          </span>
+          <AgentPicker
+            idPrefix="set-agent"
+            agents={defaultAgent.agents}
+            value={defaultAgent.value}
+            onChange={(id) => setS({ ...s, defaultHarness: id })}
+            labelledBy="set-agent-label"
+          />
+          <span className="hint">
+            New sessions and Ask AgentK run on it (on another available agent while it isn't); the New session dialog can pick another. A
+            session keeps the agent it started on.
+          </span>
+        </div>
+      )}
+      {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
+      <div className="harness-pick">
+        <HarnessBar value={shown} onChange={setShown} />
+        <AgentSettings
+          id={shown}
+          s={s}
+          status={agents.find((h) => h.id === shown)}
+          checking={checking}
+          updating={updating === shown}
+          outcome={shown === 'claude' ? claudeOutcome : null}
+          onEnable={(on) => enable(shown, on)}
+          onChange={(patch) => setS({ ...s, ...patch })}
+          onCheck={checkAgain}
+          onUpdate={() => update(shown)}
+        />
+      </div>
+      <ErrorText error={error} />
+      <div className="settings-actions">
+        <button className="btn primary" disabled={busy}>
+          {busy ? <Busy label="Saving" /> : 'Save'}
+        </button>
+        {saved && <span className="muted small">Saved</span>}
+      </div>
+    </form>
+  );
+}
+
+/** Settings › Harness's bar: every agent, on or off, so one that's off can be turned on. */
+export function HarnessBar({ value, onChange }: { value: HarnessId; onChange: (id: HarnessId) => void }) {
+  return (
+    <div className="seg agents" role="tablist" aria-label="Agent">
+      {HARNESS_IDS.map((id) => (
+        <button
+          key={id}
+          id={`set-harness-tab-${id}`}
+          type="button"
+          role="tab"
+          aria-selected={value === id}
+          aria-controls="set-harness-panel"
+          className={cx(value === id && 'on')}
+          onClick={() => onChange(id)}
+        >
+          <AgentLabel harness={id} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** One agent's settings, under the bar: whether it's offered, its version, and its own extras. */
+export function AgentSettings({
+  id,
+  s,
+  status,
+  checking,
+  updating,
+  outcome = null,
+  onEnable,
+  onChange,
+  onCheck,
+  onUpdate,
+}: {
+  id: HarnessId;
+  s: Settings;
+  status: HarnessStatus | undefined;
+  /** Check again is reading the versions. */
+  checking: boolean;
+  /** This page started this agent's update, and it hasn't answered yet. */
+  updating: boolean;
+  /** What this page's update of it came to, when nothing else says so (Claude Code with the mod off). */
+  outcome?: { ok: boolean; text: string } | null;
+  onEnable: (on: boolean) => void;
+  onChange: (patch: Partial<Settings>) => void;
+  onCheck: () => void;
+  onUpdate: () => void;
+}) {
+  const label = HARNESS_CAPS[id].label;
+  const enabled = s[ENABLED_KEY[id]];
+  return (
+    <div className="stack harness-panel" id="set-harness-panel" role="tabpanel" aria-labelledby={`set-harness-tab-${id}`}>
+      <div className="field">
+        <label className="check">
+          <input id={`set-${id}`} type="checkbox" checked={enabled} onChange={(e) => onEnable(e.target.checked)} />
+          <span>Offer {label} for new sessions</span>
+        </label>
+        <span className="hint">{harnessNote(id, status)}</span>
+        {status?.enabled && (
+          <div className="settings-actions">
+            <button type="button" id={`set-${id}-check`} className="btn small" disabled={checking} onClick={onCheck}>
+              {checking ? <Busy label="Checking" /> : 'Check again'}
+            </button>
+            {enabled && status.available && (
+              <button type="button" id={`set-${id}-update`} className="btn small" disabled={updating || status.updating} onClick={onUpdate}>
+                {updating || status.updating ? <Busy label={`Updating ${label}`} /> : `Update ${label}`}
+              </button>
+            )}
+          </div>
+        )}
+        {outcome && (
+          <span id={`set-${id}-outcome`} className={outcome.ok ? 'ok-text' : 'error-text'} role="status">
+            {outcome.text}
+          </span>
+        )}
+      </div>
+      {id === 'kiro' && enabled && (
+        <div className="field">
+          <label className="check">
+            <input id="set-kiro-trust" type="checkbox" checked={s.kiroTrustTools} onChange={(e) => onChange({ kiroTrustTools: e.target.checked })} />
+            <span>Let Kiro run any tool without asking</span>
+          </label>
+          <span className="hint">
+            Kiro says nothing to AgentK while it waits for a permission answer, so the session shows as working until you answer in its terminal. On,
+            Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Takes effect when a session next starts or
+            resumes.
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 

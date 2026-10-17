@@ -147,10 +147,11 @@ your phone can connect.
   running when you disconnect or the server updates. You can still attach from iTerm:
   `agent-k-local attach <session>` (`Ctrl+\` detaches).
 - **Claude Code or Kiro, per session.** New sessions start on the default agent (Settings →
-  General), or pick **Agent** under **Advanced** in New session once both Claude Code and
+  Harness), or pick **Agent** under **Advanced** in New session once both Claude Code and
   [Kiro CLI](https://kiro.dev/cli/) 2.32 or later are installed and signed in (`kiro-cli login`).
-  Either one alone is enough: with only Kiro, every session runs on Kiro, and Settings can stop
-  offering an agent you have installed but don't want (**Offer Claude Code / Kiro for new sessions**). A Kiro session runs as `agentk`, an
+  Either one alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness has a
+  bar that picks an agent and shows its settings, and can stop offering an agent you have installed
+  but don't want (**Offer Claude Code / Kiro for new sessions**). A Kiro session runs as `agentk`, an
   agent AgentK builds from your default Kiro agent (Meko's, after **Set up Kiro with this Meko**)
   with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
   and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod
@@ -159,7 +160,7 @@ your phone can connect.
   designs as markdown, AgentK types its prompts into its terminal, and since Kiro says nothing while
   it waits for a permission answer, the session shows as working until you answer in the terminal
   (or turn on **Let Kiro run any tool**). While your open sessions run on both, each session's tab
-  and row in the rail shows its agent's logo (turn that off in Settings › General).
+  and row in the rail shows its agent's logo (turn that off in Settings › Harness).
 - **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
   another and that screen offers **Move to this screen**; it moves there by itself once the first
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
