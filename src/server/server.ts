@@ -44,6 +44,28 @@ const ACTIONS: SessionAction[] = [
   'learn',
 ];
 const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
+/**
+ * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
+ * srcdoc iframe, which takes this policy on top of its own (design-frame.ts), and Artifacts run
+ * inline scripts and scripts from two CDNs. What it does stop: images from anywhere but here,
+ * data:, blob: and GitHub (a remote image in an outsider's review would tell its author who read
+ * it, and when), connections to other servers, plugins, a <base> or a form that points elsewhere,
+ * and framing. `host`: the page's Host, for its WebSockets (older Safari doesn't take 'self' for them).
+ */
+export function appCsp(host: string | undefined): string {
+  const ws = host && /^[A-Za-z0-9.:[\]-]+$/.test(host) ? ` wss://${host} ws://${host}` : '';
+  return [
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    `connect-src 'self'${ws}`,
+    "img-src 'self' data: blob: https://github.com https://*.githubusercontent.com",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  ].join('; ');
+}
+
 /** How long a closing server waits for a browser's socket to answer its close before dropping it. */
 export const SHUTDOWN_CLOSE_MS = 1000;
 
@@ -773,7 +795,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- web app ----
   if (opts.webDir) {
     // `/` is served by the not-found handler below too, so every page carries this server's version.
-    await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: false });
+    await app.register(fastifyStatic, {
+      root: opts.webDir, wildcard: false, index: false,
+      // /index.html asked for by name gets the page's policy too.
+      setHeaders: (res, path) => {
+        if (path.endsWith('.html')) res.header('Content-Security-Policy', appCsp(undefined));
+      },
+    });
     const indexHtml = stampVersion(readFileSync(join(opts.webDir, 'index.html'), 'utf8'), core.version);
     app.setNotFoundHandler((req, reply) => {
       const path = req.url.split('?')[0];
@@ -782,7 +810,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if ((req.method !== 'GET' && req.method !== 'HEAD') || path.startsWith('/api/') || path.startsWith('/ws/') || missingFile) {
         return reply.code(404).send({ error: 'Not found.' });
       }
-      return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml);
+      return reply.type('text/html').header('Cache-Control', 'no-cache').header('Content-Security-Policy', appCsp(req.headers.host)).send(indexHtml);
     });
   }
 

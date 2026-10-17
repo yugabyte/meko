@@ -630,6 +630,11 @@ export async function isFreshRepo(dir: string): Promise<boolean> {
 
 // ---- Review a PR ----
 
+/** GitHub's `owner/name` of <repo>'s remote <name> (`origin`), or null when it has none on GitHub. */
+export async function remoteRepo(repo: string, name: string): Promise<string | null> {
+  return githubRepo((await tryGit(repo, 'config', '--get', `remote.${name}.url`))?.trim() || null);
+}
+
 /**
  * The remote of <repo> that is GitHub's <ghRepo> (`owner/name`): `upstream` first (a fork whose
  * PRs are upstream), then `origin`. Null when neither is.

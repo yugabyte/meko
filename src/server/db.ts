@@ -1,5 +1,5 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type Db = DatabaseSync;
@@ -601,10 +601,28 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN agent_session_id TEXT;
   ALTER TABLE usage_messages ADD COLUMN credits REAL;
   `,
+  // 38: untrusted: 1 when the session works on a PR's head on a public repo (or one whose visibility
+  // gh couldn't read), so it runs without the repo's own config (headtrust.ts); 0 when that head is
+  // trusted or it's on its own branch; NULL until its first check, at its next launch.
+  `
+  ALTER TABLE sessions ADD COLUMN untrusted INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
+  if (path !== ':memory:') {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    // Owner-only whatever its folder is: it holds the login's password hash and TOTP secret.
+    // SQLite gives the -wal and -shm files the database's mode; ones made before this are fixed too.
+    closeSync(openSync(path, 'a', 0o600));
+    for (const f of [path, `${path}-wal`, `${path}-shm`]) {
+      try {
+        chmodSync(f, 0o600);
+      } catch {
+        /* not there yet */
+      }
+    }
+  }
   const db = new DatabaseSync(path);
   db.exec(`
     PRAGMA journal_mode = WAL;

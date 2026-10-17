@@ -9,6 +9,7 @@ import {
   AGENTK_AGENT, MIN_KIRO, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
   kiroSessionFile, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
 } from '../kiro.js';
+import { kiroWorkspaceConfig } from '../headtrust.js';
 import { shq } from '../launcher.js';
 import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
@@ -145,14 +146,22 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       refreshAgent(paths, cfg);
     },
     beforeLaunch: (paths, cfg) => refreshAgent(paths, cfg),
-    launcher: (paths, cfg, l) => ({
-      sessionId: l.row.id,
-      worktree: l.row.worktree_path,
-      command: cfg.kiro.command,
-      args: kiroArgs({ conversation: l.resume ? kiroConversation(l.row) : null, trustTools: cfg.kiro.trustTools, prompt: l.prompt }),
-      env: l.env,
-      unsetEnv: l.unsetEnv,
-    }),
+    launcher(paths, cfg, l) {
+      // Kiro has no flag to leave a workspace's agents and MCP servers out: refuse rather than run a PR's.
+      const own = l.untrusted ? kiroWorkspaceConfig(l.row.worktree_path, AGENTK_AGENT) : [];
+      if (own.length) {
+        throw new HttpError(400, `Kiro would use this PR's own ${own.join(' and ')} in place of AgentK's, and anyone can have written `
+          + "this PR's code. Review it on Claude Code instead, which can leave the repo's config out.");
+      }
+      return {
+        sessionId: l.row.id,
+        worktree: l.row.worktree_path,
+        command: cfg.kiro.command,
+        args: kiroArgs({ conversation: l.resume ? kiroConversation(l.row) : null, trustTools: cfg.kiro.trustTools, prompt: l.prompt }),
+        env: l.env,
+        unsetEnv: l.unsetEnv,
+      };
+    },
     normalize: normalizeKiro,
     // Kiro's guard script exits 2 with this on stderr.
     deny: (reason) => reason,

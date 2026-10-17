@@ -8,7 +8,7 @@ import {
   artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
   withDesignLine, type PrDesignRef,
 } from './design.js';
-import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
+import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, remoteRepo, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -1067,7 +1067,8 @@ export class Lifecycle {
       const linked = await github.prByNumber(cwd, row.pr_number, prRepoOf(row.pr_url)).catch(() => null);
       if (linked?.state === 'OPEN') return linked;
     }
-    return github.findPr(cwd, row.branch, row.created_at, anyOpen);
+    // Only a PR from where the branch is pushed: a fork's branch of the same name isn't this one's.
+    return github.findPr(cwd, row.branch, row.created_at, anyOpen, await remoteRepo(cwd, row.push_remote ?? 'origin'));
   }
 
   /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */

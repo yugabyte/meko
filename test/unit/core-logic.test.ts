@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -82,7 +82,16 @@ describe('auth', () => {
 });
 
 describe('config and db', () => {
-  it('round-trips config.toml with snake_case keys and keeps defaults', () => {
+  it('keeps the database owner-only, its WAL included, and fixes one made before', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    writeFileSync(file, '', { mode: 0o644 });
+    const db = openDb(file);
+    run(db, `INSERT INTO kv(key, value) VALUES ('k', 'v')`);
+    for (const f of [file, `${file}-wal`]) expect(statSync(f).mode & 0o777, f).toBe(0o600);
+    db.close();
+  });
+
+    it('round-trips config.toml with snake_case keys and keeps defaults', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.repos.roots = ['~/src', '~/code'];
@@ -527,6 +536,11 @@ function dropV37(db: ReturnType<typeof openDb>) {
   db.exec('ALTER TABLE usage_messages DROP COLUMN credits');
 }
 
+/** Undoes migration 38 (untrusted PR heads), for tests that rewind the schema. */
+function dropV38(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'untrusted');
+}
+
 function dropV36(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE held_reviews');
 }
@@ -656,10 +670,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 36 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 38 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37];
-  for (let v = 37; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38];
+  for (let v = 38; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
