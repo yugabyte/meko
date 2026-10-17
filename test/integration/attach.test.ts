@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { OpenPr, PrInfo, PrRef, PrStatus } from '../../src/server/github.js';
+import type { OpenPr, PrInfo, PrRef, PrStatus, RepoVisibility } from '../../src/server/github.js';
 
 // GitHub is mocked; git (with "GitHub" repos as local bare repos), the session host and the fake claude are real.
 const gh = vi.hoisted(() => ({
@@ -17,6 +17,8 @@ const gh = vi.hoisted(() => ({
   asked: [] as (string | null)[],
   /** How long findPr takes. */
   findDelay: 0,
+  /** Who can see each repo (`owner/name`); private when not set. */
+  visibility: new Map<string, RepoVisibility>(),
 }));
 
 vi.mock('../../src/server/github.js', async (orig) => {
@@ -44,6 +46,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
     issueText: async () => ({ title: '', body: '' }),
     viewerLogin: async () => 'me',
     botLogins: async () => [],
+    repoVisibility: async (_cwd: string, repo: string) => gh.visibility.get(repo) ?? 'private',
   };
 });
 
@@ -109,6 +112,7 @@ describe('sessions on an existing branch or an open PR (real session host + git,
 
   beforeEach(async () => {
     gh.info.clear();
+    gh.visibility.clear();
     gh.byBranch.clear();
     gh.byNumber.clear();
     gh.mine = [];

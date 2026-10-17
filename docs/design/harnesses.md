@@ -84,7 +84,11 @@ it. Meko's capture hooks (`kiro-handler.js`) are left out
 while `[meko] capture_transcripts` is off. The file is written only when it changes, at server start
 (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of its own), before every
 launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
-AgentK's, and `readKiroAgent` never takes it as a base.
+AgentK's, and `readKiroAgent` never takes it as a base. Kiro uses a workspace agent of the same
+name (`<worktree>/.kiro/agents/*.json` named `agentk`) over this one, and the agent loads a
+workspace's `.kiro/settings/mcp.json`, with no flag to skip either; so a session on a public repo's
+PR head ([Code from public repos](security.md#code-from-public-repos)) refuses to start on Kiro while
+its worktree has either (`kiroWorkspaceConfig()` in `headtrust.ts`, checked in the launcher).
 
 **Starting and resuming.** The first prompt is a positional argument, never after `--`: with
 `--agent`, kiro-cli 2.32 drops a prompt given after `--`; one starting with `-` gets a leading space

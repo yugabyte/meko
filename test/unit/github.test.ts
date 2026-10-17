@@ -28,6 +28,20 @@ describe('finding the PR a session opened', () => {
     expect(pickPr([{ ...pr(4, 'OPEN', '2026-05-01T09:00:00Z'), isCrossRepository: undefined }], since, true)).toBeNull();
   });
 
+  it("takes only a PR from where the branch is pushed, not a fork's branch of the same name", () => {
+    const at = (headRepo: string | null, isCrossRepository = false): PrRef => ({ ...pr(9, 'OPEN', '2026-09-01T12:30:00Z', isCrossRepository), headRepo });
+    // A stranger's fork reusing the branch's name after the session started, newer than the session's own PR.
+    const prs = [{ ...at('stranger/demo', true), number: 10, createdAt: '2026-09-01T13:00:00Z' }, at('acme/demo')];
+    expect(pickPr(prs, since, false, 'acme/demo')?.number).toBe(9);
+    expect(pickPr(prs, since, true, 'ACME/demo')?.number).toBe(9);
+    // A clone of the user's fork pushes there: its PR is from the fork.
+    expect(pickPr([at('me/demo', true)], since, false, 'me/demo')?.number).toBe(9);
+    // Not knowing where the branch is pushed (an SSH host alias), a fork's PR opened since counts, as the
+    // user's own from a clone of their fork would; an older one only from the base repo itself.
+    expect(pickPr([at('me/demo', true)], since)?.number).toBe(9);
+    expect(pickPr([{ ...at('me/demo', true), createdAt: '2026-05-01T09:00:00Z' }], since, true)).toBeNull();
+  });
+
   it('allows for a little clock skew', () => {
     expect(pickPr([pr(9, 'OPEN', '2026-09-01T11:59:30Z')], since)?.number).toBe(9);
     expect(pickPr([], since)).toBeNull();

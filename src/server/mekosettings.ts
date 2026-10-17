@@ -1,5 +1,5 @@
 import type { MekoSettings, MekoSettingsUpdate } from '../shared/types.js';
-import { DEFAULT_MEKO_URL, envMekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, envMekoWebUrl, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, type Config } from './config.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
 import { checkMeko, tryMekoToken, type TokenTry } from './meko.js';
@@ -91,6 +91,21 @@ function checkUrl(v: string, what: string): void {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new HttpError(400, `The ${what} must start with https:// or http://.`);
 }
 
+/** A URL's origin (scheme, host and port: never credentials), or null when it isn't one. */
+function originOf(url: string | null): string | null {
+  try {
+    return url ? new URL(url).origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a saved key already goes (the MCP server and the API), and Meko Cloud's servers. */
+function keyOrigins(cfg: Config): Set<string> {
+  return new Set([resolveMekoWithSource(cfg).url, resolveMekoApiUrl(cfg), DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL]
+    .map(originOf).filter((o): o is string => !!o));
+}
+
 /** The Meko settings the tab can change; all but `enabled` are strings. */
 const TEXT_KEYS = ['url', 'apiKey', 'webUrl', 'apiUrl'] as const;
 const MEKO_KEYS = ['enabled', ...TEXT_KEYS] as const;
@@ -149,6 +164,16 @@ export async function nextMekoConfig(
   if (!changed.length) return null;
   const before = resolveMeko(base);
   const after = resolveMeko(next);
+  // A saved key goes only where it already goes, or to Meko Cloud. Sending it to another server
+  // takes it typed again: otherwise anyone with the browser's login could point AgentK at their
+  // own server and read the key off the check (or the next invite sync). Checked with Meko off
+  // too, or a URL saved while off would count as one the key goes to once Meko is back on.
+  const key = resolveMekoWithSource(next);
+  if (!m.apiKey?.trim() && key.apiKey && key.apiKey === resolveMekoWithSource(base).apiKey) {
+    const known = keyOrigins(base);
+    const to = [key.url, resolveMekoApiUrl(next)].map(originOf).find((o) => o && !known.has(o));
+    if (to) throw new HttpError(400, `Enter the Meko API key again to use it with ${to}: AgentK sends a saved key only to a Meko server it already uses. Nothing was saved.`);
+  }
   const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
   if (reconnect && next.meko.enabled) {
     if (!after.apiKey) throw new HttpError(400, 'Enter a Meko API key.');

@@ -132,6 +132,11 @@ export interface SessionRow {
   push_remote: string | null;
   /** The branch on push_remote (the PR's head branch); NULL: the session's branch. */
   push_branch: string | null;
+  /**
+   * 1: it works on a PR's head on a public repo (or one gh couldn't read), so it runs without the
+   * repo's own config (headtrust.ts). 0: trusted. NULL: no PR head, or not checked yet (at every launch).
+   */
+  untrusted: number | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {

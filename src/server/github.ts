@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isRepoName, parsePrInput } from '../shared/github-refs.js';
 import type { CiState, MergeMethod } from '../shared/types.js';
+import { TRUSTED_ASSOCIATIONS } from './headtrust.js';
 
 const exec = promisify(execFile);
 
@@ -36,6 +37,8 @@ export interface PrRef {
   /** From a fork: `gh pr list --head` matches the branch name in any repo. */
   isCrossRepository?: boolean;
   baseRefName?: string;
+  /** `owner/name` of the repo the head branch is in, when gh says (findPr reads it). */
+  headRepo?: string | null;
 }
 
 /** Leeway for the host's clock being ahead of GitHub's. */
@@ -43,11 +46,15 @@ export const CLOCK_SKEW_MS = 60_000;
 
 /**
  * The PR for a branch that was opened at or after `since` (ms). Branch names can be reused,
- * so an older PR from the same branch is never taken for this one.
+ * so an older PR from the same branch is never taken for this one. `headRepo`: the `owner/name`
+ * the branch is pushed to (see pickPr).
  */
-export async function findPr(worktree: string, branch: string, since: number, anyOpen = false): Promise<PrRef | null> {
-  const out = await gh(worktree, 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,url,state,createdAt,isCrossRepository,baseRefName', '--limit', '20');
-  return pickPr(JSON.parse(out || '[]') as PrRef[], since, anyOpen);
+export async function findPr(worktree: string, branch: string, since: number, anyOpen = false, headRepo: string | null = null): Promise<PrRef | null> {
+  const out = await gh(worktree, 'pr', 'list', '--head', branch, '--state', 'all', '--json',
+    'number,url,state,createdAt,isCrossRepository,baseRefName,headRepository,headRepositoryOwner', '--limit', '20');
+  const prs = (JSON.parse(out || '[]') as (PrRef & HeadFields)[]).map(({ headRepository, headRepositoryOwner, ...p }) =>
+    ({ ...p, headRepo: headRepoOf({ headRepository, headRepositoryOwner }) }));
+  return pickPr(prs, since, anyOpen, headRepo);
 }
 
 /** `--repo <owner/name>` when <repo> is given, so gh reads that repo's PR rather than its default repo for the folder. */
@@ -59,12 +66,18 @@ export async function prByNumber(cwd: string, number: number, repo?: string | nu
 }
 
 /**
- * The newest PR opened since `since`, an open one first. With `anyOpen`, an older open PR from this
- * repo (not a fork's branch of the same name) counts too.
+ * The newest PR opened since `since`, an open one first. With `anyOpen`, an older open PR counts too.
+ * Only a PR whose head is in `headRepo` (the repo the branch is pushed to) is the branch's: anyone
+ * can open a PR from a fork's branch of the same name, and taking it would have AgentK follow and
+ * merge it. Without `headRepo` (a remote whose URL doesn't name its GitHub repo), any PR opened
+ * since counts, a fork's too (the user's own, from a clone of their fork), but an older one only
+ * from the base repo itself.
  */
-export function pickPr(prs: PrRef[], since: number, anyOpen = false): PrRef | null {
+export function pickPr(prs: PrRef[], since: number, anyOpen = false, headRepo: string | null = null): PrRef | null {
+  const ours = (p: PrRef) => !headRepo || p.headRepo?.toLowerCase() === headRepo.toLowerCase();
   const fresh = prs
-    .filter((p) => (anyOpen && p.state === 'OPEN' && p.isCrossRepository === false) || Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
+    .filter(ours)
+    .filter((p) => (anyOpen && p.state === 'OPEN' && (headRepo || p.isCrossRepository === false)) || Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return fresh.find((p) => p.state === 'OPEN') ?? fresh[0] ?? null;
 }
@@ -214,9 +227,6 @@ export function isLogin(author: Author | null, login: string): boolean {
   return a === login.toLowerCase().replace(/\[bot\]$/, '');
 }
 
-/** Associations of people with a role on the repo. Anyone else can comment on a public repo. */
-const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
-
 /**
  * Whether feedback from this author may be acted on: someone with a role on the repo, or the
  * AgentK reviewer (whose association is NONE). Bots are looked up separately (`botLogins`).
@@ -338,14 +348,27 @@ export interface IssueOrPr {
   title: string;
   body: string;
   author: string;
+  /** How the author relates to the repo (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …), when GitHub says. */
+  authorAssociation?: string;
   state: 'open' | 'closed' | 'merged';
+}
+
+export type RepoVisibility = 'public' | 'private' | 'internal';
+
+/** Who can see <repo> (`owner/name`) on GitHub. Throws when gh can't say. */
+export async function repoVisibility(cwd: string, repo: string): Promise<RepoVisibility> {
+  if (!isRepoName(repo)) throw new Error(`${repo} isn't a GitHub repo name.`);
+  const r = JSON.parse(await ghWithin(cwd, 20_000, 'api', `repos/${repo}`)) as { visibility?: unknown; private?: unknown };
+  if (r.visibility === 'public' || r.visibility === 'private' || r.visibility === 'internal') return r.visibility;
+  if (typeof r.private === 'boolean') return r.private ? 'private' : 'public';
+  throw new Error(`GitHub didn't say who can see ${repo}.`);
 }
 
 /** PR or issue <number> of <repo> (`owner/name`): GitHub numbers them together, so this says which. */
 export async function issueOrPr(cwd: string, repo: string, number: number): Promise<IssueOrPr> {
   const r = JSON.parse(await ghWithin(cwd, 20_000, 'api', `repos/${repo}/issues/${number}`)) as {
     number?: number; html_url?: string; title?: string | null; body?: string | null; state?: string;
-    user?: { login?: string } | null; pull_request?: { merged_at?: string | null } | null;
+    user?: { login?: string } | null; author_association?: string; pull_request?: { merged_at?: string | null } | null;
   };
   const pr = r.pull_request ?? null;
   return {
@@ -355,6 +378,7 @@ export async function issueOrPr(cwd: string, repo: string, number: number): Prom
     title: r.title ?? '',
     body: r.body ?? '',
     author: r.user?.login ?? '',
+    authorAssociation: r.author_association,
     state: r.state === 'open' ? 'open' : pr?.merged_at ? 'merged' : 'closed',
   };
 }
