@@ -887,6 +887,8 @@ export interface AppState {
   serverHost: string;
   /** The account's plan usage limits, or null when no session has reported them (API-key accounts never do). */
   limits: PlanLimits | null;
+  /** Kiro's plan allowance (`kiro-cli chat /usage`), or null until Kiro has been used in AgentK and read, or while it isn't available. */
+  kiroPlan: KiroPlan | null;
   /** Project datapacks shared with you that aren't a project here yet (not the ones put off with Later). */
   invites: DatapackInvite[];
   /** New sessions whose worktree couldn't be made, newest first, until dismissed (kept in memory: a restart forgets them). */
@@ -976,6 +978,26 @@ export interface PlanLimits {
   fiveHour: LimitWindow | null;
   sevenDay: LimitWindow | null;
   /** When a session last reported them. */
+  updatedAt: number;
+}
+
+/**
+ * Kiro's plan allowance: the account's credits this period, as `kiro-cli chat /usage` prints it
+ * (all Kiro use, in AgentK or not). Kiro calls it an estimate.
+ */
+export interface KiroPlan {
+  /** As Kiro names it, without "Kiro": "Free", "Pro". Null when it didn't say. */
+  plan: string | null;
+  /** Credits used this period, and how many the plan covers. */
+  used: number;
+  covered: number;
+  /** The day it resets (YYYY-MM-DD, as Kiro prints it); null when it didn't say. */
+  resetsOn: string | null;
+  /** Bonus credits (paid plans; the format is a best guess); null when Kiro printed no bonus line. */
+  bonus: { used: number; total: number; expires: string | null; line: string } | null;
+  /** Overage (paid plans; a best guess too): credits billed past the plan, and whether it's turned on. Null without an overage line. */
+  overage: { credits: number | null; enabled: boolean | null; line: string } | null;
+  /** When it was read, in ms since the epoch. */
   updatedAt: number;
 }
 

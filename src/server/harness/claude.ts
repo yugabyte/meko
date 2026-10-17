@@ -43,7 +43,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     launcher: (paths, cfg, l) => claudeLauncher(paths, {
       sessionId: l.row.id, worktree: l.row.worktree_path, claudeCommand: cfg.claude.command, claudeSessionId: l.row.claude_session_id,
       resume: l.resume, name: l.row.name, planMode: l.planMode, addDirs: l.addDirs, pluginDirs: l.pluginDirs,
-      appendSystemPrompt: l.systemPrompt, prompt: l.prompt, env: l.env, unsetEnv: l.unsetEnv,
+      appendSystemPrompt: l.systemPrompt, prompt: l.prompt, env: l.env, unsetEnv: l.unsetEnv, userSettingsOnly: l.untrusted,
     }),
     // Claude Code's hook shape is AgentK's event shape.
     normalize: (raw) => raw,

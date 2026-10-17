@@ -104,7 +104,7 @@ export function ProjectView({
   onMenu: () => void;
   /** Show the session tabs above the terminal (the wide layout): the rail doesn't list the sessions, or is hidden. */
   showTabs: boolean;
-  /** Show each session's harness logo in its tab: open sessions run on more than one harness. */
+  /** Show each session's harness logo in its tab: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
   onError: (msg: string) => void;
 }) {

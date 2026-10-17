@@ -22,7 +22,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     await env.cleanup();
   });
 
-  it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits, exit and Resume", async () => {
+  it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits and Kiro's plan, exit and Resume", async () => {
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
     // Built from Kiro's built-in default (exported with `agent create --from`), its upgrade bookkeeping left out.
     expect(agent).toMatchObject({ name: 'agentk', tools: ['*'], includeMcpJson: true, resources: ['file://AGENTS.md'] });
@@ -54,6 +54,11 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     const home = await env.core.projects.home(p.id);
     expect(home.usage.cost).toEqual({ usd: 0, unpricedMessages: 0 });
     expect(home.usage.total.credits).toBe(0.5);
+    // The first session on Kiro read Kiro's plan for the rail, and the session that run left was deleted.
+    const plan = await waitFor(() => env.core.state().kiroPlan, Boolean, 10000, "Kiro's plan");
+    expect(plan).toMatchObject({ plan: 'Free', used: 12.5, covered: 50, resetsOn: '2099-01-01' });
+    const [read] = lines(env, 'usage.jsonl');
+    await waitFor(() => lines(env, 'deleted.jsonl'), (d) => d.some((x: { cwd: string }) => x.cwd === read.cwd), 10000, "the plan read's session deleted");
 
     // Kiro fires no hook when it exits: reconcile finds the dead pane.
     await env.core.sessions.submit(s.id, 'exit');

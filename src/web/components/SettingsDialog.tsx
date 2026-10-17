@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
-import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
-import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
+import { harnessLogosToggle } from '../toggle';
+import { cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
+import { AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
 export type SettingsTab = 'general' | 'meko' | 'account' | 'updates';
@@ -17,6 +17,7 @@ export function SettingsDialog({
   update,
   meko,
   harnesses,
+  twoAgents,
   initialTab = 'general',
   onClose,
 }: {
@@ -25,6 +26,8 @@ export function SettingsDialog({
   meko: MekoStatus;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
   harnesses: HarnessStatus[];
+  /** Open sessions run on more than one agent (`harnessLogos()`), so the logos would show. */
+  twoAgents: boolean;
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
@@ -48,6 +51,7 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
+          {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
           <GeneralTab harnesses={harnesses} />
         </div>
       )}
@@ -73,6 +77,24 @@ function RailSessionsSetting() {
         <span>List sessions under their project in the projects pane</span>
       </label>
       <span className="hint">In place of the tabs above the terminal. Kept in this browser.</span>
+    </div>
+  );
+}
+
+/**
+ * Saved in this browser as it's ticked, like the setting above. Offered while a second agent is
+ * turned on, or while open sessions run on two agents (the logos' own condition): turning an agent
+ * off leaves its open sessions, and their logos, in place.
+ */
+function HarnessLogosSetting() {
+  const on = harnessLogosToggle.use();
+  return (
+    <div className="field">
+      <label className="check">
+        <input id="set-harness-logos" type="checkbox" checked={on} onChange={(e) => harnessLogosToggle.save(e.target.checked)} />
+        <span>Show each session's agent logo beside its name</span>
+      </label>
+      <span className="hint">While your open sessions run on more than one agent. The tooltip names the agent either way. Kept in this browser.</span>
     </div>
   );
 }
@@ -120,6 +142,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
 
   const agents = checked ?? harnesses;
   const kiro = agents.find((h) => h.id === 'kiro');
+  const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -256,31 +279,24 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
-      <div className="field">
-        <span className="label" id="set-agent-label">
-          Default agent
-        </span>
-        <div className="seg" role="radiogroup" aria-labelledby="set-agent-label">
-          {HARNESS_IDS.map((id: HarnessId) => (
-            <button
-              key={id}
-              id={`set-agent-${id}`}
-              type="button"
-              role="radio"
-              aria-checked={s.defaultHarness === id}
-              disabled={id !== 'claude' && s.defaultHarness !== id && !agents.find((h) => h.id === id)?.available}
-              className={cx(s.defaultHarness === id && 'on')}
-              onClick={() => setS({ ...s, defaultHarness: id })}
-            >
-              {HARNESS_CAPS[id].label}
-            </button>
-          ))}
+      {defaultAgent && (
+        <div className="field">
+          <span className="label" id="set-agent-label">
+            Default agent
+          </span>
+          <AgentPicker
+            idPrefix="set-agent"
+            agents={defaultAgent.agents}
+            value={defaultAgent.value}
+            onChange={(id) => setS({ ...s, defaultHarness: id })}
+            labelledBy="set-agent-label"
+          />
+          <span className="hint">
+            New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
+            session keeps the agent it started on.
+          </span>
         </div>
-        <span className="hint">
-          New sessions and Ask AgentK run on it (on Claude Code while it isn't available); the New session dialog can pick another. A
-          session keeps the agent it started on.
-        </span>
-      </div>
+      )}
       <div className="field">
         <label className="check">
           <input

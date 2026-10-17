@@ -346,6 +346,11 @@ export interface LaunchSpec {
   env: Record<string, string>;
   /** Variables the session must not inherit (from the session host's environment or the user's profile). */
   unsetEnv?: string[];
+  /**
+   * Load only the user's settings, not the repo's (`.claude/settings*.json`: hooks, permissions,
+   * env, status line, plugins) or its `.mcp.json` servers: for a PR head whose code isn't trusted.
+   */
+  userSettingsOnly?: boolean;
 }
 
 /**
@@ -355,6 +360,8 @@ export interface LaunchSpec {
  */
 export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   const args = ['--settings', claudePath(hooksSettingsPath(paths))];
+  // AgentK's --settings, its mod and the user's MCP servers still apply.
+  if (spec.userSettingsOnly) args.push('--setting-sources', 'user');
   if (spec.resume) {
     args.push('--resume', spec.claudeSessionId);
   } else {

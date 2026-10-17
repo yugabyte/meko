@@ -8,7 +8,7 @@ import {
   artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
   withDesignLine, type PrDesignRef,
 } from './design.js';
-import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, tryGit, uncommittedCount } from './git.js';
+import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, remoteRepo, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -1067,7 +1067,8 @@ export class Lifecycle {
       const linked = await github.prByNumber(cwd, row.pr_number, prRepoOf(row.pr_url)).catch(() => null);
       if (linked?.state === 'OPEN') return linked;
     }
-    return github.findPr(cwd, row.branch, row.created_at, anyOpen);
+    // Only a PR from where the branch is pushed: a fork's branch of the same name isn't this one's.
+    return github.findPr(cwd, row.branch, row.created_at, anyOpen, await remoteRepo(cwd, row.push_remote ?? 'origin'));
   }
 
   /** gh needs a directory in the repo; the worktree is gone (or another session's) once cleanup let go of it. */
@@ -1152,6 +1153,8 @@ export class Lifecycle {
       this.sessions.event(id, 'pr-again', `Back on PR #${pr.number}`, { url: pr.url });
     } else {
       this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0, conflict_head: null, conflict_fixes: 0 });
+      // A session on an existing branch now works on a PR's head: whether it's trusted, before its prompts.
+      await this.sessions.checkHead(id);
       dropOtherPrs(this.db, id, pr.number);
       // A review-held prompt still waiting names the old PR's reviews.
       const q = this.queue(id);
