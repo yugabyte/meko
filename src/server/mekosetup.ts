@@ -279,14 +279,15 @@ export function manualMekoSetup(url: string, client: MekoSetupClient = 'claude-c
 export class MekoSetupError extends Error {}
 
 /**
- * The install step: sets up Meko for Claude Code when something is missing, only after asking
- * (or with `installDeps`); the question names the package and version it will run. Throws
- * MekoSetupError, with the command to run by hand, when it's declined, can't ask, or doesn't finish.
+ * The install step: sets up Meko for Claude Code (or Kiro, `client`) when something is missing,
+ * only after asking (or with `installDeps`); the question names the package and version it will
+ * run. Throws MekoSetupError, with the command to run by hand, when it's declined, can't ask, or
+ * doesn't finish.
  */
-export async function ensureMekoInClaude(
-  o: { url: string; apiKey: string; canAsk: boolean; installDeps: boolean; noInstallDeps: boolean },
+export async function ensureMekoSetup(
+  o: { url: string; apiKey: string; canAsk: boolean; installDeps: boolean; noInstallDeps: boolean; client?: MekoSetupClient },
   d: {
-    /** What's wrong with Meko in Claude Code, one sentence each (mekoClaudeGaps, plus tokens that don't work). */
+    /** What's wrong with Meko in the agent, one sentence each (mekoClaudeGaps plus tokens that don't work, or kiroMekoGaps). */
     gaps: () => Promise<string[]>;
     latest: () => Promise<MekoSetupPackage>;
     run: (pkg: MekoSetupPackage) => Promise<number>;
@@ -297,10 +298,12 @@ export async function ensureMekoInClaude(
 ): Promise<'ready' | 'set-up'> {
   const gaps = await d.gaps();
   if (!gaps.length) return 'ready';
-  const manual = manualMekoSetup(o.url);
+  const manual = manualMekoSetup(o.url, o.client);
+  const kiro = o.client === 'kiro';
+  const agent = kiro ? 'Kiro' : 'Claude Code';
   // A short word, not the list: the install output stays tidy, and the setup fixes them all.
-  d.warn('Meko in Claude', 'not set up for this Meko');
-  if (o.noInstallDeps) throw new MekoSetupError(`Meko isn't set up for Claude Code. Run: ${manual}`);
+  d.warn(kiro ? 'Meko in Kiro' : 'Meko in Claude', 'not set up for this Meko');
+  if (o.noInstallDeps) throw new MekoSetupError(`Meko isn't set up for ${agent}. Run: ${manual}`);
   const pkg = await d.latest().catch((e: unknown) => {
     throw new MekoSetupError(`Couldn't look up Meko's setup on npm (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
   });
@@ -308,8 +311,8 @@ export async function ensureMekoInClaude(
   if (o.installDeps) {
     d.say(`    Running ${what}`);
   } else {
-    if (!o.canAsk) throw new MekoSetupError(`Meko isn't set up for Claude Code. Rerun with --install-deps to set it up, or run: ${manual}`);
-    if (/^n/i.test(await d.ask(`Run ${what}? (Y/n)`, 'y'))) throw new MekoSetupError(`Meko isn't set up for Claude Code. Run: ${manual}`);
+    if (!o.canAsk) throw new MekoSetupError(`Meko isn't set up for ${agent}. Rerun with --install-deps to set it up, or run: ${manual}`);
+    if (/^n/i.test(await d.ask(`Run ${what}${kiro ? ' for Kiro' : ''}? (Y/n)`, 'y'))) throw new MekoSetupError(`Meko isn't set up for ${agent}. Run: ${manual}`);
   }
   const code = await d.run(pkg).catch((e: unknown) => {
     throw new MekoSetupError(`Meko's setup couldn't run (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);

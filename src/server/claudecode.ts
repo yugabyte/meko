@@ -31,6 +31,8 @@ function summary(output: string): string {
 export class ClaudeCode {
   private ver: { command: string; at: number; read: Promise<string | null> } | null = null;
   private value: string | null = null;
+  /** The command the last finished read was for (`checked`). */
+  private readFor: string | null = null;
   private updating = false;
   private last: ClaudeCodeStatus['lastUpdate'] = null;
   private readVersion: (command: string) => Promise<string | null>;
@@ -43,14 +45,28 @@ export class ClaudeCode {
     this.now = deps.now ?? Date.now;
   }
 
-  /** The version, read again when the last read is older than the TTL, `force`d, or for another command. */
+  /**
+   * The version, read again when the last read is older than the TTL, `force`d, or for another
+   * command. Null without a read while Claude Code is turned off (`[claude] enabled = false`), and
+   * the last read is forgotten then, so turning it back on reads it again before it's offered.
+   */
   version(force = false): Promise<string | null> {
+    if (!this.deps.config().claude.enabled) {
+      this.ver = null;
+      this.readFor = null;
+      return Promise.resolve(null);
+    }
+    return this.read(force);
+  }
+
+  private read(force = false): Promise<string | null> {
     const { command } = this.deps.config().claude;
     const now = this.now();
     if (force || !this.ver || this.ver.command !== command || now - this.ver.at > CLAUDE_VERSION_TTL_MS) {
       const read = this.readVersion(command).then((v) => {
-        if (this.ver?.read === read && v !== this.value) {
+        if (this.ver?.read === read && (v !== this.value || this.readFor !== command)) {
           this.value = v;
+          this.readFor = command;
           this.deps.changed();
         }
         return v;
@@ -60,17 +76,28 @@ export class ClaudeCode {
     return this.ver.read;
   }
 
-  /** Whether the Claude Code the next launch gets runs AgentK's mod (false when its version can't be read). */
+  /**
+   * Whether the Claude Code the next launch gets runs AgentK's mod (false when its version can't be
+   * read). Read even while Claude Code isn't offered for new sessions: its sessions keep the mod.
+   */
   async supportsMod(): Promise<boolean> {
-    const v = await this.version();
+    const v = await this.read();
     return !!v && versionAtLeast(v, MIN_MOD_CLAUDE);
   }
 
+  /** A version read for the command Claude Code is run with has finished (true while it's turned off). */
+  checked(): boolean {
+    const { command, enabled } = this.deps.config().claude;
+    return !enabled || this.readFor === command;
+  }
+
+  /** Its status; no version while it's turned off (so nothing offers to update it) or not read yet for its command. */
   status(): ClaudeCodeStatus {
+    const version = this.checked() && this.deps.config().claude.enabled ? this.value : null;
     return {
-      version: this.value,
+      version,
       minModVersion: MIN_MOD_CLAUDE,
-      supportsMod: this.value === null ? null : versionAtLeast(this.value, MIN_MOD_CLAUDE),
+      supportsMod: version === null ? null : versionAtLeast(version, MIN_MOD_CLAUDE),
       modEnabled: this.deps.config().claude.mod,
       updating: this.updating,
       lastUpdate: this.last,

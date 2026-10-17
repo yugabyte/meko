@@ -1,4 +1,4 @@
-import { HARNESS_IDS, harnessOf, type HarnessId } from '../../shared/harnesses.js';
+import { HARNESS_IDS, NO_AGENT, harnessOf, type HarnessId } from '../../shared/harnesses.js';
 import type { HarnessStatus } from '../../shared/types.js';
 import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
@@ -34,20 +34,40 @@ export class Harnesses {
     return this.list().map((h) => h.status(cfg));
   }
 
-  /** `[agents] default` while it's available, else Claude Code (always available): what runs when nobody picks. */
-  defaultFor(cfg: Config): Harness {
+  /**
+   * What runs when nobody picks: `[agents] default` while it's available, else the first available
+   * harness (HARNESS_IDS order), else null (no coding agent is installed, turned on and new enough).
+   */
+  defaultFor(cfg: Config): Harness | null {
     const h = this.of(cfg.agents.default);
-    return h.status(cfg).available ? h : this.all.claude;
+    return h.status(cfg).available ? h : (this.list().find((x) => x.status(cfg).available) ?? null);
   }
 
   /**
-   * The harness a new session starts on: the one asked for, else the default (`defaultFor`). 400
-   * when the one asked for isn't available (turned off, not installed, or too old), naming what to do.
+   * `defaultFor`, after reading again the version of any harness that's turned on but has none (not
+   * read yet, or its last read failed), so a read that failed once doesn't refuse until the next one.
    */
-  pick(cfg: Config, asked: unknown): Harness {
+  async ensureDefault(cfg: Config): Promise<Harness | null> {
+    const asked = this.of(cfg.agents.default);
+    await this.reread(cfg, asked);
+    if (!this.defaultFor(cfg)) await Promise.all(this.list().filter((h) => h !== asked).map((h) => this.reread(cfg, h)));
+    return this.defaultFor(cfg);
+  }
+
+  /**
+   * The harness a new session starts on: the one asked for, else the default (`ensureDefault`). 400
+   * when the one asked for isn't available (turned off, not installed, or too old), naming what to
+   * do; 409 when no harness is available at all.
+   */
+  async pick(cfg: Config, asked: unknown): Promise<Harness> {
     if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(' or ')}.`);
-    if (asked == null) return this.defaultFor(cfg);
+    if (asked == null) {
+      const h = await this.ensureDefault(cfg);
+      if (!h) throw new HttpError(409, NO_AGENT);
+      return h;
+    }
     const h = this.of(asked);
+    await this.reread(cfg, h);
     const s = h.status(cfg);
     if (s.available) return h;
     const how = !s.enabled
@@ -56,5 +76,10 @@ export class Harnesses {
         ? `install it, or set [${h.id}] command in config.toml`
         : `update it to ${s.minVersion} or later (it's ${s.version})`;
     throw new HttpError(400, `${h.caps.label} isn't available for new sessions: ${how}.`);
+  }
+
+  /** Reads a harness's version again when it's turned on but has none. */
+  private async reread(cfg: Config, h: Harness): Promise<void> {
+    if (h.enabled(cfg) && h.status(cfg).version === null) await h.version(cfg, true);
   }
 }

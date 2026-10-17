@@ -8,7 +8,7 @@ import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import * as github from './github.js';
-import { TranscriptCapture } from './capture.js';
+import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
 import { AskAgentk } from './askagentk.js';
@@ -17,7 +17,7 @@ import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
-import { claudeUserDir } from './claude.js';
+import { claudeUserDir, writeHookFiles } from './claude.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
@@ -139,6 +139,8 @@ export class Core extends EventEmitter {
   readonly callHome: CallHomeService;
   /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
+  /** Claude Code was available at its last version change (`claudeChanged`). */
+  private claudeAvailable = false;
   /** Every coding agent sessions can run on (src/server/harness/). */
   readonly harnesses: Harnesses;
   /** The last read of Kiro's Meko setup (kiroMeko). */
@@ -201,7 +203,7 @@ export class Core extends EventEmitter {
       current: this.version, channel: this.cfg.update.channel, latest: null, available: false, applying: false,
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
     });
-    this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.changed() });
+    this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
     this.harnesses = new Harnesses({ claudeCode: this.claudeCode, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
@@ -217,7 +219,7 @@ export class Core extends EventEmitter {
       cwd: join(this.paths.run, 'ask'),
       projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
-      harness: () => this.harnesses.defaultFor(this.cfg).id,
+      harness: async () => (await this.harnesses.ensureDefault(this.cfg))?.id ?? null,
     });
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.kiroPlan = new KiroPlanStore({
@@ -231,6 +233,7 @@ export class Core extends EventEmitter {
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
     this.claudeMeko = new MekoClaudeWatch({
       config: () => this.cfg,
+      available: () => this.harnesses.of('claude').status(this.cfg).available,
       read: () => readClaudeMeko(claudeUserDir(), claudeConfigPath()),
       mcpRegistered: () => this.mekoTools.claudeHasMcp(this.cfg.claude.command),
       projectDatapacks: () => openProjectDatapacks(this.db),
@@ -312,6 +315,18 @@ export class Core extends EventEmitter {
     if (!this.stopped) this.emit('change');
   }
 
+  /** Claude Code's version changed: its Meko is checked again once it's there (or cleared once it's gone). */
+  private claudeChanged(): void {
+    // A read that finishes after stop(): nothing to check or push any more.
+    if (this.stopped) return;
+    const available = this.harnesses.of('claude').status(this.cfg).available;
+    if (available !== this.claudeAvailable) {
+      this.claudeAvailable = available;
+      void this.claudeMeko.refresh();
+    }
+    this.changed();
+  }
+
   notify(n: Omit<NotifyEvent, 'type'>): void {
     this.emit('notify', { type: 'notify', ...n } satisfies NotifyEvent);
   }
@@ -371,6 +386,7 @@ export class Core extends EventEmitter {
   }
 
   state(): AppState {
+    const harnesses = this.harnesses.status(this.cfg);
     return {
       projects: (() => {
         const projects = projectRows(this.db).map((r) => ({ ...toProject(this.db, r), sessions: this.sessions.listForProject(r.id) }));
@@ -395,8 +411,9 @@ export class Core extends EventEmitter {
       invites: this.invites.pending(),
       failedStarts: this.sessions.failedStarts(),
       claudeCode: this.claudeCode.status(),
-      harnesses: this.harnesses.status(this.cfg),
-      askAgentk: this.cfg.askAgentk.enabled,
+      harnesses,
+      // Still offered while an agent that's turned on hasn't answered yet (just after a start).
+      askAgentk: this.cfg.askAgentk.enabled && harnesses.some((h) => h.available || !h.checked),
       sessionHost: { version: this.host.hello?.version ?? null, outdated: !!this.host.hello?.outdated },
     };
   }
@@ -404,12 +421,17 @@ export class Core extends EventEmitter {
   async start(): Promise<void> {
     this.stopped = false;
     this.tmuxMoved = false;
-    // Claude Code's hook files and settings: a server that can't write them doesn't start, since
-    // every session's --settings file and the Design guard depend on them. The other harnesses'
-    // files wait on their CLI (Kiro's version, its agent file), in the background.
-    await this.harnesses.of('claude').prepare(this.paths, this.cfg);
+    // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
+    // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on
+    // them. With transcript capture off, Claude Code sessions run without the Meko plugin: its own
+    // hooks would still send transcripts when a session compacts or ends. Its MCP server is
+    // configured apart from it, so Meko's tools stay, and the system prompt gives the conversation_id
+    // its SessionStart did. The setting, not whether the plugin's script was found: a plugin
+    // installed after AgentK starts runs in sessions once capture is on.
+    writeHookFiles(this.paths, { disabledPlugins: this.cfg.meko.captureTranscripts ? [] : mekoPluginKeys() });
+    // Each harness's own files wait on its CLI (its version, Kiro's agent file), in the background:
+    // no one CLI has to be installed for AgentK to start.
     for (const h of this.harnesses.list()) {
-      if (h.id === 'claude') continue;
       const ready = h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
       // Kiro's plan is read once its version is known (whether it's available).
       if (h.id === 'kiro' && this.timersOn) void ready.then(() => this.kiroPlan.refresh());
@@ -484,6 +506,7 @@ export class Core extends EventEmitter {
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
+    this.sessions.stop();
     this.learn.stop();
     this.knowledge.stop();
     await this.closeHooks();

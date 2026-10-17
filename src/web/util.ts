@@ -44,7 +44,8 @@ export function harnessLogos(projects: ProjectWithSessions[]): boolean {
  * or null while there's no choice (fewer than two available), when Settings leaves it out. A stored
  * default that isn't available shows as the first available (`AppState.harnesses` is in
  * `HARNESS_IDS` order), which the server starts on meanwhile; it stays stored, so it decides again
- * once it's available (unless Kiro is turned off in Settings, which resets it to Claude Code).
+ * once it's available (unless that agent is turned off in Settings, which moves the default to another
+ * available agent).
  */
 export function defaultAgentChoice(harnesses: HarnessStatus[], stored: HarnessId): { agents: HarnessId[]; value: HarnessId } | null {
   const agents = harnesses.filter((h) => h.available).map((h) => h.id);
@@ -190,6 +191,11 @@ export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack:
 }
 
 export { agentName } from '../shared/harnesses';
+
+/** Every agent that's turned on has answered, and none can run a session (`AppState.harnesses`). */
+export function noAgent(harnesses: HarnessStatus[]): boolean {
+  return harnesses.length > 0 && harnesses.every((h) => h.checked && !h.available);
+}
 
 /** Last segment of a repo path: /home/me/code/api → api. */
 export function repoFolder(path: string): string {

@@ -62,11 +62,12 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [claude]
 # command = "claude"         # how Claude Code is run
+# enabled = false            # don't offer Claude Code for new sessions; on by default (offered once `claude --version` answers)
 # mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
 
 [agents]
 # default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → General); claude by default,
-                             # and Claude Code while the one named isn't available
+                             # and the first available one while the one named isn't available
 
 [kiro]
 # command = "kiro-cli"       # how Kiro CLI is run

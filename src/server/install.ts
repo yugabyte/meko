@@ -6,7 +6,8 @@ import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
-import { claudeUserDir } from './claude.js';
+import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
+import { claudeUserDir, claudeVersion, versionAtLeast } from './claude.js';
 import {
   DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
 } from './config.js';
@@ -15,7 +16,7 @@ import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
 import { claudeConfigPath } from './trust.js';
 import {
-  MekoSetupError, claudeHasMekoMcp, ensureMekoInClaude, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+  MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
@@ -24,7 +25,8 @@ import { SessionHost } from './hostclient.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
-import { removeKiroAgent } from './kiro.js';
+import { MIN_KIRO, removeKiroAgent } from './kiro.js';
+import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 
 // Linux names from `stat -f -c %T`; macOS names from `mount`.
 const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs', 'afpfs', 'webdav', 'macfuse', 'osxfuse']);
@@ -224,8 +226,11 @@ export interface InstallMekoDeps {
   /**
    * Sets up Meko for Claude Code; throws MekoSetupError when that's declined or doesn't finish.
    * `keyFromEnv`: the key came from the installer's MEKO_API_KEY, so it isn't stored in config.toml.
+   * Left out when Claude Code isn't installed.
    */
-  ensureInClaude: (url: string, apiKey: string, keyFromEnv: boolean) => Promise<void>;
+  ensureInClaude?: (url: string, apiKey: string, keyFromEnv: boolean) => Promise<void>;
+  /** Sets up Meko for Kiro, the same way; left out when Kiro isn't installed. */
+  ensureInKiro?: (url: string, apiKey: string) => Promise<void>;
   ui: Pick<typeof ui, 'ok' | 'warn' | 'note' | 'section'>;
 }
 
@@ -233,8 +238,8 @@ export interface InstallMekoDeps {
  * The installer's Meko step. Meko is optional: without a key (skipped at the prompt, none given
  * non-interactively, or --no-meko) AgentK works without datapacks, and a key can be added later
  * on the Meko tab in Settings. A key that's given must work, unless someone is there to choose to
- * go on without Meko. Declining Meko's setup for Claude Code is a warning, not a stop. Updates
- * `cfg.meko`; returns whether Meko is on.
+ * go on without Meko. Declining Meko's setup for Claude Code or Kiro (each offered only where it's
+ * installed) is a warning, not a stop. Updates `cfg.meko`; returns whether Meko is on.
  */
 export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
   const later = 'Projects work without datapacks; add a Meko key any time on the Meko tab in Settings.';
@@ -290,27 +295,61 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boo
   }
   d.ui.ok('Meko', meko.url.replace(/^https?:\/\//, ''));
 
-  let inClaude = true;
-  try {
-    // Not typed, and not from config.toml or Claude Code's settings: only this process has it.
-    const keyFromEnv = !storeKey && resolveMekoWithSource(cfg).keySource === 'env' && meko.apiKey === process.env.MEKO_API_KEY;
-    await d.ensureInClaude(meko.url, meko.apiKey, keyFromEnv);
-  } catch (e) {
-    if (!(e instanceof MekoSetupError)) throw e;
-    inClaude = false;
-    d.ui.warn('Meko in Claude', `${e.message} AgentK uses Meko; Claude Code sessions do once it's set up (the Meko tab in Settings can do it).`);
+  let inClaude = !!d.ensureInClaude;
+  if (d.ensureInClaude) {
+    try {
+      // Not typed, and not from config.toml or Claude Code's settings: only this process has it.
+      const keyFromEnv = !storeKey && resolveMekoWithSource(cfg).keySource === 'env' && meko.apiKey === process.env.MEKO_API_KEY;
+      await d.ensureInClaude(meko.url, meko.apiKey, keyFromEnv);
+    } catch (e) {
+      if (!(e instanceof MekoSetupError)) throw e;
+      inClaude = false;
+      d.ui.warn('Meko in Claude', `${e.message} AgentK uses Meko; Claude Code sessions do once it's set up (the Meko tab in Settings can do it).`);
+    }
   }
   const settingsEnv = readClaudeSettingsEnv();
+  // Without Claude Code, nothing puts a key from the installer's environment into its settings, and
+  // the service has no MEKO_* environment: config.toml keeps it, as it would a typed one.
+  const noClaude = !d.ensureInClaude;
   const keep = mekoKeyForConfig({
-    apiKey: meko.apiKey, url: meko.url, typed: storeKey, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
-    envKey: process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
+    apiKey: meko.apiKey, url: meko.url, typed: storeKey || noClaude, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
+    envKey: noClaude ? undefined : process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
   });
   if (keep !== 'unchanged') {
     cfg.meko.apiKey = keep.apiKey;
     cfg.meko.url = keep.url;
   }
   if (inClaude) d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
+  if (d.ensureInKiro) {
+    try {
+      await d.ensureInKiro(meko.url, meko.apiKey);
+      d.ui.ok('Meko in Kiro', 'MCP server and agent in place');
+    } catch (e) {
+      if (!(e instanceof MekoSetupError)) throw e;
+      d.ui.warn('Meko in Kiro', `${e.message} AgentK uses Meko; Kiro sessions do once it's set up (the Meko tab in Settings can do it).`);
+    }
+  }
   return true;
+}
+
+/**
+ * The installer's agents check: the coding agents turned on in config.toml whose `--version`
+ * answers (Kiro's with MIN_KIRO or later), in HARNESS_IDS order. With none the install stops,
+ * saying what to install. A default that isn't among them becomes the first that is, so a machine
+ * with only Kiro starts its sessions on Kiro.
+ */
+export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, string | null>>): HarnessId[] {
+  const found = HARNESS_IDS.filter((id) => {
+    const v = versions[id];
+    return cfg[id].enabled && !!v && (id !== 'kiro' || versionAtLeast(v, MIN_KIRO));
+  });
+  if (!found.length) {
+    throw new InstallError(
+      `no coding agent found. Install Claude Code (https://claude.com/claude-code) or Kiro CLI ${MIN_KIRO} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
+    );
+  }
+  if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
+  return found;
 }
 
 export async function runInstall(args: string[]): Promise<void> {
@@ -380,13 +419,25 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.row('Access', `${isLoopback(cfg.server.bind) ? 'local' : 'remote'}, on ${cfg.server.bind}:${cfg.server.port}`);
     }
 
-    // 2. Meko (optional) and 3. Meko in Claude Code
+    // 2. The coding agents: at least one, or nothing can run.
+    const versions = { claude: await claudeVersion(cfg.claude.command), kiro: await claudeVersion(cfg.kiro.command) };
+    const agents = settleAgents(cfg, versions);
+
+    // 3. Meko (optional) and 4. Meko in each agent
     const canAsk = interactive && !!process.stdin.isTTY;
+    const setup = { canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] };
     await installMeko(cfg, { keyArg: values['meko-key'], noMeko: values['no-meko'] }, {
       ask,
       canAsk,
       check: checkMeko,
-      ensureInClaude: async (url, apiKey, keyFromEnv) => {
+      ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey) => {
+        const gaps = async () => kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
+        await ensureMekoSetup(
+          { url, apiKey, client: 'kiro', ...setup },
+          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro' }), ask, say, warn: (l, t) => ui.warn(l, t) },
+        );
+      },
+      ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv) => {
         // The plugin, its MCP server and the key where its hooks read it, all on this Meko, with
         // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking. A key
         // from the environment must also end up in Claude Code's settings: the service has no
@@ -399,17 +450,18 @@ export async function runInstall(args: string[]): Promise<void> {
             ...(await claudeTokenGaps(c, url, apiKey, tryMekoToken)),
           ];
         };
-        await ensureMekoInClaude(
-          { url, apiKey, canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] },
+        await ensureMekoSetup(
+          { url, apiKey, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
       ui,
     });
+    ui.ok('Agents', agents.map((id) => `${HARNESS_CAPS[id].label} ${versions[id]}`).join(', ') + ` (new sessions start on ${HARNESS_CAPS[cfg.agents.default].label})`);
     if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
     else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
 
-    // 4. Keep SQLite off network filesystems
+    // 5. Keep SQLite off network filesystems
     let db = dbPath(paths, cfg);
     mkdirSync(dirname(db), { recursive: true });
     if (isNetworkFs(dirname(db))) {
@@ -427,7 +479,7 @@ export async function runInstall(args: string[]): Promise<void> {
     const tls = await loadTls(paths, cfg);
     if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
 
-    // 5. Services
+    // 6. Services
     ui.section('Services');
     if (!isLoopback(cfg.server.bind) && macFirewallOn()) {
       ui.note('The macOS firewall is on. If other devices (like your phone) can\'t connect, allow incoming connections for');
@@ -446,7 +498,7 @@ export async function runInstall(args: string[]): Promise<void> {
       }
     }
 
-    // 6. Setup link and next steps
+    // 7. Setup link and next steps
     const handle = openDb(db);
     try {
       const scheme = tls ? 'https' : 'http';

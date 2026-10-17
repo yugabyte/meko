@@ -84,6 +84,8 @@ function hash(s: string): string {
 
 export interface MekoClaudeWatchDeps {
   config: () => Config;
+  /** Claude Code is available for sessions (turned on and installed): nothing to check without it. */
+  available: () => boolean;
   /** Claude Code's Meko as its files say now. */
   read: () => ClaudeMeko;
   /**
@@ -106,6 +108,7 @@ export interface MekoClaudeWatchDeps {
  * Keeps MekoStatus.claude current. A refresh reads Claude Code's files (cheap) and tries each of
  * its tokens that isn't AgentK's own on AgentK's server, reusing a token's result for
  * CLAUDE_MEKO_TTL_MS. Refreshes run one at a time; one asked for while another runs follows it.
+ * Empty while Meko is off or Claude Code isn't available (Core refreshes it when that changes).
  */
 export class MekoClaudeWatch {
   status: MekoClaudeStatus = EMPTY;
@@ -147,7 +150,7 @@ export class MekoClaudeWatch {
     const now = this.o.now?.() ?? Date.now();
     for (const [k, r] of this.results) if (now - r.at >= CLAUDE_MEKO_TTL_MS) this.results.delete(k);
     const { url, apiKey } = resolveMeko(this.o.config());
-    if (!apiKey) {
+    if (!apiKey || !this.o.available()) {
       this.results.clear();
       this.own = null;
       this.set(EMPTY);
