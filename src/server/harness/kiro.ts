@@ -150,7 +150,8 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       // Kiro has no flag to leave a workspace's agents and MCP servers out: refuse rather than run a PR's.
       const own = l.untrusted ? kiroWorkspaceConfig(l.row.worktree_path, AGENTK_AGENT) : [];
       if (own.length) {
-        throw new HttpError(400, `Kiro would use this PR's own ${own.join(' and ')} in place of AgentK's, and anyone can have written `
+        const what = own.map((f) => (f.endsWith('mcp.json') ? `the MCP servers in ${f}` : `the agent in ${f} in place of AgentK's`));
+        throw new HttpError(400, `Kiro would run this PR's own config (${what.join(', and ')}), and anyone can have written `
           + "this PR's code. Review it on Claude Code instead, which can leave the repo's config out.");
       }
       return {

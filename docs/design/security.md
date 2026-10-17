@@ -67,8 +67,9 @@ their own copy.
   write-only from the browser's side: no response carries it, and a saved key goes only where it
   already goes (the MCP server and API URL in use) or to Meko Cloud. A change on the Meko tab that
   would send it to another server (the MCP, web app or API URL) is refused until the key is typed
-  again, before anything is sent, so someone with a stolen login can't point AgentK at their own
-  server and read the key off it. Hooks use the local unix socket with a per-session
+  again, before anything is sent, with Meko on or off (a URL saved while it's off would get the key
+  once it's back on), so someone with a stolen login can't point AgentK at their own server and
+  read the key off it. Hooks use the local unix socket with a per-session
   token, never the network port. The Design-stage edit guard asks the server over the same socket;
   if it gets no answer it lets the edit go ahead, so Claude is never stuck.
 - **The page's policy.** Every app page carries a Content-Security-Policy (`appCsp()` in
@@ -81,8 +82,10 @@ their own copy.
   `allow-same-origin`, so scripts are kept out by those instead.
 - **Files on disk.** `state.db` (the password hash, the TOTP secret, hook tokens) is owner-only
   (0600) whatever folder it's in, and so are its `-wal` and `-shm` files, which SQLite gives the
-  database's mode; a database made before this is fixed when the server opens it. Its folder is
-  made 0700.
+  database's mode, and so are the snapshots the updater takes before an update
+  (`state.db.bak-<version>`); ones made before this are fixed when the server opens the database.
+  A folder AgentK creates for it is 0700 (so is `$XDG_STATE_HOME/agent-k-local`); an existing one,
+  such as AgentK's home on an older install or a `[state] db_path` folder, keeps its mode.
 
 ## Code from public repos
 
@@ -116,6 +119,9 @@ author has no role on the repo (not OWNER, MEMBER or COLLABORATOR) tells Claude 
 as a report to verify, and not to run commands, install anything or open links it asks for
 (`issuePrompt()` in `ghlinks.ts`). And a session takes only a PR whose head is where its branch is
 pushed (`origin`, or the fork's remote it pushes to) as its PR, so a stranger's PR from a fork's
-branch of the same name is never followed or merged (`pickPr()` in `github.ts`).
+branch of the same name is never followed or merged (`pickPr()` in `github.ts`). When that remote's
+URL doesn't name its GitHub repo (an SSH host alias, a GitHub Enterprise host), any PR opened since
+the session started still counts, as before. A session's head is checked again whenever it takes
+a PR, and one with no PR head isn't treated as checked once it has one.
 
 *Later: passkeys (WebAuthn), and single sign-on with Google Workspace or another OIDC provider.*

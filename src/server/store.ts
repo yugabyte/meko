@@ -134,7 +134,7 @@ export interface SessionRow {
   push_branch: string | null;
   /**
    * 1: it works on a PR's head on a public repo (or one gh couldn't read), so it runs without the
-   * repo's own config (headtrust.ts). 0: trusted. NULL: not checked yet (checked at every launch).
+   * repo's own config (headtrust.ts). 0: trusted. NULL: no PR head, or not checked yet (at every launch).
    */
   untrusted: number | null;
 }

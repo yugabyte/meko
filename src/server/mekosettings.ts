@@ -166,10 +166,12 @@ export async function nextMekoConfig(
   const after = resolveMeko(next);
   // A saved key goes only where it already goes, or to Meko Cloud. Sending it to another server
   // takes it typed again: otherwise anyone with the browser's login could point AgentK at their
-  // own server and read the key off the check (or the next invite sync).
-  if (next.meko.enabled && !m.apiKey?.trim() && after.apiKey && after.apiKey === resolveMekoWithSource(base).apiKey) {
+  // own server and read the key off the check (or the next invite sync). Checked with Meko off
+  // too, or a URL saved while off would count as one the key goes to once Meko is back on.
+  const key = resolveMekoWithSource(next);
+  if (!m.apiKey?.trim() && key.apiKey && key.apiKey === resolveMekoWithSource(base).apiKey) {
     const known = keyOrigins(base);
-    const to = [after.url, resolveMekoApiUrl(next)].map(originOf).find((o) => o && !known.has(o));
+    const to = [key.url, resolveMekoApiUrl(next)].map(originOf).find((o) => o && !known.has(o));
     if (to) throw new HttpError(400, `Enter the Meko API key again to use it with ${to}: AgentK sends a saved key only to a Meko server it already uses. Nothing was saved.`);
   }
   const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;

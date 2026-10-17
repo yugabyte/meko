@@ -30,6 +30,8 @@ describe("whose code a session's PR head is", () => {
     expect(repoConfigTrusted(row({ kind: 'review-pr', pr_repo: 'acme/demo' }))).toBe(false);
     expect(repoConfigTrusted(row({ kind: 'review-pr', pr_repo: 'acme/demo', untrusted: 1 }))).toBe(false);
     expect(repoConfigTrusted(row({ kind: 'review-pr', pr_repo: 'acme/demo', untrusted: 0 }))).toBe(true);
+    // A task on an existing branch that took its PR after it was checked (with no PR head: NULL) isn't trusted until checked again.
+    expect(repoConfigTrusted(row({ branch_reused: 1, pr_number: 5, pr_url: 'https://github.com/acme/demo/pull/5', untrusted: null }))).toBe(false);
   });
 });
 
@@ -82,8 +84,8 @@ describe("Kiro config a PR brings", () => {
       row: row({ id: 's1', worktree_path: wt }), resume: false, prompt: null, systemPrompt: '', addDirs: [], pluginDirs: [], planMode: false, env: {}, unsetEnv: [], untrusted,
     });
     expect(() => kiro.launcher({} as Paths, DEFAULT_CONFIG, launch(true))).toThrow(
-      "Kiro would use this PR's own .kiro/agents/mine.json and .kiro/settings/mcp.json in place of AgentK's, and anyone can have written this PR's code. "
-        + "Review it on Claude Code instead, which can leave the repo's config out.");
+      "Kiro would run this PR's own config (the agent in .kiro/agents/mine.json in place of AgentK's, and the MCP servers in .kiro/settings/mcp.json), "
+        + "and anyone can have written this PR's code. Review it on Claude Code instead, which can leave the repo's config out.");
     expect(kiro.launcher({} as Paths, DEFAULT_CONFIG, launch(false)).args).toEqual(['chat', '--agent', 'agentk']);
   });
 });

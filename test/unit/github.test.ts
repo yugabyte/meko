@@ -36,9 +36,10 @@ describe('finding the PR a session opened', () => {
     expect(pickPr(prs, since, true, 'ACME/demo')?.number).toBe(9);
     // A clone of the user's fork pushes there: its PR is from the fork.
     expect(pickPr([at('me/demo', true)], since, false, 'me/demo')?.number).toBe(9);
-    // Not knowing where the branch is pushed, only a PR from the base repo itself counts.
-    expect(pickPr(prs, since)?.number).toBe(9);
-    expect(pickPr([at('stranger/demo', true)], since)).toBeNull();
+    // Not knowing where the branch is pushed (an SSH host alias), a fork's PR opened since counts, as the
+    // user's own from a clone of their fork would; an older one only from the base repo itself.
+    expect(pickPr([at('me/demo', true)], since)?.number).toBe(9);
+    expect(pickPr([{ ...at('me/demo', true), createdAt: '2026-05-01T09:00:00Z' }], since, true)).toBeNull();
   });
 
   it('allows for a little clock skew', () => {

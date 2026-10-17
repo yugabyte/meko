@@ -122,6 +122,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'same-origin');
     if (isApi(req)) reply.header('Cache-Control', 'no-store');
+    // Every app page (`/`, an app route, or /index.html by name) gets the same policy.
+    else if (/^text\/html/.test(String(reply.getHeader('content-type') ?? ''))) reply.header('Content-Security-Policy', appCsp(req.headers.host));
     return payload;
   });
 
@@ -795,13 +797,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // ---- web app ----
   if (opts.webDir) {
     // `/` is served by the not-found handler below too, so every page carries this server's version.
-    await app.register(fastifyStatic, {
-      root: opts.webDir, wildcard: false, index: false,
-      // /index.html asked for by name gets the page's policy too.
-      setHeaders: (res, path) => {
-        if (path.endsWith('.html')) res.header('Content-Security-Policy', appCsp(undefined));
-      },
-    });
+    await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: false });
     const indexHtml = stampVersion(readFileSync(join(opts.webDir, 'index.html'), 'utf8'), core.version);
     app.setNotFoundHandler((req, reply) => {
       const path = req.url.split('?')[0];
@@ -810,7 +806,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if ((req.method !== 'GET' && req.method !== 'HEAD') || path.startsWith('/api/') || path.startsWith('/ws/') || missingFile) {
         return reply.code(404).send({ error: 'Not found.' });
       }
-      return reply.type('text/html').header('Cache-Control', 'no-cache').header('Content-Security-Policy', appCsp(req.headers.host)).send(indexHtml);
+      return reply.type('text/html').header('Cache-Control', 'no-cache').send(indexHtml);
     });
   }
 

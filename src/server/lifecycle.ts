@@ -1153,6 +1153,8 @@ export class Lifecycle {
       this.sessions.event(id, 'pr-again', `Back on PR #${pr.number}`, { url: pr.url });
     } else {
       this.sessions.update(id, { pr_number: pr.number, pr_url: pr.url, review_state: 'waiting', agentk_seen: 0, ci_fix_head: null, ci_fixes: 0, conflict_head: null, conflict_fixes: 0 });
+      // A session on an existing branch now works on a PR's head: whether it's trusted, before its prompts.
+      await this.sessions.checkHead(id);
       dropOtherPrs(this.db, id, pr.number);
       // A review-held prompt still waiting names the old PR's reviews.
       const q = this.queue(id);

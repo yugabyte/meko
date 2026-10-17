@@ -14,7 +14,7 @@ import {
 } from './git.js';
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
 import { findPr, isRepoName, issueText, prInfo, repoVisibility, type PrInfo } from './github.js';
-import { HeadTrust, UNTRUSTED_TEXT, repoConfigTrusted } from './headtrust.js';
+import { HeadTrust, UNTRUSTED_TEXT, prHead, repoConfigTrusted } from './headtrust.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -1163,12 +1163,13 @@ export class SessionManager {
 
   /**
    * Reads again whether the session's PR head is trusted (headtrust.ts) and keeps it on the row,
-   * saying so in its log when that changes.
+   * saying so in its log when that changes: NULL with no PR head, so a PR linked later isn't
+   * taken as checked (`repoConfigTrusted`) before this runs again (adoptPr does).
    */
-  private async checkHead(id: string): Promise<SessionRow> {
+  async checkHead(id: string): Promise<SessionRow> {
     const row = this.row(id);
     const why = await this.headTrust.untrusted(row);
-    const untrusted = why ? 1 : 0;
+    const untrusted = !prHead(row) ? null : why ? 1 : 0;
     if (row.untrusted !== untrusted) {
       this.update(id, { untrusted });
       if (why) this.event(id, 'untrusted', `${why}, ${UNTRUSTED_TEXT}.`);
@@ -1788,6 +1789,8 @@ export class SessionManager {
     const cont = wasWorking && autoContinue && !tooSoon && !parked;
     const resume = this.transcriptExists(row);
 
+    // Before the prompt, which a trusted repo's .agent-k/stages may write (launch reads it again).
+    row = await this.checkHead(row.id);
     let prompt: string | null = null;
     if (!resume) prompt = this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     else if (cont) prompt = this.prompt(row, row.stage === 'review' ? 'continue-review' : 'continue');
@@ -1996,6 +1999,7 @@ export class SessionManager {
       });
     }
     const resume = this.transcriptExists(row);
+    row = await this.checkHead(row.id);
     const firstPrompt = resume ? null : this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     this.setStatus(row.id, 'starting', 'Resuming');
     this.startup.delete(row.id);

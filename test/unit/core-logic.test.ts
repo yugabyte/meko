@@ -12,7 +12,7 @@ import {
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
 import { shortHost } from '../../src/server/core.js';
 import { mekoSettings } from '../../src/server/mekosettings.js';
-import { all, kvGet, openDb, run, schemaVersion } from '../../src/server/db.js';
+import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor, parseReviewDetails, reviewDetailsQuery } from '../../src/server/github.js';
 import { reviewRoute } from '../../src/server/heldreviews.js';
@@ -82,16 +82,22 @@ describe('auth', () => {
 });
 
 describe('config and db', () => {
-  it('keeps the database owner-only, its WAL included, and fixes one made before', () => {
+  it('keeps the database owner-only, its WAL and update snapshots included, and fixes ones made before', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
     writeFileSync(file, '', { mode: 0o644 });
+    writeFileSync(`${file}.bak-0.1`, '', { mode: 0o644 });
     const db = openDb(file);
     run(db, `INSERT INTO kv(key, value) VALUES ('k', 'v')`);
-    for (const f of [file, `${file}-wal`]) expect(statSync(f).mode & 0o777, f).toBe(0o600);
+    snapshotDb(db, `${file}.bak-0.2`);
+    for (const f of [file, `${file}-wal`, `${file}.bak-0.1`, `${file}.bak-0.2`]) expect(statSync(f).mode & 0o777, f).toBe(0o600);
     db.close();
+    // The snapshot is a database of its own.
+    const snap = openDb(`${file}.bak-0.2`);
+    expect(kvGet(snap, 'k')).toBe('v');
+    snap.close();
   });
 
-    it('round-trips config.toml with snake_case keys and keeps defaults', () => {
+  it('round-trips config.toml with snake_case keys and keeps defaults', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.repos.roots = ['~/src', '~/code'];

@@ -69,13 +69,15 @@ export async function prByNumber(cwd: string, number: number, repo?: string | nu
  * The newest PR opened since `since`, an open one first. With `anyOpen`, an older open PR counts too.
  * Only a PR whose head is in `headRepo` (the repo the branch is pushed to) is the branch's: anyone
  * can open a PR from a fork's branch of the same name, and taking it would have AgentK follow and
- * merge it. Without `headRepo`, only a PR from the base repo itself counts.
+ * merge it. Without `headRepo` (a remote whose URL doesn't name its GitHub repo), any PR opened
+ * since counts, a fork's too (the user's own, from a clone of their fork), but an older one only
+ * from the base repo itself.
  */
 export function pickPr(prs: PrRef[], since: number, anyOpen = false, headRepo: string | null = null): PrRef | null {
-  const ours = (p: PrRef) => (headRepo ? p.headRepo?.toLowerCase() === headRepo.toLowerCase() : p.isCrossRepository === false);
+  const ours = (p: PrRef) => !headRepo || p.headRepo?.toLowerCase() === headRepo.toLowerCase();
   const fresh = prs
     .filter(ours)
-    .filter((p) => (anyOpen && p.state === 'OPEN') || Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
+    .filter((p) => (anyOpen && p.state === 'OPEN' && (headRepo || p.isCrossRepository === false)) || Date.parse(p.createdAt) >= since - CLOCK_SKEW_MS)
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return fresh.find((p) => p.state === 'OPEN') ?? fresh[0] ?? null;
 }
