@@ -49,6 +49,13 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mod pass `claude plugin validate` and
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
+- [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
+      answers the guard or context hooks, or reads a transcript goes through its adapter
+      (`src/server/harness/`), never straight to Claude Code's files or flags, and a feature only
+      Claude Code has (the mod, Artifacts, plan limits) is gated on `HARNESS_CAPS` on both sides. Text
+      about the process and its terminal names the session's agent (`agentName()`), not "Claude".
+      Anything AgentK writes in the user's Kiro home (the `agentk` agent) is marked as AgentK's,
+      inert without AgentK's variables, and removed by `uninstall`.
 - [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
       updates). Nothing restarts the host by itself, and the program never waits on a viewer.

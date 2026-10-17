@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
-import { cx, formatCostOf, formatTokens, totalTokens, usageTitle } from '../util';
+import { cx, formatCostOf, formatCredits, formatTokens, totalTokens, usageTitle } from '../util';
 import { MekoUsageSection } from './MekoUsageSection';
 
 /**
@@ -20,15 +20,16 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
     <section className="box usage-box">
       <div className="usage-hd">
         <span className="label">Token usage</span>
-        <span className="muted small">From Claude Code transcripts, subagents included</span>
+        <span className="muted small">{t.credits ? "From Claude Code transcripts (subagents included) and Kiro's sessions" : 'From Claude Code transcripts, subagents included'}</span>
       </div>
       {empty ? (
-        <p className="muted">No usage yet. It's counted after each Claude turn.</p>
+        <p className="muted">No usage yet. It's counted after each turn.</p>
       ) : (
         <>
           <div className="usage-stats">
             <Stat label="Total" value={totalTokens(t)} strong />
             <CostStat cost={usage.cost} />
+            <CreditsStat usage={t} />
             <Stat label="Output" value={t.output} />
             <Stat label="Input" value={t.input} />
             <Stat label="Cache write" value={t.cacheWrite} />
@@ -139,6 +140,17 @@ export function CostStat({ cost }: { cost: UsageCost }) {
     <div className="usage-stat" title={`At Anthropic's API list prices.${left}`}>
       <span className="usage-num">{formatCostOf(cost)}</span>
       <span className="usage-lbl">{partial ? 'Est. cost, partial' : 'Est. cost'}</span>
+    </div>
+  );
+}
+
+/** The credits Kiro's sessions billed, beside the cost (never added to it); nothing without any. */
+export function CreditsStat({ usage }: { usage: TokenUsage }) {
+  if (!usage.credits) return null;
+  return (
+    <div className="usage-stat" title="What Kiro billed for its sessions' turns. Not part of the cost, which prices Claude Code's tokens.">
+      <span className="usage-num">{formatCredits(usage.credits).replace(/ credits?$/, '')}</span>
+      <span className="usage-lbl">Kiro credits</span>
     </div>
   );
 }

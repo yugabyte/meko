@@ -8,7 +8,7 @@ import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import * as github from './github.js';
-import { mekoPluginKeys, TranscriptCapture } from './capture.js';
+import { TranscriptCapture } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
 import { AskAgentk } from './askagentk.js';
@@ -17,7 +17,9 @@ import { PrReviewService } from './prreview.js';
 import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
 import { all, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
-import { claudeUserDir, writeHookFiles, writeModFiles } from './claude.js';
+import { claudeUserDir } from './claude.js';
+import { Harnesses } from './harness/index.js';
+import { kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
@@ -64,6 +66,8 @@ export interface CoreOptions {
   mekoTools?: MekoTools;
   /** How usage stats are sent (tests fake it); by default the global fetch. */
   callHomeFetch?: typeof fetch;
+  /** Reads Kiro CLI's version (tests fake it); by default `<command> --version`. */
+  kiroVersion?: (command: string) => Promise<string | null>;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -78,6 +82,8 @@ const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 /** How often images staged in the New session dialog that no session started with are looked for. */
 const STAGED_SWEEP_MS = 60 * 60 * 1000;
+/** How long a read of Kiro's Meko setup is reused (the state is pushed often). */
+const KIRO_MEKO_TTL_MS = 10_000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
@@ -130,6 +136,10 @@ export class Core extends EventEmitter {
   readonly callHome: CallHomeService;
   /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
+  /** Every coding agent sessions can run on (src/server/harness/). */
+  readonly harnesses: Harnesses;
+  /** The last read of Kiro's Meko setup (kiroMeko). */
+  private kiroMekoAt: { at: number; value: MekoStatus['kiro'] } | null = null;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -189,6 +199,7 @@ export class Core extends EventEmitter {
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
     });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.changed() });
+    this.harnesses = new Harnesses({ claudeCode: this.claudeCode, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
@@ -203,6 +214,10 @@ export class Core extends EventEmitter {
       cwd: join(this.paths.run, 'ask'),
       projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
+      harness: () => {
+        const h = this.harnesses.of(this.cfg.agents.default);
+        return h.status(this.cfg).available ? h.id : 'claude';
+      },
     });
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.mekoTools = o.mekoTools ?? defaultMekoTools;
@@ -255,7 +270,20 @@ export class Core extends EventEmitter {
   }
 
   private mekoStatusFor(cfg: Config): MekoStatus {
-    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status };
+    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null };
+  }
+
+  /**
+   * Whether Kiro's sessions reach AgentK's Meko (`MekoStatus.kiro`): null while Meko is off or Kiro
+   * isn't available. Its files are read again at most every KIRO_MEKO_TTL_MS, or when `force`d.
+   */
+  kiroMeko(force = false): MekoStatus['kiro'] {
+    if (!mekoConfigured(this.cfg) || !this.harnesses.of('kiro').status(this.cfg).available) return null;
+    const now = Date.now();
+    if (force || !this.kiroMekoAt || now - this.kiroMekoAt.at > KIRO_MEKO_TTL_MS) {
+      this.kiroMekoAt = { at: now, value: { gaps: kiroMekoGaps(readKiroMeko(), resolveMeko(this.cfg).url) } };
+    }
+    return this.kiroMekoAt.value;
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */
@@ -346,7 +374,7 @@ export class Core extends EventEmitter {
         }
         return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
       })(),
-      meko: this.mekoStatus,
+      meko: { ...this.mekoStatus, kiro: this.kiroMeko() },
       update: this.updateStatus(),
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
@@ -358,6 +386,7 @@ export class Core extends EventEmitter {
       invites: this.invites.pending(),
       failedStarts: this.sessions.failedStarts(),
       claudeCode: this.claudeCode.status(),
+      harnesses: this.harnesses.status(this.cfg),
       askAgentk: this.cfg.askAgentk.enabled,
       sessionHost: { version: this.host.hello?.version ?? null, outdated: !!this.host.hello?.outdated },
     };
@@ -366,19 +395,9 @@ export class Core extends EventEmitter {
   async start(): Promise<void> {
     this.stopped = false;
     this.tmuxMoved = false;
-    // With transcript capture off, sessions run without the Meko plugin: its own hooks would still
-    // send transcripts when a session compacts or ends. Its MCP server is configured apart from it,
-    // so Meko's tools stay, and the system prompt gives the conversation_id its SessionStart did.
-    // The setting, not whether the plugin's script was found: a plugin installed after AgentK
-    // starts runs in sessions once capture is on.
-    writeHookFiles(this.paths, { disabledPlugins: this.cfg.meko.captureTranscripts ? [] : mekoPluginKeys() });
-    try {
-      if (!writeModFiles(this.paths)) this.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
-    } catch (e) {
-      this.log.warn("couldn't write AgentK's mod for Claude Code; sessions start without it", errMsg(e));
-    }
-    // Reads the Claude Code version now, so the first launch doesn't wait for it and the banner shows.
-    void this.claudeCode.version().catch(() => undefined);
+    // Each harness's hook files, settings and agents. What a launch needs is written before this
+    // returns; what waits on a CLI (Kiro's version, its agent file) follows in the background.
+    for (const h of this.harnesses.list()) void h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
     mkdirSync(this.paths.worktrees, { recursive: true });
     try {
       if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);
@@ -426,8 +445,8 @@ export class Core extends EventEmitter {
       this.every(60000, () => this.retireTmux());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
-      // Claude Code updates itself: read its version again once the last read is stale.
-      this.every(60000, () => this.claudeCode.version());
+      // Claude Code and Kiro update themselves: read their versions again once the last read is stale.
+      this.every(60000, () => Promise.all(this.harnesses.list().map((h) => h.version(this.cfg))));
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());

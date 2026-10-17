@@ -7,7 +7,7 @@ import {
 import { api, errorMessage } from '../api';
 import { anchorComment, parsePatch, showsLine, sideLine, type DiffLine } from '../diff';
 import { useTouch } from '../hooks/useMedia';
-import { cx } from '../util';
+import { agentName, cx } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
 
@@ -361,7 +361,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
       )}
       {(note || queued > 0 || (exited && drafts > 0)) && (
         <div className="chg-bar" role="status">
-          {exited && drafts > 0 && <span>Claude has exited. Resume the session to send your comments.</span>}
+          {exited && drafts > 0 && <span>{agentName(session)} has exited. Resume the session to send your comments.</span>}
           {queued > 0 && (
             <span>
               {plural(queued, 'comment')} queued. {queued === 1 ? 'It goes' : 'They go'} to AgentK when it finishes its turn

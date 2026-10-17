@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
+import { MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
+import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
@@ -24,6 +25,7 @@ const WORK_ON: { value: WorkOn; label: string }[] = [
 export function NewSessionDialog({
   project,
   ghLogin,
+  harnesses,
   fresh = false,
   initial,
   onClose,
@@ -32,6 +34,8 @@ export function NewSessionDialog({
   project: Project;
   /** The login gh is signed in as, for `{login}` in the branch prefix. */
   ghLogin: string | null;
+  /** The harnesses sessions can run on (`AppState.harnesses`): the Agent choice shows when more than one is available. */
+  harnesses: HarnessStatus[];
   /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
   fresh?: boolean;
   /** What a failed start asked for, to try it again. */
@@ -68,6 +72,12 @@ export function NewSessionDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inProjectRepo = repoPath === project.repoPath;
+  // The agent: the default (Settings → General) unless picked here; a retry keeps the one it asked for.
+  const agents = harnesses.filter((h) => h.available);
+  const [harness, setHarness] = useState<HarnessId>(
+    () => (agents.find((h) => h.id === initial?.harness) ?? agents.find((h) => h.isDefault) ?? agents[0])?.id ?? 'claude',
+  );
+  const pickAgent = agents.length > 1;
 
   // Images for the first prompt (a review's notes): each uploads as it's added, kept under the
   // project until the session is created with it.
@@ -272,6 +282,7 @@ export function NewSessionDialog({
         review && picked
           ? {
             name: name.trim(),
+            ...(pickAgent ? { harness } : {}),
             prompt: prompt.trim() || undefined,
             kind: 'review-pr',
             repoPath: inProjectRepo ? undefined : repoPath,
@@ -280,6 +291,7 @@ export function NewSessionDialog({
           }
           : {
             name: name.trim(),
+            ...(pickAgent ? { harness } : {}),
             prompt: prompt.trim() || undefined,
             baseBranch: workOn === 'pr' ? undefined : baseBranch,
             kind: 'task',
@@ -437,6 +449,7 @@ export function NewSessionDialog({
             <b>Advanced</b>
             {!advanced && (
               <span className="advanced-summary mono">
+                {pickAgent && `${HARNESS_CAPS[harness].label} · `}
                 {review
                   ? `${repoFolder(repoPath)}${picked ? ` · PR #${picked.number} · ${reviewBranch}` : ''}`
                   : `${repoFolder(repoPath)} · ${workSummary}`}
@@ -445,6 +458,33 @@ export function NewSessionDialog({
           </button>
           {advanced && (
             <div className="advanced-body stack" id="ns-advanced-body">
+              {pickAgent && (
+                <div className="field">
+                  <span className="label" id="ns-agent-label">
+                    Agent
+                  </span>
+                  <div className="seg" role="radiogroup" aria-labelledby="ns-agent-label">
+                    {agents.map((h) => (
+                      <button
+                        key={h.id}
+                        id={`ns-agent-${h.id}`}
+                        type="button"
+                        role="radio"
+                        aria-checked={harness === h.id}
+                        className={cx(harness === h.id && 'on')}
+                        onClick={() => setHarness(h.id)}
+                      >
+                        {HARNESS_CAPS[h.id].label}
+                      </button>
+                    ))}
+                  </div>
+                  {!HARNESS_CAPS[harness].artifacts && (
+                    <span className="hint">
+                      {HARNESS_CAPS[harness].label} writes its designs as markdown, and AgentK types its prompts into the terminal.
+                    </span>
+                  )}
+                </div>
+              )}
               <Field
                 label="Repo"
                 hint={

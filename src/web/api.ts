@@ -7,7 +7,7 @@ import type {
   AuthStatus,
   ChangeSide,
   CloseSessionRequest,
-  ClaudeCodeStatus,
+  ClaudeCodeStatus, HarnessStatus,
   CreateProjectRequest,
   CreateSessionRequest,
   CloneRepoRequest,
@@ -67,6 +67,7 @@ import type {
   UpdateSessionRequest,
   UpdateStatus,
 } from '../shared/types';
+import type { HarnessId } from '../shared/harnesses';
 
 export class ApiError extends Error {
   constructor(
@@ -263,7 +264,9 @@ export const api = {
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: SettingsUpdate) => request<Settings>('PUT', '/api/settings', b),
   mekoClaudeSetup: () => post<Settings>('/api/settings/meko/claude-setup'),
+  mekoKiroSetup: () => post<Settings>('/api/settings/meko/kiro-setup'),
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
+  updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
   update: () => get<UpdateStatus>('/api/update'),
   checkUpdate: () => post<UpdateStatus>('/api/update/check'),
   applyUpdate: () => post<UpdateStatus>('/api/update/apply'),

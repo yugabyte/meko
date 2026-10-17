@@ -20,14 +20,14 @@ reports.
 
 - *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
   hosts sharing a home count once), the version and update channel, platform, CPU, Node and
-  Claude Code versions (`claude --version`; `''` when it can't be read; our version or
+  Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on; our version or
   Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
   cut to its leading numbers, else `0.0.0`), local or remote access, the service manager, whether Meko is on (and where its key comes from, and the
   sharing: `api` when AgentK can share through Meko's API, `none` when Meko is off or its API URL
   isn't known), and the UTC day of the first
   report.
 - *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
-  attached, distinct repos), sessions (by kind, open ones by stage; a task counts as `explore`,
+  attached, distinct repos), sessions (by kind, by the agent they run on (`byHarness`), open ones by stage; a task counts as `explore`,
   `plan` or `quick` by the stage it started in, Explore, Design or Code), what shipped (merged PRs,
   direct pushes and their commits as on the Usage page, plus the commits and lines of merged PRs),
   file types, tokens, idle worktrees, Meko use (below), and the tokens Meko brought into first
@@ -39,7 +39,9 @@ reports.
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
   resumes, reused worktrees, file types, tokens by model, Meko use (left out of a day with none),
   and [Ask AgentK](palette.md#ask-agentk) asks (`agentk_asks`: asks, the ones that failed and the actions their
-  answers proposed; left out of a day with none; a cancelled ask isn't counted).
+  answers proposed; left out of a day with none; a cancelled ask isn't counted), and Kiro (`kiro`:
+  sessions started on it, its finished turns and the credits they billed, rounded to thousandths;
+  left out of a day with none).
 - *File types* are counts per file extension: files changed, lines added and deleted, from merged
   PRs and direct pushes. When a PR is merged, one `gh pr view <url> --json
   commits,additions,deletions,files` call adds its size to the `merged` event's payload; for a

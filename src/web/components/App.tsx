@@ -593,6 +593,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         <NewSessionDialog
           project={newSessionProject}
           ghLogin={state.ghLogin ?? null}
+          harnesses={state.harnesses ?? []}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
           initial={modal.kind === 'new-session' ? (modal.retry?.request ?? modal.initial) : undefined}
           onClose={() => setModal({ kind: 'none' })}
@@ -628,7 +629,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
+        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} />
       )}
       {modal.kind === 'palette' && (
         <CommandPalette

@@ -797,7 +797,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(get(env.core.db, 'SELECT path FROM worktrees WHERE session_id = ?', session.id)).toBeUndefined();
     expect(env.core.state().failedStarts).toEqual([{
       id: session.id, projectId: p.id, name: 'No base', error: expect.stringMatching(/^Couldn't create the worktree: /), at: expect.any(Number),
-      request: { name: 'No base', prompt: 'the task', kind: 'task', start: 'code', baseBranch: 'main', images: [image] },
+      request: { name: 'No base', harness: 'claude', prompt: 'the task', kind: 'task', start: 'code', baseBranch: 'main', images: [image] },
     }]);
     expect(notes).toEqual([expect.objectContaining({ projectId: p.id, sessionId: session.id, title: "No base: Couldn't start" })]);
 

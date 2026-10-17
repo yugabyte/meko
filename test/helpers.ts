@@ -17,6 +17,7 @@ import { startHost, type HostHandle } from '../src/server/host/host.js';
 import { SessionHost } from '../src/server/hostclient.js';
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
+export const FAKE_KIRO = fileURLToPath(new URL('./fixtures/fake-kiro.mjs', import.meta.url));
 export const FAKE_CAPTURE = fileURLToPath(new URL('./fixtures/fake-capture.mjs', import.meta.url));
 
 export function gitRepo(dir: string): string {
@@ -141,6 +142,11 @@ export function stubMekoTools() {
       log('setting up');
       if (state.setupError) throw new Error(state.setupError);
     },
+    async setUpKiro(url, apiKey, log) {
+      calls.push({ name: 'setUpKiro', args: [url, apiKey] });
+      log('setting up');
+      if (state.setupError) throw new Error(state.setupError);
+    },
     async tryToken(url, token) {
       calls.push({ name: 'tryToken', args: [url, token] });
       return state.tokens[token] ?? { ok: false, rejected: true, error: 'invalid_token' };
@@ -202,14 +208,17 @@ export function tempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {}): Promise<TestEnv> {
+/** `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; off by default. */
+export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean } = {}): Promise<TestEnv> {
   const home = tempDir('akl-test-');
   const repo = gitRepo(join(home, 'code', 'demo-repo'));
   const fakeDir = join(home, 'fake-claude');
   process.env.MEKO_WATERMARK_DIR = join(home, 'meko-capture');
   process.env.FAKE_CLAUDE_DIR = fakeDir;
-  // Keep tests away from the real ~/.claude.json (folder trust).
+  // Keep tests away from the real ~/.claude.json (folder trust) and ~/.kiro.
   process.env.CLAUDE_CONFIG_DIR = join(home, 'claude-config');
+  process.env.KIRO_HOME = join(home, 'kiro');
+  process.env.FAKE_KIRO_DIR = join(home, 'fake-kiro');
   const paths = getPaths(join(home, 'ak'));
   const socket = `akl-test-${process.pid}-${seq++}`;
   // The session host runs in this process, and never through this machine's background services.
@@ -219,6 +228,8 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean } = {})
   cfg.repos.roots = [join(home, 'code')];
   cfg.repos.cloneInto = join(home, 'code');
   cfg.claude.command = FAKE_CLAUDE;
+  cfg.kiro.command = FAKE_KIRO;
+  cfg.kiro.enabled = !!opts.kiro;
   cfg.meko.apiKey = 'test-key';
   cfg.meko.captureTranscripts = opts.capture !== false;
   const db = openDb(join(paths.home, 'state.db'));

@@ -3,9 +3,10 @@
 Guide for coding agents (Claude Code, Codex, Cursor, and others) working on **AgentK Local**. Humans
 should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and the rules.
 
-AgentK Local is a self-hosted web workbench for Claude Code. A project is an effort on a feature
+AgentK Local is a self-hosted web workbench for Claude Code and Kiro CLI. A project is an effort on a feature
 or product, worked on in a git repo. Each task is a session with its own git worktree and a
-Claude process held by AgentK's session host. A task runs on Explore → Design → Code → PR & Review → Merge & Close,
+Claude (or Kiro) process held by AgentK's session host; the agent a session runs on is its harness
+(`src/server/harness/`, [docs/design/harnesses.md](docs/design/harnesses.md)). A task runs on Explore → Design → Code → PR & Review → Merge & Close,
 starting at Explore, Design or Code (the user picks), and a Review a PR session (someone else's PR,
 with AgentK assisting the reviewer) stays in one Reviewing PR stage. The user can move a task
 between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (Meko is optional). The design
@@ -37,6 +38,7 @@ agents should read it before changing code there.
 | `src/shared/types.ts` | The API contract: every REST route, WebSocket message and shared type. Change it first. |
 | `src/server/` | The server, the session host (`host/`) and the CLI. A row per module is in [src/server/AGENTS.md](src/server/AGENTS.md). |
 | `src/web/` | The React + xterm.js UI. A row per module, and the rules every UI change follows (it must work on a phone), are in [src/web/AGENTS.md](src/web/AGENTS.md) and [src/web/REVIEW.md](src/web/REVIEW.md). |
+| `src/shared/harnesses.ts` | The harnesses a session can run on (`claude`, `kiro`), their labels and what each can do (`HARNESS_CAPS`: the mod, Artifacts, a needs-you hook, plan limits, tokens or credits), which the server and the UI both gate on; `harnessOf()` reads a stored id. |
 | `src/shared/stages.ts` | The rules for moving a session by hand: where a task can move, what can't be moved, where the move dialog starts, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. |
 | `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/shared/branches.ts` | The branch prefix setting's `{login}` (`expandBranchPrefix`: gh's login, or left out with its joiner when gh can't say) and the default, `ak_{login}/`. Used by the server and the web UI. |
@@ -81,7 +83,7 @@ agents should read it before changing code there.
 7. **Meko is optional; a project has at most one dedicated datapack.** Without a key (or with
    `[meko] enabled = false`) AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
    lines in their prompt, and nothing is saved there. Each session gets its own
-   `MEKO_AGENT_ID` (`sessionAgentId()`: `claude_code:<slug>-<hash>`, never the project id), with
+   `MEKO_AGENT_ID` (`sessionAgentId()`: `claude_code:<slug>-<hash>`, or `kiro:<slug>-<hash>` for a Kiro session, never the project id), with
    the project's dedicated datapack pinned for it when it starts; AgentK's writes for a session use
    the id it runs with (`launchedAgentId()`). Never remove a `pin-claude_code_<project id>.json`:
    it may be the user's own pin for plain Claude Code in that repo. (Claude Code's own
@@ -101,7 +103,7 @@ agents should read it before changing code there.
 - User-facing text: plain, direct, active voice; errors say what went wrong and how to fix it.
   AgentK runs the workflow, so text about the work (designing, coding, reviews, turns) names
   **AgentK**; **Claude** is only for the Claude Code process and its terminal (starting, exits,
-  Resume, typing into it). Prompts sent to Claude still address Claude.
+  Resume, typing into it), and for a Kiro session that text names Kiro (`agentName()`). Prompts sent to Claude still address Claude.
 - The server is the source of truth; the UI renders `AppState` pushed over `/ws/events`.
 - Tests: new behavior gets a test, and only one: before adding a test, look for one that already
   covers the path and extend it (cases of one rule go in one `it.each` table). Don't test
@@ -109,7 +111,7 @@ agents should read it before changing code there.
   REVIEW.md §6 flags redundant tests. Integration tests use a real session host and git; GitHub
   is mocked with `vi.mock('../../src/server/github.js')`. Tests must never touch the real
   `~/.claude.json` or Meko (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
-  `CLAUDE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
+  `CLAUDE*`, `KIRO_*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits and PR titles: `<type>[(<component>)][!]: <summary>` with one of nine types, checked by
   `scripts/check-title.sh`, and **no agent attribution** (see `.claude/skills/commit/SKILL.md`).

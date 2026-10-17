@@ -1,6 +1,8 @@
 // API contract shared by the server (src/server) and the web UI (src/web).
 // Every REST route and WebSocket message is described here.
 
+import type { HarnessId } from './harnesses.js';
+
 export type SessionStatus =
   | 'starting'
   | 'working'
@@ -162,8 +164,10 @@ export interface TokenUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  /** Model responses counted. */
+  /** Model responses counted (for Kiro, turns). */
   messages: number;
+  /** Credits Kiro billed, which aren't priced in `UsageCost`; absent or 0 for Claude Code. */
+  credits?: number;
 }
 
 export interface ModelUsage {
@@ -355,6 +359,8 @@ export interface CallHomeInstall {
   node: string;
   /** The version number only, or '' when it can't be read. */
   claudeCode: string;
+  /** Kiro CLI's version, or '' when it's off or can't be read. */
+  kiro?: string;
   access: 'local' | 'remote';
   service: 'systemd' | 'launchd' | 'none';
   /** Sharing is 'api' when AgentK shares through Meko's API, 'none' when it can't (Meko off, or no API URL). */
@@ -458,6 +464,8 @@ export interface CallHomeTotals {
     open: number;
     archived: number;
     byKind: Record<CallHomeKind, number>;
+    /** Sessions by the harness they run on. */
+    byHarness?: Record<HarnessId, number>;
     openByStage: Record<Stage, number>;
   };
   /** prCommits, prAdditions and prDeletions cover merges recorded since this was added. */
@@ -499,6 +507,8 @@ export interface CallHomeDay {
   tokensByModel: (CallHomeTokens & { model: string })[];
   /** Left out of a day with no Meko calls or searches at session start. */
   meko?: CallHomeMeko;
+  /** Kiro on the day: sessions started on it, its finished turns, and the credits they billed. Left out of a day with none. */
+  kiro?: { sessionsCreated: number; turns: number; credits: number };
   /** Ask AgentK on the day: asks, the ones that failed, and the actions the answers proposed. Left out of a day with none. */
   askAgentk?: { asks: number; failed: number; actions: number };
 }
@@ -691,6 +701,12 @@ export interface Session {
   id: string;
   projectId: string;
   name: string;
+  /** The coding agent the session runs on, fixed when it starts (`src/shared/harnesses.ts`). */
+  harness: HarnessId;
+  /**
+   * AgentK's key for the session's conversation: Claude Code's session id (Resume continues it), and
+   * for every harness the key of its Meko conversation.
+   */
   claudeSessionId: string;
   branch: string;
   baseBranch: string;
@@ -838,6 +854,13 @@ export interface MekoStatus {
    * /api/settings/meko/claude-setup). Empty lists while Meko is off.
    */
   claude: MekoClaudeStatus;
+  /**
+   * Whether Kiro's sessions reach the Meko AgentK uses, through Meko's own setup for Kiro: its MCP
+   * server in `~/.kiro/settings/mcp.json` with a token, and its agent (`meko-default`, with the
+   * capture hooks) as Kiro's default. Null when Kiro isn't available or Meko is off. Fixed only when
+   * the user asks (POST /api/settings/meko/kiro-setup).
+   */
+  kiro: { gaps: string[] } | null;
 }
 
 export interface MekoClaudeStatus {
@@ -869,10 +892,29 @@ export interface AppState {
   failedStarts: FailedStart[];
   /** The Claude Code sessions launch with, and whether it runs AgentK's mod. */
   claudeCode: ClaudeCodeStatus;
+  /** Each harness sessions can run on, in HARNESS_IDS order, and the default for new sessions. */
+  harnesses: HarnessStatus[];
   /** `[ask_agentk] enabled`: the command palette offers Ask AgentK. */
   askAgentk: boolean;
   /** The session host that runs every Claude, as it last answered. */
   sessionHost: SessionHostStatus;
+}
+
+/** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[kiro]` in config.toml). */
+export interface HarnessStatus {
+  id: HarnessId;
+  /** The CLI is turned on in the config (Claude Code always is). */
+  enabled: boolean;
+  /** What `<command> --version` printed, or null when it can't be read (or hasn't been yet). */
+  version: string | null;
+  /** The oldest version AgentK runs sessions on. */
+  minVersion: string | null;
+  /** New sessions can start on it: enabled, and its version read and new enough. */
+  available: boolean;
+  /** `[agents] default`: new sessions start on it unless the New session dialog picks another. */
+  isDefault: boolean;
+  /** Its update command is running (POST /api/harnesses/:id/update). */
+  updating: boolean;
 }
 
 /** The session host (`agent-k-local host`). It keeps running across updates, so it can be older than the server. */
@@ -1361,6 +1403,14 @@ export interface Settings {
   callHomeEnabled: boolean;
   /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
   resolveConflicts: boolean;
+  /** `[agents] default`: the harness new sessions start on unless the New session dialog picks another. */
+  defaultHarness: HarnessId;
+  /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
+  kiroEnabled: boolean;
+  /** `[kiro] command`: how Kiro CLI is run. */
+  kiroCommand: string;
+  /** `[kiro] trust_tools`: AgentK's Kiro agent allows every tool, so Kiro runs any tool without asking. */
+  kiroTrustTools: boolean;
   meko: MekoSettings;
 }
 
@@ -1810,6 +1860,8 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
+  /** The harness the session runs on; left out, `[agents] default`. It must be available (`AppState.harnesses`). */
+  harness?: HarnessId;
   /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
   /** Defaults to the repo's default branch. */
@@ -2077,7 +2129,7 @@ export type TermServerMessage =
 //        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters or given twice, or two `project`s)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
-// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a bad branch name, a
+// POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a harness that isn't available, a bad branch name, a
 //        base branch neither the repo nor its origin has, a repo that isn't a scanned one, an `existingBranch` that doesn't exist, or a task's
 //        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has. Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
@@ -2161,9 +2213,14 @@ export type TermServerMessage =
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
 //                                                           '' goes back to the host name; callHomeEnabled and
-//                                                           resolveConflicts are booleans)
+//                                                           resolveConflicts are booleans; defaultHarness must be an
+//                                                           available harness; kiroCommand is a command name or path)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
+// POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,
+//                                                           only when the user asks; then checks Kiro's Meko again)
+// POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`kiro-cli update`), then
+//        reads its version again; Claude Code keeps POST /api/claude/update; 409 while one runs)
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
 //        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs)
 // GET    /api/update                           → UpdateStatus

@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { LauncherSpec } from './launcher.js';
 import { claudePath, type Paths } from './paths.js';
 
 /**
@@ -18,15 +19,6 @@ export const CLAUDE_SESSION_MARKERS = [
   'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SESSION_ATTENDED',
   'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID', 'CLAUDE_EFFORT',
 ];
-
-export function scrubClaudeMarkers(env: NodeJS.ProcessEnv = process.env): void {
-  for (const k of CLAUDE_SESSION_MARKERS) delete env[k];
-}
-
-/** Single-quote for POSIX sh. */
-export function shq(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
 
 /**
  * Hook script: forwards the hook payload (stdin) to the server over its unix
@@ -356,38 +348,12 @@ export interface LaunchSpec {
   unsetEnv?: string[];
 }
 
-/** Shells that parse `-c` text the POSIX way, so the quoting in our launcher holds. */
-const POSIX_SHELLS = new Set(['sh', 'bash', 'zsh', 'ksh', 'mksh', 'pdksh', 'oksh', 'dash', 'ash', 'yash']);
-/** Other shells whose `-l -c` can run a plain `exec /bin/sh <path>` when the path needs no quoting. */
-const PLAIN_EXEC_SHELLS = new Set(['fish']);
-/** Argument passed to the launcher when it re-runs itself inside the login shell. */
-const INNER = '--in-login-shell';
-
 /**
- * How the launcher runs its second half through the user's login shell: `[shell, -c text]`.
- * The text is plain POSIX for POSIX shells; fish quotes differently, so it only gets a path
- * that needs no quoting at all. Anything else (tcsh, csh: no `-l` with `-c`) falls back to `/bin/sh -l`.
+ * What a Claude Code session's launcher runs: `claude` with AgentK's settings, the conversation
+ * (`--session-id` for a new one, named; `--resume` after), and every path in its local spelling
+ * (see claudePath).
  */
-export function loginShellCommand(shell: string, script: string): [string, string] {
-  const name = basename(shell).replace(/^-/, '');
-  const inner = (path: string) => `exec /bin/sh ${path} ${INNER}`;
-  if (POSIX_SHELLS.has(name)) return [shell, inner(shq(script))];
-  if (PLAIN_EXEC_SHELLS.has(name) && /^[\w./-]+$/.test(script)) return [shell, inner(script)];
-  return ['/bin/sh', inner(shq(script))];
-}
-
-/**
- * Writes the per-session launcher. It runs Claude through the user's login
- * shell so PATH and tools match an interactive terminal, even when the session
- * host was started by systemd or launchd with a bare environment. The script
- * runs twice: first it clears inherited markers and re-runs itself inside the
- * login shell; then, after the user's profile, it sets the session's variables
- * (so a profile can't override them) and starts Claude.
- */
-export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
-  mkdirSync(paths.run, { recursive: true });
-  // Every path Claude is started with is in its local spelling (see claudePath).
-  const cwd = claudePath(spec.worktree);
+export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   const args = ['--settings', claudePath(hooksSettingsPath(paths))];
   if (spec.resume) {
     args.push('--resume', spec.claudeSessionId);
@@ -400,41 +366,7 @@ export function writeLauncher(paths: Paths, spec: LaunchSpec): string {
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);
-
-  const file = join(paths.run, `${spec.sessionId}.sh`);
-  const [shell, cmd] = loginShellCommand(loginShell(), file);
-  const unset = (spec.unsetEnv ?? []).filter((k) => !(k in spec.env));
-  const lines = [
-    '#!/bin/sh',
-    `# agent-k-local launcher for session ${spec.sessionId}. Rewritten on every launch.`,
-    `if [ "$1" != ${INNER} ]; then`,
-    `  cd ${shq(cwd)} || exit 1`,
-    // Never let an outer Claude Code session's markers, or this install's own home and app, leak in.
-    `  unset ${CLAUDE_SESSION_MARKERS.join(' ')} TMUX TMUX_PANE AK_HOME AK_APP_DIR AK_VERSION`,
-    `  exec ${shq(shell)} -l -c ${shq(cmd)}`,
-    'fi',
-    `cd ${shq(cwd)} || exit 1`,
-    // The installer puts Claude Code and gh in ~/.local/bin, which a login profile (zsh on macOS
-    // by default) may not add to PATH.
-    'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac',
-    ...(unset.length ? [`unset ${unset.join(' ')}`] : []),
-    ...Object.entries(spec.env).map(([k, v]) => `export ${k}=${shq(v)}`),
-    `exec ${shq(spec.claudeCommand)} ${args.map(shq).join(' ')}`,
-    '',
-  ];
-  writeFileSync(file, lines.join('\n'), { mode: 0o700 });
-  chmodSync(file, 0o700);
-  return file;
-}
-
-export function loginShell(): string {
-  try {
-    const s = userInfo().shell;
-    if (s && existsSync(s)) return s;
-  } catch {
-    /* fall through */
-  }
-  return process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : '/bin/sh';
+  return { sessionId: spec.sessionId, worktree: spec.worktree, command: spec.claudeCommand, args, env: spec.env, unsetEnv: spec.unsetEnv };
 }
 
 /**

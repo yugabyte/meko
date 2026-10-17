@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
 import { findMekoCaptureScript } from './capture.js';
-import { loginShell, scrubClaudeMarkers } from './claude.js';
+import { loginShell, scrubSessionMarkers } from './launcher.js';
 import { dbPath, isLoopback, loadConfig, resolveMeko } from './config.js';
 import { Core } from './core.js';
 import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
@@ -54,7 +54,7 @@ function baseUrl(cfg: ReturnType<typeof loadConfig>, tls: boolean): string {
 }
 
 async function serve(): Promise<void> {
-  scrubClaudeMarkers();
+  scrubSessionMarkers();
   adoptLoginPath();
   const paths = getPaths();
   const cfg = loadConfig(paths);
@@ -302,7 +302,7 @@ async function host(args: string[]): Promise<void> {
     return;
   }
   if (args.length) throw new Error(`Unknown host command: ${args[0]} (stop or restart)`);
-  scrubClaudeMarkers();
+  scrubSessionMarkers();
   adoptLoginPath();
   const log = fileLogger(join(paths.logs, 'host.log'));
   // A terminal it was started from may close: the host keeps going.

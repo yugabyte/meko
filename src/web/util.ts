@@ -1,4 +1,5 @@
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
+import { HARNESS_CAPS, harnessOf } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
 import type { MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
@@ -169,6 +170,11 @@ export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack:
 }
 
 /** Last segment of a repo path: /home/me/code/api → api. */
+/** The short name of a session's agent, for its process and terminal: "Claude", "Kiro". */
+export function agentName(s: Pick<Session, 'harness'>): string {
+  return HARNESS_CAPS[harnessOf(s.harness)].short;
+}
+
 export function repoFolder(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;
 }
@@ -304,6 +310,12 @@ export function formatTokens(n: number): string {
   const [div, unit] = n >= 1e9 ? [1e9, 'B'] : n >= 1e6 ? [1e6, 'M'] : [1e3, 'k'];
   const v = n / div;
   return `${v >= 100 ? Math.round(v) : v >= 10 ? v.toFixed(1).replace(/\.0$/, '') : v.toFixed(2).replace(/\.?0+$/, '')}${unit}`;
+}
+
+/** Kiro's credits: "0.42 credits", "12.5 credits", "1 credit". */
+export function formatCredits(n: number): string {
+  const v = n >= 100 ? Math.round(n) : n >= 10 ? Number(n.toFixed(1)) : Number(n.toFixed(2));
+  return `${v.toLocaleString()} ${v === 1 ? 'credit' : 'credits'}`;
 }
 
 /** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */

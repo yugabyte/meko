@@ -77,7 +77,15 @@ the exchange so far (the last 10, kept only while the palette is open) and what'
 puts the text back; closing the palette cancels it too, and the server stops Claude when the
 request closes.
 
-**The Claude call.** The server runs Claude Code once per ask (`[claude] command`), with the
+**The Claude call.** The server asks the default agent (`[agents] default`, when it's available;
+else Claude Code). On Kiro it runs `kiro-cli chat --no-interactive --output-format stream-json
+--agent agentk-ask`, the message on stdin, in the same empty folder, where AgentK writes the
+`agentk-ask` agent as a workspace agent (`.kiro/agents/agentk-ask.json`, so it never shows in the
+user's agent list): the system prompt below plus the answer's JSON schema (Kiro has no schema
+option), no tools, no MCP servers, no hooks. The answer is the `runFinished` event's `finalText`, its
+JSON object read even inside a code fence; Kiro keeps every run as a session, so AgentK deletes the
+ask's (`chat --delete-session`) once it has the answer. `[ask_agentk] model` is Claude's; Kiro uses
+its own default. On Claude Code, the server runs it once per ask (`[claude] command`), with the
 arguments as an array: `-p --model <[ask_agentk] model> --output-format json --json-schema <answer>
 --tools "" --strict-mcp-config --setting-sources user --settings {"disableAllHooks":true}
 --no-session-persistence --system-prompt <AgentK's>`, the message on stdin, in an empty folder

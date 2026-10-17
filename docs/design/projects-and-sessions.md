@@ -64,6 +64,14 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # command = "claude"         # how Claude Code is run
 # mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
 
+[agents]
+# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → General); claude by default
+
+[kiro]
+# command = "kiro-cli"       # how Kiro CLI is run
+# enabled = false            # don't offer Kiro for new sessions; on by default (offered once `kiro-cli --version` answers 2.32.0 or later)
+# trust_tools = true         # AgentK's Kiro agent allows every tool (allowedTools ["*"]), so Kiro never asks; off by default
+
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
 # url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
@@ -79,10 +87,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 | Action | What the server does |
 |---|---|
-| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b <prefix><slug> <base>` (`<prefix>` is the project's branch prefix, `ak_<login>/` by default; or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b <prefix><slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
+| New session | `git fetch origin <base>`, fast-forward the local `<base>` to `origin/<base>` if safe, then in the repo's most recently idled worktree `git checkout --no-track -b <prefix><slug> <base>` (`<prefix>` is the project's branch prefix, `ak_<login>/` by default; or `origin/<base>` if the fast-forward was skipped), or with none `git worktree add … -b <prefix><slug> <base>`, then a `spawn` of pane `ak-<proj>--<slug>` in the session host, in the worktree, running `claude --session-id <uuid> --settings <hooks> -n "<name>" [--plugin-dir <AgentK's mod>] [-- prompt]` (on Kiro, `kiro-cli chat --agent agentk [prompt]`) through your login shell, with the session's variables (Meko, hook token) set after your profile runs so it can't override them. |
 | Open tab | Attaches to the pane in the session host, one attach per viewer. The pane takes the size of the viewer that attached or was used last (see *Sizing* in [Architecture](architecture.md)). A phone lets go of its terminals after its page has been hidden for 30 seconds, and of a session's terminal 5 seconds after you switch away from it, so it holds no connections it doesn't show, and reconnects when it is shown again. The 30 seconds are measured by the clock: a phone that suspended the page (so its timers didn't run) lets go of the terminals when the page is shown again, then reconnects the ones on screen. The browser opens the socket at its terminal size (`?cols=&rows=`). A dropped connection reconnects with backoff (reset once a connection has stayed up 5 seconds); a close for a lost login (4401) goes to the login screen, a missing or archived session stops with a **Try again** button, and an attach that couldn't start retries with backoff. |
 | Close tab | Ends that attach only. The session host and Claude keep running. |
-| Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree. |
+| Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree (a Kiro session: `kiro-cli chat --agent agentk --resume-id <Kiro's id>`, see [Agents](harnesses.md)). |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise ends the session's pane. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
 | Discard | Chosen in Archive's confirmation step. First runs the [learn step](recall-and-learn.md#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then ends the session's pane, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
 | Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (**Use an existing one**) brings the project back (see [Opening a closed project again](open-project-and-new-session.md#open-project)). |
@@ -102,7 +110,10 @@ CREATE TABLE project_events (  -- closes and reopens, for the usage stats (a reo
   project_id TEXT REFERENCES projects, kind TEXT CHECK (kind IN ('closed','reopened')), at INTEGER);
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, name TEXT,
-  claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT,
+  harness TEXT NOT NULL DEFAULT 'claude',  -- the agent it runs on: claude | kiro (src/shared/harnesses.ts)
+  claude_session_id TEXT NOT NULL, branch TEXT, worktree_path TEXT,  -- claude_session_id: Claude Code's session id, and every
+                                  --   harness's key for its Meko conversation
+  agent_session_id TEXT,          -- the conversation id a harness picks itself (Kiro's), once a hook has said it; NULL for Claude Code
   tmux_name TEXT,                 -- the pane's name in the session host (named when panes were tmux sessions)
   repo_path TEXT,                 -- the repo's real path: the project's, or another one picked in Advanced
   branch_reused INTEGER,          -- 1: the branch existed when the session started

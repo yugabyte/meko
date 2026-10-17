@@ -2,7 +2,7 @@ import { useEffect, useReducer } from 'react';
 import type { Session, StartupStep } from '../../shared/types';
 import { STAGE_LABELS, STARTUP_STEPS } from '../../shared/types';
 import { kindOf } from '../../shared/stages';
-import { cx } from '../util';
+import { agentName, cx } from '../util';
 import { Busy, Check } from './common';
 
 const STAGE_HINT: Partial<Record<Session['stage'], string>> = {
@@ -74,13 +74,18 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
       </ol>
       {stuck ? (
         <div className="startup-stuck">
-          <p className="startup-note">This is taking longer than usual. Claude may already be running: check the terminal.</p>
+          <p className="startup-note">This is taking longer than usual. {agentName(session)} may already be running: check the terminal.</p>
           <button className="btn small" onClick={onShowTerminal}>
             Show terminal
           </button>
         </div>
       ) : (
-        slow && <p className="startup-note">Claude Code loads its plugins, MCP servers and startup hooks first. This can take up to a minute.</p>
+        slow && (
+          <p className="startup-note">
+            {session.harness === 'kiro' ? 'Kiro loads its agent and MCP servers first.' : 'Claude Code loads its plugins, MCP servers and startup hooks first.'} This can take up
+            to a minute.
+          </p>
+        )
       )}
       {slowWorktree && (
         <p className="startup-note">On a big repo this can take a few minutes. You can switch to other sessions meanwhile; this one keeps starting.</p>
