@@ -72,7 +72,7 @@ export function NewSessionDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inProjectRepo = repoPath === project.repoPath;
-  // The agent: the default (Settings → General) unless picked here; a retry keeps the one it asked for.
+  // The agent: the default (Settings → Harness) unless picked here; a retry keeps the one it asked for.
   // Always sent while one is shown, so a default that isn't available any more never decides for the
   // dialog; with none available yet (just after a start), the server picks.
   const agents = harnesses.filter((h) => h.available);

@@ -66,7 +66,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
 
 [agents]
-# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → General); claude by default,
+# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → Harness); claude by default,
                              # and the first available one while the one named isn't available
 
 [kiro]

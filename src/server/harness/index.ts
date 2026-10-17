@@ -80,7 +80,7 @@ export class Harnesses {
     const s = h.status(cfg);
     if (s.available) return h;
     const how = !s.enabled
-      ? `turn it on in Settings → General ([${h.id}] enabled in config.toml)`
+      ? `turn it on in Settings → Harness ([${h.id}] enabled in config.toml)`
       : s.version === null
         ? `install it, or set [${h.id}] command in config.toml`
         : `update it to ${s.minVersion} or later (it's ${s.version})`;

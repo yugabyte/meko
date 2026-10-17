@@ -2295,10 +2295,12 @@ export type TermServerMessage =
 //                                                           only when the user asks; then checks Kiro's Meko again)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
 //        that's turned on again now (Kiro's isn't read while it's off); a change is pushed to every page)
-// POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`kiro-cli update`), then
-//        reads its version again; Claude Code keeps POST /api/claude/update; 409 while one runs)
+// POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`claude update`,
+//        `kiro-cli update`), then reads its version again; 409 while one runs. Settings › Harness's Update Kiro calls
+//        it; the UI updates Claude Code through POST /api/claude/update, whose answer carries the outcome)
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
-//        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs)
+//        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs. Called
+//        by the too-old banner's Update Claude Code and by Settings › Harness's)
 // GET    /api/update                           → UpdateStatus
 // POST   /api/update/check                     → UpdateStatus
 // POST   /api/update/apply                     → UpdateStatus

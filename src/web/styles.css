@@ -360,6 +360,24 @@ textarea.input {
   max-width: 100%;
   flex-wrap: wrap;
 }
+/* Settings › Harness: the bar that picks an agent, sitting on the frame of that agent's settings. */
+.harness-pick {
+  display: flex;
+  flex-direction: column;
+}
+.harness-pick > .seg {
+  align-self: flex-start;
+  max-width: 100%;
+  flex-wrap: wrap;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom: 0;
+}
+.harness-panel {
+  border: 1px solid var(--rule);
+  border-radius: 0 8px 8px 8px;
+  padding: 12px;
+}
 /* The agent pickers (AgentPicker): each agent's logo, then its name. */
 .seg.agents button {
   display: inline-flex;

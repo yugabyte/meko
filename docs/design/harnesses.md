@@ -9,7 +9,7 @@ Resume work the same on both. Codex and Cursor CLI are left for later; the inter
 
 ## Picking one
 
-`[agents] default` (Settings → General, **Default agent**) is where new sessions and
+`[agents] default` (Settings → Harness, **Default agent**) is where new sessions and
 [Ask AgentK](palette.md#ask-agentk) start. The New session dialog shows **Agent** under
 **Advanced** once more than one harness is available, and a failed start's **Try again** keeps the
 one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on
@@ -27,6 +27,18 @@ and decides again once it's available; turning **Offer Claude Code / Kiro** off 
 exception, which moves the default to another available agent. Both choices are `AgentPicker` in
 `common.tsx`, each agent's logo then its name. Before deciding, `pick` reads versions again (see
 [Reading versions](#reading-versions) below). The session's harness is `sessions.harness` (`Session.harness`).
+
+**Settings › Harness** holds every agent setting. At its top are **Default agent** and the logo
+setting (below); under them a bar lists every harness in `HARNESS_IDS` order, each with its logo
+and name (`HarnessBar`, a tab list), off or not installed ones too, since that's where an agent is
+turned on. It starts on the default agent, and the agent picked there shows its own settings under
+it (`AgentSettings` in `SettingsDialog.tsx`): **Offer … for new sessions** with its version or why it
+isn't offered, **Check again**, **Update Claude Code** or **Update Kiro** while it's available
+(`POST /api/claude/update`, whose answer carries the outcome, and `POST /api/harnesses/kiro/update`;
+each agent's update runs on its own, so one running doesn't hold up the other's button), and for
+Kiro **Let Kiro run any tool without asking** while Kiro is on. Edits are kept while the bar switches agents, and one
+Save sends the tab's fields (`defaultHarness`, `claudeEnabled`, `kiroEnabled`, `kiroTrustTools`).
+The no-agent banner's **Settings** opens this tab. The Meko tab keeps each agent's Meko row.
 
 **No agent is required.** AgentK installs and runs with Claude Code, Kiro, or both; nothing assumes
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
@@ -60,7 +72,7 @@ startup, then again once the last read is over 10 minutes old when a page opens 
 session is created (`Harnesses.refresh`, `pick`). It's read right away when a create needs an agent
 that's turned on but not available (not read yet, its read failed, or too old: it may have been
 installed or updated since), when an agent is turned on or updated, and on **Check again** under an
-agent's **Offer … for new sessions** in Settings → General (shown while that agent is on; `POST
+agent's **Offer … for new sessions** in Settings → Harness (shown while that agent is on; `POST
 /api/harnesses/refresh`). While an agent is off its version isn't read (apart from the mod's
 `supportsMod` check above); turning it on reads it. A version that changed is pushed to every page.
 
@@ -69,7 +81,7 @@ projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; ar
 don't count), every session tab and every session row in the rail shows its agent's logo between
 its dot and its name (`HarnessLogo` in `common.tsx`, all in one 18 × 14 px box so names line up);
 while they all run on one, nothing is added. Unticking **Show each session's agent logo beside its
-name** in Settings › General (offered while a second agent is turned on or open sessions still run
+name** in Settings › Harness (offered while a second agent is turned on or open sessions still run
 on two; on by default, kept in this browser, `ak-harness-logos`) turns them off there; the agent
 pickers keep theirs. The logos are files in `src/web/public/`, never
 loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
