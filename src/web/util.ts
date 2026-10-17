@@ -1,3 +1,4 @@
+import { HARNESS_CAPS, harnessOf } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
@@ -28,6 +29,14 @@ const URGENCY: Record<DotState, number> = {
 
 export function liveSessions(p: ProjectWithSessions): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
+}
+
+/**
+ * Whether the open sessions across all projects run on more than one harness: the session tabs and
+ * the rail then show each session's logo (`HarnessLogo`), and none while they all run on one.
+ */
+export function harnessLogos(projects: ProjectWithSessions[]): boolean {
+  return new Set(projects.flatMap((p) => liveSessions(p).map((s) => harnessOf(s.harness)))).size > 1;
 }
 
 /** A project's open sessions in the order the rail and the phone's tabs list them: oldest first. */
@@ -543,6 +552,7 @@ export function queuedText(session: Session): string | null {
 export function sessionTabTitle(s: Session): string {
   return [
     s.name,
+    HARNESS_CAPS[harnessOf(s.harness)].label,
     dotTitle(s) + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
     STAGE_LABELS[s.stage],
     `${formatTokens(totalTokens(s.usage))} tokens`,

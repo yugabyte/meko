@@ -4,7 +4,7 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { aggregateDot, cx, dotState, formatTokens, isMac, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { StatusDot } from './common';
+import { HarnessLogo, StatusDot } from './common';
 
 export function Rail({
   projects,
@@ -21,6 +21,7 @@ export function Rail({
   onCycleTheme,
   onSelect,
   sessionsShown,
+  harnessLogos,
   onSelectSession,
   onNewSession,
   onRenameSession,
@@ -52,6 +53,8 @@ export function Rail({
   onSelect: (p: ProjectWithSessions) => void;
   /** List each project's sessions under it (the Settings toggle); off, the rail lists projects only. */
   sessionsShown: boolean;
+  /** Show each listed session's harness logo: open sessions run on more than one harness. */
+  harnessLogos: boolean;
   onSelectSession: (s: Session) => void;
   /** New session in this project, offered at the end of each listed project's sessions. */
   onNewSession: (projectId: string) => void;
@@ -182,7 +185,7 @@ export function Rail({
                 )}
               </div>
               {listed && !folded && (
-                <div className="rail-sessions" id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
+                <div className={cx('rail-sessions', harnessLogos && 'logos')} id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
                   {sessions.map((s) => (
                     <button
                       key={s.id}
@@ -193,6 +196,7 @@ export function Rail({
                       title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
                     >
                       <StatusDot status={dotState(s)} phase={s.id} />
+                      {harnessLogos && <HarnessLogo harness={s.harness} />}
                       <span className="rail-sess-name">{s.name}</span>
                       <span className="stchip">{STAGE_LABELS[s.stage]}</span>
                     </button>

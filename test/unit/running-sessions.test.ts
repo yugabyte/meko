@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProjectWithSessions, QueuedGate, Session, SessionStatus } from '../../src/shared/types.js';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkOffsetMs, totalUnits } from '../../src/web/blink.js';
 import { StatusDot } from '../../src/web/components/common.js';
-import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, offersLearn, runningSessions, type DotState } from '../../src/web/util.js';
+import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, harnessLogos, offersLearn, runningSessions, type DotState } from '../../src/web/util.js';
 
 const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false, queued: QueuedGate | null = null) =>
   ({ id: status, status, desired, learning, mekoCall, queued, mergeBlockers: [] as string[] }) as Session;
@@ -95,5 +95,22 @@ describe('offersLearn', () => {
     ['not while Claude has exited', 'exited', false, true, true, false],
   ])('%s', (_, status, discarding, datapack, meko, offered) => {
     expect(offersLearn({ status, discarding }, datapack, meko)).toBe(offered);
+  });
+});
+
+describe('harnessLogos', () => {
+  // Shown while the open sessions across all projects run on two harnesses or more; an unknown id reads as Claude Code.
+  const on = (harness: string, desired: Session['desired'] = 'running') => ({ ...session('idle', desired), harness }) as Session;
+  const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
+  it.each<[string, ProjectWithSessions[], boolean]>([
+    ['no projects', [], false],
+    ['all Claude Code', [project(on('claude'), on('claude')), project(on('claude'))], false],
+    ['all Kiro', [project(on('kiro'))], false],
+    ['the only Kiro session archived', [project(on('claude'), on('kiro', 'archived'))], false],
+    ['an unknown harness beside Claude Code', [project(on('claude'), on('codex'))], false],
+    ['both in one project', [project(on('claude'), on('kiro'))], true],
+    ['one in each project', [project(on('claude')), project(on('kiro'))], true],
+  ])('%s', (_, projects, shown) => {
+    expect(harnessLogos(projects)).toBe(shown);
   });
 });

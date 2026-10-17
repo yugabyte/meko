@@ -1,10 +1,23 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
+
+const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', kiro: '/harness-kiro.svg' };
+
+/**
+ * A session's harness logo beside its name, in the tabs and the rail, while open sessions run on
+ * more than one harness (`harnessLogos()`). An 18 × 14 box that every logo fits, so names line up.
+ * Decorative: the tab's tooltip names the harness.
+ */
+export function HarnessLogo({ harness }: { harness: string }) {
+  const id = harnessOf(harness);
+  return <img className="harness-logo" src={HARNESS_LOGOS[id]} alt="" title={HARNESS_CAPS[id].label} width={18} height={14} />;
+}
 
 /**
  * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
