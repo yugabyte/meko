@@ -16,8 +16,11 @@ one it asked for (`CreateSessionRequest.harness`). A harness is *available* when
 its `--version` answers with its minimum version or later (`AppState.harnesses`; Kiro: `[kiro]
 enabled`, 2.32.0). A create that names one that isn't is a 400 that says what to do; the dialog
 always names the agent it shows. A default that isn't available any more never decides: a request
-that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`), and Settings
-offers only an available agent as the default. The session's harness is `sessions.harness`
+that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`). Settings'
+**Default agent**, like New session's **Agent**, offers only available agents and shows only while
+two or more are: with one, there's nothing to choose. A stored default that isn't available is
+kept, not rewritten, and decides again once it is. Both choices are `AgentPicker` in
+`common.tsx`, each agent's logo then its name. The session's harness is `sessions.harness`
 (`Session.harness`).
 
 **Telling them apart.** Each session's tooltip names its agent. While the open sessions across all

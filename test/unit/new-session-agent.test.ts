@@ -9,13 +9,18 @@ const status = (id: HarnessStatus['id'], o: Partial<HarnessStatus> = {}): Harnes
   id, enabled: true, version: '1.0.0', minVersion: null, available: true, isDefault: id === 'claude', updating: false, ...o,
 });
 
-/** The dialog with Advanced open (a retry on another repo opens it), and the Agent choice's buttons in it. */
+/**
+ * The dialog with Advanced open (a retry on another repo opens it), and the Agent choice's buttons
+ * in it: each one's id, `*` when it's picked, and ` (no logo)` when it doesn't show its agent's logo.
+ */
 function agents(harnesses: HarnessStatus[], harness?: HarnessStatus['id']) {
   const html = renderToStaticMarkup(createElement(NewSessionDialog, {
     project, ghLogin: null, harnesses, initial: { name: 'x', repoPath: '/code/other', ...(harness ? { harness } : {}) },
     onClose: () => undefined, onCreated: () => undefined,
   }));
-  return [...html.matchAll(/<button[^>]*id="ns-agent-(\w+)"[^>]*aria-checked="(true|false)"/g)].map(([, id, on]) => `${id}${on === 'true' ? '*' : ''}`);
+  return [...html.matchAll(/<button[^>]*id="ns-agent-(\w+)"[^>]*aria-checked="(true|false)"[^>]*>(.*?)<\/button>/g)].map(
+    ([, id, on, inner]) => `${id}${on === 'true' ? '*' : ''}${inner.includes(`src="/harness-${id}.svg"`) ? '' : ' (no logo)'}`,
+  );
 }
 
 describe("the New session dialog's Agent choice", () => {
