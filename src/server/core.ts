@@ -489,6 +489,7 @@ export class Core extends EventEmitter {
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
+    this.sessions.stop();
     this.learn.stop();
     this.knowledge.stop();
     await this.closeHooks();

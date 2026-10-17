@@ -237,6 +237,8 @@ export class SessionManager {
   private usage = new Map<string, TokenUsage>();
   private usageLoaded = false;
   private usageReadAt = new Map<string, number>();
+  /** Kiro turns' second usage reads, cleared by `stop()` so none runs after the database closes. */
+  private rereads = new Set<NodeJS.Timeout>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
   /**
@@ -1458,7 +1460,13 @@ export class SessionManager {
     this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
     // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
-    if (this.harness(row).caps.usage === 'credits') setTimeout(() => this.ingestUsage(id), USAGE_REREAD_MS).unref();
+    if (this.harness(row).caps.usage === 'credits') {
+      const t = setTimeout(() => {
+        this.rereads.delete(t);
+        this.ingestUsage(id);
+      }, USAGE_REREAD_MS).unref();
+      this.rereads.add(t);
+    }
     await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
   }
 
@@ -2368,6 +2376,12 @@ export class SessionManager {
   }
 
   // ---- token usage ----
+
+  /** At server stop: drops the usage reads still waiting (a Kiro session's next turn reads its file again anyway). */
+  stop(): void {
+    for (const t of this.rereads) clearTimeout(t);
+    this.rereads.clear();
+  }
 
   /** Reads any new transcript lines for a session (Kiro's: its session file) and updates its token totals. */
   ingestUsage(id: string): void {
