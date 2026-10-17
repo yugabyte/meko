@@ -306,6 +306,8 @@ export class Core extends EventEmitter {
 
   /** Claude Code's version changed: its Meko is checked again once it's there (or cleared once it's gone). */
   private claudeChanged(): void {
+    // A read that finishes after stop(): nothing to check or push any more.
+    if (this.stopped) return;
     const available = this.harnesses.of('claude').status(this.cfg).available;
     if (available !== this.claudeAvailable) {
       this.claudeAvailable = available;

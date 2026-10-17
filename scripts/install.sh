@@ -11,7 +11,8 @@
 #                       setup for the agents) without asking
 #   --agent <claude|kiro>
 #                       the coding agent to install when neither Claude Code nor Kiro CLI is
-#                       there (default: ask, or Claude Code when there's no one to ask)
+#                       there (default: ask; Claude Code with --install-deps or when there's no
+#                       one to ask)
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK Local is already installed
@@ -196,9 +197,9 @@ if ! command -v gh >/dev/null 2>&1; then
   fi
 fi
 # Sessions run on Claude Code or Kiro CLI: one of them is enough. With neither, one is installed:
-# the one --agent names, else the one picked here, else Claude Code.
+# the one --agent names, else the one picked here, else Claude Code. --install-deps never asks.
 if ! command -v claude >/dev/null 2>&1 && ! command -v kiro-cli >/dev/null 2>&1; then
-  if [ -z "$agent" ] && $interactive && [ "$install_deps" != no ]; then
+  if [ -z "$agent" ] && $interactive && [ "$install_deps" = ask ]; then
     say "${b}Coding agent${n}"
     warn "Missing" "AgentK Local runs sessions on Claude Code or Kiro CLI, and neither is installed"
     printf '    Install Claude Code (1) or Kiro CLI (2)? %s[1]%s ' "$d" "$n" >&2

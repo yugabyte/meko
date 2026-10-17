@@ -307,9 +307,12 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boo
     }
   }
   const settingsEnv = readClaudeSettingsEnv();
+  // Without Claude Code, nothing puts a key from the installer's environment into its settings, and
+  // the service has no MEKO_* environment: config.toml keeps it, as it would a typed one.
+  const noClaude = !d.ensureInClaude;
   const keep = mekoKeyForConfig({
-    apiKey: meko.apiKey, url: meko.url, typed: storeKey, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
-    envKey: process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
+    apiKey: meko.apiKey, url: meko.url, typed: storeKey || noClaude, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
+    envKey: noClaude ? undefined : process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
   });
   if (keep !== 'unchanged') {
     cfg.meko.apiKey = keep.apiKey;

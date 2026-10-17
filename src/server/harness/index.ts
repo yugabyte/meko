@@ -48,8 +48,9 @@ export class Harnesses {
    * read yet, or its last read failed), so a read that failed once doesn't refuse until the next one.
    */
   async ensureDefault(cfg: Config): Promise<Harness | null> {
-    await this.reread(cfg, this.of(cfg.agents.default));
-    if (!this.defaultFor(cfg)) await Promise.all(this.list().map((h) => this.reread(cfg, h)));
+    const asked = this.of(cfg.agents.default);
+    await this.reread(cfg, asked);
+    if (!this.defaultFor(cfg)) await Promise.all(this.list().filter((h) => h !== asked).map((h) => this.reread(cfg, h)));
     return this.defaultFor(cfg);
   }
 

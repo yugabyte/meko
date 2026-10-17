@@ -104,7 +104,12 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
 
   const version = (cfg: Config, force = false): Promise<string | null> => {
     const command = cfg.kiro.command;
-    if (!cfg.kiro.enabled) return Promise.resolve(null);
+    if (!cfg.kiro.enabled) {
+      // Forgotten, so turning it back on reads it again before it's offered.
+      ver = null;
+      readFor = null;
+      return Promise.resolve(null);
+    }
     const now = Date.now();
     if (force || !ver || ver.command !== command || now - ver.at > VERSION_TTL_MS) {
       const read = readVersion(command).then((v) => {

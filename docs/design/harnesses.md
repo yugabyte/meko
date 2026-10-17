@@ -28,16 +28,20 @@ once) doesn't wait ten minutes. The session's harness is `sessions.harness` (`Se
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
 `--settings` file and the scripts Kiro's `agentk` agent runs too), then prepares every harness in the
 background, so no CLI holds up the start. `HarnessStatus.checked` says an agent's version has been
-read for the command it's run with, so the UI tells "not installed" from "not asked yet". Once every
+read for the command it's run with since it was last turned on (turning it off forgets the read), so
+the UI tells "not installed" from "not asked yet". Once every
 agent that's turned on has answered and none is available, a create (and Ask AgentK) is a 409 that
 says to install Claude Code or Kiro CLI, a banner says the same with a **Settings** button, the New
 session dialog shows it in place of starting, and the palette leaves Ask AgentK out
 (`AppState.askAgentk`). Claude Code's Meko check (`MekoClaudeWatch`) runs only while Claude Code is
 available, and the Meko tab shows Claude Code's row only then. Sessions already on an agent that's
-gone keep their row: a relaunch exits at once and shows as exited, like a crash.
+gone keep their row: a relaunch exits at once and shows as exited, like a crash. Turning an agent off
+only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
+AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
 
 The installer needs one agent: `install.sh` takes Claude Code or `kiro-cli` on the PATH, and with
-neither asks which to install (Claude Code first; `--agent claude|kiro` for unattended runs), with
+neither asks which to install (Claude Code first; `--agent claude|kiro` for unattended runs, and
+`--install-deps` takes Claude Code without asking unless `--agent` says otherwise), with
 Anthropic's installer or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), and stops
 when that's declined or fails. It checks each agent's sign-in (`claude auth status`, `kiro-cli
 whoami`) and offers `claude auth login` or `kiro-cli login`. `agent-k-local install` then reads each

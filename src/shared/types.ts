@@ -913,8 +913,9 @@ export interface HarnessStatus {
   /** New sessions can start on it: enabled, and its version read and new enough. */
   available: boolean;
   /**
-   * Its version has been read (or tried) for the command it's run with since it was turned on, so
-   * `available: false` means it really isn't there rather than not asked yet. True while it's off.
+   * Its version has been read (or tried) for the command it's run with since it was last turned on
+   * (turning it off forgets the read), so `available: false` means it really isn't there rather than
+   * not asked yet. True while it's off.
    */
   checked: boolean;
   /** `[agents] default`: new sessions start on it unless the New session dialog picks another. */
@@ -1866,7 +1867,11 @@ export interface AttachDatapackRequest {
 
 export interface CreateSessionRequest {
   name: string;
-  /** The harness the session runs on; it must be available (`AppState.harnesses`). Left out, `[agents] default` while that's available, else Claude Code. */
+  /**
+   * The harness the session runs on; it must be available (`AppState.harnesses`). Left out,
+   * `[agents] default` while that's available, else the first available one (HARNESS_IDS order),
+   * else the create is a 409 (NO_AGENT).
+   */
   harness?: HarnessId;
   /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
@@ -2138,7 +2143,8 @@ export type TermServerMessage =
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a harness that isn't available, a bad branch name, a
 //        base branch neither the repo nor its origin has, a repo that isn't a scanned one, an `existingBranch` that doesn't exist, or a task's
-//        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has. Review a PR:
+//        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has, or
+//        when no coding agent is available (NO_AGENT). Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
 //        `images` that aren't this project's staged images, or more than MAX_START_IMAGES). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it

@@ -47,11 +47,20 @@ export class ClaudeCode {
 
   /**
    * The version, read again when the last read is older than the TTL, `force`d, or for another
-   * command. Null without a read while Claude Code is turned off (`[claude] enabled = false`).
+   * command. Null without a read while Claude Code is turned off (`[claude] enabled = false`), and
+   * the last read is forgotten then, so turning it back on reads it again before it's offered.
    */
   version(force = false): Promise<string | null> {
-    const { command, enabled } = this.deps.config().claude;
-    if (!enabled) return Promise.resolve(null);
+    if (!this.deps.config().claude.enabled) {
+      this.ver = null;
+      this.readFor = null;
+      return Promise.resolve(null);
+    }
+    return this.read(force);
+  }
+
+  private read(force = false): Promise<string | null> {
+    const { command } = this.deps.config().claude;
     const now = this.now();
     if (force || !this.ver || this.ver.command !== command || now - this.ver.at > CLAUDE_VERSION_TTL_MS) {
       const read = this.readVersion(command).then((v) => {
@@ -67,9 +76,12 @@ export class ClaudeCode {
     return this.ver.read;
   }
 
-  /** Whether the Claude Code the next launch gets runs AgentK's mod (false when its version can't be read). */
+  /**
+   * Whether the Claude Code the next launch gets runs AgentK's mod (false when its version can't be
+   * read). Read even while Claude Code isn't offered for new sessions: its sessions keep the mod.
+   */
   async supportsMod(): Promise<boolean> {
-    const v = await this.version();
+    const v = await this.read();
     return !!v && versionAtLeast(v, MIN_MOD_CLAUDE);
   }
 

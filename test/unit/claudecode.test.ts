@@ -24,7 +24,7 @@ function setup(installed: string | null, update: (c: { installed: string | null 
 }
 
 describe('the Claude Code sessions launch with', () => {
-  it("runs no claude --version while it's turned off, and has no version then", async () => {
+  it("isn't offered while it's turned off, but its sessions keep the mod, and turning it on reads it again", async () => {
     const { cc, cfg, state } = setup('2.1.290');
     await cc.version();
     cfg.claude.enabled = false;
@@ -32,6 +32,14 @@ describe('the Claude Code sessions launch with', () => {
     expect(state.reads).toBe(1);
     expect(cc.checked()).toBe(true);
     expect(cc.status().version).toBeNull();
+    // A Claude Code session that relaunches still gets the mod.
+    expect(await cc.supportsMod()).toBe(true);
+    // Turned off, the last read is forgotten: back on, it isn't checked until it's read again.
+    await cc.version();
+    cfg.claude.enabled = true;
+    expect(cc.checked()).toBe(false);
+    await cc.version();
+    expect(cc.checked()).toBe(true);
   });
 
   it('reports its version and whether it runs the mod, reading it again only once the last read is stale', async () => {

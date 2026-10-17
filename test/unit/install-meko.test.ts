@@ -115,12 +115,18 @@ describe('installer: Meko is optional', () => {
     await expect(installMeko(cfg(), { keyArg: 'bad', noMeko: false }, no.d)).rejects.toThrow(/Run the installer again/);
   });
 
-  it("tells Claude Code's check when the key came only from the installer's environment", async () => {
+  it("tells Claude Code's check when the key came only from the installer's environment, and keeps it in config.toml without Claude Code", async () => {
     process.env.MEKO_API_KEY = 'mko_tkn_env';
     try {
       const fromEnv = deps({ canAsk: false });
-      expect(await installMeko(cfg(), { noMeko: false }, fromEnv.d)).toBe(true);
+      const withClaude = cfg();
+      expect(await installMeko(withClaude, { noMeko: false }, fromEnv.d)).toBe(true);
       expect(fromEnv.calls).toEqual(['check', 'claude (key from env)']);
+      expect(withClaude.meko.apiKey).toBe('');
+      // Only Kiro: the service, which has no MEKO_* environment, reads it from config.toml.
+      const kiroOnly = cfg();
+      expect(await installMeko(kiroOnly, { noMeko: false }, deps({ canAsk: false, agents: ['kiro'] }).d)).toBe(true);
+      expect(kiroOnly.meko.apiKey).toBe('mko_tkn_env');
       const typed = deps({ canAsk: false });
       expect(await installMeko(cfg(), { keyArg: 'mko_tkn_typed', noMeko: false }, typed.d)).toBe(true);
       expect(typed.calls).toEqual(['check', 'claude']);

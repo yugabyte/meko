@@ -229,7 +229,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       with Meko off, stopped at an error waiting can't fix, and dropped on a Meko settings change.
       The one check that calls Meko by itself, trying Claude
       Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
-      session launch, after Claude Code's setup), in the background, only for a token that isn't
+      session launch, after Claude Code's setup, Claude Code becoming available or not after a
+      version read), only while Claude Code is available, in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
 - [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the
       session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.

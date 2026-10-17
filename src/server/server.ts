@@ -598,11 +598,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
-    // An agent turned on: its version (and Kiro's agent file) follow, in the background.
+    // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
+    // off forgets its last read, so it isn't offered on that read once it's turned on again.
     for (const id of HARNESS_IDS) {
-      if (!core.config[id].enabled || enabledBefore[id]) continue;
+      if (core.config[id].enabled === enabledBefore[id]) continue;
       const h = core.harnesses.of(id);
-      void h.version(core.config, true).then(() => h.prepare(core.paths, core.config)).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+      if (!core.config[id].enabled) void h.version(core.config);
+      else void h.version(core.config, true).then(() => h.prepare(core.paths, core.config)).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
     }
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
     const cleanup = (what: string, fn: () => Promise<void>) => void fn().catch((e) => core.log.warn(`${what} failed`, errMsg(e)));

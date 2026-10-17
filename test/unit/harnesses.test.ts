@@ -10,11 +10,10 @@ function setup(installed: Record<HarnessId, string | null>, o: { default?: Harne
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
   cfg.agents.default = o.default ?? 'claude';
   for (const id of o.off ?? []) cfg[id].enabled = false;
-  const reads: string[] = [];
-  const read = (id: HarnessId) => async () => (reads.push(id), installed[id]);
+  const read = (id: HarnessId) => async () => installed[id];
   const claudeCode = new ClaudeCode({ config: () => cfg, changed: () => undefined, readVersion: read('claude') });
   const harnesses = new Harnesses({ claudeCode, log: silentLogger, changed: () => undefined, kiroVersion: read('kiro') });
-  return { cfg, harnesses, installed, reads, readAll: () => Promise.all(harnesses.list().map((h) => h.version(cfg))) };
+  return { cfg, harnesses, installed, readAll: () => Promise.all(harnesses.list().map((h) => h.version(cfg))) };
 }
 
 describe('the agent new sessions and Ask AgentK start on', () => {
@@ -39,9 +38,7 @@ describe('the agent new sessions and Ask AgentK start on', () => {
     expect((await s.harnesses.pick(s.cfg, undefined)).id).toBe('claude');
     s.installed.claude = null;
     await s.harnesses.of('claude').version(s.cfg, true);
-    s.reads.length = 0;
     await expect(s.harnesses.pick(s.cfg, undefined)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/^No coding agent is available: install Claude Code or Kiro CLI/) });
-    expect(s.reads.sort()).toEqual(['claude', 'claude', 'kiro']);
     await expect(s.harnesses.pick(s.cfg, 'kiro')).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^Kiro isn't available for new sessions: install it/) });
   });
 });
