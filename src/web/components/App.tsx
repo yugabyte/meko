@@ -12,6 +12,7 @@ import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import {
   cx,
+  harnessLogos,
   lastOpenSession,
   lastSessionClosed,
   liveSessions,
@@ -191,6 +192,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     () => sortedProjects(withCreated(withOpened(state?.projects ?? [], opened), created?.session ?? null)),
     [state, opened, created],
   );
+  // Logos beside session names in the tabs and the rail, while open sessions run on more than one harness.
+  const logos = useMemo(() => harnessLogos(projects), [projects]);
   useEffect(() => {
     if (!created || !state || state === created.seen) return;
     const inState = state.projects.some((p) => p.sessions.some((s) => s.id === created.session.id));
@@ -473,6 +476,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         currentId={currentProject?.id ?? null}
         currentSessionId={currentSession?.id ?? null}
         sessionsShown={railSessions}
+        harnessLogos={logos}
         usageOpen={route.view === 'usage'}
         onUsage={() => {
           navigate({ view: 'usage' }, { replace: isDrawerEntry() });
@@ -556,6 +560,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onMenu={openDrawer}
             showTabs={!railSessions || railHidden}
+            harnessLogos={logos}
             onError={showToast}
           />
         ) : (
