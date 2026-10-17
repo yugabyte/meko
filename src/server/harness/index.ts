@@ -35,6 +35,15 @@ export class Harnesses {
   }
 
   /**
+   * Reads every harness's version again once the last read is stale (`force`: now), since Claude Code
+   * and Kiro update themselves. Nothing polls: this runs when a page opens, and on Check again.
+   */
+  async refresh(cfg: Config, force = false): Promise<HarnessStatus[]> {
+    await Promise.all(this.list().map((h) => h.version(cfg, force)));
+    return this.status(cfg);
+  }
+
+  /**
    * What runs when nobody picks: `[agents] default` while it's available, else the first available
    * harness (HARNESS_IDS order), else null (no coding agent is installed, turned on and new enough).
    */
@@ -44,8 +53,8 @@ export class Harnesses {
   }
 
   /**
-   * `defaultFor`, after reading again the version of any harness that's turned on but has none (not
-   * read yet, or its last read failed), so a read that failed once doesn't refuse until the next one.
+   * `defaultFor`, after reading versions again (`reread`), so a read that failed once, or an agent
+   * installed or updated since, doesn't refuse until the next page load.
    */
   async ensureDefault(cfg: Config): Promise<Harness | null> {
     const asked = this.of(cfg.agents.default);
@@ -57,7 +66,7 @@ export class Harnesses {
   /**
    * The harness a new session starts on: the one asked for, else the default (`ensureDefault`). 400
    * when the one asked for isn't available (turned off, not installed, or too old), naming what to
-   * do; 409 when no harness is available at all.
+   * do; 409 when no harness is available at all. Its version is read again first (`reread`).
    */
   async pick(cfg: Config, asked: unknown): Promise<Harness> {
     if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(' or ')}.`);
@@ -78,8 +87,12 @@ export class Harnesses {
     throw new HttpError(400, `${h.caps.label} isn't available for new sessions: ${how}.`);
   }
 
-  /** Reads a harness's version again when it's turned on but has none. */
+  /**
+   * Reads a harness's version again: now while it's turned on but not available (not read yet, its
+   * last read failed, or too old: it may have been installed or updated since), else once stale.
+   */
   private async reread(cfg: Config, h: Harness): Promise<void> {
-    if (h.enabled(cfg) && h.status(cfg).version === null) await h.version(cfg, true);
+    const s = h.status(cfg);
+    await h.version(cfg, s.enabled && !s.available);
   }
 }

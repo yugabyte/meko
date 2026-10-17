@@ -25,9 +25,8 @@ are: with one, there's nothing to choose (`defaultAgentChoice()` in `util.ts`). 
 goes unavailable some other way (not installed, too old, or turned off in config.toml) stays stored,
 and decides again once it's available; turning **Offer Claude Code / Kiro** off in Settings is the
 exception, which moves the default to another available agent. Both choices are `AgentPicker` in
-`common.tsx`, each agent's logo then its name. Before refusing, `pick` reads again the version of any agent
-that's turned on but has none, so an agent installed since the last read (or a read that failed
-once) doesn't wait ten minutes. The session's harness is `sessions.harness` (`Session.harness`).
+`common.tsx`, each agent's logo then its name. Before deciding, `pick` reads versions again (see
+[Reading versions](#reading-versions) below). The session's harness is `sessions.harness` (`Session.harness`).
 
 **No agent is required.** AgentK installs and runs with Claude Code, Kiro, or both; nothing assumes
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
@@ -53,6 +52,17 @@ whoami`) and offers `claude auth login` or `kiro-cli login`. `agent-k-local inst
 agent's version (`settleAgents`): with none it stops, saying what to install; a default that isn't
 installed becomes the first agent that is; and Meko's setup is offered for each agent found (Claude
 Code's plugin and MCP server, Kiro's `--client kiro`), asking first, each a warning when declined.
+
+### Reading versions
+
+Claude Code and Kiro update themselves, but nothing polls them. An agent's `--version` is read at
+startup, then again once the last read is over 10 minutes old when a page opens (`/ws/events`) or a
+session is created (`Harnesses.refresh`, `pick`). It's read right away when a create needs an agent
+that's turned on but not available (not read yet, its read failed, or too old: it may have been
+installed or updated since), when an agent is turned on or updated, and on **Check again** under an
+agent's **Offer … for new sessions** in Settings → General (shown while that agent is on; `POST
+/api/harnesses/refresh`). While an agent is off its version isn't read (apart from the mod's
+`supportsMod` check above); turning it on reads it. A version that changed is pushed to every page.
 
 **Telling them apart.** Each session's tooltip names its agent. While the open sessions across all
 projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions

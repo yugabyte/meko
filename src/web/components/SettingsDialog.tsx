@@ -112,15 +112,18 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
   if (h.version === null) {
     if (!h.checked) return <Busy label="Looking for it" />;
     const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
-    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml.`;
+    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml, then check again.`;
   }
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
+  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
   return `Version ${h.version}.`;
 }
 
 function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [s, setS] = useState<Settings | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [checking, setChecking] = useState(false);
+  // What Check again answered, until the next state push replaces it.
+  const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
@@ -130,6 +133,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => setRechecked(null), [harnesses]);
 
   useEffect(() => {
     api
@@ -146,11 +151,36 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
-  const kiro = harnesses.find((h) => h.id === 'kiro');
-  const defaultAgent = defaultAgentChoice(harnesses, s.defaultHarness);
+  const agents = rechecked ?? harnesses;
+  const claude = agents.find((h) => h.id === 'claude');
+  const kiro = agents.find((h) => h.id === 'kiro');
+  const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
   // Turning off the default agent moves the default to another available one, if there is one.
   const defaultWithout = (off: HarnessId): HarnessId =>
-    s.defaultHarness !== off ? s.defaultHarness : (harnesses.find((h) => h.id !== off && h.available)?.id ?? s.defaultHarness);
+    s.defaultHarness !== off ? s.defaultHarness : (agents.find((h) => h.id !== off && h.available)?.id ?? s.defaultHarness);
+  // Under an agent that's on: reads every agent's version again (nothing polls them).
+  const checkAgain = (h: HarnessStatus | undefined) =>
+    h?.enabled && (
+      <div className="settings-actions">
+        <button
+          type="button"
+          id={`set-${h.id}-check`}
+          className="btn small"
+          disabled={checking}
+          onClick={() => {
+            setChecking(true);
+            setError(null);
+            api
+              .refreshHarnesses()
+              .then(setRechecked)
+              .catch((err) => setError(errorMessage(err)))
+              .finally(() => setChecking(false));
+          }}
+        >
+          {checking ? <Busy label="Checking" /> : 'Check again'}
+        </button>
+      </div>
+    );
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -316,7 +346,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           />
           <span>Offer Claude Code for new sessions</span>
         </label>
-        <span className="hint">{harnessNote('claude', harnesses.find((h) => h.id === 'claude'))}</span>
+        <span className="hint">{harnessNote('claude', claude)}</span>
+        {checkAgain(claude)}
       </div>
       <div className="field">
         <label className="check">
@@ -329,6 +360,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           <span>Offer Kiro for new sessions</span>
         </label>
         <span className="hint">{harnessNote('kiro', kiro)}</span>
+        {checkAgain(kiro)}
       </div>
       {s.kiroEnabled && (
         <>

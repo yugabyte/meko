@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
@@ -670,6 +670,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());
+  // Check again (Settings → General): a version that changed reaches every page through `changed()`.
+  app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.harnesses.refresh(core.config, true));
   app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req) => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
     return core.harnesses.of(req.params.id).update(core.config);
@@ -780,6 +782,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!wsGuard(socket, req)) return;
     clients.add(socket);
     socket.send(JSON.stringify({ type: 'state', state: core.state() } satisfies ServerEvent));
+    // A page opening is when stale versions are read again (nothing polls them); a change is pushed.
+    void core.harnesses.refresh(core.config).catch((e) => core.log.warn('reading the agents\' versions failed', errMsg(e)));
     // A page checking that its socket is still there (src/web/events.ts).
     socket.on('message', (data) => {
       let msg: EventsClientMessage | null;
