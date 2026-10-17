@@ -12,26 +12,57 @@ Resume work the same on both. Codex and Cursor CLI are left for later; the inter
 `[agents] default` (Settings → General, **Default agent**) is where new sessions and
 [Ask AgentK](palette.md#ask-agentk) start. The New session dialog shows **Agent** under
 **Advanced** once more than one harness is available, and a failed start's **Try again** keeps the
-one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on and
-its `--version` answers with its minimum version or later (`AppState.harnesses`; Kiro: `[kiro]
-enabled`, 2.32.0). A create that names one that isn't is a 400 that says what to do; the dialog
-always names the agent it shows. A default that isn't available any more never decides: a request
-that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`). Settings'
-**Default agent**, like New session's **Agent**, offers only available agents and shows only while
-two or more are: with one, there's nothing to choose (`defaultAgentChoice()` in `util.ts`). A
-stored default that goes unavailable (Kiro missing, too old, or `[kiro] enabled` turned off in
-config.toml) stays stored, and decides again once it's available; turning **Offer Kiro** off in
-Settings is the exception, which also sets the default to Claude Code. Both choices are
-`AgentPicker` in `common.tsx`, each agent's logo then its name. The session's harness is
-`sessions.harness` (`Session.harness`).
+one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on
+(`[claude] enabled`, `[kiro] enabled`: **Offer Claude Code / Kiro for new sessions** in Settings) and
+its `--version` answers with its minimum version or later (`AppState.harnesses`; Claude Code: any
+version, Kiro: 2.32.0). Each one's command is set only in `config.toml` (`[claude] command`, `[kiro]
+command`). A create that names one that isn't is a 400 that says what to do; the dialog always names
+the agent it shows (none while no agent has answered yet, just after a start: the server then picks).
+A default that isn't available never decides: a request that names no harness, and Ask AgentK, start
+on the first available one in `HARNESS_IDS` order (`Harnesses.defaultFor`). Settings' **Default
+agent**, like New session's **Agent**, offers only available agents and shows only while two or more
+are: with one, there's nothing to choose (`defaultAgentChoice()` in `util.ts`). A stored default that
+goes unavailable some other way (not installed, too old, or turned off in config.toml) stays stored,
+and decides again once it's available; turning **Offer Claude Code / Kiro** off in Settings is the
+exception, which moves the default to another available agent. Both choices are `AgentPicker` in
+`common.tsx`, each agent's logo then its name. Before deciding, `pick` reads versions again (see
+[Reading versions](#reading-versions) below). The session's harness is `sessions.harness` (`Session.harness`).
 
-**Reading versions.** Claude Code and Kiro update themselves, but nothing polls them. A harness's
-`--version` is read at startup, then again once the last read is over 10 minutes old when a page
-opens (`/ws/events`) or a session is created, and right away when a create names one that's on but
-not available (it may have been installed or updated since), when Kiro is turned on or updated, and
-on **Check again** under **Offer Kiro for new sessions** in Settings → General (shown while Kiro is
-on; `POST /api/harnesses/refresh`). Kiro's version isn't read while it's off: turning it on reads
-it. A version that changed is pushed to every page.
+**No agent is required.** AgentK installs and runs with Claude Code, Kiro, or both; nothing assumes
+`claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
+`--settings` file and the scripts Kiro's `agentk` agent runs too), then prepares every harness in the
+background, so no CLI holds up the start. `HarnessStatus.checked` says an agent's version has been
+read for the command it's run with since it was last turned on (turning it off forgets the read), so
+the UI tells "not installed" from "not asked yet". Once every
+agent that's turned on has answered and none is available, a create (and Ask AgentK) is a 409 that
+says to install Claude Code or Kiro CLI, a banner says the same with a **Settings** button, the New
+session dialog shows it in place of starting, and the palette leaves Ask AgentK out
+(`AppState.askAgentk`). Claude Code's Meko check (`MekoClaudeWatch`) runs only while Claude Code is
+available, and the Meko tab shows Claude Code's row only then. Sessions already on an agent that's
+gone keep their row: a relaunch exits at once and shows as exited, like a crash. Turning an agent off
+only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
+AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
+
+The installer needs one agent: `install.sh` takes Claude Code or `kiro-cli` on the PATH, and with
+neither asks which to install (Claude Code first; `--agent claude|kiro` for unattended runs, and
+`--install-deps` takes Claude Code without asking unless `--agent` says otherwise), with
+Anthropic's installer or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), and stops
+when that's declined or fails. It checks each agent's sign-in (`claude auth status`, `kiro-cli
+whoami`) and offers `claude auth login` or `kiro-cli login`. `agent-k-local install` then reads each
+agent's version (`settleAgents`): with none it stops, saying what to install; a default that isn't
+installed becomes the first agent that is; and Meko's setup is offered for each agent found (Claude
+Code's plugin and MCP server, Kiro's `--client kiro`), asking first, each a warning when declined.
+
+### Reading versions
+
+Claude Code and Kiro update themselves, but nothing polls them. An agent's `--version` is read at
+startup, then again once the last read is over 10 minutes old when a page opens (`/ws/events`) or a
+session is created (`Harnesses.refresh`, `pick`). It's read right away when a create needs an agent
+that's turned on but not available (not read yet, its read failed, or too old: it may have been
+installed or updated since), when an agent is turned on or updated, and on **Check again** under an
+agent's **Offer … for new sessions** in Settings → General (shown while that agent is on; `POST
+/api/harnesses/refresh`). While an agent is off its version isn't read (apart from the mod's
+`supportsMod` check above); turning it on reads it. A version that changed is pushed to every page.
 
 **Telling them apart.** Each session's tooltip names its agent. While the open sessions across all
 projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions

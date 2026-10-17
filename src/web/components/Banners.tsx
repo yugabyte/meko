@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import type { Conn } from '../hooks/useEvents';
+import { noAgent } from '../util';
 import { Busy } from './common';
 
 const DISMISS_KEY = 'ak-dismissed-updated-from';
@@ -265,6 +266,7 @@ export function Banners({
   onOpenInvite,
   onRetryStart,
   onMekoSettings,
+  onSettings,
 }: {
   state: AppState;
   conn: Conn;
@@ -275,6 +277,8 @@ export function Banners({
   onRetryStart: (f: FailedStart) => void;
   /** Opens the Meko tab in Settings. */
   onMekoSettings: () => void;
+  /** Opens Settings (its General tab, where the agents are turned on). */
+  onSettings: () => void;
 }) {
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
   const [applying, setApplying] = useState(false);
@@ -289,6 +293,17 @@ export function Banners({
             The session host on {state.serverName} runs version {state.sessionHost.version}, too old for this version of AgentK
             Local, so sessions can’t start. Run agent-k-local host restart there: running sessions restart and resume.
           </span>
+        </div>
+      )}
+      {noAgent(state.harnesses ?? []) && (
+        <div className="banner warn" role="alert">
+          <span className="banner-text">
+            No coding agent is available on {state.serverName}, so no session can start. Install Claude Code or Kiro CLI there, or turn
+            one on in Settings.
+          </span>
+          <button className="btn primary small" onClick={onSettings}>
+            Settings
+          </button>
         </div>
       )}
       {conn === 'closed' && (

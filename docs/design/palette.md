@@ -78,7 +78,8 @@ puts the text back; closing the palette cancels it too, and the server stops Cla
 request closes.
 
 **The Claude call.** The server asks the default agent (`[agents] default`, when it's available;
-else Claude Code). On Kiro it runs `kiro-cli chat --no-interactive --output-format stream-json
+else the first available one, `Harnesses.ensureDefault`; with none it answers 409, and the palette
+doesn't offer Ask AgentK while no agent is available, `AppState.askAgentk`). On Kiro it runs `kiro-cli chat --no-interactive --output-format stream-json
 --agent agentk-ask`, the message on stdin, in the same empty folder, where AgentK writes the
 `agentk-ask` agent as a workspace agent (`.kiro/agents/agentk-ask.json`, so it never shows in the
 user's agent list): the system prompt below plus the answer's JSON schema (Kiro has no schema
@@ -120,8 +121,8 @@ branches and PR titles other people may have written, so at worst it proposes so
 then doesn't pick. The palette
 shows the exchange above the list; the input's placeholder becomes *Reply to AgentK, or type a
 command…*, and typing filters commands again, with the Ask item for a follow-up. Errors say what
-went wrong with **Try again**: Claude Code missing (503), not signed in, failed, or an answer that
-can't be read (502). `[ask_agentk] enabled = false` drops the item (and the route answers 403).
+went wrong with **Try again**: no coding agent available (409), the agent's command missing (503), not
+signed in, failed, or an answer that can't be read (502). `[ask_agentk] enabled = false` drops the item (and the route answers 403).
 
 ## Finding a session
 

@@ -7,7 +7,7 @@
 export const HARNESS_IDS = ['claude', 'kiro'] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
-/** The harness sessions run on when nothing else says (`[agents] default`). */
+/** The harness `[agents] default` names when config.toml doesn't (the first available one runs while it isn't). */
 export const DEFAULT_HARNESS: HarnessId = 'claude';
 
 export interface HarnessCaps {
@@ -27,6 +27,10 @@ export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
   claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens' },
   kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits' },
 };
+
+/** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */
+export const NO_AGENT =
+  'No coding agent is available: install Claude Code or Kiro CLI where AgentK Local runs, or turn one on in Settings → General.';
 
 export function isHarnessId(v: unknown): v is HarnessId {
   return typeof v === 'string' && (HARNESS_IDS as readonly string[]).includes(v);
