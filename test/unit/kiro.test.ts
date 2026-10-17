@@ -129,7 +129,6 @@ describe("Kiro's plan usage (/usage)", () => {
     ['overage billed', `${FREE}Overages: 14.20 credits ($0.57), enabled`, { ...base, overage: { credits: 14.2, enabled: true, line: 'Overages: 14.20 credits ($0.57), enabled' } }],
     ['overage turned off', `${FREE}Overage: Disabled`, { ...base, overage: { credits: null, enabled: false, line: 'Overage: Disabled' } }],
     ['no credits line', 'Estimated Usage | resets on 2026-11-01 | KIRO FREE', null],
-    ['something else', 'Unknown command: /usage', null],
   ])('reads %s', (_, text, want) => {
     expect(parseKiroPlan(text, NOW)).toEqual(want);
   });

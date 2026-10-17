@@ -1002,6 +1002,13 @@ textarea.input {
   color: var(--muted);
   font-size: 11px;
 }
+/* Kiro's own bonus and overage lines, quoted under what AgentK read from them. */
+.lim-said {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
 .me {
   display: flex;
   flex-wrap: wrap;

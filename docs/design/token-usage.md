@@ -166,18 +166,22 @@ stream-json /usage` prints the account's credits this period (about 4 s; it bill
 version is read), hourly, and when the first Kiro session is created, so that session's plan shows
 without waiting for the hour; never after turns. It runs only while Kiro is available and some
 session (archived ones too) has run on it, so an install that never uses Kiro in AgentK never
-runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most; Kiro keeps the run as an
-empty session, which AgentK deletes (`chat --delete-session`). `parseKiroPlan` (`src/server/kiro.ts`)
+runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most, as `agentk-usage`, an
+inert agent written in that folder (no tools, MCP servers or hooks, like Ask AgentK's), so the
+user's default agent isn't loaded for it. Kiro keeps each run as an empty session: after every
+read AgentK deletes (`chat --delete-session`) the one the run named and any other Kiro session
+whose folder is `run/kiro-usage`, since a run cut off at its timeout never names its own. `parseKiroPlan` (`src/server/kiro.ts`)
 reads the plan name, the reset day and the credits line, and returns nothing without the credits
 line. Paid plans' bonus and overage lines haven't been seen, so they're matched loosely (a line
 with `bonus` and two numbers, `remaining` or `left` meaning what's left; a line with `overage`, its
 first amount that isn't money or a percentage, and `enabled`/`disabled`), and each is kept with the
 line as Kiro printed it. The reading is kept in `kv` (`kiro_plan`) and sent as `AppState.kiroPlan`;
 a read that fails (signed out, say) keeps the last one and logs once. The rail shows **Kiro
-credits**: a bar of used over covered in Kiro's violet (amber at 80%, red at 95%, and red past
-100% unless overage is on), `36 of 50 · Free · resets Nov 1`, a line for bonus and overage when
-Kiro printed them (the tooltip quotes Kiro's lines, since how they're read is a guess), and its
-own **As of** line. The reading is dropped once its reset day has come (UTC midnight), and while
+credits**: a bar of used over covered in Kiro's violet (amber at 80%, red at 95%; past 100%,
+**Over plan**, red, or amber while overage is on, since Kiro then bills the rest and goes on),
+`36 of 50 · Free · resets Nov 1`, a line for bonus and overage when Kiro printed them, Kiro's own
+lines quoted under it (since how they're read is a guess), and its own line saying it's Kiro's
+estimate of all your Kiro use, with its age. The reading is dropped once its reset day has come (UTC midnight), and while
 Kiro isn't available.
 
 - **Where it shows.** The session footer and tab tooltip show the session's total and output

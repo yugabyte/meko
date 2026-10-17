@@ -24,6 +24,8 @@ export const MIN_KIRO = '2.32.0';
 export const AGENTK_AGENT = 'agentk';
 /** The agent Ask AgentK runs as: no tools, no MCP servers, no hooks. */
 export const ASK_AGENT = 'agentk-ask';
+/** The agent the plan usage read (`/usage`) runs as, likewise inert. */
+export const USAGE_AGENT = 'agentk-usage';
 /** In the description of every agent file AgentK writes, so it's never mistaken for the user's own. */
 const MARK = 'Written by AgentK Local, which rewrites it: edit your default agent instead.';
 
@@ -170,9 +172,9 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boo
 const MEKO_CAPTURE = /kiro-handler\.js/;
 
 /** The agent Ask AgentK runs as: its instructions, and nothing it could act with. */
-export function askAgent(prompt: string): Json {
+export function askAgent(prompt: string, name = ASK_AGENT): Json {
   return {
-    name: ASK_AGENT, description: MARK, prompt, mcpServers: {}, tools: [], toolAliases: {}, allowedTools: [], resources: [],
+    name, description: MARK, prompt, mcpServers: {}, tools: [], toolAliases: {}, allowedTools: [], resources: [],
     includeMcpJson: false, hooks: {},
   };
 }
@@ -333,9 +335,31 @@ export function readKiroRun(stdout: string): { text: string; ok: boolean; sessio
   };
 }
 
-/** The arguments for reading Kiro's plan allowance: its `/usage` command in a one-shot run, which bills nothing. */
+/**
+ * The arguments for reading Kiro's plan allowance: its `/usage` command in a one-shot run, which
+ * bills nothing, as the inert `agentk-usage` agent (written in the run's folder), so the user's
+ * default agent, its MCP servers and its hooks aren't loaded for it.
+ */
 export function kiroUsageArgs(): string[] {
-  return ['chat', '--no-interactive', '--output-format', 'stream-json', '/usage'];
+  return ['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', USAGE_AGENT, '/usage'];
+}
+
+/** The ids of the sessions in Kiro's store that ran in one of `cwds` (any of its spellings). */
+export function kiroSessionsIn(cwds: string[], home = kiroHome()): string[] {
+  const dir = join(home, 'sessions', 'cli');
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  return files
+    .map((f) => f.slice(0, -'.json'.length))
+    .filter((id) => {
+      if (!SESSION_ID.test(id)) return false;
+      const s = readJson(join(dir, `${id}.json`));
+      return !!s && typeof s.cwd === 'string' && cwds.includes(s.cwd);
+    });
 }
 
 /** A number as Kiro prints one: `36.02`, `1,000`. */

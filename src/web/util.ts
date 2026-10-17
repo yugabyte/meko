@@ -309,6 +309,14 @@ export function totalTokens(u: TokenUsage): number {
   return u.input + u.output + u.cacheRead + u.cacheWrite;
 }
 
+/**
+ * One of a usage row's token counts, or a dash for a Kiro-only row (credits and no tokens: Kiro's
+ * `auto` model counts none), so it doesn't read as zero use.
+ */
+export function rowTokens(u: TokenUsage, n: number): string {
+  return u.credits && totalTokens(u) === 0 ? '—' : formatTokens(n);
+}
+
 /** 950 → "950", 12_300 → "12.3k", 4_560_000 → "4.56M". */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);

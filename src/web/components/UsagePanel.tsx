@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
-import { creditsNumber, cx, formatCostOf, formatTokens, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, formatTokens, rowTokens, totalTokens, usageTitle } from '../util';
 import { MekoUsageSection } from './MekoUsageSection';
 
 /**
@@ -160,13 +160,12 @@ export function CreditsStat({ usage }: { usage: TokenUsage }) {
   );
 }
 
-/** A row's output and total tokens; a dash for each in a Kiro row with credits and no tokens (its `auto` model counts none). */
+/** A row's output and total tokens; a dash for each in a Kiro-only row (`rowTokens`). */
 export function TokenCells({ usage }: { usage: TokenUsage }) {
-  const none = !!usage.credits && totalTokens(usage) === 0;
   return (
     <>
-      <td className="num">{none ? '—' : formatTokens(usage.output)}</td>
-      <td className="num">{none ? '—' : formatTokens(totalTokens(usage))}</td>
+      <td className="num">{rowTokens(usage, usage.output)}</td>
+      <td className="num">{rowTokens(usage, totalTokens(usage))}</td>
     </>
   );
 }
@@ -345,11 +344,11 @@ export function DailyTable({ daily }: { daily: DailyUsage[] }) {
           {[...daily].reverse().map((d) => (
             <tr key={d.day}>
               <td>{dayLabel(d.day, 'long')}</td>
-              <td className="num">{formatTokens(d.usage.output)}</td>
-              <td className="num">{formatTokens(d.usage.input)}</td>
-              <td className="num">{formatTokens(d.usage.cacheWrite)}</td>
-              <td className="num">{formatTokens(d.usage.cacheRead)}</td>
-              <td className="num">{formatTokens(totalTokens(d.usage))}</td>
+              <td className="num">{rowTokens(d.usage, d.usage.output)}</td>
+              <td className="num">{rowTokens(d.usage, d.usage.input)}</td>
+              <td className="num">{rowTokens(d.usage, d.usage.cacheWrite)}</td>
+              <td className="num">{rowTokens(d.usage, d.usage.cacheRead)}</td>
+              <td className="num">{rowTokens(d.usage, totalTokens(d.usage))}</td>
               {kiro && <CreditsCell usage={d.usage} />}
             </tr>
           ))}

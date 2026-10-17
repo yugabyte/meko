@@ -4,7 +4,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
-import { creditsNumber, cx, formatCostOf, formatTokens, relativeTime, repoFolder, totalTokens, usageTitle } from '../util';
+import { creditsNumber, cx, formatCostOf, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, Stat, TokenCells } from './UsagePanel';
@@ -173,8 +173,8 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                               {p.directCommits.toLocaleString()}
                               {p.directPushes > 0 && <span className="muted small usage-when">in {plural(p.directPushes, 'push')}</span>}
                             </td>
-                            <td className="num opt">{formatTokens(p.usage.output)}</td>
-                            <td className="num">{formatTokens(totalTokens(p.usage))}</td>
+                            <td className="num opt">{rowTokens(p.usage, p.usage.output)}</td>
+                            <td className="num">{rowTokens(p.usage, totalTokens(p.usage))}</td>
                             <td
                               className="num opt"
                               title={p.cost.unpricedMessages > 0 ? `Leaves out ${plural(p.cost.unpricedMessages, 'response')} from models without a known price` : undefined}

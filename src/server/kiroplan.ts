@@ -1,8 +1,9 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import type { KiroPlan } from '../shared/types.js';
 import { runClaudeOnce, type AskRunner } from './askagentk.js';
 import { get, kvGet, kvSet, type Db } from './db.js';
-import { deleteKiroSession, kiroUsageArgs, parseKiroPlan, readKiroRun } from './kiro.js';
+import { askAgent, deleteKiroSession, kiroSessionsIn, kiroUsageArgs, parseKiroPlan, readKiroRun, USAGE_AGENT, writeKiroAgent } from './kiro.js';
 import { errMsg, type Logger } from './log.js';
 
 const KV_KEY = 'kiro_plan';
@@ -21,13 +22,19 @@ export interface KiroPlanDeps {
   changed: () => void;
   log: Logger;
   run?: AskRunner;
+  /** Kiro's home, whose session store is swept (tests name their own). */
+  kiroHome?: string;
+  /** Deletes one of Kiro's sessions (tests record it); by default `kiro-cli chat --delete-session`. */
+  deleteSession?: (cmd: string, id: string, cwd: string) => void;
 }
 
 /**
  * Kiro's plan allowance for the rail, read with its `/usage` command (`kiro-cli chat
  * --no-interactive /usage`, which bills nothing) at start, hourly, and when the first Kiro session
  * starts. Only once a session has run on Kiro in AgentK: an install that never uses Kiro never runs
- * it for this. A read that fails keeps the last one, which the rail shows with its age.
+ * it for this. A read that fails keeps the last one, which the rail shows with its age. Each run is
+ * the inert `agentk-usage` agent's, in a folder of its own, and every session Kiro keeps of a run
+ * there is deleted afterwards, whether or not the run said its id.
  */
 export class KiroPlanStore {
   private last: KiroPlan | null = null;
@@ -71,14 +78,16 @@ export class KiroPlanStore {
   }
 
   private async read(): Promise<void> {
-    if (!this.deps.available() || !this.used()) return;
-    const cmd = this.deps.command();
     try {
-      mkdirSync(this.deps.cwd, { recursive: true });
-      const out = await this.run(cmd, kiroUsageArgs(), { input: '', cwd: this.deps.cwd, timeoutMs: RUN_TIMEOUT_MS });
+      if (!this.deps.available() || !this.used()) return;
+      const cmd = this.deps.command();
+      const cwd = this.deps.cwd;
+      mkdirSync(cwd, { recursive: true });
+      // Kiro finds the run's agent in the folder it runs in, so it never shows in the user's agent list.
+      writeKiroAgent(askAgent('', USAGE_AGENT), join(cwd, '.kiro'));
+      const out = await this.run(cmd, kiroUsageArgs(), { input: '', cwd, timeoutMs: RUN_TIMEOUT_MS });
       const r = readKiroRun(out.stdout);
-      // Kiro keeps every run as a session; this one has no turns and nobody resumes it.
-      if (r.sessionId) deleteKiroSession(cmd, r.sessionId, this.deps.cwd);
+      this.sweep(cmd, r.sessionId);
       const plan = r.ok ? parseKiroPlan(r.text, Date.now()) : null;
       if (!plan) {
         const why = out.spawnError ?? (out.timedOut ? 'it timed out' : r.error ?? (r.ok ? `its answer wasn't one AgentK knows: ${r.text.slice(0, 200)}` : `exit ${out.code}`));
@@ -92,6 +101,22 @@ export class KiroPlanStore {
     } catch (e) {
       this.warn(`reading Kiro's plan usage failed: ${errMsg(e)}`);
     }
+  }
+
+  /**
+   * Kiro keeps every run as a session, with no turns and nobody to resume it: deletes the one the run
+   * named, and any other in the run's folder (a run cut off at its timeout never names its own).
+   */
+  private sweep(cmd: string, named: string | null): void {
+    const del = this.deps.deleteSession ?? deleteKiroSession;
+    let cwds = [this.deps.cwd];
+    try {
+      cwds = [...new Set([this.deps.cwd, realpathSync(this.deps.cwd)])];
+    } catch {
+      /* the folder is there: it was just made */
+    }
+    const ids = new Set([...(named ? [named] : []), ...kiroSessionsIn(cwds, this.deps.kiroHome)]);
+    for (const id of ids) del(cmd, id, this.deps.cwd);
   }
 
   /** Once until a read works again, so an hourly failure (signed out, say) doesn't fill the log. */

@@ -341,15 +341,15 @@ function LimitBar({ label, pct, level, title, className, children }: {
 function KiroLimit({ plan, now }: { plan: KiroPlan; now: number }) {
   const pct = plan.covered > 0 ? Math.round((plan.used / plan.covered) * 100) : plan.used > 0 ? 100 : 0;
   const over = plan.used > plan.covered;
-  // Past the plan with no overage turned on: Kiro stops, so it's red whatever the level.
-  const level = over && !plan.overage?.enabled ? 'bad' : limitLevel(pct);
+  // Past the plan, Kiro stops unless overage is on; with it on, Kiro bills the rest and goes on, so amber.
+  const level = over && plan.overage?.enabled ? 'warn' : limitLevel(pct);
   const resets = plan.resetsOn ? dayLabel(plan.resetsOn) : null;
   const extra = [
     plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
     plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
   ].filter(Boolean);
-  // Kiro's own words for the bonus and overage, since how they're read is a guess.
-  const said = [plan.bonus?.line, plan.overage?.line].filter(Boolean).map((l) => `\nKiro: ${l}`).join('');
+  // Kiro's own words for the bonus and overage, shown as it printed them, since how they're read is a guess.
+  const said = [plan.bonus?.line, plan.overage?.line].filter((l): l is string => !!l);
   return (
     <>
       <LimitBar
@@ -357,14 +357,19 @@ function KiroLimit({ plan, now }: { plan: KiroPlan; now: number }) {
         pct={pct}
         level={level}
         className="kiro"
-        title={`Kiro credits: ${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)} in the plan used${resets ? `, resets ${resets}` : ''}. Kiro's estimate, across all your Kiro use.${said}`}
+        title={`Kiro credits: ${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)} in the plan used${resets ? `, resets ${resets}` : ''}`}
       >
         <div className="lim-reset">
           {[over ? 'Over plan' : null, `${creditsNumber(plan.used)} of ${creditsNumber(plan.covered)}`, plan.plan, resets && `resets ${resets}`].filter(Boolean).join(' · ')}
         </div>
         {extra.length > 0 && <div className="lim-reset">{extra.join(' · ')}</div>}
+        {said.map((l) => (
+          <div key={l} className="lim-said">
+            Kiro: {l}
+          </div>
+        ))}
       </LimitBar>
-      <div className="lim-age">As of {relativeTime(plan.updatedAt, now).toLowerCase()}</div>
+      <div className="lim-age">Kiro's estimate of all your Kiro use, as of {relativeTime(plan.updatedAt, now).toLowerCase()}</div>
     </>
   );
 }

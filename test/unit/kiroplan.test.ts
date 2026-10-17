@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AskRun, AskRunner } from '../../src/server/askagentk.js';
 import { openDb, run } from '../../src/server/db.js';
@@ -24,10 +26,18 @@ function setup() {
   };
   let changes = 0;
   const cwd = tempDir('akl-kiro-usage-');
+  const kiroHome = tempDir('akl-kiro-home-');
+  const deleted: string[] = [];
   const make = (available = true) => new KiroPlanStore({
     db, available: () => available, command: () => '/no/such/kiro-cli', cwd, changed: () => changes++, log: silentLogger, run: runner,
+    kiroHome, deleteSession: (_cmd, id) => deleted.push(id),
   });
-  return { db, session, runs, make, setAnswer: (a: AskRun) => (answer = a), changes: () => changes };
+  /** A session in Kiro's store, as a run in `dir` leaves one. */
+  const kiroSession = (id: string, dir: string) => {
+    mkdirSync(join(kiroHome, 'sessions', 'cli'), { recursive: true });
+    writeFileSync(join(kiroHome, 'sessions', 'cli', `${id}.json`), JSON.stringify({ session_id: id, cwd: dir }));
+  };
+  return { db, cwd, session, kiroSession, runs, deleted, make, setAnswer: (a: AskRun) => (answer = a), changes: () => changes };
 }
 
 describe("Kiro's plan reading", () => {
@@ -39,7 +49,9 @@ describe("Kiro's plan reading", () => {
     expect(t.runs).toEqual([]);
     t.session('k', 'kiro');
     await store.refresh();
-    expect(t.runs).toEqual([['chat', '--no-interactive', '--output-format', 'stream-json', '/usage']]);
+    // As an inert agent written in the run's folder, never the user's default one.
+    expect(t.runs).toEqual([['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', 'agentk-usage', '/usage']]);
+    expect(existsSync(join(t.cwd, '.kiro', 'agents', 'agentk-usage.json'))).toBe(true);
     expect(store.current()).toMatchObject({ used: 10, covered: 50, plan: 'Free' });
     expect(t.changes()).toBe(1);
     // Signed out, say: the last reading stays.
@@ -60,6 +72,22 @@ describe("Kiro's plan reading", () => {
     store.sessionCreated();
     await store.refresh();
     expect(t.runs).toHaveLength(2);
+  });
+
+  it("deletes every session Kiro kept in the run's folder, the one it named and any a cut-off run left", async () => {
+    const t = setup();
+    t.session('k', 'kiro');
+    t.kiroSession('left-by-timeout', t.cwd);
+    t.kiroSession('a-worktree-session', '/w');
+    await t.make().refresh();
+    expect(t.deleted.sort()).toEqual(['left-by-timeout', 'u-1']);
+  });
+
+  it("never rejects, even when the database can't be read", async () => {
+    const t = setup();
+    const store = t.make();
+    t.db.close();
+    await expect(store.refresh()).resolves.toBeUndefined();
   });
 
   it.each([
