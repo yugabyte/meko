@@ -56,7 +56,7 @@ export function Rail({
   onSelect: (p: ProjectWithSessions) => void;
   /** List each project's sessions under it (the Settings toggle); off, the rail lists projects only. */
   sessionsShown: boolean;
-  /** Show each listed session's harness logo: open sessions run on more than one harness. */
+  /** Show each listed session's harness logo: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
   onSelectSession: (s: Session) => void;
   /** New session in this project, offered at the end of each listed project's sessions. */
