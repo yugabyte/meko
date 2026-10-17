@@ -80,17 +80,17 @@ function RailSessionsSetting() {
 /** What Settings says about a harness's CLI: its version, or why it isn't offered. */
 function harnessNote(h: HarnessStatus | undefined): string {
   if (!h?.enabled) return 'Off.';
-  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml.`;
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later.`;
+  if (h.version === null) return `Kiro CLI didn't answer. Install it and run kiro-cli login, or set [kiro] command in config.toml, then check again.`;
+  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
   return `Version ${h.version}.`;
 }
 
 function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [s, setS] = useState<Settings | null>(null);
   const [updating, setUpdating] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  // Local copy of harness statuses, updated by the Refresh button and kept in sync with the WS push.
-  const [localHarnesses, setLocalHarnesses] = useState(harnesses);
+  const [checking, setChecking] = useState(false);
+  // What Check again answered, until the next state push replaces it.
+  const [checked, setChecked] = useState<HarnessStatus[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
   // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
@@ -101,7 +101,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { setLocalHarnesses(harnesses); }, [harnesses]);
+  useEffect(() => setChecked(null), [harnesses]);
 
   useEffect(() => {
     api
@@ -118,7 +118,8 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
-  const kiro = localHarnesses.find((h) => h.id === 'kiro');
+  const agents = checked ?? harnesses;
+  const kiro = agents.find((h) => h.id === 'kiro');
   const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
   // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
   const clampOr = (typed: string, max: number, saved: number) => {
@@ -267,7 +268,7 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
               type="button"
               role="radio"
               aria-checked={s.defaultHarness === id}
-              disabled={id !== 'claude' && s.defaultHarness !== id && !harnesses.find((h) => h.id === id)?.available}
+              disabled={id !== 'claude' && s.defaultHarness !== id && !agents.find((h) => h.id === id)?.available}
               className={cx(s.defaultHarness === id && 'on')}
               onClick={() => setS({ ...s, defaultHarness: id })}
             >
@@ -291,21 +292,27 @@ function GeneralTab({ harnesses }: { harnesses: HarnessStatus[] }) {
           <span>Offer Kiro for new sessions</span>
         </label>
         <span className="hint">{harnessNote(kiro)}</span>
-        <div className="settings-actions">
-          <button
-            type="button"
-            id="set-kiro-refresh"
-            className="btn small"
-            disabled={refreshing}
-            onClick={() => {
-              setRefreshing(true);
-              setError(null);
-              api.refreshHarnesses().then((next) => setLocalHarnesses(next)).catch((err) => setError(errorMessage(err))).finally(() => setRefreshing(false));
-            }}
-          >
-            {refreshing ? <Busy label="Refreshing" /> : 'Refresh'}
-          </button>
-        </div>
+        {kiro?.enabled && (
+          <div className="settings-actions">
+            <button
+              type="button"
+              id="set-kiro-check"
+              className="btn small"
+              disabled={checking}
+              onClick={() => {
+                setChecking(true);
+                setError(null);
+                api
+                  .refreshHarnesses()
+                  .then(setChecked)
+                  .catch((err) => setError(errorMessage(err)))
+                  .finally(() => setChecking(false));
+              }}
+            >
+              {checking ? <Busy label="Checking" /> : 'Check again'}
+            </button>
+          </div>
+        )}
       </div>
       {s.kiroEnabled && (
         <>

@@ -441,9 +441,10 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
-    // Checked first: a harness that isn't available starts nothing.
-    const harness = this.core.harnesses.pick(this.core.config, req.harness);
+    // Checked before the first await (a staged image can go meanwhile: claimStaged leaves it out).
     const images = checkStaged(this.core.paths.pastes, projectId, req.images);
+    // Checked before anything else: a harness that isn't available starts nothing.
+    const harness = await this.core.harnesses.pick(this.core.config, req.harness);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;

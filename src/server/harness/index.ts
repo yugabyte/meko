@@ -34,6 +34,15 @@ export class Harnesses {
     return this.list().map((h) => h.status(cfg));
   }
 
+  /**
+   * Reads every harness's version again once the last read is stale (`force`: now), since Claude Code
+   * and Kiro update themselves. Nothing polls: this runs when a page opens, and on Check again.
+   */
+  async refresh(cfg: Config, force = false): Promise<HarnessStatus[]> {
+    await Promise.all(this.list().map((h) => h.version(cfg, force)));
+    return this.status(cfg);
+  }
+
   /** `[agents] default` while it's available, else Claude Code (always available): what runs when nobody picks. */
   defaultFor(cfg: Config): Harness {
     const h = this.of(cfg.agents.default);
@@ -43,11 +52,15 @@ export class Harnesses {
   /**
    * The harness a new session starts on: the one asked for, else the default (`defaultFor`). 400
    * when the one asked for isn't available (turned off, not installed, or too old), naming what to do.
+   * Its version is read again first once stale, or now while it's on but not available: it may have
+   * been installed or updated since.
    */
-  pick(cfg: Config, asked: unknown): Harness {
+  async pick(cfg: Config, asked: unknown): Promise<Harness> {
     if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(' or ')}.`);
     if (asked == null) return this.defaultFor(cfg);
     const h = this.of(asked);
+    const before = h.status(cfg);
+    await h.version(cfg, before.enabled && !before.available);
     const s = h.status(cfg);
     if (s.available) return h;
     const how = !s.enabled

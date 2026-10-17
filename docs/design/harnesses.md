@@ -15,7 +15,15 @@ Resume work the same on both. Codex and Cursor CLI are left for later; the inter
 one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on and
 its `--version` answers with its minimum version or later (`AppState.harnesses`; Kiro: `[kiro]
 enabled`, 2.32.0). A create that names one that isn't is a 400 that says what to do; the dialog
-always names the agent it shows. A default that isn't available any more never decides: a request
+always names the agent it shows.
+
+**Reading versions.** Claude Code and Kiro update themselves, but nothing polls them. A harness's
+`--version` is read at startup, then again once the last read is over 10 minutes old when a page
+opens (`/ws/events`) or a session is created, and right away when a create names one that's on but
+not available (it may have been installed or updated since), when Kiro is turned on or updated, and
+on **Check again** under **Offer Kiro for new sessions** in Settings → General (shown while Kiro is
+on; `POST /api/harnesses/refresh`). Kiro's version isn't read while it's off: turning it on reads
+it. A version that changed is pushed to every page. A default that isn't available any more never decides: a request
 that names no harness, and Ask AgentK, start on Claude Code (`Harnesses.defaultFor`), and Settings
 offers only an available agent as the default. The session's harness is `sessions.harness`
 (`Session.harness`).

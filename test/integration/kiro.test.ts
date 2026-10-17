@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
@@ -69,7 +69,15 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(lines(env, 'argv.jsonl')[1].args).toEqual(['chat', '--agent', 'agentk', '--resume-id', row.agent_session_id]);
   });
 
-  it('refuses a new session on a harness that is turned off', async () => {
+  it("refuses a new session on a harness that isn't available, reading its version again first", async () => {
+    // Kiro read as too old, then updated: a create that names it reads the version again before refusing.
+    const version = join(process.env.FAKE_KIRO_DIR!, 'version');
+    writeFileSync(version, 'kiro-cli 2.0.0\n');
+    await env.core.harnesses.refresh(env.core.config, true);
+    expect(env.core.state().harnesses.find((h) => h.id === 'kiro')!.available).toBe(false);
+    rmSync(version);
+    expect((await env.core.harnesses.pick(env.core.config, 'kiro')).id).toBe('kiro');
+
     env.core.updateConfig((c) => {
       c.kiro.enabled = false;
     });
@@ -79,7 +87,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     env.core.updateConfig((c) => {
       c.agents.default = 'kiro';
     });
-    expect(env.core.harnesses.pick(env.core.config, undefined).id).toBe('claude');
+    expect((await env.core.harnesses.pick(env.core.config, undefined)).id).toBe('claude');
   });
 
   it("answers Ask AgentK on Kiro when it's the default, as a tool-less agent, and deletes the run's session", async () => {

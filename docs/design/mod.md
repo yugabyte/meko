@@ -16,10 +16,10 @@ hooks module whatever the variable says, and AgentK types prompts as before. It 
 
 - `[claude] mod` is on (the default);
 - the mod's files are there;
-- `claude --version` (read at startup, then at most every 10 minutes) is 2.1.287 or later. Older
-  versions frame a plugin's prompt as the plugin's message, not the person's (before 2.1.286),
-  or may lack what the learn step uses (`$.model.fork`, `$.model.complete`, `$.command.register`
-  and `command.run`, all in 2.1.287's declarations; 2.1.286's couldn't be checked).
+- `claude --version` (read at startup, then again once over 10 minutes old when a page opens or a
+  session launches; nothing polls it) is 2.1.287 or later. Older versions frame a plugin's prompt
+  as the plugin's message, not the person's (before 2.1.286), or may lack what the learn step
+  uses (`$.model.fork`, `$.model.complete`, `$.command.register` and `command.run`, all in 2.1.287's declarations; 2.1.286's couldn't be checked).
 
 **Claude Code's version.** AgentK installs Claude Code with Anthropic's installer (`install.sh`) and
 never updates it; Claude Code updates itself, unless that's turned off or it hasn't run for a while.

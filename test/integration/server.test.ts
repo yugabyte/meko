@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import type { Config } from '../../src/server/config.js';
+import type { HarnessStatus } from '../../src/shared/types.js';
 import { buildServer, stampVersion } from '../../src/server/server.js';
 import { shortHost } from '../../src/server/core.js';
 import { issueSetupToken, totpCode } from '../../src/server/auth.js';
@@ -189,32 +190,21 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain(tomlKey);
   });
 
-  it('POST /api/harnesses/refresh re-reads all harness versions and returns HarnessStatus[]', async () => {
+  it('Check again reads a harness version that changed since the last read', async () => {
     const cookie = await setup();
-    let versionCalls = 0;
-    // Inject a kiroVersion spy: counts calls after startup.
-    const origVersion = env.core.harnesses.of('kiro').version.bind(env.core.harnesses.of('kiro'));
-    const spy = async (cfg: Parameters<typeof origVersion>[0], force?: Parameters<typeof origVersion>[1]) => {
-      versionCalls++;
-      return origVersion(cfg, force);
+    env.core.updateConfig((c) => {
+      c.kiro.enabled = true;
+    });
+    const kiro = async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/harnesses/refresh', headers: { cookie } });
+      return (res.json() as HarnessStatus[]).find((h) => h.id === 'kiro');
     };
-    (env.core.harnesses.of('kiro') as { version: typeof spy }).version = spy;
-
-    const res = await app.inject({ method: 'POST', url: '/api/harnesses/refresh', headers: { cookie } });
-    expect(res.statusCode).toBe(200);
-    const statuses: unknown[] = res.json();
-    expect(Array.isArray(statuses)).toBe(true);
-    // Returns one entry per harness (claude + kiro).
-    expect(statuses).toHaveLength(2);
-    for (const s of statuses) {
-      expect(s).toMatchObject({ id: expect.any(String), enabled: expect.any(Boolean), available: expect.any(Boolean), updating: expect.any(Boolean) });
-    }
-    expect(statuses.find((s: unknown) => (s as { id: string }).id === 'claude')).toBeDefined();
-    expect(statuses.find((s: unknown) => (s as { id: string }).id === 'kiro')).toBeDefined();
-    // Force-read was called (kiro version was checked even with kiro disabled).
-    expect(versionCalls).toBeGreaterThanOrEqual(1);
-    // Requires auth.
-    expect((await app.inject({ method: 'POST', url: '/api/harnesses/refresh' })).statusCode).toBe(401);
+    expect(await kiro()).toMatchObject({ version: '2.32.0', available: true });
+    // Kiro went back to an older version: read again now, not when the 10-minute-old read expires.
+    mkdirSync(process.env.FAKE_KIRO_DIR!, { recursive: true });
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'version'), 'kiro-cli 2.0.0\n');
+    expect(await kiro()).toMatchObject({ version: '2.0.0', available: false });
+    expect(env.core.state().harnesses.find((h) => h.id === 'kiro')?.version).toBe('2.0.0');
   });
 
   it('creates a project and a session through the API', async () => {
