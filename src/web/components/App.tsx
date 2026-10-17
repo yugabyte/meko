@@ -8,6 +8,7 @@ import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, useRailSessions } from '../rail';
+import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
 import {
@@ -192,8 +193,10 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     () => sortedProjects(withCreated(withOpened(state?.projects ?? [], opened), created?.session ?? null)),
     [state, opened, created],
   );
-  // Logos beside session names in the tabs and the rail, while open sessions run on more than one harness.
-  const logos = useMemo(() => harnessLogos(projects), [projects]);
+  // Logos beside session names in the tabs and the rail, while open sessions run on more than one
+  // harness and the setting (Settings › General) is on.
+  const logosOn = harnessLogosToggle.use();
+  const logos = useMemo(() => logosOn && harnessLogos(projects), [logosOn, projects]);
   useEffect(() => {
     if (!created || !state || state === created.seen) return;
     const inState = state.projects.some((p) => p.sessions.some((s) => s.id === created.session.id));

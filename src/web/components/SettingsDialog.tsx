@@ -3,6 +3,7 @@ import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, Meko
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { saveRailSessions, useRailSessions } from '../rail';
+import { harnessLogosToggle } from '../toggle';
 import { cx, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
@@ -48,6 +49,7 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
+          {harnesses.some((h) => h.id !== 'claude' && h.enabled) && <HarnessLogosSetting />}
           <GeneralTab harnesses={harnesses} />
         </div>
       )}
@@ -73,6 +75,20 @@ function RailSessionsSetting() {
         <span>List sessions under their project in the projects pane</span>
       </label>
       <span className="hint">In place of the tabs above the terminal. Kept in this browser.</span>
+    </div>
+  );
+}
+
+/** Saved in this browser as it's ticked, like the setting above. Offered once a second agent is turned on. */
+function HarnessLogosSetting() {
+  const on = harnessLogosToggle.use();
+  return (
+    <div className="field">
+      <label className="check">
+        <input id="set-harness-logos" type="checkbox" checked={on} onChange={(e) => harnessLogosToggle.save(e.target.checked)} />
+        <span>Show each session's agent logo beside its name</span>
+      </label>
+      <span className="hint">While your open sessions run on more than one agent. The tooltip names the agent either way. Kept in this browser.</span>
     </div>
   );
 }

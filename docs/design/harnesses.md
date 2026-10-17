@@ -24,7 +24,9 @@ offers only an available agent as the default. The session's harness is `session
 projects run on more than one harness (`harnessLogos()` in `src/web/util.ts`; archived sessions
 don't count), every session tab and every session row in the rail shows its agent's logo between
 its dot and its name (`HarnessLogo` in `common.tsx`, all in one 18 × 14 px box so names line up);
-while they all run on one, nothing is added. The logos are files in `src/web/public/`, never
+while they all run on one, nothing is added. Unticking **Show each session's agent logo beside its
+name** in Settings › General (offered once a second agent is turned on; on by default, kept in
+this browser, `ak-harness-logos`) turns them off. The logos are files in `src/web/public/`, never
 loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
 from `png/clawd.png` in [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
 (Apache-2.0), and `harness-kiro.svg` is Kiro's own `https://kiro.dev/icon.svg`. Both are colored

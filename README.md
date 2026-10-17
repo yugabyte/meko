@@ -154,7 +154,7 @@ your phone can connect.
   designs as markdown, AgentK types its prompts into its terminal, and since Kiro says nothing while
   it waits for a permission answer, the session shows as working until you answer in the terminal
   (or turn on **Let Kiro run any tool**). While your open sessions run on both, each session's tab
-  and row in the rail shows its agent's logo.
+  and row in the rail shows its agent's logo (turn that off in Settings › General).
 - **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
   another and that screen offers **Move to this screen**; it moves there by itself once the first
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.

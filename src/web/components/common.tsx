@@ -11,9 +11,10 @@ const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg'
 
 /**
  * A session's harness logo beside its name, in the tabs and the rail, while open sessions run on
- * more than one harness (`harnessLogos()`). An 18 × 14 box that every logo fits, so names line up.
- * Decorative, with no title of its own: the tab's tooltip names the harness, and a title here
- * would replace that tooltip while the pointer is over the logo.
+ * more than one harness (`harnessLogos()`) and its setting is on (`harnessLogosToggle`). An 18 × 14
+ * box that every logo fits, so names line up. Decorative, with no title of its own: the tab's
+ * tooltip names the harness, and a title here would replace that tooltip while the pointer is over
+ * the logo.
  */
 export function HarnessLogo({ harness }: { harness: string }) {
   const id = harnessOf(harness);
