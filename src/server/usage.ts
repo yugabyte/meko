@@ -1,6 +1,6 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { harnessOf } from '../shared/harnesses.js';
+import { DEFAULT_HARNESS, HARNESS_IDS, harnessOf } from '../shared/harnesses.js';
 import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
@@ -360,12 +360,16 @@ function localDay(ms: number): string {
 
 /**
  * Totals per agent and model, most tokens first, for one project or all of them. The same model id
- * under two agents is two rows, and a row whose session is gone counts as Claude Code's.
+ * under two agents is two rows. The agent is read as `harnessOf` reads it before grouping: a row
+ * whose session is gone, or whose agent this version doesn't know (a newer install's), counts as
+ * the default's, in one row with the default's own.
  */
 function usageByModel(db: Db, projectId?: string): ModelUsage[] {
+  const known = HARNESS_IDS.map(() => '?').join(', ');
   return all<SumRow & { harness: string; model: string }>(db,
-    `SELECT COALESCE(s.harness, 'claude') AS harness, u.model, ${SUMS} FROM usage_messages u LEFT JOIN sessions s ON s.id = u.session_id
-     ${projectId ? 'WHERE s.project_id = ?' : ''} GROUP BY 1, u.model`, ...(projectId ? [projectId] : []))
+    `SELECT CASE WHEN s.harness IN (${known}) THEN s.harness ELSE ? END AS harness, u.model, ${SUMS}
+     FROM usage_messages u LEFT JOIN sessions s ON s.id = u.session_id
+     ${projectId ? 'WHERE s.project_id = ?' : ''} GROUP BY 1, u.model`, ...HARNESS_IDS, DEFAULT_HARNESS, ...(projectId ? [projectId] : []))
     .map((r) => ({ harness: harnessOf(r.harness), model: r.model, usage: toUsage(r) }))
     .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
 }

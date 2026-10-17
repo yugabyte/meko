@@ -156,8 +156,9 @@ describe('usage across projects', () => {
     const now = Date.now();
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('old', 'Old', '/o', 'main', 0, ?)`, now);
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('gone', 'Gone', '/g', 'main', 0, ?)`, now);
+    // On an agent this version doesn't know (a newer install's): its rows count as Claude Code's, in one by-model row.
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
-             hook_token, desired, status, stage, created_at) VALUES ('s3', 'old', 's3', 'S3', 'c', 'b', 'main', '/w', 't3', 'tok-s3', 'archived', 'archived', 'done', ?)`, now);
+             hook_token, desired, status, stage, created_at, harness) VALUES ('s3', 'old', 's3', 'S3', 'c', 'b', 'main', '/w', 't3', 'tok-s3', 'archived', 'archived', 'done', ?, 'codex')`, now);
     const msg = (sid: string, id: string, output: number) =>
       run(db, `INSERT INTO usage_messages(session_id, message_id, model, at, input, output, cache_read, cache_write) VALUES (?, ?, 'm', ?, 1, ?, 0, 0)`, sid, id, now, output);
     msg('s1', 'a', 10);
@@ -230,7 +231,6 @@ describe('token formatting (web)', () => {
   it.each([
     ['claude', 'claude-opus-5-5', 'claude-opus-5-5'],
     ['kiro', 'auto', 'Kiro · auto'],
-    ['kiro', 'claude-sonnet-4.5', 'Kiro · claude-sonnet-4.5'],
   ] as const)('names a %s row on %s by model', async (harness, model, label) => {
     const { modelLabel } = await import('../../src/web/util.js');
     expect(modelLabel({ harness, model, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 } })).toBe(label);

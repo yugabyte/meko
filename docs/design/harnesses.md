@@ -106,6 +106,7 @@ do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and th
 | Plan limits in the rail | 5-hour and weekly, from the status line and the mod | credits this period, from `/usage` hourly |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | none |
 | Usage | transcript tokens, priced | credits from Kiro's session file |
+| By-model usage rows | the model id | the agent first: **Kiro · auto** (`labelModels`) |
 
 The launcher (`launcher.ts`) is shared: the login-shell script, the session's variables after the
 profile, and every harness's markers cleared (`SESSION_MARKERS`: Claude Code's and

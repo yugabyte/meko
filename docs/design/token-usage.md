@@ -37,7 +37,8 @@ credits** beside **Est. cost**, with a **Credits** column on the by-project, by-
 and daily tables once any of their rows has some. A Kiro row with credits and no tokens (its `auto`
 model counts none) shows a dash for its tokens, not 0. The by-model tables group by agent and model
 (`ModelUsage.harness`, from the session's `harness`), and name a Kiro row with the agent first,
-**Kiro · auto** (`modelLabel`): Kiro's default model is just `auto`, and Kiro never records which
+**Kiro · auto** (`modelLabel`, from `HarnessCaps.labelModels`); an agent this version doesn't know
+counts as Claude Code's, in the same row. Kiro's default model is just `auto`, and Kiro never records which
 model it picked, so the row can say whose it is but not which model ran. The 14-day chart gives each day a Kiro
 credits bar beside its tokens bar, on a second axis on the right (tokens and credits don't share
 a scale), with a legend naming each bar's axis, once any of the 14 days has credits; without

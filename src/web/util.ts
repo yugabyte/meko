@@ -353,11 +353,12 @@ export function rowTokens(u: TokenUsage, n: number): string {
 }
 
 /**
- * A by-model row's name: the model id for Claude Code, whose ids name it, and for another agent its
- * name first ("Kiro · auto"), since Kiro's default model is just `auto`.
+ * A by-model row's name: the model id, with the agent's name first when its ids don't say which
+ * agent ran them (`HarnessCaps.labelModels`: "Kiro · auto", since Kiro's default model is just `auto`).
  */
 export function modelLabel(m: ModelUsage): string {
-  return m.harness === 'claude' ? m.model : `${HARNESS_CAPS[m.harness].short} · ${m.model}`;
+  const caps = HARNESS_CAPS[m.harness];
+  return caps.labelModels ? `${caps.short} · ${m.model}` : m.model;
 }
 
 /** 950 → "950", 12_300 → "12.3k", 4_560_000 → "4.56M". */
