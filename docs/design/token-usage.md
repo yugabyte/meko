@@ -141,9 +141,14 @@ If that command is Meko's `meko-statusline.sh`, only the command it wraps (`--in
 screen already shows, since sessions always use the project's datapack.
 AgentK's mod reports the same windows after each turn (`session.measure`), whatever the status line does.
 All sessions share one account, so reports are merged per window: a window that has reset is
-ignored, a later window replaces an earlier one, the higher use wins within a window, and a report
-missing a window keeps the last one, so an idle session re-running its status line with an old
-reading changes nothing. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,
+ignored, a later window replaces an earlier one, and a report missing a window keeps the last one.
+Within a window, what counts is whether the reading is new: the server keeps each session's last
+reading (in memory, dropped when its Claude ends). A reading that changed since that session's
+last one is new data and replaces the window even when lower, since an early reset by Anthropic
+keeps the reset time and only lowers the use. A repeat changes nothing, so an idle session
+re-running its status line with an old reading can't pull the number back. A session's first
+reading only raises the number, since it may be old; after a server restart, an early reset shows
+once a session reads a changed number. The reading is kept in the `kv` table, and the rail shows each window with a bar, its reset time and how old the reading is,
 turning amber at 80% and red at 95%. A window disappears once its reset time passes. The numbers
 only move when a session gets a reply, so the rail says when they were last reported.
 

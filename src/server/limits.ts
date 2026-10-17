@@ -53,22 +53,29 @@ const sameWindow = (a: LimitWindow | null, b: LimitWindow | null) =>
 /**
  * The better of two readings of one window: the later window (the earlier one has reset or is
  * a stale report), and within the same window the higher use, since use only grows until reset.
+ * `fresh` (`b` is new data, see `PlanLimitsStore`) lets a lower reading of the same window win:
+ * an early reset by Anthropic keeps the reset time and only lowers the use.
  */
-function newerWindow(a: LimitWindow | null, b: LimitWindow | null): LimitWindow | null {
+function newerWindow(a: LimitWindow | null, b: LimitWindow | null, fresh = false): LimitWindow | null {
   if (!a || !b) return a ?? b;
   if (a.resetsAt !== b.resetsAt) return a.resetsAt > b.resetsAt ? a : b;
-  return b.usedPercent > a.usedPercent ? b : a;
+  return fresh || b.usedPercent > a.usedPercent ? b : a;
 }
 
 /**
  * The account's plan limits. Every session reports the same account, but an idle session can
  * re-run its status line with an old reading, or one without a window, so reports are merged
- * per window instead of replacing each other. Kept in the kv table so they show again after a
+ * per window instead of replacing each other. A reading of a window that changed since the
+ * same session's last one is new data and replaces that window, even when lower; one that
+ * didn't changes nothing, and a session's first (since the server started or its Claude did)
+ * only raises it, since it may be old. Kept in the kv table so they show again after a
  * restart, until they reset.
  */
 export class PlanLimitsStore {
   private last: PlanLimits | null = null;
   private savedAt = 0;
+  /** Each session's last reading, to tell new data from a repeat. */
+  private seen = new Map<string, PlanLimits>();
 
   constructor(private db: Db, private changed: () => void) {
     try {
@@ -78,29 +85,38 @@ export class PlanLimitsStore {
     }
   }
 
-  /** Takes a status line input (see `take`). */
-  report(input: unknown, now = Date.now()): void {
-    this.take(parseRateLimits(input, now), now);
+  /** Takes a session's status line input (see `take`). */
+  report(session: string, input: unknown, now = Date.now()): void {
+    this.take(session, parseRateLimits(input, now), now);
   }
 
-  /** Takes the limits AgentK's mod measured (see `take`). */
-  reportMeasured(rateLimits: unknown, now = Date.now()): void {
-    this.take(parseMeasuredLimits(rateLimits, now), now);
+  /** Takes the limits AgentK's mod measured in a session (see `take`). */
+  reportMeasured(session: string, rateLimits: unknown, now = Date.now()): void {
+    this.take(session, parseMeasuredLimits(rateLimits, now), now);
+  }
+
+  /** A session's Claude ended: its next reading is a first one again. */
+  forget(session: string): void {
+    this.seen.delete(session);
   }
 
   /**
    * Takes a reading; saves and broadcasts when the merged numbers moved, or when a reading
    * confirms them and a minute has passed (so "as of" stays close).
    */
-  private take(reading: PlanLimits | null, now: number): void {
+  private take(session: string, reading: PlanLimits | null, now: number): void {
     const reported = currentLimits(reading, now);
     if (!reported) return; // nothing, or only windows that have already reset
+    const before = this.seen.get(session);
+    this.seen.set(session, reported);
     const prev = currentLimits(this.last, now);
-    const next: PlanLimits = {
-      fiveHour: newerWindow(prev?.fiveHour ?? null, reported.fiveHour),
-      sevenDay: newerWindow(prev?.sevenDay ?? null, reported.sevenDay),
-      updatedAt: now,
+    const merged = (k: 'fiveHour' | 'sevenDay') => {
+      const was = before?.[k];
+      const read = reported[k];
+      if (was && read && sameWindow(was, read)) return prev?.[k] ?? read; // the session's repeat says nothing new
+      return newerWindow(prev?.[k] ?? null, read, !!was && !!read);
     };
+    const next: PlanLimits = { fiveHour: merged('fiveHour'), sevenDay: merged('sevenDay'), updatedAt: now };
     const moved = !prev || !sameWindow(prev.fiveHour, next.fiveHour) || !sameWindow(prev.sevenDay, next.sevenDay);
     if (!moved) {
       // An older reading (a lower use, or a window that's missing) says nothing new.

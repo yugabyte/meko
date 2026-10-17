@@ -83,8 +83,8 @@ describe("plan limits from AgentK's mod", () => {
     const db = openDb(':memory:');
     let changes = 0;
     const store = new PlanLimitsStore(db, () => changes++);
-    store.report(input({ used_percentage: 10, resets_at: 1_790_003_600 }, undefined), NOW);
-    store.reportMeasured([{ kind: 'five_hour', percentUsed: 12, resetsAt: new Date(1_790_003_600_000).toISOString() }], NOW + 1000);
+    store.report('s1', input({ used_percentage: 10, resets_at: 1_790_003_600 }, undefined), NOW);
+    store.reportMeasured('s1', [{ kind: 'five_hour', percentUsed: 12, resetsAt: new Date(1_790_003_600_000).toISOString() }], NOW + 1000);
     expect(store.current(NOW + 1000)?.fiveHour).toEqual({ usedPercent: 12, resetsAt: 1_790_003_600_000 });
     expect(changes).toBe(2);
     db.close();
@@ -97,15 +97,15 @@ describe('PlanLimitsStore', () => {
     let changes = 0;
     const store = new PlanLimitsStore(db, () => changes++);
     const a = input({ used_percentage: 10, resets_at: NOW / 1000 + 3600 }, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 });
-    store.report(a, NOW);
-    store.report(a, NOW + 5_000);
+    store.report('s1', a, NOW);
+    store.report('s1', a, NOW + 5_000);
     expect(changes).toBe(1);
-    store.report(input({ used_percentage: 11, resets_at: NOW / 1000 + 3600 }, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 }), NOW + 6_000);
+    store.report('s1', input({ used_percentage: 11, resets_at: NOW / 1000 + 3600 }, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 }), NOW + 6_000);
     expect(changes).toBe(2);
     const b = input({ used_percentage: 11, resets_at: NOW / 1000 + 3600 }, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 });
-    store.report(b, NOW + 70_000);
+    store.report('s1', b, NOW + 70_000);
     expect(changes).toBe(3);
-    store.report({ model: {} }, NOW + 80_000);
+    store.report('s1', { model: {} }, NOW + 80_000);
     expect(changes).toBe(3);
     expect(new PlanLimitsStore(db, () => undefined).current(NOW + 80_000)).toMatchObject({ fiveHour: { usedPercent: 11 }, updatedAt: NOW + 70_000 });
     db.close();
@@ -116,26 +116,50 @@ describe('PlanLimitsStore', () => {
     let changes = 0;
     const store = new PlanLimitsStore(db, () => changes++);
     const s = NOW / 1000;
-    store.report(input({ used_percentage: 40, resets_at: s + 3600 }, { used_percentage: 20, resets_at: s + 86_400 }), NOW);
-    expect(changes).toBe(1);
+    store.report('idle', input({ used_percentage: 90, resets_at: s - 3600 }, { used_percentage: 15, resets_at: s + 86_400 }), NOW - 3_600_000);
+    store.report('busy', input({ used_percentage: 40, resets_at: s + 3600 }, { used_percentage: 20, resets_at: s + 86_400 }), NOW);
+    expect(changes).toBe(2);
     // Stale: the five-hour window reset an hour ago and the week reads lower. Nothing moves, even after a minute.
-    store.report(input({ used_percentage: 90, resets_at: s - 3600 }, { used_percentage: 15, resets_at: s + 86_400 }), NOW + 120_000);
+    store.report('idle', input({ used_percentage: 90, resets_at: s - 3600 }, { used_percentage: 15, resets_at: s + 86_400 }), NOW + 120_000);
     // Only one window: the other one is kept.
-    store.report(input(undefined, { used_percentage: 20, resets_at: s + 86_400 }), NOW + 240_000);
-    expect(changes).toBe(1);
+    store.report('busy', input(undefined, { used_percentage: 20, resets_at: s + 86_400 }), NOW + 240_000);
+    expect(changes).toBe(2);
     expect(store.current(NOW + 240_000)).toEqual({
       fiveHour: { usedPercent: 40, resetsAt: (s + 3600) * 1000 },
       sevenDay: { usedPercent: 20, resetsAt: (s + 86_400) * 1000 },
       updatedAt: NOW,
     });
     // A new five-hour window replaces the old one, whatever its use.
-    store.report(input({ used_percentage: 2, resets_at: s + 7200 }, { used_percentage: 20, resets_at: s + 86_400 }), NOW + 250_000);
-    expect(changes).toBe(2);
+    store.report('busy', input({ used_percentage: 2, resets_at: s + 7200 }, { used_percentage: 20, resets_at: s + 86_400 }), NOW + 250_000);
+    expect(changes).toBe(3);
     expect(store.current(NOW + 250_000)).toMatchObject({ fiveHour: { usedPercent: 2 }, sevenDay: { usedPercent: 20 }, updatedAt: NOW + 250_000 });
-    // An earlier window that's still live is an old reading.
-    store.report(input({ used_percentage: 50, resets_at: s + 3600 }, null), NOW + 400_000);
-    expect(changes).toBe(2);
+    // An earlier window that's still live is an old reading, even when it's new to the session.
+    store.report('busy', input({ used_percentage: 50, resets_at: s + 3600 }, null), NOW + 400_000);
+    expect(changes).toBe(3);
     expect(new PlanLimitsStore(db, () => undefined).current(NOW + 400_000)).toMatchObject({ fiveHour: { usedPercent: 2 }, sevenDay: { usedPercent: 20 } });
+    db.close();
+  });
+
+  it('takes a lower use in the same window once a session reads it, as after an early reset', () => {
+    const db = openDb(':memory:');
+    const store = new PlanLimitsStore(db, () => undefined);
+    const week = (pct: number) => [{ kind: 'seven_day', percentUsed: pct, resetsAt: new Date(NOW + 86_400_000).toISOString() }];
+    const weekly = (t: number) => store.current(t)?.sevenDay?.usedPercent;
+    store.reportMeasured('idle', week(100), NOW);
+    store.report('busy', input(undefined, { used_percentage: 99, resets_at: NOW / 1000 + 86_400 }), NOW + 1000);
+    // A session's first reading only raises the number: it may be an old one.
+    expect(weekly(NOW + 1000)).toBe(100);
+    // The use dropped with the reset time unchanged: Anthropic reset the week early.
+    store.report('busy', input(undefined, { used_percentage: 5, resets_at: NOW / 1000 + 86_400 }), NOW + 2000);
+    expect(weekly(NOW + 2000)).toBe(5);
+    // The idle session repeating what it read before the reset changes nothing.
+    store.reportMeasured('idle', week(100), NOW + 3000);
+    expect(weekly(NOW + 3000)).toBe(5);
+    // After its Claude restarts, the idle session's first reading counts as a first one again.
+    store.forget('idle');
+    store.reportMeasured('idle', week(4), NOW + 4000);
+    store.reportMeasured('idle', week(6), NOW + 5000);
+    expect(weekly(NOW + 5000)).toBe(6);
     db.close();
   });
 });

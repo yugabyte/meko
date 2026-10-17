@@ -1380,6 +1380,7 @@ export class SessionManager {
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
+    this.core.limits.forget(id);
     this.core.learn.interrupted(id);
     this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
@@ -1389,7 +1390,7 @@ export class SessionManager {
 
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
   private measured(id: string, m: Record<string, unknown>): void {
-    this.core.limits.reportMeasured(m.rateLimits);
+    this.core.limits.reportMeasured(id, m.rateLimits);
     const ctx = m.context && typeof m.context === 'object' ? (m.context as { percent?: unknown }) : null;
     const pct = typeof ctx?.percent === 'number' && Number.isFinite(ctx.percent) ? Math.round(Math.min(100, Math.max(0, ctx.percent))) : null;
     if (pct === (this.contextFill.get(id) ?? null)) return;
@@ -1419,7 +1420,7 @@ export class SessionManager {
   /** A status line run: only its plan usage limits are kept. */
   onStatusLine(token: string, input: unknown): void {
     const row = this.byToken(token);
-    if (row?.desired === 'running') this.core.limits.report(input);
+    if (row?.desired === 'running') this.core.limits.report(row.id, input);
   }
 
   /**
