@@ -21,6 +21,7 @@ export function SettingsDialog({
   twoAgents,
   initialTab = 'general',
   onClose,
+  onWhatsNew,
 }: {
   auth: AuthStatus;
   update: UpdateStatus;
@@ -32,6 +33,8 @@ export function SettingsDialog({
   /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
   initialTab?: SettingsTab;
   onClose: () => void;
+  /** Opens What's new from one version to another, in place of Settings. */
+  onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   return (
@@ -69,7 +72,7 @@ export function SettingsDialog({
           <UsageStatsCheck />
         </div>
       )}
-      {tab === 'updates' && <UpdatesTab initial={update} />}
+      {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={onWhatsNew} />}
     </Dialog>
   );
 }
@@ -889,8 +892,15 @@ function AccountTab({ auth }: { auth: AuthStatus }) {
   );
 }
 
-function UpdatesTab({ initial }: { initial: UpdateStatus }) {
+function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew: (from: string, to: string) => void }) {
   const [u, setU] = useState(initial);
+  // What the update on offer brings, else what the last update brought (none on an install never updated).
+  const whatsNew =
+    u.available && u.latest
+      ? { from: u.current, to: u.latest, label: `What’s in v${u.latest}` }
+      : u.lastUpdatedFrom
+        ? { from: u.lastUpdatedFrom, to: u.current, label: `What’s new in v${u.current}` }
+        : null;
   const [busy, setBusy] = useState<'check' | 'apply' | 'channel' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -958,10 +968,10 @@ function UpdatesTab({ initial }: { initial: UpdateStatus }) {
             {busy === 'apply' || u.applying ? <Busy label="Updating" /> : 'Update to the latest version'}
           </button>
         )}
-        {u.releaseUrl && (
-          <a href={u.releaseUrl} target="_blank" rel="noreferrer" className="link-btn">
-            Release notes
-          </a>
+        {whatsNew && (
+          <button className="link-btn" onClick={() => onWhatsNew(whatsNew.from, whatsNew.to)}>
+            {whatsNew.label}
+          </button>
         )}
       </div>
     </div>

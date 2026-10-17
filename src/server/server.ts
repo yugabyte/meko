@@ -32,7 +32,7 @@ import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
 import type { TlsMaterial } from './tls.js';
-import type { Updater } from './updater.js';
+import { notesRange, type Updater } from './updater.js';
 import { usageOverview } from './usage.js';
 import { taskPrs } from './taskprs.js';
 import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
@@ -679,6 +679,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post('/api/update/apply', async () => {
     if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
     return opts.updater.apply();
+  });
+  app.get<{ Querystring: { from?: string; to?: string } }>('/api/update/notes', async (req) => {
+    if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
+    const { from, to } = req.query;
+    if (typeof from !== 'string' || typeof to !== 'string' || !notesRange(from, to)) throw new HttpError(400, 'Give two versions, the older one first.');
+    try {
+      return await opts.updater.notes(from, to);
+    } catch (e) {
+      throw new HttpError(502, `${errMsg(e).replace(/\.?$/, '.')} Check that gh is signed in (gh auth login) or GITHUB_TOKEN is set, then try again.`);
+    }
   });
 
   // ---- websockets ----

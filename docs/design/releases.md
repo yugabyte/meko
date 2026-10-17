@@ -91,8 +91,24 @@ version `app/current` points at. Each version is about 180 MB, most of it the bu
 The "Updated to" notice shows from the new version's first boot, without waiting for the healthy
 check.
 
-The rail shows "Updated to v0.4.1" with a link to the changelog. Updates never need a maintenance
-window, because they never touch the session host.
+The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. Updates never need a
+maintenance window, because they never touch the session host.
+
+**What's new.** Releases come out several times a day and each one's notes cover only the commits
+since the release before it, and releases beyond the newest 5 are deleted, so one release's notes
+don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx`) shows every
+change between two versions instead: the server asks GitHub for the commits between their tags
+(`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
+check: `repos/<repo>/compare/v<from>...v<to>`) and lists the `feat`, `fix`, `perf` and `deps`
+subjects by type, as `scripts/release-notes.sh` does (`src/server/releasenotes.ts`), with
+**Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
+comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
+there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.
+It opens from the "Updated to" banner (the version updated from → this one), the "Version X is
+available" banner and Settings while an update is on offer (this version → the offered one), and
+otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, kept after the
+update's first boot; no link on an install that has never updated, or after a rollback). This is
+why release pruning keeps the tags.
 
 **Open pages reload themselves.** The server stamps its version into every page it serves
 (`<meta name="ak-version">`, and the page is sent with `Cache-Control: no-cache`). When a page's

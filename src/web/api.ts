@@ -47,6 +47,7 @@ import type {
   LinkPlan,
   StartFromLinkRequest,
   StartFromLinkResult,
+  ReleaseNotes,
   ReviewComment,
   SearchResult,
   SessionMatch,
@@ -270,6 +271,7 @@ export const api = {
   update: () => get<UpdateStatus>('/api/update'),
   checkUpdate: () => post<UpdateStatus>('/api/update/check'),
   applyUpdate: () => post<UpdateStatus>('/api/update/apply'),
+  updateNotes: (from: string, to: string) => get<ReleaseNotes>(`/api/update/notes?${new URLSearchParams({ from, to })}`),
 };
 
 /** The machine-readable `code` of an API error (DATAPACK_LIMIT, MEKO_OFF, …), if it has one. */

@@ -28,6 +28,7 @@ import {
   Updater,
   verifySha256,
   hostVersionDir,
+  notesRange,
   versionsToPrune,
   type Release,
   type ReleaseSource,
@@ -178,8 +179,14 @@ interface Fixture {
   kv: Map<string, string>;
   snapshot: ReturnType<typeof vi.fn>;
   restart: ReturnType<typeof vi.fn>;
-  makeUpdater(source: ReleaseSource, appDir?: string): Updater;
+  /** A source without `compare` gets one that fails. */
+  makeUpdater(source: SourceStub, appDir?: string): Updater;
 }
+
+type SourceStub = Omit<ReleaseSource, 'compare'> & Partial<ReleaseSource>;
+const noCompare: ReleaseSource['compare'] = async () => {
+  throw new Error('no comparison');
+};
 
 /** Build a fake release tarball for `version` whose `selftest` exits with `code`. */
 function buildRelease(releaseDir: string, version: string, code = 0, corrupt = false, selftestSecs = 0): void {
@@ -196,7 +203,7 @@ function buildRelease(releaseDir: string, version: string, code = 0, corrupt = f
   writeFileSync(join(releaseDir, 'SHA256SUMS'), `${digest}  ${name}\n`);
 }
 
-function fakeSource(releaseDir: string, releases: Release[]): ReleaseSource {
+function fakeSource(releaseDir: string, releases: Release[]): SourceStub {
   return {
     listReleases: async () => releases,
     download: async (_repo, _tag, asset, destDir) => {
@@ -240,7 +247,7 @@ function setup(): Fixture {
         onChange: () => {},
         requestRestart: restart,
         appDir,
-        source,
+        source: { compare: noCompare, ...source },
         arch: 'x64',
       }),
   };
@@ -270,7 +277,7 @@ describe('Updater', () => {
       log: () => {},
       onChange: () => {},
       requestRestart: () => {},
-      source: fakeSource(fx.releaseDir, [rel('9.9.9')]),
+      source: { compare: noCompare, ...fakeSource(fx.releaseDir, [rel('9.9.9')]) },
     });
     const s = await u.check();
     expect(s.available).toBe(false);
@@ -384,20 +391,59 @@ describe('Updater', () => {
     u.start();
     u.stop();
     // The "Updated to" banner doesn't wait for the healthy check; the rollback stays armed until it.
-    expect(u.status().justUpdatedFrom).toBe('0.0.9');
+    expect(u.status()).toMatchObject({ justUpdatedFrom: '0.0.9', lastUpdatedFrom: '0.0.9' });
     expect(fx.kv.get('update.justUpdatedFrom')).toBe('0.0.9');
     expect(existsSync(fx.paths.updatePending)).toBe(true);
     u.markHealthy();
     expect(existsSync(fx.paths.updatePending)).toBe(false);
   });
 
-  it('shows no banner on a boot that was not an update', () => {
+  it('shows no banner on a boot that was not an update, and keeps the last update for What\'s new', () => {
     fx.kv.set('update.justUpdatedFrom', '0.0.9');
+    fx.kv.set('update.lastUpdatedFrom', '0.0.9');
     const u = fx.makeUpdater(fakeSource(fx.releaseDir, []));
     u.start();
     u.stop();
-    expect(u.status().justUpdatedFrom).toBeNull();
+    expect(u.status()).toMatchObject({ justUpdatedFrom: null, lastUpdatedFrom: '0.0.9' });
     expect(fx.kv.get('update.justUpdatedFrom')).toBe('');
+    // Rolled back to an older version since: nothing to show.
+    fx.kv.set('update.lastUpdatedFrom', '0.2.0');
+    expect(u.status().lastUpdatedFrom).toBeNull();
+  });
+
+  it('reads What\'s new from the commits between two tags, newest first, asking GitHub once per range', async () => {
+    const compare = vi.fn(async () => ({
+      totalCommits: 300,
+      url: 'https://github.com/o/r/compare/v0.0.9...v0.1.0',
+      commits: [
+        { sha: '1111111aaa', message: 'fix: the older fix', url: 'c1' },
+        { sha: '2222222bbb', message: 'docs: not a change', url: 'c2' },
+        { sha: '3333333ccc', message: 'fix: the newer fix', url: 'c3' },
+      ],
+    }));
+    compare.mockRejectedValueOnce(Object.assign(new Error('Command failed: gh api'), { stderr: 'gh: Not Found (HTTP 404)\n' }));
+    const u = fx.makeUpdater({ ...fakeSource(fx.releaseDir, []), compare });
+    await expect(u.notes('0.0.9', '0.1.0')).rejects.toThrow("GitHub couldn't compare v0.0.9 and v0.1.0: gh: Not Found (HTTP 404)");
+    // A failed ask isn't kept: the next one asks again, and its answer is kept.
+    const n = await u.notes('0.0.9', '0.1.0');
+    expect(await u.notes('0.0.9', '0.1.0')).toBe(n);
+    expect(compare).toHaveBeenCalledTimes(2);
+    expect(compare).toHaveBeenCalledWith(fx.cfg.update.repo, 'v0.0.9', 'v0.1.0');
+    expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/v0.0.9...v0.1.0' });
+    expect(n.sections).toEqual([{ title: 'Fixes', items: [expect.objectContaining({ summary: 'the newer fix' }), expect.objectContaining({ summary: 'the older fix' })] }]);
+  });
+
+  it.each([
+    ['0.0.9', '0.1.0', true],
+    ['0.1.0-beta.1', '0.1.0', true],
+    ['0.1.0', '0.1.0', false],
+    ['0.2.0', '0.1.0', false],
+    ['main', '0.1.0', false],
+    ['0.0.9', '0.1.0/../x', false],
+    ['v0.0.9', '0.1.0', false],
+    [' 0.0.9', '0.1.0', false],
+  ])('What\'s new from %s to %s is a range: %s', (from, to, ok) => {
+    expect(notesRange(from, to)).toBe(ok);
   });
 
   it('markHealthy leaves an update alone while it installs and after the switch', async () => {

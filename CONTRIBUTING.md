@@ -94,7 +94,8 @@ sorts higher.
    `install.sh`, and attests build provenance where the plan allows.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
-   Tags are kept, so release notes and version numbering are unaffected.
+   Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
+   between two tags) are unaffected.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
    a "Version X is available" banner. Its **Update to the latest version** button checks again and
    installs the newest release then (which may be newer than X), without interrupting sessions. Once a version has been healthy for 5 minutes, the

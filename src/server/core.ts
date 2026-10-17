@@ -201,7 +201,7 @@ export class Core extends EventEmitter {
     this.hostFull = hostname();
     this.updateStatus = () => ({
       current: this.version, channel: this.cfg.update.channel, latest: null, available: false, applying: false,
-      lastCheckedAt: null, lastError: null, justUpdatedFrom: null, releaseUrl: null,
+      lastCheckedAt: null, lastError: null, justUpdatedFrom: null, lastUpdatedFrom: null, releaseUrl: null,
     });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
     this.harnesses = new Harnesses({ claudeCode: this.claudeCode, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion });

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
+import { RELEASE_TYPES } from '../../src/server/releasenotes.js';
 
 // scripts/check-title.sh holds the commit subject and PR title rules the commit skill follows;
 // scripts/release-notes.sh decides which of those types release.
@@ -137,6 +138,8 @@ describe('release types', () => {
     expect(sections.sort()).toEqual(['deps', 'feat', 'fix', 'perf']);
     expect(list(NOTES, 'RELEASE').sort()).toEqual(sections);
     expect(list(CHECK, 'RELEASE').sort()).toEqual(sections);
+    // What's new in the app (src/server/releasenotes.ts) lists the same types.
+    expect([...RELEASE_TYPES].sort()).toEqual(sections);
     for (const t of sections) expect(checkerTypes()).toContain(t);
   });
 
