@@ -150,7 +150,8 @@ mattn 1.14.52 with SQLite 3.53.4, sqlite-vec 0.1.9):
 - One write connection (a `database/sql` pool with one connection) and a read pool of 4.
   SQLite allows one writer at a time anyway, and a single writer keeps transactions from
   waiting on locks.
-- Every query lives in `internal/store` behind typed methods. Nothing else imports the driver.
+- Every query lives in `internal/store` behind typed methods. The only other package that imports
+  the driver is `internal/sqlitevec`, which links SQLite's C code; only its test runs a query.
 
 ### Migrations
 
@@ -293,7 +294,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 
 | Path | What |
 |---|---|
-| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko-local/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid |
+| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko-local/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid, golang.org/x/sys (macOS statfs) |
 | `backend/cmd/meko-local/main.go` | Entry point |
 | `backend/internal/cli/` | `start`, `stop`, `status`, `serve`, `version`; detaching `serve` (setsid), pid file, waiting until `/api/v1/status` reports the new server |
 | `backend/internal/config/` | Defaults, `config.toml`, `MEKO_LOCAL_*` env, flags; precedence |

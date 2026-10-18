@@ -29,7 +29,8 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
   prompt asks for aren't attribution: keep them.)
 - **Changes reach `main` only through PRs** that pass CI and the title check.
 - **Keep the docs current** in the same commit as the code, and check the change against the
-  REVIEW.md of the part you changed (`extensions/agentk/REVIEW.md` for AgentK).
+  REVIEW.md of the part you changed (`extensions/agentk/REVIEW.md` for AgentK, `backend/REVIEW.md`
+  for the backend).
 - **Treat the repo as public** (it's internal today): no internal hostnames, mount paths, tokens
   or keys in code, docs, tests or commit messages.
 - Shell commands and scripts run on Linux and macOS: stick to POSIX flags that GNU and BSD tools

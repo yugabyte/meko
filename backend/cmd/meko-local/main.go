@@ -1,19 +1,12 @@
-// Command meko-local is Meko Local: the CLI and the server in one binary. For now it only
-// reports its version; the commands come with the foundation.
+// Command meko-local is Meko Local: the CLI and the server in one binary.
 package main
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/yugabyte/meko-local/backend/internal/version"
+	"github.com/yugabyte/meko-local/backend/internal/cli"
 )
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "version" {
-		fmt.Printf("meko-local %s (commit %s)\n", version.Version, version.Commit)
-		return
-	}
-	fmt.Fprintln(os.Stderr, "usage: meko-local version")
-	os.Exit(2)
+	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 }
