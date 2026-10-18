@@ -91,9 +91,30 @@ marks that read in either theme.
 
 ## The adapter
 
-Everything Claude-specific sits behind one interface, `Harness` in `src/server/harness/`, with an
-adapter per CLI (`claude.ts`, `kiro.ts`) and the registry (`Harnesses` in `index.ts`). What each can
-do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and the UI both gate on:
+Everything specific to one CLI sits behind one interface, `Harness` in `src/server/harness/types.ts`,
+with an adapter per CLI (`claude.ts`, `kiro.ts`) and the registry (`Harnesses` in `index.ts`). The
+session manager, projects and Ask AgentK call a session's adapter rather than ask which harness it
+runs on. The adapter says how to prepare its files and settle what a launch needs first
+(`prepare`, `beforeLaunch`: Claude Code's folder trust, Kiro's agent file), which folders to trust
+and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code only), its command line
+(`launcher`), its hooks (`normalize`, `deny`, `context`, `editedPaths`), its conversation on disk
+(`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
+progress shows in (`activityFiles`, for the hookless fallback), its usage (`readUsage`), the
+transcript AgentK sends to Meko (`captureTranscript`, Claude Code only), AgentK's mod (`modDir`,
+`offersMod`, Claude Code only), Ask AgentK (`ask`), and its version and updater. Reading a CLI's
+version and comparing it is shared (`version.ts`). What each can do is data, `HARNESS_CAPS` in
+`src/shared/harnesses.ts`, which the server and the UI both gate on, its minimum version included
+(`minVersion`, which the installer checks too), and the Starting view's line (`loads`).
+
+What still names an agent outside the adapters, on purpose: Kiro's plan reader (`Core.kiroPlan`,
+read after Kiro's `prepare` and when a Kiro session is created; its plan is Kiro-only data in
+`AppState.kiroPlan`), and the usage report's per-day `kiro` counts (`callhome.ts`, a field of the
+report's schema). Adding a harness is an id in `HARNESS_IDS`, its caps, its `[<id>]` config
+section and an adapter. The compiler names each `Record<HarnessId, …>` that needs an entry (its
+logo, its Meko agent id prefix, the Settings dialog's switch), but not these, which also need one:
+the Settings route's `<id>Enabled` field (`Settings` in `types.ts`, checked and applied in
+`server.ts`), and the installer's "no coding agent found" message
+(`settleAgents` in `install.ts`), which names each agent and where to get it:
 
 | | Claude Code | Kiro |
 |---|---|---|

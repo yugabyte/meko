@@ -32,30 +32,24 @@ one. The host runs in the foreground, as launchd wants. Both jobs set
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
 back; reinstalling never reloads a loaded host job.
 
-**Moving off tmux.** Versions before the session host ran every Claude in tmux (socket `agentk`,
-or `[tmux] socket`), in a tmux service. The updater swaps the app but never writes service files,
-so on its first start a version with the session host adds the host service itself (`addHost`,
-which never restarts the server) and starts the host. Only once a host answers, and before binding
-the hook socket, does it end this home's sessions still in tmux (only panes named by its own
-`state.db`) and wait for their Claudes to exit; until then recovery waits too, so the sessions keep
-running in tmux and none runs twice (a host that comes up later is found by the reconcile tick).
-Recovery resumes them all in the host with `claude --resume`, auto-continuing the turns it cut off
-(the usual guards apply). The tmux service is removed once the update is final
-(`update-pending.json` gone) and no other home has AgentK sessions on its tmux server (removing the
-service ends that server, and its socket is shared by every home on the account). A rollback to a
-version without the host finds the tmux service still there, and the launcher first runs
-`agent-k-local host retire`: it removes the host service, ending every Claude in it, so they resume
-in tmux, none runs twice, and nothing keeps restarting a host that version can't run. To go back to
-such a version by hand, run `agent-k-local uninstall` (it removes both services, ending the
-sessions, and keeps your state), then install that version with `--version`. Without a tmux
-service, a tmux server left with no AgentK sessions is ended at once. This code (`legacytmux.ts`)
-goes after 2026-10-14.
+**Versions before the session host** ran every Claude in tmux, in a tmux service. The server
+moved an install off it by itself on its first start after the update (it added the host service,
+ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
+on 2026-10-09 and was removed about a week later. A Claude must never run in tmux and in the host at
+once, so what's left is a guard: while the tmux service is installed (`legacyTmuxInstalled`), the
+server refuses to start, saying to run `agent-k-local install`. An install that updated itself from
+a tmux version therefore fails to start and rolls back to it (the launcher's rollback; see
+[Releases](releases.md)), with its sessions still running in tmux. `agent-k-local install`, which
+the installer runs, moves it: before it installs the services it removes the old ones, stopping
+the old server first and then the tmux service, which ends the Claudes in it, and the new server's
+recovery resumes them in the host (auto-continuing a turn that was cut off). `agent-k-local
+uninstall` removes the tmux service too. Removing it ends the tmux server on its socket, which
+every AgentK home on the account shared.
 
-All of this sits behind one interface in `src/server/service.ts` (install, add or remove the host,
-start, restart, state, remove, boot check, removing the old tmux service), with a systemd and a
-launchd implementation picked by platform. `servicesFor(home)` uses the installed services only
-when their `AK_HOME` is exactly this home, so a dev server or a second home never acts on another
-install's services.
+All of this sits behind one interface in `src/server/service.ts` (install, start, restart, state,
+remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.
+`servicesFor(home)` uses the installed services only when their `AK_HOME` is exactly this home, so
+a dev server or a second home never acts on another install's services.
 
 ## One server per home
 

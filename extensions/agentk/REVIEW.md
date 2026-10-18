@@ -50,11 +50,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
 - [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
-      answers the guard or context hooks, or reads a transcript goes through its adapter
-      (`src/server/harness/`), never straight to Claude Code's files or flags, and what only some
-      harnesses have (the mod, Artifacts, usage as tokens or credits) is read from `HARNESS_CAPS`,
-      not from the harness's name. Text about the process and its terminal names the session's agent
-      (`agentName()`), not "Claude", in error messages and screen-reader labels too. Anything AgentK
+      answers the guard or context hooks, reads a transcript, usage or conversation id, or runs Ask
+      AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
+      Claude Code's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
+      usage as tokens or credits, a minimum version) is read from `HARNESS_CAPS` or an optional
+      adapter method, not from the harness's name (no new `harness === 'kiro'` outside the adapters;
+      `docs/design/harnesses.md` lists the few that stay on purpose). Text about the process and its
+      terminal names the session's agent (`agentName()`), not "Claude", in error messages and
+      screen-reader labels too. Anything AgentK
       writes in the user's Kiro home (the `agentk` agent) is marked as AgentK's, inert without
       AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
       launch), and is removed by `uninstall`. A Kiro session reads and resumes only its own

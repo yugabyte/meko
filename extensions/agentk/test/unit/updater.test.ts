@@ -22,7 +22,6 @@ import {
   compareSemver,
   parseSha256Sums,
   pickLatest,
-  releaseLane,
   tarballName,
   uncountStart,
   Updater,
@@ -65,17 +64,6 @@ function rel(version: string, extra: Partial<Release> = {}): Release {
     ...extra,
   };
 }
-
-describe('release lanes', () => {
-  it('groups versions by their prerelease identifier', () => {
-    expect(releaseLane('0.20260925.9')).toBe('stable');
-    expect(releaseLane('v0.20260925.9')).toBe('stable');
-    expect(releaseLane('0.20260925.9', true)).toBe('prerelease');
-    expect(releaseLane('1.0.0-beta.2')).toBe('beta');
-    expect(releaseLane('0.20260925.6-dp-links')).toBe('dp-links');
-    expect(releaseLane('1.0.0-1')).toBe('prerelease');
-  });
-});
 
 describe('removing old versions', () => {
   const names = ['current', '.staging-x', '0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.10', '0.1.11-ctrl', '0.2.0-beta.1'];

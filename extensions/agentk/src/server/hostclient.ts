@@ -66,10 +66,6 @@ export class SessionHost {
     } = {},
   ) {}
 
-  get sockPath(): string {
-    return this.paths.hostSock;
-  }
-
   /** Sends one request and returns the host's answer; throws NoHostError or HostRequestError. */
   async request<T extends Record<string, unknown> = Record<string, unknown>>(r: HostRequest, timeoutMs = REQUEST_MS): Promise<T> {
     return new Promise<T>((resolve, reject) => {

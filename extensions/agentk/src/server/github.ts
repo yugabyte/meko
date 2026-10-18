@@ -321,15 +321,6 @@ export async function merge(worktree: string, url: string, method: 'squash' | 'm
   await gh(worktree, 'pr', 'merge', url, `--${method}`);
 }
 
-export async function ghAvailable(): Promise<boolean> {
-  try {
-    await exec('gh', ['auth', 'status']);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ---- Review a PR ----
 
 export { isRepoName, parsePrInput };

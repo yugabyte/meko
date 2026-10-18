@@ -208,8 +208,8 @@ export class ProjectService {
       this.creatingNames.delete(claim);
     }
     if (dp) this.core.invites.markUsed(dp.id);
-    // Trust the repo in Claude Code now, before any session of it starts.
-    await this.core.sessions.trustRepo(repoPath);
+    // Trust the repo now (Claude Code's folder trust), before any session of it starts.
+    for (const h of this.core.harnesses.list()) await h.trustFolder?.(repoPath, this.core.log);
     if (dp) this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
     this.core.log.info(`project ${reopened ? 'opened again' : 'opened'}: ${id} (${repoPath}) ${dp ? `datapack ${dp.name}` : 'without a datapack'}`);
     this.core.changed();

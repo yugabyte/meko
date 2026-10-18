@@ -144,8 +144,8 @@ them; this isn't a change AgentK made in its turn, so it neither drops a queued 
 the design ready. The `design-answers` prompt still asks Claude to mark each answered question
 resolved, saying AgentK Local may have done so already, and to follow the user's change to a
 decision (listed as `### D<n>` with *You decided* and *The user wants*), keeping it a decision
-decided by the user. After the approval, the design gets a **Key Design Decisions** section near its top,
-right after the goal (`designQaLine()`): every question and decision, who decided it, what and why,
+decided by the user. After the approval, the design's **Key Design Decisions** section, near its top right after the
+goal, is brought up to date, or added if it's missing (`designQaLine()`): every question and decision, who decided it, what and why,
 and its Meko items by kind, datapack and id; the Design prompt already asks for AgentK's own
 decisions there, so a reviewer reads the design's direction first; `designUpkeepLine()` adds decisions made while coding there (they don't
 reach the panel). All three ask for Meko's marker, `<span class="meko-source">from Meko</span>`

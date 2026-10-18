@@ -31,8 +31,6 @@ export interface Paths {
   hostLock: string;
   /** The running server's lease on this home (instance.ts): one server per home, even across hosts. */
   lock: string;
-  /** Written by versions that ran sessions in tmux; removed once a session host has taken over. */
-  tmuxConf: string;
   logs: string;
   /** Written by the updater before a restart; read by the bin wrapper for rollback. */
   updatePending: string;
@@ -57,7 +55,6 @@ export function getPaths(home: string = akHome()): Paths {
     hostState: join(home, 'run', 'host.json'),
     hostLock: join(home, 'host.lock'),
     lock: join(home, 'server.lock'),
-    tmuxConf: join(home, 'tmux.conf'),
     logs: join(home, 'logs'),
     updatePending: join(home, 'update-pending.json'),
     badVersions: join(home, 'bad-versions'),

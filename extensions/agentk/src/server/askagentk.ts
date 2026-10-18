@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { NO_AGENT, type HarnessId } from '../shared/harnesses.js';
+import { NO_AGENT } from '../shared/harnesses.js';
 import { parseGithubRef } from '../shared/github-refs.js';
 import { MOVE_TARGETS, moveBlockedIn, moveError } from '../shared/stages.js';
 import {
@@ -277,6 +277,40 @@ function jsonIn(text: string): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * How a harness answers one ask (`Harness.ask`): its command line, run once in AgentK's empty ask
+ * folder with the message on stdin, and what it printed read as an answer.
+ */
+export interface Asker {
+  /** The command and its arguments for one ask. May write what the CLI reads from `cwd` first. */
+  command(cfg: Config, cwd: string): { cmd: string; args: string[] };
+  /** What it printed, as an answer, or the HttpError the palette shows. */
+  read(run: AskRun, cmd: string, timeoutSeconds: number, cwd: string): { reply: string; actions: unknown };
+}
+
+/** Claude Code: `claude -p` with no tools, MCP servers or hooks, the answer as JSON (`askArgs`). */
+export const claudeAsker: Asker = {
+  command: (cfg) => ({ cmd: cfg.claude.command, args: askArgs(cfg.askAgentk.model.trim()) }),
+  read: (run, cmd, timeoutSeconds) => readAnswer(run, cmd, timeoutSeconds),
+};
+
+/**
+ * Kiro: as the `agentk-ask` agent, written into the ask's folder, where Kiro finds it, so it never
+ * shows in the user's agent list. Kiro keeps every run as a session; an ask's isn't one anyone
+ * resumes, so it's deleted.
+ */
+export const kiroAsker: Asker = {
+  command(cfg, cwd) {
+    writeKiroAgent(askAgent(kiroAskPrompt()), join(cwd, '.kiro'));
+    return { cmd: cfg.kiro.command, args: kiroAskArgs() };
+  },
+  read(run, cmd, timeoutSeconds, cwd) {
+    const answer = readKiroAnswer(run, cmd, timeoutSeconds);
+    if (answer.sessionId) deleteKiroSession(cmd, answer.sessionId, cwd);
+    return answer;
+  },
+};
+
 /** What Kiro printed (`readKiroRun`), as an answer, or the error the palette shows. */
 export function readKiroAnswer(run: AskRun, cmd: string, timeoutSeconds: number): { reply: string; actions: unknown; sessionId: string | null } {
   if (run.spawnError) throw new HttpError(503, `Kiro couldn't be run (${cmd}): install it, or set [kiro] command in config.toml.`);
@@ -316,8 +350,8 @@ export interface AskAgentkDeps {
   projects: () => AskProject[];
   /** One ask that ran Claude, for the usage report. */
   record: (r: { at: number; ok: boolean; actions: number; ms: number }) => void;
-  /** The harness asks run on: `[agents] default` when it's available, else the first available one, else null (none is). */
-  harness?: () => Promise<HarnessId | null>;
+  /** How the harness asks run on answers: `[agents] default`'s when it's available, else the first available one's, else null (none is). */
+  asker?: () => Promise<Asker | null>;
   run?: AskRunner;
 }
 
@@ -338,8 +372,8 @@ export class AskAgentk {
     const cfg = this.deps.config();
     if (!cfg.askAgentk.enabled) throw new HttpError(403, 'Ask AgentK is turned off ([ask_agentk] enabled = false in config.toml).');
     const req = checkRequest(body);
-    const harness = this.deps.harness ? await this.deps.harness() : 'claude';
-    if (!harness) throw new HttpError(409, NO_AGENT);
+    const asker = this.deps.asker ? await this.deps.asker() : claudeAsker;
+    if (!asker) throw new HttpError(409, NO_AGENT);
     if (this.inFlight >= ASK_MAX_IN_FLIGHT) throw new HttpError(429, 'AgentK is answering two asks already. Try again in a moment.');
     this.inFlight++;
     const started = Date.now();
@@ -347,25 +381,14 @@ export class AskAgentk {
     try {
       const timeoutSeconds = Math.min(300, Math.max(5, Math.round(cfg.askAgentk.timeoutSeconds) || 45));
       mkdirSync(this.deps.cwd, { recursive: true });
-      const kiro = harness === 'kiro';
-      // Kiro finds the ask's agent in the folder it runs in, so it never shows in the user's agent list.
-      if (kiro) writeKiroAgent(askAgent(kiroAskPrompt()), join(this.deps.cwd, '.kiro'));
-      const cmd = kiro ? cfg.kiro.command : cfg.claude.command;
-      const run = await this.run(cmd, kiro ? kiroAskArgs() : askArgs(cfg.askAgentk.model.trim()), {
+      const { cmd, args } = asker.command(cfg, this.deps.cwd);
+      const run = await this.run(cmd, args, {
         input: askMessage(req, this.deps.projects()), cwd: this.deps.cwd, timeoutMs: timeoutSeconds * 1000, signal,
       });
       // The user closed the palette: nobody reads the answer, and it isn't counted.
       if (run.aborted) throw new HttpError(499, 'The ask was cancelled.');
       outcome = { ok: false, actions: 0 };
-      let answer: { reply: string; actions: unknown };
-      if (kiro) {
-        const k = readKiroAnswer(run, cmd, timeoutSeconds);
-        // Kiro keeps every run as a session; an ask's isn't one anyone resumes.
-        if (k.sessionId) deleteKiroSession(cmd, k.sessionId, this.deps.cwd);
-        answer = k;
-      } else {
-        answer = readAnswer(run, cmd, timeoutSeconds);
-      }
+      const answer = asker.read(run, cmd, timeoutSeconds, this.deps.cwd);
       // Checked against the state as it is now, not as it was when Claude started.
       const { actions, notes } = checkActions(answer.actions, this.deps.projects());
       outcome = { ok: true, actions: actions.length };

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpCode, totpVerify, verifyPassword,
+  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpAccept, totpCode, verifyPassword,
 } from '../../src/server/auth.js';
 import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
@@ -41,8 +41,9 @@ describe('auth', () => {
     expect(base32Decode(secret).toString()).toBe('12345678901234567890');
     expect(totpCode(secret, 59_000)).toBe('287082');
     expect(totpCode(secret, 1_111_111_109_000)).toBe('081804');
-    expect(totpVerify(secret, '287082', 59_000 + 30_000)).toBe(true); // one step of drift
-    expect(totpVerify(secret, '287082', 59_000 + 120_000)).toBe(false);
+    const db = openDb(':memory:');
+    expect(totpAccept(db, secret, '287082', 59_000 + 120_000)).toBe(false);
+    expect(totpAccept(db, secret, '287082', 59_000 + 30_000)).toBe(true); // one step of drift
   });
 
   it('setup tokens are single use, and reported outstanding until used', () => {
