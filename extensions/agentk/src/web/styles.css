@@ -1830,6 +1830,31 @@ textarea.input {
   -webkit-mask: url('/meko-m.png') center / contain no-repeat;
   mask: url('/meko-m.png') center / contain no-repeat;
 }
+/* A markdown design's marker on a key design decision from Meko (MEKO_SOURCE_MARK): the same
+   badge, its "from Meko" text kept for screen readers. Only in the design: other markdown (held
+   reviews) is other people's text. An Artifact's is in design-frame.ts. */
+.design-body .prose .meko-source {
+  display: inline-block;
+  position: relative;
+  box-sizing: content-box;
+  width: 11px;
+  height: 11px;
+  margin: 0 0.3em;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 0;
+  vertical-align: middle;
+  background: var(--meko-soft);
+  color: var(--meko);
+}
+.design-body .prose .meko-source::before {
+  content: '';
+  position: absolute;
+  inset: 3px 6px;
+  background: currentColor;
+  -webkit-mask: url('/meko-m.png') center / contain no-repeat;
+  mask: url('/meko-m.png') center / contain no-repeat;
+}
 .dq-refs {
   list-style: none;
   margin: 0;

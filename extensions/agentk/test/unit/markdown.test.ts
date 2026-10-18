@@ -1,8 +1,15 @@
 import { marked } from 'marked';
 import { describe, expect, it } from 'vitest';
+import { MEKO_SOURCE_MARK } from '../../src/shared/decisions.js';
 import { renderMarkdown } from '../../src/web/markdown.js';
 
 describe('markdown designs', () => {
+  it("keeps Meko's marker on a key design decision as HTML, for the badge to draw", () => {
+    const { html } = renderMarkdown(`## Key Design Decisions\n\n### D1 · One SQLite file ${MEKO_SOURCE_MARK}\n\n- **D2** Reuse the cards ${MEKO_SOURCE_MARK}\n`);
+    expect(html).toContain(`<h3>D1 · One SQLite file ${MEKO_SOURCE_MARK}</h3>`);
+    expect(html).toContain(`<strong>D2</strong> Reuse the cards ${MEKO_SOURCE_MARK}`);
+  });
+
   it('takes each mermaid fence out into a numbered slot', () => {
     const md = '# Flow\n\n```mermaid\nflowchart LR\n  a --> b\n```\n\nText\n\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n';
     const { html, diagrams } = renderMarkdown(md);
