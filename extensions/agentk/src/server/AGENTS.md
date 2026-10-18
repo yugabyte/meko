@@ -1,6 +1,6 @@
 # AGENTS.md: the server
 
-The modules under `src/server/`: the server, the session host (`host/`) and the CLI. The repo-wide
+The modules under `src/server/`: the server, the session host (`host/`) and the CLI. AgentK's
 guide, with the invariants every change here keeps, is [../../AGENTS.md](../../AGENTS.md).
 
 ## Map

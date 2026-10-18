@@ -7,10 +7,10 @@ dist/
 *.pem
 *.key
 state.db
-.claude/settings.local.json
+**/.claude/settings.local.json
 .DS_Store
 state.db-*
 *.bak-*
 # Laid beside the mod by Claude Code when it loads it from here (claude --plugin-dir src/mod/agentk).
-src/mod/agentk/.claude-plugin/types/
-src/mod/agentk/tsconfig.json
+extensions/agentk/src/mod/agentk/.claude-plugin/types/
+extensions/agentk/src/mod/agentk/tsconfig.json

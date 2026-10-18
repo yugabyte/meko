@@ -3,7 +3,7 @@
 #
 #   scripts/package-release.sh <version> <arch> <node-dir> <out-dir>
 #
-# Expects `npm run build` and `npm prune --omit=dev` to have run in the repo root, on the
+# Expects `npm run build` and `npm prune --omit=dev` to have run in extensions/agentk, on the
 # platform the tarball is for (node-pty is compiled natively). Produces
 # <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz containing:
 #
@@ -63,7 +63,8 @@ cp -R "$repo/dist" "$root/lib/dist"
 cp -R "$repo/node_modules" "$root/lib/node_modules"
 cp -R "$repo/packaging/systemd" "$root/lib/packaging/systemd"
 cp -R "$repo/packaging/launchd" "$root/lib/packaging/launchd"
-cp "$repo/LICENSE" "$root/LICENSE"
+# The license covers the whole repo, so it sits at the root, above extensions/agentk.
+cp "$repo/../../LICENSE" "$root/LICENSE"
 printf '%s\n' "$version" > "$root/VERSION"
 # Kept out of the repo: release builds get it from the CALL_HOME_URL repo variable.
 if [ -n "${AK_CALL_HOME_URL:-}" ]; then

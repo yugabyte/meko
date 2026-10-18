@@ -6,7 +6,12 @@ Requirements: Linux or macOS, Node 22, git, and Claude
 Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is required to create
 projects.
 
+AgentK Local lives in `extensions/agentk` of the meko-local repo: run everything below from there.
+Paths are relative to it, except `.github/`, `.claude/` and `scripts/check-title.sh`, which are
+at the repo root.
+
 ```sh
+cd extensions/agentk
 nvm use 22                      # .nvmrc pins the major version
 
 # node-pty is a native module that needs a C++20 compiler. On RHEL 8 the system g++ (8.5)
@@ -39,7 +44,8 @@ npm run test:unit
 npm run test:integration        # needs git; uses a stub `claude` (tmux only for the move-off-tmux tests)
 ```
 
-CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`).
+CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`,
+in `extensions/agentk`).
 Changes reach `main` only through PRs, squash-merged once CI and the PR title check pass.
 
 ## Commits
@@ -54,7 +60,8 @@ Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
 The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
 and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
-for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"`; the
+for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
+repo root; the
 `PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules, including: no
 agent attribution.
 
@@ -110,8 +117,8 @@ collector of your own, set `[call_home] url` in the dev home's `config.toml`
 an identical copy of `docs/call-home-report.schema.json`; change both together.
 
 Run the Release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
-a **tag** to rebuild the assets of an existing release (a tag from before macOS support gets its
-Linux tarballs only).
+a **tag** to rebuild the assets of an existing release. Only tags from after the move to
+`extensions/agentk` can be rebuilt; the workflow refuses older ones.
 
 Release tarball layout:
 

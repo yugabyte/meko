@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/AgentK-nobg.png" width="120" alt="AgentK logo"></p>
+<p align="center"><img src="extensions/agentk/assets/AgentK-nobg.png" width="120" alt="AgentK logo"></p>
 
 # AgentK Local
 
@@ -9,23 +9,23 @@ datapacks your whole team and their agents can build on.
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
 your phone.
 
-![AgentK Local: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
+![AgentK Local: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](extensions/agentk/docs/screenshots/workbench.png)
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/design-review.png" alt="Design stage: Claude's plan shown next to the terminal, with Approve design"><br><sub><b>Design review.</b> Claude's plan, rendered next to the terminal, waiting for your approval.</sub></td>
-    <td width="50%"><img src="docs/screenshots/new-project.png" alt="Open project dialog listing the repos under ~/code"><br><sub><b>Open project.</b> Pick a repo from your repos folder; a dedicated Meko datapack is created with it.</sub></td>
+    <td width="50%"><img src="extensions/agentk/docs/screenshots/design-review.png" alt="Design stage: Claude's plan shown next to the terminal, with Approve design"><br><sub><b>Design review.</b> Claude's plan, rendered next to the terminal, waiting for your approval.</sub></td>
+    <td width="50%"><img src="extensions/agentk/docs/screenshots/new-project.png" alt="Open project dialog listing the repos under ~/code"><br><sub><b>Open project.</b> Pick a repo from your repos folder; a dedicated Meko datapack is created with it.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/project-home.png" alt="Project home with datapacks, activity, token usage and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity, token usage by day, session and model, and settings.</sub></td>
-    <td width="50%"><img src="docs/screenshots/workbench-dark.png" alt="The workbench in the dark theme"><br><sub><b>Dark theme.</b> Follows your system, or pick one.</sub></td>
+    <td width="50%"><img src="extensions/agentk/docs/screenshots/project-home.png" alt="Project home with datapacks, activity, token usage and settings"><br><sub><b>Project home.</b> Datapacks, memory search, activity, token usage by day, session and model, and settings.</sub></td>
+    <td width="50%"><img src="extensions/agentk/docs/screenshots/workbench-dark.png" alt="The workbench in the dark theme"><br><sub><b>Dark theme.</b> Follows your system, or pick one.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/changes-comments.png" alt="Changes panel with a draft review comment and a new comment on a range of lines"><br><sub><b>Review comments.</b> Comment on lines of the diff, then send them all to Claude at once.</sub></td>
-    <td width="50%"><img src="docs/screenshots/mobile.png" alt="A session on a phone: app bar, one-line stage bar, the terminal, its key bar and a compose box"><br><sub><b>On a phone.</b> The terminal with a key bar and a compose box, and the stage gate in reach.</sub></td>
+    <td width="50%"><img src="extensions/agentk/docs/screenshots/changes-comments.png" alt="Changes panel with a draft review comment and a new comment on a range of lines"><br><sub><b>Review comments.</b> Comment on lines of the diff, then send them all to Claude at once.</sub></td>
+    <td width="50%"><img src="extensions/agentk/docs/screenshots/mobile.png" alt="A session on a phone: app bar, one-line stage bar, the terminal, its key bar and a compose box"><br><sub><b>On a phone.</b> The terminal with a key bar and a compose box, and the stage gate in reach.</sub></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/screenshots/kiro-session.png" alt="A session running on Kiro CLI in the Design stage: Kiro's terminal with the design it wrote and its open questions, the markdown design in the design panel waiting for approval, and the footer showing the credits Kiro billed"><br><sub><b>Sessions on Kiro.</b> The same stages, gates and design review with Kiro CLI as the agent; the footer shows the credits it billed.</sub></td>
+    <td colspan="2"><img src="extensions/agentk/docs/screenshots/kiro-session.png" alt="A session running on Kiro CLI in the Design stage: Kiro's terminal with the design it wrote and its open questions, the markdown design in the design panel waiting for approval, and the footer showing the credits Kiro billed"><br><sub><b>Sessions on Kiro.</b> The same stages, gates and design review with Kiro CLI as the agent; the footer shows the credits it billed.</sub></td>
   </tr>
 </table>
 
@@ -196,7 +196,7 @@ your phone can connect.
   Claude's context window is. Turn it off with `[claude] mod = false` in `config.toml` and restart
   the server (the file is read at startup): AgentK then types its prompts into the terminal, running
   sessions included, though those keep the mod loaded until they're relaunched
-  ([details](docs/design/mod.md)). Claude Code's mods are early
+  ([details](extensions/agentk/docs/design/mod.md)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
   When the host's Claude Code is too old for the mod, a banner says so and can update it.
 - **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
@@ -252,13 +252,13 @@ your phone can connect.
 - **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
-  (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
+  (details in [docs/design/usage-stats.md](extensions/agentk/docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
 - **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback
   if a new version won't start.
 
-Design: [`docs/design.md`](docs/design.md), an index with one file per area under `docs/design/`.
+Design: [`docs/design.md`](extensions/agentk/docs/design.md), an index with one file per area under `docs/design/`.
 
 ## Commands
 
@@ -273,7 +273,7 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 ## Develop
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](extensions/agentk/CONTRIBUTING.md).
 
 ## License
 
