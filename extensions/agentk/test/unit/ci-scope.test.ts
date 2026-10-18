@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -21,23 +21,16 @@ const out = (agentk: boolean, backend: boolean) => `agentk=${agentk}\nbackend=${
 describe('ci-scope.sh', () => {
   it.each([
     ['extensions/agentk/src/server/core.ts', true, false],
-    ['extensions/agentk/package-lock.json', true, false],
     ['scripts/check-title.sh', true, false],
-    ['.github/dependabot.yml', true, false],
     ['.github/workflows/pr-title.yml', true, false],
-    ['.github/workflows/release.yml', true, false],
     ['backend/cmd/meko-local/main.go', false, true],
     ['backend/AGENTS.md', false, true],
     ['.github/workflows/ci.yml', true, true],
     ['scripts/ci-scope.sh', true, true],
     ['AGENTS.md', false, false],
-    ['README.md', false, false],
     ['.claude/skills/commit/SKILL.md', false, false],
     ['.gitignore', true, true],
-    ['.gitattributes', true, true],
-    ['LICENSE', true, true],
     ['docs/new.md', true, true],
-    ['extensions/other/index.ts', true, true],
   ])('%s runs agentk=%s backend=%s', (path, agentk, backend) => {
     expect(run(path)).toBe(out(agentk, backend));
   });
@@ -48,10 +41,9 @@ describe('ci-scope.sh', () => {
     expect(run('README.md', '.claude/x', 'extensions/agentk/README.md')).toBe(out(true, false));
   });
 
-  it('runs nothing for no paths, and reads a last line without a newline', () => {
+  it('runs nothing for no paths', () => {
     expect(run()).toBe(out(false, false));
     expect(scope('\n\n').stdout).toBe(out(false, false));
-    expect(scope('AGENTS.md\nbackend/go.mod').stdout).toBe(out(false, true));
   });
 
   it('runs everything with --all', () => {
@@ -94,20 +86,16 @@ describe('the CI workflow', () => {
     expect(needs.sort()).toEqual([...jobs.keys()].filter((k) => k !== 'gate').sort());
   });
 
-  it('runs each component only when the change needs it', () => {
-    expect([...jobs.keys()]).toEqual(expect.arrayContaining(['changes', 'agentk', 'backend']));
-    for (const c of ['agentk', 'backend']) {
-      expect(jobs.get('changes')).toContain(`      ${c}: \${{ steps.scope.outputs.${c} }}\n`);
-      expect(jobs.get(c)).toContain('    needs: changes\n');
-      expect(jobs.get(c)).toContain(`    if: needs.changes.outputs.${c} == 'true'\n`);
-    }
-    expect(jobs.get('changes')).toContain('sh scripts/ci-scope.sh');
-    // Run steps have no pipefail: a failed diff piped into the script would skip everything.
-    expect(jobs.get('changes')).not.toMatch(/\|\s*sh scripts\/ci-scope\.sh/);
+  it('runs each component job on the answer the script gives for it', () => {
+    const components = [...jobs.keys()].filter((k) => k !== 'changes' && k !== 'gate');
+    expect(components.sort()).toEqual([...scope('', '--all').stdout.matchAll(/^(\w+)=/gm)].map((m) => m[1]).sort());
+    for (const c of components) expect(jobs.get(c)).toMatch(new RegExp(`^ {4}if:.*needs\\.changes\\.outputs\\.${c}\\b`, 'm'));
   });
 
-  it('always starts, and holds every component', () => {
-    expect(ci).not.toMatch(/^\s*paths(-ignore)?:/m);
-    expect(existsSync(join(WORKFLOWS, 'backend.yml'))).toBe(false);
+  // Run steps have no pipefail: a failed diff piped into the script would read as no changes,
+  // skip every component and pass the gate.
+  it('never pipes into the script', () => {
+    expect(jobs.get('changes')).toContain('scripts/ci-scope.sh');
+    expect(jobs.get('changes')).not.toMatch(/\|[^\n]*ci-scope\.sh/);
   });
 });

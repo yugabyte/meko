@@ -1,9 +1,11 @@
 #!/bin/sh
 # Says which components' CI jobs a change needs, for .github/workflows/ci.yml:
 #
-#   git diff --name-only --no-renames <base> <head> | scripts/ci-scope.sh
+#   git diff --name-only --no-renames <base> <head> > changed
+#   scripts/ci-scope.sh < changed
 #   scripts/ci-scope.sh --all
 #
+# Not through a pipe: without pipefail a failed diff would read as no changes.
 # Reads changed paths, one per line, and prints `agentk=true|false` and
 # `backend=true|false`, ready for $GITHUB_OUTPUT. --all prints both true (pushes
 # to main check everything). A path no rule claims runs both, so a new root file
