@@ -48,8 +48,6 @@ export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 
  */
 export type SessionKind = 'task' | 'review-pr';
 
-export const SESSION_KINDS: SessionKind[] = ['task', 'review-pr'];
-
 /**
  * A session's kind as `sessions.kind` stores it and `Session.kind` sends it: `review-pr`, or a task
  * under one of the old session types' names (`plan` for new ones). Pages and releases from before

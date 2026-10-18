@@ -7,7 +7,8 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
-import { claudeUserDir, claudeVersion, versionAtLeast } from './claude.js';
+import { claudeUserDir } from './claude.js';
+import { cliVersion, versionAtLeast } from './harness/version.js';
 import {
   DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
 } from './config.js';
@@ -25,7 +26,7 @@ import { SessionHost } from './hostclient.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
-import { MIN_KIRO, removeKiroAgent } from './kiro.js';
+import { removeKiroAgent } from './kiro.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 
 // Linux names from `stat -f -c %T`; macOS names from `mount`.
@@ -334,18 +335,19 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boo
 
 /**
  * The installer's agents check: the coding agents turned on in config.toml whose `--version`
- * answers (Kiro's with MIN_KIRO or later), in HARNESS_IDS order. With none the install stops,
+ * answers (with its `minVersion` or later), in HARNESS_IDS order. With none the install stops,
  * saying what to install. A default that isn't among them becomes the first that is, so a machine
  * with only Kiro starts its sessions on Kiro.
  */
 export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, string | null>>): HarnessId[] {
   const found = HARNESS_IDS.filter((id) => {
     const v = versions[id];
-    return cfg[id].enabled && !!v && (id !== 'kiro' || versionAtLeast(v, MIN_KIRO));
+    const min = HARNESS_CAPS[id].minVersion;
+    return cfg[id].enabled && !!v && (!min || versionAtLeast(v, min));
   });
   if (!found.length) {
     throw new InstallError(
-      `no coding agent found. Install Claude Code (https://claude.com/claude-code) or Kiro CLI ${MIN_KIRO} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
+      `no coding agent found. Install Claude Code (https://claude.com/claude-code) or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
@@ -420,7 +422,8 @@ export async function runInstall(args: string[]): Promise<void> {
     }
 
     // 2. The coding agents: at least one, or nothing can run.
-    const versions = { claude: await claudeVersion(cfg.claude.command), kiro: await claudeVersion(cfg.kiro.command) };
+    const versions: Partial<Record<HarnessId, string | null>> = {};
+    for (const id of HARNESS_IDS) versions[id] = await cliVersion(cfg[id].command);
     const agents = settleAgents(cfg, versions);
 
     // 3. Meko (optional) and 4. Meko in each agent

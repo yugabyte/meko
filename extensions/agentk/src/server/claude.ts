@@ -291,15 +291,6 @@ export function writeModFiles(paths: Paths, source = MOD_SOURCE): boolean {
   return true;
 }
 
-/** The version `<command> --version` prints (`2.1.287 (Claude Code)` → `2.1.287`), or null. */
-export function claudeVersion(command: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile(command, ['--version'], { timeout: 10_000, env: { ...process.env, NO_COLOR: '1' } }, (err, stdout) => {
-      resolve(err ? null : (/(\d+\.\d+\.\d+)/.exec(String(stdout))?.[1] ?? null));
-    });
-  });
-}
-
 /** How long `claude update` may run before it's stopped. */
 const CLAUDE_UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -314,18 +305,6 @@ export function runClaudeUpdate(command: string): Promise<{ ok: boolean; output:
       resolve({ ok: !err, output: output || (err ? err.message : '') });
     });
   });
-}
-
-/** Whether dotted version `v` is `min` or later (numeric parts; `2.1.10` is after `2.1.9`). */
-export function versionAtLeast(v: string, min: string): boolean {
-  const a = v.split('.').map(Number);
-  const b = min.split('.').map(Number);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] || 0;
-    const y = b[i] || 0;
-    if (x !== y) return x > y;
-  }
-  return true;
 }
 
 export interface LaunchSpec {

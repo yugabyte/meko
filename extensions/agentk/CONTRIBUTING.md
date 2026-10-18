@@ -41,7 +41,7 @@ npm run typecheck
 npm run lint
 npm test                        # unit + integration
 npm run test:unit
-npm run test:integration        # needs git; uses a stub `claude` (tmux only for the move-off-tmux tests)
+npm run test:integration        # needs git; uses a stub `claude`
 ```
 
 CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`,

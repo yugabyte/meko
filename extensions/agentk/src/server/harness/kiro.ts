@@ -2,12 +2,14 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { HARNESS_CAPS } from '../../shared/harnesses.js';
 import type { HarnessStatus } from '../../shared/types.js';
-import { claudeVersion, contextScriptPath, hookScriptPath, versionAtLeast } from '../claude.js';
+import { kiroAsker } from '../askagentk.js';
+import { contextScriptPath, hookScriptPath } from '../claude.js';
 import type { Config } from '../config.js';
+import { run } from '../db.js';
 import type { HookPayload } from '../hooks.js';
 import {
-  AGENTK_AGENT, MIN_KIRO, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
-  kiroSessionFile, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
+  AGENTK_AGENT, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
+  kiroSessionFile, kiroTurns, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
 } from '../kiro.js';
 import { kiroWorkspaceConfig } from '../headtrust.js';
 import { shq } from '../launcher.js';
@@ -15,8 +17,12 @@ import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
 import { HttpError } from '../projects.js';
 import type { SessionRow } from '../store.js';
+import { recordKiroTurns } from '../usage.js';
 import type { Harness } from './types.js';
+import { cliVersion, versionAtLeast } from './version.js';
 
+/** The oldest kiro-cli sessions start on. */
+const MIN_VERSION = HARNESS_CAPS.kiro.minVersion;
 /** How long a version read is used before it's read again (Kiro updates itself). */
 const VERSION_TTL_MS = 10 * 60 * 1000;
 /** How long `kiro-cli update` may run before it's stopped. */
@@ -72,18 +78,9 @@ export function kiroArgs(o: { conversation: string | null; trustTools: boolean; 
   return args;
 }
 
-/** The session's own Kiro conversation, while Kiro still has it: the id a hook gave, or `findKiroConversation` found. */
-export function kiroConversation(row: SessionRow): string | null {
+/** The session's own Kiro conversation, while Kiro still has it: the id a hook gave, or `findConversation` found. */
+function kiroConversation(row: SessionRow): string | null {
   return row.agent_session_id && existsSync(kiroSessionFile(row.agent_session_id)) ? row.agent_session_id : null;
-}
-
-/**
- * The Kiro conversation a session that has none yet (no hook said its id) started in its worktree:
- * the newest Kiro started there since the session was created. Callers ask only while the session
- * owns the worktree, and keep what it finds, so a later session's conversation is never taken.
- */
-export function findKiroConversation(row: SessionRow): string | null {
-  return findKiroSession([row.worktree_path, claudePath(row.worktree_path)], row.created_at);
 }
 
 /** A Kiro hook payload as AgentK's event: Kiro's id moves to `agent_session_id`, since `session_id` is Claude Code's. */
@@ -96,7 +93,7 @@ export function normalizeKiro(raw: HookPayload): HookPayload | null {
 
 /** Kiro CLI (`kiro-cli`). */
 export function kiroHarness(deps: { log: Logger; changed: () => void; readVersion?: (cmd: string) => Promise<string | null> }): Harness {
-  const readVersion = deps.readVersion ?? claudeVersion;
+  const readVersion = deps.readVersion ?? cliVersion;
   let ver: { command: string; at: number; read: Promise<string | null> } | null = null;
   let value: string | null = null;
   /** The command the last finished read was for (`checked`). */
@@ -128,7 +125,7 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
   const status = (cfg: Config): HarnessStatus => {
     const v = cfg.kiro.enabled && readFor === cfg.kiro.command ? value : null;
     return {
-      id: 'kiro', enabled: cfg.kiro.enabled, version: v, minVersion: MIN_KIRO, available: !!v && versionAtLeast(v, MIN_KIRO),
+      id: 'kiro', enabled: cfg.kiro.enabled, version: v, minVersion: MIN_VERSION, available: !!v && (!MIN_VERSION || versionAtLeast(v, MIN_VERSION)),
       checked: !cfg.kiro.enabled || readFor === cfg.kiro.command, isDefault: cfg.agents.default === 'kiro', updating,
     };
   };
@@ -143,8 +140,6 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
   return {
     id: 'kiro',
     caps: HARNESS_CAPS.kiro,
-    command: (cfg) => cfg.kiro.command,
-    enabled: (cfg) => cfg.kiro.enabled,
     systemPromptByContext: true,
     async prepare(paths, cfg) {
       writeKiroGuardScript(paths);
@@ -153,7 +148,7 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       if (!kiroDefaultAgentName()) await exportBuiltinKiroAgent(cfg.kiro.command, paths);
       refreshAgent(paths, cfg);
     },
-    beforeLaunch: (paths, cfg) => refreshAgent(paths, cfg),
+    beforeLaunch: async ({ paths, cfg }) => refreshAgent(paths, cfg),
     launcher(paths, cfg, l) {
       // Kiro has no flag to leave a workspace's agents and MCP servers out: refuse rather than run a PR's.
       const own = l.untrusted ? kiroWorkspaceConfig(l.row.worktree_path, AGENTK_AGENT) : [];
@@ -181,7 +176,26 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       const path = p.tool_input?.path;
       return typeof path === 'string' && path ? [path] : [];
     },
+    // The newest Kiro started in the worktree since the session was created: the session manager
+    // asks only while the session owns the worktree, so a later session's conversation is never taken.
+    findConversation: (row) => findKiroSession([row.worktree_path, claudePath(row.worktree_path)], row.created_at),
     canResume: (row) => !!kiroConversation(row),
+    activityFiles(row) {
+      const conv = kiroConversation(row);
+      return conv ? [kiroSessionFile(conv), kiroSessionFile(conv).replace(/\.json$/, '.jsonl')] : [];
+    },
+    // Its finished turns (credits, tokens) and its context fill after the last one, from its session file.
+    readUsage(db, row) {
+      const conv = kiroConversation(row);
+      if (!conv) return { changed: false };
+      const turns = kiroTurns(conv);
+      const changed = recordKiroTurns(db, row.id, conv, turns);
+      // Marks the session as read, so backfillUsage leaves it alone at the next start.
+      run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
+               ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, row.id, kiroSessionFile(conv), turns.length);
+      return { changed, contextPercent: turns.at(-1)?.contextPercent };
+    },
+    ask: kiroAsker,
     status,
     version,
     async update(cfg) {

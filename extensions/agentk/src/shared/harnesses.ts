@@ -23,11 +23,13 @@ export interface HarnessCaps {
   usage: 'tokens' | 'credits';
   /** A by-model usage row names it before the model ("Kiro · auto"): its model ids don't say which agent ran them. */
   labelModels: boolean;
+  /** The oldest version sessions start on (the one its hooks and files were checked against), or null for any. */
+  minVersion: string | null;
 }
 
 export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
-  claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens', labelModels: false },
-  kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits', labelModels: true },
+  claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens', labelModels: false, minVersion: null },
+  kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits', labelModels: true, minVersion: '2.32.0' },
 };
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */

@@ -91,9 +91,21 @@ marks that read in either theme.
 
 ## The adapter
 
-Everything Claude-specific sits behind one interface, `Harness` in `src/server/harness/`, with an
-adapter per CLI (`claude.ts`, `kiro.ts`) and the registry (`Harnesses` in `index.ts`). What each can
-do is data, `HARNESS_CAPS` in `src/shared/harnesses.ts`, which the server and the UI both gate on:
+Everything specific to one CLI sits behind one interface, `Harness` in `src/server/harness/types.ts`,
+with an adapter per CLI (`claude.ts`, `kiro.ts`) and the registry (`Harnesses` in `index.ts`). The
+session manager, Ask AgentK and the settings never ask which harness a session runs on: they call
+its adapter, which says how to prepare its files and settle what a launch needs first
+(`prepare`, `beforeLaunch`: Claude Code's folder trust, Kiro's agent file), its command line
+(`launcher`), its hooks (`normalize`, `deny`, `context`, `editedPaths`), its conversation on disk
+(`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
+progress shows in (`activityFiles`, for the hookless fallback), its usage (`readUsage`), the
+transcript AgentK sends to Meko (`captureTranscript`, Claude Code only), AgentK's mod (`modDir`,
+`offersMod`, Claude Code only), Ask AgentK (`ask`), and its version and updater. Reading a CLI's
+version and comparing it is shared (`version.ts`). What each can do is data, `HARNESS_CAPS` in
+`src/shared/harnesses.ts`, which the server and the UI both gate on, its minimum version included
+(`minVersion`, which the installer checks too). Adding a harness is an id in `HARNESS_IDS`, its
+caps, its `[<id>]` config section and an adapter; the compiler then names the rest, each a
+`Record<HarnessId, …>` (its logo, its Meko agent id prefix, its Settings switch):
 
 | | Claude Code | Kiro |
 |---|---|---|

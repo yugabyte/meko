@@ -2,9 +2,8 @@
 # Deletes GitHub releases beyond the newest $KEEP (default 5) in each lane.
 #
 # A lane is the version's first prerelease identifier (v0.1.2-beta.3 → beta), "prerelease"
-# for a numeric one or a prerelease without one, else "stable" — the same rule as
-# releaseLane() in src/server/updater.ts. Drafts are left alone. Tags are kept, so
-# release-notes.sh and next-version.sh still see every release.
+# for a numeric one or a prerelease without one, else "stable". Drafts are left alone. Tags are
+# kept, so release-notes.sh and next-version.sh still see every release.
 #
 #   scripts/prune-releases.sh [--dry-run]
 #

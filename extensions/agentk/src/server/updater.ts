@@ -59,17 +59,6 @@ export function compareSemver(a: string, b: string): number {
 }
 
 /**
- * A version's lane: its first prerelease identifier (0.1.2-beta.3 → beta), "prerelease" for a
- * numeric one or a GitHub prerelease without one, else "stable". scripts/prune-releases.sh
- * uses the same rule for GitHub Releases.
- */
-export function releaseLane(v: string, prerelease = false): string {
-  const pre = parseSemver(v)?.pre[0];
-  if (pre && !/^\d+$/.test(pre)) return pre;
-  return pre || prerelease ? 'prerelease' : 'stable';
-}
-
-/**
  * How long a new version must stay up before it counts as good: until then a crash loop rolls it
  * back (see packaging/agent-k-local); after it, the update is final and older versions are removed.
  */

@@ -17,6 +17,7 @@ import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
 import { findGap, gapPage, markGap } from './mekogaps.js';
 import { expandHome, repoKey } from './paths.js';
 import { repoRoots } from './config.js';
+import { trustFolder } from './trust.js';
 import { projectUsage } from './usage.js';
 import {
   DEFAULT_SETTINGS, dedicatedDatapack, projectDatapacks, projectRow, projectRows, slugify, toProject, type ProjectRow,
@@ -209,7 +210,7 @@ export class ProjectService {
     }
     if (dp) this.core.invites.markUsed(dp.id);
     // Trust the repo in Claude Code now, before any session of it starts.
-    await this.core.sessions.trustRepo(repoPath);
+    await trustFolder(repoPath, this.core.log);
     if (dp) this.ensureConversation(id).catch((e) => this.core.log.warn('Meko conversation create failed', errMsg(e)));
     this.core.log.info(`project ${reopened ? 'opened again' : 'opened'}: ${id} (${repoPath}) ${dp ? `datapack ${dp.name}` : 'without a datapack'}`);
     this.core.changed();

@@ -340,10 +340,9 @@ describe('install.sh: when AgentK Local is already installed', () => {
 
   /**
    * An install of `version`: unpacked, linked as app/current and ~/.local/bin/agent-k-local, and
-   * set up (config.toml, and both services, as long as there's no `no-services` file). `second`
-   * is the service beside the server's: the session host, or tmux on versions before it.
+   * set up (config.toml, and both services, as long as there's no `no-services` file).
    */
-  function installed(version: string, h = akHome(), second: 'host' | 'tmux' = 'host') {
+  function installed(version: string, h = akHome()) {
     mkdirSync(join(h, 'app', version, 'bin'), { recursive: true });
     stub(join(h, 'app', version, 'bin'), 'agent-k-local', 'exit 0');
     symlinkSync(version, join(h, 'app', 'current'));
@@ -351,8 +350,8 @@ describe('install.sh: when AgentK Local is already installed', () => {
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
     symlinkSync(join(h, 'app', 'current', 'bin', 'agent-k-local'), join(home, '.local', 'bin', 'agent-k-local'));
     const services = `[ -f "${root}/no-services" ] && exit 1`;
-    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled agent-k-local.service" ] || [ "$*" = "--user is-enabled agent-k-local-${second}.service" ] || exit 1; ${services}; echo enabled`);
-    stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.${second}) ;; *) exit 1 ;; esac; ${services}; exit 0`);
+    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled agent-k-local.service" ] || [ "$*" = "--user is-enabled agent-k-local-host.service" ] || exit 1; ${services}; echo enabled`);
+    stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.host) ;; *) exit 1 ;; esac; ${services}; exit 0`);
   }
 
   /** Release `version` of AgentK Local, as `gh release download` hands it out. */
@@ -399,17 +398,6 @@ exit 0`);
     const onPath = runAll([], { PATH: `${bin}:${join(home, '.local', 'bin')}` });
     expect(onPath.code).toBe(0);
     expect(onPath.err).toMatch(/Status\S* +agent-k-local status/);
-  });
-
-  it('counts an install from before the session host, with its tmux service, as installed', () => {
-    rmSync(join(akHome(), 'app', 'current'));
-    rmSync(join(home, '.local', 'bin', 'agent-k-local'));
-    installed('1.2.2', akHome(), 'tmux');
-    for (const env of [{}, { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' }] as Record<string, string>[]) {
-      const r = runAll([], env);
-      expect(r.code).toBe(0);
-      expect(r.err).toContain('AgentK Local is already installed');
-    }
   });
 
   it('stops before the tools, even with tools missing and --install-deps', () => {

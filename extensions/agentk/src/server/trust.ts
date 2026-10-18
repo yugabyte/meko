@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { errMsg, type Logger } from './log.js';
 
 /** Claude Code's global config (holds per-folder trust decisions). */
 export function claudeConfigPath(): string {
@@ -54,3 +55,19 @@ export function ensureWorkspaceTrust(dir: string, exact = false): 'already' | 'a
 
 /** Text Claude Code shows in its folder-trust dialog. */
 export const TRUST_PROMPT_RE = /trust this folder|do you trust the files|Is this a project you created or one you trust/i;
+
+/**
+ * Makes sure Claude Code trusts `dir` (`ensureWorkspaceTrust`). Other Claude processes rewrite
+ * ~/.claude.json with their own copy when they start, which can drop a fresh entry, so a new entry
+ * is checked again after a moment. Never throws.
+ */
+export async function trustFolder(dir: string, log: Logger, exact = false): Promise<void> {
+  try {
+    for (let i = 0; i < 3; i++) {
+      if (ensureWorkspaceTrust(dir, exact) !== 'added') return;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  } catch (e) {
+    log.warn(`could not mark ${dir} as trusted in Claude Code`, errMsg(e));
+  }
+}

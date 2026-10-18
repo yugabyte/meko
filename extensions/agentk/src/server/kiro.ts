@@ -17,9 +17,6 @@ import type { Paths } from './paths.js';
 /** Variables Kiro sets in its children's environment; an AgentK started inside Kiro must not pass them on. */
 export const KIRO_SESSION_MARKERS = ['KIRO_SESSION_ID', 'KIRO_CLI_IS_CHILD_PROCESS', 'KIRO_CLI_ACP_CLIENT_NAME', 'KIRO_HOST_PID'];
 
-/** The oldest Kiro CLI AgentK runs sessions on (the one its hooks and session store were checked against). */
-export const MIN_KIRO = '2.32.0';
-
 /** The agent Kiro sessions run as (`--agent`), derived from the user's default agent with AgentK's hooks added. */
 export const AGENTK_AGENT = 'agentk';
 /** The agent Ask AgentK runs as: no tools, no MCP servers, no hooks. */
