@@ -228,10 +228,11 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
               context: { type: ['string', 'null'], description: 'Why it matters, or why you decided so (optional).' },
               options: {
                 type: 'array',
+                description: 'The real alternatives, when there are any; "recommended" is an index into this list.',
                 items: { type: 'object', properties: { label: { type: 'string' }, detail: { type: ['string', 'null'] } }, required: ['label'] },
               },
               recommended: { type: ['integer', 'null'], description: 'The index of the option you recommend, or for a decision, picked.' },
-              status: { type: 'string', enum: ['open', 'resolved'] },
+              status: { type: 'string', enum: ['open', 'resolved'], description: 'open until the user answers it or it is decided; a decision is always resolved.' },
               decision: { type: ['string', 'null'], description: 'What was decided, once resolved.' },
               decidedBy: { type: ['string', 'null'], enum: ['user', 'agentk', null], description: 'Who decided it, once resolved.' },
               meko: {

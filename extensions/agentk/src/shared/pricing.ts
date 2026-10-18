@@ -1,6 +1,8 @@
 /**
  * Anthropic API list prices in USD per million tokens (first-party rates, checked 2026-09-29).
  * Cache writes cost 1.25× the input price for the 5-minute cache and 2× for the 1-hour cache.
+ * Claude Haiku 5.5 has the rates for prompts of up to 100K tokens: costs are worked out from
+ * per-model sums, so its 5× rate for longer prompts isn't applied.
  */
 export interface ModelPrice {
   input: number;
@@ -30,6 +32,7 @@ const PRICES: [string, ModelPrice][] = (
     ['claude-sonnet-4-5', { input: 3, output: 15, cacheRead: 0.3 }],
     ['claude-sonnet-4-0', { input: 3, output: 15, cacheRead: 0.3 }],
     ['claude-sonnet-4', { input: 3, output: 15, cacheRead: 0.3 }],
+    ['claude-haiku-5-5', { input: 0.1, output: 0.5, cacheRead: 0.01 }],
     ['claude-haiku-4-5', { input: 1, output: 5, cacheRead: 0.1 }],
     ['claude-3-5-haiku', { input: 0.8, output: 4, cacheRead: 0.08 }],
   ] as [string, ModelPrice][]

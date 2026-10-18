@@ -428,10 +428,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(lastEvent(s.id, 'learned')).toBe('Saved 1 memory and corrected 1 in team/demo');
     // The fork's and the check's tokens count as the session's.
     expect(all(env.core.db, "SELECT agent, model, output FROM usage_messages WHERE session_id = ? AND agent = 'agentk:learn' ORDER BY message_id DESC", s.id))
-      .toEqual([{ agent: 'agentk:learn', model: 'claude-fake-1', output: 200 }, { agent: 'agentk:learn', model: 'claude-haiku-4-5-20251001', output: 200 }]);
+      .toEqual([{ agent: 'agentk:learn', model: 'claude-fake-1', output: 200 }, { agent: 'agentk:learn', model: 'claude-haiku-5-5', output: 200 }]);
     // Each part reached the mod on a poll, and each post was answered at once.
     expect(modLearn().map((x) => [x.job.kind, x.post.step, x.status])).toEqual([['extract', 'facts', 204], ['check', 'decisions', 204]]);
-    expect(modLearn()[1].job).toMatchObject({ prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-4-5-20251001' });
+    expect(modLearn()[1].job).toMatchObject({ prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-5-5' });
     await waitFor(toasts, (t) => t.length === 1, 5000, 'the toast');
     expect(toasts()).toEqual(['Saved 1 memory and corrected 1 in team/demo.']);
   });
@@ -971,8 +971,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.sessions.action(s.id, 'approve-design');
     // The approval asks for the key design decisions in the design before any code, and to keep it current.
     const file = join(env.core.paths.designs, s.id, 'design.md');
-    await waitFor(() => transcript(s.id), (t) => t.includes('add a \\"Key Design Decisions\\" section'), 10000, 'approval prompt');
-    expect(transcript(s.id)).toContain(`section to the design (edit ${file})`);
+    await waitFor(() => transcript(s.id), (t) => t.includes('bring the design\'s \\"Key Design Decisions\\" section up to date'), 10000, 'approval prompt');
+    expect(transcript(s.id)).toContain(`section up to date (edit ${file};`);
     expect(transcript(s.id)).toContain('If a new question comes up or the design changes while you work, update the design in the same turn');
     await idle(s.id, 'approval turn');
     await env.core.sessions.submit(s.id, 'DESIGN_QA');

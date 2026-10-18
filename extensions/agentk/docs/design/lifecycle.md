@@ -193,9 +193,10 @@ sent, withdrawn or dropped.
 
 A task's design doesn't stop at the approval: it's what the PR's reviewers read.
 
-- **Its key design decisions go into it.** The approval asks Claude to add a *Key Design
-  Decisions* section near the top of the design, right after its goal, before writing any code
-  (`designQaLine()`, added in code after the approval prompt): each question and each decision
+- **Its key design decisions go into it.** The approval asks Claude to bring the design's *Key
+  Design Decisions* section up to date before writing any code (`designQaLine()`, added in code
+  after the approval prompt; the Design prompt already asks for the section, and a design without
+  one gets it near the top, right after its goal): each question and each decision
   AgentK made itself from the questions file, who decided it (the user, or AgentK), the user's
   answer, what was decided and why, and the Meko items it rests on (kind, datapack, id). Designs
   written before call the section *Questions and decisions*.

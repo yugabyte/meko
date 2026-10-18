@@ -56,7 +56,7 @@ There is no `refactor`, `build`, `style` or `revert`:
 The rest of the subject:
 
 - `(<component>)` is optional: any lowercase name (letters, digits, dashes) for the part of the
-  code it touches, e.g. `server`, `web`, `auth`, `tmux`, `worktree`, `meko`, `update`,
+  code it touches, e.g. `server`, `web`, `auth`, `host`, `worktree`, `meko`, `update`,
   `release`, `install`.
 - `!` after the type or component marks a breaking change (`feat!:`, `fix(web)!:`), or add a
   `BREAKING CHANGE:` footer. Only `feat`, `fix`, `perf` and `deps` can be breaking: a breaking
@@ -68,15 +68,15 @@ The rest of the subject:
 Check a subject before using it; it prints what's wrong and the rules:
 
 ```sh
-sh scripts/check-title.sh "fix(tmux): recreate sessions after a host reboot"
+sh scripts/check-title.sh "fix(host): resume sessions after a host reboot"
 ```
 
 Example:
 
 ```
-fix(tmux): recreate sessions with claude --resume after host reboot
+fix(host): resume sessions with claude --resume after a host reboot
 
-The server now reconciles state.db against the tmux socket on boot and
+The server now reconciles state.db against the session host on boot and
 relaunches any session whose pane is gone, so a devserver crash no longer
 loses open work.
 ```

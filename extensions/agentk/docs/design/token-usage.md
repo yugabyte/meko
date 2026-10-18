@@ -17,8 +17,9 @@ counts as 1-hour, which is what Claude Code uses).
 
 **Cost.** Tokens are priced at Anthropic's API list prices (`src/shared/pricing.ts`: input, output
 and cache read per model, with cache writes at 1.25× input for the 5-minute cache and 2× for the
-1-hour one), from per-model sums. It's shown as **Est. cost**, what the tokens would cost on the
-API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
+1-hour one), from per-model sums. Sums can't tell a request's prompt size, so Claude Haiku 5.5 is
+priced at its rates for prompts of up to 100K tokens, never its 5× rate above that. It's shown as
+**Est. cost**, what the tokens would cost on the API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
 A model with no known price adds tokens but no cost; the cost then reads `≥ $…` (**Est. cost,
 partial**), and the tooltip says how many responses were left out. Model ids match with a date
 (`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).

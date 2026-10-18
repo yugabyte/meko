@@ -120,7 +120,7 @@ gets the same list. The duplicate check still runs on what comes back.
    parallel). It puts a `check` part on the next poll: the duplicate check's prompt
    (`dedupPrompt()`), each fact numbered with those memories and their ids; a skip or an update
    names the memory it means.
-4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Haiku) and posts the reply.
+4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Claude Haiku 5.5) and posts the reply.
 5. For each fact the server adds it (`memory_add`, as "Gotcha (component): …", with metadata
    `{ source, kind: "learned", fact, component, session, learn }`), skips it, or updates the memory
    it corrects (`memory_update`, as the agent that wrote it, with the check's corrected text unless
