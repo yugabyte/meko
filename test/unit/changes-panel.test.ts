@@ -18,7 +18,7 @@ const render = (limit: number) =>
 
 describe('a large diff', () => {
   it.each<[number, number, string]>([
-    [0, 0, '<span>Large diff: 5,000 lines.</span><button class="btn small">Show diff</button>'],
+    [0, 0, '<span>Large diff: 4,999 lines.</span><button class="btn small">Show diff</button>'],
     [2000, 2000, '<button class="btn small">Show 2,000 more lines (3,000 left)</button>'],
     [4000, 4000, '<button class="btn small">Show the last 1,000 lines</button>'],
   ])('shows %i rows, then a button for the rest, with comments on the hidden rows under it', (limit, rows, button) => {

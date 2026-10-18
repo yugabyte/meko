@@ -91,10 +91,8 @@ describe('changes parsing', () => {
     ['lists every file under the cap', ['a', 'b', 'c'], ['c'], ['a', 'b', 'c']],
     ['keeps the first files by path past it', ['a', 'b', 'c', 'd', 'e'], [], ['a', 'b', 'c']],
     ['keeps files with comments first, in path order', ['a', 'b', 'c', 'd', 'e'], ['e', 'gone', 'b'], ['a', 'b', 'e']],
-    ['keeps a renamed file by its old path', ['a', 'b', 'c', 'new'], ['old'], ['a', 'b', 'new']],
   ])('caps the files listed: %s', (_, paths, keep, listed) => {
-    const files = paths.map((p) => ({ ...file(p, null), oldPath: p === 'new' ? 'old' : null }));
-    expect(capFiles(files, new Set(keep), 3).map((f) => f.path)).toEqual(listed);
+    expect(capFiles(paths.map((p) => file(p, null)), new Set(keep), 3).map((f) => f.path)).toEqual(listed);
   });
 
   it('builds a new-file patch', () => {

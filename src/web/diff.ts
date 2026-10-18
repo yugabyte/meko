@@ -68,7 +68,7 @@ export function defaultOpen(files: { path: string }[], rowsOf: (path: string) =>
     // A file with no rows (binary, an image) still takes a slot, so a branch of images doesn't load them all.
     if (hasComments(path) || (!large && shown + Math.max(n, 1) <= OPEN_LINE_BUDGET)) {
       open.add(path);
-      if (!large) shown += n;
+      if (!large) shown += Math.max(n, 1);
     }
   }
   return open;

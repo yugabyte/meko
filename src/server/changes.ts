@@ -161,7 +161,7 @@ export async function changes(worktree: string, base: string, keep: ReadonlySet<
  */
 export function capFiles(files: ChangedFile[], keep: ReadonlySet<string>, max = MAX_FILES): ChangedFile[] {
   if (files.length <= max) return files;
-  const picked = new Set(files.filter((f) => keep.has(f.path) || (f.oldPath !== null && keep.has(f.oldPath))).slice(0, max));
+  const picked = new Set(files.filter((f) => keep.has(f.path)).slice(0, max));
   for (const f of files) {
     if (picked.size >= max) break;
     picked.add(f);

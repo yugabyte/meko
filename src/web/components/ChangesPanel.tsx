@@ -879,6 +879,8 @@ export function FileDiff({
   if (!lines) return <p className="chg-note">This diff is too large to show here.</p>;
   if (lines.length === 0) return <p className="chg-note">{file.kind === 'untracked' ? 'Empty file.' : 'No content changes.'}</p>;
   const left = lines.length - limit;
+  /** Lines of the file among rows [from, to), for the labels: hunk headers and notes aren't lines. */
+  const fileLines = (from: number, to = lines.length) => lines.slice(from, to).filter((l) => l.kind === 'add' || l.kind === 'del' || l.kind === 'ctx').length;
   // Comments on rows not rendered yet go under the button that shows them.
   const later: ReactNode[] = [];
   for (let i = limit; i < lines.length; i++) {
@@ -933,12 +935,14 @@ export function FileDiff({
         <div className="chg-more">
           {limit === 0 ? (
             <>
-              <span>Large diff: {plural(lines.length, 'line')}.</span>
+              <span>Large diff: {plural(fileLines(0), 'line')}.</span>
               <button className="btn small" onClick={onMore}>Show diff</button>
             </>
           ) : (
             <button className="btn small" onClick={onMore}>
-              {left > ROW_PAGE ? `Show ${ROW_PAGE.toLocaleString()} more lines (${left.toLocaleString()} left)` : `Show the last ${plural(left, 'line')}`}
+              {left > ROW_PAGE
+                ? `Show ${fileLines(limit, limit + ROW_PAGE).toLocaleString()} more lines (${fileLines(limit).toLocaleString()} left)`
+                : `Show the last ${plural(fileLines(limit), 'line')}`}
             </button>
           )}
         </div>
