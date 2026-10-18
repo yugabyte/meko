@@ -2035,7 +2035,8 @@ export class SessionManager {
   async changes(id: string): Promise<SessionChanges> {
     const row = this.row(id);
     if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
-    const c = await changes(row.worktree_path, row.base_branch);
+    // Files with review comments stay listed past the file cap, so no comment loses its file.
+    const c = await changes(row.worktree_path, row.base_branch, new Set(this.core.comments.list(id).map((x) => x.path)));
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
     // Only a session that can change its base (setBase) is offered one.
     if (row.kind !== 'review-pr' && !row.pr_number) c.suggestedBase = await suggestBase(row.worktree_path, row.base_branch, row.branch, c.ahead);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, parsePatch, sameLine, showsLine } from '../../src/web/diff.js';
+import { anchorComment, defaultOpen, parsePatch, sameLine, showsLine } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -74,5 +74,18 @@ describe('telling changed lines from hidden ones', () => {
     expect(showsLine(lines, 'new', 5)).toBe(true);
     expect(showsLine(lines, 'old', 5)).toBe(false); // context lines are commented on the new side
     expect(showsLine(lines, 'new', 40)).toBe(false);
+  });
+});
+
+describe('opening diffs by default', () => {
+  // Each file as [path, rows, has comments].
+  it.each<[string, [string, number, boolean][], string[]]>([
+    ['opens small files while they fit the budget', [['a', 900, false], ['b', 900, false], ['c', 300, false], ['d', 100, false]], ['a', 'b', 'd']],
+    ['never opens a large file, even first', [['big', 1001, false], ['a', 10, false]], ['a']],
+    ['opens files with comments, large ones included, and counts only small ones', [['big', 50000, true], ['a', 1000, false], ['b', 1000, true], ['c', 1, false]], ['big', 'a', 'b']],
+    ['lets files without rows take a slot, so a branch of images opens only the first ones', [['a', 1000, false], ['b', 1000, false], ['img.png', 0, false]], ['a', 'b']],
+  ])('%s', (_, files, open) => {
+    const by = new Map(files.map(([path, n, c]) => [path, { n, c }]));
+    expect([...defaultOpen(files.map(([path]) => ({ path })), (p) => by.get(p)!.n, (p) => by.get(p)!.c)]).toEqual(open);
   });
 });

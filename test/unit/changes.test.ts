@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChangedFile } from '../../src/shared/types.js';
 import {
-  FILE_PATCH_CAP, TOTAL_PATCH_CAP, capPatches, matchPatches, newFilePatch, parseNameStatus, parseNumstat, quotePath, splitPatch,
+  FILE_PATCH_CAP, TOTAL_PATCH_CAP, capFiles, capPatches, matchPatches, newFilePatch, parseNameStatus, parseNumstat, quotePath, splitPatch,
 } from '../../src/server/changes.js';
 import { parsePatch } from '../../src/web/diff.js';
 
@@ -85,6 +85,16 @@ describe('changes parsing', () => {
     expect(omitted).toBeGreaterThan(0);
     expect(many.filter((f) => f.patch === null)).toHaveLength(omitted);
     expect(many.reduce((t, f) => t + (f.patch?.length ?? 0), 0)).toBeLessThanOrEqual(TOTAL_PATCH_CAP);
+  });
+
+  it.each<[string, string[], string[], string[]]>([
+    ['lists every file under the cap', ['a', 'b', 'c'], ['c'], ['a', 'b', 'c']],
+    ['keeps the first files by path past it', ['a', 'b', 'c', 'd', 'e'], [], ['a', 'b', 'c']],
+    ['keeps files with comments first, in path order', ['a', 'b', 'c', 'd', 'e'], ['e', 'gone', 'b'], ['a', 'b', 'e']],
+    ['keeps a renamed file by its old path', ['a', 'b', 'c', 'new'], ['old'], ['a', 'b', 'new']],
+  ])('caps the files listed: %s', (_, paths, keep, listed) => {
+    const files = paths.map((p) => ({ ...file(p, null), oldPath: p === 'new' ? 'old' : null }));
+    expect(capFiles(files, new Set(keep), 3).map((f) => f.path)).toEqual(listed);
   });
 
   it('builds a new-file patch', () => {
