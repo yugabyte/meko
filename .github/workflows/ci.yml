@@ -1,6 +1,7 @@
 name: CI
 
-# No paths filter: the test checks are required, and a run that never starts leaves them pending.
+# One job per component, each run only when a PR changes it (scripts/ci-scope.sh decides), and
+# a gate over them all. No paths filter: a run that never starts leaves the required gate pending.
 on:
   push:
     branches: [main]
@@ -14,9 +15,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Merging into main requires both `test (...)` checks by name: renaming the job or a matrix
-  # entry means updating the branch rules.
-  test:
+  # Which components this change touches. A push to main checks everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      agentk: ${{ steps.scope.outputs.agentk }}
+      backend: ${{ steps.scope.outputs.backend }}
+    steps:
+      # A PR runs on GitHub's merge commit, whose first parent is the base branch: two commits
+      # are enough to diff it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      # Through files, not pipes: run steps have no pipefail, and a failed diff piped in would read
+      # as no changes, skip every component and pass the gate.
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+            sh scripts/ci-scope.sh < "$RUNNER_TEMP/changed" > "$RUNNER_TEMP/scope"
+          else
+            sh scripts/ci-scope.sh --all > "$RUNNER_TEMP/scope"
+          fi
+          cat "$RUNNER_TEMP/scope" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/scope"
+
+  # AgentK Local (extensions/agentk).
+  agentk:
+    name: AgentK (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.agentk == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -61,3 +94,60 @@ jobs:
       - run: npm test -- --maxWorkers=4
         env:
           TERM: xterm-256color
+
+  # Meko Local's Go backend (backend/). cgo builds natively on each platform, so both run here.
+  backend:
+    name: Backend (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          # go.mod is always there; go.sum only once there are dependencies.
+          cache-dependency-path: |
+            backend/go.mod
+            backend/go.sum
+
+      - run: make build
+      - run: ./bin/meko-local version
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          working-directory: backend
+
+      - run: go vet -tags sqlite_fts5 ./...
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: make test
+
+  # Merging into main requires this check and `PR title` by name: renaming it means updating the
+  # branch rules. It passes when every job in needs passed or was skipped, so a new component's
+  # job goes into needs (extensions/agentk/test/unit/ci-scope.test.ts checks).
+  gate:
+    name: CI gate
+    if: always()
+    needs: [changes, agentk, backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check every job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          case " $RESULTS " in
+            *' failure '* | *' cancelled '*) exit 1 ;;
+          esac
