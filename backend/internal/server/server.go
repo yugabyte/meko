@@ -19,6 +19,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/yugabyte/meko-local/backend/internal/auth"
+	"github.com/yugabyte/meko-local/backend/internal/envelope"
 	"github.com/yugabyte/meko-local/backend/internal/store"
 	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
@@ -62,7 +63,7 @@ func New(opts Options) *Server {
 	e := echo.New()
 	e.HideBanner, e.HidePort = true, true
 	e.Logger.SetOutput(io.Discard)
-	e.HTTPErrorHandler = errorHandler(opts.Logger)
+	e.HTTPErrorHandler = envelope.ErrorHandler(opts.Logger)
 	s := &Server{e: e, opts: opts}
 
 	e.Use(middleware.RequestID())
@@ -131,11 +132,11 @@ func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		r := c.Request()
 		if !allowed[r.Host] {
-			return apiError(c, http.StatusForbidden, "FORBIDDEN",
+			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 				"Requests must be addressed to 127.0.0.1:"+port+" or localhost:"+port+".")
 		}
 		if r.Header.Get(echo.HeaderOrigin) != "" {
-			return apiError(c, http.StatusForbidden, "FORBIDDEN", "Browser requests aren't accepted yet.")
+			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Browser requests aren't accepted yet.")
 		}
 		return next(c)
 	}
@@ -148,13 +149,13 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 		if c.Path() == "/healthz" || auth.CheckBearer(c.Request().Header.Get(echo.HeaderAuthorization), s.opts.Token) {
 			return next(c)
 		}
-		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED",
+		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
 			"Missing or wrong admin token. Use the meko-local CLI, which reads it from the data folder.")
 	}
 }
 
 func (s *Server) healthz(c echo.Context) error {
-	return ok(c, map[string]string{"status": "ok", "version": s.opts.Info.Version})
+	return envelope.OK(c, map[string]string{"status": "ok", "version": s.opts.Info.Version})
 }
 
 // StatusReply is GET /api/v1/status.
@@ -174,7 +175,7 @@ func (s *Server) status(c echo.Context) error {
 	if children == nil {
 		children = []supervisor.Status{}
 	}
-	return ok(c, StatusReply{
+	return envelope.OK(c, StatusReply{
 		Version: i.Version, PID: i.PID, Port: s.opts.Port, DataDir: i.DataDir, StartedAt: i.StartedAt,
 		UptimeSeconds: int64(time.Since(i.StartedAt).Seconds()), Children: children,
 	})
@@ -190,5 +191,5 @@ type VersionReply struct {
 
 func (s *Server) version(c echo.Context) error {
 	i := s.opts.Info
-	return ok(c, VersionReply{Version: i.Version, Commit: i.Commit, GoVersion: i.GoVersion, Versions: i.Libs})
+	return envelope.OK(c, VersionReply{Version: i.Version, Commit: i.Commit, GoVersion: i.GoVersion, Versions: i.Libs})
 }
