@@ -13,6 +13,9 @@ import (
 //	{"role": ["user", "assistant"]}        a list means "in"
 //	{"n": {"gte": 2}}                      eq ne gt gte lt lte in nin contains icontains
 //	{"OR": [{...}, {...}]}                 also AND, NOT (none may match), and $or $and $not
+//
+// A filter that spells one operator both ways (OR and $or) is refused: mem0 keeps whichever came
+// first, which a decoded JSON object no longer says.
 type Filter map[string]any
 
 // logicalOps maps mem0's spellings of the logical operators to one.
@@ -35,8 +38,8 @@ func filterSQL(f Filter, col func(key string) (expr string, args []any)) (string
 	for _, k := range keys {
 		v := f[k]
 		if op, ok := logicalOps[k]; ok {
-			if seen[op] { // mem0 keeps the first of "OR" and "$or"
-				continue
+			if seen[op] {
+				return "", nil, fmt.Errorf("the filter uses both spellings of %s; use one", op)
 			}
 			seen[op] = true
 			subs, ok := v.([]any)

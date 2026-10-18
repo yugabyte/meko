@@ -185,8 +185,8 @@ CREATE TABLE memories (
   is created on first start. It must not be named `meko_default_datapack*`, because meko_ui
   sets up Langfuse keys for datapacks with that name.
 
-The memory and conversation tables came in milestone 2 (`0002_memory.sql`,
-`0003_conversations.sql`); [memory-engine.md](memory-engine.md) describes them. Two things the
+The memory and conversation tables come in milestone 2 (`0002_memory.sql` in #178,
+`0003_conversations.sql` in #182); [memory-engine.md](memory-engine.md) describes them. Two things the
 foundation fixed hold: the FTS5 table has `datapack_id` as a column so the filter runs inside
 MATCH (the naive join with the filter outside FTS never finished at 200 MB), and the `vec0` tables
 are made when the engine first reports its model and dimension.
@@ -360,7 +360,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
-| 2 | Memory engine | Built: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko Local's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
+| 2 | Memory engine | Being built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko Local's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
 | 3 | MCP | `/mcp` (Streamable HTTP, stateless) with prod's tool names, arguments and reply shapes; API keys (`keys create/list/revoke`, stored hashed) |
 | 4 | REST API and UI | The `/api/v1` subset meko_ui calls, serving the pinned meko_ui package at `/`, browser access |
 | 5 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash |

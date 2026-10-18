@@ -1,7 +1,16 @@
 # Meko Local backend: memory engine and conversations
 
-Status: approved; built in five stacked PRs: the store; the store API; the Node engine; running it
-under `serve` with memories searched through it; conversations and conversation search. Milestone 2 of the backend (issue #168), on the foundation in
+Status: approved. Built in five stacked PRs; each section below names the PR that adds it, so the
+doc matches the code at every step:
+
+| PR | Adds |
+|---|---|
+| #178 | The store: `0002_memory.sql`, mem0's filters, vector and keyword search, history; this doc |
+| #179 | The store API on `run/store.sock`, and `internal/envelope` |
+| #180 | The Node engine, `backend/engine` |
+| #181 | Running the engine under `serve`; `internal/engine` and `internal/memory` (memories) |
+| #182 | Conversations and conversation search: `0003_conversations.sql`, `make bench` |
+ Milestone 2 of the backend (issue #168), on the foundation in
 [design.md](design.md).
 
 Milestone 2 makes memories and conversations work end to end on the local store, as prod Meko's
@@ -46,7 +55,7 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 | **Meko Local finds its own Node**: `[engine] node` (or `MEKO_LOCAL_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | Never AgentK's. Release packaging of Node is milestone 5. |
 | **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid | A reused pid is never hit. The engine also exits on its own when its parent changes or `store.sock` goes away. |
 
-## Layout
+## Layout (#179–#181)
 
 ```mermaid
 flowchart LR
@@ -92,7 +101,8 @@ engine/                           mem0's own config folder (MEM0_DIR)
 
 ## Storage
 
-Two migrations: `0002_memory.sql` (memories, entities, history) and `0003_conversations.sql`.
+Two migrations: `0002_memory.sql` (memories, entities, history; #178) and
+`0003_conversations.sql` (#182).
 
 - `memories`: id (mem0's UUID), datapack, `user_id` (the install's local user, as an account id
   is in prod), `agent_id`, `conversation_id`, `role`, `actor_id`, `text`, `text_lemmatized`,
@@ -101,21 +111,21 @@ Two migrations: `0002_memory.sql` (memories, entities, history) and `0003_conver
 - `memories_fts`: contentless FTS5 (`contentless_delete=1`) over the lemmas (the text when mem0
   gave none), with the datapack as a column so the filter runs inside MATCH:
   `datapack_id:"<id>" AND text_lemmatized:("a" OR "b")`, every term quoted, at most 64 terms. The
-  datapack column's bm25 weight is 0. `memories_fts_vocab` (fts5vocab) counts each term's rows,
-  so terms in more than half of all rows, which `bm25()` weighs at 1e-6, are dropped from the
-  query (see Measured).
+  datapack column's bm25 weight is 0. `memories_fts_vocab` (fts5vocab, per column) counts each
+  term's rows in the text column, so terms in half or more of all rows, which `bm25()` weighs at
+  1e-6, are dropped from the query (see Measured).
 - `entities`: mem0's `<datapack>_entities` store (text, type, linked memory ids).
 - `memory_history`: mem0's change log, per datapack (prod dropped it; it costs little).
-- `conversations` (datapack NULL for none; unique per datapack and id), `messages` (unique per
+- (#182) `conversations` (datapack NULL for none; unique per datapack and id), `messages` (unique per
   conversation and id, so a repeated seed is the same turn), `message_chunks` (a turn's windows,
   `embedded` 0 until searchable), and `datapacks.conversation_search_opt_out`.
-- Vector tables `memories_vec`, `entities_vec`, `message_chunks_vec`:
+- Vector tables `memories_vec`, `entities_vec` and (#182) `message_chunks_vec`:
   `vec0(datapack_id TEXT partition key, <metadata columns>, embedding float[D] distance_metric=cosine)`,
   keyed by the owner's rowid. They're made at the engine's first hello, when D is known (and the
   model recorded in `settings`), with a delete trigger on each owner table, since vec0 takes no
   foreign keys: every delete, a datapack's cascade included, takes its vectors along.
 
-### What the store API does with mem0's calls
+### What the store API does with mem0's calls (#179)
 
 | Route on `store.sock` | mem0 call | Notes |
 |---|---|---|
@@ -131,7 +141,7 @@ Filters follow mem0's grammar: equality, `*`, lists as `in`, `eq ne gt gte lt lt
 icontains`, and `AND`/`OR`/`NOT` (or `$and`/`$or`/`$not`), compiled to SQL over the columns or
 `json_extract` on the payload, every value bound.
 
-## The engine (`backend/engine`)
+## The engine (`backend/engine`, #180)
 
 TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` and the build.
 
@@ -148,7 +158,7 @@ TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` 
 Search asks mem0 for `max(limit × 4, 60)` results with their score parts, so mem0 scans 4× that
 many vector candidates; the engine rescores them and returns the top `limit`.
 
-## Conversations (`internal/memory`)
+## Conversations (`internal/memory`, #182)
 
 - `CreateConversation`, `AddMessage`, `GetConversation`, `ListConversations`,
   `UpdateConversation`, `DeleteConversation`, `SetConversationSearchOptOut`,
@@ -176,14 +186,15 @@ On an 8-core Linux x64 dev server, with MiniLM q8 on transformers.js:
 
 In `make test` on Linux and macOS (CI caches the model):
 
-- **store**: migrations, the payload mapping and backdating, the filter grammar, KNN with and
-  without pushed-down filters, keyword search (positive scores, quoting, datapack isolation), the
-  model lock, every delete path taking vectors along, conversations and turns (idempotence, seed
-  dedupe, null datapacks), chunk search excluding a conversation, the opt-out.
-- **storeapi**: the token, each route's shapes and refusals, the hello.
-- **engine** (`tsx --test`, with a fake store): the factory override, Meko scoring, prod's reply
+- **store** (#178): migrations, the payload mapping and backdating, the filter grammar, KNN with
+  and without pushed-down filters, keyword search (positive scores, quoting, datapack isolation,
+  dropped common terms), the model lock, every delete path taking vectors along. With #182:
+  conversations and turns (idempotence, seed dedupe, null datapacks), chunk search excluding a
+  conversation, the opt-out.
+- **storeapi** (#179): the token, each route's shapes and refusals, the hello.
+- **engine** (#180; `tsx --test`, with a fake store): the factory override, Meko scoring, prod's reply
   shape, verbatim adds with role and actor and no entities, refusing extraction, update, delete.
-- **end to end** (the real engine): add, get, list, search, update, delete; the engine down and
+- **end to end** (#181, and #182 for conversations; the real engine): add, get, list, search, update, delete; the engine down and
   back; an engine with another model refused; with MiniLM, a paraphrase found with a 0–1 score and
   its cosine, an identifier above 0.75, and conversation search's cutoff; turns waiting for the
   engine; no memory text in `engine.log`; `serve` starting the engine and `stop` stopping it, and

@@ -30,8 +30,10 @@ CREATE INDEX memories_conversation ON memories(datapack_id, conversation_id);
 CREATE VIRTUAL TABLE memories_fts USING fts5(
   datapack_id, text_lemmatized, content='', contentless_delete=1
 );
--- How many rows hold each term, so keyword search can drop terms too common to weigh anything.
-CREATE VIRTUAL TABLE memories_fts_vocab USING fts5vocab(memories_fts, 'row');
+-- How many rows hold each term in each column, so keyword search can drop terms too common to weigh
+-- anything. Per column ('col', not 'row'): bm25() counts a term's rows in text_lemmatized only, and
+-- the datapack ids' UUID segments mustn't count.
+CREATE VIRTUAL TABLE memories_fts_vocab USING fts5vocab(memories_fts, 'col');
 CREATE TRIGGER memories_fts_ai AFTER INSERT ON memories BEGIN
   INSERT INTO memories_fts(rowid, datapack_id, text_lemmatized)
   VALUES (new.rowid, new.datapack_id, CASE WHEN new.text_lemmatized = '' THEN new.text ELSE new.text_lemmatized END);

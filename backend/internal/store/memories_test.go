@@ -217,7 +217,7 @@ func TestKeywordSearch(t *testing.T) {
 	insert(t, s, Memories, "a", "m3", unit(1, 0, 0), map[string]any{"data": "no lemmas: MIN_MEMORY_SCORE",
 		"user_id": "u"})
 	insert(t, s, Memories, "b", "m4", unit(1, 0, 0), map[string]any{"data": "rate limit", "user_id": "u"})
-	for i := 0; i < 4; i++ { // so no query term is in more than half the rows (those are dropped)
+	for i := 0; i < 4; i++ { // so no query term is in half the rows or more (those are dropped)
 		insert(t, s, Memories, "b", fmt.Sprintf("filler%d", i), unit(1, 0, 0), map[string]any{"data": "unrelated"})
 	}
 
@@ -291,7 +291,8 @@ func TestListAndFilters(t *testing.T) {
 	if len(res) != 2 || total != 3 {
 		t.Errorf("limit 2: %d rows of %d", len(res), total)
 	}
-	for _, bad := range []Filter{{"OR": "x"}, {"n": map[string]any{"between": 1.0}}, {"n": map[string]any{}}} {
+	for _, bad := range []Filter{{"OR": "x"}, {"n": map[string]any{"between": 1.0}}, {"n": map[string]any{}},
+		{"OR": []any{}, "$or": []any{}}} {
 		if _, _, err := s.ListVectors(ctx, Memories, "a", bad, 0); err == nil {
 			t.Errorf("%v was accepted", bad)
 		}
@@ -334,7 +335,7 @@ func TestDeletesTakeVectors(t *testing.T) {
 	insert(t, s, Memories, "a", "m1", unit(1, 0, 0), map[string]any{"data": "alpha"})
 	insert(t, s, Memories, "a", "m2", unit(1, 0, 0), map[string]any{"data": "beta"})
 	insert(t, s, Memories, "b", "m3", unit(1, 0, 0), map[string]any{"data": "gamma"})
-	for i := 0; i < 3; i++ { // distinct words, so no term is in more than half the rows
+	for i := 0; i < 3; i++ { // distinct words, so no term is in half the rows or more
 		insert(t, s, Memories, "b", fmt.Sprintf("f%d", i), unit(1, 0, 0), map[string]any{"data": fmt.Sprintf("filler%d", i)})
 	}
 	insert(t, s, Entities, "a", "e1", unit(1, 0, 0), map[string]any{"data": "Alpha"})
@@ -387,7 +388,7 @@ func TestHistory(t *testing.T) {
 	}
 }
 
-// A term in more than half the rows weighs nothing in bm25(), so it's dropped from the query.
+// A term in half or more of the rows weighs nothing in bm25(), so it's dropped from the query.
 func TestKeywordSearchDropsCommonTerms(t *testing.T) {
 	ctx := context.Background()
 	s := openMem(t)
@@ -402,5 +403,66 @@ func TestKeywordSearchDropsCommonTerms(t *testing.T) {
 	}
 	if got := queryTerms("B a  b \"x\" ?"); strings.Join(got, ",") != "\"x\",a,b" {
 		t.Errorf("terms %q", got)
+	}
+}
+
+// A term in exactly half the rows is dropped too: bm25()'s IDF is log(1) there, clamped to 1e-6.
+func TestKeywordSearchDropsHalfTerms(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	for i, text := range []string{"half one", "half two", "three", "four"} {
+		insert(t, s, Memories, "a", fmt.Sprintf("m%d", i), unit(1, 0, 0), map[string]any{"data": text})
+	}
+	if res, _ := s.KeywordSearch(ctx, "a", "half", 10, nil); len(res) != 0 {
+		t.Errorf("a term in 2 of 4 rows matched: %s", ids(res))
+	}
+}
+
+// Rows are counted in the text column only: a term equal to a piece of a big datapack's id (which
+// unicode61 splits at the hyphens) still counts as rare when the text rarely has it.
+func TestKeywordSearchIgnoresDatapackIDTokens(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	q := "INSERT INTO datapacks(id, name, created_at, updated_at) VALUES ('d1d97fc0-2026', 'big', '', '')"
+	if _, err := s.w.Exec(q); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		insert(t, s, Memories, "d1d97fc0-2026", fmt.Sprintf("big%d", i), unit(1, 0, 0), map[string]any{"data": "unrelated"})
+	}
+	insert(t, s, Memories, "a", "m1", unit(1, 0, 0), map[string]any{"data": "the port is 2026"})
+	if res, _ := s.KeywordSearch(ctx, "a", "2026", 10, nil); ids(res) != "m1" {
+		t.Errorf("a term that's also a datapack id token: %s", ids(res))
+	}
+}
+
+// A filter key matches the same rows whether it runs inside the vec0 scan or after it.
+func TestFilterKeysMatchOnEveryPath(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	insert(t, s, Memories, "a", "m1", unit(1, 0, 0), map[string]any{"data": "x", "meko_conversation_id": "c1"})
+	insert(t, s, Memories, "a", "m2", unit(1, 0.1, 0), map[string]any{"data": "x", "conversation_id": "c1"})
+	for _, f := range []Filter{{"meko_conversation_id": "c1"}, {"run_id": "c1"}, {"conversation_id": "c1"}} {
+		knn, _ := s.SearchVectors(ctx, Memories, "a", unit(1, 0, 0), 10, f)
+		list, _, _ := s.ListVectors(ctx, Memories, "a", f, 0)
+		withRest := Filter{"data": "x"}
+		for k, v := range f {
+			withRest[k] = v
+		}
+		after, _ := s.SearchVectors(ctx, Memories, "a", unit(1, 0, 0), 10, withRest)
+		if ids(knn) != ids(list) || ids(knn) != ids(after) || len(knn) != 1 {
+			t.Errorf("%v: knn %s, list %s, filtered after the scan %s", f, ids(knn), ids(list), ids(after))
+		}
+	}
+}
+
+// Lists go by created_at, so a backdated memory comes before newer ones it was added after.
+func TestListOrderFollowsCreatedAt(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	insert(t, s, Memories, "a", "new", unit(1, 0, 0), map[string]any{"data": "x", "createdAt": "2026-10-17T00:00:00.000Z"})
+	insert(t, s, Memories, "a", "old", unit(1, 0, 0), map[string]any{"data": "y", "created_at": "2026-09-01"})
+	if res, _, _ := s.ListVectors(ctx, Memories, "a", nil, 0); ids(res) != "old,new" {
+		t.Errorf("order %s", ids(res))
 	}
 }

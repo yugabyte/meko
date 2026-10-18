@@ -463,8 +463,8 @@ func (s *Store) DeleteVector(ctx context.Context, k Kind, datapack, id string) e
 	return err
 }
 
-// ListVectors is the datapack's rows that match f, oldest first, up to limit (100 when it's 0),
-// and how many match in all.
+// ListVectors is the datapack's rows that match f, oldest first (by created_at, which a backdated
+// memory sets), up to limit (100 when it's 0), and how many match in all.
 func (s *Store) ListVectors(ctx context.Context, k Kind, datapack string, f Filter, limit int) ([]Record, int, error) {
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -482,7 +482,7 @@ func (s *Store) ListVectors(ctx context.Context, k Kind, datapack string, f Filt
 		return nil, 0, err
 	}
 	// G202: fixed names, and filterSQL binds every value.
-	q := "SELECT " + t.selectList() + where + " ORDER BY t.rowid LIMIT ?" //nolint:gosec
+	q := "SELECT " + t.selectList() + where + " ORDER BY t.created_at, t.rowid LIMIT ?" //nolint:gosec
 	rows, err := s.r.QueryContext(ctx, q, append(all, limit)...)
 	if err != nil {
 		return nil, 0, err
@@ -555,17 +555,21 @@ func (s *Store) SearchVectors(ctx context.Context, k Kind, datapack string, quer
 	return out, rows.Err()
 }
 
+// pushKeys are the payload keys whose string equality runs inside the vec0 scan, and the metadata
+// column each tests: the same columns colExpr maps them to, so a filter matches the same rows on
+// every path.
+var pushKeys = map[string]string{
+	"user_id": "user_id", "agent_id": "agent_id", "meko_conversation_id": "conversation_id", "run_id": "conversation_id",
+}
+
 // splitPushdown takes from f the string equalities on vec0's metadata columns.
 func splitPushdown(f Filter) (pushed map[string]string, rest Filter) {
 	pushed, rest = map[string]string{}, Filter{}
 	for k, v := range f {
-		col := k
-		if k == "meko_conversation_id" || k == "run_id" {
-			col = "conversation_id"
-		}
+		col, ok := pushKeys[k]
 		s, isStr := v.(string)
 		_, dup := pushed[col]
-		if isStr && s != "*" && !dup && (col == "user_id" || col == "agent_id" || col == "conversation_id") {
+		if ok && isStr && s != "*" && !dup {
 			pushed[col] = s
 			continue
 		}
@@ -632,10 +636,12 @@ func queryTerms(query string) []string {
 	return terms
 }
 
-// weighableTerms drops the terms in more than half of all rows. FTS5's bm25() gives such a term
-// an IDF of 1e-6, so it adds nothing to any score; matched with OR, it would still make nearly
-// every row a match to score and sort (measured: 366 ms instead of 138 ms over 200k memories), and
-// count a weightless match as a keyword hit in mem0's divisor.
+// weighableTerms drops the terms in half or more of all rows. FTS5's bm25() computes IDF as
+// log((N-n+0.5)/(n+0.5)) and clamps it to 1e-6 when that's <= 0, which happens from n = N/2: such a
+// term adds nothing to any score, but matched with OR it would still make nearly every row a match
+// to score and sort (measured: 366 ms instead of 138 ms over 200k memories), and count a weightless
+// match as a keyword hit in mem0's divisor. Rows are counted in text_lemmatized only, as bm25()
+// counts them.
 func (s *Store) weighableTerms(ctx context.Context, terms []string) ([]string, error) {
 	if len(terms) == 0 {
 		return nil, nil
@@ -647,11 +653,12 @@ func (s *Store) weighableTerms(ctx context.Context, terms []string) ([]string, e
 	keep := terms[:0:0]
 	for _, t := range terms {
 		var docs int
-		err := s.r.QueryRowContext(ctx, "SELECT doc FROM memories_fts_vocab WHERE term = ?", t).Scan(&docs)
+		err := s.r.QueryRowContext(ctx,
+			"SELECT doc FROM memories_fts_vocab WHERE term = ? AND col = 'text_lemmatized'", t).Scan(&docs)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if docs*2 <= rows {
+		if docs*2 < rows {
 			keep = append(keep, t)
 		}
 	}
