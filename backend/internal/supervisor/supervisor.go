@@ -1,0 +1,312 @@
+// Package supervisor runs Meko Local's child processes (the Node engine from milestone 2,
+// connectors later): it starts each one in its own process group, waits for it to be healthy,
+// restarts it with backoff when it exits, gives up after repeated crashes, and stops the whole
+// group on shutdown.
+package supervisor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// Spec describes one child. Zero durations and counts take the defaults noted.
+type Spec struct {
+	Name    string
+	Path    string
+	Args    []string
+	Env     []string // added to this process's environment
+	Dir     string
+	LogFile string // stdout and stderr, appended
+
+	// Health reports whether the child is ready. Nil means ready as soon as it starts.
+	Health       func(ctx context.Context) error
+	StartTimeout time.Duration // to become healthy; default 30 s
+
+	MinBackoff  time.Duration // first restart delay; default 1 s, doubling
+	MaxBackoff  time.Duration // default 60 s
+	StableAfter time.Duration // running this long resets the delay; default 60 s
+	MaxCrashes  int           // within CrashWindow, then the child is failed; default 5
+	CrashWindow time.Duration // default 10 min
+	StopTimeout time.Duration // SIGTERM to SIGKILL; default 10 s
+}
+
+func (s Spec) withDefaults() Spec {
+	def := func(d *time.Duration, v time.Duration) {
+		if *d == 0 {
+			*d = v
+		}
+	}
+	def(&s.StartTimeout, 30*time.Second)
+	def(&s.MinBackoff, time.Second)
+	def(&s.MaxBackoff, time.Minute)
+	def(&s.StableAfter, time.Minute)
+	def(&s.CrashWindow, 10*time.Minute)
+	def(&s.StopTimeout, 10*time.Second)
+	if s.MaxCrashes == 0 {
+		s.MaxCrashes = 5
+	}
+	return s
+}
+
+// State is where a child is in its life.
+type State string
+
+// States.
+const (
+	Starting State = "starting"
+	Running  State = "running"
+	Backoff  State = "backoff" // waiting to restart after a crash
+	Failed   State = "failed"  // crashed too often; not restarted
+	Stopped  State = "stopped"
+)
+
+// Status is a child's state for status reports.
+type Status struct {
+	Name      string    `json:"name"`
+	State     State     `json:"state"`
+	PID       int       `json:"pid,omitempty"`
+	Restarts  int       `json:"restarts"`
+	LastError string    `json:"last_error,omitempty"`
+	Since     time.Time `json:"since"`
+}
+
+// Supervisor owns the children.
+type Supervisor struct {
+	log      *slog.Logger
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	mu       sync.Mutex
+	children []*child
+}
+
+// New returns a supervisor with no children.
+func New(log *slog.Logger) *Supervisor {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Supervisor{log: log, ctx: ctx, cancel: cancel}
+}
+
+// Start runs a child under supervision.
+func (s *Supervisor) Start(spec Spec) {
+	c := &child{spec: spec.withDefaults(), log: s.log.With("child", spec.Name)}
+	c.set(Starting, 0, "")
+	s.mu.Lock()
+	s.children = append(s.children, c)
+	s.mu.Unlock()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		c.run(s.ctx)
+	}()
+}
+
+// Statuses reports every child, in the order they were started.
+func (s *Supervisor) Statuses() []Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Status, len(s.children))
+	for i, c := range s.children {
+		out[i] = c.status()
+	}
+	return out
+}
+
+// Stop stops every child (SIGTERM to its group, then SIGKILL after its StopTimeout) and waits
+// for them, until ctx ends.
+func (s *Supervisor) Stop(ctx context.Context) error {
+	s.cancel()
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("children didn't stop in time: %w", ctx.Err())
+	}
+}
+
+type child struct {
+	spec    Spec
+	log     *slog.Logger
+	mu      sync.Mutex
+	st      Status
+	crashes []time.Time
+}
+
+func (c *child) set(state State, pid int, lastErr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.st.Name, c.st.State, c.st.PID, c.st.Since = c.spec.Name, state, pid, time.Now()
+	if lastErr != "" {
+		c.st.LastError = lastErr
+	}
+}
+
+func (c *child) status() Status {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.st
+}
+
+func (c *child) run(ctx context.Context) {
+	delay := c.spec.MinBackoff
+	for {
+		ranFor, err := c.once(ctx)
+		if ctx.Err() != nil {
+			c.set(Stopped, 0, "")
+			return
+		}
+		now := time.Now()
+		c.crashes = append(c.crashes, now)
+		for len(c.crashes) > 0 && now.Sub(c.crashes[0]) > c.spec.CrashWindow {
+			c.crashes = c.crashes[1:]
+		}
+		c.mu.Lock()
+		c.st.Restarts++
+		c.mu.Unlock()
+		if len(c.crashes) >= c.spec.MaxCrashes {
+			c.log.Error("child failed: too many crashes; not restarting it",
+				"crashes", len(c.crashes), "window", c.spec.CrashWindow, "error", err)
+			c.set(Failed, 0, err.Error())
+			return
+		}
+		if ranFor >= c.spec.StableAfter {
+			delay = c.spec.MinBackoff
+		}
+		c.log.Warn("child exited; restarting", "error", err, "in", delay)
+		c.set(Backoff, 0, err.Error())
+		select {
+		case <-ctx.Done():
+			c.set(Stopped, 0, "")
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, c.spec.MaxBackoff)
+	}
+}
+
+// once runs the child until it exits or ctx ends, and reports how long it was healthy and why it
+// stopped.
+func (c *child) once(ctx context.Context) (time.Duration, error) {
+	logf, err := os.OpenFile(c.spec.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer logf.Close()
+	cmd := exec.Command(c.spec.Path, c.spec.Args...) //nolint:gosec // G204: specs come from code, not input
+	cmd.Env = append(os.Environ(), c.spec.Env...)
+	cmd.Dir = c.spec.Dir
+	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("can't start %s: %w", c.spec.Path, err)
+	}
+	pid := cmd.Process.Pid
+	c.set(Starting, pid, "")
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	if err := c.waitHealthy(ctx, exited); err != nil {
+		c.stopGroup(pid, exited)
+		return 0, err
+	}
+	if ctx.Err() != nil {
+		c.stopGroup(pid, exited)
+		return 0, nil
+	}
+	c.log.Info("child running", "pid", pid)
+	c.set(Running, pid, "")
+	since := time.Now()
+	select {
+	case err := <-exited:
+		return time.Since(since), exitError(err)
+	case <-ctx.Done():
+		c.stopGroup(pid, exited)
+		return time.Since(since), nil
+	}
+}
+
+func (c *child) waitHealthy(ctx context.Context, exited chan error) error {
+	if c.spec.Health == nil {
+		return nil
+	}
+	deadline := time.Now().Add(c.spec.StartTimeout)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		hctx, cancel := context.WithTimeout(ctx, time.Second)
+		err := c.spec.Health(hctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		select {
+		case e := <-exited:
+			exited <- e // stopGroup reads it again
+			return exitError(e)
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("not healthy within %s: %v", c.spec.StartTimeout, err)
+		}
+	}
+}
+
+// stopGroup sends SIGTERM to the child's process group, then SIGKILL after StopTimeout, and
+// waits for the child to exit.
+func (c *child) stopGroup(pid int, exited chan error) {
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	select {
+	case <-exited:
+		return
+	case <-time.After(c.spec.StopTimeout):
+	}
+	c.log.Warn("child didn't stop after SIGTERM; killing it", "pid", pid)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	<-exited
+}
+
+func exitError(err error) error {
+	if err == nil {
+		return errors.New("exited with status 0")
+	}
+	return fmt.Errorf("exited: %w", err)
+}
+
+// UnixHTTPCheck is a Health function that GETs path over the unix socket and wants a 2xx.
+func UnixHTTPCheck(socket, path string) func(ctx context.Context) error {
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+	}}
+	return func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix"+path, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			return fmt.Errorf("health check answered %s", resp.Status)
+		}
+		return nil
+	}
+}
