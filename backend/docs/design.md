@@ -293,7 +293,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 
 | Path | What |
 |---|---|
-| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko-local/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid |
+| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko-local/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid, golang.org/x/sys (macOS statfs) |
 | `backend/cmd/meko-local/main.go` | Entry point |
 | `backend/internal/cli/` | `start`, `stop`, `status`, `serve`, `version`; detaching `serve` (setsid), pid file, waiting until `/api/v1/status` reports the new server |
 | `backend/internal/config/` | Defaults, `config.toml`, `MEKO_LOCAL_*` env, flags; precedence |

@@ -121,7 +121,7 @@ func runStop(l paths.Layout, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if !up {
-		removeRunFiles(l) // left behind if the server was killed
+		cleanRunFiles(l) // left behind if the server was killed
 		fmt.Fprintln(stdout, "Meko Local isn't running.")
 		return exitOK
 	}
@@ -141,7 +141,7 @@ func runStop(l paths.Layout, stdout, stderr io.Writer) int {
 	if !waitUnlocked(l.Lock, 5*time.Second) {
 		return fail(stderr, fmt.Errorf("pid %d didn't stop, even after SIGKILL", pid))
 	}
-	removeRunFiles(l)
+	cleanRunFiles(l)
 	fmt.Fprintf(stdout, "Meko Local didn't stop within %s, so it was killed.\n", stopTimeout)
 	return exitOK
 }

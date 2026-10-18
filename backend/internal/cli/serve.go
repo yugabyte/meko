@@ -50,7 +50,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err = l.Ensure(); err != nil {
 		return err
 	}
-	lock, err := acquireLock(l.Lock)
+	lock, err := acquireServeLock(l.Lock)
 	if errors.Is(err, errLocked) {
 		pid, _ := readInt(l.Pid)
 		return &lockedError{root: l.Root, pid: pid}

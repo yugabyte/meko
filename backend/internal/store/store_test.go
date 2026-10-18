@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -109,6 +110,14 @@ func TestDefaultDatapackAndInstallID(t *testing.T) {
 	if err != nil || len(dps) != 1 || dps[0].Name != DefaultDatapackName ||
 		strings.HasPrefix(dps[0].Name, "meko_default_datapack") {
 		t.Fatalf("datapacks %+v, %v", dps, err)
+	}
+	// Times are stored fixed-width, so they sort as text.
+	var created string
+	if err = s.r.QueryRow("SELECT created_at FROM datapacks").Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{9}Z$`).MatchString(created) {
+		t.Errorf("created_at %q isn't fixed-width", created)
 	}
 	// Deleted by the user, it isn't made again.
 	if _, err = s.w.Exec("DELETE FROM datapacks"); err != nil {

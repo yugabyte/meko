@@ -5,8 +5,11 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,9 +24,46 @@ func TestMain(m *testing.M) {
 		_ = os.Unsetenv(k)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		if mode := os.Getenv("MEKO_TEST_SERVE"); mode != "" {
+			hungServe(mode)
+		}
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
+}
+
+// hungServe stands in for a serve that takes the lock and writes its pid but never answers;
+// "hang-ignore-term" also ignores SIGTERM, so only SIGKILL stops it.
+func hungServe(mode string) {
+	dir := ""
+	for i, a := range os.Args {
+		if a == "--data-dir" && i+1 < len(os.Args) {
+			dir = os.Args[i+1]
+		}
+	}
+	l := paths.New(dir)
+	if mode == "hang-ignore-term" {
+		signal.Ignore(syscall.SIGTERM)
+	}
+	if err := l.Ensure(); err != nil {
+		os.Exit(2)
+	}
+	if _, err := acquireLock(l.Lock); err != nil {
+		os.Exit(2)
+	}
+	if err := paths.WriteFile(l.Pid, []byte(strconv.Itoa(os.Getpid())+"\n")); err != nil {
+		os.Exit(2)
+	}
+	time.Sleep(time.Hour)
+	os.Exit(0)
+}
+
+// shorten sets a timeout for one test.
+func shorten(t *testing.T, v *time.Duration, d time.Duration) {
+	t.Helper()
+	old := *v
+	*v = d
+	t.Cleanup(func() { *v = old })
 }
 
 func freePort(t *testing.T) int {
@@ -167,4 +207,48 @@ func TestUsage(t *testing.T) {
 	want(t, "no command", code, 0, out, "Usage:")
 	code, out, _ = run("version")
 	want(t, "version", code, 0, out, "sqlite-vec  v0.1.9")
+}
+
+// A start whose server never answers stops it, with SIGKILL if SIGTERM isn't enough, and leaves
+// the lock free for a retry.
+func TestStartStopsAServerThatNeverAnswers(t *testing.T) {
+	dir, port := setup(t)
+	t.Setenv("MEKO_TEST_SERVE", "hang-ignore-term")
+	shorten(t, &startTimeout, time.Second)
+	shorten(t, &stopTimeout, time.Second)
+	code, _, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start of a hung server", code, 1, errs, "didn't answer within 1s, so it was stopped")
+	if up, err := running(paths.New(dir).Lock); err != nil || up {
+		t.Fatalf("lock still held after start returned: %v %v", up, err)
+	}
+}
+
+// stop kills a server that ignores SIGTERM, then clears its run files.
+func TestStopKillsAServerThatIgnoresSIGTERM(t *testing.T) {
+	dir, _ := setup(t)
+	l := paths.New(dir)
+	t.Setenv("MEKO_TEST_SERVE", "hang-ignore-term")
+	shorten(t, &stopTimeout, time.Second)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "serve", "--data-dir", dir)
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = cmd.Wait() }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := readInt(l.Pid); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the hung serve never wrote its pid")
+		}
+	}
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop of a server ignoring SIGTERM", code, 0, out+errs, "didn't stop within 1s, so it was killed")
+	if _, err := os.Stat(l.Pid); !os.IsNotExist(err) {
+		t.Errorf("pid file left behind: %v", err)
+	}
 }

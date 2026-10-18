@@ -35,22 +35,38 @@ func TestMain(m *testing.M) {
 		fallthrough
 	case "never-ready":
 		time.Sleep(time.Hour)
+	case "crash-leader": // starts a stubborn child in its own process group, then crashes once it's ready
+		startStubbornChild()
+		for {
+			if _, err := os.Stat(os.Getenv("STUB_READY")); err == nil { //nolint:gosec // G703: the test's temp folder
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(200 * time.Millisecond)
+		os.Exit(1)
 	case "leader": // starts a stubborn child in its own process group, then exits on SIGTERM
-		exe, err := os.Executable()
-		if err != nil {
-			os.Exit(2)
-		}
-		child := exec.Command(exe)
-		child.Env = append(os.Environ(), "STUB_MODE=stubborn")
-		if err := child.Start(); err != nil {
-			os.Exit(2)
-		}
-		pid := []byte(strconv.Itoa(child.Process.Pid))
-		// G703: the path is the test's own temp folder.
-		if err := os.WriteFile(os.Getenv("STUB_CHILD_PID"), pid, 0o600); err != nil { //nolint:gosec
-			os.Exit(2)
-		}
+		startStubbornChild()
 		time.Sleep(time.Hour)
+	}
+}
+
+// startStubbornChild starts a stub that ignores SIGTERM in this process's group and writes its
+// pid to $STUB_CHILD_PID.
+func startStubbornChild() {
+	exe, err := os.Executable()
+	if err != nil {
+		os.Exit(2)
+	}
+	child := exec.Command(exe)
+	child.Env = append(os.Environ(), "STUB_MODE=stubborn")
+	if err := child.Start(); err != nil {
+		os.Exit(2)
+	}
+	pid := []byte(strconv.Itoa(child.Process.Pid))
+	// G703: the path is the test's own temp folder.
+	if err := os.WriteFile(os.Getenv("STUB_CHILD_PID"), pid, 0o600); err != nil { //nolint:gosec
+		os.Exit(2)
 	}
 }
 
@@ -168,34 +184,43 @@ func TestStopKillsAfterTimeout(t *testing.T) {
 	}
 }
 
-// A child that exits on SIGTERM can leave its own children behind in its group: they get SIGKILL.
-func TestStopKillsWhatTheChildLeaves(t *testing.T) {
-	s, logs := newSupervisor()
-	sp := spec(t, "leader")
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	sp.Env = append(sp.Env, "STUB_CHILD_PID="+pidFile)
-	sp.StopTimeout = 300 * time.Millisecond
-	s.Start(sp)
-	waitFor(t, s, "running", func(st Status) bool { return st.State == Running })
-	var grandchild int
-	for deadline := time.Now().Add(5 * time.Second); grandchild == 0; time.Sleep(20 * time.Millisecond) {
-		if b, err := os.ReadFile(pidFile); err == nil {
-			grandchild, _ = strconv.Atoi(string(b))
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the leader never started its child")
-		}
-	}
-	if err := s.Stop(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); alive(grandchild); time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("pid %d, left in the group, survived the stop", grandchild)
-		}
-	}
-	if !strings.Contains(logs.String(), "processes left in the child's group") {
-		t.Errorf("log: %s", logs.String())
+// Whatever a child leaves in its group gets SIGKILL, whether the child exits on the supervisor's
+// SIGTERM or crashes on its own.
+func TestLeftoversInTheGroupAreKilled(t *testing.T) {
+	for _, mode := range []string{"leader", "crash-leader"} {
+		t.Run(mode, func(t *testing.T) {
+			s, logs := newSupervisor()
+			sp := spec(t, mode)
+			pidFile := filepath.Join(t.TempDir(), "child.pid")
+			sp.Env = append(sp.Env, "STUB_CHILD_PID="+pidFile)
+			sp.StopTimeout = 300 * time.Millisecond
+			sp.MaxCrashes = 1
+			s.Start(sp)
+			waitFor(t, s, "running", func(st Status) bool { return st.State == Running })
+			var grandchild int
+			for deadline := time.Now().Add(5 * time.Second); grandchild == 0; time.Sleep(20 * time.Millisecond) {
+				if b, err := os.ReadFile(pidFile); err == nil {
+					grandchild, _ = strconv.Atoi(string(b))
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the leader never started its child")
+				}
+			}
+			if mode == "crash-leader" {
+				waitFor(t, s, "failed", func(st Status) bool { return st.State == Failed })
+			}
+			if err := s.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			for deadline := time.Now().Add(5 * time.Second); alive(grandchild); time.Sleep(20 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatalf("pid %d, left in the group, survived", grandchild)
+				}
+			}
+			if !strings.Contains(logs.String(), "processes left in the child's group") {
+				t.Errorf("log: %s", logs.String())
+			}
+		})
 	}
 }
 

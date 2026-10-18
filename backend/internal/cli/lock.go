@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/yugabyte/meko-local/backend/internal/paths"
 )
 
 // lockedError means another server holds the data folder's lock.
@@ -40,6 +43,32 @@ func acquireLock(path string) (*os.File, error) {
 }
 
 var errLocked = errors.New("locked")
+
+// lockWait is how long serve retries a held lock. The CLI's own checks (running) take the lock for
+// an instant, so a serve starting during a status or stop must not mistake that for a server.
+var lockWait = 2 * time.Second
+
+// acquireServeLock is acquireLock for serve: it retries a held lock for lockWait.
+func acquireServeLock(path string) (*os.File, error) {
+	deadline := time.Now().Add(lockWait)
+	for {
+		f, err := acquireLock(path)
+		if !errors.Is(err, errLocked) || time.Now().After(deadline) {
+			return f, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// cleanRunFiles removes the run files a killed server left, holding the lock while it does so a
+// server starting at the same moment can't lose the files it just wrote. It does nothing if a
+// server holds the lock.
+func cleanRunFiles(l paths.Layout) {
+	if f, err := acquireLock(l.Lock); err == nil {
+		removeRunFiles(l)
+		releaseLock(f)
+	}
+}
 
 func releaseLock(f *os.File) {
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)

@@ -1,5 +1,6 @@
 // Package store is Meko Local's only door to SQLite: every query lives here behind typed
-// methods, and nothing else imports the driver.
+// methods. Only it and internal/sqlitevec (which links SQLite's C code and runs no queries) import
+// the driver.
 //
 // One write connection takes every write (SQLite allows one writer at a time, and a single
 // connection keeps transactions from waiting on locks); a pool of readers serves reads. The

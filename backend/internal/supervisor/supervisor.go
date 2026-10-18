@@ -231,7 +231,12 @@ func (c *child) once(ctx context.Context) (time.Duration, error) {
 	since := time.Now()
 	select {
 	case err := <-exited:
-		return time.Since(since), exitError(err)
+		// It went on its own, but anything it started in its group may still run (holding a
+		// port, say): sweep the group before it's restarted.
+		ran := time.Since(since)
+		exited <- err
+		c.stopGroup(pid, exited)
+		return ran, exitError(err)
 	case <-ctx.Done():
 		c.stopGroup(pid, exited)
 		return time.Since(since), nil

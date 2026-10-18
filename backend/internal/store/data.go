@@ -15,6 +15,10 @@ const (
 	keyDefaultDatapack = "default_datapack_id"
 )
 
+// timeLayout is RFC 3339 in UTC with a fixed-width fraction, so stored times sort as text.
+// (time.RFC3339Nano drops trailing zeros, and "…:03.1Z" sorts after "…:03.12Z".)
+const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 // DefaultDatapackName names the datapack made on first start. It must not start with
 // meko_default_datapack: meko_ui sets up Langfuse keys for datapacks named that way.
 const DefaultDatapackName = "default"
@@ -76,7 +80,7 @@ func (s *Store) EnsureDefaultDatapack(ctx context.Context) (string, error) {
 		return "", err
 	}
 	id = uuid.NewString()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().Format(timeLayout)
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO datapacks(id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
 		id, DefaultDatapackName, "Created by Meko Local on first start.", now, now); err != nil {
@@ -104,10 +108,10 @@ func (s *Store) Datapacks(ctx context.Context) ([]Datapack, error) {
 		if err = rows.Scan(&d.ID, &d.Name, &d.Description, &created, &updated); err != nil {
 			return nil, err
 		}
-		if d.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+		if d.CreatedAt, err = time.Parse(timeLayout, created); err != nil {
 			return nil, err
 		}
-		if d.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated); err != nil {
+		if d.UpdatedAt, err = time.Parse(timeLayout, updated); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
