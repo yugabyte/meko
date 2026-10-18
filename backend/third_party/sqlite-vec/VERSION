@@ -1,4 +1,4 @@
 sqlite-vec 0.1.9
 source: https://github.com/asg017/sqlite-vec/releases/tag/v0.1.9 (sqlite-vec-0.1.9-amalgamation.tar.gz)
 sha256 of the tarball: 3acd67cb4aff080c7050926fd3cf8227905fe5b7ee3829d8ee5024ab1283cf61
-sqlite3-binding.h, sqlite3ext.h: copied from github.com/mattn/go-sqlite3 v1.14.52 (SQLite 3.53.4)
+sqlite3-binding.h: copied from github.com/mattn/go-sqlite3 v1.14.52 (SQLite 3.53.4)

@@ -12,7 +12,14 @@ package sqlitevec
 // static const char *header_version(void) { return SQLITE_VERSION; }
 import "C"
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+
+	// sqlite-vec and Register call SQLite's C API, which only mattn/go-sqlite3 compiles into
+	// the binary: importing it here keeps every user of this package linkable.
+	_ "github.com/mattn/go-sqlite3"
+)
 
 var once sync.Once
 
@@ -20,7 +27,10 @@ var once sync.Once
 // than once.
 func Register() {
 	once.Do(func() {
-		C.sqlite3_auto_extension((*[0]byte)(C.sqlite3_vec_init))
+		if rc := C.sqlite3_auto_extension((*[0]byte)(C.sqlite3_vec_init)); rc != C.SQLITE_OK {
+			// Without it no connection has vec0; there's no way to go on, and nowhere to return to.
+			panic(fmt.Sprintf("sqlitevec: sqlite3_auto_extension failed with SQLite error %d", int(rc)))
+		}
 	})
 }
 

@@ -16,7 +16,8 @@ make lint                                           # go vet, gofmt, golangci-li
 ```
 
 It needs Go 1.25 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum)
-and a C compiler, because cgo is on; the Makefile sets it and the build tags. CI runs build, lint
+and a C compiler, because cgo is on; the Makefile sets it and the build tags. SQLite and sqlite-vec
+are compiled into the binary, so the first build compiles SQLite and takes about a minute. CI runs build, lint
 and test on Linux and macOS when `backend/` changes (`.github/workflows/backend.yml`).
 
 ## Rules
