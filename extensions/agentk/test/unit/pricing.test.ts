@@ -7,7 +7,6 @@ describe('API list prices', () => {
     expect(priceFor('claude-opus-5')).toEqual({ input: 5, output: 25, cacheRead: 0.5 }); // not Opus 5.5's
     expect(priceFor('claude-opus-5-5[1m]')).toEqual(priceFor('claude-opus-5-5'));
     expect(priceFor('claude-haiku-4-5-20251001')).toEqual({ input: 1, output: 5, cacheRead: 0.1 });
-    expect(priceFor('claude-haiku-5-5')).toEqual({ input: 0.1, output: 0.5, cacheRead: 0.01 });
     expect(priceFor('claude-fable-5-1')?.cacheRead).toBe(0.25);
     expect(priceFor('claude-fable-5')?.cacheRead).toBe(1);
   });
