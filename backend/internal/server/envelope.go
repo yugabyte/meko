@@ -39,9 +39,9 @@ var statusCodes = map[int]string{
 	http.StatusRequestEntityTooLarge: "PAYLOAD_TOO_LARGE",
 }
 
-// errorHandler writes every error as an envelope. An HTTP error keeps its status and message;
-// anything else is logged and the caller gets a generic message, so internal details (paths,
-// SQL) never reach a reply.
+// errorHandler writes every error as an envelope. An HTTP error below 500 keeps its status and
+// message; anything else (a 5xx HTTP error too) is logged and the caller gets a generic message,
+// so internal details (paths, SQL) never reach a reply.
 func errorHandler(log *slog.Logger) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		if c.Response().Committed {

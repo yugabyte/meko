@@ -23,7 +23,8 @@ import (
 	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
-// BodyLimit caps request bodies; upload routes will raise it for themselves.
+// BodyLimit caps request bodies on /api/v1. Routes outside that group (uploads, later) set their
+// own limit: one installed for every route would refuse their bodies before theirs could run.
 const BodyLimit = "1M"
 
 // Info is what status and version report.
@@ -74,10 +75,9 @@ func New(opts Options) *Server {
 	e.Use(s.accessLog)
 	e.Use(s.guard)
 	e.Use(s.requireToken)
-	e.Use(middleware.BodyLimit(BodyLimit))
 
 	e.GET("/healthz", s.healthz)
-	v1 := e.Group("/api/v1")
+	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
 	v1.GET("/status", s.status)
 	v1.GET("/version", s.version)
 	s.srv = &http.Server{Handler: e, ReadHeaderTimeout: 10 * time.Second}

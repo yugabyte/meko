@@ -19,10 +19,11 @@ import (
 	"github.com/yugabyte/meko-local/backend/internal/version"
 )
 
-// Timeouts for start and stop.
+// Timeouts for start and stop. stop waits longer than serve's own shutdown (drain, then
+// children), so its SIGKILL is only for a server that hangs.
 var (
 	startTimeout = 10 * time.Second
-	stopTimeout  = 20 * time.Second
+	stopTimeout  = drainTimeout + childStopTimeout + 5*time.Second
 )
 
 // runStart starts serve in the background, in its own session, and waits until it answers.
@@ -32,8 +33,11 @@ func runStart(l paths.Layout, o config.Overrides, stdout, stderr io.Writer) int 
 	if up, err := running(l.Lock); err != nil {
 		return fail(stderr, err)
 	} else if up {
-		port, _ := readInt(l.Port)
-		fmt.Fprintf(stdout, "Meko Local is already running at http://127.0.0.1:%d (data in %s).\n", port, l.Root)
+		if port, err := readInt(l.Port); err == nil {
+			fmt.Fprintf(stdout, "Meko Local is already running at http://127.0.0.1:%d (data in %s).\n", port, l.Root)
+		} else {
+			fmt.Fprintf(stdout, "Meko Local is already running, and still starting (data in %s).\n", l.Root)
+		}
 		return exitOK
 	}
 	if err := l.Ensure(); err != nil {
@@ -54,7 +58,7 @@ func runStart(l paths.Layout, o config.Overrides, stdout, stderr io.Writer) int 
 	if err != nil {
 		return fail(stderr, err)
 	}
-	defer logf.Close()
+	defer func() { _ = logf.Close() }() // the child has its own copy
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -82,7 +86,14 @@ func runStart(l paths.Layout, o config.Overrides, stdout, stderr io.Writer) int 
 			}
 		}
 	}
+	// Stop it for real before saying so: a retry right away must not find it still running.
 	_ = cmd.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-exited:
+	case <-time.After(stopTimeout):
+		_ = cmd.Process.Kill()
+		<-exited
+	}
 	fmt.Fprintf(stderr, "meko-local: the server didn't answer within %s, so it was stopped. See %s.\n%s",
 		startTimeout, l.Log, startLogTail(l))
 	return exitError

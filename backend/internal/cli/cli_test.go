@@ -112,6 +112,9 @@ func TestStalePidFileDoesntBlockStart(t *testing.T) {
 	}
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start over stale files", code, 0, out+errs, "running at")
+	if pid, err := readInt(l.Pid); err != nil || pid == 999999 || !strings.Contains(out, "pid "+strconv.Itoa(pid)) {
+		t.Errorf("pid file holds %d (%v); start said %q", pid, err, out)
+	}
 }
 
 func TestStartReportsTakenPort(t *testing.T) {

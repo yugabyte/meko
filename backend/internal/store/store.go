@@ -37,7 +37,9 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	f.Close()
+	if err = f.Close(); err != nil {
+		return nil, err
+	}
 	w, err := sql.Open("sqlite3", dsn(path, false))
 	if err != nil {
 		return nil, err

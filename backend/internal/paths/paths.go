@@ -126,6 +126,9 @@ func existingAncestor(path string) string {
 	}
 }
 
+// SharedTmp is the shared local folder localFallback uses; tests replace it.
+var SharedTmp = "/var/tmp"
+
 // localFallback is a local-disk data folder for a home folder on a network filesystem:
 // $XDG_STATE_HOME/meko-local if that's local, else /var/tmp/<user>/meko-local (as AgentK does
 // for its state.db).
@@ -140,7 +143,7 @@ func localFallback() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join("/var/tmp", u.Username, "meko-local")
+	dir := filepath.Join(SharedTmp, u.Username, "meko-local")
 	if err := EnsurePrivateDir(dir); err != nil {
 		return "", err
 	}
@@ -149,7 +152,8 @@ func localFallback() (string, error) {
 
 // EnsurePrivateDir creates dir in a shared place like /var/tmp, where another user could have
 // made the folders first. It refuses unless dir and its parent are real folders (not symlinks)
-// owned by this user and the parent isn't writable by others, then makes dir 0700.
+// owned by this user and the parent isn't writable by others (group write is fine for the user's
+// own primary group, as AgentK allows), then makes dir 0700.
 func EnsurePrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -166,11 +170,22 @@ func EnsurePrivateDir(dir string) error {
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
 			return fmt.Errorf("%s is owned by another user. %s", d, fix)
 		}
-		if d != dir && fi.Mode().Perm()&0o002 != 0 {
+		if d != dir && othersCanWrite(fi) {
 			return fmt.Errorf("%s is writable by other users. %s", d, fix)
 		}
 	}
 	return os.Chmod(dir, 0o700)
+}
+
+// othersCanWrite reports whether anyone but this user can write in a folder: it's world-writable,
+// or group-writable for a group that isn't the user's own primary group.
+func othersCanWrite(fi fs.FileInfo) bool {
+	perm := fi.Mode().Perm()
+	if perm&0o002 != 0 {
+		return true
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return perm&0o020 != 0 && (!ok || int(st.Gid) != os.Getgid())
 }
 
 // WriteFile writes data to path atomically (a temp file renamed over it), readable only by
@@ -182,11 +197,11 @@ func WriteFile(path string, data []byte) error {
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }() // gone after the rename
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // already failing; the temp file is removed
 		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // already failing; the temp file is removed
 		return err
 	}
 	if err := tmp.Close(); err != nil {

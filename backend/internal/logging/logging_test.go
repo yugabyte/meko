@@ -45,3 +45,29 @@ func TestNewWritesJSONAndText(t *testing.T) {
 		t.Errorf("terminal: %q", term.String())
 	}
 }
+
+// A rotation that can't rename keeps logging to the current file instead of stopping.
+func TestRotatingFileSurvivesFailedRotation(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can rename in a read-only folder")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.log")
+	r, err := OpenRotating(path, 10, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	fmt.Fprint(r, "0123456789")
+	if err := os.Chmod(dir, 0o500); err != nil { // renames in it now fail
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	fmt.Fprint(r, "more")
+	if _, err := fmt.Fprint(r, "still"); err != nil {
+		t.Fatalf("write after a failed rotation: %v", err)
+	}
+	if b, _ := os.ReadFile(path); !strings.HasSuffix(string(b), "still") {
+		t.Errorf("file holds %q", b)
+	}
+}

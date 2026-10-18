@@ -93,7 +93,7 @@ func (r *RotatingFile) open() error {
 	}
 	st, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	r.f, r.size = f, st.Size()
@@ -108,7 +108,7 @@ func (r *RotatingFile) Write(p []byte) (int, error) {
 		return 0, os.ErrClosed
 	}
 	if r.size > 0 && r.size+int64(len(p)) > r.maxBytes {
-		if err := r.rotate(); err != nil {
+		if err := r.rotate(); err != nil && r.f == nil {
 			return 0, err
 		}
 	}
@@ -117,21 +117,27 @@ func (r *RotatingFile) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// rotate renames the files along and opens a new one. If a rename fails it reopens the current
+// file, so logging carries on in it rather than stopping for the rest of the run.
 func (r *RotatingFile) rotate() error {
 	if err := r.f.Close(); err != nil {
-		return err
+		r.f = nil
+		return errors.Join(err, r.open())
 	}
 	for i := r.keep - 1; i >= 1; i-- {
 		_ = os.Rename(fmt.Sprintf("%s.%d", r.path, i), fmt.Sprintf("%s.%d", r.path, i+1))
 	}
+	var err error
 	if r.keep > 0 {
-		if err := os.Rename(r.path, r.path+".1"); err != nil {
-			return err
-		}
-	} else if err := os.Remove(r.path); err != nil {
-		return err
+		err = os.Rename(r.path, r.path+".1")
+	} else {
+		err = os.Remove(r.path)
 	}
-	return r.open()
+	if oerr := r.open(); oerr != nil {
+		r.f = nil
+		return errors.Join(err, oerr)
+	}
+	return err
 }
 
 // Close closes the file.

@@ -173,9 +173,6 @@ func (c *child) run(ctx context.Context) {
 		for len(c.crashes) > 0 && now.Sub(c.crashes[0]) > c.spec.CrashWindow {
 			c.crashes = c.crashes[1:]
 		}
-		c.mu.Lock()
-		c.st.Restarts++
-		c.mu.Unlock()
 		if len(c.crashes) >= c.spec.MaxCrashes {
 			c.log.Error("child failed: too many crashes; not restarting it",
 				"crashes", len(c.crashes), "window", c.spec.CrashWindow, "error", err)
@@ -193,6 +190,9 @@ func (c *child) run(ctx context.Context) {
 			return
 		case <-time.After(delay):
 		}
+		c.mu.Lock()
+		c.st.Restarts++ // only restarts made: the crash that fails the child isn't one
+		c.mu.Unlock()
 		delay = min(delay*2, c.spec.MaxBackoff)
 	}
 }
@@ -204,7 +204,7 @@ func (c *child) once(ctx context.Context) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer logf.Close()
+	defer func() { _ = logf.Close() }()              // the child has its own copy
 	cmd := exec.Command(c.spec.Path, c.spec.Args...) //nolint:gosec // G204: specs come from code, not input
 	cmd.Env = append(os.Environ(), c.spec.Env...)
 	cmd.Dir = c.spec.Dir
@@ -266,19 +266,33 @@ func (c *child) waitHealthy(ctx context.Context, exited chan error) error {
 	}
 }
 
-// stopGroup sends SIGTERM to the child's process group, then SIGKILL after StopTimeout, and
-// waits for the child to exit.
+// stopGroup sends SIGTERM to the child's process group and waits for the child to exit. Anything
+// still in the group at StopTimeout gets SIGKILL, even when the child itself exited first: its own
+// children (a worker, say) may ignore SIGTERM.
 func (c *child) stopGroup(pid int, exited chan error) {
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	deadline := time.After(c.spec.StopTimeout)
 	select {
 	case <-exited:
+	case <-deadline:
+		c.log.Warn("child didn't stop after SIGTERM; killing its process group", "pid", pid)
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-exited
 		return
-	case <-time.After(c.spec.StopTimeout):
 	}
-	c.log.Warn("child didn't stop after SIGTERM; killing it", "pid", pid)
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	<-exited
+	for groupAlive(pid) {
+		select {
+		case <-deadline:
+			c.log.Warn("processes left in the child's group after SIGTERM; killing them", "pgid", pid)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
+
+// groupAlive reports whether any process is left in the process group.
+func groupAlive(pgid int) bool { return syscall.Kill(-pgid, 0) == nil }
 
 func exitError(err error) error {
 	if err == nil {

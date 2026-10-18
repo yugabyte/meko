@@ -37,7 +37,8 @@ func newClient(l paths.Layout) (*client, error) {
 
 func (c *client) status(ctx context.Context) (server.StatusReply, error) {
 	var out server.StatusReply
-	return out, c.get(ctx, "/api/v1/status", &out)
+	err := c.get(ctx, "/api/v1/status", &out)
+	return out, err
 }
 
 func (c *client) get(ctx context.Context, path string, data any) error {

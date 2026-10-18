@@ -30,7 +30,7 @@ func acquireLock(path string) (*os.File, error) {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, errLocked
 		}
@@ -43,7 +43,7 @@ var errLocked = errors.New("locked")
 
 func releaseLock(f *os.File) {
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	f.Close()
+	_ = f.Close() // the lock file holds nothing
 }
 
 // running reports whether a server holds the lock at path.

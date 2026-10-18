@@ -59,6 +59,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 	defer releaseLock(lock)
+	// A killed server leaves its run files behind. Replace them now, so the lock and the pid file
+	// always describe the same process: stop reads the pid while the lock is held.
+	removeRunFiles(l)
+	defer removeRunFiles(l)
+	pid := os.Getpid()
+	if err = paths.WriteFile(l.Pid, []byte(strconv.Itoa(pid)+"\n")); err != nil {
+		return err
+	}
 
 	level, _ := cfg.Log.SlogLevel()
 	logFile, err := logging.OpenRotating(l.Log, logging.MaxBytes, logging.Keep)
@@ -101,12 +109,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	defer removeRunFiles(l)
 	if err := auth.WriteToken(l.Token, token); err != nil {
-		return err
-	}
-	pid := os.Getpid()
-	if err := paths.WriteFile(l.Pid, []byte(strconv.Itoa(pid)+"\n")); err != nil {
 		return err
 	}
 	if err := paths.WriteFile(l.Port, []byte(strconv.Itoa(cfg.Server.Port)+"\n")); err != nil {

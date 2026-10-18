@@ -2,8 +2,10 @@ package paths
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -46,8 +48,27 @@ func TestResolve(t *testing.T) {
 	if got, err := Resolve(""); err != nil || got != filepath.Join(xdg, "meko-local") {
 		t.Fatalf("default on NFS: got %q, %v", got, err)
 	}
+	// With no $XDG_STATE_HOME either, it moves to /var/tmp/<user>/meko-local, made private.
+	t.Setenv("XDG_STATE_HOME", "")
+	oldTmp := SharedTmp
+	SharedTmp = t.TempDir()
+	t.Cleanup(func() { SharedTmp = oldTmp })
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(SharedTmp, u.Username, "meko-local")
+	got, err := Resolve("")
+	if err != nil || got != want {
+		t.Fatalf("default on NFS without XDG: got %q, %v", got, err)
+	}
+	fi, err := os.Stat(want)
+	if err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("fallback folder: %v, %v", fi, err)
+	}
+
 	// A folder the user named on NFS is refused, with the reason.
-	_, err := Resolve(filepath.Join(home, "data"))
+	_, err = Resolve(filepath.Join(home, "data"))
 	if err == nil || !strings.Contains(err.Error(), "network filesystem (nfs4)") {
 		t.Fatalf("explicit on NFS: got %v", err)
 	}
@@ -68,6 +89,55 @@ func TestEnsurePermissions(t *testing.T) {
 	}
 	if fi, err := os.Stat(l.Pid); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("pid file: mode %v, err %v", fi.Mode().Perm(), err)
+	}
+}
+
+func TestEnsurePrivateDir(t *testing.T) {
+	gid := os.Getgid()
+	cases := []struct {
+		name       string
+		parentMode os.FileMode
+		want       string // "" for success, else a substring of the error
+	}{
+		{name: "private parent", parentMode: 0o700},
+		{name: "world-writable parent", parentMode: 0o777, want: "writable by other users"},
+		{name: "group-writable parent", parentMode: 0o770, want: "group"}, // decided below by its gid
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := filepath.Join(t.TempDir(), "user")
+			dir := filepath.Join(parent, "meko-local")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(parent, tc.parentMode); err != nil {
+				t.Fatal(err)
+			}
+			want := tc.want
+			if want == "group" { // allowed only for the user's own primary group
+				want = "writable by other users"
+				fi, err := os.Stat(parent)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Gid) == gid {
+					want = ""
+				}
+			}
+			err := EnsurePrivateDir(dir)
+			if want != "" {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("got %v, want %q", err, want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+				t.Errorf("mode %v, want 0700", fi.Mode().Perm())
+			}
+		})
 	}
 }
 
