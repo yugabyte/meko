@@ -19,7 +19,9 @@ func TestRotatingFileKeepsN(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		fmt.Fprintf(r, "%s\n", strings.Repeat(string(rune('a'+i)), 59)) // 60 bytes: one per file
 	}
-	r.Close()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range []string{path, path + ".1", path + ".2"} {
 		if fi, err := os.Stat(p); err != nil || fi.Size() > 100 {
 			t.Errorf("%s: %v %v", p, fi, err)

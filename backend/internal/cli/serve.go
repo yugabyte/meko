@@ -73,7 +73,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	defer logFile.Close()
+	// Closes last: the log has nowhere to record its own failure, so it joins the error returned.
+	defer func() { err = errors.Join(err, logFile.Close()) }()
 	log := logging.New(logFile, o.Stderr, level)
 	defer func() {
 		if err != nil {
@@ -85,7 +86,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	// Runs before the deferred error log above, so a failed close is logged too.
+	defer func() { err = errors.Join(err, st.Close()) }()
 	if err = st.Migrate(ctx); err != nil {
 		return err
 	}
