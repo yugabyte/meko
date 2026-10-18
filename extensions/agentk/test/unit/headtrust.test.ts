@@ -81,7 +81,7 @@ describe("Kiro config a PR brings", () => {
 
     const kiro = kiroHarness({ log: { info() {}, warn() {}, error() {} } as never, changed: () => {} });
     const launch = (untrusted: boolean): LaunchInput => ({
-      row: row({ id: 's1', worktree_path: wt }), resume: false, prompt: null, systemPrompt: '', addDirs: [], pluginDirs: [], planMode: false, env: {}, unsetEnv: [], untrusted,
+      row: row({ id: 's1', worktree_path: wt }), resume: false, prompt: null, systemPrompt: '', addDirs: [], modDir: null, planMode: false, env: {}, unsetEnv: [], untrusted,
     });
     expect(() => kiro.launcher({} as Paths, DEFAULT_CONFIG, launch(true))).toThrow(
       "Kiro would run this PR's own config (the agent in .kiro/agents/mine.json in place of AgentK's, and the MCP servers in .kiro/settings/mcp.json), "

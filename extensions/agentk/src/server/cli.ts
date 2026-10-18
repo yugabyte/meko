@@ -254,21 +254,11 @@ async function status(): Promise<void> {
   console.log(`logs:     ${join(paths.logs, 'server.log')}`);
 }
 
-/**
- * `host`, `host stop`, `host restart`, and `host retire`: the launcher's, before it rolls back to a
- * version without the session host.
- */
+/** `host`, `host stop` and `host restart`. */
 async function host(args: string[]): Promise<void> {
   const paths = getPaths();
   const client = new SessionHost(paths, { services: () => null });
   const svc = servicesFor(paths.home);
-  if (args[0] === 'retire') {
-    // That version runs its sessions in tmux: end every session here and remove the host service,
-    // so nothing starts a host it can't run, and no Claude runs twice once it resumes them.
-    if (svc?.installed('host')) svc.removeHost();
-    await client.stop().catch(() => undefined);
-    return;
-  }
   if (args[0] === 'stop' || args[0] === 'restart') {
     if (args[0] === 'stop') {
       // A running server would start the host again at once and resume every session in it.

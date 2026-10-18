@@ -601,7 +601,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['claudeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
-    const enabledBefore = { claude: core.config.claude.enabled, kiro: core.config.kiro.enabled };
+    const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;

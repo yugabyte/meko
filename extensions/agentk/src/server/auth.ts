@@ -168,10 +168,6 @@ export function setupTokenOutstanding(db: Db): boolean {
   return liveSetupToken(db) !== null;
 }
 
-export function setupPending(db: Db): boolean {
-  return !getOwner(db);
-}
-
 // ---- cookie sessions ----
 
 export function createAuthSession(db: Db, userAgent: string | undefined, ip: string | undefined): string {
@@ -255,10 +251,6 @@ export function totpCode(secret: string, atMs: number = Date.now()): string {
   const off = h[h.length - 1] & 15;
   const bin = ((h[off] & 0x7f) << 24) | (h[off + 1] << 16) | (h[off + 2] << 8) | h[off + 3];
   return String(bin % 1_000_000).padStart(6, '0');
-}
-
-export function totpVerify(secret: string, code: string, atMs: number = Date.now()): boolean {
-  return totpStep(secret, code, atMs) !== null;
 }
 
 /** The 30 s time step a code matches (within one step of drift), or null. */
