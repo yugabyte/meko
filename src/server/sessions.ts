@@ -936,13 +936,13 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...this.designLines(row, name, extra), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row), this.harness(row).caps.mod)] : []), ...this.designLines(row, name, extra), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
   /**
    * A prompt's lines about the design, added in code so a repo's own prompts get them too: for a
-   * task with a design, the approval asks for its questions and decisions in it before coding, and
+   * task with a design, the approval asks for its key design decisions in it before coding, and
    * the prompts that change code later ask to keep it current; for a review, where AgentK put the
    * PR's design (in its first prompt, and in the summary after Update to latest when it changed).
    */

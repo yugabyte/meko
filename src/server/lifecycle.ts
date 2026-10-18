@@ -459,12 +459,17 @@ export class Lifecycle {
       this.designChanged.add(row.id);
       this.core.changed();
     }
-    const open = checked.questions.filter((q) => q.status === 'open').length;
-    const n = checked.questions.length;
+    const asked = checked.questions.filter((q) => q.kind === 'question');
+    const open = asked.filter((q) => q.status === 'open').length;
+    const n = asked.length;
+    const d = checked.questions.length - n;
+    const cited = checked.questions.filter((q) => q.meko.length).length;
+    const decisions = d ? ` and ${d === 1 ? '1 decision' : `${d} decisions`}` : '';
+    const meko = cited ? `, ${cited} citing Meko,` : '';
     return {
       status: 200,
       body: {
-        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open) to ${this.sessions.questionsFile(row)}. The user sees them beside the design in AgentK Local.`,
+        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open)${decisions}${meko} to ${this.sessions.questionsFile(row)}. The user sees them beside the design in AgentK Local.`,
       },
     };
   }

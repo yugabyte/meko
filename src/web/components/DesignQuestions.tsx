@@ -1,18 +1,38 @@
-import { useEffect, useRef, useState } from 'react';
-import type { DesignDoc, DesignQuestion, Session } from '../../shared/types';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { decisionNumbers } from '../../shared/decisions';
+import type { DatapackRef, DesignDoc, DesignQuestion, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import {
-  approvalSent, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts, type Draft,
+  approvalSent, changeDraft, draftFor, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts,
+  type Draft,
 } from '../design-answers';
 import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../util';
 import { AskForm } from './AskSheet';
 import { Busy } from './common';
+import { MekoBadge, MekoRefs } from './MekoRefs';
 
 function StateChip({ q, d, answerable }: { q: DesignQuestion; d: Draft; answerable: boolean }) {
+  if (q.kind === 'decision') return <span className="dq-chip custom">✎ Changing</span>;
   if (q.status === 'resolved') return <span className="dq-chip done">✓ Resolved</span>;
   if (d.custom && d.text.trim() && q.options.length) return <span className="dq-chip custom">✎ Custom</span>;
   if (d.choice !== null || (d.custom && d.text.trim())) return <span className="dq-chip answered">✓ Answered</span>;
   return <span className="dq-chip open">{answerable ? '● Open' : '● Unanswered'}</span>;
+}
+
+/**
+ * Who settled a key design decision: the user, AgentK on its own, or AgentK on a question left to it. A
+ * file from before `decidedBy` reads from its decision's words.
+ */
+function DecidedChip({ q }: { q: DesignQuestion }) {
+  if (q.decidedBy === 'user') return <span className="dq-chip user">You decided</span>;
+  if (q.kind === 'decision') return <span className="dq-chip agent">AgentK decided</span>;
+  if (q.decidedBy === 'agentk' || q.decision?.startsWith('Left to AgentK')) return <span className="dq-chip">Left to AgentK</span>;
+  return <span className="dq-chip done">✓ Resolved</span>;
+}
+
+/** The options AgentK weighed against the one it picked. */
+function alsoWeighed(q: DesignQuestion): string[] {
+  return q.options.filter((_, i) => i !== q.recommended).map((o) => o.label);
 }
 
 function QuestionCard({
@@ -22,14 +42,22 @@ function QuestionCard({
   answerable,
   editable,
   onChange,
+  datapacks,
+  lead,
+  foot,
 }: {
   q: DesignQuestion;
-  n: number;
+  /** Its number as the user sees it: Q1, or D1 for one of AgentK's own decisions. */
+  n: string;
   d: Draft;
   /** False past Design: nothing is picked for the user. */
   answerable: boolean;
   editable: boolean;
   onChange: (d: Draft) => void;
+  datapacks?: DatapackRef[];
+  /** Under the context: for a decision being changed, what AgentK decided. */
+  lead?: ReactNode;
+  foot?: ReactNode;
 }) {
   const name = `dq-${q.id}`;
   const text = useRef<HTMLTextAreaElement>(null);
@@ -37,13 +65,16 @@ function QuestionCard({
   return (
     <li className="dq-card">
       <div className="dq-top">
-        <span className="dq-n">Q{n}</span>
+        <span className="dq-n">{n}</span>
         <span className="dq-q">{q.question}</span>
+        {q.meko.length > 0 && <MekoBadge />}
         <StateChip q={q} d={d} answerable={answerable} />
       </div>
       {q.context && <p className="dq-ctx">{q.context}</p>}
+      {lead}
+      <MekoRefs refs={q.meko} datapacks={datapacks} />
       {q.options.length > 0 && (
-        <div className="dq-opts" role="radiogroup" aria-label={`Answer to Q${n}`}>
+        <div className="dq-opts" role="radiogroup" aria-label={`Answer to ${n}`}>
           {q.options.map((o, i) => (
             <label key={i} className={cx('dq-opt', !d.custom && d.choice === i && 'on')}>
               <input
@@ -56,7 +87,7 @@ function QuestionCard({
               <span className="dq-opt-text">
                 <span className="dq-label">
                   {o.label}
-                  {q.recommended === i && <span className="dq-rec">Recommended</span>}
+                  {q.recommended === i && <span className="dq-rec">{q.kind === 'decision' ? 'AgentK’s pick' : 'Recommended'}</span>}
                 </span>
                 {o.detail && <span className="dq-detail">{o.detail}</span>}
               </span>
@@ -88,22 +119,58 @@ function QuestionCard({
         rows={2}
         value={d.text}
         disabled={!editable}
-        placeholder={answer ? 'Your answer' : q.options.length ? 'Add a note (optional)' : 'Your answer (or leave it to AgentK)'}
-        aria-label={answer || !q.options.length ? `Your answer to Q${n}` : `Note on Q${n}`}
+        placeholder={answer ? 'Your answer' : q.options.length ? 'Add a note (optional)' : q.kind === 'decision' ? 'What AgentK should do instead' : 'Your answer (or leave it to AgentK)'}
+        aria-label={answer || !q.options.length ? `Your answer to ${n}` : `Note on ${n}`}
         data-reload-safe={draftsPersist() ? '' : undefined}
         onChange={(e) => onChange({ ...d, text: e.target.value })}
       />
+      {foot}
+    </li>
+  );
+}
+
+/**
+ * A key design decision, read-only: an answered question, or one AgentK made itself, with who decided
+ * it, why, what else AgentK weighed and the Meko items it rests on. `onChange` (in Design) offers
+ * Change this on AgentK's own decisions.
+ */
+function DecidedCard({ q, n, datapacks, onChange }: { q: DesignQuestion; n: string; datapacks?: DatapackRef[]; onChange?: () => void }) {
+  const weighed = q.kind === 'decision' ? alsoWeighed(q) : [];
+  return (
+    <li className="dq-card">
+      <div className="dq-top">
+        <span className="dq-n">{n}</span>
+        <span className="dq-q">{q.question}</span>
+        {q.meko.length > 0 && <MekoBadge />}
+        <DecidedChip q={q} />
+      </div>
+      {q.decision && (
+        <p className="dq-decision">
+          <span className="dq-decision-label">Decision</span> {q.decision}
+        </p>
+      )}
+      {q.kind === 'decision' && q.context && <p className="dq-ctx">{q.context}</p>}
+      {weighed.length > 0 && <p className="dq-ctx">Also weighed: {weighed.join(' · ')}</p>}
+      <MekoRefs refs={q.meko} datapacks={datapacks} />
+      {onChange && (
+        <div className="dq-actions">
+          <button type="button" className="btn small" onClick={onChange}>
+            Change this
+          </button>
+        </div>
+      )}
     </li>
   );
 }
 
 /**
  * The design's questions for the user: open ones to answer (an option, with an optional note, or
- * a custom answer), what's decided, and other feedback. The answers stay in this browser until
- * they go to AgentK: with the approval, or to revise the design. Questions Claude is asking right
- * now (AskUserQuestion, through AgentK's mod) come first, answered on their own.
+ * a custom answer), the key design decisions (answered questions and AgentK's own, which the user can
+ * change), and other feedback. The answers stay in this browser until they go to AgentK: with the
+ * approval, or to revise the design. Questions Claude is asking right now (AskUserQuestion,
+ * through AgentK's mod) come first, answered on their own.
  */
-export function DesignQuestions({ session, doc }: { session: Session; doc: DesignDoc }) {
+export function DesignQuestions({ session, doc, datapacks }: { session: Session; doc: DesignDoc; datapacks?: DatapackRef[] }) {
   const [drafts, update] = useDesignDrafts(session.id);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -112,10 +179,19 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
   const editable = session.stage === 'design' && session.desired === 'running';
   // While an approval waits for the turn's end, the answers it took stay as they were.
   const canEdit = editable && !session.approvalQueued;
-  const open = doc.questions.filter((q) => q.status === 'open');
-  const resolved = doc.questions.filter((q) => q.status === 'resolved');
-  const number = new Map(doc.questions.map((q, i) => [q.id, i + 1]));
+  const open = doc.questions.filter((q) => q.kind === 'question' && q.status === 'open');
+  const resolved = doc.questions.filter((q) => q.kind === 'decision' || q.status === 'resolved');
+  const number = decisionNumbers(doc.questions);
   const request = toRequest(doc.questions, drafts);
+  // AgentK's decisions the user is changing (Change this), until the decision itself changes.
+  const changing = (q: DesignQuestion) => q.kind === 'decision' && drafts.answers[q.id]?.against === q.decision;
+  const setDraft = (id: string, d: Draft | null) =>
+    update((x) => {
+      const answers = { ...x.answers };
+      if (d) answers[id] = d;
+      else delete answers[id];
+      return { ...x, answers };
+    });
   const notDesign = !editable ? 'Answers go to AgentK only while the session is in Design.' : null;
   const blocker = notDesign ?? draftsBlocker(doc.questions, drafts) ?? designApprovalBlocker(session);
   const reviseBlocker = notDesign ?? draftsBlocker(doc.questions, drafts) ?? designReviseBlocker(session)
@@ -172,11 +248,12 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
               <QuestionCard
                 key={q.id}
                 q={q}
-                n={number.get(q.id) ?? 0}
+                n={number.get(q.id) ?? ''}
                 d={shownDraft(q, drafts.answers[q.id], editable)}
                 answerable={editable}
                 editable={canEdit}
-                onChange={(d) => update((x) => ({ ...x, answers: { ...x.answers, [q.id]: d } }))}
+                datapacks={datapacks}
+                onChange={(d) => setDraft(q.id, d)}
               />
             ))}
           </ol>
@@ -195,24 +272,44 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
         )}
 
         {resolved.length > 0 && (
-          // Open when nothing else is, so what was answered shows at once.
-          <details className="dq-section dq-decided" open={!open.length}>
-            <summary>Decided ({resolved.length})</summary>
+          // Open when nothing else is, or when AgentK made decisions of its own: those are there to be seen.
+          <details className="dq-section dq-decided" open={!open.length || resolved.some((q) => q.kind === 'decision')}>
+            <summary>Key Design Decisions ({resolved.length})</summary>
             <ol className="dq-list">
-              {resolved.map((q) => (
-                <li key={q.id} className="dq-card">
-                  <div className="dq-top">
-                    <span className="dq-n">Q{number.get(q.id)}</span>
-                    <span className="dq-q">{q.question}</span>
-                    <span className="dq-chip done">✓ Resolved</span>
-                  </div>
-                  {q.decision && (
-                    <p className="dq-decision">
-                      <span className="dq-decision-label">Decision</span> {q.decision}
-                    </p>
-                  )}
-                </li>
-              ))}
+              {resolved.map((q) =>
+                changing(q) ? (
+                  <QuestionCard
+                    key={q.id}
+                    q={q}
+                    n={number.get(q.id) ?? ''}
+                    d={draftFor(q, drafts.answers[q.id])}
+                    answerable
+                    editable={canEdit}
+                    datapacks={datapacks}
+                    lead={
+                      <p className="dq-decision">
+                        <span className="dq-decision-label">AgentK decided</span> {q.decision}
+                      </p>
+                    }
+                    foot={
+                      <div className="dq-actions">
+                        <button type="button" className="btn small" disabled={!canEdit} onClick={() => setDraft(q.id, null)}>
+                          Keep AgentK’s decision
+                        </button>
+                      </div>
+                    }
+                    onChange={(d) => setDraft(q.id, d)}
+                  />
+                ) : (
+                  <DecidedCard
+                    key={q.id}
+                    q={q}
+                    n={number.get(q.id) ?? ''}
+                    datapacks={datapacks}
+                    onChange={canEdit && q.kind === 'decision' ? () => setDraft(q.id, changeDraft(q)) : undefined}
+                  />
+                ),
+              )}
             </ol>
           </details>
         )}
@@ -264,7 +361,7 @@ export function DesignQuestions({ session, doc }: { session: Session; doc: Desig
                 : 'Approve the design with your answers, and move to Code')}
               onClick={() => void go('approve')}
             >
-              {sending === 'approve' ? <Busy label="Approving" /> : open.length ? 'Approve with answers' : 'Approve design'}
+              {sending === 'approve' ? <Busy label="Approving" /> : open.length || request.answers.length ? 'Approve with answers' : 'Approve design'}
             </button>
           )}
         </div>

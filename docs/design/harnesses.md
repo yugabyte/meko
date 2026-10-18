@@ -171,7 +171,9 @@ pane, as Claude's crash is. With no hooks at all, the hookless fallback follows 
 **Prompts, designs, learn.** The paths Claude Code takes without the mod: prompts are typed into
 the terminal (a bracketed paste, Enter 300 ms later, which Kiro's TUI takes multi-line), designs are
 markdown in the session's design folder with `questions.json` (the Design prompt only offers
-Artifacts "if you have the Artifact tool"), and the learn step is a typed `learn` prompt.
+Artifacts "if you have the Artifact tool", and names the `design_questions` tool only to an agent
+with the mod, so Kiro is told to write the file; its key design decisions and Meko items go there the same
+way), and the learn step is a typed `learn` prompt.
 
 **Usage** is in [Token usage](token-usage.md#kiros-credits); Meko is in
 [Datapacks](datapacks.md) (Meko's own setup for Kiro, `--client kiro`); Ask AgentK on Kiro is in

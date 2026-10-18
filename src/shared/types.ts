@@ -1747,25 +1747,52 @@ export interface DesignQuestionOption {
   detail: string | null;
 }
 
-/** A question AgentK asks the user about its design, with the options it sees, if any. */
+/** A Meko item a design decision (or a recommendation) rests on, as AgentK cited it. */
+export interface MekoRef {
+  kind: 'memory' | 'knowledge';
+  /** Meko's id for the item. */
+  id: string;
+  /** The datapack it's in, when AgentK said. */
+  datapackId: string | null;
+  /** The words AgentK relied on, as it read them. */
+  excerpt: string | null;
+}
+
+/**
+ * One of the design's Key Design Decisions (KDDs): a question AgentK asks the user, with the options it
+ * sees, if any, or (`kind: 'decision'`) a decision AgentK made itself, with the alternatives it
+ * weighed as its options and the one it picked as `recommended`.
+ */
 export interface DesignQuestion {
   /** Stable across revisions of the design: lowercase letters, digits and dashes. */
   id: string;
+  /** `decision`: one AgentK made without asking. It's always resolved, and the user can change it. */
+  kind: 'question' | 'decision';
+  /** The question, or for a decision, the decision point. */
   question: string;
+  /** Why it matters; for a decision, why AgentK chose as it did. */
   context: string | null;
   options: DesignQuestionOption[];
-  /** The option AgentK recommends (an index into `options`), or null. */
+  /** The option AgentK recommends, or picked (an index into `options`), or null. */
   recommended: number | null;
   status: 'open' | 'resolved';
   /** What was decided, once resolved. */
   decision: string | null;
+  /**
+   * Who settled it, once resolved: the user (an answer, or a change to AgentK's decision) or
+   * AgentK (its own decision, or a question left to it); null while open, or when not known.
+   */
+  decidedBy: 'user' | 'agentk' | null;
+  /** The Meko items its decision or recommendation rests on (at most 5). */
+  meko: MekoRef[];
 }
 
 /**
- * The user's answer to one of the design's open questions. Answers aren't stored on the server:
- * the browser keeps them until an approval goes to AgentK, and after a request to revise until
- * their questions are no longer open. Once sent, the server resolves the question with the answer
- * as its decision, in the questions file (a markdown design's questions only with an approval).
+ * The user's answer to one of the design's open questions, or a change to one of AgentK's own
+ * decisions. Answers aren't stored on the server: the browser keeps them until an approval goes to
+ * AgentK, and after a request to revise until their questions are no longer open (a decision's
+ * until it changes). Once sent, the server resolves the question with the answer as its decision,
+ * in the questions file (a markdown design's questions only with an approval).
  */
 export interface DesignAnswerInput {
   questionId: string;
@@ -1786,8 +1813,9 @@ export interface CloseSessionRequest {
 }
 
 /**
- * Answers to the design's open questions and other feedback on it. An open question left out is
- * sent as unanswered: AgentK goes with its recommendation, or its own judgment when it has none.
+ * Answers to the design's open questions, changes to AgentK's own decisions, and other feedback on
+ * it. An open question left out is sent as unanswered: AgentK goes with its recommendation, or its
+ * own judgment when it has none; a decision left out stays as AgentK made it.
  */
 export interface DesignAnswersRequest {
   answers: DesignAnswerInput[];

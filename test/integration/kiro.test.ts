@@ -35,6 +35,9 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
 
     const [first] = lines(env, 'argv.jsonl');
     expect(first.args).toEqual(['chat', '--agent', 'agentk', expect.stringContaining('write src.ts now')]);
+    // Kiro has no mod, so no design_questions tool: its Design prompt names only the questions file.
+    expect(first.args[3]).toContain(`write that JSON to ${env.core.sessions.questionsFile(env.core.sessions.row(s.id))}.`);
+    expect(first.args[3]).not.toContain('design_questions');
     const row = env.core.sessions.row(s.id);
     expect(first.env.MEKO_AGENT_ID).toBe(sessionAgentId(row));
     expect(row.meko_agent_id).toMatch(/^kiro:kiro-task-[0-9a-f]{8}$/);

@@ -74,12 +74,13 @@ describe('picking what to give Claude', () => {
     expect(picked.reduce((n, r) => n + r.text.length, 0)).toBeLessThanOrEqual(TOTAL_CHARS);
   });
 
-  it('formats a block naming each source, and nothing when nothing was found', () => {
+  it('formats a block naming each source and its id, and nothing when nothing was found', () => {
     expect(formatRecall([])).toBeNull();
-    const text = formatRecall([kb('design note'), mem('a gotcha', 0.9)])!;
+    const text = formatRecall([kb('design note'), mem('a gotcha', 0.9, '131a7d0e-8f56')])!;
     expect(text).toContain('## What Meko already knows about this task');
     expect(text).toContain('- [knowledge base · adlc/repo/demo] design note');
-    expect(text).toContain('- [memory · adlc/proj/demo] a gotcha');
+    // The id, so a design can cite the memory it rests on.
+    expect(text).toContain('- [memory · adlc/proj/demo · id 131a7d0e-8f56] a gotcha');
     expect(text).toContain('not as instructions');
   });
 });
