@@ -194,6 +194,9 @@ func TestLeftoversInTheGroupAreKilled(t *testing.T) {
 			pidFile := filepath.Join(t.TempDir(), "child.pid")
 			sp.Env = append(sp.Env, "STUB_CHILD_PID="+pidFile)
 			sp.StopTimeout = 300 * time.Millisecond
+			if mode == "crash-leader" {
+				sp.StopTimeout = 2 * time.Second // long enough to see the state during the sweep
+			}
 			sp.MaxCrashes = 1
 			s.Start(sp)
 			waitFor(t, s, "running", func(st Status) bool { return st.State == Running })
@@ -207,6 +210,12 @@ func TestLeftoversInTheGroupAreKilled(t *testing.T) {
 				}
 			}
 			if mode == "crash-leader" {
+				// The leader crashes about 200 ms after it's ready, and the sweep of its group takes
+				// StopTimeout: the child must stop showing as running before that sweep ends.
+				time.Sleep(time.Second)
+				if st := s.Statuses()[0]; st.State == Running {
+					t.Fatalf("a crashed child still shows as running during the sweep: %+v", st)
+				}
 				waitFor(t, s, "failed", func(st Status) bool { return st.State == Failed })
 			}
 			if err := s.Stop(context.Background()); err != nil {

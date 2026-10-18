@@ -59,13 +59,18 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 	defer releaseLock(lock)
-	// A killed server leaves its run files behind. Replace them now, so the lock and the pid file
-	// always describe the same process: stop reads the pid while the lock is held.
-	removeRunFiles(l)
+	// A killed server leaves its run files behind. Replace the pid file now (WriteFile renames over
+	// it, so it's never missing), so the lock and the pid file always describe the same process: stop
+	// reads the pid while the lock is held. The port and token are written once serve listens.
 	defer removeRunFiles(l)
 	pid := os.Getpid()
 	if err = paths.WriteFile(l.Pid, []byte(strconv.Itoa(pid)+"\n")); err != nil {
 		return err
+	}
+	for _, p := range []string{l.Port, l.Token} {
+		if err = paths.RemoveIfExists(p); err != nil {
+			return err
+		}
 	}
 
 	level, _ := cfg.Log.SlogLevel()

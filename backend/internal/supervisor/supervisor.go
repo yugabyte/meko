@@ -232,8 +232,9 @@ func (c *child) once(ctx context.Context) (time.Duration, error) {
 	select {
 	case err := <-exited:
 		// It went on its own, but anything it started in its group may still run (holding a
-		// port, say): sweep the group before it's restarted.
+		// port, say): sweep the group before it's restarted. It's no longer running meanwhile.
 		ran := time.Since(since)
+		c.set(Backoff, 0, exitError(err).Error())
 		exited <- err
 		c.stopGroup(pid, exited)
 		return ran, exitError(err)

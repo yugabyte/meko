@@ -5,8 +5,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
 
 - [ ] `make test` and `make lint` pass in `backend/`; new behavior has a test.
-- [ ] Every database call goes through `internal/store`. Only it and `internal/sqlitevec` (which
-      links SQLite's C code and makes no database calls) import the SQLite driver.
+- [ ] Every database call goes through `internal/store`. The only other package that imports the
+      SQLite driver is `internal/sqlitevec`, which links SQLite's C code; only its test runs a query.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
 - [ ] Every route but `/healthz` needs a credential (the admin token in this phase), checked on the
       matched route (`c.Path()`), never the raw URL. The server binds 127.0.0.1 only, checks `Host`,

@@ -43,8 +43,8 @@ and test on Linux and macOS when `backend/` changes (`.github/workflows/backend.
   yet, and any `feat`, `fix`, `perf` or `deps` commit on `main` cuts an AgentK release.
 - Keep `docs/design.md` and this file current in the same commit as the code, and check the
   change against [REVIEW.md](REVIEW.md).
-- Every database call goes through `internal/store`. Only it and `internal/sqlitevec` (which links
-  SQLite's C code and makes no database calls) import the SQLite driver.
+- Every database call goes through `internal/store`. The only other package that imports the
+  SQLite driver is `internal/sqlitevec`, which links SQLite's C code; only its test runs a query.
   Migrations are append-only: never edit one that has shipped.
 - Tests use temporary data folders and free ports, never `~/.meko-local` or port 7778.
 - `third_party/` is vendored code, never edited (sqlite-vec and SQLite's headers; see

@@ -48,13 +48,15 @@ func hungServe(mode string) {
 	if err := l.Ensure(); err != nil {
 		os.Exit(2)
 	}
-	if _, err := acquireLock(l.Lock); err != nil {
+	lock, err := acquireLock(l.Lock)
+	if err != nil {
 		os.Exit(2)
 	}
 	if err := paths.WriteFile(l.Pid, []byte(strconv.Itoa(os.Getpid())+"\n")); err != nil {
 		os.Exit(2)
 	}
 	time.Sleep(time.Hour)
+	releaseLock(lock) // keeps the handle (and so the flock) alive through the sleep
 	os.Exit(0)
 }
 
