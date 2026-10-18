@@ -65,6 +65,7 @@ export async function trustFolder(dir: string, log: Logger, exact = false): Prom
   try {
     for (let i = 0; i < 3; i++) {
       if (ensureWorkspaceTrust(dir, exact) !== 'added') return;
+      if (i === 0) log.info(`trusted ${dir} in Claude Code, so sessions there skip its folder-trust prompt`);
       await new Promise((r) => setTimeout(r, 400));
     }
   } catch (e) {

@@ -158,6 +158,12 @@ function installServices(paths: Paths): boolean {
     return false;
   }
   mkdirSync(paths.logs, { recursive: true }); // launchd opens its log files before starting a job
+  // A version before the session host: stop its server, then its tmux service and the Claudes in
+  // it, so none runs twice; the new server's recovery resumes them in the session host.
+  if (svc.legacyTmuxInstalled()) {
+    svc.remove();
+    ui.ok('tmux', "removed an older version's tmux service; its sessions resume in the session host");
+  }
   try {
     svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
   } catch (e) {

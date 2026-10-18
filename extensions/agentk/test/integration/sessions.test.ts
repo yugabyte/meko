@@ -925,6 +925,18 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await waitFor(() => captureLog(env).length, (n) => n > captured, 10000, 'catch-up capture on boot');
   });
 
+  it("won't start while a version before the session host's tmux service is installed, so no Claude runs twice", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'In tmux too', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    await env.core.stop();
+    await env.killHost();
+    const launches = argvLog(env).length;
+    (env.core as unknown as { services: () => unknown }).services = () => ({ legacyTmuxInstalled: () => true });
+    await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+    expect(argvLog(env).length).toBe(launches);
+  });
+
   it('waits for a session that is still starting before archiving it, and leaves no Claude behind', async () => {
     const p = await newProject();
     let discarding: Promise<unknown> | undefined;

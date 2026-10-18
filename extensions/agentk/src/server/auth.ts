@@ -253,7 +253,6 @@ export function totpCode(secret: string, atMs: number = Date.now()): string {
   return String(bin % 1_000_000).padStart(6, '0');
 }
 
-
 /** The 30 s time step a code matches (within one step of drift), or null. */
 function totpStep(secret: string, code: unknown, atMs: number): number | null {
   if (typeof code !== 'string') return null;

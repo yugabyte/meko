@@ -32,14 +32,22 @@ one. The host runs in the foreground, as launchd wants. Both jobs set
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
 back; reinstalling never reloads a loaded host job.
 
-**Versions before the session host** ran every Claude in tmux, in a tmux service. Moving an
-install off it (ending its sessions in tmux, adding the host service, removing the tmux one) shipped
-for the weeks after the host came out and is gone now. An install still on such a version moves by
-hand: `agent-k-local uninstall` (it removes the services, ending the sessions, and keeps your
-state), then the installer; recovery resumes the sessions in the host.
+**Versions before the session host** ran every Claude in tmux, in a tmux service. The server
+moved an install off it by itself on its first start after the update (it added the host service,
+ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
+on 2026-10-09 and was removed about a week later. A Claude must never run in tmux and in the host at
+once, so what's left is a guard: while the tmux service is installed (`legacyTmuxInstalled`), the
+server refuses to start, saying to run `agent-k-local install`. An install that updated itself from
+a tmux version therefore fails to start and rolls back to it (the launcher's rollback; see
+[Releases](releases.md)), with its sessions still running in tmux. `agent-k-local install`, which
+the installer runs, moves it: before it installs the services it removes the old ones, stopping
+the old server first and then the tmux service, which ends the Claudes in it, and the new server's
+recovery resumes them in the host (auto-continuing a turn that was cut off). `agent-k-local
+uninstall` removes the tmux service too. Removing it ends the tmux server on its socket, which
+every AgentK home on the account shared.
 
 All of this sits behind one interface in `src/server/service.ts` (install, start, restart, state,
-remove, boot check), with a systemd and a launchd implementation picked by platform.
+remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.
 `servicesFor(home)` uses the installed services only when their `AK_HOME` is exactly this home, so
 a dev server or a second home never acts on another install's services.
 

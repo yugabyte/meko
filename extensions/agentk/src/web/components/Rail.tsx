@@ -5,6 +5,7 @@ import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } f
 import type { ThemePref } from '../theme';
 import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, Ring, StatusDot } from './common';
+import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
   projects,
@@ -320,9 +321,9 @@ function Limits({ limits, kiroPlan }: { limits: PlanLimits | null; kiroPlan: Kir
 }
 
 /** The agent's logo at the start of its row of limits; its name is in each meter's label. */
-function AgentMark({ harness }: { harness: 'claude' | 'kiro' }) {
+function AgentMark({ harness }: { harness: HarnessId }) {
   return (
-    <span className="lim-agent" title={harness === 'kiro' ? 'Kiro' : 'Claude'}>
+    <span className="lim-agent" title={HARNESS_CAPS[harness].short}>
       <HarnessLogo harness={harness} />
     </span>
   );

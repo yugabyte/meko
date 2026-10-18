@@ -42,7 +42,6 @@ import {
 } from './store.js';
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
 import { ZERO_USAGE, sessionUsage, usageBySession } from './usage.js';
-import { TRUST_PROMPT_RE, trustFolder } from './trust.js';
 import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
@@ -1653,9 +1652,10 @@ export class SessionManager {
         if (this.followTranscript(row)) continue;
         // Claude fires no hooks until the folder-trust dialog is answered (new, resumed or recovered).
         const screen = await this.core.host.capture(row.tmux_name).catch(() => '');
-        if (TRUST_PROMPT_RE.test(screen)) {
+        const h = this.harness(row);
+        if (h.trustPrompt?.test(screen)) {
           const repo = sessionRepo(this.db, row);
-          if (repo) await trustFolder(repo, this.core.log); // so the next session skips it
+          if (repo) await h.trustFolder?.(repo, this.core.log); // so the next session skips it
           this.setStatus(row.id, 'needs_input', TRUST_DETAIL);
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         }
@@ -1672,7 +1672,8 @@ export class SessionManager {
         this.setStatus(row.id, 'exited', pane.exitStatus ? `${name} exited with status ${pane.exitStatus}` : `${name} exited`);
         this.event(row.id, 'exited', `${name} exited`);
         this.notifyUser(row.id, 'Exited', `${name} exited. Resume it from the session header.`);
-        // Its last turn's usage, for an agent with no hook at its exit (Kiro).
+        // Its last turn's usage: an agent may write it after its last hook (Kiro has none at its
+        // exit). For the others it's a read from where the last one stopped.
         this.ingestUsage(row.id);
       }
     }

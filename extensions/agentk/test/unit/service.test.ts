@@ -174,16 +174,21 @@ describe('SystemdServices', () => {
     expect(() => make((a) => (a[0] === 'sh' ? fail('') : ok)).svc.preflight()).toThrow(/systemctl was not found/);
   });
 
-  it('removes both units', () => {
+  it('removes both units, and the tmux unit of a version before the session host', () => {
     const { svc, calls } = make();
     svc.install(files);
+    const tmuxUnit = join(dirname(svc.file('server')), 'agent-k-local-tmux.service');
+    writeFileSync(tmuxUnit, 'tmux unit\n');
+    expect(svc.legacyTmuxInstalled()).toBe(true);
     calls.length = 0;
     svc.remove();
     expect(existsSync(svc.file('server'))).toBe(false);
     expect(existsSync(svc.file('host'))).toBe(false);
+    expect(svc.legacyTmuxInstalled()).toBe(false);
     expect(calls).toEqual([
       'systemctl --user disable --now agent-k-local.service',
       'systemctl --user disable --now agent-k-local-host.service',
+      'systemctl --user disable --now agent-k-local-tmux.service',
       'systemctl --user daemon-reload',
     ]);
   });
@@ -280,14 +285,20 @@ describe('LaunchdServices', () => {
     expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('host')}`]);
   });
 
-  it('removes both jobs and their files', () => {
+  it('removes both jobs and their files, and the tmux job of a version before the session host', () => {
     const { svc, calls, loaded } = make();
     svc.install(files);
+    writeFileSync(join(agents(), 'com.yugabyte.agent-k-local.tmux.plist'), 'tmux job\n');
+    loaded.add('com.yugabyte.agent-k-local.tmux');
+    expect(svc.legacyTmuxInstalled()).toBe(true);
     calls.length = 0;
     svc.remove();
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.host']);
+    expect(calls).toEqual([
+      'bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.host', 'bootout gui/501/com.yugabyte.agent-k-local.tmux',
+    ]);
     expect(loaded.size).toBe(0);
     expect(existsSync(svc.file('server'))).toBe(false);
     expect(existsSync(svc.file('host'))).toBe(false);
+    expect(svc.legacyTmuxInstalled()).toBe(false);
   });
 });

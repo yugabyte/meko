@@ -2,6 +2,7 @@ import { useEffect, useReducer } from 'react';
 import type { Session, StartupStep } from '../../shared/types';
 import { STAGE_LABELS, STARTUP_STEPS } from '../../shared/types';
 import { kindOf } from '../../shared/stages';
+import { HARNESS_CAPS, harnessOf } from '../../shared/harnesses';
 import { agentName, cx } from '../util';
 import { Busy, Check } from './common';
 
@@ -43,6 +44,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
   const currentIdx = steps.findIndex((s) => s.step === current);
   const now = Date.now();
   const slow = current === 'loading' && st && now - st.stepSince > 20000;
+  const agent = HARNESS_CAPS[harnessOf(session.harness)];
   const slowWorktree = current === 'worktree' && st && now - st.stepSince > 10000;
   const stuck = (current === 'loading' || current === 'prompt') && st && now - st.stepSince > STUCK_MS;
   const currentLabel = steps[currentIdx]?.label;
@@ -82,7 +84,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
       ) : (
         slow && (
           <p className="startup-note">
-            {session.harness === 'kiro' ? 'Kiro loads its agent and MCP servers first.' : 'Claude Code loads its plugins, MCP servers and startup hooks first.'} This can take up
+            {`${agent.label} loads ${agent.loads} first.`} This can take up
             to a minute.
           </p>
         )

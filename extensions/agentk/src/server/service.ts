@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
  * every Claude session (host/host.ts). They are separate so restarting or updating
  * the server never ends a session. systemd user units run them on Linux,
  * LaunchAgents on macOS; everything else talks to them through `ServiceManager`.
+ *
+ * Versions before the session host ran sessions in tmux, in a tmux service. Its Claudes must never
+ * run while the host runs them too, so the server refuses to start while it's installed, and
+ * `install` and `uninstall` remove it (`removeLegacyTmux`), which ends them.
  */
 export type Service = 'server' | 'host';
 
@@ -42,10 +46,14 @@ export interface ServiceManager {
   install(files: Record<Service, string>): void;
   /** Restarts a service (for the host, this ends every Claude; recovery resumes them). */
   restart(s: Service): void;
+  /** Whether the tmux service of versions before the session host is installed. */
+  legacyTmuxInstalled(): boolean;
+  /** Stops and deletes the tmux service of versions before the session host, ending every Claude in it. */
+  removeLegacyTmux(): void;
   /** Starts a service that isn't running; leaves a running one alone. */
   start(s: Service): void;
   state(s: Service): { running: boolean; text: string };
-  /** Stops both services and deletes their files. */
+  /** Stops both services (and an old tmux one) and deletes their files. */
   remove(): void;
   /** Whether the services come back after a reboot, turning that on where we can. */
   bootCheck(): BootCheck;
@@ -88,6 +96,8 @@ const SYSTEMD_UNITS: Record<Service, string> = {
   server: 'agent-k-local.service',
   host: 'agent-k-local-host.service',
 };
+/** The tmux unit of versions before the session host. */
+const SYSTEMD_TMUX = 'agent-k-local-tmux.service';
 
 export class SystemdServices implements ServiceManager {
   readonly kind = 'systemd';
@@ -148,6 +158,17 @@ export class SystemdServices implements ServiceManager {
       this.run('systemctl', ['--user', 'disable', '--now', this.id(s)]);
       if (existsSync(this.file(s))) unlinkSync(this.file(s));
     }
+    if (this.legacyTmuxInstalled()) this.removeLegacyTmux();
+    else this.run('systemctl', ['--user', 'daemon-reload']);
+  }
+
+  legacyTmuxInstalled(): boolean {
+    return existsSync(join(this.dir(), SYSTEMD_TMUX));
+  }
+
+  removeLegacyTmux(): void {
+    this.run('systemctl', ['--user', 'disable', '--now', SYSTEMD_TMUX]);
+    rmSync(join(this.dir(), SYSTEMD_TMUX), { force: true });
     this.run('systemctl', ['--user', 'daemon-reload']);
   }
 
@@ -182,6 +203,8 @@ const LAUNCHD_LABELS: Record<Service, string> = {
   server: 'com.yugabyte.agent-k-local',
   host: 'com.yugabyte.agent-k-local.host',
 };
+/** The tmux job of versions before the session host. */
+const LAUNCHD_TMUX = 'com.yugabyte.agent-k-local.tmux';
 
 /** The job's own `state = …` line from `launchctl print` (the first one; nested blocks come later). */
 export function parseLaunchdState(print: string): string | null {
@@ -239,7 +262,11 @@ export class LaunchdServices implements ServiceManager {
 
   /** Unloads a job and waits for launchd to finish (bootout returns before the job is gone). */
   private unload(s: Service): void {
-    const target = this.target(s);
+    this.unloadLabel(this.id(s));
+  }
+
+  private unloadLabel(label: string): void {
+    const target = `${this.domain()}/${label}`;
     if (!this.run('launchctl', ['print', target]).ok) return;
     this.run('launchctl', ['bootout', target]);
     for (let i = 0; i < 50 && this.run('launchctl', ['print', target]).ok; i++) this.pause(100);
@@ -291,6 +318,20 @@ export class LaunchdServices implements ServiceManager {
       this.unload(s);
       if (existsSync(this.file(s))) unlinkSync(this.file(s));
     }
+    if (this.legacyTmuxInstalled()) this.removeLegacyTmux();
+  }
+
+  private tmuxFile(): string {
+    return join(this.home, 'Library', 'LaunchAgents', `${LAUNCHD_TMUX}.plist`);
+  }
+
+  legacyTmuxInstalled(): boolean {
+    return existsSync(this.tmuxFile());
+  }
+
+  removeLegacyTmux(): void {
+    this.unloadLabel(LAUNCHD_TMUX);
+    rmSync(this.tmuxFile(), { force: true });
   }
 
   bootCheck(): BootCheck {

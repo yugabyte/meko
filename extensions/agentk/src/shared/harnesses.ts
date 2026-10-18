@@ -25,11 +25,15 @@ export interface HarnessCaps {
   labelModels: boolean;
   /** The oldest version sessions start on (the one its hooks and files were checked against), or null for any. */
   minVersion: string | null;
+  /** What it loads before it takes a session's first prompt, for the Starting view: "Kiro loads <this> first". */
+  loads: string;
 }
 
 export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
-  claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens', labelModels: false, minVersion: null },
-  kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits', labelModels: true, minVersion: '2.32.0' },
+  claude: { label: 'Claude Code', short: 'Claude', mod: true, artifacts: true, usage: 'tokens', labelModels: false, minVersion: null,
+    loads: 'its plugins, MCP servers and startup hooks' },
+  kiro: { label: 'Kiro', short: 'Kiro', mod: false, artifacts: false, usage: 'credits', labelModels: true, minVersion: '2.32.0',
+    loads: 'its agent and MCP servers' },
 };
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */

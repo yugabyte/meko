@@ -10,9 +10,10 @@ import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
-import { trustFolder } from '../trust.js';
+import { TRUST_PROMPT_RE, trustFolder } from '../trust.js';
 import { ingestSessionUsage, sessionTranscript } from '../usage.js';
 import type { Harness } from './types.js';
+import { versionAtLeast } from './version.js';
 
 /**
  * Claude Code: AgentK's first harness, and the only one with AgentK's mod and Artifact designs. Like
@@ -22,10 +23,11 @@ import type { Harness } from './types.js';
 export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Harness {
   const status = (cfg: Config): HarnessStatus => {
     const s = deps.claudeCode.status();
+    const min = HARNESS_CAPS.claude.minVersion;
     return {
-      id: 'claude', enabled: cfg.claude.enabled, version: s.version, minVersion: HARNESS_CAPS.claude.minVersion,
-      available: cfg.claude.enabled && s.version !== null, checked: deps.claudeCode.checked(), isDefault: cfg.agents.default === 'claude',
-      updating: s.updating,
+      id: 'claude', enabled: cfg.claude.enabled, version: s.version, minVersion: min,
+      available: cfg.claude.enabled && s.version !== null && (!min || versionAtLeast(s.version, min)), checked: deps.claudeCode.checked(),
+      isDefault: cfg.agents.default === 'claude', updating: s.updating,
     };
   };
   // The mod's files are copied at start (prepare); a half-updated install may lack them.
@@ -55,6 +57,8 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
       const cwd = claudePath(row.worktree_path);
       if (cwd !== row.worktree_path) await trustFolder(cwd, log, true);
     },
+    trustFolder,
+    trustPrompt: TRUST_PROMPT_RE,
     async modDir(paths, cfg) {
       return modReady(paths, cfg) && (await deps.claudeCode.supportsMod()) ? modDirPath(paths) : null;
     },

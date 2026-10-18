@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
-import { claudeConfigPath, ensureWorkspaceTrust } from './trust.js';
+import { claudeConfigPath } from './trust.js';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
@@ -408,6 +408,13 @@ export class Core extends EventEmitter {
 
   async start(): Promise<void> {
     this.stopped = false;
+    // A version before the session host ran sessions in tmux, and they may still run there: a host
+    // would start each one a second time. `install` ends them (it removes the tmux service), and
+    // this version's recovery then resumes them in the host. Refusing here also lets an update
+    // from such a version roll back by itself.
+    if (this.services()?.legacyTmuxInstalled()) {
+      throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+    }
     // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
     // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on
     // them. With transcript capture off, Claude Code sessions run without the Meko plugin: its own
@@ -424,11 +431,8 @@ export class Core extends EventEmitter {
       if (h.id === 'kiro' && this.timersOn) void ready.then(() => this.kiroPlan.refresh());
     }
     mkdirSync(this.paths.worktrees, { recursive: true });
-    try {
-      if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);
-    } catch (e) {
-      this.log.warn('could not update Claude Code folder trust', errMsg(e));
-    }
+    // So new worktrees skip a CLI's folder-trust prompt (Claude Code's).
+    for (const h of this.harnesses.list()) await h.trustFolder?.(this.paths.worktrees, this.log);
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));

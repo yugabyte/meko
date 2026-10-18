@@ -53,8 +53,9 @@ export interface UsageRead {
  * A coding agent sessions can run on. Each adapter turns what AgentK wants into its CLI's terms:
  * the command line, its hook payloads as AgentK's events (Claude Code's hook shape, which every
  * adapter maps onto), what its guard and context hooks print, where its conversation and usage
- * are on disk, and how it answers Ask AgentK. Nothing outside the adapters asks which harness a
- * session runs on, apart from data in `HARNESS_CAPS` and each one's own config section.
+ * are on disk, and how it answers Ask AgentK. Code outside the adapters reads a harness's
+ * differences from here or from `HARNESS_CAPS`, not from its id; docs/design/harnesses.md lists the
+ * few places that still name one.
  */
 export interface Harness {
   id: HarnessId;
@@ -80,6 +81,14 @@ export interface Harness {
    * prompt is often rendered before the launch that settles it, so a version not read yet counts.
    */
   offersMod?(paths: Paths, cfg: Config): boolean;
+  /**
+   * Marks a folder as trusted for a CLI that asks before working in one (Claude Code's folder trust:
+   * the repo when a project opens, the worktrees folder at start, the repo again when the dialog
+   * shows). `exact`: only an entry for `dir` itself counts, not one for a parent. Never throws.
+   */
+  trustFolder?(dir: string, log: Logger, exact?: boolean): Promise<void>;
+  /** Text its folder-trust dialog shows on screen; the CLI fires no hooks until it's answered. */
+  trustPrompt?: RegExp;
   /** The launcher for one launch. */
   launcher(paths: Paths, cfg: Config, l: LaunchInput): LauncherSpec;
   /** True when the system prompt goes in through the context hook at every start (no flag for it). */

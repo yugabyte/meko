@@ -54,8 +54,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
       Claude Code's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
       usage as tokens or credits, a minimum version) is read from `HARNESS_CAPS` or an optional
-      adapter method, not from the harness's name (no `harness === 'kiro'` outside the adapters). Text about the process and its terminal names the session's agent
-      (`agentName()`), not "Claude", in error messages and screen-reader labels too. Anything AgentK
+      adapter method, not from the harness's name (no new `harness === 'kiro'` outside the adapters;
+      `docs/design/harnesses.md` lists the few that stay on purpose). Text about the process and its
+      terminal names the session's agent (`agentName()`), not "Claude", in error messages and
+      screen-reader labels too. Anything AgentK
       writes in the user's Kiro home (the `agentk` agent) is marked as AgentK's, inert without
       AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
       launch), and is removed by `uninstall`. A Kiro session reads and resumes only its own

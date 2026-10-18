@@ -189,10 +189,16 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       const conv = kiroConversation(row);
       if (!conv) return { changed: false };
       const turns = kiroTurns(conv);
-      const changed = recordKiroTurns(db, row.id, conv, turns);
-      // Marks the session as read, so backfillUsage leaves it alone at the next start.
-      run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
-               ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, row.id, kiroSessionFile(conv), turns.length);
+      let changed = false;
+      try {
+        changed = recordKiroTurns(db, row.id, conv, turns);
+        // Marks the session as read, so backfillUsage leaves it alone at the next start.
+        run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
+                 ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, row.id, kiroSessionFile(conv), turns.length);
+      } catch (e) {
+        // The context fill from the same read still counts.
+        deps.log.warn(`reading Kiro's usage for ${row.id} failed`, errMsg(e));
+      }
       return { changed, contextPercent: turns.at(-1)?.contextPercent };
     },
     ask: kiroAsker,
