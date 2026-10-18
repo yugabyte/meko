@@ -20,6 +20,7 @@ import (
 
 	"github.com/yugabyte/meko-local/backend/internal/auth"
 	"github.com/yugabyte/meko-local/backend/internal/envelope"
+	"github.com/yugabyte/meko-local/backend/internal/memory"
 	"github.com/yugabyte/meko-local/backend/internal/store"
 	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
@@ -46,6 +47,7 @@ type Options struct {
 	Token    string // the admin token
 	Logger   *slog.Logger
 	Children func() []supervisor.Status
+	Engine   func(ctx context.Context) memory.EngineStatus // nil reports no engine
 }
 
 // Server is the HTTP server.
@@ -59,6 +61,11 @@ type Server struct {
 func New(opts Options) *Server {
 	if opts.Children == nil {
 		opts.Children = func() []supervisor.Status { return nil }
+	}
+	if opts.Engine == nil {
+		opts.Engine = func(context.Context) memory.EngineStatus {
+			return memory.EngineStatus{State: "unavailable", Reason: "no engine in this server"}
+		}
 	}
 	e := echo.New()
 	e.HideBanner, e.HidePort = true, true
@@ -167,6 +174,7 @@ type StatusReply struct {
 	StartedAt     time.Time           `json:"started_at"`
 	UptimeSeconds int64               `json:"uptime_seconds"`
 	Children      []supervisor.Status `json:"children"`
+	Engine        memory.EngineStatus `json:"engine"`
 }
 
 func (s *Server) status(c echo.Context) error {
@@ -178,6 +186,7 @@ func (s *Server) status(c echo.Context) error {
 	return envelope.OK(c, StatusReply{
 		Version: i.Version, PID: i.PID, Port: s.opts.Port, DataDir: i.DataDir, StartedAt: i.StartedAt,
 		UptimeSeconds: int64(time.Since(i.StartedAt).Seconds()), Children: children,
+		Engine: s.opts.Engine(c.Request().Context()),
 	})
 }
 

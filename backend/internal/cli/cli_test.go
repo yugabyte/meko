@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,11 +44,22 @@ func hungServe(mode string) {
 		}
 	}
 	l := paths.New(dir)
-	if mode == "hang-ignore-term" {
+	if mode == "hang-ignore-term" || mode == "hang-with-child" {
 		signal.Ignore(syscall.SIGTERM)
 	}
 	if err := l.Ensure(); err != nil {
 		os.Exit(2)
+	}
+	if mode == "hang-with-child" { // a child in its own process group, recorded as serve records the engine
+		child := exec.Command("sleep", "3600")
+		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		rec := fmt.Sprintf("%d %d\n", child.Process.Pid, child.Process.Pid)
+		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "engine"), []byte(rec)); err != nil {
+			os.Exit(2)
+		}
 	}
 	lock, err := acquireLock(l.Lock)
 	if err != nil {
@@ -100,11 +113,23 @@ func want(t *testing.T, what string, code, wantCode int, text, wantText string) 
 	}
 }
 
+// shortDir is a temp folder with a short path: the data folder's unix sockets must fit the OS's
+// limit, which t.TempDir() can pass on macOS.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "mk-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // setup gives a test its own home and data folder, and a free port.
 func setup(t *testing.T) (dir, port string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	dir = t.TempDir()
+	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
 	t.Cleanup(func() { run("stop", "--data-dir", dir) })
 	return dir, port
@@ -252,5 +277,84 @@ func TestStopKillsAServerThatIgnoresSIGTERM(t *testing.T) {
 	want(t, "stop of a server ignoring SIGTERM", code, 0, out+errs, "didn't stop within 1s, so it was killed")
 	if _, err := os.Stat(l.Pid); !os.IsNotExist(err) {
 		t.Errorf("pid file left behind: %v", err)
+	}
+}
+
+// stop's SIGKILL path also kills the children a hung server recorded, in their own groups.
+func TestStopKillsAHungServersChildren(t *testing.T) {
+	dir, _ := setup(t)
+	l := paths.New(dir)
+	t.Setenv("MEKO_TEST_SERVE", "hang-with-child")
+	shorten(t, &stopTimeout, time.Second)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "serve", "--data-dir", dir)
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = cmd.Wait() }()
+	var child int
+	for deadline := time.Now().Add(10 * time.Second); child == 0; time.Sleep(50 * time.Millisecond) {
+		if b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "engine")); err == nil {
+			_, _ = fmt.Sscanf(string(b), "%d", &child)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the hung serve never recorded its child")
+		}
+	}
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "so it was killed")
+	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(child, 0) == nil; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(-child, syscall.SIGKILL)
+			t.Fatal("the child outlived stop")
+		}
+	}
+}
+
+// serve starts the engine (with the test embedder), status reports it ready, and stop stops it.
+func TestServeRunsTheEngine(t *testing.T) {
+	engineDir, err := filepath.Abs(filepath.Join("..", "..", "engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(engineDir, "dist", "main.js")); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skip("the engine isn't built (make test builds it)")
+	}
+	dir, port := setup(t)
+	t.Setenv("MEKO_LOCAL_ENGINE_DIR", engineDir)
+	t.Setenv(TestEmbedderEnv, "hash")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko Local is running")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		_, out, _ = run("status", "--data-dir", dir)
+		if strings.Contains(out, "Engine:   ready, test hash (384 dims)") && strings.Contains(out, "engine running") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the engine never got ready:\n%s", out)
+		}
+	}
+	l := paths.New(dir)
+	b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enginePid int
+	_, _ = fmt.Sscanf(string(b), "%d", &enginePid)
+	code, out, _ = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out, "Meko Local stopped.")
+	if enginePid == 0 || syscall.Kill(enginePid, 0) == nil {
+		t.Errorf("the engine (pid %d) outlived stop", enginePid)
+	}
+	for _, p := range []string{l.StoreSock, l.EngineSock, filepath.Join(l.ChildrenDir, "engine")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left behind", p)
+		}
 	}
 }

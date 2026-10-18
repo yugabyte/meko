@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -262,5 +263,70 @@ func TestUnixHTTPCheck(t *testing.T) {
 	}
 	if err := UnixHTTPCheck(filepath.Join(dir, "none.sock"), "/ok")(ctx); err == nil {
 		t.Error("a missing socket should fail")
+	}
+}
+
+// A running child's pid and process group are recorded, and the record goes when it stops.
+func TestPidFile(t *testing.T) {
+	s, _ := newSupervisor()
+	sp := spec(t, "healthy")
+	sp.PidFile = filepath.Join(t.TempDir(), "stub")
+	s.Start(sp)
+	st := waitFor(t, s, "running", func(st Status) bool { return st.State == Running })
+	b, err := os.ReadFile(sp.PidFile)
+	if want := fmt.Sprintf("%d %d\n", st.PID, st.PID); err != nil || string(b) != want {
+		t.Fatalf("pid file %q, %v; want %q", b, err, want)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sp.PidFile); !os.IsNotExist(err) {
+		t.Errorf("pid file left after stop: %v", err)
+	}
+}
+
+// KillRecorded kills a recorded group whose leader still has the recorded pgid, and never a
+// process whose pid was reused (here: this test, recorded with a pgid it doesn't have).
+func TestKillRecorded(t *testing.T) {
+	dir := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	leader := exec.Command(exe)
+	leader.Env = append(os.Environ(), "STUB_MODE=stubborn", "STUB_READY="+filepath.Join(dir, "ready"))
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err = leader.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = leader.Wait(); close(exited) }()
+	pid := leader.Process.Pid
+	records := map[string]string{
+		"engine": fmt.Sprintf("%d %d\n", pid, pid),
+		"reused": fmt.Sprintf("%d %d\n", os.Getpid(), os.Getpid()+100000),
+		"junk":   "not a pid\n",
+	}
+	for name, rec := range records {
+		if err = os.WriteFile(filepath.Join(dir, name), []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := KillRecorded(dir)
+	if err != nil || n != 1 {
+		t.Fatalf("killed %d, %v; want 1", n, err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the recorded child is still running")
+	}
+	for name := range records {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("record %s left: %v", name, err)
+		}
+	}
+	if n, err := KillRecorded(filepath.Join(dir, "missing")); n != 0 || err != nil {
+		t.Errorf("a missing folder: %d %v", n, err)
 	}
 }

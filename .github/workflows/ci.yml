@@ -127,6 +127,13 @@ jobs:
           cache: npm
           cache-dependency-path: backend/engine/package-lock.json
 
+      # The engine tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: backend/engine/.models
+          key: embedding-model-all-MiniLM-L6-v2-q8
+
       - run: make build engine
       - run: ./bin/meko-local version
 

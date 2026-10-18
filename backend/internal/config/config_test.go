@@ -84,3 +84,19 @@ func TestLoadErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestEngineSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[engine]\nnode = \"/file/node\"\ndir = \"/file/engine\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Engine.Node != "/file/node" || c.Engine.Dir != "/file/engine" {
+		t.Fatalf("from the file: %+v %v", c.Engine, err)
+	}
+	env := map[string]string{"MEKO_LOCAL_NODE": "/env/node", "MEKO_LOCAL_ENGINE_DIR": "/env/engine"}
+	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
+	if err != nil || c.Engine.Node != "/env/node" || c.Engine.Dir != "/env/engine" {
+		t.Fatalf("env over the file: %+v %v", c.Engine, err)
+	}
+}

@@ -15,14 +15,16 @@ conversations). The rules for the whole repo are in the root [AGENTS.md](../AGEN
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
 | `internal/sqlitevec/` | cgo glue that compiles `third_party/sqlite-vec` in and registers it. |
-| `internal/server/` | The HTTP server on 127.0.0.1: the Host, Origin and admin-token checks, `/healthz` and `/api/v1`. |
+| `internal/server/` | The HTTP server on 127.0.0.1: the Host, Origin and admin-token checks, `/healthz` and `/api/v1` (status includes the engine's). |
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
+| `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
+| `internal/memory/` | The service milestone 3's MCP and REST will call: memories through the engine (conversations and conversation search come next). |
+| `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko Local's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (API keys come with MCP). |
-| `internal/supervisor/` | Child processes (the Node engine, later): process groups, health checks, backoff, stop. |
+| `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
-| `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko Local's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `third_party/` | Vendored C code, never edited. |
 
 ## Commands
@@ -39,7 +41,8 @@ make lint                                           # go vet, gofmt, golangci-li
 
 It needs Go 1.25 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum)
 and a C compiler, because cgo is on; the Makefile sets it and the build tags. The engine needs
-Node 22.13+ and npm. SQLite and sqlite-vec
+Node 22.13+ and npm. The first engine test run downloads the embedding model (23 MB) into
+`engine/.models` (git-ignored; `MEKO_LOCAL_TEST_MODELS` moves it). SQLite and sqlite-vec
 are compiled into the binary, so the first build compiles SQLite and takes about a minute. CI runs build, lint
 and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 `.github/workflows/ci.yml`; `scripts/ci-scope.sh` decides), and the required `CI gate` fails when any of them fails.
@@ -59,7 +62,9 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   paths (state the behavior instead).
 - Neither log ever holds memory or turn text: only ids, counts and timings. The engine never logs
   an error's message.
-- Tests use temporary data folders and free ports, never `~/.meko-local` or port 7778.
+- Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
+  ports, never `~/.meko-local` or port 7778. Tests that need no model start the engine with the
+  hashing embedder (`MEKO_LOCAL_TEST_EMBEDDER=hash`).
 - `third_party/` is vendored code, never edited (sqlite-vec and SQLite's headers; see
   `third_party/sqlite-vec/README.md`). It moves to yugabyte forks once those exist.
 - Lint is `.golangci.yml`: prod Meko's config with the changes listed at its top. Fix findings

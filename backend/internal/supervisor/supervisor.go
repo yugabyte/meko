@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,9 @@ type Spec struct {
 	Env     []string // added to this process's environment
 	Dir     string
 	LogFile string // stdout and stderr, appended
+	// PidFile, if set, holds "<pid> <pgid>" while the child runs, so stop can still reach its
+	// process group after killing a serve that hung (KillRecorded).
+	PidFile string
 
 	// Health reports whether the child is ready. Nil means ready as soon as it starts.
 	Health       func(ctx context.Context) error
@@ -217,6 +221,13 @@ func (c *child) once(ctx context.Context) (time.Duration, error) {
 	c.set(Starting, pid, "")
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	if c.spec.PidFile != "" {
+		// The child leads its own group (Setpgid), so its pgid is its pid.
+		if err := writeFile(c.spec.PidFile, fmt.Sprintf("%d %d\n", pid, pid)); err != nil {
+			c.log.Warn("can't record the child's pid; stop can't reach it if serve hangs", "error", err)
+		}
+		defer func() { _ = os.Remove(c.spec.PidFile) }()
+	}
 
 	if err := c.waitHealthy(ctx, exited); err != nil {
 		c.stopGroup(pid, exited)
@@ -305,6 +316,44 @@ func exitError(err error) error {
 		return errors.New("exited with status 0")
 	}
 	return fmt.Errorf("exited: %w", err)
+}
+
+func writeFile(path, data string) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(data), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// KillRecorded sends SIGKILL to the process group of each child recorded in dir (PidFile) and
+// removes the records. A group is killed only while its leader still has the recorded pgid, so a
+// reused pid is never hit. It's for after serve itself was killed, or before a new serve starts.
+func KillRecorded(dir string) (killed int, err error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(path) //nolint:gosec // G304: our own run folder
+		if err != nil {
+			continue
+		}
+		var pid, pgid int
+		if _, err := fmt.Sscanf(string(b), "%d %d", &pid, &pgid); err == nil && pid > 1 && pgid > 1 {
+			if got, err := syscall.Getpgid(pid); err == nil && got == pgid {
+				if syscall.Kill(-pgid, syscall.SIGKILL) == nil {
+					killed++
+				}
+			}
+		}
+		_ = os.Remove(path)
+	}
+	return killed, nil
 }
 
 // UnixHTTPCheck is a Health function that GETs path over the unix socket and wants a 2xx.
