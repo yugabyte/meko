@@ -120,7 +120,14 @@ jobs:
             backend/go.mod
             backend/go.sum
 
-      - run: make build
+      # The memory engine (backend/engine) is TypeScript on Node.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/engine/package-lock.json
+
+      - run: make build engine
       - run: ./bin/meko-local version
 
       - name: Lint
@@ -131,6 +138,8 @@ jobs:
 
       - run: go vet -tags sqlite_fts5 ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: npm run typecheck
+        working-directory: backend/engine
       - run: make test
 
   # Merging into main requires this check and `PR title` by name: renaming it means updating the

@@ -13,7 +13,10 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       on their unix sockets (0600) and need the internal token. The server binds 127.0.0.1 only, checks `Host`,
       and refuses requests with an `Origin` until a browser client exists.
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
-      never reach logs or error replies (internal errors get the generic message).
+      never reach logs or error replies (internal errors get the generic message), in Go or in the
+      engine (`logs/engine.log`).
+- [ ] The engine stores only through the store API, its dependencies stay pinned, and nothing copies
+      or cites prod Meko's private code.
 - [ ] `third_party/` is vendored and unchanged; an upgrade replaces the files and updates `VERSION`.
 - [ ] Commits are `chore(backend): ...`: nothing in `backend/` ships in AgentK Local's release yet.
 - [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code.
