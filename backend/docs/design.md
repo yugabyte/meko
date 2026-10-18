@@ -84,8 +84,8 @@ server's own stderr to `logs/start.log` and prints it if the server never answer
 before logging starts (a bad config file, a taken port) aren't lost.
 
 Shutdown on SIGTERM or SIGINT: stop accepting connections, drain requests (10 s), stop the
-children (SIGTERM, then SIGKILL after 10 s), checkpoint the WAL, close the database, remove the
-pid file.
+children (each gets SIGTERM, then SIGKILL after its 10 s stop timeout; serve waits at most 15 s for
+all of them), checkpoint the WAL, close the database, remove the pid file.
 
 A client that needs Meko Local running, such as AgentK, runs `meko-local start`. It must not keep
 `serve` as its own child, because then restarting the client would stop Meko Local.
@@ -271,8 +271,8 @@ counts.
   bytes, against readability), and errcheck allowing a deliberate `_ =`. Its exclusions apply
   everywhere, not per call site: `fmt.Fprint*` (used only for CLI output here) and Close or
   Rollback on handles that only clean up (listeners, response bodies, sql rows, transactions and
-  databases, our store and log file). A file's Close is checked, since it can be the only sign a
-  write failed. gosec's few hits (running our own binary, a
+  databases). The Close of anything that writes (a file, the store, the log file) is checked,
+  since it can be the only sign a write failed. gosec's few hits (running our own binary, a
   localhost client, paths from the data folder) carry `nolint` comments with the reason.
 - Tests use a temporary data folder and never touch `~/.meko-local`. The server's tests start it
   in-process on port 0. The supervisor's tests re-run the test binary as the stub child.

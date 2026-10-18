@@ -32,7 +32,10 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          # go.mod is always there; go.sum only once there are dependencies.
+          cache-dependency-path: |
+            backend/go.mod
+            backend/go.sum
 
       - run: make build
       - run: ./bin/meko-local version

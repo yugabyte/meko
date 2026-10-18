@@ -3,9 +3,9 @@
 # - govet's fieldalignment is off: it reorders structs for bytes, against readability;
 # - errcheck allows a deliberate `_ =` (no check-blank). Its exclusions below apply everywhere, not
 #   per call site: fmt.Fprint* (used only for CLI output here), and Close or Rollback on handles
-#   that only ever clean up (listeners, response bodies, sql rows, transactions and databases, our
-#   store and log file). A file's Close isn't excluded: it can be the only sign a write failed, so
-#   check it, or write `_ = f.Close()` where the file was only read.
+#   that only ever clean up (listeners, response bodies, sql rows, transactions and databases). The
+#   Close of anything that writes (a file, the store, the log file) isn't excluded: it can be the
+#   only sign a write failed, so check it, or write `_ = f.Close()` where nothing was written.
 version: "2"
 run:
   modules-download-mode: readonly
@@ -33,8 +33,6 @@ linters:
         - (*database/sql.DB).Close
         - (*database/sql.Tx).Rollback
         - (*database/sql.Rows).Close
-        - (*github.com/yugabyte/meko-local/backend/internal/store.Store).Close
-        - (*github.com/yugabyte/meko-local/backend/internal/logging.RotatingFile).Close
     govet:
       enable-all: true
       disable:
