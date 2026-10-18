@@ -1831,8 +1831,9 @@ textarea.input {
   mask: url('/meko-m.png') center / contain no-repeat;
 }
 /* A markdown design's marker on a key design decision from Meko (MEKO_SOURCE_MARK): the same
-   badge, its "from Meko" text kept for screen readers. An Artifact's is in design-frame.ts. */
-.prose .meko-source {
+   badge, its "from Meko" text kept for screen readers. Only in the design: other markdown (held
+   reviews) is other people's text. An Artifact's is in design-frame.ts. */
+.design-body .prose .meko-source {
   display: inline-block;
   position: relative;
   box-sizing: content-box;
@@ -1846,7 +1847,7 @@ textarea.input {
   background: var(--meko-soft);
   color: var(--meko);
 }
-.prose .meko-source::before {
+.design-body .prose .meko-source::before {
   content: '';
   position: absolute;
   inset: 3px 6px;

@@ -85,10 +85,11 @@ note on the option picked (optional), or the answer itself with Custom answer (o
 options). Resolved questions and AgentK's decisions are listed under **Key Design Decisions** as read-only
 cards in the file's order: the decision, who decided it (*You decided*, *AgentK decided*, *Left to
 AgentK*, or *Resolved* for a file from before that doesn't say), for AgentK's own why and what else
-it weighed, and the Meko items. The section starts collapsed, so the open questions and the
-feedback come first; it opens by itself while one of AgentK's decisions is being changed (Approve
-sends you there to finish it), and when **Review ›** on the Design tab's decisions bar (shown with
-no open question left) asks to see the decisions. A decision or question that rests on Meko carries Meko's "m"
+it weighed, and the Meko items. In Design the section starts collapsed, so the open questions and
+the feedback come first; it opens by itself while one of AgentK's decisions is being changed, again
+whenever Approve sends you there to finish that change (even after you collapsed it), and when
+**Review ›** on the Design tab's decisions bar (shown with no open question left) asks to see the
+decisions. Past Design the decisions are all the tab has to show, so it starts open. A decision or question that rests on Meko carries Meko's "m"
 (`public/meko-m.png`, drawn as a mask in the badge's color, `.meko-mark`) in a round badge, and each
 Meko item shows the excerpt, its kind, its datapack (by name when it's one of the project's), its id
 and **Copy id** (`MekoRefs.tsx`). In Design, **Change this** on one of AgentK's decisions turns it into
@@ -150,8 +151,9 @@ decisions there, so a reviewer reads the design's direction first; `designUpkeep
 reach the panel). All three ask for Meko's marker, `<span class="meko-source">from Meko</span>`
 (`MEKO_SOURCE_MARK` in `src/shared/decisions.ts`), after the title of each decision in that section
 that rests on Meko, and only those. The panel draws it as Meko's "m" badge with CSS alone, its text
-kept for screen readers: a `.prose .meko-source` rule for a markdown design (the sanitizer keeps
-the class), and for an Artifact a style `designFrameDoc()` adds after the page when it names the
+kept for screen readers: a `.design-body .prose .meko-source` rule for a markdown design (the
+sanitizer keeps the class; the rule is scoped to the design, as held reviews render markdown too
+and are other people's text), and for an Artifact a style `designFrameDoc()` adds after the page when it names the
 class (`mekoSourceStyle()`, the mark as a `data:` URL the frame's policy allows, `!important` so the
 page's own styles don't undo it). Anywhere else (claude.ai, GitHub, Meko) it reads as plain "from
 Meko". The badge is only as right as AgentK's marking; the Questions tab's comes from the questions

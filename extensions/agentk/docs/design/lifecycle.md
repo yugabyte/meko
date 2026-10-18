@@ -197,14 +197,16 @@ A task's design doesn't stop at the approval: it's what the PR's reviewers read.
   Decisions* section near the top of the design, right after its goal, before writing any code
   (`designQaLine()`, added in code after the approval prompt): each question and each decision
   AgentK made itself from the questions file, who decided it (the user, or AgentK), the user's
-  answer, what was decided and why, and the Meko items it rests on (kind, datapack, id). Designs
-  written before call the section *Questions and decisions*.
+  answer, what was decided and why, and the Meko items it rests on (kind, datapack, id), with
+  Meko's marker after the title of each decision that rests on Meko
+  ([Design panel](design-panel.md)). Designs written before call the section *Questions and
+  decisions*.
 - **It's kept current.** The approval, a move to Code by hand (`move-code`) and the prompts that
   change code later (`comments`, `review`, `review-people`, `review-held`, `ci`, `conflicts`;
   `DESIGN_UPKEEP_PROMPTS`) carry a line
   (`designUpkeepLine()`) asking Claude to update the design in the same turn when a new question
   comes up or the design changes, adding the question or decision, who decided it and what was
-  decided to that section. The line
+  decided to that section (with Meko's marker when it rests on Meko). The line
   names where: the markdown design file, or the design's Artifact to republish from the same file.
 - **Each change is a new version in Meko.** In Code, PR & Review and Merge & Close, the markdown
   design file is read again at each turn end, and a publish of the design's own Artifact (the same

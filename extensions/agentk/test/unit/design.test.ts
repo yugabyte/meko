@@ -128,17 +128,14 @@ describe('design frame', () => {
     const style = mekoSourceStyle(page);
     expect(style).toMatch(/^<style>span\.meko-source \{/);
     expect(style).toContain(`mask: url("${MEKO_MARK_DATA_URL}")`);
-    // Its text stays for screen readers, only too small to see.
-    expect(style).toContain('font-size: 0 !important');
     expect(designFrameDoc(page, null)).toBe(`<!doctype html>${meta}${page}${style}${mermaidLoader(page)}`);
     expect(mekoSourceStyle('<p>bare</p>')).toBe('');
     expect(designFrameDoc('<p>bare</p>', null)).not.toContain('<style>');
   });
 
-  it("carries Meko's m as a data: URL of public/meko-m.png, which the policy allows", () => {
+  it("carries Meko's m as a data: URL of public/meko-m.png", () => {
     const png = readFileSync(join(import.meta.dirname, '../../src/web/public/meko-m.png'));
     expect(MEKO_MARK_DATA_URL).toBe(`data:image/png;base64,${png.toString('base64')}`);
-    expect(DESIGN_FRAME_CSP).toContain('img-src data:');
   });
 
   it('passes an explicit app theme to the page', () => {

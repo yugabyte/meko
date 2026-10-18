@@ -39,11 +39,12 @@ export function DesignPanel({
   const [doc, setDoc] = useState<DesignDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'design' | 'questions'>(showQuestions ? 'questions' : 'design');
-  // The Questions tab was opened from the Design tab's decisions bar, to see the key design decisions.
-  const [decisionsAsked, setDecisionsAsked] = useState(false);
+  // Bumped to open the key design decisions in the questions: from the Design tab's decisions bar,
+  // or to finish a change to one of AgentK's decisions before approving. 0 leaves them collapsed.
+  const [decisionsAt, setDecisionsAt] = useState(0);
   const showTab = (t: 'design' | 'questions', decisions = false) => {
     setTab(t);
-    setDecisionsAsked(decisions);
+    setDecisionsAt((n) => (decisions ? n + 1 : 0));
   };
   const qcol = useRef<HTMLElement>(null);
   const mobile = useIsMobile();
@@ -77,6 +78,9 @@ export function DesignPanel({
   const [drafts] = useDesignDrafts(session.id);
   // A change to one of AgentK's decisions waits in this browser: it goes from the questions' footer.
   const changing = !!doc && hasDecisionChanges(doc.questions, drafts);
+  // For the effect below, which runs only when the questions are asked for.
+  const changingNow = useRef(changing);
+  changingNow.current = changing;
   const toAnswer = open > 0 || changing;
   // The decisions AgentK made itself, called out beside the open questions.
   const made = doc?.questions.filter((q) => q.kind === 'decision').length ?? 0;
@@ -86,13 +90,13 @@ export function DesignPanel({
   const waiting = open + (session.asking ? 1 : 0);
   const questions = !hasQuestions ? 'none' : split || tab === 'questions' ? 'shown' : 'hidden';
   const toQuestions = () => {
-    showTab('questions');
+    showTab('questions', changing);
     qcol.current?.scrollIntoView({ block: 'nearest' });
   };
   useEffect(() => {
     if (!showQuestions) return;
     setTab('questions');
-    setDecisionsAsked(false);
+    setDecisionsAt((n) => (changingNow.current ? n + 1 : 0));
     qcol.current?.scrollIntoView({ block: 'nearest' });
   }, [showQuestions]);
 
@@ -199,7 +203,7 @@ export function DesignPanel({
             <div className="design-qcol-hd">
               Questions{waiting > 0 && <span className="count-badge">{waiting}</span>}
             </div>
-            <DesignQuestions session={session} doc={doc!} datapacks={datapacks} />
+            <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAt} />
           </aside>
         </div>
       ) : (
@@ -207,7 +211,7 @@ export function DesignPanel({
       )}
       {tabs && tab === 'questions' && (
         <div className="dq-view" role="tabpanel">
-          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAsked} />
+          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAt} />
         </div>
       )}
       {tabs && tab === 'design' && (open > 0 || (session.stage === 'design' && made > 0)) && (

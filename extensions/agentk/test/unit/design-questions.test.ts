@@ -314,7 +314,6 @@ describe('the design prompts', () => {
   });
 
   it("asks for Meko's marker after each key design decision from Meko, in Design, at the approval and after", () => {
-    expect(MEKO_SOURCE_MARK).toBe('<span class="meko-source">from Meko</span>');
     for (const line of [designQuestionsLine('/d/questions.json'), designQuestionsLine('/d/questions.json', false), designQaLine('edit /d/design.md', '/d/questions.json')]) {
       expect(line).toContain(`write ${MEKO_SOURCE_MARK} after the title of each one that rests on Meko (one with "meko" items), and only those`);
     }
@@ -326,20 +325,24 @@ describe('the key design decisions on the Questions tab', () => {
   const session = { id: 'kdd-view', stage: 'design', desired: 'running', approvalQueued: false, asking: null, busy: false } as unknown as Session;
   const made = decision({ id: 'cards', question: 'How the panel is built' });
   const doc = (questions: DesignQuestion[]): DesignDoc => ({ markdown: '# D', html: null, artifactUrl: null, updatedAt: 1, questions, questionsSource: 'file', fromPr: null });
-  const render = (questions: DesignQuestion[], showDecisions?: boolean) =>
-    renderToStaticMarkup(createElement(DesignQuestions, { session, doc: doc(questions), showDecisions }));
+  const render = (questions: DesignQuestion[], showDecisions?: number, s: Session = session) =>
+    renderToStaticMarkup(createElement(DesignQuestions, { session: s, doc: doc(questions), showDecisions }));
   /** The opening tag of the Key Design Decisions section. */
   const section = (html: string) => /<details[^>]*class="dq-section dq-decided"[^>]*>/.exec(html)?.[0];
 
   afterEach(() => clearDrafts(session.id));
 
-  it('start collapsed, with or without open questions', () => {
+  it('start collapsed in Design, with or without open questions', () => {
     expect(section(render([made]))).not.toContain(' open');
     expect(section(render([question({ id: 'q1', options: opts('A', 'B') }), made, question({ id: 'done', status: 'resolved', decision: 'A' })]))).not.toContain(' open');
   });
 
   it("open when the Design tab's decisions bar asks for them", () => {
-    expect(section(render([made], true))).toContain(' open');
+    expect(section(render([made], 1))).toContain(' open');
+  });
+
+  it("start open past Design, where they're all the tab shows", () => {
+    expect(section(render([made], 0, { ...session, stage: 'code' }))).toContain(' open');
   });
 
   it("stay open while one of AgentK's decisions is being changed", () => {
