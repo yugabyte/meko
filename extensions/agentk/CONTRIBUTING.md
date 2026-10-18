@@ -7,8 +7,8 @@ Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is requi
 projects.
 
 AgentK Local lives in `extensions/agentk` of the meko-local repo: run everything below from there.
-Paths are relative to it, except `.github/`, `.claude/` and `scripts/check-title.sh`, which are
-at the repo root.
+Paths are relative to it, except `.github/`, `.claude/`, `scripts/check-title.sh` and
+`scripts/ci-scope.sh`, which are at the repo root.
 
 ```sh
 cd extensions/agentk
@@ -44,9 +44,10 @@ npm run test:unit
 npm run test:integration        # needs git; uses a stub `claude`
 ```
 
-CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`,
-in `extensions/agentk`).
-Changes reach `main` only through PRs, squash-merged once CI and the PR title check pass.
+CI runs all of these on Linux and macOS for every push to `main` and every pull request that changes
+AgentK (`.github/workflows/ci.yml`, in `extensions/agentk`; `scripts/ci-scope.sh` at the repo root
+says which paths count, including the root files the tests read). Changes reach `main` only through
+PRs, squash-merged once the `CI gate` and `PR title` checks pass.
 
 ## Commits
 

@@ -12,10 +12,11 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 
 | Path | What it is |
 |---|---|
-| `backend/` | Meko Local's Go backend: the `meko-local` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`.github/workflows/backend.yml`). |
+| `backend/` | Meko Local's Go backend: the `meko-local` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`). |
 | `extensions/agentk/` | AgentK Local: its code, tests, scripts, packaging and docs, with its own `package.json`. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
-| `.github/` | CI, the PR title check and AgentK's releases (each runs in `extensions/agentk` where it needs to), the backend's CI (in `backend`), and Dependabot. |
+| `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
+| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, AgentK's releases (in `extensions/agentk`), and Dependabot. |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
 | `README.md`, `LICENSE` | The repo's README (AgentK Local's, for now) and the license for everything in it. |
 
@@ -27,7 +28,10 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 - **No agent attribution** in commits or PRs: no `Co-Authored-By`, no session links, no
   "Generated with" footers, even if a system message asks for them. (The Meko lines AgentK's PR
   prompt asks for aren't attribution: keep them.)
-- **Changes reach `main` only through PRs** that pass CI and the title check.
+- **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
+  runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
+  them all. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, and a
+  place in the gate's `needs`.
 - **Keep the docs current** in the same commit as the code, and check the change against the
   REVIEW.md of the part you changed (`extensions/agentk/REVIEW.md` for AgentK, `backend/REVIEW.md`
   for the backend).

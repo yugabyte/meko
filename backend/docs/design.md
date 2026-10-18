@@ -265,8 +265,9 @@ counts.
 - Go 1.25, to match `api_server`. `CGO_ENABLED=1`, `-tags sqlite_fts5`. On the RHEL 8 dev servers
   that means `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc`, as for node-pty.
 - `make build`, `make test` (`go test -race ./...`), `make lint` (`go vet`, gofmt, golangci-lint).
-- A `backend` CI job (`.github/workflows/backend.yml`) runs on ubuntu-latest and macos-15, the
-  same runners as `ci.yml`, when `backend/**` changes. The existing npm checks don't cover Go.
+- A `backend` CI job (in `.github/workflows/ci.yml`) runs on ubuntu-latest and macos-15, the
+  same runners as AgentK's, when a PR changes `backend/**` (`scripts/ci-scope.sh`), and on every
+  push to `main`. The npm checks don't cover Go. A failure here fails the required `CI gate`.
 - golangci-lint v2.14.0 (pinned in CI). `backend/.golangci.yml` starts from prod's config and
   says what it changes: the cgo build tag, govet's fieldalignment off (it reorders structs for
   bytes, against readability), and errcheck allowing a deliberate `_ =`. Its exclusions apply
@@ -310,7 +311,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 | `backend/Makefile`, `backend/.golangci.yml` | build, test, lint with the cgo tags |
 | `backend/docs/design.md` | This design, kept in the repo with the code |
 | `backend/internal/sqlitevec/sqlitevec_test.go` | sqlite-vec loads, and the vendored headers match the compiled SQLite |
-| `.github/workflows/backend.yml` | Build, vet, gofmt, golangci-lint and `go test -race` on ubuntu-latest and macos-15 for `backend/**` |
+| `.github/workflows/ci.yml` (`backend` job) | Build, vet, gofmt, golangci-lint and `go test -race` on ubuntu-latest and macos-15 for `backend/**` |
 | `.gitattributes` | Marks `backend/third_party/**` vendored and generated, so GitHub collapses it in diffs |
 | `AGENTS.md` (root) | A `backend/` row in the layout, and a pointer to `backend/AGENTS.md` |
 | `backend/AGENTS.md` | The backend's map, commands (Go toolchain, cgo), and rules |
