@@ -3,7 +3,7 @@ import { decisionNumbers } from '../../shared/decisions';
 import type { DatapackRef, DesignDoc, DesignQuestion, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import {
-  approvalSent, changeDraft, draftFor, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts,
+  approvalSent, changeDraft, decidedOption, draftFor, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts,
   type Draft,
 } from '../design-answers';
 import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../util';
@@ -30,9 +30,10 @@ function DecidedChip({ q }: { q: DesignQuestion }) {
   return <span className="dq-chip done">✓ Resolved</span>;
 }
 
-/** The options AgentK weighed against the one it picked. */
+/** The options weighed against the one the decision stands on now. */
 function alsoWeighed(q: DesignQuestion): string[] {
-  return q.options.filter((_, i) => i !== q.recommended).map((o) => o.label);
+  const i = decidedOption(q);
+  return q.options.filter((_, j) => j !== i).map((o) => o.label);
 }
 
 function QuestionCard({
@@ -150,7 +151,11 @@ function DecidedCard({ q, n, datapacks, onChange }: { q: DesignQuestion; n: stri
         </p>
       )}
       {q.kind === 'decision' && q.context && <p className="dq-ctx">{q.context}</p>}
-      {weighed.length > 0 && <p className="dq-ctx">Also weighed: {weighed.join(' · ')}</p>}
+      {weighed.length > 0 && (
+        <p className="dq-ctx">
+          {q.decidedBy === 'user' ? 'Other options' : 'Also weighed'}: {weighed.join(' · ')}
+        </p>
+      )}
       <MekoRefs refs={q.meko} datapacks={datapacks} />
       {onChange && (
         <div className="dq-actions">
@@ -288,7 +293,7 @@ export function DesignQuestions({ session, doc, datapacks }: { session: Session;
                     datapacks={datapacks}
                     lead={
                       <p className="dq-decision">
-                        <span className="dq-decision-label">AgentK decided</span> {q.decision}
+                        <span className="dq-decision-label">{q.decidedBy === 'user' ? 'You decided' : 'AgentK decided'}</span> {q.decision}
                       </p>
                     }
                     foot={

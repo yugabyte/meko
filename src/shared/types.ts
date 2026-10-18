@@ -1433,6 +1433,8 @@ export interface SearchResult {
   text: string;
   score: number | null;
   datapackName: string | null;
+  /** The datapack's id, for a design to cite the item by. */
+  datapackId?: string;
 }
 
 export interface AuthStatus {
@@ -1802,6 +1804,11 @@ export interface DesignAnswerInput {
   label: string | null;
   /** With an option, an optional note on it; for a custom answer, the answer itself (required). */
   text: string;
+  /**
+   * For a change to one of AgentK's own decisions: the decision as the user saw it, so a change to
+   * a decision AgentK has revised since is refused (409). Required for a decision.
+   */
+  decision?: string | null;
 }
 
 /**

@@ -94,7 +94,10 @@ describe("a design's open questions (real session host + git, fake claude)", () 
 
     // The user answers a question and changes the decision: both are theirs as they go.
     await revise(s.id, {
-      answers: [{ questionId: 'store', choice: 0, label: 'Datapack', text: 'RESOLVE_STORE WITH_DECISION' }, { questionId: 'cards', choice: 1, label: 'New cards', text: '' }],
+      answers: [
+        { questionId: 'store', choice: 0, label: 'Datapack', text: 'RESOLVE_STORE WITH_DECISION' },
+        { questionId: 'cards', choice: 1, label: 'New cards', text: '', decision: 'Reuse the cards' },
+      ],
       feedback: '',
     });
     const sent = await waitFor(() => transcript(s.id), (t) => t.includes('The user wants: New cards'), 10000, 'answers prompt');
@@ -105,10 +108,12 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     ]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
 
-    // AgentK's revision keeps the change; the approval leaves the open question to AgentK.
+    // AgentK's revision rewrites the file without "decidedBy" on the answer: it's still the user's.
+    // The approval leaves the open question to AgentK.
     await designReady(s.id, 'revised design', () => questions(s.id)[0].decision === 'Datapack.');
+    expect(who()[0]).toEqual(['store', 'question', 'Datapack.', 'user']);
     await env.core.sessions.action(s.id, 'approve-design', {});
-    expect(who()).toEqual([['store', 'question', 'Datapack.', null], ['tabs', 'question', 'Left to AgentK', 'agentk'], ['cards', 'decision', 'New cards', 'user']]);
+    expect(who()).toEqual([['store', 'question', 'Datapack.', 'user'], ['tabs', 'question', 'Left to AgentK', 'agentk'], ['cards', 'decision', 'New cards', 'user']]);
   });
 
   it('approves without answers, and refuses answers to options AgentK has changed', async () => {

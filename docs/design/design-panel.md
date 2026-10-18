@@ -39,7 +39,8 @@ markdown fences are taken out as text before any HTML parsing, so they're unaffe
 the file and shows them at once, or else by writing the file, read at the turn's end (Kiro, which
 has no mod, always writes the file).
 The line asking for them is added to the Design prompt in code (`designQuestionsLine()`, which names
-the tool only when the session's harness has the mod), so a repo's own `design` prompt gets it too.
+the tool only when the session's agent gets the mod as far as is known when the prompt is written:
+a harness that runs it, `[claude] mod` on, its files there, and a Claude Code not known to be too old), so a repo's own `design` prompt gets it too.
 
 The same list holds the design's **Key Design Decisions** (KDDs): the questions, and the decisions AgentK made
 itself that set the design's direction (`"kind": "decision"`: the decision point, the decision, why
@@ -47,7 +48,10 @@ in `context`, and the alternatives it weighed as `options`, its pick as `recomme
 is always resolved, and one without its decision is dropped. `decidedBy` says who settled each
 entry: `user` for an answer or a change to AgentK's decision, `agentk` for AgentK's own decision or a
 question left to it, null while open (and in files from before). The server sets it when it records
-answers; AgentK sets it only on its own decisions. `meko` lists up to 5 Meko items a decision (or a
+answers; AgentK sets it only on its own decisions, and is asked to keep it as written. When AgentK
+rewrites the file (or calls the tool) leaving it out, a resolved entry keeps what the questions kept
+before said (`parseDesignQuestions(text, prev)`), so a revision never turns the user's answer into
+nobody's, or a decision the user changed back into AgentK's. `meko` lists up to 5 Meko items a decision (or a
 recommendation) rests on, as AgentK cites them: `{"kind": "memory" | "knowledge", "id", "datapackId",
 "excerpt"}`, with the id Meko gave it (from its own searches, or the ids in the
 [recall block](recall-and-learn.md#meko-recall-at-start)) and the words it relied on, cut to 500
@@ -86,8 +90,9 @@ decisions of its own, else collapsed. A decision or question that rests on Meko 
 (`public/meko-m.png`, drawn as a mask in the badge's color, `.meko-mark`) in a round badge, and each
 Meko item shows the excerpt, its kind, its datapack (by name when it's one of the project's), its id
 and **Copy id** (`MekoRefs.tsx`). In Design, **Change this** on one of AgentK's decisions turns it into
-an answer card (its alternatives, AgentK's pick selected, **Custom answer**, a note) with **Keep
-AgentK's decision** to drop the change; the change goes with the answers, and only when it changes
+an answer card (its alternatives with the option in force selected, which is AgentK's pick unless
+the user changed it before, or their own words, **Custom answer**, a note) with **Keep AgentK's
+decision** to drop the change; the change goes with the answers, and only when it changes
 something (another option, a note, or the user's own words). Past Design, an open question shows nothing
 picked and reads *Unanswered*, never the recommendation. **Other feedback**
 takes anything else about the design. Question text, decisions and Meko excerpts render as plain
@@ -106,7 +111,8 @@ the ⋯ sheet take you to the questions (as they do, with no open questions, whi
 AgentK's decisions waits in this browser: `changingDecisions()`, which `approveDesign()` also
 refuses, since its request can't carry it), and the approval goes from their footer, **Approve with
 answers** (the header leaves its button out while the questions are on screen, or can't be shown
-because the design couldn't be read). On a panel too
+because the design couldn't be read, and does the same, reading **Answer & approve**, while a change
+to one of AgentK's decisions waits: `headerApproves(session, questions, changing)`). On a panel too
 short for the questions and their footer (a phone with the keyboard up), the view scrolls, so the
 footer stays reachable. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
@@ -116,7 +122,9 @@ while Claude is at its prompt (between turns, or with the design waiting for app
 permission or question prompt); otherwise the button says why, and nothing is queued. With the mod
 both work mid-turn: see [Answers and approvals mid-turn](mod.md). The server checks the
 answers against the current questions: one to a question no longer open (or a decision that's
-gone), or whose option's label changed, is refused (409) so the user looks again; answers too long for one prompt (50,000
+gone), or whose option's label changed, or a change to a decision AgentK has revised since the user
+saw it (the request carries the decision it was made against, `DesignAnswerInput.decision`), is
+refused (409) so the user looks again; answers too long for one prompt (50,000
 characters) are refused too.
 
 Once the answers have gone to Claude, the server records them in `questions.json`

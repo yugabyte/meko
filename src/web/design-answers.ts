@@ -173,9 +173,31 @@ export function shownDraft(q: DesignQuestion, d: Draft | undefined, answerable: 
   return { choice: null, label: null, custom: false, text: d?.text ?? '' };
 }
 
-/** The draft that starts a change to one of AgentK's own decisions (Change this): AgentK's pick, against its decision. */
+/**
+ * The option one of AgentK's decisions stands on now: the one its decision names (a change the user
+ * made may have moved it off AgentK's pick, which `recommended` still is), else AgentK's pick; null
+ * for a decision in the user's own words.
+ */
+export function decidedOption(q: DesignQuestion): number | null {
+  const d = q.decision ?? '';
+  const i = q.options.findIndex((o) => d === o.label || d.startsWith(`${o.label} — `));
+  if (i >= 0) return i;
+  return q.decidedBy === 'user' ? null : q.recommended;
+}
+
+/**
+ * The draft that starts a change to one of AgentK's own decisions (Change this): the decision as it
+ * stands (its option, or the user's own words), against that decision.
+ */
 export function changeDraft(q: DesignQuestion): Draft {
-  return { ...defaultDraft(q), against: q.decision };
+  const i = decidedOption(q);
+  if (i !== null && q.options[i]) return { choice: i, label: q.options[i].label, custom: false, text: '', against: q.decision };
+  return { choice: null, label: null, custom: true, text: q.decidedBy === 'user' ? (q.decision ?? '') : '', against: q.decision };
+}
+
+/** Whether a session's drafts hold a change to one of `questions`' decisions that's still to go (Change this). */
+export function hasDecisionChanges(questions: DesignQuestion[], drafts: Drafts): boolean {
+  return questions.some((q) => q.kind === 'decision' && drafts.answers[q.id]?.against === q.decision);
 }
 
 /**
@@ -196,10 +218,13 @@ export function pruneDrafts(questions: DesignQuestion[], drafts: Drafts): Drafts
   return { ...drafts, answers: Object.fromEntries(ids.filter(keep).map((id) => [id, drafts.answers[id]])) };
 }
 
-/** A change to one of AgentK's decisions that changes something: another option, a note, or the user's own words. */
+/**
+ * A change to one of AgentK's decisions that changes something: another option than the one in
+ * force, a note, or other words than the decision's.
+ */
 function changes(q: DesignQuestion, d: Draft): boolean {
-  if (d.custom) return !!d.text.trim();
-  return d.choice !== null && (d.choice !== q.recommended || !!d.text.trim());
+  if (d.custom) return !!d.text.trim() && d.text.trim() !== q.decision;
+  return d.choice !== null && (d.choice !== decidedOption(q) || !!d.text.trim());
 }
 
 /**
@@ -223,7 +248,8 @@ export function toRequest(questions: DesignQuestion[], drafts: Drafts): DesignAn
       if (!draft || draft.against !== q.decision) return [];
       const d = draftFor(q, draft);
       if (!changes(q, d)) return [];
-      return d.custom ? [{ questionId: q.id, choice: null, label: null, text: d.text }] : [{ questionId: q.id, choice: d.choice, label: d.label, text: d.text }];
+      const was = { decision: q.decision };
+      return d.custom ? [{ questionId: q.id, choice: null, label: null, text: d.text, ...was }] : [{ questionId: q.id, choice: d.choice, label: d.label, text: d.text, ...was }];
     }
     if (q.status !== 'open') return [];
     const d = draftFor(q, drafts.answers[q.id]);

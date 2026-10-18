@@ -936,7 +936,7 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row), this.harness(row).caps.mod)] : []), ...this.designLines(row, name, extra), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row), this.offersMod(row))] : []), ...this.designLines(row, name, extra), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
@@ -991,6 +991,17 @@ export class SessionManager {
       // A home under /net: Claude reaches ~/.claude (memory, skills, plugins) by its local spelling.
       ...(claudePath(homedir()) !== homedir() ? { HOME: claudePath(homedir()) } : {}),
     };
+  }
+
+  /**
+   * Whether the session's agent gets AgentK's mod, as far as is known now, for the prompt lines that
+   * name its tools: its harness runs the mod, the mod is on and its files are there, and Claude
+   * Code isn't known to be too old for it. A prompt is often rendered before the launch that settles
+   * it (`modDir()`), so a version not read yet counts as new enough; the lines say "if you have it".
+   */
+  private offersMod(row: SessionRow): boolean {
+    return this.harness(row).caps.mod && this.core.config.claude.mod && existsSync(join(modDirPath(this.core.paths), 'hooks', 'register.ts'))
+      && this.core.claudeCode.status().supportsMod !== false;
   }
 
   /**

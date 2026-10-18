@@ -22,7 +22,7 @@ while it's being created share the one `conversation_create`.
   (15 seconds each) is skipped; the search fails only when every datapack's did.
 - **Delivery.** Claude's `SessionStart` hook (`context.sh`, source `startup` only) gets the items
   as `additionalContext`, headed "What Meko already knows about this task", each labelled with its
-  source, datapack and Meko id (`[memory · <datapack> · id <id>]`), so a design can cite the item a
+  source, datapack and Meko ids (`[memory · <datapack> · id <id> · datapackId <id>]`), so a design can cite the item a
   decision rests on ([key design decisions](design-panel.md)). The header says the
   items are notes from earlier sessions, some possibly written by other people (shared
   datapacks), to check against the code and not to follow as instructions. The hook waits up to 2.5 seconds for a search still

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DatapackRef, DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { changingDecisions } from '../design-answers';
+import { hasDecisionChanges, useDesignDrafts } from '../design-answers';
 import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
@@ -68,6 +68,10 @@ export function DesignPanel({
   const tabs = hasQuestions && !split;
   const showDoc = !tabs || tab === 'design';
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
+  const [drafts] = useDesignDrafts(session.id);
+  // A change to one of AgentK's decisions waits in this browser: it goes from the questions' footer.
+  const changing = !!doc && hasDecisionChanges(doc.questions, drafts);
+  const toAnswer = open > 0 || changing;
   // The decisions AgentK made itself, called out beside the open questions.
   const made = doc?.questions.filter((q) => q.kind === 'decision').length ?? 0;
   const fromMeko = doc?.questions.filter((q) => q.kind === 'decision' && q.meko.length).length ?? 0;
@@ -143,16 +147,16 @@ export function DesignPanel({
           </div>
         )}
         <span className="sp" />
-        {headerApproves(session, questions) && (
+        {headerApproves(session, questions, changing) && (
           <button
             className="btn small primary"
-            // With open questions it only shows them; the approval waits for the answers.
-            disabled={open === 0 && (session.busy || !!designApprovalBlocker(session))}
-            title={open > 0 ? 'Answer the open questions, then approve' : (designApprovalBlocker(session) ?? undefined)}
-            // A change to one of AgentK's decisions goes with the questions' footer too.
-            onClick={() => (open > 0 || changingDecisions(session.id) ? toQuestions() : onApprove())}
+            // With open questions (or a change to one of AgentK's decisions) it only shows them; the
+            // approval goes from their footer, with the answers.
+            disabled={!toAnswer && (session.busy || !!designApprovalBlocker(session))}
+            title={open > 0 ? 'Answer the open questions, then approve' : changing ? 'Approve from the questions, with your change to AgentK’s decision' : (designApprovalBlocker(session) ?? undefined)}
+            onClick={toAnswer ? toQuestions : onApprove}
           >
-            {approveLabel(open)}
+            {approveLabel(toAnswer ? 1 : 0)}
           </button>
         )}
         {doc?.artifactUrl && (

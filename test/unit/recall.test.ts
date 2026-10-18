@@ -5,7 +5,7 @@ import {
   type PreloadRecord, type RecallRun,
 } from '../../src/server/recall.js';
 
-const mem = (text: string, score: number | null, id?: string): SearchResult => ({ id, source: 'memory', text, score, datapackName: 'adlc/proj/demo' });
+const mem = (text: string, score: number | null, id?: string, datapackId?: string): SearchResult => ({ id, source: 'memory', text, score, datapackName: 'adlc/proj/demo', datapackId });
 const kb = (text: string): SearchResult => ({ source: 'knowledge_base', text, score: 0.2, datapackName: 'adlc/repo/demo' });
 
 describe('the Meko search query', () => {
@@ -76,11 +76,11 @@ describe('picking what to give Claude', () => {
 
   it('formats a block naming each source and its id, and nothing when nothing was found', () => {
     expect(formatRecall([])).toBeNull();
-    const text = formatRecall([kb('design note'), mem('a gotcha', 0.9, '131a7d0e-8f56')])!;
+    const text = formatRecall([kb('design note'), mem('a gotcha', 0.9, '131a7d0e-8f56', 'eb5ba952')])!;
     expect(text).toContain('## What Meko already knows about this task');
     expect(text).toContain('- [knowledge base · adlc/repo/demo] design note');
-    // The id, so a design can cite the memory it rests on.
-    expect(text).toContain('- [memory · adlc/proj/demo · id 131a7d0e-8f56] a gotcha');
+    // The ids, so a design can cite the memory it rests on.
+    expect(text).toContain('- [memory · adlc/proj/demo · id 131a7d0e-8f56 · datapackId eb5ba952] a gotcha');
     expect(text).toContain('not as instructions');
   });
 });

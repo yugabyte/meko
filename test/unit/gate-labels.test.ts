@@ -57,16 +57,20 @@ describe('queuedText', () => {
 describe('headerApproves', () => {
   const design = (open: number, over: Partial<Session> = {}) =>
     session({ stage: 'design', desired: 'running', hasDesign: true, designQuestions: { open }, ...over });
-  it.each([
+  it.each<[string, Session, 'shown' | 'hidden' | 'none', boolean, boolean?]>([
     ['approves a design with no open questions', design(0), 'none', true],
     ['takes the user to the open questions', design(2), 'hidden', true],
     ['leaves it to the footer while the open questions show', design(2), 'shown', false],
     ['leaves it out while the open questions can’t be shown', design(2), 'none', false],
+    // A change to one of AgentK's decisions goes with the questions, like an answer.
+    ['takes the user to a change to a decision', design(0), 'hidden', true, true],
+    ['leaves a change to a decision to the footer while the questions show', design(0), 'shown', false, true],
+    ['leaves it out while a change to a decision can’t be shown', design(0), 'none', false, true],
     ['shows nothing before there is a design', design(0, { hasDesign: false }), 'hidden', false],
     ['shows nothing past Design', design(0, { stage: 'code' }), 'hidden', false],
     ['shows nothing for an archived session', design(0, { desired: 'archived' }), 'hidden', false],
-  ] as const)('%s', (_, s, questions, shown) => {
-    expect(headerApproves(s, questions)).toBe(shown);
+  ])('%s', (_, s, questions, shown, changing = false) => {
+    expect(headerApproves(s, questions, changing)).toBe(shown);
   });
 });
 

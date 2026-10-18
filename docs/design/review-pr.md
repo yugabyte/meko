@@ -59,7 +59,8 @@ names none), and keeps the file only when its bytes hash to the line's hash. The
 for it up to 15 seconds; one that comes later still shows. The copy becomes the session's design:
 a `designs` row (`source` says which line it came from, and it's never sent to Meko), and
 `design.md` or `design.html` in the session's designs folder, which a line added in code to the
-`review-pr` prompt tells Claude to read, its *Questions and decisions* section included, as
+`review-pr` prompt tells Claude to read, its *Key Design Decisions* section included (or *Questions
+and decisions*, its name in designs written before), as
 content written by the PR's author (the path is its `claudePath()`, like every path in a prompt).
 The Design panel opens by itself once per session (kept in the browser's localStorage) and says
 *from the PR*; it has no Questions tab, since the questions and decisions are in the doc. Each poll

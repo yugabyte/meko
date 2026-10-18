@@ -444,7 +444,7 @@ export class Lifecycle {
   questionsFromTool(row: SessionRow, input: unknown): ModReply {
     const fail = (error: string): ModReply => ({ status: 400, body: { error } });
     if (row.stage !== 'design' || row.plan_mode) return fail("The session isn't in the Design stage, so there's no design to ask about.");
-    const checked = checkToolQuestions(input);
+    const checked = checkToolQuestions(input, this.core.questions.get(row).questions);
     if ('error' in checked) return fail(checked.error);
     let changed: boolean;
     try {

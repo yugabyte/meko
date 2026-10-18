@@ -203,7 +203,8 @@ export class DesignQuestionStore {
     if (row.kind === 'review-pr') return entry([], null);
     const d = get<{ markdown: string }>(this.core.db, 'SELECT markdown FROM designs WHERE session_id = ?', row.id);
     if (!d) return entry([], null);
-    const fromFile = skipFile ? null : readDesignQuestions(this.core.sessions.questionsFile(row));
+    // Who decided each, as recorded, survives AgentK rewriting the file without it.
+    const fromFile = skipFile ? null : readDesignQuestions(this.core.sessions.questionsFile(row), this.cache.get(row.id)?.questions);
     if (fromFile) return entry(fromFile, 'file');
     const fromMd = d.markdown ? questionsFromMarkdown(d.markdown) : [];
     return entry(fromMd, fromMd.length ? 'markdown' : null);
@@ -256,6 +257,8 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
     seen.add(a.questionId);
     const q = questions.find((x) => x.id === a.questionId);
     if (!q || !answerable(q)) throw new HttpError(409, STALE);
+    // A change to one of AgentK's decisions is to the decision the user saw.
+    if (q.kind === 'decision' && a.decision !== q.decision) throw new HttpError(409, STALE);
     const qn = number.get(q.id) ?? q.id;
     const text = a.text ?? '';
     if (typeof text !== 'string') throw new HttpError(400, `The answer to ${qn} must be text.`);

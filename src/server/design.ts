@@ -201,9 +201,13 @@ function mekoRefs(v: unknown): MekoRef[] {
  * The questions in a questions file's JSON (`{"questions": [...]}` or a bare array), normalized:
  * entries without a question or a usable id, and repeated ids, are dropped, text is capped, and
  * a recommendation must point at an option. A decision (`kind: "decision"`) is always resolved,
- * and one without its decision is dropped. Throws when the JSON or its shape is wrong.
+ * and one without its decision is dropped. A resolved entry that doesn't say who decided it keeps
+ * what `prev` (the questions kept before) said: AgentK rewriting the file after AgentK Local
+ * recorded the user's answers mustn't make them AgentK's, or nobody's. Throws when the JSON or its
+ * shape is wrong.
  */
-export function parseDesignQuestions(text: string): DesignQuestion[] {
+export function parseDesignQuestions(text: string, prev: DesignQuestion[] = []): DesignQuestion[] {
+  const before = new Map(prev.filter((q) => q.status === 'resolved' && q.decidedBy).map((q) => [q.id, q.decidedBy]));
   const data: unknown = JSON.parse(text);
   const list = Array.isArray(data) ? data : data && typeof data === 'object' ? (data as Record<string, unknown>).questions : undefined;
   if (!Array.isArray(list)) throw new Error('expected {"questions": [...]}');
@@ -235,7 +239,7 @@ export function parseDesignQuestions(text: string): DesignQuestion[] {
       status: resolved ? 'resolved' : 'open',
       decision,
       // AgentK's own decision is its until the user changes it.
-      decidedBy: resolved ? (decidedByOf(q.decidedBy) ?? (kind === 'decision' ? 'agentk' : null)) : null,
+      decidedBy: resolved ? (decidedByOf(q.decidedBy) ?? before.get(id) ?? (kind === 'decision' ? 'agentk' : null)) : null,
       meko: mekoRefs(q.meko),
     });
   }
@@ -252,9 +256,10 @@ export function questionsFileText(questions: DesignQuestion[]): string {
  * strictly, since Claude can fix them in the same turn: a list of objects, each with an id and a
  * question, ids not repeated, options a list of labels or {label, detail}, a recommendation that
  * points at an option, and a status of open or resolved. Returns them normalized as a questions
- * file would be, or what's wrong.
+ * file would be (who decided each kept from `prev`, the questions kept before, when it isn't
+ * given), or what's wrong.
  */
-export function checkToolQuestions(input: unknown): { questions: DesignQuestion[] } | { error: string } {
+export function checkToolQuestions(input: unknown, prev: DesignQuestion[] = []): { questions: DesignQuestion[] } | { error: string } {
   if (!Array.isArray(input)) return { error: 'questions must be a list: {"questions": [{"id": …, "question": …}, …]}, or [] when there are none.' };
   const decisions = input.filter((v) => v && typeof v === 'object' && kindOf((v as Record<string, unknown>).kind) === 'decision').length;
   if (input.length - decisions > MAX_QUESTIONS) return { error: `Give at most ${MAX_QUESTIONS} questions.` };
@@ -299,7 +304,7 @@ export function checkToolQuestions(input: unknown): { questions: DesignQuestion[
     if (q.status !== undefined && q.status !== 'open' && q.status !== 'resolved') problems.push(`${at}: "status" must be "open" or "resolved".`);
   });
   if (problems.length) return { error: problems.slice(0, 10).join(' ') };
-  const questions = parseDesignQuestions(JSON.stringify({ questions: input }));
+  const questions = parseDesignQuestions(JSON.stringify({ questions: input }), prev);
   if (Buffer.byteLength(questionsFileText(questions)) > MAX_QUESTIONS_FILE) {
     return { error: `The questions come to more than ${MAX_QUESTIONS_FILE / 1024} KB. Shorten their context and details.` };
   }
@@ -309,9 +314,9 @@ export function checkToolQuestions(input: unknown): { questions: DesignQuestion[
 /**
  * The questions file AgentK writes beside the design: null when there's none (or it's empty);
  * throws when it's too large, can't be read, or isn't questions, so a bad file is never taken
- * for a missing one.
+ * for a missing one. `prev` is what `parseDesignQuestions` keeps who decided each from.
  */
-export function readDesignQuestions(file: string): DesignQuestion[] | null {
+export function readDesignQuestions(file: string, prev: DesignQuestion[] = []): DesignQuestion[] | null {
   let size: number;
   try {
     const st = statSync(file);
@@ -323,7 +328,7 @@ export function readDesignQuestions(file: string): DesignQuestion[] | null {
   }
   if (size > MAX_QUESTIONS_FILE) throw new Error(`larger than ${MAX_QUESTIONS_FILE / 1024} KB`);
   const text = readFileSync(file, 'utf8');
-  return text.trim() ? parseDesignQuestions(text) : null;
+  return text.trim() ? parseDesignQuestions(text, prev) : null;
 }
 
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
