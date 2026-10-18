@@ -24,5 +24,7 @@ and test on Linux and macOS when `backend/` changes (`.github/workflows/backend.
 - Commits and PR titles are `chore(backend): ...`. Nothing here ships in AgentK Local's release
   yet, and any `feat`, `fix`, `perf` or `deps` commit on `main` cuts an AgentK release.
 - Keep `docs/design.md` and this file current in the same commit as the code.
+- `third_party/` is vendored code, never edited (sqlite-vec and SQLite's headers; see
+  `third_party/sqlite-vec/README.md`). It moves to yugabyte forks once those exist.
 - Lint is `.golangci.yml`: prod Meko's config with the changes listed at its top. Fix findings
   rather than adding to its exclusions; a `nolint` names the rule and says why.
