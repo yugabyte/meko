@@ -969,9 +969,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const s = await env.core.sessions.create(p.id, { name: 'Kept', prompt: 'DESIGN_MD it' });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
     await env.core.sessions.action(s.id, 'approve-design');
-    // The approval asks for the questions and decisions in the design before any code, and to keep it current.
+    // The approval asks for the key design decisions in the design before any code, and to keep it current.
     const file = join(env.core.paths.designs, s.id, 'design.md');
-    await waitFor(() => transcript(s.id), (t) => t.includes('add a \\"Questions and decisions\\" section'), 10000, 'approval prompt');
+    await waitFor(() => transcript(s.id), (t) => t.includes('add a \\"Key Design Decisions\\" section'), 10000, 'approval prompt');
     expect(transcript(s.id)).toContain(`section to the design (edit ${file})`);
     expect(transcript(s.id)).toContain('If a new question comes up or the design changes while you work, update the design in the same turn');
     await idle(s.id, 'approval turn');

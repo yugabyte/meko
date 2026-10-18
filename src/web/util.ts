@@ -498,13 +498,14 @@ export function approveLabel(openQuestions: number): string {
 
 /**
  * Whether the design panel's header shows the approve button: for a design of a running session in
- * Design, as the questions' footer is. With open questions it only takes the user to them, so it's
- * left out while they're on screen (their footer approves, with the answers) and while they can't
- * be shown (the design is loading, or couldn't be read).
+ * Design, as the questions' footer is. With open questions, or a change to one of AgentK's decisions
+ * waiting (`changing`), it only takes the user to them, so it's left out while they're on screen
+ * (their footer approves, with the answers) and while they can't be shown (the design is loading,
+ * or couldn't be read).
  */
-export function headerApproves(session: Session, questions: 'shown' | 'hidden' | 'none'): boolean {
+export function headerApproves(session: Session, questions: 'shown' | 'hidden' | 'none', changing = false): boolean {
   if (session.stage !== 'design' || session.desired !== 'running' || !session.hasDesign) return false;
-  return !session.designQuestions.open || questions === 'hidden';
+  return !(session.designQuestions.open || changing) || questions === 'hidden';
 }
 
 /** The status detail while Claude asks the user something (`askDetail()` in sessions.ts). */

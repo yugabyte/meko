@@ -1,7 +1,8 @@
-// The user's answers to a design's open questions (DesignQuestions.tsx). They aren't stored on the
-// server: this browser keeps them, per session, until they go to AgentK with an approval or a
-// request to revise the design.
+// The user's answers to a design's open questions, and changes to AgentK's own decisions
+// (DesignQuestions.tsx). They aren't stored on the server: this browser keeps them, per session,
+// until they go to AgentK with an approval or a request to revise the design.
 import { useCallback, useEffect, useState } from 'react';
+import { decisionNumbers } from '../shared/decisions';
 import type { DesignAnswerInput, DesignAnswersRequest, DesignQuestion, Session } from '../shared/types';
 import { api } from './api';
 
@@ -16,6 +17,12 @@ export interface Draft {
   label: string | null;
   custom: boolean;
   text: string;
+  /**
+   * For a change to one of AgentK's own decisions: the decision as it stood when the change began
+   * (Change this). The change is dropped once the decision is no longer that (sent and recorded,
+   * or AgentK revised it).
+   */
+  against?: string | null;
 }
 
 export interface Drafts {
@@ -40,7 +47,8 @@ function isDraft(v: unknown): v is Draft {
   if (!v || typeof v !== 'object') return false;
   const d = v as Record<string, unknown>;
   return (d.choice === null || Number.isInteger(d.choice)) && (d.label === null || typeof d.label === 'string')
-    && typeof d.custom === 'boolean' && typeof d.text === 'string';
+    && typeof d.custom === 'boolean' && typeof d.text === 'string'
+    && (d.against === undefined || d.against === null || typeof d.against === 'string');
 }
 
 /** Drafts from stored JSON, dropping anything that isn't one. */
@@ -144,13 +152,14 @@ export function defaultDraft(q: DesignQuestion): Draft {
  */
 export function draftFor(q: DesignQuestion, d: Draft | undefined): Draft {
   if (!d) return defaultDraft(q);
-  if (!q.options.length) return { choice: null, label: null, custom: true, text: d.text };
+  const against = d.against === undefined ? {} : { against: d.against };
+  if (!q.options.length) return { choice: null, label: null, custom: true, text: d.text, ...against };
   if (d.custom) return { ...d, choice: null, label: null };
   if (d.label !== null) {
     const i = q.options.findIndex((o) => o.label === d.label);
     if (i >= 0) return { ...d, choice: i };
   }
-  return { ...defaultDraft(q), text: d.text };
+  return { ...defaultDraft(q), text: d.text, ...against };
 }
 
 /**
@@ -165,14 +174,57 @@ export function shownDraft(q: DesignQuestion, d: Draft | undefined, answerable: 
 }
 
 /**
+ * The option one of AgentK's decisions stands on now: the one its decision names (a change the user
+ * made may have moved it off AgentK's pick, which `recommended` still is), else AgentK's pick; null
+ * for a decision in the user's own words.
+ */
+export function decidedOption(q: DesignQuestion): number | null {
+  const d = q.decision ?? '';
+  const i = q.options.findIndex((o) => d === o.label || d.startsWith(`${o.label} — `));
+  if (i >= 0) return i;
+  return q.decidedBy === 'user' ? null : q.recommended;
+}
+
+/**
+ * The draft that starts a change to one of AgentK's own decisions (Change this): the decision as it
+ * stands (its option, or the user's own words), against that decision.
+ */
+export function changeDraft(q: DesignQuestion): Draft {
+  const i = decidedOption(q);
+  if (i !== null && q.options[i]) return { choice: i, label: q.options[i].label, custom: false, text: '', against: q.decision };
+  return { choice: null, label: null, custom: true, text: q.decidedBy === 'user' ? (q.decision ?? '') : '', against: q.decision };
+}
+
+/** Whether a session's drafts hold a change to one of `questions`' decisions that's still to go (Change this). */
+export function hasDecisionChanges(questions: DesignQuestion[], drafts: Drafts): boolean {
+  return questions.some((q) => q.kind === 'decision' && drafts.answers[q.id]?.against === q.decision);
+}
+
+/**
  * The drafts without the answers to questions that are no longer open (AgentK Local resolved
- * them as they were sent, or AgentK did), or null when there are none to drop.
+ * them as they were sent, or AgentK did), and without changes to decisions that have changed
+ * since, or null when there are none to drop.
  */
 export function pruneDrafts(questions: DesignQuestion[], drafts: Drafts): Drafts | null {
-  const open = new Set(questions.filter((q) => q.status === 'open').map((q) => q.id));
+  const byId = new Map(questions.map((q) => [q.id, q]));
+  const keep = (id: string) => {
+    const q = byId.get(id);
+    if (!q) return false;
+    if (q.kind === 'decision') return drafts.answers[id].against === q.decision;
+    return q.status === 'open';
+  };
   const ids = Object.keys(drafts.answers);
-  if (ids.every((id) => open.has(id))) return null;
-  return { ...drafts, answers: Object.fromEntries(ids.filter((id) => open.has(id)).map((id) => [id, drafts.answers[id]])) };
+  if (ids.every(keep)) return null;
+  return { ...drafts, answers: Object.fromEntries(ids.filter(keep).map((id) => [id, drafts.answers[id]])) };
+}
+
+/**
+ * A change to one of AgentK's decisions that changes something: another option than the one in
+ * force, a note, or other words than the decision's.
+ */
+function changes(q: DesignQuestion, d: Draft): boolean {
+  if (d.custom) return !!d.text.trim() && d.text.trim() !== q.decision;
+  return d.choice !== null && (d.choice !== decidedOption(q) || !!d.text.trim());
 }
 
 /**
@@ -186,10 +238,19 @@ export function revisionSent(sessionId: string): void {
 
 /**
  * The request for the open questions: the option picked (with any note) or the custom answer.
- * A question with nothing picked, or a custom answer left empty, is left out (unanswered).
+ * A question with nothing picked, or a custom answer left empty, is left out (unanswered). A
+ * change to one of AgentK's decisions goes only when it changes something.
  */
 export function toRequest(questions: DesignQuestion[], drafts: Drafts): DesignAnswersRequest {
   const answers = questions.flatMap((q): DesignAnswerInput[] => {
+    if (q.kind === 'decision') {
+      const draft = drafts.answers[q.id];
+      if (!draft || draft.against !== q.decision) return [];
+      const d = draftFor(q, draft);
+      if (!changes(q, d)) return [];
+      const was = { decision: q.decision };
+      return d.custom ? [{ questionId: q.id, choice: null, label: null, text: d.text, ...was }] : [{ questionId: q.id, choice: d.choice, label: d.label, text: d.text, ...was }];
+    }
     if (q.status !== 'open') return [];
     const d = draftFor(q, drafts.answers[q.id]);
     if (d.custom) return d.text.trim() ? [{ questionId: q.id, choice: null, label: null, text: d.text }] : [];
@@ -199,16 +260,17 @@ export function toRequest(questions: DesignQuestion[], drafts: Drafts): DesignAn
 }
 
 /**
- * Why the answers can't go yet: Custom answer picked on a question with options, and nothing
- * written. Null when they can. Questions are numbered as the user sees them.
+ * Why the answers can't go yet: Custom answer picked on a question with options (or a decision
+ * being changed), and nothing written. Null when they can. Numbered as the user sees them.
  */
 export function draftsBlocker(questions: DesignQuestion[], drafts: Drafts): string | null {
-  const i = questions.findIndex((q) => {
-    if (q.status !== 'open' || !q.options.length) return false;
-    const d = draftFor(q, drafts.answers[q.id]);
+  const q = questions.find((x) => {
+    if (!x.options.length) return false;
+    if (x.kind === 'decision' ? drafts.answers[x.id]?.against !== x.decision : x.status !== 'open') return false;
+    const d = draftFor(x, drafts.answers[x.id]);
     return d.custom && !d.text.trim();
   });
-  return i < 0 ? null : `Write your answer to Q${i + 1}, or pick one of AgentK’s options.`;
+  return q ? `Write your answer to ${decisionNumbers(questions).get(q.id)}, or pick one of AgentK’s options.` : null;
 }
 
 /**
@@ -234,7 +296,21 @@ export function settleApprovals(sessions: Session[]): void {
   }
 }
 
-/** Approves a design with no open questions, taking along any other feedback the user wrote. */
+/**
+ * Whether this browser holds a change to one of AgentK's decisions (Change this). It goes only with
+ * the questions, from their footer, so the approvals elsewhere take the user there first.
+ */
+export function changingDecisions(sessionId: string): boolean {
+  return Object.values(loadDrafts(sessionId).answers).some((d) => typeof d.against === 'string');
+}
+
+/**
+ * Approves a design with no open questions, taking along any other feedback the user wrote. Refused
+ * while a change to one of AgentK's decisions waits, which this request couldn't carry.
+ */
 export async function approveDesign(sessionId: string): Promise<void> {
+  if (changingDecisions(sessionId)) {
+    throw new Error('You started changing one of AgentK’s decisions. Approve from the Questions tab to send it, or keep AgentK’s decision.');
+  }
   approvalSent(await api.approveDesign(sessionId, toRequest([], loadDrafts(sessionId))));
 }

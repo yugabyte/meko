@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
-import type { DesignAnswerInput, DesignQuestion, DesignQuestionOption } from '../shared/types.js';
+import { decisionNumbers } from '../shared/decisions.js';
+import type { DesignAnswerInput, DesignQuestion, DesignQuestionOption, MekoRef } from '../shared/types.js';
 
 /** A published Artifact's HTML larger than this isn't kept (the claude.ai link still is). */
 export const MAX_DESIGN_HTML = 5 * 1024 * 1024;
@@ -12,8 +13,13 @@ export const MAX_DESIGN_MARKDOWN = 1024 * 1024;
 export const MAX_QUESTIONS_FILE = 256 * 1024;
 /** Most questions kept from a design; later ones are dropped. */
 export const MAX_QUESTIONS = 30;
+/** Most of AgentK's own decisions kept from a design, counted apart from the questions. */
+export const MAX_DECISIONS = 30;
 /** Most options kept per question. */
 export const MAX_OPTIONS = 6;
+/** Most Meko references kept per question or decision. */
+export const MAX_MEKO_REFS = 5;
+const EXCERPT_CHARS = 500;
 const QUESTION_CHARS = 1000;
 const CONTEXT_CHARS = 4000;
 const LABEL_CHARS = 200;
@@ -158,36 +164,83 @@ function option(v: unknown): DesignQuestionOption | null {
   return label ? { label, detail: str(o.detail ?? o.description, DETAIL_CHARS) } : null;
 }
 
+/** A Meko id as AgentK cites it (a memory's UUID, a knowledge item's id): letters, digits, dashes and underscores. */
+const MEKO_ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** A decision's kind as written: anything but "decision" is a question. */
+function kindOf(v: unknown): DesignQuestion['kind'] {
+  return typeof v === 'string' && v.trim().toLowerCase() === 'decision' ? 'decision' : 'question';
+}
+
+function decidedByOf(v: unknown): DesignQuestion['decidedBy'] {
+  return v === 'user' || v === 'agentk' ? v : null;
+}
+
+/** A Meko reference, or null for one without a kind AgentK knows or a usable id. */
+function mekoRef(v: unknown): MekoRef | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const kind = r.kind === 'memory' ? 'memory' : r.kind === 'knowledge' || r.kind === 'knowledge_base' ? 'knowledge' : null;
+  const id = typeof r.id === 'string' ? r.id.trim() : '';
+  if (!kind || !MEKO_ID.test(id)) return null;
+  const dp = r.datapackId ?? r.datapack_id;
+  return { kind, id, datapackId: typeof dp === 'string' && MEKO_ID.test(dp.trim()) ? dp.trim() : null, excerpt: str(r.excerpt, EXCERPT_CHARS) };
+}
+
+/** The Meko references of an entry: the first MAX_MEKO_REFS that can be read, without repeats. */
+function mekoRefs(v: unknown): MekoRef[] {
+  const out: MekoRef[] = [];
+  for (const r of Array.isArray(v) ? v.map(mekoRef) : []) {
+    if (r && !out.some((x) => x.kind === r.kind && x.id === r.id)) out.push(r);
+    if (out.length >= MAX_MEKO_REFS) break;
+  }
+  return out;
+}
+
 /**
  * The questions in a questions file's JSON (`{"questions": [...]}` or a bare array), normalized:
  * entries without a question or a usable id, and repeated ids, are dropped, text is capped, and
- * a recommendation must point at an option. Throws when the JSON or its shape is wrong.
+ * a recommendation must point at an option. A decision (`kind: "decision"`) is always resolved,
+ * and one without its decision is dropped. A resolved entry that doesn't say who decided it keeps
+ * what `prev` (the questions kept before) said: AgentK rewriting the file after AgentK Local
+ * recorded the user's answers mustn't make them AgentK's, or nobody's. Throws when the JSON or its
+ * shape is wrong.
  */
-export function parseDesignQuestions(text: string): DesignQuestion[] {
+export function parseDesignQuestions(text: string, prev: DesignQuestion[] = []): DesignQuestion[] {
+  const before = new Map(prev.filter((q) => q.status === 'resolved' && q.decidedBy).map((q) => [q.id, q.decidedBy]));
   const data: unknown = JSON.parse(text);
   const list = Array.isArray(data) ? data : data && typeof data === 'object' ? (data as Record<string, unknown>).questions : undefined;
   if (!Array.isArray(list)) throw new Error('expected {"questions": [...]}');
   const out: DesignQuestion[] = [];
   const seen = new Set<string>();
+  const counts = { question: 0, decision: 0 };
   for (const v of list) {
-    if (out.length >= MAX_QUESTIONS) break;
     if (!v || typeof v !== 'object') continue;
     const q = v as Record<string, unknown>;
+    const kind = kindOf(q.kind);
+    if (counts[kind] >= (kind === 'decision' ? MAX_DECISIONS : MAX_QUESTIONS)) continue;
     const id = questionId(q.id);
     const question = str(q.question, QUESTION_CHARS);
     if (!id || !question || seen.has(id)) continue;
+    const resolved = kind === 'decision' || (typeof q.status === 'string' && /^(resolved|answered|closed|decided)$/i.test(q.status.trim()));
+    const decision = resolved ? str(q.decision, DECISION_CHARS) : null;
+    if (kind === 'decision' && !decision) continue;
     seen.add(id);
+    counts[kind]++;
     const options = (Array.isArray(q.options) ? q.options : []).map(option).filter((o): o is DesignQuestionOption => !!o).slice(0, MAX_OPTIONS);
     const rec = q.recommended;
-    const resolved = typeof q.status === 'string' && /^(resolved|answered|closed|decided)$/i.test(q.status.trim());
     out.push({
       id,
+      kind,
       question,
       context: str(q.context, CONTEXT_CHARS),
       options,
       recommended: Number.isInteger(rec) && (rec as number) >= 0 && (rec as number) < options.length ? (rec as number) : null,
       status: resolved ? 'resolved' : 'open',
-      decision: resolved ? str(q.decision, DECISION_CHARS) : null,
+      decision,
+      // AgentK's own decision is its until the user changes it.
+      decidedBy: resolved ? (decidedByOf(q.decidedBy) ?? before.get(id) ?? (kind === 'decision' ? 'agentk' : null)) : null,
+      meko: mekoRefs(q.meko),
     });
   }
   return out;
@@ -203,11 +256,14 @@ export function questionsFileText(questions: DesignQuestion[]): string {
  * strictly, since Claude can fix them in the same turn: a list of objects, each with an id and a
  * question, ids not repeated, options a list of labels or {label, detail}, a recommendation that
  * points at an option, and a status of open or resolved. Returns them normalized as a questions
- * file would be, or what's wrong.
+ * file would be (who decided each kept from `prev`, the questions kept before, when it isn't
+ * given), or what's wrong.
  */
-export function checkToolQuestions(input: unknown): { questions: DesignQuestion[] } | { error: string } {
+export function checkToolQuestions(input: unknown, prev: DesignQuestion[] = []): { questions: DesignQuestion[] } | { error: string } {
   if (!Array.isArray(input)) return { error: 'questions must be a list: {"questions": [{"id": …, "question": …}, …]}, or [] when there are none.' };
-  if (input.length > MAX_QUESTIONS) return { error: `Give at most ${MAX_QUESTIONS} questions.` };
+  const decisions = input.filter((v) => v && typeof v === 'object' && kindOf((v as Record<string, unknown>).kind) === 'decision').length;
+  if (input.length - decisions > MAX_QUESTIONS) return { error: `Give at most ${MAX_QUESTIONS} questions.` };
+  if (decisions > MAX_DECISIONS) return { error: `Give at most ${MAX_DECISIONS} decisions: only the ones that set the design's direction.` };
   const problems: string[] = [];
   const seen = new Set<string>();
   input.forEach((v, i) => {
@@ -217,6 +273,19 @@ export function checkToolQuestions(input: unknown): { questions: DesignQuestion[
       return;
     }
     const q = v as Record<string, unknown>;
+    if (q.kind !== undefined && q.kind !== null && q.kind !== 'question' && q.kind !== 'decision') problems.push(`${at}: "kind" must be "question" or "decision".`);
+    if (q.kind === 'decision') {
+      if (!str(q.decision, DECISION_CHARS)) problems.push(`${at} is a decision, so it needs its "decision": what you chose.`);
+      if (q.status !== undefined && q.status !== 'resolved') problems.push(`${at} is a decision, so its "status" must be "resolved".`);
+    }
+    if (q.decidedBy !== undefined && q.decidedBy !== null && q.decidedBy !== 'user' && q.decidedBy !== 'agentk') problems.push(`${at}: "decidedBy" must be "user", "agentk" or null.`);
+    if (q.meko !== undefined && q.meko !== null) {
+      if (!Array.isArray(q.meko)) problems.push(`${at}: "meko" must be a list.`);
+      else {
+        if (q.meko.length > MAX_MEKO_REFS) problems.push(`${at} cites ${q.meko.length} Meko items; give at most ${MAX_MEKO_REFS}.`);
+        if (q.meko.some((r) => !mekoRef(r))) problems.push(`${at}: each "meko" item needs "kind" ("memory" or "knowledge") and the "id" Meko gave it.`);
+      }
+    }
     const id = questionId(q.id);
     if (!id) problems.push(`${at} needs an "id" (letters, digits and dashes).`);
     else if (seen.has(id)) problems.push(`${at} repeats the id "${id}".`);
@@ -235,7 +304,7 @@ export function checkToolQuestions(input: unknown): { questions: DesignQuestion[
     if (q.status !== undefined && q.status !== 'open' && q.status !== 'resolved') problems.push(`${at}: "status" must be "open" or "resolved".`);
   });
   if (problems.length) return { error: problems.slice(0, 10).join(' ') };
-  const questions = parseDesignQuestions(JSON.stringify({ questions: input }));
+  const questions = parseDesignQuestions(JSON.stringify({ questions: input }), prev);
   if (Buffer.byteLength(questionsFileText(questions)) > MAX_QUESTIONS_FILE) {
     return { error: `The questions come to more than ${MAX_QUESTIONS_FILE / 1024} KB. Shorten their context and details.` };
   }
@@ -245,9 +314,9 @@ export function checkToolQuestions(input: unknown): { questions: DesignQuestion[
 /**
  * The questions file AgentK writes beside the design: null when there's none (or it's empty);
  * throws when it's too large, can't be read, or isn't questions, so a bad file is never taken
- * for a missing one.
+ * for a missing one. `prev` is what `parseDesignQuestions` keeps who decided each from.
  */
-export function readDesignQuestions(file: string): DesignQuestion[] | null {
+export function readDesignQuestions(file: string, prev: DesignQuestion[] = []): DesignQuestion[] | null {
   let size: number;
   try {
     const st = statSync(file);
@@ -259,7 +328,7 @@ export function readDesignQuestions(file: string): DesignQuestion[] | null {
   }
   if (size > MAX_QUESTIONS_FILE) throw new Error(`larger than ${MAX_QUESTIONS_FILE / 1024} KB`);
   const text = readFileSync(file, 'utf8');
-  return text.trim() ? parseDesignQuestions(text) : null;
+  return text.trim() ? parseDesignQuestions(text, prev) : null;
 }
 
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
@@ -316,7 +385,7 @@ export function questionsFromMarkdown(markdown: string): DesignQuestion[] {
     const id = `md-${createHash('sha256').update(question).digest('hex').slice(0, 8)}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, question, context: null, options: [], recommended: null, status: 'open', decision: null });
+    out.push({ id, kind: 'question', question, context: null, options: [], recommended: null, status: 'open', decision: null, decidedBy: null, meko: [] });
     if (out.length >= MAX_QUESTIONS) break;
   }
   return out;
@@ -327,45 +396,57 @@ export const ANSWER_MAX = 10_000;
 /** Longest set of answers sent to Claude at once, in characters. */
 export const ANSWERS_PROMPT_MAX = 50_000;
 
-/** "2 answers to open questions and other feedback", for the prompt's first line. */
-export function answersCount(answers: DesignAnswerInput[], feedback: string): string {
-  const n = answers.length;
+/**
+ * "2 answers to open questions, a change to one of your decisions and other feedback", for the
+ * prompt's first line. An answer to one of AgentK's own decisions (in `questions`) is a change to it.
+ */
+export function answersCount(answers: DesignAnswerInput[], feedback: string, questions: DesignQuestion[] = []): string {
+  const decisions = new Set(questions.filter((q) => q.kind === 'decision').map((q) => q.id));
+  const changes = answers.filter((a) => decisions.has(a.questionId)).length;
+  const n = answers.length - changes;
   const parts = [];
   if (n) parts.push(n === 1 ? '1 answer to an open question' : `${n} answers to open questions`);
-  if (feedback.trim()) parts.push(n ? 'other feedback' : 'feedback');
-  return parts.join(' and ');
+  if (changes) parts.push(changes === 1 ? 'a change to one of your decisions' : `changes to ${changes} of your decisions`);
+  if (feedback.trim()) parts.push(n || changes ? 'other feedback' : 'feedback');
+  return parts.length > 2 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts.join(' and ');
+}
+
+/** The user's answer as lines for the agent: the option (with any note) or the custom answer. */
+function answerLines(a: DesignAnswerInput, lead: string): string[] {
+  const text = a.text.trim();
+  if (a.label === null) return [`${lead} (custom): ${text}`];
+  return text ? [`${lead}: ${a.label}`, `Note: ${text}`] : [`${lead}: ${a.label}`];
 }
 
 /**
- * The answers as markdown for Claude: every open question in the design's order (numbered as the
- * user saw them), answered or not, then other feedback. A question without an answer is left to
- * AgentK's recommendation.
+ * The answers as markdown for the agent: every open question in the design's order (numbered as
+ * the user saw them, Q1…), answered or not, then each of AgentK's own decisions the user changed
+ * (D1…), then other feedback. A question without an answer is left to AgentK's recommendation.
  */
 export function formatAnswers(answers: DesignAnswerInput[], feedback: string, questions: DesignQuestion[]): string {
   const byId = new Map(answers.map((a) => [a.questionId, a]));
-  const out = questions.flatMap((q, i) => {
-    if (q.status !== 'open') return [];
+  const number = decisionNumbers(questions);
+  const head = (q: DesignQuestion) => `### ${number.get(q.id)} (id: ${q.id}): ${q.question}`;
+  const open = questions.flatMap((q) => {
+    if (q.kind === 'decision' || q.status !== 'open') return [];
     const a = byId.get(q.id);
-    const lines = [`### Q${i + 1} (id: ${q.id}): ${q.question}`];
-    const text = a?.text.trim() ?? '';
-    if (!a) {
-      lines.push(q.recommended !== null ? 'No answer: go with your recommendation.' : 'No answer: use your judgment, and say what you picked.');
-    } else if (a.label !== null) {
-      lines.push(`Answer: ${a.label}`);
-      if (text) lines.push(`Note: ${text}`);
-    } else {
-      lines.push(`Answer (custom): ${text}`);
-    }
-    return [lines.join('\n')];
+    if (a) return [[head(q), ...answerLines(a, 'Answer')].join('\n')];
+    return [`${head(q)}\n${q.recommended !== null ? 'No answer: go with your recommendation.' : 'No answer: use your judgment, and say what you picked.'}`];
   });
+  const changed = questions.flatMap((q) => {
+    const a = q.kind === 'decision' ? byId.get(q.id) : undefined;
+    return a ? [[head(q), `You decided: ${q.decision ?? ''}`, ...answerLines(a, 'The user wants')].join('\n')] : [];
+  });
+  const out = [...open, ...changed];
   if (feedback.trim()) out.push(`### Other feedback\n${feedback.trim()}`);
   return out.join('\n\n');
 }
 
 /**
  * A question resolved by the user's answer (`a`), as the questions file keeps it: the option
- * picked (with any note) or the custom answer as its decision. Without an answer it's left to
- * AgentK, on its recommendation when it has one.
+ * picked (with any note) or the custom answer as its decision, decided by the user. Without an
+ * answer it's left to AgentK, on its recommendation when it has one. One of AgentK's own decisions
+ * answered this way is the user's change to it.
  */
 export function answeredQuestion(q: DesignQuestion, a: DesignAnswerInput | undefined): DesignQuestion {
   let decision: string;
@@ -376,5 +457,5 @@ export function answeredQuestion(q: DesignQuestion, a: DesignAnswerInput | undef
     const text = a.text.trim();
     decision = a.label === null ? text : text ? `${a.label} — ${text}` : a.label;
   }
-  return { ...q, status: 'resolved', decision: clip(decision, DECISION_CHARS) };
+  return { ...q, status: 'resolved', decision: clip(decision, DECISION_CHARS), decidedBy: a ? 'user' : 'agentk' };
 }

@@ -15,7 +15,7 @@ import { kindOf, moveBlockedIn, moveTargets, stepOf } from '../../shared/stages'
 import { HARNESS_CAPS, agentName, harnessOf } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
-import { approveDesign } from '../design-answers';
+import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
@@ -171,8 +171,9 @@ export function ProjectView({
   }, [updated]);
   const act = async (action: SessionAction, req?: CloseSessionRequest) => {
     if (!session || actingRef.current) return;
-    // With open questions, approving starts with answering them; the approval goes from there.
-    if (action === 'approve-design' && session.designQuestions.open > 0) {
+    // With open questions (or a change to one of AgentK's decisions), approving starts with the
+    // questions; the approval goes from there.
+    if (action === 'approve-design' && (session.designQuestions.open > 0 || changingDecisions(session.id))) {
       setPanel('design');
       setSheet(false);
       setQuestionsAt((n) => n + 1);
@@ -422,6 +423,7 @@ export function ProjectView({
           <DesignPanel
             key={`design-${session.id}`}
             session={session}
+            datapacks={project.datapacks}
             showQuestions={questionsAt}
             onClose={() => setPanel(null)}
             onApprove={() => act('approve-design')}

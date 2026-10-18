@@ -68,7 +68,7 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     expect(get(s.id).stage).toBe('code');
     const approval = await waitFor(() => transcript(s.id), (t) => t.includes('The design is approved'), 10000, 'approval prompt');
     expect(approval).toMatch(
-      /as they approved it\. Where an answer differs from the design, follow the answer\.\s+### Q2 \(id: tabs\): Tabs or one column\? Answer \(custom\): One column\.\s+### Other feedback Ship it\.\s+The design is approved/,
+      /as they approved it \(and changed any of your own decisions listed with a D number\)\. Where an answer differs from the design, follow the answer\.\s+### Q2 \(id: tabs\): Tabs or one column\? Answer \(custom\): One column\.\s+### Other feedback Ship it\.\s+The design is approved/,
     );
     expect(events(s.id)).toContain('Approved with 1 answer to an open question and other feedback');
     // Nothing revisits the questions after the approval: they keep the answers.
@@ -77,6 +77,43 @@ describe("a design's open questions (real session host + git, fake claude)", () 
 
     // Past Design, answers don't go.
     await expect(revise(s.id, { answers: [], feedback: 'More' })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("lists AgentK's own decisions with their Meko items, and records who decided each", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Decide', prompt: 'DESIGN_QUESTIONS WITH_DECISION it' });
+    const ready = await designReady(s.id, 'design with a decision');
+    // The prompt asks for them (and names the tool: Claude Code has the mod).
+    expect(transcript(s.id)).toContain('give the key design decisions you made yourself');
+    expect(transcript(s.id)).toContain('mcp__agentk__design_questions');
+    // A decision is resolved, so only the questions are open.
+    expect(ready.designQuestions).toEqual({ open: 2 });
+    const who = () => questions(s.id).map((q) => [q.id, q.kind, q.decision, q.decidedBy]);
+    expect(who()).toEqual([['store', 'question', null, null], ['tabs', 'question', null, null], ['cards', 'decision', 'Reuse the cards', 'agentk']]);
+    expect(questions(s.id)[2].meko).toEqual([{ kind: 'memory', id: '131a7d0e-8f56', datapackId: 'dp-1', excerpt: 'The cards already keep drafts.' }]);
+
+    // The user answers a question and changes the decision: both are theirs as they go.
+    await revise(s.id, {
+      answers: [
+        { questionId: 'store', choice: 0, label: 'Datapack', text: 'RESOLVE_STORE WITH_DECISION' },
+        { questionId: 'cards', choice: 1, label: 'New cards', text: '', decision: 'Reuse the cards' },
+      ],
+      feedback: '',
+    });
+    const sent = await waitFor(() => transcript(s.id), (t) => t.includes('The user wants: New cards'), 10000, 'answers prompt');
+    expect(sent).toContain('The user sent 1 answer to an open question and a change to one of your decisions on your design');
+    expect(sent).toContain('### D1 (id: cards): How the panel is built You decided: Reuse the cards The user wants: New cards');
+    expect(who()).toEqual([
+      ['store', 'question', 'Datapack — RESOLVE_STORE WITH_DECISION', 'user'], ['tabs', 'question', null, null], ['cards', 'decision', 'New cards', 'user'],
+    ]);
+    expect(onDisk(s.id)).toEqual(questions(s.id));
+
+    // AgentK's revision rewrites the file without "decidedBy" on the answer: it's still the user's.
+    // The approval leaves the open question to AgentK.
+    await designReady(s.id, 'revised design', () => questions(s.id)[0].decision === 'Datapack.');
+    expect(who()[0]).toEqual(['store', 'question', 'Datapack.', 'user']);
+    await env.core.sessions.action(s.id, 'approve-design', {});
+    expect(who()).toEqual([['store', 'question', 'Datapack.', 'user'], ['tabs', 'question', 'Left to AgentK', 'agentk'], ['cards', 'decision', 'New cards', 'user']]);
   });
 
   it('approves without answers, and refuses answers to options AgentK has changed', async () => {

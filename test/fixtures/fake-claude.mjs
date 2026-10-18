@@ -277,14 +277,22 @@ async function turn(text) {
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
   if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {
     // A design with open questions, listed in the questions file beside it; RESOLVE_STORE (in the
-    // user's answer) revises it, resolving the first one.
+    // user's answer) revises it, resolving the first one. WITH_DECISION adds a decision AgentK made
+    // itself, resting on a Meko memory, kept as the user's once they changed it.
     const resolved = text.includes('RESOLVE_STORE');
+    const changed = text.includes('The user wants: New cards');
+    const decision = text.includes('WITH_DECISION') ? [{
+      id: 'cards', kind: 'decision', question: 'How the panel is built', options: [{ label: 'Reuse the cards' }, { label: 'New cards' }], recommended: 0,
+      status: 'resolved', decision: changed ? 'New cards' : 'Reuse the cards', ...(changed ? { decidedBy: 'user' } : {}),
+      meko: [{ kind: 'memory', id: '131a7d0e-8f56', datapackId: 'dp-1', excerpt: 'The cards already keep drafts.' }],
+    }] : [];
     writeFileSync(process.env.AK_DESIGN_FILE, `# Design\n\nDo the thing${resolved ? ' in the datapack' : ''}.\n`);
     writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'questions.json'), JSON.stringify({
       questions: [
         { id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0,
           status: resolved ? 'resolved' : 'open', decision: resolved ? 'Datapack.' : null },
         { id: 'tabs', question: 'Tabs or one column?', status: 'open' },
+        ...decision,
       ],
     }));
   }

@@ -397,7 +397,7 @@ export class MekoClient {
       for (const it of items as Json[]) {
         const text = pickText(it);
         const id = typeof it.id === 'string' && it.id ? { id: it.id } : {};
-        if (text) out.push({ ...id, source, text, score: pickScore(it), datapackName: datapack.name });
+        if (text) out.push({ ...id, source, text, score: pickScore(it), datapackName: datapack.name, datapackId: datapack.id });
       }
     };
     push('memory', results.memory);

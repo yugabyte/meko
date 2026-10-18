@@ -758,7 +758,7 @@ describe('Meko recall in prompts', () => {
   it("isn't in the default prompts, which reach sessions with Meko off too", () => {
     for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toMatch(/search Meko/);
     // Nor are the design's lines (designQaLine and the others), which only sessions with a design get.
-    for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toContain('Questions and decisions');
+    for (const t of Object.values(DEFAULT_PROMPTS)) expect(t).not.toMatch(/Questions and decisions|Key Design Decisions/);
   });
 
   it("names the datapack after its id in the PR's Meko line, on one line", () => {
