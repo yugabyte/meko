@@ -98,6 +98,15 @@ is closer to the branch (a fork's own `<base>` can lag the upstream one the bran
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
 edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
 past that only line counts are shown.
+The panel lists at most 1,000 files (`MAX_FILES`, `capFiles()` in `changes.ts`): the files with
+review comments, so no comment loses its file, then the first by path. The header's file count and
+line counts still cover every file, and a note says how many are listed (*Showing 1,000 of 52,341
+changed files*).
+Big diffs aren't drawn until asked for, so a big branch can't freeze the page (`defaultOpen()` in
+`src/web/diff.ts`). Files open by default while their rows fit a 2,000-row budget, and files with
+comments always open. A diff of more than 1,000 rows (`LARGE_DIFF_ROWS`) opens to *Large diff: N
+lines* and **Show diff**, which draws 2,000 rows (`ROW_PAGE`) per click, with **Show more** under
+them; comments on rows not drawn yet are listed under that button.
 Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
 read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";

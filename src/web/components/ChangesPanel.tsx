@@ -5,7 +5,7 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { anchorComment, parsePatch, showsLine, sideLine, type DiffLine } from '../diff';
+import { anchorComment, defaultOpen, LARGE_DIFF_ROWS, parsePatch, ROW_PAGE, showsLine, sideLine, type DiffLine } from '../diff';
 import { useTouch } from '../hooks/useMedia';
 import { agentName, cx } from '../util';
 import { Busy, ConfirmButton } from './common';
@@ -20,9 +20,6 @@ const KIND: Record<ChangeKind, { letter: string; label: string }> = {
 };
 
 const STATE_LABEL: Record<CommentState, string> = { draft: 'draft', queued: 'queued', sent: 'sent' };
-
-/** Diffs start collapsed once this many lines are already shown, so big branches open fast. */
-const OPEN_LINE_BUDGET = 2000;
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
@@ -57,6 +54,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   const [tick, setTick] = useState(0);
   /** Files the user opened or closed; the rest follow the line budget. */
   const [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
+  /** Rows shown of each large diff the user asked to see (the rest show none until asked). */
+  const [rowsShown, setRowsShown] = useState<Map<string, number>>(new Map());
   const sections = useRef(new Map<string, HTMLElement>());
   const body = useRef<HTMLDivElement>(null);
   /** The file last jumped to; short files at the end can't scroll to the top, so position alone can't tell. */
@@ -145,20 +144,16 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     return m;
   }, [comments]);
 
-  const openByDefault = useMemo(() => {
-    const open = new Set<string>();
-    let shown = 0;
-    for (const f of files) {
-      const n = parsed.get(f.path)?.length ?? 0;
-      // A file with comments always opens, so none of them are hidden.
-      if (shown < OPEN_LINE_BUDGET || placed.at.has(f.path) || placed.outdated.has(f.path)) open.add(f.path);
-      shown += n;
-    }
-    return open;
-  }, [files, parsed, placed]);
+  const openByDefault = useMemo(
+    () => defaultOpen(files, (path) => parsed.get(path)?.length ?? 0, (path) => placed.at.has(path) || placed.outdated.has(path)),
+    [files, parsed, placed],
+  );
 
   const isOpen = (path: string) => toggled.get(path) ?? openByDefault.has(path);
   const setOpen = (path: string, open: boolean) => setToggled((t) => new Map(t).set(path, open));
+  /** How many of a file's rows to render: all of a small diff, and of a large one what the user asked for. */
+  const rowLimit = (path: string, rows: number) => (rows <= LARGE_DIFF_ROWS ? rows : Math.min(rows, rowsShown.get(path) ?? 0));
+  const showMore = (path: string, rows: number) => setRowsShown((m) => new Map(m).set(path, Math.min(rows, (m.get(path) ?? 0) + ROW_PAGE)));
 
   const jump = (path: string) => {
     lastJump.current = files.findIndex((f) => f.path === path);
@@ -312,7 +307,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
             ) : (
               <BaseMenu session={session} base={data.base} onPick={changeBase} />
             )}{' '}
-            · {plural(files.length, 'file')} ·{' '}
+            · {plural(files.length + (data.omittedFiles ?? 0), 'file')} ·{' '}
             <span className="add">+{data.added}</span> <span className="del">−{data.removed}</span>
           </span>
         )}
@@ -383,6 +378,12 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           <p className="muted">No changes yet compared to {data.base}.</p>
         ) : (
           <>
+            {data.omittedFiles > 0 && (
+              <p className="muted small">
+                Showing {files.length.toLocaleString()} of {plural(files.length + data.omittedFiles, 'changed file')}: every file
+                with comments, then the first by path. The line counts cover every file.
+              </p>
+            )}
             {data.omittedPatches > 0 && (
               <p className="muted small">
                 {data.omittedPatches} {data.omittedPatches === 1 ? 'diff is' : 'diffs are'} left out because this
@@ -439,6 +440,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                       file={f}
                       imageUrl={(side, path) => api.changeImageUrl(session.id, path, side, fetchedAt)}
                       lines={parsed.get(f.path) ?? null}
+                      limit={rowLimit(f.path, parsed.get(f.path)?.length ?? 0)}
+                      onMore={() => showMore(f.path, parsed.get(f.path)?.length ?? 0)}
                       renderAfter={(i) => {
                         const cs = placed.at.get(f.path)?.get(i);
                         const here = editor && !editor.id && editor.path === f.path && editorAt === i;
@@ -847,10 +850,12 @@ function ImageSide({ label, src }: { label: string; src: string }) {
   );
 }
 
-function FileDiff({
+export function FileDiff({
   file,
   imageUrl,
   lines,
+  limit,
+  onMore,
   renderAfter,
   picked,
   onComment,
@@ -858,6 +863,10 @@ function FileDiff({
   file: ChangedFile;
   imageUrl: (side: ChangeSide, path: string) => string;
   lines: DiffLine[] | null;
+  /** How many of the rows to render; a large diff renders none until Show diff. */
+  limit: number;
+  /** Shows the next ROW_PAGE rows. */
+  onMore: () => void;
   /** Comment threads (or the editor) shown under row i, or null. */
   renderAfter: (i: number) => ReactNode;
   /** The range a new comment is being written for. */
@@ -869,48 +878,76 @@ function FileDiff({
   }
   if (!lines) return <p className="chg-note">This diff is too large to show here.</p>;
   if (lines.length === 0) return <p className="chg-note">{file.kind === 'untracked' ? 'Empty file.' : 'No content changes.'}</p>;
+  const left = lines.length - limit;
+  /** Lines of the file among rows [from, to), for the labels: hunk headers and notes aren't lines. */
+  const fileLines = (from: number, to = lines.length) => lines.slice(from, to).filter((l) => l.kind === 'add' || l.kind === 'del' || l.kind === 'ctx').length;
+  // Comments on rows not rendered yet go under the button that shows them.
+  const later: ReactNode[] = [];
+  for (let i = limit; i < lines.length; i++) {
+    const after = renderAfter(i);
+    if (after) later.push(<Fragment key={i}>{after}</Fragment>);
+  }
   return (
     <div className="diff-wrap">
-      <table className="diff">
-        <tbody>
-          {lines.map((l, i) => {
-            const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
-            const n = sideLine(l, side);
-            const inPick = picked !== null && n !== null && picked.side === side && n >= picked.line && n <= picked.endLine;
-            const after = renderAfter(i);
-            return (
-              <Fragment key={i}>
-                <tr className={cx(`dl-${l.kind}`, inPick && 'picked')}>
-                  <td className="cg">
-                    {n !== null && (
-                      <button
-                        className="cmt-add"
-                        tabIndex={-1}
-                        title="Comment on this line (shift-click to cover a range)"
-                        aria-label={`Comment on ${linesLabel(side, n, n)}`}
-                        onClick={(e) => onComment(i, e.shiftKey)}
-                      >
-                        +
-                      </button>
-                    )}
-                  </td>
-                  <td className="ln">{l.old ?? ''}</td>
-                  <td className="ln">{l.new ?? ''}</td>
-                  <td className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</td>
-                  <td className="code">{l.text}</td>
-                </tr>
-                {after && (
-                  <tr className="cmt-row">
-                    <td colSpan={5}>
-                      <div className="cmt-thread">{after}</div>
+      {limit > 0 && (
+        <table className="diff">
+          <tbody>
+            {lines.slice(0, limit).map((l, i) => {
+              const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
+              const n = sideLine(l, side);
+              const inPick = picked !== null && n !== null && picked.side === side && n >= picked.line && n <= picked.endLine;
+              const after = renderAfter(i);
+              return (
+                <Fragment key={i}>
+                  <tr className={cx(`dl-${l.kind}`, inPick && 'picked')}>
+                    <td className="cg">
+                      {n !== null && (
+                        <button
+                          className="cmt-add"
+                          tabIndex={-1}
+                          title="Comment on this line (shift-click to cover a range)"
+                          aria-label={`Comment on ${linesLabel(side, n, n)}`}
+                          onClick={(e) => onComment(i, e.shiftKey)}
+                        >
+                          +
+                        </button>
+                      )}
                     </td>
+                    <td className="ln">{l.old ?? ''}</td>
+                    <td className="ln">{l.new ?? ''}</td>
+                    <td className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</td>
+                    <td className="code">{l.text}</td>
                   </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+                  {after && (
+                    <tr className="cmt-row">
+                      <td colSpan={5}>
+                        <div className="cmt-thread">{after}</div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {left > 0 && (
+        <div className="chg-more">
+          {limit === 0 ? (
+            <>
+              <span>Large diff: {plural(fileLines(0), 'line')}.</span>
+              <button className="btn small" onClick={onMore}>Show diff</button>
+            </>
+          ) : (
+            <button className="btn small" onClick={onMore}>
+              {left > ROW_PAGE
+                ? `Show ${fileLines(limit, limit + ROW_PAGE).toLocaleString()} more lines (${fileLines(limit).toLocaleString()} left)`
+                : `Show the last ${plural(fileLines(limit), 'line')}`}
+            </button>
+          )}
+        </div>
+      )}
+      {later.length > 0 && <div className="cmt-thread chg-later">{later}</div>}
       {file.truncated && <p className="chg-note">Diff cut short: this file’s diff is larger than 256 KB.</p>}
     </div>
   );

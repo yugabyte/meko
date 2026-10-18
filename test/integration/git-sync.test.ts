@@ -217,6 +217,7 @@ describe('changes vs. the base (real git)', () => {
     expect(by['draft.md']).toMatchObject({ kind: 'untracked', added: 2, uncommitted: true, patch: '@@ -0,0 +1,2 @@\n+x\n+y\n\\ No newline at end of file' });
     expect(by['blob.bin']).toMatchObject({ kind: 'untracked', binary: true, patch: null, added: 0 });
     expect(c.omittedPatches).toBe(0);
+    expect(c.omittedFiles).toBe(0);
     expect(c.added).toBe(6);
     expect(c.removed).toBe(1);
 
