@@ -173,9 +173,21 @@ function DecidedCard({ q, n, datapacks, onChange }: { q: DesignQuestion; n: stri
  * a custom answer), the key design decisions (answered questions and AgentK's own, which the user can
  * change), and other feedback. The answers stay in this browser until they go to AgentK: with the
  * approval, or to revise the design. Questions Claude is asking right now (AskUserQuestion,
- * through AgentK's mod) come first, answered on their own.
+ * through AgentK's mod) come first, answered on their own. The key design decisions start
+ * collapsed: they open for a change to one of AgentK's decisions, and when `showDecisions` (the
+ * Design tab's decisions bar) asks for them.
  */
-export function DesignQuestions({ session, doc, datapacks }: { session: Session; doc: DesignDoc; datapacks?: DatapackRef[] }) {
+export function DesignQuestions({
+  session,
+  doc,
+  datapacks,
+  showDecisions = false,
+}: {
+  session: Session;
+  doc: DesignDoc;
+  datapacks?: DatapackRef[];
+  showDecisions?: boolean;
+}) {
   const [drafts, update] = useDesignDrafts(session.id);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -190,6 +202,18 @@ export function DesignQuestions({ session, doc, datapacks }: { session: Session;
   const request = toRequest(doc.questions, drafts);
   // AgentK's decisions the user is changing (Change this), until the decision itself changes.
   const changing = (q: DesignQuestion) => q.kind === 'decision' && drafts.answers[q.id]?.against === q.decision;
+  // A change in progress keeps the key design decisions open: Approve sends the user there to finish it.
+  const changingAny = resolved.some(changing);
+  const [decidedOpen, setDecidedOpen] = useState(showDecisions || changingAny);
+  const decided = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (changingAny) setDecidedOpen(true);
+  }, [changingAny]);
+  useEffect(() => {
+    if (!showDecisions) return;
+    setDecidedOpen(true);
+    decided.current?.scrollIntoView({ block: 'nearest' });
+  }, [showDecisions]);
   const setDraft = (id: string, d: Draft | null) =>
     update((x) => {
       const answers = { ...x.answers };
@@ -277,8 +301,7 @@ export function DesignQuestions({ session, doc, datapacks }: { session: Session;
         )}
 
         {resolved.length > 0 && (
-          // Open when nothing else is, or when AgentK made decisions of its own: those are there to be seen.
-          <details className="dq-section dq-decided" open={!open.length || resolved.some((q) => q.kind === 'decision')}>
+          <details ref={decided} className="dq-section dq-decided" open={decidedOpen} onToggle={(e) => setDecidedOpen(e.currentTarget.open)}>
             <summary>Key Design Decisions ({resolved.length})</summary>
             <ol className="dq-list">
               {resolved.map((q) =>

@@ -39,6 +39,12 @@ export function DesignPanel({
   const [doc, setDoc] = useState<DesignDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'design' | 'questions'>(showQuestions ? 'questions' : 'design');
+  // The Questions tab was opened from the Design tab's decisions bar, to see the key design decisions.
+  const [decisionsAsked, setDecisionsAsked] = useState(false);
+  const showTab = (t: 'design' | 'questions', decisions = false) => {
+    setTab(t);
+    setDecisionsAsked(decisions);
+  };
   const qcol = useRef<HTMLElement>(null);
   const mobile = useIsMobile();
 
@@ -80,12 +86,13 @@ export function DesignPanel({
   const waiting = open + (session.asking ? 1 : 0);
   const questions = !hasQuestions ? 'none' : split || tab === 'questions' ? 'shown' : 'hidden';
   const toQuestions = () => {
-    setTab('questions');
+    showTab('questions');
     qcol.current?.scrollIntoView({ block: 'nearest' });
   };
   useEffect(() => {
     if (!showQuestions) return;
     setTab('questions');
+    setDecisionsAsked(false);
     qcol.current?.scrollIntoView({ block: 'nearest' });
   }, [showQuestions]);
 
@@ -137,10 +144,10 @@ export function DesignPanel({
         )}
         {tabs && (
           <div className="seg design-tabs" role="tablist" aria-label="Design and its questions">
-            <button role="tab" aria-selected={tab === 'design'} className={cx(tab === 'design' && 'on')} onClick={() => setTab('design')}>
+            <button role="tab" aria-selected={tab === 'design'} className={cx(tab === 'design' && 'on')} onClick={() => showTab('design')}>
               Design
             </button>
-            <button role="tab" aria-selected={tab === 'questions'} className={cx(tab === 'questions' && 'on')} onClick={() => setTab('questions')}>
+            <button role="tab" aria-selected={tab === 'questions'} className={cx(tab === 'questions' && 'on')} onClick={() => showTab('questions')}>
               Questions
               {waiting > 0 && <span className="count-badge" aria-label={`${waiting} open`}>{waiting}</span>}
             </button>
@@ -200,11 +207,11 @@ export function DesignPanel({
       )}
       {tabs && tab === 'questions' && (
         <div className="dq-view" role="tabpanel">
-          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} />
+          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAsked} />
         </div>
       )}
       {tabs && tab === 'design' && (open > 0 || (session.stage === 'design' && made > 0)) && (
-        <button className={cx('dq-bar', !open && 'calm')} onClick={() => setTab('questions')}>
+        <button className={cx('dq-bar', !open && 'calm')} onClick={() => showTab('questions', !open)}>
           <span>{[open > 0 && (open === 1 ? '1 open question' : `${open} open questions`), made > 0 && madeText].filter(Boolean).join(open > 0 ? ', and ' : '')}</span>
           <span className="sp" />
           <span>{open > 0 ? 'Answer ›' : 'Review ›'}</span>

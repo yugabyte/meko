@@ -1,15 +1,21 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DesignAnswerInput, DesignQuestion, Session } from '../../src/shared/types.js';
+import { MEKO_SOURCE_MARK } from '../../src/shared/decisions.js';
+import type { DesignAnswerInput, DesignDoc, DesignQuestion, Session } from '../../src/shared/types.js';
 import { designAnswers } from '../../src/server/answers.js';
 import {
   ANSWER_MAX, MAX_DECISIONS, MAX_MEKO_REFS, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answeredQuestion, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown,
   readDesignQuestions,
 } from '../../src/server/design.js';
-import { DEFAULT_PROMPTS, DESIGN_QUESTIONS_TOOL, designQuestionsLine } from '../../src/server/prompts.js';
-import { changeDraft, defaultDraft, draftFor, draftsBlocker, parseDrafts, pruneDrafts, shownDraft, toRequest, type Draft } from '../../src/web/design-answers.js';
+import { DEFAULT_PROMPTS, DESIGN_QUESTIONS_TOOL, designQaLine, designQuestionsLine, designUpkeepLine } from '../../src/server/prompts.js';
+import { DesignQuestions } from '../../src/web/components/DesignQuestions.js';
+import {
+  changeDraft, clearDrafts, defaultDraft, draftFor, draftsBlocker, parseDrafts, pruneDrafts, saveDrafts, shownDraft, toRequest, type Draft,
+} from '../../src/web/design-answers.js';
 
 const question = (over: Partial<DesignQuestion>): DesignQuestion => ({
   id: 'q', kind: 'question', question: 'Which?', context: null, options: [], recommended: null, status: 'open', decision: null, decidedBy: null, meko: [], ...over,
@@ -305,6 +311,42 @@ describe('the design prompts', () => {
     expect(kiro).toContain('write that JSON to /d/questions.json.');
     // Both ask for AgentK's own decisions, and for the Meko items they rest on.
     for (const line of [withTool, kiro]) expect(line).toMatch(/"kind": "decision".*"meko": \[\{"kind": "memory" or "knowledge", "id"/s);
+  });
+
+  it("asks for Meko's marker after each key design decision from Meko, in Design, at the approval and after", () => {
+    expect(MEKO_SOURCE_MARK).toBe('<span class="meko-source">from Meko</span>');
+    for (const line of [designQuestionsLine('/d/questions.json'), designQuestionsLine('/d/questions.json', false), designQaLine('edit /d/design.md', '/d/questions.json')]) {
+      expect(line).toContain(`write ${MEKO_SOURCE_MARK} after the title of each one that rests on Meko (one with "meko" items), and only those`);
+    }
+    expect(designUpkeepLine('edit /d/design.md')).toContain(`(with ${MEKO_SOURCE_MARK} after its title when it rests on Meko)`);
+  });
+});
+
+describe('the key design decisions on the Questions tab', () => {
+  const session = { id: 'kdd-view', stage: 'design', desired: 'running', approvalQueued: false, asking: null, busy: false } as unknown as Session;
+  const made = decision({ id: 'cards', question: 'How the panel is built' });
+  const doc = (questions: DesignQuestion[]): DesignDoc => ({ markdown: '# D', html: null, artifactUrl: null, updatedAt: 1, questions, questionsSource: 'file', fromPr: null });
+  const render = (questions: DesignQuestion[], showDecisions?: boolean) =>
+    renderToStaticMarkup(createElement(DesignQuestions, { session, doc: doc(questions), showDecisions }));
+  /** The opening tag of the Key Design Decisions section. */
+  const section = (html: string) => /<details[^>]*class="dq-section dq-decided"[^>]*>/.exec(html)?.[0];
+
+  afterEach(() => clearDrafts(session.id));
+
+  it('start collapsed, with or without open questions', () => {
+    expect(section(render([made]))).not.toContain(' open');
+    expect(section(render([question({ id: 'q1', options: opts('A', 'B') }), made, question({ id: 'done', status: 'resolved', decision: 'A' })]))).not.toContain(' open');
+  });
+
+  it("open when the Design tab's decisions bar asks for them", () => {
+    expect(section(render([made], true))).toContain(' open');
+  });
+
+  it("stay open while one of AgentK's decisions is being changed", () => {
+    saveDrafts(session.id, { answers: { cards: changeDraft(made) }, feedback: '' });
+    const html = render([made]);
+    expect(section(html)).toContain(' open');
+    expect(html).toContain('Keep AgentK’s decision');
   });
 });
 
