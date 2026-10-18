@@ -13,6 +13,7 @@ import (
 const (
 	keyInstallID       = "install_id"
 	keyDefaultDatapack = "default_datapack_id"
+	keyLocalUserID     = "local_user_id"
 )
 
 // timeLayout is RFC 3339 in UTC with a fixed-width fraction, so stored times sort as text.
@@ -42,16 +43,34 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 
 // EnsureInstallID returns this install's id, making one the first time.
 func (s *Store) EnsureInstallID(ctx context.Context) (string, error) {
-	if id, ok, err := s.Setting(ctx, keyInstallID); err != nil || ok {
+	return s.ensureID(ctx, keyInstallID)
+}
+
+// EnsureLocalUserID returns the id of the install's one user, making one the first time. It's
+// the user_id on every memory, as an account id is in prod.
+func (s *Store) EnsureLocalUserID(ctx context.Context) (string, error) {
+	return s.ensureID(ctx, keyLocalUserID)
+}
+
+func (s *Store) ensureID(ctx context.Context, key string) (string, error) {
+	if id, ok, err := s.Setting(ctx, key); err != nil || ok {
 		return id, err
 	}
-	id := uuid.NewString()
 	if _, err := s.w.ExecContext(ctx,
-		"INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", keyInstallID, id); err != nil {
+		"INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", key, uuid.NewString()); err != nil {
 		return "", err
 	}
-	id, _, err := s.Setting(ctx, keyInstallID)
+	id, _, err := s.Setting(ctx, key)
 	return id, err
+}
+
+// DatapackExists reports whether a datapack with this id exists.
+func (s *Store) DatapackExists(ctx context.Context, id string) (bool, error) {
+	err := datapackExists(ctx, s.r, id)
+	if errors.Is(err, ErrNoDatapack) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Datapack is a row of datapacks.

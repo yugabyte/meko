@@ -1,6 +1,7 @@
 # Meko Local backend: foundation
 
-Status: approved. Built in three stacked PRs: #164 (layout), #165 (vendored sqlite-vec), #166 (the foundation). Part of Meko Local (product design: the "Meko Local Design" doc;
+Status: approved. Built in three stacked PRs: #164 (layout), #165 (vendored sqlite-vec), #166 (the foundation).
+Milestone 2, the memory engine and conversations, is in [memory-engine.md](memory-engine.md). Part of Meko Local (product design: the "Meko Local Design" doc;
 requirements: the "Meko Local PRD").
 
 The foundation is the Go program everything else plugs into: one binary, `meko-local`, that is
@@ -184,17 +185,11 @@ CREATE TABLE memories (
   is created on first start. It must not be named `meko_default_datapack*`, because meko_ui
   sets up Langfuse keys for datapacks with that name.
 
-The memory tables come in milestone 2 with the engine's storage API, but their shape is fixed
-now because the store layer is built around it:
-
-- `memories`, `entities`, `memory_history`, `conversations`, `messages`, `message_memories`.
-- `memories_fts`: FTS5 over the lemmatized text mem0 stores, with `datapack_id` as an FTS
-  column so the filter runs inside MATCH. The naive join with the filter outside FTS never
-  finished at 200 MB.
-- `memories_vec`, `entities_vec`: `vec0(datapack_id TEXT partition key, agent_id TEXT,
-  embedding float[D] distance_metric=cosine)`. D comes from the embedding model, which isn't
-  chosen yet. So these tables are created when the engine first reports its model and
-  dimension (stored in `settings`), and a change of model means re-embedding (a later job).
+The memory and conversation tables came in milestone 2 (`0002_memory.sql`,
+`0003_conversations.sql`); [memory-engine.md](memory-engine.md) describes them. Two things the
+foundation fixed hold: the FTS5 table has `datapack_id` as a column so the filter runs inside
+MATCH (the naive join with the filter outside FTS never finished at 200 MB), and the `vec0` tables
+are made when the engine first reports its model and dimension.
 
 ## HTTP server
 
@@ -252,7 +247,8 @@ only goes over the internal sockets, never the TCP port.
 
 The store API (milestone 2) mirrors mem0-ts's two storage interfaces, `VectorStore` and
 `HistoryManager`, which is everything mem0-ts needs from a database. mem0's collection name maps
-to a datapack: `<datapack id>` to `memories`, and `<datapack id>_entities` to `entities`.
+to a datapack: `<datapack id>` to `memories`, and `<datapack id>_entities` to `entities`. The
+routes, the engine's API and the engine itself are in [memory-engine.md](memory-engine.md).
 
 ## Logging
 
@@ -364,7 +360,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
-| 2 | Memory engine | The store API, the memory tables, the Node engine as the first supervised child, a mem0-ts patch adding the Meko Local providers; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
+| 2 | Memory engine | Built: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko Local's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
 | 3 | MCP | `/mcp` (Streamable HTTP, stateless) with prod's tool names, arguments and reply shapes; API keys (`keys create/list/revoke`, stored hashed) |
 | 4 | REST API and UI | The `/api/v1` subset meko_ui calls, serving the pinned meko_ui package at `/`, browser access |
 | 5 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash |

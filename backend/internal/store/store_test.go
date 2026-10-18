@@ -32,8 +32,12 @@ func TestMigrateFreshAndAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, err := s.SchemaVersion(ctx); err != nil || v != 1 {
-		t.Fatalf("version %d, %v", v, err)
+	ms, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.SchemaVersion(ctx); err != nil || v != len(ms) {
+		t.Fatalf("version %d, %v; want %d", v, err, len(ms))
 	}
 	if _, err := os.Stat(s.BackupPath(0)); !os.IsNotExist(err) {
 		t.Errorf("a fresh database shouldn't be backed up: %v", err)

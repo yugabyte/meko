@@ -15,4 +15,4 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       never reach logs or error replies (internal errors get the generic message).
 - [ ] `third_party/` is vendored and unchanged; an upgrade replaces the files and updates `VERSION`.
 - [ ] Commits are `chore(backend): ...`: nothing in `backend/` ships in AgentK Local's release yet.
-- [ ] `docs/design.md` and `AGENTS.md` here match the code.
+- [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code.
