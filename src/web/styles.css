@@ -3464,6 +3464,25 @@ div[id^='dak-mermaid-'] .label {
   color: var(--muted);
   font-size: 12px;
 }
+/* A large diff's Show diff, and Show more under its rows; kept in view when the diff scrolls sideways. */
+.chg-more {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.diff + .chg-more {
+  border-top: 1px solid var(--rule);
+}
+/* Comments on rows a large diff doesn't show yet. */
+.chg-later {
+  padding: 0 0 10px;
+}
 .diff-wrap {
   overflow-x: auto;
   /* Comment cards size against the visible width, not the (often wider) table. */

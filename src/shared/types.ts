@@ -1621,10 +1621,13 @@ export interface DiffStat {
 export interface SessionChanges {
   /** What the changes are compared against, e.g. `origin/main`. */
   base: string;
-  /** Sorted by path. */
+  /** Sorted by path. At most 1,000 (`MAX_FILES`): the files with review comments, then the first by path. */
   files: ChangedFile[];
+  /** Over every changed file, the ones left out of `files` included. */
   added: number;
   removed: number;
+  /** Changed files left out of `files` by the cap. */
+  omittedFiles: number;
   /** Files whose patch was left out because the whole diff hit the size cap. */
   omittedPatches: number;
   /** Commits on the branch since it left the base. */

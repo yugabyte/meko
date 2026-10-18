@@ -47,6 +47,33 @@ export function parsePatch(patch: string): DiffLine[] {
   return out;
 }
 
+/** Diffs open by default until this many rows are shown, so big branches open fast. */
+export const OPEN_LINE_BUDGET = 2000;
+/** A file's diff with more rows than this shows only when asked for. */
+export const LARGE_DIFF_ROWS = 1000;
+/** Rows a large diff shows per click of Show diff or Show more. */
+export const ROW_PAGE = 2000;
+
+/**
+ * The files whose diffs open by default: in order, each that fits what's left of
+ * OPEN_LINE_BUDGET (a large one never does), and every file with comments, so none are hidden
+ * (a large one opens to its Show diff button).
+ */
+export function defaultOpen(files: { path: string }[], rowsOf: (path: string) => number, hasComments: (path: string) => boolean): Set<string> {
+  const open = new Set<string>();
+  let shown = 0;
+  for (const { path } of files) {
+    const n = rowsOf(path);
+    const large = n > LARGE_DIFF_ROWS;
+    // A file with no rows (binary, an image) still takes a slot, so a branch of images doesn't load them all.
+    if (hasComments(path) || (!large && shown + Math.max(n, 1) <= OPEN_LINE_BUDGET)) {
+      open.add(path);
+      if (!large) shown += Math.max(n, 1);
+    }
+  }
+  return open;
+}
+
 /** The line's number on a comment side: `new` for added and unchanged lines, `old` for removed ones. */
 export function sideLine(l: DiffLine, side: 'old' | 'new'): number | null {
   if (side === 'new') return l.kind === 'add' || l.kind === 'ctx' ? l.new : null;
