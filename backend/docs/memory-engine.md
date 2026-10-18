@@ -185,8 +185,25 @@ On an 8-core Linux x64 dev server, with MiniLM q8 on transformers.js:
   adds 1 to the divisor): a paraphrase with cosine 0.61 scored 0.33. With 200 more memories, rare
   terms carry real weight: the same paraphrase scored 0.78 and an exact identifier
   (`MIN_MEMORY_SCORE`, cosine 0.81) 0.90, above AgentK's 0.75 recall cut.
-- At 200 MB of content in one datapack: measured with conversation search, in the last PR of the
-  stack (`make bench`).
+- At 200 MB of content in one datapack (`make bench`: 50 MB of memories, about 210k, and 150 MB of
+  turns, about 225k chunks, with random vectors and Zipf-distributed words; searches through the
+  real engine and model):
+
+  | Search | p50 | p95 |
+  |---|---|---|
+  | Memory search (limit 10) | 664 ms | 772 ms |
+  | of which: vector scan (240 candidates) | 390 ms | 400 ms |
+  | of which: keyword search | 226 ms | 359 ms |
+  | of which: embedding the query | 6 ms | 8 ms |
+  | Conversation search | 209 ms | 218 ms |
+
+  This misses the 300 ms first proposed for memory search. sqlite-vec 0.1.9 scans every vector of
+  the partition, at about 1.1 ms per 1,000 (int8 and bit quantization measured no faster), so at
+  this size the scan alone is most of it; a datapack of 20k memories scans in about 25 ms. Below
+  this would take an ANN index (sqlite.org's vec1, for one) or smaller partitions. Keyword search
+  drops query terms in more than half of all rows: FTS5's `bm25()` weighs them at 1e-6, and
+  matching them made every row a candidate (366 ms before, 138 ms after, measured over 200k
+  memories in the store alone).
 
 ## Test plan
 

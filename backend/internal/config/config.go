@@ -18,9 +18,17 @@ const DefaultPort = 7778
 
 // Config is every setting.
 type Config struct {
-	Server Server `toml:"server"`
-	Log    Log    `toml:"log"`
-	Engine Engine `toml:"engine"`
+	Server             Server             `toml:"server"`
+	Log                Log                `toml:"log"`
+	Engine             Engine             `toml:"engine"`
+	ConversationSearch ConversationSearch `toml:"conversation_search"`
+}
+
+// ConversationSearch is the [conversation_search] table.
+type ConversationSearch struct {
+	// MaxDistance is the farthest (cosine distance, 0 to 2) a past turn may be from the query to
+	// be a hit. 0 means the default, tuned for the embedding model (internal/memory).
+	MaxDistance float64 `toml:"max_distance"`
 }
 
 // Server is the [server] table.
@@ -100,6 +108,9 @@ func (c Config) validate() error {
 	}
 	if _, err := c.Log.SlogLevel(); err != nil {
 		return err
+	}
+	if d := c.ConversationSearch.MaxDistance; d < 0 || d > 2 {
+		return fmt.Errorf("conversation_search.max_distance %g is out of range: use 0 to 2", d)
 	}
 	return nil
 }

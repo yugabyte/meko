@@ -11,7 +11,7 @@ LDFLAGS := -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 
 ENGINE_SRC := $(wildcard engine/src/*.ts) engine/tsconfig.json engine/tsconfig.build.json
 
-.PHONY: build engine test lint fmt clean
+.PHONY: build engine test bench lint fmt clean
 
 build:
 	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko-local ./cmd/meko-local
@@ -29,6 +29,10 @@ engine: engine/dist/main.js
 test: engine
 	go test -race -tags $(TAGS) ./...
 	cd engine && npm test
+
+# The search budget at 200 MB of content (a few minutes; not in CI).
+bench: engine
+	go test -tags "$(TAGS) bench" -run TestSearchBudget -v -timeout 60m ./internal/memory/
 
 # golangci-lint v2 (https://golangci-lint.run) must be installed; CI pins its version.
 lint: engine/node_modules/.package-lock.json

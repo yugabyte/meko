@@ -24,12 +24,14 @@ var (
 
 // Service is the memory and conversation operations of one install.
 type Service struct {
-	st       *store.Store
-	eng      *engine.Client
-	userID   string
-	log      *slog.Logger
-	noEngine string
-	child    func() (supervisor.Status, bool)
+	st          *store.Store
+	eng         *engine.Client
+	userID      string
+	log         *slog.Logger
+	noEngine    string
+	child       func() (supervisor.Status, bool)
+	maxDistance float64
+	kick        chan struct{}
 }
 
 // Options configure a Service.
@@ -40,11 +42,17 @@ type Options struct {
 	NoEngine string
 	// EngineChild, if set, is the supervisor's status of the engine's child process.
 	EngineChild func() (supervisor.Status, bool)
+	// MaxDistance is conversation search's cutoff; 0 means DefaultMaxDistance.
+	MaxDistance float64
 }
 
 // New is the service over st and the engine eng.
 func New(st *store.Store, eng *engine.Client, o Options) *Service {
-	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noEngine: o.NoEngine, child: o.EngineChild}
+	if o.MaxDistance <= 0 {
+		o.MaxDistance = DefaultMaxDistance
+	}
+	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noEngine: o.NoEngine, child: o.EngineChild,
+		maxDistance: o.MaxDistance, kick: make(chan struct{}, 1)}
 }
 
 // UserID is the install's local user, the user_id on every memory.
