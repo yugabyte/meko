@@ -8,6 +8,8 @@ import { gitBuffer, gitRaw, tryGit } from './git.js';
 export const FILE_PATCH_CAP = 256 * 1024;
 /** Patches past this total are left out (the files keep their stats). */
 export const TOTAL_PATCH_CAP = 4 * 1024 * 1024;
+/** At most this many files are listed; the totals still count the rest (see capFiles). */
+export const MAX_FILES = 1000;
 /** Untracked files larger than this aren't read (no patch, counted as 0 lines). */
 const UNTRACKED_READ_MAX = 1024 * 1024;
 /** At most this many bytes of untracked files are read per call; the rest count as 0 lines. */
@@ -97,8 +99,11 @@ export async function suggestBase(worktree: string, base: string, branch: string
   return best;
 }
 
-/** Every file changed in the worktree vs. its base, with a patch per file. Null when there's no merge base. */
-export async function changes(worktree: string, base: string): Promise<SessionChanges | null> {
+/**
+ * Every file changed in the worktree vs. its base, with a patch per file, up to MAX_FILES (the
+ * files in `keep` first). Null when there's no merge base.
+ */
+export async function changes(worktree: string, base: string, keep: ReadonlySet<string> = new Set()): Promise<SessionChanges | null> {
   const mb = await diffBase(worktree, base);
   if (!mb) return null;
   const [status, numstat, porcelain, ahead] = await Promise.all([
@@ -132,16 +137,36 @@ export async function changes(worktree: string, base: string): Promise<SessionCh
   const extra = await untracked(worktree, true);
   files.push(...extra.files);
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const omittedPatches = capPatches(files) + extra.omitted + (patches ? 0 : entries.filter((e) => !counts.get(e.path)?.binary).length);
+  const added = files.reduce((t, f) => t + f.added, 0);
+  const removed = files.reduce((t, f) => t + f.removed, 0);
+  const listed = capFiles(files, keep);
+  // Patches left out before the caps: git's diff was too large, or untracked files past the read budgets.
+  const left = new Set([...extra.omitted, ...(patches ? [] : entries.filter((e) => !counts.get(e.path)?.binary).map((e) => e.path))]);
+  const omittedPatches = capPatches(listed) + listed.filter((f) => left.has(f.path)).length;
   return {
     base: mb.ref,
-    files,
-    added: files.reduce((t, f) => t + f.added, 0),
-    removed: files.reduce((t, f) => t + f.removed, 0),
+    files: listed,
+    added,
+    removed,
+    omittedFiles: files.length - listed.length,
     omittedPatches,
     ahead: Number(ahead) || 0,
     suggestedBase: null,
   };
+}
+
+/**
+ * The files to list, sorted as given: those in `keep` (files with review comments, so no comment
+ * loses its file), then the rest in order, up to MAX_FILES in all.
+ */
+export function capFiles(files: ChangedFile[], keep: ReadonlySet<string>, max = MAX_FILES): ChangedFile[] {
+  if (files.length <= max) return files;
+  const picked = new Set(files.filter((f) => keep.has(f.path)).slice(0, max));
+  for (const f of files) {
+    if (picked.size >= max) break;
+    picked.add(f);
+  }
+  return files.filter((f) => picked.has(f));
 }
 
 /** Cuts each patch at FILE_PATCH_CAP and drops patches past TOTAL_PATCH_CAP. Returns how many were dropped. */
@@ -325,13 +350,14 @@ function parsePorcelain(out: string): Set<string> {
 /**
  * Untracked, non-ignored files as changes, read directly (no git per file). Reads are async
  * and bounded (per file and in total), and patches stop once they'd pass TOTAL_PATCH_CAP;
- * `omitted` counts files left without a patch because of those totals.
+ * `omitted` names the files left without a patch because of those totals.
  */
-async function untracked(worktree: string, withPatches: boolean): Promise<{ files: ChangedFile[]; omitted: number }> {
+async function untracked(worktree: string, withPatches: boolean): Promise<{ files: ChangedFile[]; omitted: string[] }> {
   const out = await gitRaw(worktree, 'ls-files', '--others', '--exclude-standard', '-z').catch(() => '');
   const paths = out.split('\0').filter((p) => p && !p.endsWith('/')).slice(0, UNTRACKED_MAX_FILES);
   const files: ChangedFile[] = [];
-  let read = 0, patchBytes = 0, omitted = 0;
+  const omitted: string[] = [];
+  let read = 0, patchBytes = 0;
   for (const path of paths) {
     const f: ChangedFile = {
       path, oldPath: null, kind: 'untracked', added: 0, removed: 0, binary: false, uncommitted: true, patch: null, truncated: false,
@@ -344,7 +370,7 @@ async function untracked(worktree: string, withPatches: boolean): Promise<{ file
       if (st.isSymbolicLink()) text = await readlink(full);
       else if (!st.isFile() || st.size > UNTRACKED_READ_MAX) continue;
       else if (read + st.size > UNTRACKED_READ_BUDGET) {
-        if (withPatches) omitted++;
+        if (withPatches) omitted.push(path);
         continue;
       } else {
         const buf = await readFile(full);
@@ -361,7 +387,7 @@ async function untracked(worktree: string, withPatches: boolean): Promise<{ file
     f.added = countLines(text);
     if (!withPatches) continue;
     if (patchBytes >= TOTAL_PATCH_CAP) {
-      omitted++;
+      omitted.push(path);
       continue;
     }
     f.patch = newFilePatch(text);
