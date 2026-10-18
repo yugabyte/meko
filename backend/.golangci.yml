@@ -1,8 +1,11 @@
 # golangci-lint v2. Prod Meko's config (meko/.golangci.yml) is the starting point. Changes:
 # - the cgo build tag, and misspell ignores "lustre" (a filesystem name);
 # - govet's fieldalignment is off: it reorders structs for bytes, against readability;
-# - errcheck allows a deliberate `_ =` (no check-blank), and ignores writes to the terminal and
-#   Close or Rollback on cleanup paths, where there's nothing useful to do with the error.
+# - errcheck allows a deliberate `_ =` (no check-blank). Its exclusions below apply everywhere, not
+#   per call site: fmt.Fprint* (used only for CLI output here), and Close or Rollback on handles
+#   that only ever clean up (listeners, response bodies, sql rows, transactions and databases, our
+#   store and log file). A file's Close isn't excluded: it can be the only sign a write failed, so
+#   check it, or write `_ = f.Close()` where the file was only read.
 version: "2"
 run:
   modules-download-mode: readonly
@@ -25,9 +28,7 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
-        - (io.Closer).Close
         - (io.ReadCloser).Close
-        - (*os.File).Close
         - (net.Listener).Close
         - (*database/sql.DB).Close
         - (*database/sql.Tx).Rollback
