@@ -3,7 +3,9 @@ name: Release
 # Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day.
 # A push to main cuts a release when it contains feat/fix/perf/deps commits since the last
 # release tag and the tests pass. Run the workflow by hand to force a release, or to
-# rebuild the assets of an existing tag.
+# rebuild the assets of an existing tag (one from after the move to extensions/agentk).
+#
+# AgentK Local lives in extensions/agentk: jobs that run its scripts or npm work there.
 
 on:
   push:
@@ -15,7 +17,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: Rebuild assets for this existing tag instead (e.g. v0.20260924.0)
+        description: Rebuild assets for this existing tag instead (one from after the move to extensions/agentk)
         required: false
 
 # Read-only by default: only publish, which runs none of the dependency installs or tests,
@@ -36,6 +38,9 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: extensions/agentk
     outputs:
       release: ${{ steps.p.outputs.release }}
       rebuild: ${{ steps.p.outputs.rebuild }}
@@ -55,6 +60,9 @@ jobs:
           set -eu
           if [ -n "${DISPATCH_TAG:-}" ]; then
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
+            # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
+            git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||
+              { echo "$DISPATCH_TAG is from before AgentK Local moved to extensions/agentk and can't be rebuilt"; exit 1; }
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=${DISPATCH_TAG#v}"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -73,6 +81,9 @@ jobs:
     runs-on: ubuntu-latest
     # A hung step would otherwise hold the release concurrency group for GitHub's 6h default.
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: extensions/agentk
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,6 +92,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: extensions/agentk/package-lock.json
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends git build-essential
       - run: |
           git config --global user.name "CI"
@@ -106,6 +118,9 @@ jobs:
     # AlmaLinux 8 = glibc 2.28, so the native node-pty build loads on RHEL 8 devservers.
     container: almalinux:8
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: extensions/agentk
     # Plan outputs reach the shell through the environment, never pasted into scripts.
     env:
       VERSION: ${{ needs.plan.outputs.version }}
@@ -114,6 +129,8 @@ jobs:
       AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
       - name: Install build toolchain
+        # Before checkout: extensions/agentk doesn't exist yet.
+        working-directory: .
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             gcc-toolset-13-gcc-c++ make python3.11 git tar xz findutils which
@@ -170,7 +187,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: tarball-linux-${{ matrix.arch }}
-          path: out/*.tar.gz
+          path: extensions/agentk/out/*.tar.gz
           if-no-files-found: error
 
   # macOS on Apple Silicon. No container: the runner's Xcode clang builds node-pty.
@@ -179,10 +196,12 @@ jobs:
     if: always() && needs.plan.outputs.release == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped')
     runs-on: macos-15
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: extensions/agentk
     env:
       ARCH: arm64
       VERSION: ${{ needs.plan.outputs.version }}
-      REF: ${{ needs.plan.outputs.ref }}
       AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
       - uses: actions/checkout@v7
@@ -190,20 +209,7 @@ jobs:
           ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
 
-      - name: Check the ref supports macOS
-        id: check
-        # Rebuilding a tag from before macOS support: its scripts would name a macOS tarball
-        # linux-arm64, so build nothing and let publish go ahead with the Linux tarballs.
-        run: |
-          if [ -d packaging/launchd ]; then
-            echo "supported=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::$REF predates macOS support; no darwin build"
-            echo "supported=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Download Node ${{ env.NODE_VERSION }}
-        if: steps.check.outputs.supported == 'true'
         run: |
           set -eu
           dist="node-v${NODE_VERSION}-darwin-${ARCH}"
@@ -216,7 +222,6 @@ jobs:
           echo "$RUNNER_TEMP/${dist}/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (node-pty built from source)
-        if: steps.check.outputs.supported == 'true'
         env:
           # node-pty ships a prebuilt macOS binary; build our own like on Linux.
           npm_config_build_from_source: 'true'
@@ -225,25 +230,20 @@ jobs:
           npm ci
 
       - name: Stamp version
-        if: steps.check.outputs.supported == 'true'
         run: npm pkg set version="$VERSION"
 
       - name: Build
-        if: steps.check.outputs.supported == 'true'
         run: npm run build
 
       - name: Prune dev dependencies
-        if: steps.check.outputs.supported == 'true'
         run: npm prune --omit=dev
 
       - name: Package
-        if: steps.check.outputs.supported == 'true'
         run: |
           sh scripts/package-release.sh "$VERSION" "$ARCH" "$NODE_DIR" out
           ls out/*-darwin-"$ARCH".tar.gz
 
       - name: Smoke-test the tarball
-        if: steps.check.outputs.supported == 'true'
         run: |
           set -eu
           smoke="$RUNNER_TEMP/smoke"
@@ -254,16 +254,14 @@ jobs:
           "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7
-        if: steps.check.outputs.supported == 'true'
         with:
           name: tarball-darwin-arm64
-          path: out/*.tar.gz
+          path: extensions/agentk/out/*.tar.gz
           if-no-files-found: error
 
   publish:
     needs: [plan, build, build-macos]
-    # build-macos succeeds without a tarball for a tag from before macOS support; any other
-    # failure stops the release, so SHA256SUMS never loses an existing darwin tarball.
+    # Any build failure stops the release, so SHA256SUMS never loses an existing tarball.
     if: always() && needs.build.result == 'success' && needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -288,7 +286,7 @@ jobs:
         working-directory: dist-release
         run: |
           sha256sum *.tar.gz > SHA256SUMS
-          cp ../scripts/install.sh install.sh
+          cp ../extensions/agentk/scripts/install.sh install.sh
           cat SHA256SUMS
 
       - name: Create the release
@@ -299,7 +297,7 @@ jobs:
           SHA: ${{ needs.plan.outputs.ref }}
         run: |
           set -eu
-          sh scripts/release-notes.sh > notes.md || echo "Maintenance release." > notes.md
+          sh extensions/agentk/scripts/release-notes.sh > notes.md || echo "Maintenance release." > notes.md
           gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
 
@@ -324,4 +322,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           KEEP: 5
-        run: sh scripts/prune-releases.sh
+        run: sh extensions/agentk/scripts/prune-releases.sh
