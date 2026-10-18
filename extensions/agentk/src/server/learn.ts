@@ -21,7 +21,7 @@ export type LearnOutcome = 'done' | 'failed' | 'interrupted' | 'skipped';
 /** How long a learn step through the mod may take, all its parts and writes together, before it's given up. */
 export const LEARN_TIMEOUT_MS = 180_000;
 /** The small model that checks the facts against what Meko already has. */
-export const DEDUP_MODEL = 'claude-haiku-4-5-20251001';
+export const DEDUP_MODEL = 'claude-haiku-5-5';
 /** How many saved memories each fact is checked against. */
 const SIMILAR = 3;
 /** A fact longer than this is cut (a reply that put a whole document in one fact). */
