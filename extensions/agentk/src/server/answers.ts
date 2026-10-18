@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { answerable, decisionNumbers } from '../shared/decisions.js';
 import type { DesignAnswerInput, DesignQuestion } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get } from './db.js';
@@ -105,7 +106,8 @@ export class DesignQuestionStore {
 
   /**
    * The user's answers, as they go to Claude: each question answered is resolved, with the answer
-   * as its decision, and with `all` (an approval) so is every other open one, left to AgentK.
+   * as its decision (decided by the user, as is each of AgentK's own decisions the user changed),
+   * and with `all` (an approval) so is every other open one, left to AgentK.
    * Written to the questions file and kept, so the user sees what they sent in any browser, and
    * the next turn end doesn't count it as AgentK's change. Built from the file as it is now, so a
    * change AgentK made since is kept; an answer to a question that changed since it was checked
@@ -121,9 +123,10 @@ export class DesignQuestionStore {
     const byId = new Map(answers.map((a) => [a.questionId, a]));
     const left: string[] = [];
     const next = cur.questions.map((q) => {
-      if (q.status !== 'open') return q;
       const a = byId.get(q.id);
+      if (!answerable(q)) return q;
       if (a) return was.get(q.id) === JSON.stringify(q) ? answeredQuestion(q, a) : q;
+      if (q.status !== 'open') return q;
       if (!all) return q;
       left.push(q.id);
       return answeredQuestion(q, undefined);
@@ -168,7 +171,7 @@ export class DesignQuestionStore {
     const left = new Set(Array.isArray(note.left) ? note.left : []);
     const cur = this.read(row);
     if (cur.source !== 'file' || !cur.questions.some((q) => left.has(q.id) && q.status === 'resolved')) return false;
-    this.write(row, cur.questions.map((q) => (left.has(q.id) && q.status === 'resolved' ? { ...q, status: 'open', decision: null } : q)));
+    this.write(row, cur.questions.map((q) => (left.has(q.id) && q.status === 'resolved' ? { ...q, status: 'open', decision: null, decidedBy: null } : q)));
     return true;
   }
 
@@ -200,7 +203,8 @@ export class DesignQuestionStore {
     if (row.kind === 'review-pr') return entry([], null);
     const d = get<{ markdown: string }>(this.core.db, 'SELECT markdown FROM designs WHERE session_id = ?', row.id);
     if (!d) return entry([], null);
-    const fromFile = skipFile ? null : readDesignQuestions(this.core.sessions.questionsFile(row));
+    // Who decided each, as recorded, survives AgentK rewriting the file without it.
+    const fromFile = skipFile ? null : readDesignQuestions(this.core.sessions.questionsFile(row), this.cache.get(row.id)?.questions);
     if (fromFile) return entry(fromFile, 'file');
     const fromMd = d.markdown ? questionsFromMarkdown(d.markdown) : [];
     return entry(fromMd, fromMd.length ? 'markdown' : null);
@@ -221,11 +225,11 @@ export interface CheckedAnswers {
 }
 
 /**
- * The user's answers to the design's open questions (and other feedback) from a request body,
- * checked against the current questions and formatted for Claude, with the count for the
- * prompt's first line. Null when there's nothing in it. Throws a 400 for a malformed answer or
- * answers too long for one prompt, and a 409 for an answer to a question that's no longer open
- * or whose options changed.
+ * The user's answers to the design's open questions, changes to AgentK's own decisions, and other
+ * feedback, from a request body, checked against the current questions and formatted for Claude,
+ * with the count for the prompt's first line. Null when there's nothing in it. Throws a 400 for a
+ * malformed answer or answers too long for one prompt, and a 409 for an answer to a question
+ * that's no longer open (or gone) or whose options changed.
  */
 export function designAnswers(body: unknown, questions: DesignQuestion[]): CheckedAnswers | null {
   if (body === undefined || body === null) return null;
@@ -242,7 +246,7 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
   };
   capped('Other feedback', feedback);
 
-  const number = new Map(questions.map((q, i) => [q.id, i + 1]));
+  const number = decisionNumbers(questions);
   const answers: DesignAnswerInput[] = [];
   const seen = new Set<string>();
   for (const v of (b.answers as unknown[] | undefined) ?? []) {
@@ -252,8 +256,10 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
     if (seen.has(a.questionId)) throw new HttpError(400, `There are two answers to ${a.questionId}.`);
     seen.add(a.questionId);
     const q = questions.find((x) => x.id === a.questionId);
-    if (!q || q.status !== 'open') throw new HttpError(409, STALE);
-    const qn = `Q${number.get(q.id)}`;
+    if (!q || !answerable(q)) throw new HttpError(409, STALE);
+    // A change to one of AgentK's decisions is to the decision the user saw.
+    if (q.kind === 'decision' && a.decision !== q.decision) throw new HttpError(409, STALE);
+    const qn = number.get(q.id) ?? q.id;
     const text = a.text ?? '';
     if (typeof text !== 'string') throw new HttpError(400, `The answer to ${qn} must be text.`);
     capped(`The answer to ${qn}`, text);
@@ -275,5 +281,5 @@ export function designAnswers(body: unknown, questions: DesignQuestion[]): Check
   if (text.length > ANSWERS_PROMPT_MAX) {
     throw new HttpError(400, `Your answers come to ${text.length.toLocaleString('en-US')} characters, more than the ${ANSWERS_PROMPT_MAX.toLocaleString('en-US')} that go to AgentK at once. Shorten some.`);
   }
-  return { text, count: answersCount(answers, feedback), answers, questions };
+  return { text, count: answersCount(answers, feedback, questions), answers, questions };
 }

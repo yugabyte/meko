@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DesignDoc, Session } from '../../shared/types';
+import type { DatapackRef, DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { hasDecisionChanges, useDesignDrafts } from '../design-answers';
 import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
@@ -24,8 +25,11 @@ export function DesignPanel({
   onApprove,
   showQuestions = 0,
   page = false,
+  datapacks,
 }: {
   session: Session;
+  /** The project's datapacks, to name the ones AgentK's Meko references are in. */
+  datapacks?: DatapackRef[];
   onClose?: () => void;
   onApprove: () => void;
   /** Changes when the questions should be shown (Approve pressed elsewhere with open questions). */
@@ -64,6 +68,14 @@ export function DesignPanel({
   const tabs = hasQuestions && !split;
   const showDoc = !tabs || tab === 'design';
   const open = session.stage === 'design' ? session.designQuestions.open : 0;
+  const [drafts] = useDesignDrafts(session.id);
+  // A change to one of AgentK's decisions waits in this browser: it goes from the questions' footer.
+  const changing = !!doc && hasDecisionChanges(doc.questions, drafts);
+  const toAnswer = open > 0 || changing;
+  // The decisions AgentK made itself, called out beside the open questions.
+  const made = doc?.questions.filter((q) => q.kind === 'decision').length ?? 0;
+  const fromMeko = doc?.questions.filter((q) => q.kind === 'decision' && q.meko.length).length ?? 0;
+  const madeText = `${made === 1 ? '1 decision' : `${made} decisions`} AgentK made${fromMeko ? ` (${fromMeko} from Meko)` : ''}`;
   // The Questions tab's count takes in what Claude is asking right now, shown at its top.
   const waiting = open + (session.asking ? 1 : 0);
   const questions = !hasQuestions ? 'none' : split || tab === 'questions' ? 'shown' : 'hidden';
@@ -135,15 +147,16 @@ export function DesignPanel({
           </div>
         )}
         <span className="sp" />
-        {headerApproves(session, questions) && (
+        {headerApproves(session, questions, changing) && (
           <button
             className="btn small primary"
-            // With open questions it only shows them; the approval waits for the answers.
-            disabled={open === 0 && (session.busy || !!designApprovalBlocker(session))}
-            title={open > 0 ? 'Answer the open questions, then approve' : (designApprovalBlocker(session) ?? undefined)}
-            onClick={open > 0 ? toQuestions : onApprove}
+            // With open questions (or a change to one of AgentK's decisions) it only shows them; the
+            // approval goes from their footer, with the answers.
+            disabled={!toAnswer && (session.busy || !!designApprovalBlocker(session))}
+            title={open > 0 ? 'Answer the open questions, then approve' : changing ? 'Approve from the questions, with your change to AgentK’s decision' : (designApprovalBlocker(session) ?? undefined)}
+            onClick={toAnswer ? toQuestions : onApprove}
           >
-            {approveLabel(open)}
+            {approveLabel(toAnswer ? 1 : 0)}
           </button>
         )}
         {doc?.artifactUrl && (
@@ -179,7 +192,7 @@ export function DesignPanel({
             <div className="design-qcol-hd">
               Questions{waiting > 0 && <span className="count-badge">{waiting}</span>}
             </div>
-            <DesignQuestions session={session} doc={doc!} />
+            <DesignQuestions session={session} doc={doc!} datapacks={datapacks} />
           </aside>
         </div>
       ) : (
@@ -187,14 +200,14 @@ export function DesignPanel({
       )}
       {tabs && tab === 'questions' && (
         <div className="dq-view" role="tabpanel">
-          <DesignQuestions session={session} doc={doc!} />
+          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} />
         </div>
       )}
-      {tabs && tab === 'design' && open > 0 && (
-        <button className="dq-bar" onClick={() => setTab('questions')}>
-          <span>{open === 1 ? '1 open question' : `${open} open questions`}</span>
+      {tabs && tab === 'design' && (open > 0 || (session.stage === 'design' && made > 0)) && (
+        <button className={cx('dq-bar', !open && 'calm')} onClick={() => setTab('questions')}>
+          <span>{[open > 0 && (open === 1 ? '1 open question' : `${open} open questions`), made > 0 && madeText].filter(Boolean).join(open > 0 ? ', and ' : '')}</span>
           <span className="sp" />
-          <span>Answer ›</span>
+          <span>{open > 0 ? 'Answer ›' : 'Review ›'}</span>
         </button>
       )}
     </>

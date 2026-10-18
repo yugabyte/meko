@@ -139,9 +139,13 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     fakeFiles(env, { mod: '', debug: '' });
     const s = await session();
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    // The Design prompt names the mod's design_questions tool only while the mod is offered.
+    const designPrompt = () => env.core.sessions.prompt(env.core.sessions.row(s.id), 'design');
+    expect(designPrompt()).toContain('mcp__agentk__design_questions');
     env.core.updateConfig((c) => {
       c.claude.mod = false;
     });
+    expect(designPrompt()).not.toContain('design_questions');
     await env.core.sessions.submit(s.id, 'typed after turning it off');
     await waitFor(() => typed(env), (t) => t.includes('typed after turning it off'), 10000, 'the typed prompt');
     expect(modPrompts(env)).toEqual([]);

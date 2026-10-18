@@ -936,13 +936,13 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row))] : []), ...this.designLines(row, name, extra), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row), this.offersMod(row))] : []), ...this.designLines(row, name, extra), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
   /**
    * A prompt's lines about the design, added in code so a repo's own prompts get them too: for a
-   * task with a design, the approval asks for its questions and decisions in it before coding, and
+   * task with a design, the approval asks for its key design decisions in it before coding, and
    * the prompts that change code later ask to keep it current; for a review, where AgentK put the
    * PR's design (in its first prompt, and in the summary after Update to latest when it changed).
    */
@@ -991,6 +991,17 @@ export class SessionManager {
       // A home under /net: Claude reaches ~/.claude (memory, skills, plugins) by its local spelling.
       ...(claudePath(homedir()) !== homedir() ? { HOME: claudePath(homedir()) } : {}),
     };
+  }
+
+  /**
+   * Whether the session's agent gets AgentK's mod, as far as is known now, for the prompt lines that
+   * name its tools: its harness runs the mod, the mod is on and its files are there, and Claude
+   * Code isn't known to be too old for it. A prompt is often rendered before the launch that settles
+   * it (`modDir()`), so a version not read yet counts as new enough; the lines say "if you have it".
+   */
+  private offersMod(row: SessionRow): boolean {
+    return this.harness(row).caps.mod && this.core.config.claude.mod && existsSync(join(modDirPath(this.core.paths), 'hooks', 'register.ts'))
+      && this.core.claudeCode.status().supportsMod !== false;
   }
 
   /**

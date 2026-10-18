@@ -5,14 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesignAnswerInput, DesignQuestion, Session } from '../../src/shared/types.js';
 import { designAnswers } from '../../src/server/answers.js';
 import {
-  ANSWER_MAX, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answeredQuestion, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown, readDesignQuestions,
+  ANSWER_MAX, MAX_DECISIONS, MAX_MEKO_REFS, MAX_OPTIONS, MAX_QUESTIONS, MAX_QUESTIONS_FILE, answeredQuestion, answersCount, formatAnswers, parseDesignQuestions, questionsFromMarkdown,
+  readDesignQuestions,
 } from '../../src/server/design.js';
-import { DEFAULT_PROMPTS } from '../../src/server/prompts.js';
-import { defaultDraft, draftFor, draftsBlocker, parseDrafts, pruneDrafts, shownDraft, toRequest, type Draft } from '../../src/web/design-answers.js';
+import { DEFAULT_PROMPTS, DESIGN_QUESTIONS_TOOL, designQuestionsLine } from '../../src/server/prompts.js';
+import { changeDraft, defaultDraft, draftFor, draftsBlocker, parseDrafts, pruneDrafts, shownDraft, toRequest, type Draft } from '../../src/web/design-answers.js';
 
 const question = (over: Partial<DesignQuestion>): DesignQuestion => ({
-  id: 'q', question: 'Which?', context: null, options: [], recommended: null, status: 'open', decision: null, ...over,
+  id: 'q', kind: 'question', question: 'Which?', context: null, options: [], recommended: null, status: 'open', decision: null, decidedBy: null, meko: [], ...over,
 });
+/** One of AgentK's own decisions. */
+const decision = (over: Partial<DesignQuestion>): DesignQuestion =>
+  question({ kind: 'decision', status: 'resolved', decidedBy: 'agentk', decision: 'Reuse the cards', options: opts('Reuse the cards', 'New cards'), recommended: 0, ...over });
 const answer = (over: Partial<DesignAnswerInput>): DesignAnswerInput => ({ questionId: 'q', choice: null, label: null, text: '', ...over });
 const opts = (...labels: string[]) => labels.map((label) => ({ label, detail: null }));
 
@@ -32,10 +36,57 @@ describe('reading the questions file', () => {
       {
         id: 'approve-with-answers', question: 'Can Approve take unsent answers?', context: 'Drafts would be lost.',
         options: [{ label: 'Fold them in', detail: 'They go with the approval.' }, { label: 'Require sending first', detail: null }],
-        recommended: 0, status: 'open', decision: null,
+        recommended: 0, status: 'open', decision: null, kind: 'question', decidedBy: null, meko: [],
       },
-      { id: 'meko', question: 'A decisions file?', context: null, options: [{ label: 'Yes', detail: 'A new file' }], recommended: null, status: 'resolved', decision: 'No.' },
+      {
+        id: 'meko', kind: 'question', question: 'A decisions file?', context: null, options: [{ label: 'Yes', detail: 'A new file' }], recommended: null, status: 'resolved',
+        decision: 'No.', decidedBy: null, meko: [],
+      },
     ]);
+  });
+
+  it("reads AgentK's own decisions, who decided, and the Meko items they rest on", () => {
+    const ref = (i: number) => ({ kind: 'memory', id: `m-${i}` });
+    const qs = parseDesignQuestions(JSON.stringify([
+      {
+        id: 'cards', kind: 'Decision', question: 'How the panel is built', decision: 'Reuse the cards', status: 'open', options: ['Reuse the cards', 'New cards'], recommended: 0,
+        meko: [
+          { kind: 'memory', id: '131a7d0e-8f56-4118-b7e3-5f3ddf247c0b', datapack_id: 'eb5ba952', excerpt: ` ${'x'.repeat(600)} ` },
+          { kind: 'knowledge_base', id: 'doc_7', datapackId: 'not an id!' },
+          { kind: 'memory', id: '131a7d0e-8f56-4118-b7e3-5f3ddf247c0b' },
+          { kind: 'note', id: 'n-1' }, { kind: 'memory', id: 'has spaces' }, 'm-2',
+        ],
+      },
+      { id: 'no-decision', kind: 'decision', question: 'Chosen?' },
+      { id: 'changed', kind: 'decision', question: 'Where?', decision: 'Repo', decidedBy: 'user', meko: [1, 2, 3, 4, 5, 6, 7].map(ref) },
+      { id: 'answered', kind: 'other', question: 'Tabs?', status: 'resolved', decision: 'One column', decidedBy: 'user' },
+      { id: 'open', question: 'Later?', decidedBy: 'agentk' },
+    ]));
+    expect(qs.map((q) => [q.id, q.kind, q.status, q.decision, q.decidedBy])).toEqual([
+      ['cards', 'decision', 'resolved', 'Reuse the cards', 'agentk'],
+      ['changed', 'decision', 'resolved', 'Repo', 'user'],
+      ['answered', 'question', 'resolved', 'One column', 'user'],
+      ['open', 'question', 'open', null, null],
+    ]);
+    expect(qs[0].meko).toEqual([
+      { kind: 'memory', id: '131a7d0e-8f56-4118-b7e3-5f3ddf247c0b', datapackId: 'eb5ba952', excerpt: `${'x'.repeat(500)}…` },
+      { kind: 'knowledge', id: 'doc_7', datapackId: null, excerpt: null },
+    ]);
+    expect(qs[1].meko.map((r) => r.id)).toEqual([1, 2, 3, 4, 5].map((i) => `m-${i}`));
+    // AgentK rewriting the file without "decidedBy" keeps who decided each, as kept before.
+    const kept = [question({ id: 'answered', status: 'resolved', decision: 'One column', decidedBy: 'user' }), decision({ id: 'cards', decidedBy: 'user', decision: 'New cards' })];
+    const rewritten = parseDesignQuestions(JSON.stringify([
+      { id: 'answered', question: 'Tabs?', status: 'resolved', decision: 'One column.' },
+      { id: 'cards', kind: 'decision', question: 'How?', decision: 'New cards' },
+      { id: 'mine', kind: 'decision', question: 'Mine?', decision: 'Yes' },
+    ]), kept);
+    expect(rewritten.map((q) => [q.id, q.decidedBy])).toEqual([['answered', 'user'], ['cards', 'user'], ['mine', 'agentk']]);
+    expect(qs[1].meko).toHaveLength(MAX_MEKO_REFS);
+    // Decisions are counted apart from the questions.
+    const many = (kind: string, n: number) => Array.from({ length: n }, (_, i) => ({ id: `${kind}-${i}`, kind, question: '?', decision: 'Yes' }));
+    const capped = parseDesignQuestions(JSON.stringify([...many('decision', MAX_DECISIONS + 2), ...many('question', MAX_QUESTIONS + 2)]));
+    expect(capped.filter((q) => q.kind === 'decision')).toHaveLength(MAX_DECISIONS);
+    expect(capped.filter((q) => q.kind === 'question')).toHaveLength(MAX_QUESTIONS);
   });
 
   it('takes a bare array, and drops entries without an id or a question, and repeated ids', () => {
@@ -124,14 +175,18 @@ describe('formatting answers for Claude', () => {
   const questions = [
     question({ id: 'store', question: 'Where?', options: opts('Datapack', 'Repo'), recommended: 0 }),
     question({ id: 'done', question: 'Decided?', status: 'resolved', decision: 'Yes.' }),
+    // AgentK's own decisions are numbered apart (D1, D2), so the questions keep their numbers.
+    decision({ id: 'cards', question: 'How the panel is built' }),
     question({ id: 'tabs', question: 'Tabs?' }),
+    decision({ id: 'kept', question: 'Kept?', decision: 'Yes' }),
     question({ id: 'layout', question: 'Layout?', options: opts('Tabs', 'Columns'), recommended: 1 }),
     question({ id: 'name', question: 'Name?', options: opts('A', 'B') }),
   ];
 
-  it('lists every open question in order, answered or not, then other feedback', () => {
+  it('lists every open question in order, answered or not, then the decisions the user changed, then other feedback', () => {
     const out = formatAnswers([
       answer({ questionId: 'tabs', text: 'One column.' }),
+      answer({ questionId: 'cards', choice: 1, label: 'New cards', text: 'Simpler.' }),
       answer({ questionId: 'store', choice: 1, label: 'Repo', text: ' Under docs/designs. ' }),
       answer({ questionId: 'layout', choice: 0, label: 'Tabs' }),
     ], ' Shorter, please. ', questions);
@@ -140,6 +195,7 @@ describe('formatting answers for Claude', () => {
       '### Q3 (id: tabs): Tabs?\nAnswer (custom): One column.',
       '### Q4 (id: layout): Layout?\nAnswer: Tabs',
       '### Q5 (id: name): Name?\nNo answer: use your judgment, and say what you picked.',
+      '### D1 (id: cards): How the panel is built\nYou decided: Reuse the cards\nThe user wants: New cards\nNote: Simpler.',
       '### Other feedback\nShorter, please.',
     ].join('\n\n'));
     expect(formatAnswers([], '', [questions[0]])).toBe('### Q1 (id: store): Where?\nNo answer: go with your recommendation.');
@@ -148,10 +204,12 @@ describe('formatting answers for Claude', () => {
   it('resolves a question with the answer as its decision, or leaves it to AgentK', () => {
     const q = question({ id: 'store', options: opts('Datapack', 'Repo'), recommended: 1 });
     const done = (a?: Partial<DesignAnswerInput>) => answeredQuestion(q, a && answer({ questionId: 'store', ...a }));
-    expect(done({ choice: 0, label: 'Datapack' })).toEqual({ ...q, status: 'resolved', decision: 'Datapack' });
+    expect(done({ choice: 0, label: 'Datapack' })).toEqual({ ...q, status: 'resolved', decision: 'Datapack', decidedBy: 'user' });
     expect(done({ choice: 0, label: 'Datapack', text: ' Keep it small ' }).decision).toBe('Datapack — Keep it small');
     expect(done({ text: 'Neither: a new table' }).decision).toBe('Neither: a new table');
-    expect(done().decision).toBe('Left to AgentK: Repo');
+    expect(done()).toMatchObject({ decision: 'Left to AgentK: Repo', decidedBy: 'agentk' });
+    // A change to one of AgentK's own decisions makes it the user's.
+    expect(answeredQuestion(decision({}), answer({ text: 'Neither' }))).toMatchObject({ kind: 'decision', decision: 'Neither', decidedBy: 'user' });
     expect(answeredQuestion(question({}), undefined)).toMatchObject({ status: 'resolved', decision: 'Left to AgentK' });
     expect(done({ text: 'x'.repeat(ANSWER_MAX) }).decision!.length).toBeLessThan(ANSWER_MAX);
   });
@@ -161,6 +219,9 @@ describe('formatting answers for Claude', () => {
     expect(answersCount([answer({}), answer({ questionId: 'b' })], ' ')).toBe('2 answers to open questions');
     expect(answersCount([answer({})], 'More.')).toBe('1 answer to an open question and other feedback');
     expect(answersCount([], 'More.')).toBe('feedback');
+    const qs = [question({}), decision({ id: 'd1' }), decision({ id: 'd2' })];
+    expect(answersCount([answer({}), answer({ questionId: 'd1' })], 'More.', qs)).toBe('1 answer to an open question, a change to one of your decisions and other feedback');
+    expect(answersCount([answer({ questionId: 'd1' }), answer({ questionId: 'd2' })], '', qs)).toBe('changes to 2 of your decisions');
   });
 });
 
@@ -169,16 +230,21 @@ describe('checking the answers a browser sends', () => {
     question({ id: 'store', question: 'Where?', options: opts('Datapack', 'Repo'), recommended: 0 }),
     question({ id: 'done', question: 'Decided?', status: 'resolved', decision: 'Yes.' }),
     question({ id: 'tabs', question: 'Tabs?' }),
+    decision({ id: 'cards', question: 'How the panel is built' }),
   ];
   const check = (body: unknown) => () => designAnswers(body, questions);
 
-  it('formats valid answers, and is null with nothing in them', () => {
+  it('formats valid answers and changes to AgentK’s decisions, and is null with nothing in them', () => {
     expect(designAnswers(undefined, questions)).toBeNull();
     expect(designAnswers({}, questions)).toBeNull();
     expect(designAnswers({ answers: [], feedback: '  ' }, questions)).toBeNull();
     const r = designAnswers({ answers: [{ questionId: 'store', choice: 1, label: 'Repo', text: 'why' }], feedback: 'More.' }, questions)!;
     expect(r.count).toBe('1 answer to an open question and other feedback');
     expect(r.text).toContain('### Q1 (id: store): Where?\nAnswer: Repo\nNote: why');
+    const c = designAnswers({ answers: [{ questionId: 'cards', choice: 1, label: 'New cards', text: '', decision: 'Reuse the cards' }] }, questions)!;
+    expect(c.count).toBe('a change to one of your decisions');
+    expect(c.text).toContain('### D1 (id: cards): How the panel is built\nYou decided: Reuse the cards\nThe user wants: New cards');
+    expect(check({ answers: [{ questionId: 'cards', text: ' ', decision: 'Reuse the cards' }] })).toThrow(/Write your answer to D1/);
   });
 
   it('refuses answers to questions AgentK has changed since', () => {
@@ -187,6 +253,10 @@ describe('checking the answers a browser sends', () => {
       { questionId: 'done', choice: null, label: null, text: 'Late' },
       { questionId: 'store', choice: 0, label: 'Repo', text: '' },
       { questionId: 'store', choice: 5, label: 'Repo', text: '' },
+      { questionId: 'cards', choice: 1, label: 'Gone', text: '', decision: 'Reuse the cards' },
+      // A change to a decision AgentK has revised since the user saw it.
+      { questionId: 'cards', choice: null, label: null, text: 'Mine', decision: 'What it was' },
+      { questionId: 'cards', choice: 1, label: 'New cards', text: '' },
     ]) {
       expect(check({ answers: [a] })).toThrow(expect.objectContaining({ status: 409, message: expect.stringMatching(/changed its questions/) }));
     }
@@ -226,6 +296,16 @@ describe('the design prompts', () => {
     expect(design).not.toMatch(/must not contain `<` or `>`/);
     expect(design).toContain('```mermaid blocks render as diagrams there.');
   });
+
+  it("names the design_questions tool only to an agent that has AgentK's mod", () => {
+    const withTool = designQuestionsLine('/d/questions.json');
+    expect(withTool).toContain(`pass that list to the ${DESIGN_QUESTIONS_TOOL} tool if you have it`);
+    const kiro = designQuestionsLine('/d/questions.json', false);
+    expect(kiro).not.toContain(DESIGN_QUESTIONS_TOOL);
+    expect(kiro).toContain('write that JSON to /d/questions.json.');
+    // Both ask for AgentK's own decisions, and for the Meko items they rest on.
+    for (const line of [withTool, kiro]) expect(line).toMatch(/"kind": "decision".*"meko": \[\{"kind": "memory" or "knowledge", "id"/s);
+  });
 });
 
 describe('answers in the browser', () => {
@@ -260,21 +340,54 @@ describe('answers in the browser', () => {
     expect(shownDraft(store, draft({ custom: true, text: 'Mine' }), false)).toEqual(draft({ custom: true, text: 'Mine' }));
   });
 
-  it('drops the answers to questions that are no longer open', () => {
+  it('drops the answers to questions that are no longer open, and changes to decisions that changed since', () => {
     const answers = { store: draft({ choice: 0, label: 'Datapack' }), pick: draft({ choice: 1, label: 'B' }) };
     expect(pruneDrafts([store, pick], { answers, feedback: 'f' })).toBeNull();
+    const cards = decision({ id: 'cards' });
+    const change = { cards: changeDraft(cards) };
+    expect(pruneDrafts([cards], { answers: change, feedback: '' })).toBeNull();
+    // Sent and recorded (or AgentK revised it): the decision is no longer what the change was against.
+    expect(pruneDrafts([{ ...cards, decision: 'New cards', decidedBy: 'user' }], { answers: change, feedback: '' })).toEqual({ answers: {}, feedback: '' });
     expect(pruneDrafts([{ ...store, status: 'resolved' }, pick], { answers, feedback: 'f', approved: true }))
       .toEqual({ answers: { pick: answers.pick }, feedback: 'f', approved: true });
     expect(pruneDrafts([pick], { answers, feedback: '' })).toEqual({ answers: { pick: answers.pick }, feedback: '' });
   });
 
-  it('builds the request, leaving out questions with no answer', () => {
+  it('starts a change to a decision from the option in force, and sends going back to AgentK’s pick', () => {
+    // The user moved D1 off AgentK's pick: changing it again starts there, and back is a change.
+    const mine = decision({ id: 'cards', decision: 'New cards', decidedBy: 'user' });
+    expect(changeDraft(mine)).toEqual({ choice: 1, label: 'New cards', custom: false, text: '', against: 'New cards' });
+    const back = { ...changeDraft(mine), choice: 0, label: 'Reuse the cards' };
+    expect(toRequest([mine], { answers: { cards: changeDraft(mine) }, feedback: '' }).answers).toEqual([]);
+    expect(toRequest([mine], { answers: { cards: back }, feedback: '' }).answers).toEqual([{ questionId: 'cards', choice: 0, label: 'Reuse the cards', text: '', decision: 'New cards' }]);
+    // A decision in the user's own words starts as that custom answer.
+    const words = decision({ id: 'cards', decision: 'Neither: a list', decidedBy: 'user' });
+    expect(changeDraft(words)).toEqual({ choice: null, label: null, custom: true, text: 'Neither: a list', against: 'Neither: a list' });
+    expect(toRequest([words], { answers: { cards: changeDraft(words) }, feedback: '' }).answers).toEqual([]);
+  });
+
+  it('builds the request, leaving out questions with no answer, and decisions the user kept', () => {
     const resolved = question({ id: 'old', status: 'resolved', options: opts('X'), recommended: 0 });
-    const r = toRequest([store, pick, free, resolved], { answers: { pick: draft({ custom: true, text: 'Neither' }), free: draft({ custom: true, text: ' ' }) }, feedback: 'More.' });
+    const kept = decision({ id: 'kept' });
+    const same = decision({ id: 'same' });
+    const changed = decision({ id: 'changed' });
+    const stale = decision({ id: 'stale' });
+    const r = toRequest([store, pick, free, resolved, kept, same, changed, stale], {
+      answers: {
+        pick: draft({ custom: true, text: 'Neither' }), free: draft({ custom: true, text: ' ' }),
+        // Change this, then AgentK's own pick again: nothing to send.
+        same: changeDraft(same),
+        changed: { ...changeDraft(changed), choice: 1, label: 'New cards' },
+        // A change begun against what AgentK decided before.
+        stale: { ...changeDraft(stale), choice: 1, label: 'New cards', against: 'Before' },
+      },
+      feedback: 'More.',
+    });
     expect(r).toEqual({
       answers: [
         { questionId: 'store', choice: 1, label: 'Repo', text: '' },
         { questionId: 'pick', choice: null, label: null, text: 'Neither' },
+        { questionId: 'changed', choice: 1, label: 'New cards', text: '', decision: 'Reuse the cards' },
       ],
       feedback: 'More.',
     });
@@ -283,6 +396,9 @@ describe('answers in the browser', () => {
   it('holds the answers back while a picked custom answer is empty', () => {
     expect(draftsBlocker([store, pick, free], { answers: {}, feedback: '' })).toBeNull();
     expect(draftsBlocker([store, pick], { answers: { pick: draft({ custom: true }) }, feedback: '' })).toBe('Write your answer to Q2, or pick one of AgentK’s options.');
+    const cards = decision({ id: 'cards' });
+    expect(draftsBlocker([store, cards], { answers: { cards: { ...changeDraft(cards), choice: null, label: null, custom: true } }, feedback: '' }))
+      .toBe('Write your answer to D1, or pick one of AgentK’s options.');
   });
 
   it('reads stored drafts, dropping what isn’t one', () => {
@@ -359,6 +475,11 @@ describe('answers in the browser', () => {
       m.saveDrafts('s1', { answers: { pick: a }, feedback: 'Shorter.' });
       m.revisionSent('s1');
       expect(m.loadDrafts('s1')).toEqual({ answers: { pick: a }, feedback: '' });
+      // A change to one of AgentK's decisions holds the approvals that can't carry it.
+      expect(m.changingDecisions('s1')).toBe(false);
+      m.saveDrafts('s1', { answers: { pick: a, cards: { ...a, against: 'Reuse the cards' } }, feedback: '' });
+      expect(m.changingDecisions('s1')).toBe(true);
+      await expect(m.approveDesign('s1')).rejects.toThrow(/Approve from the Questions tab/);
     });
   });
 });

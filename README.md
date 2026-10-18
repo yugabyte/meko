@@ -213,7 +213,10 @@ your phone can connect.
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
   AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
-  takes you to them first. Once it's approved, AgentK writes the answers into the design and keeps it current
+  takes you to them first. Beside them are the design's key design decisions: the questions you answered and the decisions
+  AgentK made itself, each saying who decided it, with **Change this** on AgentK's; a decision that rests on something
+  AgentK found in Meko carries Meko's mark, the words it relied on and the item's id.
+  Once it's approved, AgentK writes the key design decisions into the design and keeps it current
   while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:

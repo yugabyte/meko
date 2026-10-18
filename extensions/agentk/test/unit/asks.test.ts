@@ -83,6 +83,17 @@ describe('questions from the design_questions tool', () => {
     expect(error([{ id: 'a', question: 'A?', options: ['x'], recommended: 1 }])).toMatch(/"recommended" must be the index/);
     expect(error([{ id: 'a', question: 'A?', status: 'done' }])).toMatch(/"status" must be "open" or "resolved"/);
     expect(error(Array.from({ length: 31 }, (_, i) => ({ id: `q${i}`, question: '?' })))).toMatch(/at most 30/);
+    // AgentK's own decisions: always resolved, with what was chosen, and the Meko items they rest on.
+    expect(error([{ id: 'a', kind: 'choice', question: 'A?' }])).toMatch(/"kind" must be "question" or "decision"/);
+    expect(error([{ id: 'a', kind: 'decision', question: 'A?' }])).toMatch(/is a decision, so it needs its "decision"/);
+    expect(error([{ id: 'a', kind: 'decision', question: 'A?', decision: 'B', status: 'open' }])).toMatch(/its "status" must be "resolved"/);
+    expect(error([{ id: 'a', question: 'A?', decidedBy: 'me' }])).toMatch(/"decidedBy" must be "user", "agentk" or null/);
+    expect(error([{ id: 'a', question: 'A?', meko: 'm-1' }])).toMatch(/"meko" must be a list/);
+    expect(error([{ id: 'a', question: 'A?', meko: [{ kind: 'memory' }] }])).toMatch(/each "meko" item needs "kind"/);
+    expect(error([{ id: 'a', question: 'A?', meko: Array.from({ length: 6 }, (_, i) => ({ kind: 'memory', id: `m${i}` })) }])).toMatch(/cites 6 Meko items; give at most 5/);
+    expect(error(Array.from({ length: 31 }, (_, i) => ({ id: `d${i}`, kind: 'decision', question: '?', decision: 'Yes' })))).toMatch(/at most 30 decisions/);
+    const ok = checkToolQuestions([{ id: 'q', question: 'A?' }, { id: 'd', kind: 'decision', question: 'B?', decision: 'Yes', meko: [{ kind: 'knowledge', id: 'doc-1', excerpt: 'Why' }] }]);
+    expect('questions' in ok && ok.questions.map((q) => [q.kind, q.status, q.decidedBy, q.meko.length])).toEqual([['question', 'open', null, 0], ['decision', 'resolved', 'agentk', 1]]);
     // Too much for the questions file to be read back.
     const big = Array.from({ length: 30 }, (_, i) => ({
       id: `q${i}`, question: 'q'.repeat(1000), context: 'c'.repeat(4000), options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}`.repeat(200), detail: 'd'.repeat(1000) })),

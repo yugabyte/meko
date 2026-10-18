@@ -210,9 +210,10 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
   await $.tool.register({
     name: QUESTIONS_TOOL,
     description:
-      "Gives the user the open questions of the design you're writing in AgentK Local's Design stage. AgentK Local checks them, " +
-      'shows them beside the design at once, and saves them to the questions file. Pass all of them each time (the list replaces ' +
-      'the last one), open and resolved, keeping each id. Returns what was saved, or what to fix in the input before calling again.',
+      "Gives the user the open questions and key design decisions of the design you're writing in AgentK Local's Design stage. AgentK Local " +
+      'checks them, shows them beside the design at once, and saves them to the questions file. Pass all of them each time (the list ' +
+      'replaces the last one): open and resolved questions, and the decisions you made yourself (kind "decision"), keeping each id. ' +
+      'Returns what was saved, or what to fix in the input before calling again.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -222,15 +223,31 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
             type: 'object',
             properties: {
               id: { type: 'string', description: 'Short and stable across revisions.' },
-              question: { type: 'string' },
-              context: { type: ['string', 'null'], description: 'Why it matters (optional).' },
+              kind: { type: 'string', enum: ['question', 'decision'], description: 'decision: one you made yourself, always resolved. Default question.' },
+              question: { type: 'string', description: 'The question, or for a decision, the decision point.' },
+              context: { type: ['string', 'null'], description: 'Why it matters, or why you decided so (optional).' },
               options: {
                 type: 'array',
                 items: { type: 'object', properties: { label: { type: 'string' }, detail: { type: ['string', 'null'] } }, required: ['label'] },
               },
-              recommended: { type: ['integer', 'null'], description: 'The index of the option you recommend.' },
+              recommended: { type: ['integer', 'null'], description: 'The index of the option you recommend, or for a decision, picked.' },
               status: { type: 'string', enum: ['open', 'resolved'] },
               decision: { type: ['string', 'null'], description: 'What was decided, once resolved.' },
+              decidedBy: { type: ['string', 'null'], enum: ['user', 'agentk', null], description: 'Who decided it, once resolved.' },
+              meko: {
+                type: 'array',
+                description: 'The Meko items it rests on, by the id Meko gave you. Never invent one.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    kind: { type: 'string', enum: ['memory', 'knowledge'] },
+                    id: { type: 'string' },
+                    datapackId: { type: ['string', 'null'] },
+                    excerpt: { type: ['string', 'null'], description: 'The words you relied on.' },
+                  },
+                  required: ['kind', 'id'],
+                },
+              },
             },
             required: ['id', 'question'],
           },

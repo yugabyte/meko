@@ -18,6 +18,9 @@
   --chart-bar: #2b55c0;
   /* Kiro's credits (its logo's violet), on the chart and its plan bar in the rail. */
   --chart-kiro: #7b3bf0;
+  /* Meko's mark on a design decision that rests on Meko, and its references. */
+  --meko: #6b3fb8;
+  --meko-soft: #efe8fa;
   --ok: #23845a;
   --warn: #b86e00;
   --warn-soft: #fff1da;
@@ -56,6 +59,8 @@
     --accent-soft: #1e2a4a;
     --chart-bar: #6f8ff0;
     --chart-kiro: #a77bff;
+    --meko: #c3a5f5;
+    --meko-soft: #2c2140;
     --ok: #5cc592;
     --warn: #e9a64a;
     --warn-soft: #3a2c14;
@@ -87,6 +92,8 @@
   --accent-soft: #1e2a4a;
   --chart-bar: #6f8ff0;
   --chart-kiro: #a77bff;
+  --meko: #c3a5f5;
+  --meko-soft: #2c2140;
   --ok: #5cc592;
   --warn: #e9a64a;
   --warn-soft: #3a2c14;
@@ -1794,9 +1801,78 @@ textarea.input {
   border-color: var(--ok);
   color: var(--ok);
 }
-.dq-chip.custom {
+.dq-chip.custom,
+.dq-chip.user {
   border-color: var(--accent);
   color: var(--accent);
+}
+.dq-chip.agent {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+/* A decision that rests on Meko: Meko's m in a round badge. */
+.dq-chip.meko {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  padding: 2px 5px;
+  border-color: transparent;
+  background: var(--meko-soft);
+  color: var(--meko);
+}
+/* Meko's "m" (public/meko-m.png) as a mask, so it takes the text color in either theme. */
+.meko-mark {
+  display: inline-block;
+  flex: none;
+  width: 11px;
+  height: 11px;
+  background: currentColor;
+  -webkit-mask: url('/meko-m.png') center / contain no-repeat;
+  mask: url('/meko-m.png') center / contain no-repeat;
+}
+.dq-refs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dq-ref {
+  border-left: 3px solid var(--meko);
+  background: var(--meko-soft);
+  border-radius: 0 6px 6px 0;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dq-ref-text {
+  margin: 0;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dq-ref-src {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 11.5px;
+  color: var(--meko);
+  min-width: 0;
+}
+.dq-ref-dp,
+.dq-ref-id {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.dq-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .dq-ctx {
   margin: 0;
@@ -1911,6 +1987,11 @@ textarea.input {
   cursor: pointer;
   text-align: left;
 }
+/* Only AgentK's own decisions to look at: no open question waits on the user. */
+.dq-bar.calm {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
 .dq-bar:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -1928,6 +2009,10 @@ textarea.input {
   .dq-bar,
   .design-tabs button {
     min-height: 40px;
+  }
+  .dq-actions .btn.small,
+  .dq-ref-src .btn.small {
+    min-height: 36px;
   }
   .dq-decided summary {
     padding: 9px 0;

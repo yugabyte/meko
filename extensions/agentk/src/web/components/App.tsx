@@ -457,6 +457,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         <DesignPanel
           page
           session={s}
+          datapacks={currentProject?.datapacks}
           onApprove={() => approveDesign(s.id).catch((e) => showToast(errorMessage(e)))}
         />
         {toastBox}
