@@ -6,11 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 
 // Dependabot's commit subjects become its PR titles and decide whether merging its PRs cuts a
-// release, so check the prefixes in .github/dependabot.yml against the real
-// scripts/check-title.sh and scripts/release-notes.sh.
-const CONFIG = readFileSync(fileURLToPath(new URL('../../.github/dependabot.yml', import.meta.url)), 'utf8');
+// release, so check the prefixes in the repo root's .github/dependabot.yml against the real
+// scripts/check-title.sh (at the repo root) and AgentK's scripts/release-notes.sh.
+const CONFIG = readFileSync(fileURLToPath(new URL('../../../../.github/dependabot.yml', import.meta.url)), 'utf8');
 const NOTES = fileURLToPath(new URL('../../scripts/release-notes.sh', import.meta.url));
-const CHECK = fileURLToPath(new URL('../../scripts/check-title.sh', import.meta.url));
+const CHECK = fileURLToPath(new URL('../../../../scripts/check-title.sh', import.meta.url));
 
 interface Group {
   name: string;

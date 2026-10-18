@@ -2,9 +2,11 @@
 
 Part of the [AgentK Local design](../design.md).
 
-- **CI (on every PR).** Typecheck, lint and unit tests, on Linux and macOS. Integration tests run
+- **CI (on every PR).** Typecheck, lint and unit tests, on Linux and macOS, run in
+  `extensions/agentk` (the workflows, `scripts/check-title.sh` and Dependabot's config are at the
+  repo root). Integration tests run
   against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
-  A separate `PR title` workflow checks the title with `scripts/check-title.sh` and reruns when
+  A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once CI and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>[(<component>)][!]: <summary>`
@@ -18,7 +20,8 @@ Part of the [AgentK Local design](../design.md).
   The installer and the updater pick the tarball for their platform. The updater skips releases
   with no build for its platform; the installer takes the latest release (or `--version`) and stops
   with a clear message if it has none. Releases since macOS support always include the macOS
-  build: publishing waits for it, and only a rebuild of an older tag goes without. Each release also includes `SHA256SUMS`, a build provenance attestation
+  build: publishing waits for it. A hand-run rebuild takes only tags from after the move to
+  `extensions/agentk`. Each release also includes `SHA256SUMS`, a build provenance attestation
   and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`) are deleted; their tags stay.
 

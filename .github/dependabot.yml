@@ -1,15 +1,15 @@
 # Dependabot version updates, assigned to the maintainer.
 #
 # Commit prefixes follow the title rules (scripts/check-title.sh) and the release rules
-# (scripts/release-notes.sh). Every npm bump is `deps: ...`, so it cuts a release once merged
-# to main: the web UI's libraries (react, xterm, marked, dompurify) are devDependencies that
-# Vite bundles into the release. Action bumps are `ci: ...` and ship with the next release.
+# (extensions/agentk/scripts/release-notes.sh). Every npm bump is `deps: ...`, so it cuts a
+# release once merged to main: the web UI's libraries (react, xterm, marked, dompurify) are
+# devDependencies that Vite bundles into the release. Action bumps are `ci: ...` and ship with the next release.
 # No `include: scope`: it would add `(deps)`, giving `deps(deps): ...`.
-# test/unit/dependabot.test.ts checks this against both scripts.
+# extensions/agentk/test/unit/dependabot.test.ts checks this against both scripts.
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /
+    directory: /extensions/agentk
     schedule:
       interval: weekly
       day: monday

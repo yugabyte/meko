@@ -1,7 +1,7 @@
 # AGENTS.md: the web UI
 
-Extra rules for changes under `src/web/`. The repo-wide guide is [../../AGENTS.md](../../AGENTS.md);
-reviewers use [REVIEW.md](REVIEW.md) here as well as the root one.
+Extra rules for changes under `src/web/`. AgentK's guide is [../../AGENTS.md](../../AGENTS.md);
+reviewers use [REVIEW.md](REVIEW.md) here as well as AgentK's [REVIEW.md](../../REVIEW.md).
 
 ## Map
 
