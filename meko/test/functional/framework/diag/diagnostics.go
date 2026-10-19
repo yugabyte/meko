@@ -185,7 +185,7 @@ func collectServerLogs(ctx context.Context, kube Kube, pod, dir string, sink app
 // pods/deployments -o wide listings ("Stack resources/"), every pod's current AND
 // previous-instance (crash-loop) logs split per container ("Stack
 // logs/<pod>/<container>.log"), and a describe of every pod that is not
-// Running-and-Ready ("Stack describe/<pod>.txt").
+// Running-and-Ready or has restarted ("Stack describe/<pod>.txt").
 // A failure to collect ONE item is logged and skipped, collection never aborts,
 // so the caller's teardown always proceeds.
 func CollectK8sDiagnostics(ctx context.Context, kube Kube, namespace string, sink apps.ArtifactSink, logf func(string, ...any)) {
@@ -286,7 +286,8 @@ func collect(ctx context.Context, kube Kube, namespace string, sink apps.Artifac
 		logf("diagnostics: pod states in %s (best-effort): %v", namespace, err)
 	}
 	for _, st := range states {
-		if !sc.describeAll && st.Phase == "Running" && st.Ready && !isUniversePod(st.Name) {
+		// A restarted pod is Ready again by now, and only describe keeps why it died (OOMKilled).
+		if !sc.describeAll && st.Phase == "Running" && st.Ready && st.Restarts == 0 && !isUniversePod(st.Name) {
 			continue
 		}
 		if out, err := kube.Describe(ctx, "pod", st.Name); err != nil {

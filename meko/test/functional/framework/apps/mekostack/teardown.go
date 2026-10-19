@@ -17,7 +17,7 @@ import (
 const logTail = 5000
 
 // Collect hands the stack's evidence to into: events, every pod's logs current
-// and previous, a describe of each pod that is not ready, the init containers by
+// and previous, a describe of each pod that is not ready or has restarted, the init containers by
 // name (a pod still in Init: has no log kubectl will print for the rest), and the
 // values with their secrets masked. Best effort throughout.
 func (a *App) Collect(ctx context.Context, into apps.ArtifactSink) error {

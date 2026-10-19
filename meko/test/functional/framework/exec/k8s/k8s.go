@@ -626,7 +626,8 @@ func (k *Kubectl) Events(ctx context.Context) (string, error) {
 }
 
 // PodState is a pod's coarse lifecycle state, enough to decide whether it is
-// worth describing (a pod that is not Running-and-Ready is the interesting one).
+// worth describing (a pod that is not Running-and-Ready, or has restarted, is the
+// interesting one).
 //
 // UID and Restarts identify the pod ACROSS a window: a deleted pod comes back
 // with Restarts reset to zero, and under a StatefulSet with the same name too,

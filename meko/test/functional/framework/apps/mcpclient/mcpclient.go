@@ -53,8 +53,16 @@ func WithClientName(name string) Option { return func(c *Client) { c.name = name
 // error's included, and the message of a call that failed outright.
 func WithResultHook(fn func(tool, text string)) Option { return func(c *Client) { c.onResult = fn } }
 
+// uvicorn closes a connection idle for 5s, and a POST sent on one it is closing
+// fails with EOF and is not retried. Drop idle connections before that.
+var transport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.IdleConnTimeout = 3 * time.Second
+	return t
+}()
+
 func New(url, token string, opts ...Option) *Client {
-	c := &Client{url: url, token: token, hc: &http.Client{Timeout: 60 * time.Second}, name: "mekoqa"}
+	c := &Client{url: url, token: token, hc: &http.Client{Timeout: 60 * time.Second, Transport: transport}, name: "mekoqa"}
 	for _, o := range opts {
 		o(c)
 	}
