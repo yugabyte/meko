@@ -102,7 +102,7 @@ export function ProjectView({
   onRename: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
-  /** Show the session tabs, above the terminal or in a phone's app bar: the rail doesn't list the sessions, or is hidden. */
+  /** Show the session tabs, above the terminal or in a phone's app bar: the rail doesn't list the sessions, or (the wide layout only) is hidden. */
   showTabs: boolean;
   /** Show each session's harness logo in its tab: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
@@ -289,7 +289,8 @@ export function ProjectView({
 
   // On a phone the tabs sit in the app bar, between the drawer button and the session's actions. On a
   // desktop they sit above the terminal. Neither shows them while the rail lists the sessions (a setting)
-  // and is shown; the phone's bar then names the session instead.
+  // and is shown; the phone's bar then names the session, with its dot, and marks the drawer button while
+  // another session needs you.
   const tabs = (
     <div className="tabs" role="tablist" ref={tabsRef}>
       {sessions.map((s) => (
@@ -317,7 +318,21 @@ export function ProjectView({
   return (
     <div className="project-view">
       {mobile ? (
-        <TopBar onMenu={onMenu} sub={showTabs ? undefined : project.name} title={showTabs ? undefined : (session?.name ?? project.name)}>
+        <TopBar
+          onMenu={onMenu}
+          menuDot={!showTabs && sessions.some((s) => s.id !== session?.id && dotState(s) === 'needs_input')}
+          sub={showTabs || !session ? undefined : project.name}
+          title={
+            showTabs ? undefined : session ? (
+              <>
+                <StatusDot status={dotState(session)} phase={session.id} />
+                {session.name}
+              </>
+            ) : (
+              project.name
+            )
+          }
+        >
           {showTabs && tabs}
           {session?.status === 'exited' && (
             <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
