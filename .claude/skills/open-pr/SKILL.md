@@ -54,8 +54,9 @@ subject convention (see the `commit` skill):
 
 - `[<KEY>-<num>]` — the tracking Jira ticket, in whichever project tracks the
   work: `MEKO-`, `AMP-`, `CLOUDGA-`, `PLAT-`, … (the project is all caps). Work
-  tracked as a GitHub issue in this repo uses `[#<issue>]` (see the
-  `create-amp-issue` skill). Several tags go back to back with no space between
+  tracked as a GitHub issue in this repo uses `[#<issue>]`. AMP work is filed in
+  Jira, never as a new GitHub issue (see the `create-amp-issue` skill). Several
+  tags go back to back with no space between
   them, and one space follows the last — no colon.
   **The tag is required.** When the work has no ticket or issue, file one first;
   never invent a placeholder like `[MEKO-xxx]` or guess a number, since it looks

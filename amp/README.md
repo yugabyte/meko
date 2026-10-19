@@ -458,10 +458,9 @@ rm -rf .yb_amp    # local dev cluster state (destroys local data)
 
 ## Issue tracking
 
-Cross-session work is tracked as **GitHub issues**.
-See [`docs/issue-tracking.md`](docs/issue-tracking.md) for the
-area labels, milestones, the create/filter contract, and how commit
-subjects reference issues.
+Cross-session work is tracked as **Jira tickets in the `AMP` project**,
+each under an epic. See [`docs/issue-tracking.md`](docs/issue-tracking.md)
+for how to file them and how commit subjects reference them.
 
 ## Contributing
 

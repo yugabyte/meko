@@ -101,15 +101,15 @@ Code anchors:
   (`compute/architecture/` for the storage/compute engine,
   `controller/architecture/` for the control plane). Code change without doc
   change usually means the doc is stale.
-- **Work is tracked as GitHub issues**, not files. See
-  [`docs/issue-tracking.md`](docs/issue-tracking.md) for the area
-  labels, milestones, the create/close contract, and the commit-subject
-  format.
+- **Work is tracked as Jira tickets in the `AMP` project, each under an
+  epic**, not as GitHub issues or files. See
+  [`docs/issue-tracking.md`](docs/issue-tracking.md) and the
+  `create-amp-issue` skill.
 - **Remote branches are `<alias>/<feature_name>`** (e.g.
   `hsunder/ingest-perf-hardening`). `<alias>` is your git/GitHub alias;
-  `<feature_name>` is kebab-case. A leading GitHub issue number in the
-  feature part (`hsunder/174-ingest-perf-hardening`) is optional but
-  encouraged when the work maps to an issue. Enforced for Claude Code by a
+  `<feature_name>` is kebab-case. Naming the ticket in the feature part
+  (`hsunder/amp-174-ingest-perf-hardening`) is optional but encouraged when
+  the work maps to one; the hook treats it as part of the kebab-case name. Enforced for Claude Code by a
   `PreToolUse` hook ([`.claude/hooks/check-branch-name.sh`](../.claude/hooks/check-branch-name.sh),
   registered in [`.claude/settings.json`](../.claude/settings.json)): it blocks
   any `git push` that would create a non-conforming branch (`main`/`master`
@@ -275,7 +275,7 @@ Use the Meko datapack above for repo-scoped memory. Don't store:
 - Things derivable from `git log` / current code.
 - **Resolved-bug narratives.** Once a fix has shipped, its root cause,
   the change, and the verification all live in the commit message and the
-  closed GitHub issue. Don't re-record "issue #N: cause was X, fixed by Y,
+  closed Jira ticket. Don't re-record "issue #N: cause was X, fixed by Y,
   verified by Z" in Meko — that's git/issue-tracker territory, not memory.
   The only durable carve-out is a *recurring sharp edge* (see below): a
   trap the fix itself doesn't prevent and a future session would hit

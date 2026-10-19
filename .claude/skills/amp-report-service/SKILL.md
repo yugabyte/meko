@@ -106,14 +106,16 @@ run  (one ampqa invocation: branch, commit, image tag, report bucket)
     ├── steps         (nested, timed, [OK]/[FAILED])
     ├── attachments   (logs, phases.txt, report.html — stored in the files service)
     ├── perf data     (named datapoints; gates against baselines or intra-run ratios)
-    └── known issues  (links to GitHub issues that EXPLAIN the failure)
+    └── known issues  (links to tickets that EXPLAIN the failure)
 ```
 
 - **Reports** group runs into buckets (`regression`, `nightly`, …) — attach or
   detach a run by patching its `report` key.
-- **Known issues** are GitHub issues (this repo) registered in the portal and
-  attached to failed results; a triaged failure is one with a KI chip. Keep the
-  GitHub side authoritative — the portal syncs title/state from it.
+- **Known issues** are tickets registered in the portal and attached to failed
+  results; a triaged failure is one with a KI chip. New AMP defects are Jira
+  tickets; older known issues link GitHub issues, whose title and state the portal
+  syncs from GitHub. The portal fetches metadata from GitHub only, so register a
+  Jira link with `--title`.
 - **Fleet** rows are standing amp deployments; deploy/update/delete actions
   trigger the Jenkins jobs in `meko-devops` (`jenkins/amp/…`), which report
   back as runs of kind `deploy`.
@@ -139,24 +141,25 @@ Then decide whether the failure is the PRODUCT's or OURS, because that decides
 what happens next and they are not symmetrical.
 
 **Product defect** — amp or the backing behaved wrongly. Attach the existing
-known issue, or file a GitHub issue (follow the `create-amp-issue` skill: area
-label + AMP milestone) and register it:
+known issue, or file a Jira ticket under an epic (follow the `create-amp-issue`
+skill) and register it:
 
 ```bash
-yb amp issue create --url <github-url> --result <id> --notes "..." --yes
+yb amp issue create --url https://yugabyte.atlassian.net/browse/AMP-<num> \
+  --title "<ticket summary>" --result <id> --notes "..." --yes
 ```
 
 **Test or framework defect** — the test asserted the wrong thing, the harness
 lost a port-forward, a chaos action injected nothing, a client pod died, a
-budget was too short. **Do not file a GitHub issue. Fix the code.** GitHub
-issues are the product's defect log, and filling it with our own harness bugs
+budget was too short. **Do not file a ticket. Fix the code.** The tracker is
+the product's defect log, and filling it with our own harness bugs
 buries the real ones and wastes the reader's time. Fix it on a branch, and if
 the fix has to wait, say so in the test's own doc comment where the next person
 to run it will see it.
 
 The tell: if the answer to "would a customer ever hit this?" is no, it is ours.
-A `needs-area-label` issue with no product area to assign is usually the same
-signal — nothing in the product owns it because the bug is not in the product.
+A defect no product epic would own is usually the same signal: nothing in the
+product owns it because the bug is not in the product.
 
 Either way the portal still needs the failure explained, so a framework defect
 you are fixing gets a note on the result rather than a fabricated issue link.
@@ -222,8 +225,8 @@ expensive.
   envelopes, and your incantation breaks on the next release.
 - **Marking a failure triaged without a known issue.** The KI link is what
   makes tomorrow's identical failure arrive pre-explained.
-- **Filing a GitHub issue for our own test or framework bug.** The issue
-  tracker is the product's defect log. A harness bug goes in a branch, not in
+- **Filing a ticket for our own test or framework bug.** The tracker is the
+  product's defect log. A harness bug goes in a branch, not in
   it.
 - **Editing portal state to "fix" a result.** Results are records of what ran;
   if the outcome is wrong, fix the test or the product and re-run.

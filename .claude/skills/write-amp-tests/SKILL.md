@@ -42,7 +42,7 @@ assume a test, suite or flag exists, so check. In this skill `ampqa` means
 ## Rules that do not bend
 
 - A product bug is reported and never worked around. A broken feature keeps running and
-  keeps failing, and a skipped test hides it. File the GitHub issue (see the
+  keeps failing, and a skipped test hides it. File a Jira ticket under an epic (see the
   `create-amp-issue` skill) and attach it as a known issue on the portal. Do not add a
   retry, sleep, looser assertion or `Skip` to get green.
 - `Skip` is for an environment the test cannot run on, or a surface that does not exist

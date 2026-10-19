@@ -115,5 +115,5 @@ in the root [`REVIEW.md`](../REVIEW.md). On top of those:
   with a Jira key from any project such as `[AMP-55]`, or `[#<issue>]` for a GitHub issue).
 - Links the tracked issue with `Closes <full issue URL>` when it completes one — a
   bare `#<n>` is unsafe, since AMP's issues were renumbered by the monorepo migration.
-- Area label (`amp_*`) + `AMP:` milestone on the linked issue — see
-  [`docs/issue-tracking.md`](docs/issue-tracking.md).
+- New AMP work is tracked as a Jira ticket under an epic, not a new GitHub issue —
+  see [`docs/issue-tracking.md`](docs/issue-tracking.md).

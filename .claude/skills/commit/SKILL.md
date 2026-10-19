@@ -348,8 +348,9 @@ The commit subject follows:
 - **`[<KEY>-<num>]`** — the tracking ticket, first so `git log --oneline` is
   greppable by ticket. Any Jira project's key works (`MEKO-`, `AMP-`, `CLOUDGA-`,
   `PLAT-`, …): use the ticket that actually tracks the work, whichever project it
-  is in. Work tracked as a GitHub issue in this repo uses `[#<issue>]` instead
-  (see the `create-amp-issue` skill). Several tags go back to back with no space
+  is in. Work tracked as a GitHub issue in this repo uses `[#<issue>]` instead.
+  AMP work is filed in Jira, never as a new GitHub issue (see the
+  `create-amp-issue` skill). Several tags go back to back with no space
   between them. **The tag is required**: the squash merge makes the PR title the
   subject on `main`, and the `PR title` check fails a PR without one. When the
   work has no ticket or issue, file one. Never invent a placeholder like

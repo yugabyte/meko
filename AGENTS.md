@@ -439,6 +439,9 @@ the `PR title` check fails any PR without one, except PRs opened by bots, and th
 merge makes the PR title the subject on `main`. When there is no ticket, file one —
 never invent a placeholder or guess a number.
 
+**AMP work is filed as a Jira ticket in the `AMP` project, under an epic, never as a
+new GitHub issue.** See the `create-amp-issue` skill.
+
 #### `[#N]` in commits that predate the monorepo merge means an *amp* number
 
 AMP's 69 open issues were transferred out of `yugabyte/amp` and **renumbered**, so a
@@ -579,7 +582,7 @@ Pointers only; each skill is the authority on its own subject.
 | `git-push` | pushing a branch, or refreshing an existing PR |
 | `open-pr` | opening a new PR |
 | `merge-pr` | merging |
-| `create-amp-issue` | filing or updating a GitHub issue for AMP work |
+| `create-amp-issue` | filing, updating or closing AMP work: a Jira ticket under an epic, never a GitHub issue |
 | `resolve-pr-comments` | closing out a review — resolving addressed threads, and 👍/👎 on bot findings so the reviewer improves |
 | `integration-before-corruption-claim` | claiming data loss or corruption in `amp/` — run the integration suite first |
 | `amp-mcp-tools` | working on the amp controller's MCP tools. A **symlink** to `amp/controller/mcp/skills/amp-mcp-tools`, so it stays in step with the packaged skill bundle |
