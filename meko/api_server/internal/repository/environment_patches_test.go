@@ -294,7 +294,7 @@ func TestApplyDesiredPatchesTx_GuardVetsAnUpdate(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectEndpointRead(mock, guardEndpoint, `{"role":"read_write"}`)
-	mock.ExpectQuery(`SELECT COALESCE\(resources::text, '\[\]'\) FROM meko_system\.environments WHERE uuid=\$1`).
+	mock.ExpectQuery(`SELECT CASE WHEN state = 'DEREGISTERED' .* FROM meko_system\.environments WHERE uuid=\$1`).
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"resources"}).AddRow(
 			`[{"kind":"endpoint","id":"endpoint/` + guardEndpoint + `","state":"rejected","attrs":{"id":"e1"}}]`))
@@ -368,7 +368,7 @@ func TestObservedResource_MalformedInventoryIsAnError(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT COALESCE\(resources::text`).WithArgs(envUUID).
+	mock.ExpectQuery(`ELSE COALESCE\(resources::text`).WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"resources"}).AddRow(`{"not":"an array"}`))
 	tx, _ := db.Begin()
 	if _, err := observedResource(tx, envUUID, "endpoint", guardEndpoint); err == nil {

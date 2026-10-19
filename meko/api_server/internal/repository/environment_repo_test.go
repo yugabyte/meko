@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
@@ -195,5 +196,39 @@ func TestEnvironmentRepo_DesiredRevs(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Error(err)
+	}
+}
+
+// Rows deregistered before the deregister action cleared them still hold the agent's
+// last inventory and live=true (CLOUDGA-37659). They must read as neither.
+func TestEnvironmentRepo_DeregisteredReadsNotLiveWithNoInventory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+
+	for state, wantLive := range map[string]bool{"DEREGISTERED": false, "READY": true} {
+		inventory := `[{"kind":"cluster","id":"cluster/pool-a/c1","state":"ready"}]`
+		mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.uuid = \$1`).
+			WillReturnRows(sqlmock.NewRows(listRowCols).AddRow(
+				envUUID, "acme-prod", listAccount, "cloud", "us-east-1", state, "", 0, "",
+				0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", inventory, nil, "BYOC", false,
+			))
+		e, err := repo.GetByUUID(envUUID)
+		if err != nil || e == nil {
+			t.Fatalf("%s: GetByUUID = (%v, %v)", state, e, err)
+		}
+		if e.Live != wantLive {
+			t.Errorf("%s: live = %v, want %v", state, e.Live, wantLive)
+		}
+		wantRes := inventory
+		if !wantLive {
+			wantRes = "[]"
+		}
+		if string(e.Resources) != wantRes {
+			t.Errorf("%s: resources = %s, want %s", state, e.Resources, wantRes)
+		}
 	}
 }

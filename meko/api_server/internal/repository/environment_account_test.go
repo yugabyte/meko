@@ -52,7 +52,8 @@ func TestEnvironmentRepo_ListFiltersByAccount(t *testing.T) {
 	defer db.Close()
 	repo := NewEnvironmentRepo(db)
 
-	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ORDER BY e\.live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ` +
+		`ORDER BY \(e\.live AND e\.state <> 'DEREGISTERED'\) DESC`).
 		WithArgs(acctA).
 		WillReturnRows(listRow("acme-prod"))
 
@@ -80,7 +81,7 @@ func TestEnvironmentRepo_ListUnscopedHasNoFilter(t *testing.T) {
 
 	// The regexp requires ORDER BY to follow the table directly, so it fails if a
 	// WHERE clause is emitted.
-	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY \(e\.live AND e\.state <> 'DEREGISTERED'\) DESC`).
 		WillReturnRows(listRow("acme-prod").AddRow(
 			"22222222-2222-2222-2222-222222222222", "other-prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, keyB, time.Now(), "meko", "[]", nil, "BYOC", false,

@@ -505,7 +505,7 @@ func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind strin
 	if err != nil {
 		return nil, err
 	}
-	e, err := s.repo.GetByAPIKeyID(apiKeyID)
+	e, err := s.ResolveAgent(apiKeyID)
 	if err != nil || e == nil {
 		return nil, err
 	}
@@ -559,11 +559,21 @@ func (s *EnvironmentService) EnrollByKey(apiKeyID, placement, declaredKind strin
 // ResolveAgent returns the environment bound to the API key an agent call
 // authenticated with, or nil when the key is bound to nothing -- a revoked key
 // and a never-registered one are deliberately the same answer.
+//
+// A DEREGISTERED environment's key is treated as revoked whether or not YBM has
+// revoked it yet: an agent left running would otherwise report the environment
+// back to its old state and inventory (CLOUDGA-37659). The agent handles that 401
+// by holding its last desired state with deletes off, so refusing it changes
+// nothing in the data plane.
 func (s *EnvironmentService) ResolveAgent(apiKeyID string) (*models.Environment, error) {
 	if apiKeyID == "" {
 		return nil, nil
 	}
-	return s.repo.GetByAPIKeyID(apiKeyID)
+	e, err := s.repo.GetByAPIKeyID(apiKeyID)
+	if err != nil || e == nil || e.State == StateDeregistered {
+		return nil, err
+	}
+	return e, nil
 }
 
 // StatusResult is what ApplyStatus managed to persist.
@@ -604,11 +614,16 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 			"env_uuid", envUUID, "reported_state", state)
 	}
 	e, err := s.repo.GetByUUID(envUUID)
-	if err != nil || e == nil {
+	// Re-checked after ResolveAgent, to skip the work below; UpdateFromAgent is what
+	// stops a deregister that lands later being written over.
+	if err != nil || e == nil || e.State == StateDeregistered {
 		return StatusResult{}, err
 	}
 	now := time.Now().UTC()
 	e.State = state
+	// Deregistering clears this. An environment resumed afterwards has an agent
+	// reporting again, which need not re-enroll to say so.
+	e.Live = true
 	// Guarded because a report can name a state and still omit this: normalizeState
 	// above refuses only a report with NO state, and nullStr turns the empty string
 	// into a NULL, erasing the version last reported. The merged fields below
@@ -670,7 +685,7 @@ func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (Status
 			e.Resources = res
 		}
 	}
-	if err := s.repo.Update(e); err != nil {
+	if updated, err := s.repo.UpdateFromAgent(e); err != nil || !updated {
 		return StatusResult{}, err
 	}
 	res := StatusResult{Found: true, TasksRecorded: true}
@@ -945,11 +960,11 @@ func (s *EnvironmentService) SetState(envUUID, state string) (bool, error) {
 		return false, err
 	}
 	e, err := s.repo.GetByUUID(envUUID)
-	if err != nil || e == nil {
+	if err != nil || e == nil || e.State == StateDeregistered {
 		return false, err
 	}
 	e.State = phase
-	return true, s.repo.Update(e)
+	return s.repo.UpdateFromAgent(e)
 }
 
 // Entitlement is the plan the control plane reports. Static until a billing source
@@ -1403,7 +1418,12 @@ func (s *EnvironmentService) Action(envID string, scope AccountScope, action str
 	case "drain":
 		e.State = StateDraining
 	case "deregister":
+		// The data plane is going away and its agent with it, so nothing would ever
+		// replace the last inventory it reported: left in place it reads as live,
+		// ready clusters that no longer exist (CLOUDGA-37659).
 		e.State = StateDeregistered
+		e.Live = false
+		e.Resources = json.RawMessage("[]")
 	default:
 		return nil, fmt.Errorf("%w: unknown action %q", ErrValidation, action)
 	}

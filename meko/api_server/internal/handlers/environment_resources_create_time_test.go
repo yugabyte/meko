@@ -71,7 +71,7 @@ func TestSetResourcesByRegion_ModeChangeOnAListedEndpointIs400(t *testing.T) {
 	defer done()
 
 	expectEndpointUpdate(mock)
-	mock.ExpectQuery(`SELECT COALESCE\(resources::text, '\[\]'\) FROM meko_system\.environments WHERE uuid=\$1`).
+	mock.ExpectQuery(`SELECT CASE WHEN state = 'DEREGISTERED' .* FROM meko_system\.environments WHERE uuid=\$1`).
 		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"resources"}).AddRow(
 			`[{"kind":"endpoint","id":"endpoint/` + ctEndpoint + `","state":"ready","attrs":{"id":"66e59001"}}]`))

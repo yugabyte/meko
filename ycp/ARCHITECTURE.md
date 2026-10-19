@@ -388,6 +388,12 @@ READY → DRAINING (drain) → DEREGISTERED (deregister)
   states.
 - Console lifecycle actions (`suspend`/`resume`/`drain`/`deregister`) are applied
   via `PATCH`/`DELETE`.
+- A `DEREGISTERED` environment reads `live: false` with an empty inventory, because
+  no agent is left to replace what it last reported. Every `/agent/*` call from it
+  answers `401`, as a revoked key would, even if YBM has not revoked the key, so an
+  agent left running cannot report it back to life. The agent responds to that by
+  keeping its last desired state with deletes off, so the data plane is left as it is.
+  `resume` lets the agent back in, and its next report sets `live` back to `true`.
 
 A state must be *present* on both `/agent/status` and `/agent/bootstrap-progress`:
 an absent or blank one is a `400` that writes nothing, heartbeat included. Every

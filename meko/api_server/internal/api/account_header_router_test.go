@@ -109,7 +109,8 @@ func TestFleetRoutes_RequireAccountHeader_RejectsMissingHeader(t *testing.T) {
 func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 	srv, mock := fleetServer(t, true)
 
-	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ORDER BY e\.live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ` +
+		`ORDER BY \(e\.live AND e\.state <> 'DEREGISTERED'\) DESC`).
 		WithArgs(acctA).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
@@ -131,7 +132,7 @@ func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 func TestFleetRoutes_AccountHeaderOptionalByDefault(t *testing.T) {
 	srv, mock := fleetServer(t, false)
 
-	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY \(e\.live AND e\.state <> 'DEREGISTERED'\) DESC`).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
 			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, testAPIKeyID, time.Now(), "meko", "[]", nil, "BYOC", false,

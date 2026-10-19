@@ -106,6 +106,13 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 	}
 	e.Components = json.RawMessage(componentsText)
 	e.Resources = json.RawMessage(resourcesText)
+	// Rows deregistered before the deregister action cleared these still hold the
+	// agent's last report, and nothing will overwrite it. Read here so every caller
+	// sees the same thing, with no migration.
+	if e.State == "DEREGISTERED" {
+		e.Live = false
+		e.Resources = json.RawMessage("[]")
+	}
 	return &e, nil
 }
 
@@ -186,7 +193,8 @@ func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) 
 		query += ` WHERE e.account_id = $1`
 		args = append(args, accountForStore(accountID))
 	}
-	query += ` ORDER BY e.live DESC, e.id ASC`
+	// The stored live, not the masked one, would sort an old deregistered row as live.
+	query += ` ORDER BY (e.live AND e.state <> 'DEREGISTERED') DESC, e.id ASC`
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list environments: %w", err)
@@ -309,6 +317,28 @@ func isUniqueViolation23505(err error) bool {
 // The key bindings are not written either -- they live in their own table, so a
 // status heartbeat cannot disturb them.
 func (r *EnvironmentRepo) Update(e *models.Environment) error {
+	_, err := r.update(e, updateEnvironmentSQL)
+	return err
+}
+
+// UpdateFromAgent is Update for a write the environment's agent drives, and is a
+// no-op returning false once the row is DEREGISTERED. The caller's read cannot
+// guard it: a deregister committing between that read and this write would be
+// written over, and the environment revived for good (CLOUDGA-37659).
+func (r *EnvironmentRepo) UpdateFromAgent(e *models.Environment) (bool, error) {
+	n, err := r.update(e, updateEnvironmentSQL+` AND state <> 'DEREGISTERED'`)
+	return n > 0, err
+}
+
+const updateEnvironmentSQL = `
+		UPDATE meko_system.environments SET
+			placement=$2, region=$3, state=$4, k8s_version=$5, node_count=$6,
+			provider=$7, datapacks=$8, max_datapacks=$9, agent_version=$10, last_heartbeat_at=$11,
+			mcp_base_url=$12, cert_fingerprint=$13, components=$14, live=$15,
+			kind=$16, resources=$17, type=$18, accepts_new_pools=$19
+		WHERE uuid = $1`
+
+func (r *EnvironmentRepo) update(e *models.Environment, query string) (int64, error) {
 	components := jsonArray(e.Components)
 	resources := jsonArray(e.Resources)
 	kind := e.Kind
@@ -319,22 +349,16 @@ func (r *EnvironmentRepo) Update(e *models.Environment) error {
 	if typ == "" {
 		typ = "BYOC"
 	}
-	_, err := r.db.Exec(`
-		UPDATE meko_system.environments SET
-			placement=$2, region=$3, state=$4, k8s_version=$5, node_count=$6,
-			provider=$7, datapacks=$8, max_datapacks=$9, agent_version=$10, last_heartbeat_at=$11,
-			mcp_base_url=$12, cert_fingerprint=$13, components=$14, live=$15,
-			kind=$16, resources=$17, type=$18, accepts_new_pools=$19
-		WHERE uuid = $1`,
+	res, err := r.db.Exec(query,
 		e.UUID, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
 		kind, resources, typ, e.AcceptsNewPools)
 	if err != nil {
 		slog.Error("update environment", "uuid", e.UUID, "err", err)
-		return fmt.Errorf("update environment: %w", err)
+		return 0, fmt.Errorf("update environment: %w", err)
 	}
-	return nil
+	return res.RowsAffected()
 }
 
 // The admin-only desired-state kinds. They move software rather than resources — the
@@ -669,7 +693,10 @@ type ObservedResource struct {
 func observedResource(tx *sql.Tx, envUUID, kind, name string) (*ObservedResource, error) {
 	var text string
 	err := tx.QueryRow(
-		`SELECT COALESCE(resources::text, '[]') FROM meko_system.environments WHERE uuid=$1`,
+		// Masked as scanEnvironment masks it, for rows deregistered before deregister
+		// cleared the inventory.
+		`SELECT CASE WHEN state = 'DEREGISTERED' THEN '[]' ELSE COALESCE(resources::text, '[]') END
+		 FROM meko_system.environments WHERE uuid=$1`,
 		envUUID).Scan(&text)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

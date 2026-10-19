@@ -83,7 +83,8 @@ func TestList_FiltersByAccountHeader(t *testing.T) {
 	h, mock, done := newScopeHandler(t)
 	defer done()
 
-	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ORDER BY e\.live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e WHERE e\.account_id = \$1 ` +
+		`ORDER BY \(e\.live AND e\.state <> 'DEREGISTERED'\) DESC`).
 		WithArgs(acctA).
 		WillReturnRows(scopeRow("acme-prod", acctA))
 
@@ -103,7 +104,7 @@ func TestList_UnscopedWithoutAccountHeader(t *testing.T) {
 	defer done()
 
 	// ORDER BY must follow the table directly — no WHERE clause.
-	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY e\.live DESC`).
+	mock.ExpectQuery(`FROM meko_system\.environments e ORDER BY \(e\.live AND e\.state <> 'DEREGISTERED'\) DESC`).
 		WillReturnRows(scopeRow("acme-prod", acctA))
 
 	rec := fleetRequest(t, h.List, http.MethodGet, "/api/v1/environments", "", "", "")
