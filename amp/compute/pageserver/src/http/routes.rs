@@ -562,10 +562,10 @@ async fn timeline_flush_handler(
                 .map_err(|e| ApiError::InternalServerError(e.into()))?;
         }
 
-        // `force_flush` (not plain `flush`): this endpoint forces the durable
-        // consistent_lsn UPDATE through immediately (bypassing the throttle the
-        // periodic/bootstrap flushes use), so a branching descendant's
-        // durability barrier clears without waiting out the `max_age` window.
+        // `force_flush` (not plain `flush`): a failed consistent_lsn UPDATE
+        // fails the request rather than waiting for the flusher's retry, so a
+        // caller that gets 200 knows a branching descendant's durability
+        // barrier is clear.
         timeline.force_flush().await.map_err(|e| match e {
             page_server::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
             other => ApiError::InternalServerError(other.into()),

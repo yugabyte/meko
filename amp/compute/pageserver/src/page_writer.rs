@@ -262,33 +262,14 @@ pub struct PageWriter {
     /// `advance_consistent_lsn` succeeds. Initialised to 0 at
     /// construction; attach seeds it from the persisted row.
     consistent_lsn_watermark: std::sync::atomic::AtomicU64,
-    /// Highest LSN actually durabilised in `amp_storage.pages` /
-    /// `slru_pages` / `meta`. Advances on every successful flush,
-    /// even when the throttle skips the YB UPDATE on
-    /// `consistent_lsn`. Used by `force_upsert_consistent_lsn_if_advanced`
-    /// at shutdown to persist any tail the throttle deferred.
-    consistent_lsn_observed: std::sync::atomic::AtomicU64,
-    /// Wall-clock timestamp of the most recent successful
-    /// `advance_consistent_lsn`. Used to throttle the YB UPDATE
-    /// to one per `policy.max_age` window even if the size-based
-    /// flush trigger fires faster than that (a burst of rel-page
-    /// writes can flush every few hundred ms; persisting the row
-    /// that often would be wasted YB traffic — SK truncation is
-    /// driven by this value but bounded by `max_age` is plenty
-    /// fine-grained).
-    ///
-    /// `Mutex<Option<Instant>>` rather than atomic because the
-    /// contention is nil (only the flusher writes it) and `Instant`
-    /// isn't atomically representable. `None` means "no upsert yet";
-    /// the first flush always writes regardless of elapsed time.
-    last_consistent_lsn_upsert_at: std::sync::Mutex<Option<Instant>>,
     /// `(last_record_lsn → prev_record_lsn)` for WAL records the
     /// walreceiver has finish_write'd but PageWriter hasn't yet
     /// persisted via `advance_consistent_lsn`. Populated by
     /// `Timeline::finish_write` (which knows both values atomically
-    /// from `RecordLsn::cnt_advance`). The flush path looks up the
-    /// prev for the max flushed lsn and prunes entries ≤ that lsn
-    /// (those records are now durable).
+    /// from `RecordLsn::cnt_advance`). Its highest key is the flush's
+    /// ingest frontier. A flush pairs that frontier with its prev in the
+    /// UPDATE and prunes entries ≤ it only once the UPDATE succeeds, so a
+    /// failed UPDATE leaves the frontier here for the next flush to retry.
     ///
     /// When the lookup misses (rare race: a record's pages landed in
     /// the buffer before its `finish_write` ran, and a flush fired
@@ -494,8 +475,6 @@ impl PageWriter {
             keys_to_materialize: DashSet::new(),
             materializer: None,
             consistent_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
-            consistent_lsn_observed: std::sync::atomic::AtomicU64::new(0),
-            last_consistent_lsn_upsert_at: std::sync::Mutex::new(None),
             record_lsn_history: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             consistent_lsn_slot: std::sync::OnceLock::new(),
             flush_completed: tokio::sync::Notify::new(),
@@ -545,30 +524,56 @@ impl PageWriter {
         &self.hot_path_page_store
     }
 
-    /// Bypass-throttle dc_lsn upsert for shutdown. The periodic flush
-    /// path throttles the YB UPDATE on the timeline row to one per
-    /// `policy.max_age`; on a clean shutdown we may have skipped the
-    /// last few flushes' worth of dc_lsn advances. Catch them up by
-    /// upserting `consistent_lsn_observed` if it exceeds the watermark.
-    /// No-op if the watermark is already at or past the observed
-    /// value.
-    pub async fn force_upsert_consistent_lsn_if_advanced(&self) -> Result<()> {
+    /// Whether a noted record is past `branch_state.consistent_lsn` with
+    /// nothing buffered to trigger the flush that would persist it: after a
+    /// failed UPDATE, after a record with no rows, or after one noted once
+    /// the flush that wrote its rows had taken its frontier. The flusher
+    /// flushes while this holds: a fork at head waits on that column in
+    /// `create_branch_row`, and an idle branch gets no other flush (#1386).
+    fn consistent_lsn_flush_needed(&self) -> bool {
+        let watermark = self.consistent_lsn_watermark.load(Ordering::Relaxed);
+        let noted_past_watermark = self
+            .record_lsn_history
+            .lock()
+            .ok()
+            .and_then(|m| m.keys().next_back().copied())
+            .is_some_and(|l| l.0 > watermark);
+        noted_past_watermark && self.nothing_buffered(&self.aux.lock())
+    }
+
+    fn nothing_buffered(&self, aux: &AuxBuffers) -> bool {
+        self.pages.unflushed_count() == 0
+            && aux.slru_buffer.is_empty()
+            && aux.meta_buffer.is_empty()
+            && aux.gc_event_buffer.is_empty()
+    }
+
+    /// Persist a flush's ingest frontier, everything at or below which that
+    /// flush has made durable, to `branch_state.consistent_lsn` if it is
+    /// ahead of the watermark. Call it only from a flush, under
+    /// `flush_serialize`: the UPDATE is absolute, so two overlapping calls
+    /// could commit an older value last and move the column backwards.
+    async fn upsert_consistent_lsn_if_advanced(&self, frontier: Option<Lsn>) -> Result<()> {
         use std::sync::atomic::Ordering::Relaxed;
-        let observed = self.consistent_lsn_observed.load(Relaxed);
-        let watermark = self.consistent_lsn_watermark.load(Relaxed);
-        if observed <= watermark {
+        let Some(lsn) = frontier else {
+            return Ok(());
+        };
+        if lsn.0 <= self.consistent_lsn_watermark.load(Relaxed) {
+            self.prune_noted_at_or_below(lsn);
             return Ok(());
         }
-        let lsn = utils::lsn::Lsn(observed);
         // Pair dc_lsn with the prev_record_lsn the walreceiver
         // noted for this record. `None` falls through to a NULL
         // column — the walreceiver re-derives prev on restart.
-        let prev = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
+        let prev = self.peek_prev_at_or_below(lsn);
         self.hot_path_page_store
             .advance_consistent_lsn(self.branch_id, lsn, prev)
             .await?;
-        self.consistent_lsn_watermark.store(observed, Relaxed);
-        *self.last_consistent_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
+        self.prune_noted_at_or_below(lsn);
+        self.consistent_lsn_watermark.store(lsn.0, Relaxed);
+        // The UPDATE is the durability commit point; this only echoes it
+        // to the walreceiver, which forwards it to the safekeeper to bound
+        // WAL truncation.
         self.publish_consistent_lsn(lsn);
         Ok(())
     }
@@ -1729,9 +1734,22 @@ impl PageWriter {
         }
     }
 
-    /// Drain the buffer into one `INSERT` against `PageStore`. No-op if
-    /// the buffer is empty. Resets the policy timer.
+    /// Drain the buffer into one `INSERT` against `PageStore`, then persist
+    /// `consistent_lsn`. A failed `consistent_lsn` UPDATE is only logged: the
+    /// pages are in YB, and the flusher's next pass retries it. Resets the
+    /// policy timer.
     pub async fn flush(&self) -> Result<()> {
+        self.flush_with(OnConsistentLsnUpdateError::Log).await
+    }
+
+    /// [`Self::flush`], but a failed `consistent_lsn` UPDATE fails the call.
+    /// For callers that need the column persisted when this returns: the
+    /// branch-time flush endpoint, and graceful shutdown.
+    pub async fn flush_persisting_consistent_lsn(&self) -> Result<()> {
+        self.flush_with(OnConsistentLsnUpdateError::Return).await
+    }
+
+    async fn flush_with(&self, on_update_error: OnConsistentLsnUpdateError) -> Result<()> {
         // Exclusive across all flushers: the aux-buffer snapshot and
         // the later count-based `drain(0..slru_count)` must see the
         // same buffer, or an overlapping flush silently drops fresh
@@ -1795,7 +1813,14 @@ impl PageWriter {
             self.pages.mark_flushed(&rel_snapshot);
             let to_dispatch = self.take_slru_materialize_jobs(false);
             self.enqueue_slru_materialize_jobs(to_dispatch).await;
-            return Ok(());
+            // A record is noted only after its rows are put, and nothing is
+            // unflushed under `flush_serialize`, so every row at or below the
+            // frontier is already in YB. Without this, a record with no rows
+            // (or one noted after the flush that wrote its rows) never
+            // reaches the column.
+            return self
+                .try_upsert_consistent_lsn(ingest_frontier, on_update_error)
+                .await;
         }
         let mut claim = FlushClaim {
             writer: self,
@@ -1913,11 +1938,7 @@ impl PageWriter {
                 // benign reconnect-replay re-push of an already-durable row,
                 // not a data-losing over-advance — see the rel-path comment
                 // for the full rationale.
-                if self.pages.unflushed_count() == 0
-                    && aux.slru_buffer.is_empty()
-                    && aux.meta_buffer.is_empty()
-                    && aux.gc_event_buffer.is_empty()
-                {
+                if self.nothing_buffered(&aux) {
                     aux.opened_at = None;
                 } else {
                     aux.opened_at = Some(Instant::now());
@@ -1928,72 +1949,12 @@ impl PageWriter {
             self.flush_completed.notify_waiters();
             self.enqueue_slru_materialize_jobs(to_materialize).await;
 
-            // Outside the writer lock: persist the dc_lsn advance to
-            // `amp_storage.branch_state` if (a) it actually moved AND
-            // (b) at least `policy.max_age` has elapsed since the last
-            // upsert. The throttle decouples the YB UPDATE rate from
-            // the page-data flush rate — a burst of size-triggered
-            // flushes (every few hundred ms under load) only writes
-            // the row once per `max_age` window. Safe because the
-            // safekeeper's WAL truncation is bounded by the persisted
-            // value; falling at most `max_age` behind means SK keeps
-            // an extra `max_age` worth of WAL (5s by default — trivial).
-            // Order matters: pages are already in YB by this point, so
-            // a missed UPDATE just means the next flush retries; SK
-            // still has the WAL because the timeline row's persisted
-            // dc_lsn hasn't moved.
-            if let Some(new_lsn) = ingest_frontier.map(|l| l.0) {
-                use std::sync::atomic::Ordering::Relaxed;
-                // Always advance `consistent_lsn_observed` — that's the
-                // "everything ≤ this is durable in YB pages/slru/meta"
-                // tracker. The throttle below only gates the YB UPDATE
-                // on the timeline row, not the underlying durability.
-                self.consistent_lsn_observed.fetch_max(new_lsn, Relaxed);
-                let prev = self.consistent_lsn_watermark.load(Relaxed);
-                let elapsed_ok = {
-                    let guard = self.last_consistent_lsn_upsert_at.lock().unwrap();
-                    match *guard {
-                        None => true, // first upsert always goes through
-                        Some(prev_at) => prev_at.elapsed() >= self.policy.max_age,
-                    }
-                };
-                if new_lsn > prev && elapsed_ok {
-                    let lsn = utils::lsn::Lsn(new_lsn);
-                    // Best-effort pairing — see force_upsert_consistent_lsn_if_advanced.
-                    let prev_record_lsn = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
-                    match self
-                        .hot_path_page_store
-                        .advance_consistent_lsn(self.branch_id, lsn, prev_record_lsn)
-                        .await
-                    {
-                        Ok(()) => {
-                            self.consistent_lsn_watermark.store(new_lsn, Relaxed);
-                            *self.last_consistent_lsn_upsert_at.lock().unwrap() =
-                                Some(Instant::now());
-                            // Publish the just-advanced LSN as the
-                            // safekeeper-truncation bound. The walreceiver
-                            // loop forwards this slot to the safekeeper
-                            // in PageserverFeedback.consistent_lsn,
-                            // bounding `truncate_lsn` / `peer_horizon_lsn`.
-                            // The UPDATE above is the durability commit
-                            // point — this publish only echoes a fact
-                            // that's already in YB.
-                            self.publish_consistent_lsn(lsn);
-                        }
-                        Err(e) => {
-                            // Transient YB / network error. Pages are
-                            // already in YB, only the timeline row
-                            // lags. Next flush retries; SK keeps a
-                            // little more WAL until we catch up.
-                            tracing::warn!(
-                                branch_id = %self.branch_id,
-                                new_lsn = %lsn,
-                                "advance_consistent_lsn failed: {e:#}"
-                            );
-                        }
-                    }
-                }
-            }
+            // Outside the writer lock, after the pages are in YB. A failed
+            // UPDATE only leaves the column behind; the flusher's next pass
+            // retries it, and the safekeeper keeps the WAL meanwhile because
+            // its truncation is bounded by the persisted value.
+            self.try_upsert_consistent_lsn(ingest_frontier, on_update_error)
+                .await?;
         }
         // On error, leave buffers untouched — next periodic flush retries.
         // With `yb_enable_upsert_mode=true` (set per-connection in
@@ -2002,6 +1963,26 @@ impl PageWriter {
             claim.settle(false);
         }
         res
+    }
+
+    async fn try_upsert_consistent_lsn(
+        &self,
+        frontier: Option<Lsn>,
+        on_update_error: OnConsistentLsnUpdateError,
+    ) -> Result<()> {
+        match (
+            self.upsert_consistent_lsn_if_advanced(frontier).await,
+            on_update_error,
+        ) {
+            (Err(e), OnConsistentLsnUpdateError::Log) => {
+                tracing::warn!(
+                    branch_id = %self.branch_id,
+                    "advance_consistent_lsn failed: {e:#}"
+                );
+                Ok(())
+            }
+            (res, _) => res,
+        }
     }
 
     async fn try_write_rows(
@@ -2119,7 +2100,7 @@ impl PageWriter {
             m.insert(last_record_lsn, prev_record_lsn);
             // Cap the map size at a generous bound so a stuck flush
             // doesn't grow it unboundedly. We prune from below in
-            // `take_prev_at_or_below`; this is just defense in depth.
+            // `prune_noted_at_or_below`; this is just defense in depth.
             const HARD_CAP: usize = 16_384;
             if m.len() > HARD_CAP {
                 let prune_to = m.len() - HARD_CAP / 2;
@@ -2129,18 +2110,19 @@ impl PageWriter {
         }
     }
 
-    /// Pull the `prev_record_lsn` paired with the highest noted
-    /// `last_record_lsn ≤ flushed_lsn`, and remove that entry plus
-    /// all older ones from the history (those records are durable
-    /// now). Returns the matched `(last, prev)` pair, or `None` if
-    /// the buffer holds no notes at or below `flushed_lsn` —
-    /// typically because pages landed before their record's
-    /// `finish_write` ran.
-    fn take_prev_at_or_below(&self, flushed_lsn: Lsn) -> Option<(Lsn, Lsn)> {
-        let mut m = self.record_lsn_history.lock().ok()?;
-        let (&last, &prev) = m.range(..=flushed_lsn).next_back()?;
-        m.retain(|&k, _| k > last);
-        Some((last, prev))
+    /// The `prev_record_lsn` paired with the highest noted
+    /// `last_record_lsn ≤ flushed_lsn`, or `None` if no note is at or
+    /// below it.
+    fn peek_prev_at_or_below(&self, flushed_lsn: Lsn) -> Option<Lsn> {
+        let m = self.record_lsn_history.lock().ok()?;
+        m.range(..=flushed_lsn).next_back().map(|(_, &prev)| prev)
+    }
+
+    /// Drop the notes at or below a `consistent_lsn` that is now persisted.
+    fn prune_noted_at_or_below(&self, lsn: Lsn) {
+        if let Ok(mut m) = self.record_lsn_history.lock() {
+            m.retain(|&k, _| k > lsn);
+        }
     }
 
     /// Range scan over meta keys. Returns the latest version per key.
@@ -2306,6 +2288,13 @@ impl PageWriter {
     }
 }
 
+/// What a flush does when its `consistent_lsn` UPDATE fails.
+#[derive(Clone, Copy)]
+enum OnConsistentLsnUpdateError {
+    Log,
+    Return,
+}
+
 /// Handle for a periodic-flush background task. Cancel the token to
 /// stop; the task does one final `flush()` before returning.
 pub struct FlushTask {
@@ -2347,7 +2336,9 @@ impl PageWriter {
                 // is nothing to flush.
                 let _ = w.stats().await;
                 w.retry_enqueue_rel_materialize_jobs();
-                let flush_due = w.slru_materialize_jobs_pending_flush() || w.should_flush().await;
+                let flush_due = w.slru_materialize_jobs_pending_flush()
+                    || w.consistent_lsn_flush_needed()
+                    || w.should_flush().await;
                 // Lets an integration test keep folded images above unflushed deltas.
                 #[cfg(feature = "testing")]
                 let flush_due =
@@ -2363,6 +2354,8 @@ impl PageWriter {
                     );
                 }
             }
+            // A failed consistent_lsn UPDATE is only logged here: the pages
+            // are in YB, and graceful shutdown's `force_flush` surfaces it.
             if let Some(w) = weak.upgrade() {
                 if let Err(e) = w.flush().await {
                     crate::metrics::CORRECTNESS_ERRORS
@@ -2371,23 +2364,6 @@ impl PageWriter {
                     tracing::error!(
                         "PAGEWRITER FINAL FLUSH FAILED — last unflushed window \
                          lost: {e:?}"
-                    );
-                }
-                // Force-persist any post-throttle dc_lsn the periodic
-                // flushes have been deferring. Without this, a clean
-                // shutdown could leave the persisted dc_lsn up to
-                // `policy.max_age` behind the actual durable LSN —
-                // safe for crash recovery (walreceiver re-applies the
-                // gap, idempotent INSERTs) but wasteful on restart
-                // and noisy in logs.
-                if let Err(e) = w.force_upsert_consistent_lsn_if_advanced().await {
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["pagewriter_flush"])
-                        .inc();
-                    tracing::error!(
-                        "PAGEWRITER FINAL DC_LSN UPSERT FAILED — persisted \
-                         consistent_lsn is stale on disk; next attach \
-                         will redo extra WAL: {e:?}"
                     );
                 }
             }
@@ -4880,16 +4856,13 @@ mod tests {
         .await
         .unwrap();
         w.note_record_lsn(Lsn(75), Lsn(60));
-        // The throttle has `max_age` since the last successful upsert.
-        // Default `max_age` is 5s; the first flush set the watermark,
-        // and we're calling flush() again before the window elapses,
-        // so the gated UPDATE is intentionally skipped → slot stays.
+        // Back to back with the first flush: the last flush of a burst must
+        // persist its own frontier, or an idle branch keeps a stale column
+        // that a fork at head waits on forever (#1386).
         w.flush().await.unwrap();
-        assert_eq!(
-            slot.load(),
-            Lsn(42),
-            "throttle prevents back-to-back UPDATE; slot retains prior value"
-        );
+        assert_eq!(slot.load(), Lsn(75), "every advancing flush publishes");
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
+        assert_eq!(row.consistent_lsn, Lsn(75));
 
         drop_schema(&store, &schema).await;
     }
@@ -4906,25 +4879,22 @@ mod tests {
         w.note_record_lsn(Lsn(0x200), Lsn(0x100));
         w.note_record_lsn(Lsn(0x300), Lsn(0x200));
 
-        // Lookup at the exact `last` returns its prev.
-        assert_eq!(
-            w.take_prev_at_or_below(Lsn(0x200)),
-            Some((Lsn(0x200), Lsn(0x100)))
-        );
-        // Older entries (≤ 0x200) are pruned; 0x100 is gone.
-        assert_eq!(w.take_prev_at_or_below(Lsn(0x100)), None);
+        // Lookup at the exact `last` returns its prev, and leaves it.
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x200)), Some(Lsn(0x100)));
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x200)), Some(Lsn(0x100)));
+        // Pruning drops entries ≤ 0x200; 0x100 is gone.
+        w.prune_noted_at_or_below(Lsn(0x200));
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x100)), None);
         // 0x300 survives.
-        assert_eq!(
-            w.take_prev_at_or_below(Lsn(0x300)),
-            Some((Lsn(0x300), Lsn(0x200)))
-        );
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x300)), Some(Lsn(0x200)));
         // Map now empty.
-        assert_eq!(w.take_prev_at_or_below(Lsn(0x400)), None);
+        w.prune_noted_at_or_below(Lsn(0x300));
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x400)), None);
 
         drop_schema(&store, &schema).await;
     }
 
-    /// `take_prev_at_or_below(L)` picks the highest noted entry ≤ L,
+    /// `peek_prev_at_or_below(L)` picks the highest noted entry ≤ L,
     /// not the exact L. Models the race where pages flush at an lsn
     /// the walreceiver has noted but a later (uncommitted) record
     /// sits above.
@@ -4938,21 +4908,16 @@ mod tests {
 
         // Query at 0x250 — no entry at exactly that lsn; pick the
         // highest noted ≤ 0x250, which is 0x100.
-        assert_eq!(
-            w.take_prev_at_or_below(Lsn(0x250)),
-            Some((Lsn(0x100), Lsn(0x080)))
-        );
-        // 0x300 still there.
-        assert_eq!(
-            w.take_prev_at_or_below(Lsn(0x300)),
-            Some((Lsn(0x300), Lsn(0x100)))
-        );
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x250)), Some(Lsn(0x080)));
+        // Pruning at 0x250 leaves 0x300.
+        w.prune_noted_at_or_below(Lsn(0x250));
+        assert_eq!(w.peek_prev_at_or_below(Lsn(0x300)), Some(Lsn(0x100)));
 
         drop_schema(&store, &schema).await;
     }
 
     /// End-to-end: walreceiver-style flow notes record_lsn after a
-    /// put + flush, the throttled `advance_consistent_lsn` runs,
+    /// put + flush, the `advance_consistent_lsn` UPDATE runs,
     /// and the persisted `branch_state.prev_record_lsn` reflects
     /// the noted prev. Restart correctness depends on this column
     /// being non-NULL; the previous shape never wrote it.
@@ -5087,7 +5052,7 @@ mod tests {
     }
 
     /// Once a non-NULL `prev_record_lsn` has been persisted, a
-    /// subsequent throttled `advance_consistent_lsn` whose
+    /// subsequent `advance_consistent_lsn` whose
     /// caller couldn't resolve a fresh pairing must NOT clobber the
     /// column with NULL. The SQL uses `COALESCE($5, prev_record_lsn)`
     /// to preserve the prior value in that case.
@@ -5122,68 +5087,109 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// Documents the contract the `pgdatadir_mapping::put_rel_creation`
-    /// idempotency check leans on: within a `policy.max_age` window
-    /// of back-to-back flushes, `amp_storage.pages` rows are durable
-    /// at LSN X while `amp_storage.branch_state.consistent_lsn`
-    /// still reads X' < X. This lag is intentional — the throttle
-    /// keeps a single hot table row from absorbing one UPSERT per
-    /// flush — but it means a `kill -9` mid-window leaves the next
-    /// PS lifetime resuming WAL replay from X'. Re-applying records
-    /// whose effects are already in YB would panic walreceiver with
-    /// `RelationAlreadyExists` on the first CREATE in (X', X];
-    /// `put_rel_creation` returns early when the rel is already in
-    /// the keyspace to keep replay safe over this window. See the
-    /// integration `restart_wal_replay` after `restart_wal_replay_yb`
-    /// in `run.sh all` for the end-to-end repro.
+    /// A failed `consistent_lsn` UPDATE leaves `amp_storage.pages` durable
+    /// at X while the column still reads X' < X — the replay window
+    /// `pgdatadir_mapping::put_rel_creation`'s idempotency check exists for
+    /// (a crash here replays (X', X]; see the integration `restart_wal_replay`).
+    /// The flusher must close that window with no further puts: an idle
+    /// branch gets no more flushes, and a fork at head waits on the column
+    /// (#1386).
     #[tokio::test]
-    async fn consistent_lsn_lag_under_throttle_is_expected() {
-        use std::sync::atomic::Ordering::Relaxed;
-
-        let (store, schema) = make_store("clsn_lag_expected").await;
+    async fn flusher_retries_a_failed_consistent_lsn_update_while_idle() {
+        let (store, schema) = make_store("clsn_idle_retry").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
+        let w = Arc::new(w);
+
+        // No branch_state row yet, so the flush's UPDATE fails.
+        w.put(&[(k(1), Lsn(0x200), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(0x200), Lsn(0x100));
+        w.flush().await.unwrap();
+        let chain = store
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(0x300))
+            .await
+            .unwrap();
+        assert_eq!(chain.iter().map(|r| r.lsn).max(), Some(Lsn(0x200)));
+
+        seed_branch_state_row(&store, t).await;
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
+        assert_eq!(row.consistent_lsn, Lsn(0), "pages ahead of the column");
+
+        let task = w.spawn_flusher(Duration::from_millis(15));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let row = store.get_branch_state(t).await.unwrap().unwrap();
+            if row.consistent_lsn == Lsn(0x200) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "column stuck at {}",
+                row.consistent_lsn
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        task.shutdown().await;
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The branch-time flush endpoint and shutdown need the column persisted
+    /// when the flush returns, so only they see a failed UPDATE.
+    #[tokio::test]
+    async fn only_the_persisting_flush_fails_on_a_failed_consistent_lsn_update() {
+        let (store, schema) = make_store("clsn_persisting_flush").await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+
+        // No branch_state row yet, so every UPDATE fails.
+        w.put(&[(k(1), Lsn(0x200), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(0x200), Lsn(0x100));
+        w.flush().await.unwrap();
+        assert!(w.flush_persisting_consistent_lsn().await.is_err());
+
+        seed_branch_state_row(&store, t).await;
+        w.flush_persisting_consistent_lsn().await.unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
+        assert_eq!(row.consistent_lsn, Lsn(0x200));
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A trailing record with no rows (or one noted after the flush that
+    /// wrote its rows took its frontier) leaves nothing to flush, so only an
+    /// empty flush can carry the column to it. A fork at head picks that
+    /// record's end as its branch point (#1386).
+    #[tokio::test]
+    async fn flusher_carries_consistent_lsn_past_a_rowless_trailing_record() {
+        let (store, schema) = make_store("clsn_rowless_tail").await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        let w = Arc::new(w);
         seed_branch_state_row(&store, t).await;
 
-        // First flush: the first upsert always goes through.
         w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x100), Lsn(0x80));
         w.flush().await.unwrap();
-        let row = store.get_branch_state(t).await.unwrap().unwrap();
-        assert_eq!(row.consistent_lsn, Lsn(0x100));
-
-        // Second flush within `policy.max_age`: pages durable, the
-        // branch_state UPDATE is throttled.
-        w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x200), Lsn(0x100));
-        w.flush().await.unwrap();
-
-        // Page row IS durable in `pages`.
-        let chain = store
-            .read_chain(t, &key_to_bytes(k(2)), Lsn(0x300))
-            .await
-            .unwrap();
-        let max_page_lsn = chain.iter().map(|r| r.lsn).max().unwrap_or(Lsn(0));
-        assert_eq!(
-            max_page_lsn,
-            Lsn(0x200),
-            "page row at 0x200 is durable in amp_storage.pages"
+        assert!(
+            !w.should_flush().await,
+            "nothing buffered to trigger a flush"
         );
 
-        // In-memory tracker knows the true LSN.
-        let observed = w.consistent_lsn_observed.load(Relaxed);
-        assert_eq!(Lsn(observed), Lsn(0x200));
-
-        // Persisted column stays at the first flush's LSN — by
-        // design. The replay window between this LSN and the actual
-        // max durable LSN is what `put_rel_creation`'s idempotency
-        // check protects against.
-        let row = store.get_branch_state(t).await.unwrap().unwrap();
-        assert_eq!(
-            row.consistent_lsn,
-            Lsn(0x100),
-            "throttle keeps consistent_lsn at the prior upsert; \
-             amp_storage.pages can be ahead within the window"
-        );
+        let task = w.spawn_flusher(Duration::from_millis(15));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let row = store.get_branch_state(t).await.unwrap().unwrap();
+            if row.consistent_lsn == Lsn(0x200) {
+                assert_eq!(row.prev_record_lsn, Some(Lsn(0x100)));
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "column stuck at {}",
+                row.consistent_lsn
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        task.shutdown().await;
 
         drop_schema(&store, &schema).await;
     }

@@ -172,7 +172,7 @@ fn synth_timeline_metadata_from_row(
     );
     Ok(TimelineMetadata::new(
         row.consistent_lsn,
-        // Persisted on flush; see PageWriter::take_prev_at_or_below.
+        // Persisted on flush; see PageWriter::peek_prev_at_or_below.
         // NULL falls through as None and the walreceiver re-derives
         // prev from the SK stream.
         row.prev_record_lsn,

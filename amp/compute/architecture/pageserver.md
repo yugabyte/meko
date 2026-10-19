@@ -78,9 +78,8 @@ The management HTTP surface is small: status / metrics / profiling,
 the single branch's detail, `get_lsn_by_timestamp`,
 `get_timestamp_of_lsn`, `lsn_lease`, `do_gc`,
 `flush` (`PUT /v1/branch/:branch_id/flush?lsn=` — waits for ingest to
-reach `lsn`, flushes pages to YB, then forces the durable
-`consistent_lsn` UPDATE through immediately, bypassing the per-`max_age`
-throttle; the launcher calls it on the ancestor at branch time so the
+reach `lsn`, flushes pages to YB, and fails unless the durable
+`consistent_lsn` UPDATE went through; the launcher calls it on the ancestor at branch time so the
 new branch's `create_branch_row` durability barrier clears in ~0.1 s
 instead of a full flush interval), and test plumbing (failpoints,
 panic, tracing/event, reload_auth_validation_keys). The full route
@@ -105,9 +104,10 @@ queue behind internal writes:
   durable chain reads, and the materialiser's image writes. The flush's
   four writes — pages, SLRU, meta, and the `pending_gc` candidates that
   trail them — all take the direct-RPC lane below. What goes out over YSQL
-  from this pool is the `branch_state` traffic: `advance_consistent_lsn` once
-  per flush window, `update_branch_initial_state` at bootstrap, and the
-  `get_branch_state` read inside `create_branch_row` at branch creation.
+  from this pool is the `branch_state` traffic: `advance_consistent_lsn` on
+  every flush that advances it, `update_branch_initial_state` at bootstrap,
+  and the `get_branch_state` read inside `create_branch_row` at branch
+  creation.
 
   Each connection still runs `SET yb_enable_upsert_mode = true`, which is
   now vestigial: the GUC only skips YB's read-before-write on INSERT, and no
@@ -650,12 +650,8 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    `evict_to_capacity` sheds cold keys if `total_bytes` exceeds
    `read_cache_bytes`, `flush_horizon_lsn` advances to the ingest
    frontier, the materialiser trigger runs (next section), and the
-   durable `consistent_lsn` UPDATE fires if it moved and the
-   per-`max_age` throttle allows (at most one row UPDATE per 5 s window
-   by default — safekeeper truncation lagging by one window is
-   trivial). `consistent_lsn_observed` always tracks the real durable
-   frontier; a clean shutdown catches up any throttled tail via
-   `force_upsert_consistent_lsn_if_advanced`.
+   durable `consistent_lsn` UPDATE fires if it moved. A failed UPDATE
+   leaves the frontier noted, so the next flush retries it (below).
 8. Reads between flushes (and DURING a flush) see all in-RAM rows —
    pre-flush and durable cache — blended with PageStore via
    `read_chain` / `scan_range` (sort, dedup by LSN, truncate at the
@@ -678,7 +674,11 @@ whose caller drops it mid-way releases its claim the same way.
 `flush_interval` (5 s), buffered bytes ≥ `min(flush_size_bytes,
 backpressure_bytes)` (12 MiB by default), or an SLRU page waits for a
 flush to enqueue its materialise job. Each pass also retries the relation-page materialise
-jobs whose enqueue failed at the crossing (see **Enqueue** below).
+jobs whose enqueue failed at the crossing (see **Enqueue** below), and
+flushes while the `consistent_lsn` column is behind with nothing buffered to
+move it — a failed UPDATE, or a noted record no flush covered — since an
+empty flush still advances it to the ingest frontier, an idle branch gets no
+other flush, and a fork at head waits on that column (#1386).
 `flusher_wakeup` runs a pass early:
 
 - an **SLRU** crossing pulses it, so the flush and the post-flush
@@ -687,8 +687,7 @@ jobs whose enqueue failed at the crossing (see **Enqueue** below).
   the cap is flushed at once rather than on the next tick.
 
 `notify_one` coalesces a burst of wakeups, and `put()` never blocks
-on it. On shutdown the task does a final flush plus the
-throttle-bypassing `consistent_lsn` catch-up.
+on it. On shutdown the task does a final flush.
 
 ### Backpressure
 

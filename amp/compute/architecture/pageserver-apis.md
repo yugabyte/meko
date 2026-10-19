@@ -150,9 +150,8 @@ Details per handler:
   so `enable_gc` off or the lsn-lease grace makes it a no-op.
 - **flush**: optional query `lsn=<lsn>` — first `wait_lsn`s until WAL
   ingest reaches that LSN, then calls `Timeline::force_flush()`
-  (`PageWriter::flush` + `force_upsert_consistent_lsn_if_advanced`), so
-  the post-flush durable `consistent_lsn` is `>= lsn` and the UPDATE
-  bypasses the per-`max_age` upsert throttle the periodic flushes use.
+  (`PageWriter::flush_persisting_consistent_lsn`), so the
+  post-flush durable `consistent_lsn` is `>= lsn`, or the request fails.
   **Not** testing-gated: the launcher calls it on the ancestor at
   branch time so the branch's `create_branch_row` durability barrier
   clears immediately instead of waiting out a flush interval. Returns

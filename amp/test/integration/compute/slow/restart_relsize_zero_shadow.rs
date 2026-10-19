@@ -1,8 +1,8 @@
 //! #22 regression: rel-size cache pin during WAL replay must not
 //! zero-shadow live blocks. Insert-heavy load extends a relation while
-//! the PS flushes rows to YB continuously; an immediate PS stop leaves
-//! the persisted checkpoint behind YB's durable horizon, so the restart
-//! replays WAL it already flushed. Pre-fix, `put_rel_extend` never
+//! the PS flushes rows to YB continuously while a failpoint holds the
+//! persisted checkpoint back; a SIGKILL then leaves it behind YB's durable
+//! horizon, so the restart replays WAL it already flushed. Pre-fix, `put_rel_extend` never
 //! advances the rel-size cache during that replay (storage already
 //! knows every size it proposes), the cache stays pinned at the
 //! replay-start size, and every subsequent record re-zero-fills
@@ -19,6 +19,71 @@ use regex::Regex;
 use crate::cluster::{Cluster, MARKERS, step};
 use crate::tee_println;
 use crate::db;
+
+const HOLD_CONSISTENT_LSN: &str = "ps::page-store::fail-advance-consistent-lsn";
+
+async fn set_failpoint(c: &Cluster, actions: &str) -> anyhow::Result<()> {
+    let url = format!("http://127.0.0.1:{}/v1/failpoints", c.ps_http_port());
+    c.daemon_client(c.ps_http_port())?
+        .put(&url)
+        .json(&serde_json::json!([{ "name": HOLD_CONSISTENT_LSN, "actions": actions }]))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
+/// Extend `zero_shadow` for ~7s with the consistent_lsn UPDATE failing, and
+/// check the column stayed put. Returns the number of insert batches.
+async fn extend_while_held(c: &Cluster, main: &str, branch: &str) -> anyhow::Result<u32> {
+    // An UPDATE that started before the failpoint was armed can still land:
+    // take the held value once two reads a moment apart agree.
+    let mut held = c.consistent_lsn(branch).await?;
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let again = c.consistent_lsn(branch).await?;
+        if again == held {
+            break;
+        }
+        held = again;
+    }
+    let deadline = Instant::now() + Duration::from_secs(7);
+    let mut batches = 0u32;
+    while Instant::now() < deadline {
+        db::batch(
+            main,
+            "INSERT INTO zero_shadow (pad)
+               SELECT repeat('x', 1000) FROM generate_series(1, 500);",
+        )
+        .await?;
+        batches += 1;
+    }
+    let nblocks = db::query_i64(main, "SELECT pg_relation_size('zero_shadow') / 8192").await?;
+    tee_println!("{batches} insert batches, relation at {nblocks} blocks");
+    if nblocks < 50 {
+        bail!("workload too small to exercise extension ({nblocks} blocks < 50)");
+    }
+    let persisted = c.consistent_lsn(branch).await?;
+    if persisted != held {
+        bail!("failpoint did not hold consistent_lsn: {held:?} -> {persisted:?}");
+    }
+    Ok(batches)
+}
+
+/// A true SIGKILL, not `stop -m immediate`: the immediate-stop path still
+/// runs a shutdown flush + dc_lsn upsert, which closes the replay window and
+/// lets the restart skip replay entirely. The production crashes were
+/// SIGABRT/OOM-kill — no shutdown handler — so that's what we simulate.
+fn kill_pageserver(c: &Cluster) -> anyhow::Result<()> {
+    step("SIGKILL pageserver (checkpoint stays behind YB rows)");
+    let pidfile = c.repo_dir().join("endpoints/main/pageserver/pageserver.pid");
+    let pid = std::fs::read_to_string(&pidfile)?.trim().to_string();
+    let status = std::process::Command::new("kill").args(["-9", &pid]).status()?;
+    if !status.success() {
+        bail!("kill -9 {pid} failed");
+    }
+    Ok(())
+}
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
@@ -41,40 +106,25 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let relnode = db::query_text(&main, "SELECT pg_relation_filenode('zero_shadow')::text").await?;
     tee_println!("zero_shadow dbnode={dbnode} relnode={relnode}");
 
-    // Outlive the PageWriter's dc_lsn upsert throttle (5s default) so
-    // the last persisted checkpoint is guaranteed to lag the rows the
-    // flush loop keeps pushing into YB — that lag IS the replay window.
-    step("Extend the relation continuously for ~7s");
-    let deadline = Instant::now() + Duration::from_secs(7);
-    let mut batches = 0u32;
-    while Instant::now() < deadline {
-        db::batch(
-            &main,
-            "INSERT INTO zero_shadow (pad)
-               SELECT repeat('x', 1000) FROM generate_series(1, 500);",
-        )
-        .await?;
-        batches += 1;
+    // Every flush persists its checkpoint, so fail the UPDATE to keep it
+    // behind the rows the flush loop pushes into YB — that lag IS the
+    // replay window. The SIGKILL clears the failpoint; any exit before it
+    // clears it here, or it would freeze consistent_lsn for every later
+    // scenario on this cluster.
+    step("Hold the persisted checkpoint, then extend the relation for ~7s");
+    set_failpoint(c, "return").await?;
+    let held = async {
+        let batches = extend_while_held(c, &main, branch).await?;
+        kill_pageserver(c)?;
+        anyhow::Ok(batches)
     }
-    let nblocks =
-        db::query_i64(&main, "SELECT pg_relation_size('zero_shadow') / 8192").await?;
-    tee_println!("{batches} insert batches, relation at {nblocks} blocks");
-    if nblocks < 50 {
-        bail!("workload too small to exercise extension ({nblocks} blocks < 50)");
+    .await;
+    if held.is_err()
+        && let Err(e) = set_failpoint(c, "off").await
+    {
+        eprintln!("could not turn {HOLD_CONSISTENT_LSN} off: {e:#}");
     }
-
-    // A true SIGKILL, not `stop -m immediate`: the immediate-stop path
-    // still runs a shutdown flush + dc_lsn upsert, which closes the
-    // replay window and lets the restart skip replay entirely. The
-    // production crashes were SIGABRT/OOM-kill — no shutdown handler —
-    // so that's what we simulate.
-    step("SIGKILL pageserver (checkpoint stays behind YB rows)");
-    let pidfile = c.repo_dir().join("endpoints/main/pageserver/pageserver.pid");
-    let pid = std::fs::read_to_string(&pidfile)?.trim().to_string();
-    let status = std::process::Command::new("kill").args(["-9", &pid]).status()?;
-    if !status.success() {
-        bail!("kill -9 {pid} failed");
-    }
+    let batches = held?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     step("Restart pageserver (replays the flushed window)");

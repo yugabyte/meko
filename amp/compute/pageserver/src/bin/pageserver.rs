@@ -724,7 +724,7 @@ async fn create_compute_page_store(
 /// moved to the thin-client lane, whose own `tsclient_read_sessions` /
 /// `tsclient_write_sessions` default to the same `scale_count(2, …)`; the
 /// YSQL pool keeps it for the `branch_state` traffic left on it:
-/// `advance_consistent_lsn` once per flush window,
+/// `advance_consistent_lsn` on every flush that advances it,
 /// `update_branch_initial_state` at bootstrap, and the `get_branch_state`
 /// read `create_branch_row` makes at branch creation. The lineage and meta-range
 /// reads never ran here: `load_lineage` and `scan_meta_range` are

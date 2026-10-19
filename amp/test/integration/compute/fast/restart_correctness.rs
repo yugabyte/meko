@@ -29,7 +29,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await?;
 
-    step("Stop endpoint, then pageserver (graceful — should force_upsert pending dc_lsn)");
+    step("Stop endpoint, then pageserver (graceful — should persist pending dc_lsn)");
     c.yb(&["endpoint", "stop", "main"])?;
     c.yb(&["pageserver", "stop"])?;
 

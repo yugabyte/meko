@@ -127,9 +127,10 @@ re-streamed and re-ingested idempotently.
 - Persisted: `amp_storage.branch_state.prev_record_lsn` (nullable column).
 
 **Advances:** Each `finish_write` inserts the `(last → prev)` pair via
-`note_record_lsn`. At flush time, `take_prev_at_or_below(flushed_lsn)` pulls
+`note_record_lsn`. At flush time, `peek_prev_at_or_below(flushed_lsn)` reads
 the pairing for the highest noted record at or below the flushed LSN and
-passes it to `advance_consistent_lsn`; the SQL uses
+passes it to `advance_consistent_lsn`; the notes are pruned only after that
+UPDATE succeeds. The SQL uses
 `COALESCE($4, prev_record_lsn)` so a missed pairing keeps the existing
 column value instead of nulling it.
 
@@ -172,31 +173,33 @@ keeps no durable local state.
    max loses rows: the snapshot can hold a row at LSN X while missing a
    concurrently-put row below X.
 2. `try_write_rows` INSERTs the snapshot into YB.
-3. On success, `consistent_lsn_observed.fetch_max(frontier)` records that
-   everything ≤ frontier is durable in the page tables.
-4. If the frontier moved past `consistent_lsn_watermark` AND at least
-   `policy.max_age` (default 5 s) elapsed since the last UPDATE, the
+3. On success, everything ≤ frontier is durable in the page tables.
+4. If the frontier moved past `consistent_lsn_watermark`, the
    absolute `PageStore::advance_consistent_lsn` UPDATE writes
-   `branch_state.consistent_lsn` (and `prev_record_lsn`). On `Updated`,
-   `consistent_lsn_watermark` stores the frontier and
-   `publish_consistent_lsn` bumps the in-memory slot.
+   `branch_state.consistent_lsn` (and `prev_record_lsn`). On success,
+   `consistent_lsn_watermark` stores the frontier, `record_lsn_history`
+   drops entries ≤ it, and `publish_consistent_lsn` bumps the in-memory
+   slot.
 
-The two `PageWriter` bookkeeping atomics split the durable state in half:
-- `consistent_lsn_observed` — max LSN durable in the page tables this
-  process lifetime (advances on every successful `try_write_rows`).
-- `consistent_lsn_watermark` — max LSN the `branch_state` column claims
-  (advances only on a successful, throttled UPDATE).
+**Invariant:** the persisted `branch_state.consistent_lsn` equals
+`consistent_lsn_watermark`. A failed UPDATE leaves the frontier in
+`record_lsn_history`, so the next flush recaptures it (or a later one) and
+retries. A flush with nothing buffered still runs the UPDATE at its
+frontier, since a record is noted only after its rows are put: that is the
+only way the column reaches a trailing record with no rows, or one noted
+after the flush that wrote its rows took its frontier. The flusher flushes
+while a noted record is past the watermark with nothing buffered, because a
+fork at head waits on this column in `create_branch_row` (#1386).
+Every UPDATE runs inside a flush, under `flush_serialize`, because it is
+absolute and two overlapping ones could move the column backwards. A plain
+`flush()` only logs a failed UPDATE; `flush_persisting_consistent_lsn`
+(used by `Timeline::force_flush` — shutdown and the branch-time flush
+endpoint) fails instead.
 
-**Invariant:** `consistent_lsn_watermark ≤ consistent_lsn_observed`, and the
-persisted `branch_state.consistent_lsn` equals the watermark. The gap is
-bounded by the `max_age` throttle window. Why the lag is safe: safekeeper
-WAL truncation is bounded by the *persisted* value, so a lagging column only
-makes the safekeeper retain extra WAL — on restart the walreceiver
-re-streams the gap and the row UPSERTs are idempotent. The gap is closed on
-clean shutdown by `force_upsert_consistent_lsn_if_advanced` (bypasses the
-throttle), invoked from `Timeline::force_flush` (used by
-`Timeline::shutdown`'s `Flush` mode and the branch-time flush endpoint) and
-by the `FlushTask`'s final drain pass.
+Why the lag is safe: safekeeper WAL truncation is bounded by the *persisted*
+value, so a lagging column only makes the safekeeper retain extra WAL — on
+restart the walreceiver re-streams the gap and the row UPSERTs are
+idempotent.
 
 **Write fencing:** the process checks `utils::write_fence` immediately before
 this UPDATE and exits if the endpoint's lease has lapsed, so a stale writer is
@@ -379,8 +382,7 @@ reads take the latest row at `lsn ≤ target_lsn` (full overwrite semantics).
 - `DeltaTally.last_lsn` — per-key delta tally for materialiser triggers;
   cold-key residue dispatches at `last_lsn` once it is ≤
   `flush_horizon_lsn` (durable by construction).
-- `consistent_lsn_observed` / `consistent_lsn_watermark` — see
-  `consistent_lsn` above.
+- `consistent_lsn_watermark` — see `consistent_lsn` above.
 
 **Write backpressure:** `PageWriter::put` blocks in `await_backpressure`
 while `unflushed_bytes + bytes_in_aux_buffers ≥ policy.backpressure_bytes`
@@ -485,9 +487,9 @@ PageWriter::flush (periodic FlushTask / size trigger)
          → snapshot_unflushed (claim the unflushed rows) + aux buffers
          → try_write_rows → YB INSERT into pages/slru/meta
          → mark_flushed(snapshot); flush_horizon_lsn := frontier
-         → consistent_lsn_observed.fetch_max(frontier)
-         → throttled (max_age), absolute advance_consistent_lsn UPDATE
-              → consistent_lsn_watermark := frontier
+         → absolute advance_consistent_lsn UPDATE at the frontier
+              (on failure the frontier stays noted; the next flush retries)
+              → consistent_lsn_watermark := frontier; prune record_lsn_history
               → publish_consistent_lsn → remote_state slot bumps
 ```
 
@@ -530,9 +532,7 @@ applied_gc_cutoff_lsn  ≤  every served read LSN        (getpage enforcement)
 
 consistent_lsn (slot) == consistent_lsn_watermark
                        == persisted branch_state.consistent_lsn
-                      ≤  consistent_lsn_observed
-      (watermark lags observed by at most the max_age throttle window;
-       the slot is published only after the column UPDATE succeeds)
+      (the slot is published only after the column UPDATE succeeds)
 
 applied_lsn  ≈  last_record_lsn.last   (both advance eagerly; equal modulo
                                         put_batch/finish_write timing)
@@ -562,7 +562,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 
 | Field | Written to YB by | Read from YB at attach |
 |-------|------------------|------------------------|
-| `consistent_lsn` | `advance_consistent_lsn` (throttled; forced at shutdown) | Yes |
+| `consistent_lsn` | `advance_consistent_lsn` (every flush that advances; a failed one is retried by the next flush) | Yes |
 | `prev_record_lsn` | same UPDATE (`COALESCE`) | Yes |
 | `applied_gc_cutoff_lsn` | `update_branch_initial_state` at creation; `publish_gc_cutoff` on GC ticks | Yes |
 | `ancestor_lsn` / `ancestor_branch_id` | `update_branch_initial_state` (an UPDATE — the controller seeds the row) | Yes |
@@ -582,8 +582,8 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 - `compute/pageserver/src/page_server/timeline/remote_state.rs` —
   `TimelineRemoteState.consistent_lsn` slot contract.
 - `compute/pageserver/src/page_writer.rs` — `flush`, ingest-frontier
-  capture, `consistent_lsn_observed` / `consistent_lsn_watermark`,
-  `publish_consistent_lsn`, `force_upsert_consistent_lsn_if_advanced`,
+  capture, `consistent_lsn_watermark`,
+  `publish_consistent_lsn`, `upsert_consistent_lsn_if_advanced`,
   `note_record_lsn` / `record_lsn_history`, `flush_horizon_lsn`,
   `await_backpressure`.
 - `compute/pageserver/src/page_store.rs` — `advance_consistent_lsn`,

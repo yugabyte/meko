@@ -1525,18 +1525,16 @@ impl Timeline {
         Ok(())
     }
 
-    /// [`Self::flush`] the row buffer to YB **and** force the durable
-    /// `consistent_lsn` UPDATE through immediately, bypassing the per-`max_age`
-    /// upsert throttle that `flush()` alone is subject to. Use when the
-    /// persisted `consistent_lsn` must reflect everything just flushed
-    /// right away: graceful shutdown (so the next attach doesn't redo WAL) and
-    /// the branch-time flush endpoint (so a freshly-branching descendant sees
-    /// the ancestor's advance at once). The throttled periodic flush and the
-    /// create-time `flush()` deliberately don't force.
+    /// [`Self::flush`] the row buffer to YB **and** fail unless the durable
+    /// `consistent_lsn` UPDATE went through. `flush()` alone only logs a failed
+    /// UPDATE and leaves the retry to the flusher. Use when the persisted
+    /// `consistent_lsn` must reflect everything just flushed: graceful
+    /// shutdown (so the next attach doesn't redo WAL) and the branch-time
+    /// flush endpoint (so a freshly-branching descendant sees the ancestor's
+    /// advance at once).
     pub(crate) async fn force_flush(&self) -> Result<(), FlushLayerError> {
-        self.flush().await?;
         if let Some(pw) = &self.page_writer {
-            pw.force_upsert_consistent_lsn_if_advanced()
+            pw.flush_persisting_consistent_lsn()
                 .await
                 .map_err(|e| FlushLayerError::Other(Arc::new(e)))?;
         }
@@ -1661,11 +1659,10 @@ impl Timeline {
             // flush so PageWriter has a chance to drain its pending row
             // buffer before shutdown.
             {
-                // `force_flush` (not plain `flush`) so the persisted
-                // `consistent_lsn` reflects everything just drained —
-                // otherwise a clean shutdown could leave it up to one upsert
-                // throttle window behind, costing extra WAL replay (and log
-                // noise) on the next attach.
+                // `force_flush` (not plain `flush`) so a failed
+                // `consistent_lsn` UPDATE surfaces here: the flusher that
+                // would retry it is stopping, and the next attach would redo
+                // the gap.
                 match self.force_flush().await {
                     Ok(_) => {}
                     Err(FlushLayerError::Cancelled) => {
@@ -2737,10 +2734,13 @@ impl Timeline {
         // `consistent_lsn` when persisting `branch_state`, so
         // a restart can hand the safekeeper the correct `xl_prev`.
         let prev_for_new = self.last_record_lsn.load().last;
-        self.last_record_lsn.advance(new_lsn);
+        // Note before advancing: once `wait_lsn(new_lsn)` returns, a flush
+        // must see this record in its frontier, or `/flush?lsn=` could
+        // persist `consistent_lsn` one record short and still return 200.
         if let Some(pw) = self.page_writer.as_ref() {
             pw.note_record_lsn(new_lsn, prev_for_new);
         }
+        self.last_record_lsn.advance(new_lsn);
     }
 
     /// Wait until the background initial logical size calculation is complete, or

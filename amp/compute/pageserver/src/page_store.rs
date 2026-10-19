@@ -2908,6 +2908,12 @@ impl PageStore {
         new_prev_record_lsn: Option<Lsn>,
     ) -> Result<()> {
         self.write_gate("durability commit (branch_state.consistent_lsn)");
+        // Lets an integration test keep the column behind the pages in YB,
+        // the window a crash replays.
+        #[cfg(feature = "testing")]
+        if fail::eval("ps::page-store::fail-advance-consistent-lsn", |_| ()).is_some() {
+            anyhow::bail!("failpoint ps::page-store::fail-advance-consistent-lsn");
+        }
 
         // Persist `prev_record_lsn` alongside `consistent_lsn`
         // so a restart can hand the safekeeper the right `xl_prev`
@@ -2915,9 +2921,9 @@ impl PageStore {
         // prev_record_lsn)` keeps the existing column value when
         // the caller didn't resolve a fresh pairing (race —
         // pages flushed before their record's `finish_write` ran;
-        // see `PageWriter::take_prev_at_or_below`). Without
+        // see `PageWriter::peek_prev_at_or_below`). Without
         // COALESCE we'd overwrite a previously-good value with
-        // NULL on every throttled flush window.
+        // NULL on every such flush.
         let sql = format!(
             "UPDATE \"{}\".branch_state \
              SET consistent_lsn = $2, \
@@ -4451,8 +4457,8 @@ mod tests {
         assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
         // A NULL `prev` keeps whatever was there — the walreceiver re-derives
-        // it, and overwriting a good value with NULL on every throttled flush
-        // window is what the COALESCE exists to prevent.
+        // it, and overwriting a good value with NULL on a flush that found no
+        // pairing is what the COALESCE exists to prevent.
         store
             .advance_consistent_lsn(branch, Lsn(0x3000), None)
             .await
