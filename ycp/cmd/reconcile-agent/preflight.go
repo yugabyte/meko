@@ -27,7 +27,6 @@ const (
 	envMetricsUser     = "BYOC_METRICS_USERNAME"
 	envMetricsPassword = "BYOC_METRICS_PASSWORD" //nolint:gosec // an env var NAME, not a credential
 	envLogsSink        = "OTEL_LOGS_SINK"
-	envDatadogKey      = "DD_API_KEY" //nolint:gosec // an env var NAME, not a credential
 	envCollectorURLs   = "PREFLIGHT_COLLECTOR_URLS"
 	envPreflightTmo    = "PREFLIGHT_TIMEOUT"
 )
@@ -112,12 +111,6 @@ func probeTelemetry(ctx context.Context) error {
 		return fmt.Errorf("telemetry preflight: the BYOC metrics password is empty. The Secret named by otel.byoc.passwordSecret exists but its key holds nothing:\n"+
 			"  kubectl -n <ns> create secret generic <name> --from-literal=password='<byoc password>' --dry-run=client -o yaml | kubectl apply -f -\n"+
 			"  (endpoint %s)", endpoint)
-	}
-	if os.Getenv(envDatadogKey) == "" {
-		// A warning, not a failure: the ask is that METRICS failing fails the
-		// deploy. The datadog exporter fails collector startup on an empty key, so
-		// phase 3's sibling daemonset is where this surfaces as an outage.
-		log.Printf("WARNING the Datadog API key is empty; the logs daemonset will fail to start and no logs will ship")
 	}
 
 	// 2 — the door answers and accepts these credentials.

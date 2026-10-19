@@ -196,20 +196,67 @@ store it was pointed at and none of this applies.
 {{- if not (dig "collectors" "logs" "enabled" true .Values.otel) -}}
 {{- $w = append $w "otel.collectors.logs.enabled is false: byoc ships metrics AND logs, and a YCP-managed environment wants both." -}}
 {{- end -}}
-{{- $ep := dig "byoc" "metricsEndpoint" "" .Values.otel -}}
-{{- if not $ep -}}
-{{- $w = append $w "otel.byoc.metricsEndpoint is empty: there is nowhere to send metrics. Take it from the install hint — the control plane checks this value at enroll." -}}
-{{- else if not (hasPrefix "https://" $ep) -}}
-{{- $w = append $w (printf "otel.byoc.metricsEndpoint is %q: the BYOC door is BasicAuth over TLS, and a plaintext URL would put the password on the wire." $ep) -}}
+{{- if dig "byoc" "enabled" false .Values.otel -}}
+{{- if not (dig "byoc" "metricsEnabled" true .Values.otel) -}}
+{{- $w = append $w "otel.byoc.metricsEnabled is false: the console reads environment health from these metrics." -}}
+{{- end -}}
+{{- if not (dig "byoc" "logsEnabled" true .Values.otel) -}}
+{{- $w = append $w "otel.byoc.logsEnabled is false: byoc ships metrics AND logs, and a YCP-managed environment wants both." -}}
+{{- end -}}
+{{- $base := include "yb-amp-controller.byocURL" . -}}
+{{- if not $base -}}
+{{- $w = append $w (printf "otel.byoc.env is %q: use dev, portal, prod or sre. Nothing ships to the BYOC ingestion endpoint until it is fixed." (dig "byoc" "env" "" .Values.otel)) -}}
+{{- else if not (hasPrefix "https://" $base) -}}
+{{- $w = append $w (printf "otel.byoc.metricsEndpoint is %q: the BYOC ingestion endpoint is BasicAuth over TLS, and a plaintext URL would put the password on the wire." (dig "byoc" "metricsEndpoint" "" .Values.otel)) -}}
+{{- end -}}
 {{- end -}}
 {{- if or (not (dig "byoc" "username" "" .Values.otel)) (not (dig "byoc" "passwordSecret" "name" "" .Values.otel)) (not (dig "byoc" "passwordSecret" "key" "" .Values.otel)) -}}
-{{- $w = append $w "otel.byoc.username or otel.byoc.passwordSecret is unset, so the metrics door has no credential and the collectors will not start." -}}
-{{- end -}}
-{{- if or (not (dig "datadog" "apiKeySecret" "name" "" .Values.otel)) (not (dig "datadog" "apiKeySecret" "key" "" .Values.otel)) -}}
-{{- $w = append $w "otel.datadog.apiKeySecret is unset, so the logs fan-out has no credential — and the datadog exporter fails collector startup on an empty key, taking the whole log pipeline down." -}}
+{{- $w = append $w "otel.byoc.username or otel.byoc.passwordSecret is unset, so the BYOC ingestion endpoint has no credential and the collectors will not start." -}}
 {{- end -}}
 {{- end -}}
 {{- $w | join "\n" -}}
+{{- end }}
+
+{{- /*
+The BYOC ingestion endpoint of the YBM environment in otel.byoc.env, or empty
+for an unknown env. Empty turns the BYOC exporters off and telemetryWarnings
+says why, rather than failing the release.
+
+An otel.byoc.metricsEndpoint set by an older install hint wins, and both signals
+use its scheme and host. Otherwise an install pinned to the dev endpoint by that value would
+ship logs to the env default. It also keeps the URL the control plane compares at
+enroll from moving under an upgrade.
+*/}}
+{{- define "yb-amp-controller.byocURL" -}}
+{{- $legacy := dig "byoc" "metricsEndpoint" "" .Values.otel -}}
+{{- if $legacy -}}
+{{- regexFind "^[a-z]+://[^/?#]+" $legacy -}}
+{{- else -}}
+{{- $env := dig "byoc" "env" "prod" .Values.otel | default "prod" -}}
+{{- $domains := dict "dev" "devcloud.yugabyte.com" "portal" "cloudportal.yugabyte.com" "prod" "cloud.yugabyte.com" "sre" "srecloud.yugabyte.com" -}}
+{{- with get $domains $env -}}
+{{- printf "https://byoc.%s" . -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- /* Where the collectors ship metrics, or empty when byoc or its metrics are off.
+       An older hint's metricsEndpoint is kept verbatim, since enroll compares it. */}}
+{{- define "yb-amp-controller.byocMetricsEndpoint" -}}
+{{- if and (dig "byoc" "enabled" false .Values.otel) (dig "byoc" "metricsEnabled" true .Values.otel) -}}
+{{- with dig "byoc" "metricsEndpoint" "" .Values.otel -}}
+{{- . -}}
+{{- else -}}
+{{- with include "yb-amp-controller.byocURL" . }}{{ printf "%s/api/v1/otlp/metrics" . }}{{ end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- /* Where the logs daemonset ships, or empty when byoc or its logs are off. */}}
+{{- define "yb-amp-controller.byocLogsEndpoint" -}}
+{{- if and (dig "byoc" "enabled" false .Values.otel) (dig "byoc" "logsEnabled" true .Values.otel) -}}
+{{- with include "yb-amp-controller.byocURL" . }}{{ printf "%s/api/v1/otlp/logs" . }}{{ end -}}
+{{- end -}}
 {{- end }}
 
 {{- /*

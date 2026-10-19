@@ -91,9 +91,9 @@ spec:
             - name: OTEL_BYOC_ENABLED
               value: {{ dig "byoc" "enabled" false .Values.otel | quote }}
             - name: BYOC_METRICS_ENDPOINT
-              value: {{ dig "byoc" "metricsEndpoint" "" .Values.otel | quote }}
+              value: {{ include "yb-amp-controller.byocMetricsEndpoint" . | quote }}
             - name: OTEL_LOGS_SINK
-              value: {{ if dig "byoc" "enabled" false .Values.otel }}"datadog"{{ else }}""{{ end }}
+              value: {{ if include "yb-amp-controller.byocLogsEndpoint" . }}"datadog"{{ else }}""{{ end }}
             {{- /* The CONTROLLER collector's own-telemetry endpoint, so the agent can
                    report whether this environment is still SHIPPING rather than only
                    what it was configured to ship. Deliberately not the compute

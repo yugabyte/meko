@@ -787,14 +787,10 @@ if [ "${YCP_ENABLED}" = "1" ]; then
   # BYOC_METRICS_URL must be the SAME value the control plane was started with
   # (--byoc-metrics-url); ycp-up.sh takes it from this same variable.
   YCP_BYOC_METRICS_URL="${YCP_BYOC_METRICS_URL:-https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics}"
-  : "${YCP_BYOC_PASSWORD:?YCP_ENABLED=1 requires YCP_BYOC_PASSWORD (the BYOC metrics door password)}"
-  : "${YCP_DATADOG_API_KEY:?YCP_ENABLED=1 requires YCP_DATADOG_API_KEY (the logs fan-out key)}"
-  # Both are read by secretKeyRef, so they must exist before the install.
+  : "${YCP_BYOC_PASSWORD:?YCP_ENABLED=1 requires YCP_BYOC_PASSWORD (the BYOC ingestion endpoint password)}"
+  # Read by secretKeyRef for metrics and logs, so it must exist before the install.
   kubectl -n "${NS}" create secret generic byoc-metrics-auth \
     --from-literal=password="${YCP_BYOC_PASSWORD}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-  kubectl -n "${NS}" create secret generic datadog-api \
-    --from-literal=api-key="${YCP_DATADOG_API_KEY}" \
     --dry-run=client -o yaml | kubectl apply -f -
 
   # YugabyteDB's own metrics, which the amp collectors do not reach: YBA exports

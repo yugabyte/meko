@@ -88,7 +88,6 @@ func TestRunPreflight_RefusesRejectedCredentials(t *testing.T) {
 		envMetricsEndpoint: srv.URL,
 		envMetricsUser:     "byoc",
 		envMetricsPassword: "wrong",
-		envDatadogKey:      "dd",
 	})
 	err := probeTelemetry(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "rejected the credentials") {
@@ -116,7 +115,6 @@ func TestRunPreflight_ProbeIsGzippedAndAuthenticated(t *testing.T) {
 		envMetricsEndpoint: srv.URL,
 		envMetricsUser:     "byoc",
 		envMetricsPassword: "s3cret",
-		envDatadogKey:      "dd",
 		envCollectorURLs:   "",
 	})
 	if err := probeTelemetry(context.Background()); err != nil {

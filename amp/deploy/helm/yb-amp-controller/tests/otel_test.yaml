@@ -623,8 +623,8 @@ tests:
           value: false
 
   # Off-cluster shipping is one switch: otel.byoc.enabled. Default OFF, so a plain
-  # install ships logs to VictoriaLogs alone — no datadog exporter, no shaping, no
-  # key env, no secret dependency.
+  # install ships logs to VictoriaLogs alone — no BYOC exporter, no shaping, no
+  # password env, no secret dependency.
   - it: does not ship logs off-cluster by default, keeping VictoriaLogs primary
     capabilities:
       apiVersions:
@@ -634,11 +634,11 @@ tests:
       value: RELEASE-NAME-yb-amp-controller-logs
     asserts:
       - notExists:
-          path: spec.config.exporters.datadog
+          path: spec.config.exporters.otlphttp/byoc
       - notExists:
           path: spec.config.processors.transform/severity
       - notExists:
-          path: spec.config.processors.transform/datadog
+          path: spec.config.processors.transform/tags
       - equal:
           path: spec.config.service.pipelines.logs.processors
           value: [memory_limiter, k8sattributes, batch]
@@ -648,13 +648,12 @@ tests:
       - notContains:
           path: spec.env
           content:
-            name: DD_API_KEY
+            name: BYOC_METRICS_PASSWORD
 
-  # byoc.enabled turns on the direct datadog exporter for logs (alongside
-  # metrics->Thanos on the metrics collectors). Added to the SAME logs pipeline as
-  # the VictoriaLogs exporter, so VictoriaLogs stays primary and Datadog is a
-  # second sink.
-  - it: fans logs out to datadog when byoc is enabled, keeping VictoriaLogs primary
+  # byoc.enabled ships logs to the BYOC ingestion endpoint, derived from
+  # otel.byoc.env. Added to the SAME logs pipeline as the VictoriaLogs exporter, so
+  # VictoriaLogs stays primary and the endpoint is a second sink.
+  - it: ships logs to the BYOC ingestion endpoint when byoc is enabled, keeping VictoriaLogs primary
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -665,35 +664,43 @@ tests:
       value: RELEASE-NAME-yb-amp-controller-logs
     asserts:
       - equal:
-          path: spec.config.exporters.datadog.api.site
-          value: us3.datadoghq.com
-      # The key is read from env, never rendered inline.
+          path: spec.config.exporters.otlphttp/byoc.logs_endpoint
+          value: https://byoc.cloud.yugabyte.com/api/v1/otlp/logs
       - equal:
-          path: spec.config.exporters.datadog.api.key
-          value: ${env:DD_API_KEY}
-      # A Datadog outage must not back up the shared pipeline.
+          path: spec.config.exporters.otlphttp/byoc.compression
+          value: gzip
       - equal:
-          path: spec.config.exporters.datadog.sending_queue.enabled
+          path: spec.config.exporters.otlphttp/byoc.auth.authenticator
+          value: basicauth/byoc
+      - equal:
+          path: spec.config.extensions.basicauth/byoc.client_auth.password
+          value: ${env:BYOC_METRICS_PASSWORD}
+      - equal:
+          path: spec.config.service.extensions
+          value: [health_check, file_storage/checkpoints, basicauth/byoc]
+      # An endpoint outage must not back up the shared pipeline.
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.sending_queue.enabled
           value: true
-      # Both exporters on the one pipeline; memory_limiter still first, shaping added.
+      - notExists:
+          path: spec.config.exporters.datadog
       - equal:
           path: spec.config.service.pipelines.logs.processors
-          value: [memory_limiter, k8sattributes, transform/severity, transform/datadog, batch]
+          value: [memory_limiter, k8sattributes, transform/severity, transform/tags, batch]
       - equal:
           path: spec.config.service.pipelines.logs.exporters
-          value: [otlphttp/logs, datadog]
+          value: [otlphttp/logs, otlphttp/byoc]
 
-  # The api key is injected from a Secret via secretKeyRef — required, not
-  # optional: an empty key fails the exporter's startup validation and takes the
-  # whole logs daemonset (VictoriaLogs export included) down with it.
-  - it: injects the datadog api key from a secret when byoc is enabled
+  # Logs authenticate with the same Secret as metrics. Required, not optional: a
+  # missing Secret fails the daemonset to start rather than shipping unauthenticated.
+  - it: reads the BYOC password from the metrics Secret for logs
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
     set:
       otel.byoc.enabled: true
-      otel.datadog.apiKeySecret.name: my-dd-secret
-      otel.datadog.apiKeySecret.key: token
+      otel.byoc.passwordSecret.name: my-byoc-secret
+      otel.byoc.passwordSecret.key: token
     documentSelector:
       path: metadata.name
       value: RELEASE-NAME-yb-amp-controller-logs
@@ -701,15 +708,138 @@ tests:
       - contains:
           path: spec.env
           content:
+            name: BYOC_METRICS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: my-byoc-secret
+                key: token
+      - notContains:
+          path: spec.env
+          content:
             name: DD_API_KEY
             valueFrom:
               secretKeyRef:
-                name: my-dd-secret
-                key: token
+                name: datadog-api
+                key: api-key
 
-  # ddsource, service and tags are what Datadog groups on. Fleet identity, when
-  # set, rides along as ddtags so a log and its metrics share one scope.
-  - it: shapes ddsource, service and identity tags for datadog
+  - it: derives both endpoints from otel.byoc.env
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.env: dev
+    asserts:
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.logs_endpoint
+          value: https://byoc.devcloud.yugabyte.com/api/v1/otlp/logs
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-logs
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.metrics_endpoint
+          value: https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-controller
+
+  # An older install hint set the full metrics URL. It keeps winning, and logs
+  # follow its host rather than the env default.
+  - it: keeps a metricsEndpoint set by an older hint and ships logs to the same host
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.metricsEndpoint: https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics
+    asserts:
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.logs_endpoint
+          value: https://byoc.devcloud.yugabyte.com/api/v1/otlp/logs
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-logs
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.metrics_endpoint
+          value: https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-controller
+
+  # A typo must not fail the release (telemetryWarnings explains it): the BYOC
+  # exporters go away and the in-cluster stores keep working.
+  - it: ships nothing to BYOC for an unknown otel.byoc.env
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.env: stage
+    asserts:
+      - notExists:
+          path: spec.config.exporters.otlphttp/byoc
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [otlphttp/logs]
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+
+  - it: takes only the scheme and host of a legacy metricsEndpoint for logs
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.metricsEndpoint: https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics?x=1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.logs_endpoint
+          value: https://byoc.devcloud.yugabyte.com/api/v1/otlp/logs
+
+  - it: ships no logs to BYOC when logsEnabled is off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.logsEnabled: false
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - notExists:
+          path: spec.config.exporters.otlphttp/byoc
+      - notExists:
+          path: spec.config.extensions.basicauth/byoc
+      - equal:
+          path: spec.config.service.pipelines.logs.exporters
+          value: [otlphttp/logs]
+
+  - it: ships no metrics to BYOC when metricsEnabled is off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.metricsEnabled: false
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - notExists:
+          path: spec.config.exporters.otlphttp/byoc
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [prometheus_remote_write]
+
+  # ddsource, service and tags are what the log backend groups on. Fleet
+  # identity, when set, rides along as ddtags so a log and its metrics share one
+  # scope.
+  - it: shapes ddsource, service and identity tags for the log backend
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -722,10 +852,10 @@ tests:
       value: RELEASE-NAME-yb-amp-controller-logs
     asserts:
       - equal:
-          path: spec.config.processors.transform/datadog.log_statements[0].statements[0]
+          path: spec.config.processors.transform/tags.log_statements[0].statements[0]
           value: 'set(attributes["datadog.log.source"], resource.attributes["k8s.container.name"]) where resource.attributes["k8s.container.name"] != nil'
       - equal:
-          path: spec.config.processors.transform/datadog.log_statements[0].statements[1]
+          path: spec.config.processors.transform/tags.log_statements[0].statements[1]
           value: 'set(attributes["ddtags"], "env:amp-acme-prod,account:3f2b1c00-0000-0000-0000-000000000009")'
 
   # No environment/account => no empty ddtags stamped.
@@ -740,29 +870,8 @@ tests:
       value: RELEASE-NAME-yb-amp-controller-logs
     asserts:
       - notContains:
-          path: spec.config.processors.transform/datadog.log_statements[0].statements
+          path: spec.config.processors.transform/tags.log_statements[0].statements
           content: 'set(attributes["ddtags"], "")'
-
-  # The secret name/key default so the deploy tooling and the chart agree on where
-  # the api key lives.
-  - it: defaults the datadog secret name and key
-    capabilities:
-      apiVersions:
-        - opentelemetry.io/v1beta1
-    set:
-      otel.byoc.enabled: true
-    documentSelector:
-      path: metadata.name
-      value: RELEASE-NAME-yb-amp-controller-logs
-    asserts:
-      - contains:
-          path: spec.env
-          content:
-            name: DD_API_KEY
-            valueFrom:
-              secretKeyRef:
-                name: datadog-api
-                key: api-key
 
   # memory_limiter has to run before anything else, or a log storm OOMs the
   # node's collector before the limiter ever sees it. With byoc off (the default)
@@ -924,7 +1033,7 @@ tests:
           value: [otlphttp/byoc]
 
   # The log shaping must survive the sink drop: severity and ddtags are what make
-  # a Datadog-only pipeline legible, and they are gated on byoc, not on the sink.
+  # a BYOC-only pipeline legible, and they are gated on byoc, not on the sink.
   - it: drops the in-cluster logs exporter when logsEndpoint is emptied
     capabilities:
       apiVersions:
@@ -940,10 +1049,10 @@ tests:
           path: spec.config.exporters.otlphttp/logs
       - equal:
           path: spec.config.service.pipelines.logs.exporters
-          value: [datadog]
+          value: [otlphttp/byoc]
       - equal:
           path: spec.config.service.pipelines.logs.processors
-          value: [memory_limiter, k8sattributes, transform/severity, transform/datadog, batch]
+          value: [memory_limiter, k8sattributes, transform/severity, transform/tags, batch]
 
   # One switch for the BYOC shape: it wins over endpoints left at (or set to) a
   # store, since a --reuse-values upgrade replays the old chart's defaults.
@@ -974,7 +1083,7 @@ tests:
           value: RELEASE-NAME-yb-amp-controller-logs
       - equal:
           path: spec.config.service.pipelines.logs.exporters
-          value: [datadog]
+          value: [otlphttp/byoc]
         documentSelector:
           path: metadata.name
           value: RELEASE-NAME-yb-amp-controller-logs
@@ -1039,7 +1148,8 @@ tests:
       - failedTemplate:
           errorMessage: >-
             no in-cluster metrics store (otel.inClusterStores.enabled=false or an empty
-            otel.remoteWriteEndpoint) and otel.byoc.enabled is false: the metrics collectors
+            otel.remoteWriteEndpoint) and byoc metrics are off (otel.byoc.enabled or
+            otel.byoc.metricsEnabled): the metrics collectors
             would have no exporter at all. Turn one of them on, or turn the collectors off
             with otel.collectors.controller.enabled=false and
             otel.collectors.compute.enabled=false.
@@ -1054,7 +1164,8 @@ tests:
       - failedTemplate:
           errorMessage: >-
             no in-cluster log store (otel.inClusterStores.enabled=false or an empty
-            otel.logsEndpoint) and otel.byoc.enabled is false: the logs collector would have
+            otel.logsEndpoint) and byoc logs are off (otel.byoc.enabled or
+            otel.byoc.logsEnabled): the logs collector would have
             no exporter at all. Turn one of them on, or turn the collector off with
             otel.collectors.logs.enabled=false.
 

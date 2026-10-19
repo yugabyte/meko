@@ -25,16 +25,18 @@ failure spanning compute_ctl, pageserver and safekeeper requires.
  │ compute pod          │   ┌────────────────────────┐ ┌►│ VictoriaLogs │─►│Grafana│
  │   pageserver         │──►│ OTel Collector         │─┤ └──────────────┘  └───────┘
  │   safekeeper         │   │ (daemonset, per node)  │ │ ┌──────────────┐
- │   compute_ctl        │   │ filelog → k8sattributes│ └►│ Datadog logs │ (byoc)
- │   postgres           │   │  → otlphttp [+ datadog]│   └──────────────┘
+ │   compute_ctl        │   │ filelog → k8sattributes│ └►│ BYOC endpoint│ (byoc)
+ │   postgres           │   │  → otlphttp [+ byoc]   │   └──────────────┘
  │   postgres_exporter  │   └────────────────────────┘
  └──────────────────────┘         reads /var/log/pods
 ```
 
-VictoriaLogs is the primary, in-cluster store. Datadog is a second sink on the
-same pipeline, added only when `otel.byoc.enabled` (off by default) — the single
-switch that also ships metrics off-cluster to Thanos. When on, the same lines
-land in both stores without a second tail of the node.
+VictoriaLogs is the primary, in-cluster store. The BYOC ingestion endpoint is a
+second sink on the same pipeline, added only when `otel.byoc.enabled` (off by
+default), the switch that also ships metrics off-cluster. When on, the same lines
+land in both without a second tail of the node. ingest nginx behind the endpoint
+forwards logs to Datadog with YBM's own key, so the cluster holds no Datadog
+credential and needs no internet egress.
 
 The kubelet already writes every container's stdout/stderr to
 `/var/log/pods/<ns>_<pod>_<uid>/<container>/N.log`. The collector tails those
@@ -125,52 +127,38 @@ verified for `https://`. Any OTLP/HTTP logs receiver works — the store is not
 baked in.
 
 An explicit `""` drops this exporter from the pipeline entirely, leaving the
-Datadog fan-out below as the only sink. That is the BYOC shape: a customer cluster
+BYOC fan-out below as the only sink. That is the BYOC shape: a customer cluster
 runs no VictoriaLogs, and an exporter aimed at one that is not there retries
 forever. An *absent* key is different and keeps the default, so
 `--reuse-values` on a release predating this cannot silently lose its store.
 
-### Datadog fan-out (gated on `otel.byoc.enabled`, off by default)
+### BYOC fan-out (gated on `otel.byoc.enabled`, off by default)
 
-`otel.byoc.enabled` is the single switch for shipping telemetry off-cluster to
-the yugabyte-cloud managed backends — metrics to Thanos (the metrics collectors,
-[`ac-metrics.md`](ac-metrics.md)) and, here, logs to Datadog. Off by default: a
-normal install ships only to the in-cluster stores. When on, a second `datadog`
-exporter joins the *same* logs pipeline, so a line reaches both VictoriaLogs and
-Datadog off one tail of the node. On a cloud install this is a *sink*, not a store
-swap: VictoriaLogs stays the in-cluster store (the Loki/CloudWatch/Datadog-as-store
-decision in the [`amp-monitoring` DESIGN](../../deploy/helm/amp-monitoring/DESIGN.md)
-is unchanged); Datadog is where the wider fleet's logs converge. On a BYOC install,
-where `otel.inClusterStores.enabled=false`, Datadog is the only sink there is. Logs go **direct**
-to Datadog's US3 intake (a public SaaS); metrics instead reach the *internal*
-Thanos through the BYOC PrivateLink door — hence two different auth secrets.
+`otel.byoc.enabled` ships telemetry off-cluster to the BYOC ingestion endpoint
+of the YBM environment in `otel.byoc.env`: metrics from the metrics collectors
+([`ac-metrics.md`](ac-metrics.md)) and, here, logs. `otel.byoc.metricsEnabled`
+and `otel.byoc.logsEnabled` turn each signal off on its own. When on, an
+`otlphttp/byoc` exporter joins the *same* logs pipeline, so a line reaches both
+VictoriaLogs and the endpoint off one tail of the node. On a BYOC install, where
+`otel.inClusterStores.enabled=false`, the endpoint is the only sink there is.
 
+- **Endpoint.** `https://byoc.<domain>/api/v1/otlp/logs`, derived from
+  `otel.byoc.env` like the metrics URL. An `otel.byoc.metricsEndpoint` set by an
+  older install hint moves both signals to its host.
 - **Shaping.** Two best-effort processors (`error_mode: ignore`) run after
   `k8sattributes`, before `batch`: `transform/severity` lifts the app's level
-  word out of the structured line onto Datadog's reserved `status`, and
-  `transform/datadog` sets `ddsource` from the container name
+  word out of the structured line onto the log backend's reserved `status`, and
+  `transform/tags` sets `ddsource` from the container name
   (`endpoint`/`controller`/`mcp`/`ui`/`postgres-exporter`), `service` from the
-  amp `component`, and — when `otel.environmentId`/`accountId` are set — `ddtags`
+  amp `component`, and, when `otel.environmentId`/`accountId` are set, `ddtags`
   with the same fleet identity the metrics collectors stamp, so a log and its
-  metrics share one scope. Both gate on `otel.byoc.enabled`.
-- **The api key is a hard dependency.** The exporter validates its key at
-  collector startup and fails on an empty one; because it shares the daemonset
-  with the VictoriaLogs exporter, a missing key takes the **whole** log pipeline
-  down, not just the Datadog fan-out. So the key is read from a Secret
-  (`otel.datadog.apiKeySecret`, `DD_API_KEY` via `secretKeyRef`, never inline)
-  that **must exist before a byoc-enabled install**. `otel.datadog` has no
-  `enabled` of its own — it is pure config (`site`, `apiKeySecret`), consumed
-  only when byoc is on.
+  metrics share one scope. Both gate on BYOC logs being on.
+- **One credential.** Logs authenticate with the same `byoc-metrics-auth`
+  BasicAuth Secret as metrics. It must exist before a byoc-enabled install: a
+  missing one fails the collectors that reference it to start.
 - **Blast radius.** The exporter has its own `sending_queue` + `retry_on_failure`,
-  so a Datadog outage queues and retries on that exporter alone and never backs
-  up the VictoriaLogs export sharing the pipeline. `site` is `us3.datadoghq.com`
-  by default (the yugabyte-cloud tenant).
-- **Two secrets, one switch.** `otel.byoc.enabled` turns on *both* fan-outs, so a
-  byoc-enabled install needs **both** the `datadog-api` key (logs → Datadog)
-  **and** the `byoc-metrics-auth` BasicAuth credential (metrics → Thanos,
-  [`ac-metrics.md`](ac-metrics.md)) present first — a missing either fails the
-  collectors that reference it to start. Off by default, so a plain or dev
-  install carries neither dependency.
+  so an endpoint outage queues and retries on that exporter alone and never backs
+  up the VictoriaLogs export sharing the pipeline.
 
 ### RBAC — namespaced, deliberately
 
@@ -199,25 +187,23 @@ rejected alternatives (Loki, CloudWatch Logs) are in that chart's
 ```sh
 helm upgrade --install amp-monitoring deploy/helm/amp-monitoring -n amp-dev
 
-# Default: in-cluster stores only — no Datadog, no Secret needed.
+# Default: in-cluster stores only, no Secret needed.
 helm upgrade --install amp deploy/helm/yb-amp-controller -n amp-dev \
   --set otel.enabled=true \
   --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
 
-# Off-cluster (metrics -> Thanos, logs -> Datadog): flip otel.byoc.enabled and
-# create BOTH secrets first — a missing either bricks the collectors that read it.
-kubectl -n amp-dev create secret generic datadog-api \
-  --from-literal=api-key='<datadog api key>'
+# Off-cluster, to the BYOC ingestion endpoint: flip otel.byoc.enabled and create
+# the secret first, or the collectors that read it fail to start.
 kubectl -n amp-dev create secret generic byoc-metrics-auth \
   --from-literal=password='<byoc htpasswd password>'
 helm upgrade --install amp deploy/helm/yb-amp-controller -n amp-dev \
-  --set otel.enabled=true --set otel.byoc.enabled=true \
+  --set otel.enabled=true --set otel.byoc.enabled=true --set otel.byoc.env=dev \
   --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
 
 # BYOC: yugabyte-cloud only, no in-cluster stores to ship to; leaving them on
 # ships to both.
 helm upgrade --install amp deploy/helm/yb-amp-controller -n "${NS}" \
-  --set otel.enabled=true --set otel.byoc.enabled=true \
+  --set otel.enabled=true --set otel.byoc.enabled=true --set otel.byoc.env=dev \
   --set otel.inClusterStores.enabled=false \
   --set agent.enabled=true ...
 ```

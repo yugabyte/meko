@@ -25,19 +25,17 @@ them.
 */}}
 {{- if dig "enabled" false .Values.agent }}
 {{- $byocEnabled := dig "byoc" "enabled" false .Values.otel }}
-{{- $metricsEndpoint := dig "byoc" "metricsEndpoint" "" .Values.otel }}
+{{- $metricsEndpoint := include "yb-amp-controller.byocMetricsEndpoint" . }}
 {{- $byocUser := dig "byoc" "username" "" .Values.otel }}
 {{- $pwSecret := dig "byoc" "passwordSecret" "name" "" .Values.otel }}
 {{- $pwKey := dig "byoc" "passwordSecret" "key" "" .Values.otel }}
-{{- $ddSecret := dig "datadog" "apiKeySecret" "name" "" .Values.otel }}
-{{- $ddKey := dig "datadog" "apiKeySecret" "key" "" .Values.otel }}
 {{- /* A non-positive timeout is clamped rather than refused: it is how long to wait
        for the first export, and a bad value should not decide whether this Job
        exists at all. */}}
 {{- $timeout := dig "byoc" "preflight" "timeoutSeconds" 300.0 .Values.otel | float64 | int }}
 {{- if le $timeout 0 }}{{ $timeout = 300 }}{{ end }}
 
-{{- /* Rendered only when there is a door to probe. With byoc off, no endpoint, or no
+{{- /* Rendered only when there is an endpoint to probe. With byoc off, no endpoint, or no
        credential named, the Job would have nothing to do and its pod would be a
        confusing failure standing in for the NOTES warning that explains the real
        problem. The CRD gate is here for the same reason: with no OpenTelemetry
@@ -107,14 +105,6 @@ spec:
                   name: {{ $pwSecret | quote }}
                   key: {{ $pwKey | quote }}
                   optional: true
-            {{- if and $ddSecret $ddKey }}
-            - name: DD_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $ddSecret | quote }}
-                  key: {{ $ddKey | quote }}
-                  optional: true
-            {{- end }}
             {{- /* The collectors' own telemetry, which the export check polls for
                    otelcol_exporter_sent_metric_points{exporter="otlphttp/byoc"}. */}}
             - name: PREFLIGHT_COLLECTOR_URLS

@@ -127,6 +127,32 @@ tests:
           path: spec.template.spec.containers[0].env
           content: {name: OTEL_LOGS_SINK, value: "datadog"}
 
+  # The metrics URL attested to the control plane is derived from otel.byoc.env
+  # when no older hint pinned it.
+  - it: attests the metrics URL derived from otel.byoc.env
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.env: dev
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: BYOC_METRICS_ENDPOINT, value: "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"}
+
+  - it: attests no logs sink when byoc logs are off
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.logsEnabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTEL_LOGS_SINK, value: ""}
+
   # An agent deployed without byoc still attests — reporting "off" is what lets the
   # control plane say so, where reporting nothing is indistinguishable from an old
   # agent image.

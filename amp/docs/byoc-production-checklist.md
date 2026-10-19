@@ -281,8 +281,7 @@ be right or `nlb_internal` will not work.
 |---|---|---|---|
 | The YCP base URL — the YBM per-account pass-through, or `https://devcloud.yugabyte.com/ycp/api/v1` | 443 | reconcile-agent | yes, for a YCP-managed environment |
 | `quay.io/yugabyte` (+ its CDN) | 443 | kubelet image pulls | yes, unless images are mirrored into a private registry |
-| `byoc.devcloud.yugabyte.com` (OTLP metrics → Thanos, over AWS PrivateLink) | 443 | otel metrics collectors | only with `otel.byoc.enabled=true` |
-| `us3.datadoghq.com` | 443 | otel logs daemonset | only with `otel.byoc.enabled=true` |
+| `byoc.<domain>`, the BYOC ingestion endpoint for `otel.byoc.env` (`byoc.cloud.yugabyte.com` for prod) | 443 | otel metrics collectors and logs daemonset | only with `otel.byoc.enabled=true` |
 | `grafana.com` | 443 | Grafana pod | only if the `amp-monitoring` chart is installed — the VictoriaLogs datasource plugin is downloaded at pod start |
 
 **No inbound rule is needed.** The agent's outbound heartbeat is how desired state,
@@ -455,8 +454,7 @@ failure; `kubectl -n "$NS" describe pvc sc-probe` says why.
 | image pull secret | Quay robot credentials (`imagePullSecrets[0].name`; also becomes `AMP_DEPLOY_PULL_SECRET` for endpoint pods) | unless the node identity can pull |
 | `amp-agent-api-key` | key `api-key` = the YBM API key, **shown once** at creation. One key drives exactly one environment. | `agent.enabled=true` |
 | backing-YB credentials | in `controller.databaseUrl`, and `--deploy-yb-existing-secret` for the endpoints' own path | always |
-| `byoc-metrics-auth` | key `password` — BasicAuth for the metrics door | `otel.byoc.enabled=true` |
-| `datadog-api` | key `api-key` | `otel.byoc.enabled=true` — a missing or empty key fails collector startup and takes the **whole** log pipeline down, VictoriaLogs export included |
+| `byoc-metrics-auth` | key `password` — BasicAuth for the BYOC ingestion endpoint, metrics and logs | `otel.byoc.enabled=true` |
 
 Create them before the install — the chart holds no credentials and creates none:
 
@@ -469,9 +467,8 @@ kubectl -n "$NS" create secret docker-registry amp-pull \
 # The YCP API key YBM showed once. One key drives exactly one environment.
 kubectl -n "$NS" create secret generic amp-agent-api-key --from-literal=api-key='<key>'
 
-# Only with otel.byoc.enabled=true — both, or the collectors fail to start.
+# Only with otel.byoc.enabled=true, or the collectors fail to start.
 kubectl -n "$NS" create secret generic byoc-metrics-auth --from-literal=password='<password>'
-kubectl -n "$NS" create secret generic datadog-api      --from-literal=api-key='<key>'
 
 kubectl -n "$NS" get secret
 ```

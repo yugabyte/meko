@@ -97,15 +97,30 @@ tests:
       agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
       agent.envName: amp-acme-prod
       otel.enabled: false
-      otel.byoc.metricsEndpoint: ""
-      otel.datadog.apiKeySecret.name: ""
+      otel.byoc.enabled: true
+      otel.byoc.metricsEnabled: false
+      otel.byoc.passwordSecret.name: ""
     asserts:
       - matchRegexRaw:
           pattern: otel.enabled is false
       - matchRegexRaw:
-          pattern: metricsEndpoint is empty
+          pattern: otel.byoc.metricsEnabled is false
       - matchRegexRaw:
-          pattern: datadog.apiKeySecret is unset
+          pattern: otel.byoc.passwordSecret is unset
+
+  - it: warns about an unknown otel.byoc.env instead of failing the release
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      agent.enabled: true
+      agent.ycpUrl: https://devcloud.yugabyte.com/ycp/api/v1
+      agent.envName: amp-acme-prod
+      otel.byoc.enabled: true
+      otel.byoc.env: stage
+    asserts:
+      - matchRegexRaw:
+          pattern: otel.byoc.env is "stage"
 
   # Silence when there is nothing to say: a correctly configured YCP install must not
   # grow a warning block, or the block stops being read.

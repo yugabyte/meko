@@ -22,9 +22,9 @@ tests:
       - hasDocuments:
           count: 0
 
-  # byoc off: the collectors would scrape and send nowhere, so there is no door to
-  # probe. The operator learns why from NOTES.txt, not from a failing pod.
-  - it: renders no Job when there is no door to probe
+  # byoc off: the collectors would scrape and send nowhere, so there is no endpoint
+  # to probe. The operator learns why from NOTES.txt, not from a failing pod.
+  - it: renders no Job when there is no endpoint to probe
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -198,7 +198,7 @@ tests:
                 name: byoc-metrics-auth
                 key: password
                 optional: true
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: DD_API_KEY

@@ -133,9 +133,9 @@ Operator** (opentelemetry.io CRDs) in the cluster.
 
 ## BYOC: shipping to yugabyte-cloud
 
-`otel.byoc.enabled` adds an `otlphttp/byoc` exporter to both metrics collectors —
-BasicAuth over the BYOC PrivateLink door — and a `datadog` exporter to the logs
-daemonset. A BYOC install pairs it with `otel.inClusterStores.enabled=false`, so
+`otel.byoc.enabled` adds an `otlphttp/byoc` exporter to both metrics collectors
+and to the logs daemonset, BasicAuth to the BYOC ingestion endpoint for
+`otel.byoc.env`. A BYOC install pairs it with `otel.inClusterStores.enabled=false`, so
 yugabyte-cloud is the only destination; a cloud install leaves the stores on and
 ships to both.
 

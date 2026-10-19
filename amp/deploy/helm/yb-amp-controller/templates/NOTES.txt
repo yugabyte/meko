@@ -76,8 +76,8 @@ Metrics collectors are deployed (otel.enabled), remote-writing to:
     {{ $rw }}
 {{- else }}
 Metrics collectors are deployed (otel.enabled) with NO in-cluster store:
-no in-cluster store is configured, so nothing remote-writes and the BYOC door
-below is the only destination.
+no in-cluster store is configured, so nothing remote-writes and the BYOC
+ingestion endpoint below is the only destination.
 {{- end }}
 {{- if dig "collectors" "logs" "enabled" true .Values.otel }}
 {{- if $logs }}
@@ -94,24 +94,24 @@ Logs have no in-cluster store either.
 
 BYOC off-cluster shipping is ON (otel.byoc.enabled){{ if or $rw $logs }} — in addition to the
 in-cluster stores above{{ end }}, it sends:
-  - metrics -> {{ dig "byoc" "metricsEndpoint" "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics" .Values.otel }} (YBM Thanos)
+{{- with include "yb-amp-controller.byocMetricsEndpoint" . }}
+  - metrics -> {{ . }}
+{{- end }}
 {{- if dig "collectors" "logs" "enabled" true .Values.otel }}
-  - logs    -> Datadog ({{ dig "datadog" "site" "us3.datadoghq.com" .Values.otel }})
+{{- with include "yb-amp-controller.byocLogsEndpoint" . }}
+  - logs    -> {{ . }}
+{{- end }}
 {{- end }}
 
-This REQUIRES the Secret(s) below in namespace {{ .Release.Namespace }}, read by the
+This REQUIRES the Secret below in namespace {{ .Release.Namespace }}, read by the
 collectors via secretKeyRef — a missing one fails those pods to start{{ if or $rw $logs }}, taking the
 in-cluster VictoriaMetrics/VictoriaLogs export down with them{{ end }}:
 
     kubectl -n {{ .Release.Namespace }} create secret generic {{ dig "byoc" "passwordSecret" "name" "byoc-metrics-auth" .Values.otel }} \
       --from-literal={{ dig "byoc" "passwordSecret" "key" "password" .Values.otel }}='<byoc htpasswd password>'
-{{- if dig "collectors" "logs" "enabled" true .Values.otel }}
-    kubectl -n {{ .Release.Namespace }} create secret generic {{ dig "datadog" "apiKeySecret" "name" "datadog-api" .Values.otel }} \
-      --from-literal={{ dig "datadog" "apiKeySecret" "key" "api-key" .Values.otel }}='<datadog api key>'
-{{- end }}
-{{- if dig "enabled" false .Values.agent }}
+{{- if and (dig "enabled" false .Values.agent) (include "yb-amp-controller.byocMetricsEndpoint" .) }}
 
-A post-install job probes that door and waits for the collectors to export
+A post-install job probes that endpoint and waits for the collectors to export
 through it. It does NOT fail this install, so a successful install does NOT mean
 metrics are flowing — its log is the verdict:
 
