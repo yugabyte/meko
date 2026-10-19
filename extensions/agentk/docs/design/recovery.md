@@ -22,6 +22,10 @@ server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one
 restarted (`agent-k-local host restart`), which the server's log says. `agent-k-local host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
 the host again at once and resume them all. With the server stopped, they resume when it starts.
+`agent-k-local stop` stops both, the server first, and `agent-k-local start` starts them again.
+With services installed it stops them through systemd (`systemctl --user stop`) or launchd
+(`bootout`): both restart a process that is only killed or exits on its own. Without services it
+sends the server SIGTERM (only when its lease names this machine) and asks the host to stop.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
 (`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….host.plist`), with `RunAtLoad`

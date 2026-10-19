@@ -146,8 +146,10 @@ describe('SystemdServices', () => {
     expect(svc.installed('host')).toBe(true);
   });
 
-  it('says how to stop a unit', () => {
-    expect(make().svc.stopHint('server')).toBe('systemctl --user stop agent-k-local.service');
+  it('stops a unit', () => {
+    const { svc, calls } = make();
+    svc.stop('server');
+    expect(calls).toEqual(['systemctl --user stop agent-k-local.service']);
   });
 
   it('reports a failed systemctl call as a ServiceError', () => {
@@ -251,8 +253,12 @@ describe('LaunchdServices', () => {
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
   });
 
-  it('unloads a job to stop it', () => {
-    expect(make().svc.stopHint('server')).toBe('launchctl bootout gui/501/com.yugabyte.agent-k-local');
+  it('unloads a job to stop it, and leaves an unloaded one alone', () => {
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local'] });
+    svc.stop('server');
+    svc.stop('host');
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local']);
+    expect(loaded.size).toBe(0);
   });
 
   it('reloads the server job when its file changed', () => {

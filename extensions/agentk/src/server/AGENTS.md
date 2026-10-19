@@ -7,7 +7,7 @@ guide, with the invariants every change here keeps, is [../../AGENTS.md](../../A
 
 | Path | What it is |
 |---|---|
-| `src/server/cli.ts` | Entry point: `serve`, `host` (`host stop`, `host restart`), `attach`, `install`, `uninstall`, `setup-link`, `status`, `logs`, `selftest`, `version`. |
+| `src/server/cli.ts` | Entry point: `serve`, `stop`, `start`, `host` (`host stop`, `host restart`), `attach`, `install`, `uninstall`, `setup-link`, `status`, `logs`, `selftest`, `version`. |
 | `src/server/core.ts` | Wires config, db, the session host, Meko and the services (refusing to start while a tmux-era version's service is installed); timers; `state()` snapshot for the UI. |
 | `src/server/server.ts` | Fastify routes, auth hook, origin checks, WebSockets (`/ws/events`, `/ws/term/:id`), static files. |
 | `src/server/sessions.ts` | Session lifecycle in the session host: create (`begin` answers once the row is in; the worktree and launch follow, and a worktree that can't be made is a failed start; a task on an existing branch or an open PR, a fork's included, works on that branch as it is), launch (through the session's harness adapter, `src/server/harness/`; hook payloads normalized by it), hook-driven status (a turn's end: `Stop`, or one the mod reports interrupted, `endTurn`), submitting prompts (through AgentK's mod while it's live, else typed into the terminal), recovery and auto-continue, archive. |
