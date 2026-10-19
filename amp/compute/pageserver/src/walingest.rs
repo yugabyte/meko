@@ -1251,9 +1251,13 @@ impl WalIngest {
                 if xlog_checkpoint.oldestActiveXid == pg_constants::INVALID_TRANSACTION_ID
                     && info == pg_constants::XLOG_CHECKPOINT_SHUTDOWN
                 {
+                    let prepared = modification
+                        .tline
+                        .list_twophase_files(Version::Modified(modification), ctx)
+                        .await?;
                     let oldest_active_xid = if pg_version.has_64bit_twophase() {
                         let mut oldest_active_full_xid = cp.nextXid.value;
-                        for xid in modification.tline.list_twophase_files(lsn, ctx).await? {
+                        for &xid in &prepared {
                             if xid < oldest_active_full_xid {
                                 oldest_active_full_xid = xid;
                             }
@@ -1261,7 +1265,7 @@ impl WalIngest {
                         oldest_active_full_xid as u32
                     } else {
                         let mut oldest_active_xid = cp.nextXid.value as u32;
-                        for xid in modification.tline.list_twophase_files(lsn, ctx).await? {
+                        for &xid in &prepared {
                             let narrow_xid = xid as u32;
                             if (narrow_xid.wrapping_sub(oldest_active_xid) as i32) < 0 {
                                 oldest_active_xid = narrow_xid;

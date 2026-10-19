@@ -475,7 +475,9 @@ pub(super) async fn handle_walreceiver_connection(
                     //
                     // The check and the record's own apply are not atomic, so a flush
                     // can still raise the frontier past a record that already passed
-                    // here, leaving a one-record window of the same failure open.
+                    // here, leaving a one-record window of the same failure open. Every
+                    // ingest metadata read is at next_record_lsn - 1 (#1627), so any of
+                    // them can hit it, not only the rel-size reads.
                     if interpreted.next_record_lsn <= timeline.get_consistent_lsn() {
                         WAL_INGEST.records_skipped_durable.inc();
                         maybe_checkpoint_stale = true;

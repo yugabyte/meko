@@ -976,19 +976,21 @@ a walreceiver reconnect loop and a stalled `consistent_lsn`
 lands, so run it locally when touching this rule.
 
 **Replay reads pre-record state exclusively.** Rows the first pass
-already upserted — including `rel_size_to_key` values written *at the
-extending record's own LSN* — are visible to the replaying record. Any
-ingest decision that asks "what was the state *before* this record"
-(relation existence and size in `create_relation_if_required` /
-`put_rel_extend`) therefore reads committed state **strictly below**
-the record's LSN (`DatadirModification::get_committed_before`,
-`Version::at(lsn-1)`), while same-record pending writes stay visible
-through the modification's pending map and the rel-size cache. An
-inclusive read is identical on the first pass but makes replay see its
-own prior-pass effects: `put_rel_extend` no-ops, the rel-size cache
-pins at the replay-start size, and gap-fill stamps all-zero images over
-live tail blocks. Regression test:
-`test/integration/compute/slow/restart_relsize_zero_shadow.rs`.
+already upserted at the record's own LSN are visible to the replaying
+record, and on a reconnect with the pageserver still up so are later
+records' rows. Every ingest read therefore sees committed state
+**strictly below** the record's LSN (`DatadirModification::get` and the
+`Version::Modified` reldir scans), while same-record pending writes
+stay visible through the modification's pending map and the rel-size
+cache. An inclusive read is identical on the first pass but makes
+replay see its own or later prior-pass effects: `put_rel_extend`
+no-ops, the rel-size cache pins at the replay-start size, gap-fill
+stamps all-zero images over live tail blocks, a replayed PREPARE fails
+`FileAlreadyExists` on every reconnect, and directory read-modify-writes
+rebuild rows inside the window from later state
+([#1627](https://github.com/yugabyte/meko/issues/1627)). Regression
+tests: `test/integration/compute/slow/restart_relsize_zero_shadow.rs`,
+`test/integration/compute/fast/twophase_replay.rs`.
 
 **Replay windows are quarantined.** A walreceiver connection that
 starts below the safekeeper's WAL end closes a per-window latch

@@ -507,7 +507,7 @@ where
         }
         for xid in self
             .timeline
-            .list_twophase_files(self.lsn, self.ctx)
+            .list_twophase_files(Version::at(self.lsn), self.ctx)
             .await?
         {
             self.add_twophase_file(xid).await?;

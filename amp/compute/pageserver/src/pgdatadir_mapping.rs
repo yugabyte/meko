@@ -731,9 +731,12 @@ impl Timeline {
         ctx: &RequestContext,
     ) -> Result<HashSet<RelTag>, PageReconstructError> {
         let key_range = rel_tag_sparse_key_range(spcnode, dbnode);
-        let results = self
-            .scan(KeySpace::single(key_range), version.get_lsn(), ctx)
-            .await?;
+        // Ingest reads the state just before its record, like `DatadirModification::get`.
+        let lsn = match version {
+            Version::LsnRange(lsns) => lsns.effective_lsn,
+            Version::Modified(modification) => modification.lsn_before_record(),
+        };
+        let results = self.scan(KeySpace::single(key_range), lsn, ctx).await?;
         let mut rels = HashSet::new();
         for (key, val) in results {
             let val = RelDirExists::decode(&val?).map_err(|_| {
@@ -1215,11 +1218,11 @@ impl Timeline {
 
     pub(crate) async fn list_twophase_files(
         &self,
-        lsn: Lsn,
+        version: Version<'_>,
         ctx: &RequestContext,
     ) -> Result<HashSet<u64>, PageReconstructError> {
         // fetch directory entry
-        let buf = self.get(TWOPHASEDIR_KEY, lsn, ctx).await?;
+        let buf = version.get(self, TWOPHASEDIR_KEY, ctx).await?;
 
         if self.pg_version.has_64bit_twophase() {
             Ok(TwoPhaseDirectoryV17::des(&buf)?.xids)
@@ -1588,7 +1591,7 @@ impl DatadirModification<'_> {
         let range = rel_tag_sparse_key_range(spcnode, dbnode);
         let results = self
             .tline
-            .scan(KeySpace::single(range), self.lsn, ctx)
+            .scan(KeySpace::single(range), self.lsn_before_record(), ctx)
             .await?;
         let mut out = Vec::new();
         for (key, val) in results {
@@ -1791,33 +1794,19 @@ impl DatadirModification<'_> {
         {
             return Ok(nblocks);
         }
-        // On cache miss, read the committed state STRICTLY BELOW the
-        // current record. This is "what did the relation look like
-        // before this record" — the question extension/creation
-        // decisions actually ask. An inclusive read is identical on
-        // the first pass, but during WAL replay below YB's durable
-        // horizon it sees this record's own effects from the previous
-        // pass and replays the wrong decision (skips the creation /
-        // re-extension and the gap-fill that must be re-applied
-        // idempotently — #22).
-        //
-        // Same-modification writes from earlier records are not
-        // visible through `before`, but every rel-size-affecting put
-        // also updates the rel-size cache, so the cache check above
-        // covers them.
-        let before = Version::at(Lsn(self.lsn.0.saturating_sub(1)));
-        if !self.tline.get_rel_exists(rel, before, ctx).await? {
+        if !self
+            .tline
+            .get_rel_exists(rel, Version::Modified(self), ctx)
+            .await?
+        {
             // create it with 0 size initially, the logic below will extend it
             self.put_rel_creation(rel, 0, ctx).await?;
             Ok(0)
         } else {
-            let nblocks = self.tline.get_rel_size(rel, before, ctx).await?;
-            // `before` is not a latest-version read, so get_rel_size
-            // cached it (if at all) only in the snapshot cache. Seed
-            // the latest cache so ingest doesn't re-read YB per
-            // record; put_rel_extend overwrites it on growth.
-            self.tline.set_cached_rel_size(rel, self.lsn, nblocks);
-            Ok(nblocks)
+            Ok(self
+                .tline
+                .get_rel_size(rel, Version::Modified(self), ctx)
+                .await?)
         }
     }
 
@@ -2314,10 +2303,6 @@ impl DatadirModification<'_> {
     ) -> Result<(), WalIngestError> {
         ensure_walingest!(rel.relnode != 0, RelationError::InvalidRelnode);
 
-        // Put size. The committed read is strictly below the current
-        // record so a replayed extension re-takes the first pass's
-        // decision instead of seeing its own prior-pass write
-        // (see get_committed_before; #22).
         let size_key = rel_size_to_key(rel);
         // #36: a torn-recovery reldir can list an FSM/VM fork whose rel-size
         // key is absent at this LSN (the directory write landed but the first
@@ -2326,7 +2311,7 @@ impl DatadirModification<'_> {
         // missing size as 0 rather than letting `MissingKey` wedge the
         // walreceiver on the extend. Same spirit as the get_rel_size / drop
         // tolerances; a missing MAIN-fork size still surfaces as an error.
-        let old_size = match self.get_committed_before(size_key, ctx).await {
+        let old_size = match self.get(size_key, ctx).await {
             Ok(mut buf) => buf.get_u32_le(),
             Err(PageReconstructError::MissingKey(_))
                 if rel.forknum == FSM_FORKNUM || rel.forknum == VISIBILITYMAP_FORKNUM =>
@@ -2798,6 +2783,9 @@ impl DatadirModification<'_> {
     /// DB create operations are always preceded by a call to commit().  This is special cased because
     /// it's rare: all the 'normal' WAL operations will only read metadata pages such as relation sizes,
     /// and not data pages.
+    ///
+    /// The committed read is strictly below this record, so a replayed record sees the state its
+    /// first pass saw rather than its own or later prior-pass rows (#22, #1627).
     async fn get(&self, key: Key, ctx: &RequestContext) -> Result<Bytes, PageReconstructError> {
         if !Self::is_data_key(&key) {
             // Have we already updated the same key? Read the latest pending updated
@@ -2833,45 +2821,13 @@ impl DatadirModification<'_> {
             }
         }
 
-        // Metadata page cache miss, or we're reading a data page.
-        let lsn = Lsn::max(self.tline.get_last_record_lsn(), self.lsn);
-        self.tline.get(key, lsn, ctx).await
+        // Read the state just before this record, as its first run saw it, so a replay of the
+        // record makes the same decisions.
+        self.tline.get(key, self.lsn_before_record(), ctx).await
     }
 
-    /// Like [`Self::get`], but the committed read is *strictly below*
-    /// the current record's LSN, while this modification's own pending
-    /// writes stay visible.
-    ///
-    /// Ingest decisions that ask "what was the state *before* this
-    /// record?" (relation size, existence) must use this instead of
-    /// `get`. An inclusive read gives the same answer on the first
-    /// pass — nothing committed at the record's own LSN yet — but
-    /// during WAL replay below YB's durable horizon it sees this very
-    /// record's effects from the previous pass, and replay then takes
-    /// different decisions than the first pass took (#22: the
-    /// rel-size cache pin and the skipped gap-fill both came from
-    /// inclusive reads at the record LSN).
-    async fn get_committed_before(
-        &self,
-        key: Key,
-        ctx: &RequestContext,
-    ) -> Result<Bytes, PageReconstructError> {
-        if !Self::is_data_key(&key) {
-            if let Some(values) = self.pending_metadata_pages.get(&key.to_compact()) {
-                if let Some((_, _, value)) = values.last() {
-                    return if let Value::Image(img) = value {
-                        Ok(img.clone())
-                    } else {
-                        Err(PageReconstructError::Other(anyhow::anyhow!(
-                            "unexpected pending WAL record"
-                        )))
-                    };
-                }
-            }
-        }
-        self.tline
-            .get(key, Lsn(self.lsn.0.saturating_sub(1)), ctx)
-            .await
+    fn lsn_before_record(&self) -> Lsn {
+        Lsn(self.lsn.0.saturating_sub(1))
     }
 
     /// Get a key from the sparse keyspace. Automatically converts the missing key error
