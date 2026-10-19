@@ -298,15 +298,38 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                 // from other members appear in the list but render without
                 // the delete affordance; the server also enforces this.
                 const isMine = isOwnMemory(m, accountId);
+                // Clickable row needs to be a div (not a button) so the
+                // markdown-rendered memory body can carry <a> links without
+                // nesting interactive content inside <button>, which HTML's
+                // content model forbids — Chromium opens the new tab AND
+                // navigates the current one, other browsers may do neither.
+                // tabIndex/onKeyDown preserve keyboard parity with a button
+                // when canLink is true; when it isn't, the row is a plain
+                // non-interactive container so AT users aren't told it does
+                // something it won't.
+                const openConversation = canLink
+                  ? () => goToConversation(m.conversation_id!, m.id)
+                  : undefined;
                 return (
                   <li key={m.id}>
-                    <button
-                      type="button"
-                      onClick={() => canLink && goToConversation(m.conversation_id!, m.id)}
+                    <div
+                      role={canLink ? "button" : undefined}
+                      tabIndex={canLink ? 0 : undefined}
+                      onClick={openConversation}
+                      onKeyDown={
+                        canLink
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                openConversation?.();
+                              }
+                            }
+                          : undefined
+                      }
                       className={cn(
                         "w-full rounded-lg border border-border bg-card px-4 py-3 text-left",
                         canLink
-                          ? "cursor-pointer hover:bg-input hover:border-border/80 transition-colors"
+                          ? "cursor-pointer hover:bg-input hover:border-border/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           : "cursor-default",
                       )}
                     >
@@ -364,7 +387,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                           ) : null}
                         </div>
                       </div>
-                    </button>
+                    </div>
                   </li>
                 );
               })}
