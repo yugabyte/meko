@@ -15,7 +15,8 @@ func (e *APIServerUnreachableError) Unwrap() error { return e.Err }
 func apiServerUnreachable(out string) bool {
 	low := strings.ToLower(out)
 	return strings.Contains(low, "unable to connect to the server") ||
-		(strings.Contains(low, "the connection to the server") && strings.Contains(low, "was refused"))
+		(strings.Contains(low, "the connection to the server") && strings.Contains(low, "was refused")) ||
+		strings.Contains(low, "error upgrading connection: dial tcp")
 }
 
 // kubectl prints "Unable to connect to the server" for any transport error,

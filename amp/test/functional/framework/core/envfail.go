@@ -73,6 +73,7 @@ var schedulingSignals = []struct {
 	{"attested harness port-forward drop", []string{"harness port-forward drop, not a product failure"}},
 	{"kube api server unreachable", []string{"kubectl: unable to connect to the server"}},
 	{"kube api server unreachable", []string{"kubectl: the connection to the server", "was refused"}},
+	{"kube api server unreachable", []string{"kubectl: error: error upgrading connection: dial tcp"}},
 	{"pod unschedulable (insufficient cpu)", []string{"insufficient cpu"}},
 	{"pod unschedulable (insufficient memory)", []string{"insufficient memory"}},
 	{"pod unschedulable (persistentvolume node affinity)", []string{"persistentvolume's node affinity"}},

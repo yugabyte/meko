@@ -698,6 +698,24 @@ func TestPortForwardGivesUpOnTheKubeletAsEnvironment(t *testing.T) {
 	}
 }
 
+func TestPortForwardGivesUpOnTheAPIServerAsEnvironment(t *testing.T) {
+	defer func(d time.Duration) { kubeletRetryDelay = d }(kubeletRetryDelay)
+	kubeletRetryDelay = time.Millisecond
+	starts := 0
+	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		starts++
+		return &fakeProc{out: strings.NewReader("error: error upgrading connection: dial tcp 10.150.8.6:443: connect: connection timed out\n"), killed: make(chan struct{})}, nil
+	})
+	_, err := k.PortForward(context.Background(), "svc/yb-ep-1", 18080, 5433)
+	var au *APIServerUnreachableError
+	if !errors.As(err, &au) {
+		t.Fatalf("err = %v, want an APIServerUnreachableError", err)
+	}
+	if starts != kubeletDialAttempts {
+		t.Errorf("kubectl started %d times, want %d", starts, kubeletDialAttempts)
+	}
+}
+
 func TestPortForwardDoesNotRetryOtherFailures(t *testing.T) {
 	starts := 0
 	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {

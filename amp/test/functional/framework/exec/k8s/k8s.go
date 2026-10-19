@@ -760,7 +760,8 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 	for attempt := 1; ; attempt++ {
 		pf, err := k.portForwardOnce(ctx, target, localPort, remotePort)
 		var ku *KubeletUnreachableError
-		if err == nil || !errors.As(err, &ku) || attempt >= kubeletDialAttempts {
+		var au *APIServerUnreachableError
+		if err == nil || !(errors.As(err, &ku) || errors.As(err, &au)) || attempt >= kubeletDialAttempts {
 			return pf, err
 		}
 		if k.logf != nil {

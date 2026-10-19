@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/universe"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
@@ -541,16 +543,26 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
+func growYBAVolumes(ctx context.Context, client universe.YBAMaintainer, id string, addGB int, timeout time.Duration) (string, error) {
+	from, to, err := client.GrowUniverseVolumesAndWait(ctx, id, addGB, timeout)
+	if err != nil {
+		err = fmt.Errorf("YBA could not grow the universe's tserver volumes by %d GB while they were full: %w", addGB, err)
+		// YBA never answered: that is the QA stack's YBA, not amp.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return "", core.AsEnvFailure(err)
+		}
+		return "", err
+	}
+	return fmt.Sprintf("YBA edit universe: tserver volume %d -> %d GB", from, to), nil
+}
+
 // growBackingVolumes is the customer's remedy for a full backing: a bigger
 // volume, through YBA when YBA manages the universe, else on the PVCs.
 func growBackingVolumes(t *core.T, kube *k8s.Kubectl, pods []string, addGB int, timeout time.Duration) (string, error) {
 	if benv, ok := t.Env.(ybaBackedEnv); ok {
 		if client, id := benv.YBAUniverse(); client != nil {
-			from, to, err := client.GrowUniverseVolumesAndWait(t.Context, id, addGB, timeout)
-			if err != nil {
-				return "", fmt.Errorf("YBA could not grow the universe's tserver volumes by %d GB while they were full: %w", addGB, err)
-			}
-			return fmt.Sprintf("YBA edit universe: tserver volume %d -> %d GB", from, to), nil
+			return growYBAVolumes(t.Context, client, id, addGB, timeout)
 		}
 	}
 	var grown []string

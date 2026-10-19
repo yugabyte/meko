@@ -80,6 +80,8 @@ func TestSchedulingReasonMatchesCapacityFailures(t *testing.T) {
 			"kube api server unreachable"},
 		{"port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: The connection to the server 10.150.8.6:443 was refused - did you specify the right host or port?)",
 			"kube api server unreachable"},
+		{"port-forward svc/yb-ep-1 not ready: exit status 1 (kubectl: error: error upgrading connection: dial tcp 10.150.8.6:443: connect: connection timed out)",
+			"kube api server unreachable"},
 		{"0/10 nodes are available: 6 node(s) didn't match PersistentVolume's node affinity",
 			"pod unschedulable (persistentvolume node affinity)"},
 		{"0/12 nodes are available: 12 Insufficient memory.", "pod unschedulable (insufficient memory)"},
