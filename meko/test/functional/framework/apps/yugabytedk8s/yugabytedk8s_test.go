@@ -2,6 +2,7 @@ package yugabytedk8s
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -13,10 +14,12 @@ import (
 )
 
 type rec struct {
-	mu    sync.Mutex
-	lines []string
-	stdin []string
-	pods  string
+	mu      sync.Mutex
+	lines   []string
+	stdin   []string
+	pods    string
+	pool    string
+	poolErr error
 }
 
 func (r *rec) run(_ context.Context, in io.Reader, argv []string) (execpkg.Result, error) {
@@ -33,6 +36,8 @@ func (r *rec) run(_ context.Context, in io.Reader, argv []string) (execpkg.Resul
 	switch {
 	case strings.Contains(line, "Ready") && strings.Contains(line, "get pods"):
 		return execpkg.Result{Stdout: strings.Repeat("True\n", 9)}, nil
+	case strings.Contains(line, "get nodes") && strings.Contains(line, "gke-nodepool"):
+		return execpkg.Result{Stdout: r.pool}, r.poolErr
 	case strings.Contains(line, "get nodes"):
 		return execpkg.Result{Stdout: "us-west1-a\tus-west1\nus-west1-b\tus-west1\n"}, nil
 	case strings.Contains(line, "get pods"):
@@ -83,6 +88,53 @@ func TestCreateBuildsOneStatefulSetPerZoneAndConfiguresPlacement(t *testing.T) {
 	}
 	if r.count("kubernetes.io/dockerconfigjson") != 1 {
 		t.Error("no pull secret")
+	}
+}
+
+func createPinned(t *testing.T, r *rec, placement map[string]int) (*Universe, error) {
+	t.Helper()
+	p := New(Config{KubeContext: "ctx", RunID: "r1", Image: "img", Logf: func(string, ...any) {}, ReadyTimeout: time.Second,
+		NodeSelector: map[string]string{"cloud.google.com/gke-nodepool": "big"}}).WithRunner(r.run)
+	spec := universe.Spec{Name: "db1", Clusters: []universe.ClusterSpec{{RF: 3, Placement: placement}}}
+	return p.Create(context.Background(), spec)
+}
+
+func TestNodeSelectorPinsOnlyZonesItsNodesCover(t *testing.T) {
+	r := &rec{pool: "n1\tus-west1-a\n"}
+	if _, err := createPinned(t, r, map[string]int{"us-west1-a": 2, "us-west1-b": 1}); err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range strings.Split(strings.Join(r.stdin, "\n"), "kind: StatefulSet") {
+		switch {
+		case strings.Contains(doc, "name: yb-us-west1-a"):
+			if !strings.Contains(doc, "cloud.google.com/gke-nodepool: big") || !strings.Contains(doc, "topology.kubernetes.io/zone: us-west1-a") {
+				t.Errorf("us-west1-a not pinned to the pool and zone:\n%s", doc)
+			}
+		case strings.Contains(doc, "name: yb-us-west1-b"):
+			if strings.Contains(doc, "gke-nodepool") {
+				t.Errorf("us-west1-b has no pool node but got the pool label:\n%s", doc)
+			}
+		}
+	}
+}
+
+func TestNodeSelectorWithNoMatchingNodeIsDropped(t *testing.T) {
+	r := &rec{}
+	if _, err := createPinned(t, r, map[string]int{"zone-x": 3}); err != nil {
+		t.Fatal(err)
+	}
+	if r.count("gke-nodepool: big") != 0 {
+		t.Error("pool label set though no node carries it")
+	}
+}
+
+func TestNodeSelectorLookupFailureFailsCreate(t *testing.T) {
+	r := &rec{poolErr: errors.New("connection refused")}
+	if _, err := createPinned(t, r, map[string]int{"us-west1-a": 3}); err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("err = %v", err)
+	}
+	if r.count("kind: Namespace") != 0 {
+		t.Error("created the universe after the node lookup failed")
 	}
 }
 

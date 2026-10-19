@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/mekostack"
+	"github.com/yugabyte/meko/meko/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/meko/meko/test/functional/framework/apps/yugabytedk8s"
 	"github.com/yugabyte/meko/meko/test/functional/framework/core"
 	"github.com/yugabyte/meko/meko/test/functional/framework/diag"
@@ -73,6 +74,7 @@ func (p *Provider) creatorFor(ctx context.Context, prov universe.Provider, tag s
 			PullUser:        p.cfg.Stack.QuayUser, PullToken: p.cfg.Stack.QuayToken,
 			RunID: tag, Owner: p.cfg.Stack.Owner, TTL: p.cfg.Stack.TTL,
 			ReadyTimeout: c.GetDuration("db.yugabyted.ready_timeout", yugabytedk8s.DefaultReadyTimeout),
+			NodeSelector: ybk8s.ParseNodeSelector(c.GetString("db.yugabyted.node_selector", "")),
 			Logf:         p.logf,
 		}
 		return yugabytedCreator{prov: yugabytedk8s.New(cfg), ctx: p.cfg.Context}, nil

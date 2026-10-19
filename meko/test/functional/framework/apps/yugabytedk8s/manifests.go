@@ -188,8 +188,18 @@ func (u *Universe) statefulSet(c universe.ClusterSpec, zone string, replicas int
 		}},
 		"volumes": []any{map[string]any{"name": "conf", "configMap": map[string]any{"name": confName(c.Type)}}},
 	}
-	if _, real := u.regions[zone]; real {
-		podSpec["nodeSelector"] = map[string]any{"topology.kubernetes.io/zone": universe.ZoneName(zone)}
+	sel := map[string]any{}
+	_, real := u.regions[zone]
+	if real {
+		sel["topology.kubernetes.io/zone"] = universe.ZoneName(zone)
+	}
+	if len(u.nodeZones) > 0 && (!real || u.nodeZones[zone]) {
+		for k, v := range u.p.cfg.NodeSelector {
+			sel[k] = v
+		}
+	}
+	if len(sel) > 0 {
+		podSpec["nodeSelector"] = sel
 	}
 	vct := map[string]any{
 		"metadata": map[string]any{"name": "data"},

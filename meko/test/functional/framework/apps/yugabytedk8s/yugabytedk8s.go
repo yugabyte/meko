@@ -47,6 +47,8 @@ type Config struct {
 	TTL   time.Duration
 
 	ReadyTimeout time.Duration
+	// NodeSelector is laid under every pod's own zone selector.
+	NodeSelector map[string]string
 	// ExtraGflags are laid under every universe's own flags. A meko stack sets
 	// the mage flags here.
 	Logf func(string, ...any)
@@ -123,6 +125,30 @@ func (p *Provider) zoneRegions(ctx context.Context) map[string]string {
 	return regions
 }
 
+// nodeZones lists the zones of the nodes carrying NodeSelector. Nil means no
+// selector, and an empty map means no node carries it.
+func (p *Provider) nodeZones(ctx context.Context) (map[string]bool, error) {
+	if len(p.cfg.NodeSelector) == 0 {
+		return nil, nil
+	}
+	sel := labelSelector(p.cfg.NodeSelector)
+	out, err := p.cluster.GetSelector(ctx, "nodes", sel,
+		`{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}{end}`)
+	if err != nil {
+		return nil, fmt.Errorf("listing the nodes matching %s: %w", sel, err)
+	}
+	zones := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if name, z, _ := strings.Cut(strings.TrimSpace(line), "\t"); name != "" {
+			zones[z] = true
+		}
+	}
+	if len(zones) == 0 {
+		p.log("yugabytedk8s: no node matches %s, scheduling the universe anywhere", sel)
+	}
+	return zones, nil
+}
+
 func (p *Provider) imageFor(s universe.Spec) string {
 	switch {
 	case s.Image != "":
@@ -167,7 +193,11 @@ func (p *Provider) Create(ctx context.Context, spec universe.Spec) (*Universe, e
 	if err := check(spec); err != nil {
 		return nil, err
 	}
-	u := &Universe{p: p, spec: spec, ns: p.Namespace(spec.Name), image: p.imageFor(spec), regions: p.zoneRegions(ctx)}
+	nodeZones, err := p.nodeZones(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("universe %s: %w", spec.Name, err)
+	}
+	u := &Universe{p: p, spec: spec, ns: p.Namespace(spec.Name), image: p.imageFor(spec), regions: p.zoneRegions(ctx), nodeZones: nodeZones}
 	u.kube = k8s.New(k8s.Config{Context: p.cfg.KubeContext, Namespace: u.ns}).WithRunner(p.cluster.Runner())
 	if err := u.create(ctx); err != nil {
 		return u, err

@@ -15,12 +15,13 @@ import (
 
 // Universe is a running yugabyted universe.
 type Universe struct {
-	p       *Provider
-	spec    universe.Spec
-	ns      string
-	image   string
-	kube    *k8s.Kubectl
-	regions map[string]string
+	p         *Provider
+	spec      universe.Spec
+	ns        string
+	image     string
+	kube      *k8s.Kubectl
+	regions   map[string]string
+	nodeZones map[string]bool
 }
 
 var (

@@ -110,6 +110,11 @@ db:
   yugabyted:
     namespace_prefix: "mekoqa-yu"
     ready_timeout: 20m
+    # node_selector pins every universe pod, "k=v,k=v", when some node carries
+    # it. yugabyted sizes the tserver's memory limit from the node's RAM, not the
+    # pod's: on meko-dev's e2-standard-4 pool it is 9.56 GB and the vector index
+    # reservations (meko#1947) reach it, on the e2-standard-16 one they do not.
+    node_selector: "cloud.google.com/gke-nodepool=default-pool"
 
 # --- Environment providers ---
 env:
