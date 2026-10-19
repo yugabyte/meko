@@ -169,6 +169,10 @@ type EnvironmentService struct {
 	taskRepo *repository.EnvironmentTaskRepo
 	extRepo  *repository.EnvironmentExtensionRepo
 
+	// revWatcher holds agents' desired-state long-polls on one batched token read per
+	// tick; see AgentDesired.
+	revWatcher *desiredRevWatcher
+
 	// pruneMu guards lastPruned, which rate-limits the fleet-wide task-retention
 	// delete. Every environment's agent heartbeats every 10s, so pruning on each
 	// report that carried a task would run one fleet-wide DELETE per environment per
@@ -191,7 +195,7 @@ func NewEnvironmentService(
 	repo *repository.EnvironmentRepo,
 	taskRepo *repository.EnvironmentTaskRepo,
 ) *EnvironmentService {
-	return &EnvironmentService{repo: repo, taskRepo: taskRepo}
+	return &EnvironmentService{repo: repo, taskRepo: taskRepo, revWatcher: newDesiredRevWatcher(repo)}
 }
 
 // ---- request DTOs ----
@@ -1064,11 +1068,12 @@ var (
 // AgentDesired is the agent's desired-state read: its change token and its rows, the
 // admin-only kinds included.
 //
-// With hold, while the token still equals since, it waits -- re-reading the token
-// every DesiredPollEvery -- until the token moves or wait (capped at DesiredMaxWait)
-// runs out, and returns the current state either way. Re-reading the database rather
-// than listening for a notification is what lets any replica serve the hold. It
-// returns ctx's error if ctx ends first.
+// With hold, while the token still equals since, it waits until the token moves or wait
+// (capped at DesiredMaxWait) runs out, and returns the current state either way. The
+// wait is desiredRevWatcher's: one query per DesiredPollEvery reads the token of every
+// environment held on this replica. Re-reading the database rather than listening for a
+// notification is what lets any replica serve the hold. It returns ctx's error if ctx
+// ends first.
 //
 // The token is read before the rows. A write landing between the two then hands the
 // agent newer rows under an older token, which costs it one early wakeup; the other
@@ -1081,7 +1086,7 @@ func (s *EnvironmentService) AgentDesired(
 		return 0, nil, err
 	}
 	if hold && token == since {
-		if token, err = s.awaitDesiredChange(ctx, envUUID, since, min(wait, DesiredMaxWait)); err != nil {
+		if token, err = s.revWatcher.wait(ctx, envUUID, since, min(wait, DesiredMaxWait)); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -1090,31 +1095,6 @@ func (s *EnvironmentService) AgentDesired(
 		return 0, nil, err
 	}
 	return token, res, nil
-}
-
-func (s *EnvironmentService) awaitDesiredChange(
-	ctx context.Context, envUUID string, since int64, wait time.Duration,
-) (int64, error) {
-	deadline := time.NewTimer(wait)
-	defer deadline.Stop()
-	poll := time.NewTicker(DesiredPollEvery)
-	defer poll.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-deadline.C:
-			return since, nil
-		case <-poll.C:
-		}
-		token, err := s.repo.DesiredRev(envUUID)
-		if err != nil {
-			return 0, err
-		}
-		if token != since {
-			return token, nil
-		}
-	}
 }
 
 // listResourcesForEnv filters an already-resolved environment's resources into two

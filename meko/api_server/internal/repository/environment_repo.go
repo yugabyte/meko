@@ -829,10 +829,10 @@ func execRows(db interface {
 	return res.RowsAffected()
 }
 
-// DesiredRev returns the environment's desired-state change token: a counter a
-// counter bumpDesiredRev moves after every write to its desired rows that changed one. It is the
-// long-poll's cheap "has anything changed" read, so it is a single primary-key lookup.
-// An environment whose desired state was never written reads as 0.
+// DesiredRev returns the environment's desired-state change token: a counter
+// bumpDesiredRev moves after every write that changed one of its desired rows. It is a
+// single primary-key lookup. An environment whose desired state was never written reads
+// as 0.
 func (r *EnvironmentRepo) DesiredRev(envUUID string) (int64, error) {
 	var rev int64
 	err := r.db.QueryRow(
@@ -844,6 +844,28 @@ func (r *EnvironmentRepo) DesiredRev(envUUID string) (int64, error) {
 		return 0, fmt.Errorf("read desired rev: %w", err)
 	}
 	return rev, nil
+}
+
+// DesiredRevs is DesiredRev for many environments in one query, for the long-poll's
+// watcher. An environment with no counter row is absent from the map; read it as 0.
+func (r *EnvironmentRepo) DesiredRevs(envUUIDs []string) (map[string]int64, error) {
+	rows, err := r.db.Query(
+		`SELECT env_uuid::text, rev FROM meko_system.environment_desired_revs WHERE env_uuid = ANY($1::uuid[])`,
+		pq.Array(envUUIDs))
+	if err != nil {
+		return nil, fmt.Errorf("read desired revs: %w", err)
+	}
+	defer rows.Close()
+	revs := make(map[string]int64, len(envUUIDs))
+	for rows.Next() {
+		var env string
+		var rev int64
+		if err := rows.Scan(&env, &rev); err != nil {
+			return nil, fmt.Errorf("scan desired rev: %w", err)
+		}
+		revs[env] = rev
+	}
+	return revs, rows.Err()
 }
 
 // GetDesired returns one desired resource, or (nil, nil) when it is not declared.

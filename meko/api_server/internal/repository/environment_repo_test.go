@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/models"
 )
@@ -164,6 +165,33 @@ func TestEnvironmentRepo_DesiredRev(t *testing.T) {
 		WithArgs(env).WillReturnRows(sqlmock.NewRows([]string{"rev"}).AddRow(int64(12)))
 	if rev, err := repo.DesiredRev(env); err != nil || rev != 12 {
 		t.Errorf("DesiredRev = %d, %v; want 12, nil", rev, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
+// The long-poll's watcher reads every held environment in one query; one with no
+// counter row is left out of the map, which the caller reads as 0.
+func TestEnvironmentRepo_DesiredRevs(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+	const a, b = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+
+	mock.ExpectQuery(`SELECT env_uuid::text, rev FROM meko_system\.environment_desired_revs ` +
+		`WHERE env_uuid = ANY\(\$1::uuid\[\]\)`).
+		WithArgs(pq.Array([]string{a, b})).
+		WillReturnRows(sqlmock.NewRows([]string{"env_uuid", "rev"}).AddRow(a, int64(4)))
+	revs, err := repo.DesiredRevs([]string{a, b})
+	if err != nil {
+		t.Fatalf("DesiredRevs: %v", err)
+	}
+	if len(revs) != 1 || revs[a] != 4 {
+		t.Errorf("DesiredRevs = %v, want only %s at 4", revs, a)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Error(err)

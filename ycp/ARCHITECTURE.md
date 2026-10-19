@@ -144,10 +144,12 @@ cluster.
      crash between commit and bump, an older replica mid-rollout, a hand edit in SQL)
      costs only latency, since the tick still reads desired state.
      `TestEveryDesiredWriterBumpsTheChangeToken` fails for a new writer that forgets.
-   - **The hold:** while the token still equals `since`, the api-server re-reads it
-     every 250ms, for at most 25s, then answers with the current state either way. It
-     re-reads the database rather than waiting on a notification, so any replica can
-     serve the hold.
+   - **The hold:** while the token still equals `since`, the api-server holds the
+     request, for at most 25s, then answers with the current state either way. One
+     loop per replica (`desiredRevWatcher`) reads the token of every environment held
+     there in a single query every 250ms and wakes the reads whose token moved, so a
+     replica costs four queries a second however many agents it holds. It re-reads the
+     database rather than waiting on a notification, so any replica can serve the hold.
    - **On a change:** the next tick reconciles the state the hold returned, with no
      second fetch.
    - **Old control plane:** one that predates this ignores `since`/`wait` and answers

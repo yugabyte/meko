@@ -19,6 +19,12 @@ func expectDesiredRev(mock sqlmock.Sqlmock, rev int64) {
 		WithArgs(envUUID).WillReturnRows(sqlmock.NewRows([]string{"rev"}).AddRow(rev))
 }
 
+// expectWatchedRevs is one tick of the long-poll's batched token read, for envUUID.
+func expectWatchedRevs(mock sqlmock.Sqlmock, rev int64) {
+	mock.ExpectQuery(`FROM meko_system\.environment_desired_revs WHERE env_uuid = ANY`).
+		WillReturnRows(sqlmock.NewRows([]string{"env_uuid", "rev"}).AddRow(envUUID, rev))
+}
+
 func expectDesiredRows(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(`FROM meko_system\.environment_desired_resources`).
 		WithArgs(envUUID).WillReturnRows(adminOnlyDesiredRows())
@@ -70,8 +76,8 @@ func TestAgentDesiredState_HoldsUntilTheTokenMoves(t *testing.T) {
 	defer done()
 	expectResolveAmpAgent(mock)
 	expectDesiredRev(mock, 7)
-	expectDesiredRev(mock, 7)
-	expectDesiredRev(mock, 9)
+	expectWatchedRevs(mock, 7)
+	expectWatchedRevs(mock, 9)
 	expectDesiredRows(mock)
 
 	rec := agentRequest(t, h.AgentDesiredState, http.MethodGet,
