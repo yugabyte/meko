@@ -27,8 +27,9 @@ Installed services stop through systemd (`systemctl --user stop`) or launchd (`b
 both restart a process that is only killed or exits on its own. Then it checks the server's lease:
 a server outside the service (`serve` by hand, or any server without services) gets SIGTERM, but
 only when the lease names this machine and its pid is an `agent-k-local serve` (after a crash the
-pid can be another process's); a lease held on another host is refused. The host goes last,
-through its service or its stop request. The services still start again at the next login (or
+pid can be another process's); a lease held on another host is refused. The host goes last:
+its service is stopped, then any host still on the socket (a detached one a server started before
+the services were installed) gets a stop request. The services still start again at the next login (or
 boot, with lingering) or reinstall; `start` starts them sooner.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain

@@ -349,13 +349,13 @@ async function stop(): Promise<void> {
   if (svc?.installed('host')) {
     stopped ||= svc.state('host').running;
     svc.stop('host');
-  } else {
-    try {
-      await client.stop();
-      stopped = true;
-    } catch (e) {
-      if (!(e instanceof NoHostError)) throw e;
-    }
+  }
+  // A host the service didn't start (a detached one from `serve` before install) still answers on the socket.
+  try {
+    await client.stop();
+    stopped = true;
+  } catch (e) {
+    if (!(e instanceof NoHostError)) throw e;
   }
   const resume = svc?.installed('server') ? 'agent-k-local start' : 'agent-k-local serve';
   if (!stopped) console.log('AgentK Local is not running.');
