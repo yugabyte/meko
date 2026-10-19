@@ -7,7 +7,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
-import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, useRailSessions } from '../rail';
+import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
 import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
@@ -569,7 +569,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onMenu={openDrawer}
-            showTabs={!railSessions || railHidden}
+            showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
             onError={showToast}
           />
