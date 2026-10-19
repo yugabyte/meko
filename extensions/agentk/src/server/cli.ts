@@ -311,6 +311,15 @@ async function host(args: string[]): Promise<void> {
   process.on('SIGINT', exit);
 }
 
+/** Whether a pid is an AgentK Local server: after a crash its lease can name a pid another process has now. */
+function isServer(pid: number): boolean {
+  try {
+    return /(agent-k-local|cli\.[jt]s) serve\b/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' }));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Stops the server, then the session host: a running server would start the host again and resume
  * every session. Their supervisors restart a killed process, so installed services stop through them.
@@ -324,14 +333,16 @@ async function stop(): Promise<void> {
   if (svc?.installed('server')) {
     stopped = svc.state('server').running;
     svc.stop('server');
-  } else {
-    const server = heldLease(paths.lock);
-    if (server) {
-      if (server.host !== hostname()) throw new Error(`The AgentK Local server for this home runs on ${server.host} (pid ${server.pid}): stop it there.`);
+  }
+  // A server outside the service (`serve` by hand, or on another host sharing this home) holds the lease too.
+  const server = heldLease(paths.lock);
+  if (server) {
+    if (server.host !== hostname()) throw new Error(`The AgentK Local server for this home runs on ${server.host} (pid ${server.pid}): stop it there.`);
+    if (isServer(server.pid)) {
       // Its SIGTERM handler shuts down cleanly and releases the lease.
       process.kill(server.pid, 'SIGTERM');
-      for (let i = 0; i < 100 && heldLease(paths.lock); i++) await sleep(100);
-      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 10 seconds. See: agent-k-local logs`);
+      for (let i = 0; i < 200 && heldLease(paths.lock); i++) await sleep(100);
+      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 20 seconds. See: agent-k-local logs`);
       stopped = true;
     }
   }
@@ -346,15 +357,21 @@ async function stop(): Promise<void> {
       if (!(e instanceof NoHostError)) throw e;
     }
   }
+  const resume = svc?.installed('server') ? 'agent-k-local start' : 'agent-k-local serve';
   if (!stopped) console.log('AgentK Local is not running.');
-  else console.log(`Stopped AgentK Local${n ? ` and the ${n} session(s) in it. They resume at: agent-k-local start` : ''}.`);
+  else console.log(`Stopped AgentK Local${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
 }
 
 /** Starts the services `stop` stopped. */
 async function start(): Promise<void> {
   const svc = servicesFor(getPaths().home);
   if (!svc?.installed('server')) throw new Error('No background services run this home: run agent-k-local serve, or install them with agent-k-local install.');
-  for (const s of ['host', 'server'] as const) if (svc.installed(s)) svc.start(s);
+  for (const s of ['host', 'server'] as const) {
+    if (!svc.installed(s)) continue;
+    svc.start(s);
+    for (let i = 0; i < 50 && !svc.state(s).running; i++) await sleep(100);
+    if (!svc.state(s).running) throw new Error(`${svc.id(s)} didn't start. Check: ${svc.statusHint(s)}`);
+  }
   console.log('Started AgentK Local; the server resumes the sessions in a few seconds. Check: agent-k-local status');
 }
 
@@ -371,8 +388,8 @@ Usage: agent-k-local <command>
                 session worktrees and designs; add --delete-worktrees to delete those too)
   setup-link    Print a one-time link to create (or reset) your login
   status        Show services, URL, certificate fingerprint and sessions
-  stop          Stop the server and the session host, ending every session (they resume at start; on
-                macOS the services also start again at the next login)
+  stop          Stop the server and the session host, ending every session (they resume at start, or
+                serve without services; the services also start again at the next login)
   start         Start the background services again after stop
   attach [name] Show a session's terminal here (Ctrl+\\ detaches; Claude keeps running); no name lists them
   host          Run the session host that holds every Claude (the background service runs this for you);

@@ -261,6 +261,12 @@ describe('LaunchdServices', () => {
     expect(loaded.size).toBe(0);
   });
 
+  it('says so when a job is still loaded after bootout', () => {
+    // launchctl print keeps finding the job: bootout failed, or it's still exiting.
+    const stuck = new LaunchdServices(() => ok, home, 501, () => {});
+    expect(() => stuck.stop('server')).toThrow(/com.yugabyte.agent-k-local didn't stop/);
+  });
+
   it('reloads the server job when its file changed', () => {
     const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local'] });
     mkdirSync(agents(), { recursive: true });

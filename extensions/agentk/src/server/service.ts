@@ -52,7 +52,7 @@ export interface ServiceManager {
   removeLegacyTmux(): void;
   /** Starts a service that isn't running; leaves a running one alone. */
   start(s: Service): void;
-  /** Stops a service until it's started again (its supervisor doesn't bring it back). */
+  /** Stops a service until `start`, the next login or a reinstall (its supervisor doesn't bring it back sooner). */
   stop(s: Service): void;
   state(s: Service): { running: boolean; text: string };
   /** Stops both services (and an old tmux one) and deletes their files. */
@@ -309,6 +309,9 @@ export class LaunchdServices implements ServiceManager {
   stop(s: Service): void {
     // KeepAlive restarts a killed job: unload it (`start`, the next login or a reinstall loads it again).
     this.unload(s);
+    // unload waits 5 s; the server's ExitTimeOut is 15 s.
+    for (let i = 0; i < 150 && this.loaded(s); i++) this.pause(100);
+    if (this.loaded(s)) throw new ServiceError(`${this.id(s)} didn't stop. Check: ${this.statusHint(s)}`);
   }
 
   state(s: Service): { running: boolean; text: string } {
