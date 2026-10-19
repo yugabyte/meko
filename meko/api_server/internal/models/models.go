@@ -113,6 +113,11 @@ type Memory struct {
 	UserName       string     `json:"user_name,omitempty"`
 	UserEmail      string     `json:"user_email,omitempty"`
 	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	// IsMine is whether the caller wrote this memory. It survives
+	// HideOwners, which blanks UserID: the delete affordance is
+	// author-scoped, so without this a viewer cannot tell which rows are
+	// theirs and the UI hides delete on every one of them.
+	IsMine bool `json:"is_mine"`
 }
 
 // MemoryListFilter is the filter for the Mem0 project (datapacks.meko_mem0_collection).
@@ -135,6 +140,10 @@ type MemoryListFilter struct {
 	PageSize   int    `json:"page_size"`
 	// HideOwners drops who added each memory, for a viewer.
 	HideOwners bool `json:"-"`
+	// CallerUserID is the authenticated account, always set. UserID is
+	// cleared for a viewer (filtering by user would tell them whose
+	// memories they are), so it cannot double as the caller's identity.
+	CallerUserID string `json:"-"`
 }
 
 // IsPaidUserType reports whether the account tier should run the

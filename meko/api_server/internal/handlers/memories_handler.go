@@ -61,6 +61,9 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 //
 //	@Summary		List memories (query)
 //	@Description	For a viewer of the datapack, user_id is ignored and who added each memory is left out.
+//	@Description	Every row carries is_mine, whether the caller wrote it. It is returned for a viewer too,
+//	@Description	whose rows have no attribution to work it out from, because deleting a memory is
+//	@Description	author-scoped: a member demoted to viewer may still delete what they wrote before.
 //	@Tags		memories
 //	@Produce	json
 //	@Param		datapack_id	query	string	true	"Datapack ID"
@@ -76,7 +79,7 @@ func (handler *MemoriesHandler) list(c echo.Context, filter models.MemoryListFil
 //	@Router		/memories [get]
 func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 	datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-	_, grant, err := RequireDatapackAccessWithGrant(c, handler.dpLookup, datapackID)
+	accountID, grant, err := RequireDatapackAccessWithGrant(c, handler.dpLookup, datapackID)
 	if err != nil {
 		return err
 	}
@@ -97,6 +100,8 @@ func (handler *MemoriesHandler) ListGET(c echo.Context) error {
 		Q:          strings.TrimSpace(c.QueryParam("q")),
 		Scope:      strings.TrimSpace(c.QueryParam("scope")),
 		HideOwners: viewer,
+
+		CallerUserID: accountID,
 	}
 	return handler.list(c, filter, grant)
 }

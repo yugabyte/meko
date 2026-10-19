@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
-import { FEATURE_FLAGS } from "@/lib/featureFlags";
 import {
   getKnowledgeBaseDocuments,
   listMemories,
@@ -73,34 +72,50 @@ describe("WorkbenchLMLiveObservationPanel — stacked layout (default, Workbench
   });
 });
 
-describe("WorkbenchLMLiveObservationPanel — memory delete is behind enableMemoryDeletion", () => {
-  // The caller's own post-cutoff memory: every other delete gate passes, so
-  // the flag is the only thing deciding whether the button renders.
-  beforeEach(() => {
+describe("WorkbenchLMLiveObservationPanel — who sees the memory delete button", () => {
+  function seedOneMemory(fields: Record<string, unknown>) {
     mockListMemories.mockResolvedValue({
       memories: [
         {
           id: "m-1",
           data: "Raj likes pencil",
-          user_id: "user-1",
           created_at: new Date().toISOString(),
+          ...fields,
         },
       ],
       total: 1,
     } as never);
+  }
+
+  it("shows it on the caller's own memory", async () => {
+    seedOneMemory({ user_id: "user-1" });
+    renderPanel({ datapackId: "dp-1", datapackName: "Test" });
+    await screen.findByText("Raj likes pencil");
+    expect(screen.getByRole("button", { name: "Delete memory" })).toBeTruthy();
   });
 
-  it("hides the delete button by default", async () => {
+  it("hides it on another member's memory", async () => {
+    seedOneMemory({ user_id: "someone-else" });
     renderPanel({ datapackId: "dp-1", datapackName: "Test" });
     await screen.findByText("Raj likes pencil");
     expect(screen.queryByRole("button", { name: "Delete memory" })).toBeNull();
   });
 
-  it("shows the delete button when the flag is set in localStorage", async () => {
-    localStorage.setItem(FEATURE_FLAGS.enableMemoryDeletion.storageKey, "true");
+  // A viewer's listing carries no attribution, so is_mine is the only
+  // signal. Without it the button would be hidden on their own rows --
+  // the bug MEKO-963 fixes.
+  it("shows it on the caller's own memory when attribution is hidden (viewer)", async () => {
+    seedOneMemory({ user_id: "", is_mine: true });
     renderPanel({ datapackId: "dp-1", datapackName: "Test" });
     await screen.findByText("Raj likes pencil");
     expect(screen.getByRole("button", { name: "Delete memory" })).toBeTruthy();
+  });
+
+  it("hides it on another member's memory when attribution is hidden (viewer)", async () => {
+    seedOneMemory({ user_id: "", is_mine: false });
+    renderPanel({ datapackId: "dp-1", datapackName: "Test" });
+    await screen.findByText("Raj likes pencil");
+    expect(screen.queryByRole("button", { name: "Delete memory" })).toBeNull();
   });
 });
 

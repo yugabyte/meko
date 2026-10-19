@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 )
@@ -23,6 +25,39 @@ const (
 	defaultPageSize = 20
 	maxPageSize     = 100
 )
+
+// applyOwnerVisibility marks the caller's own memories, then hides who wrote
+// each one when the caller is a viewer.
+//
+// The ORDER is the point, which is why both steps live in one function:
+// deleting a memory is author-scoped, so the caller has to be able to tell
+// which rows are theirs, and hiding the owners is exactly what removes the
+// attribution a client would otherwise work that out from. Mark after
+// blanking and every viewer row comes back IsMine false -- the bug this
+// exists to prevent.
+//
+// Saying only "yours" or "not yours" discloses nothing a viewer does not
+// already know: they wrote the ones that are theirs, and learn nothing
+// about anyone else's.
+// The ids are compared as uuids, not as strings, so this answers the same
+// question DeleteByIDForUser does -- it matches with meko_user_id = $3::uuid,
+// which accepts any spelling of the same id. A string compare would call a row
+// "not yours" that the delete would happily remove, and for a demoted viewer
+// that is this bug again: no delete button on their own memories, and nothing
+// saying why.
+func applyOwnerVisibility(memories []models.Memory, callerUserID string, hideOwners bool) {
+	if caller, err := uuid.Parse(strings.TrimSpace(callerUserID)); err == nil {
+		for i := range memories {
+			owner, ownerErr := uuid.Parse(strings.TrimSpace(memories[i].UserID))
+			memories[i].IsMine = ownerErr == nil && owner == caller
+		}
+	}
+	if hideOwners {
+		for i := range memories {
+			memories[i].UserID, memories[i].UserName, memories[i].UserEmail = "", "", ""
+		}
+	}
+}
 
 func (svc *MemoriesService) List(
 	ctx context.Context,
@@ -55,11 +90,7 @@ func (svc *MemoriesService) List(
 	if err != nil {
 		return models.MemoryListResponse{}, err
 	}
-	if filter.HideOwners {
-		for i := range memories {
-			memories[i].UserID, memories[i].UserName, memories[i].UserEmail = "", "", ""
-		}
-	}
+	applyOwnerVisibility(memories, filter.CallerUserID, filter.HideOwners)
 
 	topK := 5
 	if !filter.IsPaidUserType() || svc.skipVectorSort {

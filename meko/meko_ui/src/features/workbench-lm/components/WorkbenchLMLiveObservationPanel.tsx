@@ -41,7 +41,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useFeatureFlag } from "@/lib/useFeatureFlag";
+import { isOwnMemory } from "@/lib/memoryOwnership";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   API_ERROR_CODE_PRE_MEM0_V2_MEMORY,
@@ -354,7 +354,6 @@ function LearningsSection({
   const [promotingId, setPromotingId] = useState<string | null>(null);
   // Memory id currently being deleted (same single-flight pattern).
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
 
   const canPromote = isDatapackGrantEligibleToPromoteMemoryToKnowledge({
     grant: datapackGrant ?? undefined,
@@ -497,7 +496,7 @@ function LearningsSection({
             // Only the author of a memory may delete it. In a shared
             // datapack other members appear in the list; those tiles
             // render without the delete affordance.
-            const isMine = Boolean(m.user_id) && m.user_id === accountId;
+            const isMine = isOwnMemory(m, accountId);
             // Centralised fallback chain (name → email → short UUID → "-")
             // lives in formatMemoryAuthor; we pass `selfLabel: "you"` so
             // your own rows read "by you" in this personal-session view.
@@ -529,7 +528,7 @@ function LearningsSection({
                   </span>
                   <div className="flex shrink-0 items-center gap-1">
                     {/* Author + post-cutoff (server enforces both). */}
-                    {memoryDeletionEnabled && isMine && isPostMem0V2(m.created_at) ? (
+                    {isMine && isPostMem0V2(m.created_at) ? (
                       <button
                         type="button"
                         onClick={() => void handleDelete(m.id)}
@@ -623,12 +622,9 @@ function CollectiveMemorySection({
   // Single-flight delete state (matches LearningsSection above).
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
-  const canDelete =
-    memoryDeletionEnabled &&
-    isDatapackGrantEligibleToShare({
-      grant: datapackGrant ?? undefined,
-    });
+  const canDelete = isDatapackGrantEligibleToShare({
+    grant: datapackGrant ?? undefined,
+  });
 
   const fetchPromoted = useCallback(
     async (signal?: AbortSignal) => {

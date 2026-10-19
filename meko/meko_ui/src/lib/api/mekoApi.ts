@@ -2080,10 +2080,14 @@ export const MEMORY_LIST_DEFAULT_USER_TYPE: MemoryUserType = "pro";
  * One row in GET /memories `data.memories` (same shape used in UI + promoted cache).
  *
  * `user_id` + `user_name` + `user_email` identify which account added the
- * memory. In a shared datapack the listing returns memories from every
- * member, so the UI uses these to label the author and to gate the
- * delete affordance (only memories where `user_id === current account`
- * are deletable).
+ * memory, and label the author in a shared datapack. They are blank for a
+ * viewer, who may not see whose memory is whose.
+ *
+ * `is_mine` gates the delete affordance, which is author-scoped. It is a
+ * separate field because it has to survive that blanking: a member demoted
+ * to viewer still owns what they wrote and may still delete it, so
+ * comparing `user_id` to the current account would hide the button on
+ * their own rows.
  */
 export type Memory = {
   id: string;
@@ -2094,6 +2098,7 @@ export type Memory = {
   user_name?: string;
   user_email?: string;
   created_at?: string;
+  is_mine?: boolean;
 };
 
 /**

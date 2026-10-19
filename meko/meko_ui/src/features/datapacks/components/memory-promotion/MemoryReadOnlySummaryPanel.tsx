@@ -30,7 +30,7 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/hooks/use-toast";
-import { useFeatureFlag } from "@/lib/useFeatureFlag";
+import { isOwnMemory } from "@/lib/memoryOwnership";
 import { CONVERSATION_SOURCE, datapackConversationsPathWithSource } from "@/app/routes/paths";
 import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
 import { useMemoryReadOnlyList } from "./useMemoryReadOnlyList";
@@ -79,7 +79,6 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
     goToPage,
     changePageSize,
   } = useMemoryReadOnlyList({ datapackId, q: debouncedSearch });
-  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
 
   // Memory id currently being deleted. Single-flight: at most one delete
   // in flight at a time so the row spinner is unambiguous and the user
@@ -298,7 +297,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                 // Only the author may delete. In a shared datapack rows
                 // from other members appear in the list but render without
                 // the delete affordance; the server also enforces this.
-                const isMine = Boolean(m.user_id) && m.user_id === accountId;
+                const isMine = isOwnMemory(m, accountId);
                 return (
                   <li key={m.id}>
                     <button
@@ -324,7 +323,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                               — server also enforces via `meko_user_id =
                               caller` — and (b) post-Mem0-v2 rows the
                               backend can actually purge cleanly. */}
-                          {memoryDeletionEnabled && isMine && isPostMem0V2(m.created_at) ? (
+                          {isMine && isPostMem0V2(m.created_at) ? (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <span className="inline-flex">

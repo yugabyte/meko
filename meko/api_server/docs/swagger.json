@@ -5363,7 +5363,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "For a viewer of the datapack, user_id is ignored and who added each memory is left out.",
+                "description": "For a viewer of the datapack, user_id is ignored and who added each memory is left out.\nEvery row carries is_mine, whether the caller wrote it. It is returned for a viewer too,\nwhose rows have no attribution to work it out from, because deleting a memory is\nauthor-scoped: a member demoted to viewer may still delete what they wrote before.",
                 "produces": [
                     "application/json"
                 ],

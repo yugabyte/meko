@@ -39,7 +39,6 @@ import {
   datapackLearningsPathFrom,
 } from "@/app/routes/paths";
 import { useArrivalFlash } from "@/hooks/useArrivalFlash";
-import { useFeatureFlag } from "@/lib/useFeatureFlag";
 import { PAGE_SIZE_OPTIONS } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 import {
   API_ERROR_CODE_PRE_MEM0_V2_MEMORY,
@@ -127,12 +126,9 @@ export function CollectiveMemoryPanel({
   // gate on DELETE /promoted-memories/:id — do NOT switch to the Delete-named
   // helper: that one is owner-only and would silently make the client stricter
   // than the server.
-  const memoryDeletionEnabled = useFeatureFlag("enableMemoryDeletion");
-  const canDelete =
-    memoryDeletionEnabled &&
-    isDatapackGrantEligibleToShare({
-      grant: datapackGrant ?? undefined,
-    });
+  const canDelete = isDatapackGrantEligibleToShare({
+    grant: datapackGrant ?? undefined,
+  });
 
   // Single-flight delete state (mirrors MemoryReadOnlySummaryPanel).
   const [deletingId, setDeletingId] = useState<string | null>(null);
