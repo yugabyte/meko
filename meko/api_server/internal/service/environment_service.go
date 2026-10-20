@@ -30,13 +30,23 @@ var ErrValidation = errors.New("validation error")
 var ErrKindMismatch = errors.New("environment kind mismatch")
 
 // ErrManagedRequiresOperator is returned when a scoped (account-bound) caller tries to
-// register a MANAGED environment (mapped to 403). MANAGED is Yugabyte-operated shared
-// infrastructure: the region APIs pin any account's storage pools onto the oldest READY
-// MANAGED amp env in a region with no account check (pickManagedEnvTx), so a customer
-// that could register one under its own API key would have its agent handed other
-// tenants' desired state. Only an unscoped operator (admin secret, no account header)
-// may register MANAGED, which keeps type='MANAGED' a marker a customer cannot set.
-var ErrManagedRequiresOperator = errors.New("registering a MANAGED environment requires an operator (unscoped) caller")
+// register or deregister a MANAGED environment (mapped to 403). MANAGED is
+// Yugabyte-operated shared infrastructure: the region APIs pin any account's storage
+// pools onto an eligible MANAGED amp env in a region with no account check
+// (pickManagedEnvTx), so a customer that could register one under its own API key would
+// have its agent handed other tenants' desired state, and one that could deregister one
+// would move every other tenant's pools off it. Only an unscoped operator (admin secret,
+// no account header) may do either, which keeps type='MANAGED' a marker a customer
+// cannot set.
+var ErrManagedRequiresOperator = errors.New(
+	"registering or deregistering a MANAGED environment requires an operator (unscoped) caller")
+
+// ErrManagedNeedsForce is returned when an operator deregisters a MANAGED environment
+// without force (mapped to 409). Deregistering one fails every pool pinned to it over
+// to another environment on its next region PATCH, so it has to be asked for outright.
+var ErrManagedNeedsForce = errors.New(
+	"this is a MANAGED environment shared by every storage pool pinned to it; " +
+		"deregistering it needs force=true")
 
 // ErrAmbiguousID re-exports the repository's, so handlers map it to a status code
 // without importing the storage layer. Raised when an unscoped caller names an id
@@ -1405,10 +1415,23 @@ func deriveOwner(pool string) uuid.UUID {
 // the environment it acted on. nil ⇒ unknown environment, or one the scope does
 // not own. The environment comes back rather than a bool because deregistration's
 // response carries the api_key_id binding, so YBM can revoke the key.
-func (s *EnvironmentService) Action(envID string, scope AccountScope, action string) (*models.Environment, error) {
+//
+// Deregistering a MANAGED environment is refused unless the caller is unscoped and
+// passes force; force means nothing anywhere else.
+func (s *EnvironmentService) Action(
+	envID string, scope AccountScope, action string, force bool,
+) (*models.Environment, error) {
 	e, err := s.Get(envID, scope)
 	if err != nil || e == nil {
 		return nil, err
+	}
+	if action == "deregister" && e.Type == TypeManaged {
+		if scope != "" {
+			return nil, ErrManagedRequiresOperator
+		}
+		if !force {
+			return nil, fmt.Errorf("%w: %s", ErrManagedNeedsForce, e.ID)
+		}
 	}
 	switch action {
 	case "suspend":

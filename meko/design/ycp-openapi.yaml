@@ -118,8 +118,15 @@ paths:
       tags: [environments]
       summary: Lifecycle action — suspend, resume, or drain
       operationId: updateEnvironment
-      description: Requests a target lifecycle state. The agent reconciles toward it (§7 state machine).
+      description: |
+        Requests a target lifecycle state. The agent reconciles toward it (§7 state machine).
+        `deregister` on a MANAGED environment follows the same rule as DELETE.
       security: [{ aeonOIDC: ['fleet:write'] }]
+      parameters:
+        - name: force
+          in: query
+          schema: { type: boolean, default: false }
+          description: Required to `deregister` a MANAGED environment, from an unscoped caller only. Ignored otherwise.
       requestBody:
         required: true
         content:
@@ -143,15 +150,32 @@ paths:
                   api_key_id: { type: string, format: uuid }
         '202': { description: Accepted; transition queued as desired state. }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403':
+          description: '`deregister` of a MANAGED environment by a scoped (account-bound) caller, `MANAGED_REQUIRES_OPERATOR`.'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        '409':
+          description: |
+            `AMBIGUOUS_ID` (an unscoped id two accounts hold), or `MANAGED_ENVIRONMENT`
+            (`deregister` of a MANAGED environment without `force=true`).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
     delete:
       tags: [environments]
       summary: Deregister an environment
       operationId: deregisterEnvironment
-      description: Moves the environment to `DRAINING` then `DEREGISTERED`; returns the api_key_id binding so YBM can revoke the key.
+      description: |
+        Moves the environment to `DRAINING` then `DEREGISTERED`; returns the api_key_id binding so YBM can revoke the key.
+
+        A MANAGED environment is shared by every storage pool pinned to it, and deregistering
+        it fails those pools over to another environment on their next region PATCH. So it
+        needs `force=true`, and only an unscoped (operator) caller may send it.
       security: [{ aeonOIDC: ['fleet:write'] }]
+      parameters:
+        - name: force
+          in: query
+          schema: { type: boolean, default: false }
+          description: Required to deregister a MANAGED environment, from an unscoped caller only. Ignored otherwise.
       responses:
         '200':
           description: Deregistered; the body carries the environment's `api_key_id` for revocation.
@@ -161,7 +185,15 @@ paths:
                 type: object
                 properties:
                   api_key_id: { type: string, format: uuid }
+        '403':
+          description: A MANAGED environment and a scoped (account-bound) caller, `MANAGED_REQUIRES_OPERATOR`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            `AMBIGUOUS_ID` (an unscoped id two accounts hold), or `MANAGED_ENVIRONMENT`
+            (a MANAGED environment without `force=true`).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   /api/v1/environments/{envId}/desired:
     parameters: [{ $ref: '#/components/parameters/EnvId' }]
@@ -348,6 +380,45 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PoolTaskList' }
         '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/environments/resources/extensions:
+    get:
+      tags: [environments]
+      summary: The extension catalog of the MANAGED environment a region resolves to
+      operationId: listRegionExtensions
+      description: |
+        Region-addressed, admin-secret auth, not account-scoped, like the routes above. The
+        region resolves to the environment a first PATCH for a NEW storage pool would pin, by
+        the same eligibility rule. Nothing is pinned. A pool already mapped in the region can
+        sit on a different environment, with a different catalog, when the region has more
+        than one.
+
+        Same body as `getEnvironmentExtensions`, plus which environment answered.
+        `extensions: null` means that environment's agent has not relayed a catalog yet;
+        `[]` is a reported, empty one. A region with no MANAGED amp environment is a `404`,
+        and one whose environments cannot take a new pool right now a retryable `503`
+        `ENVIRONMENT_UNAVAILABLE`, as the region PATCH answers.
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      parameters:
+        - { name: region, in: query, required: true, schema: { type: string, examples: [us-east-1] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  environment_id: { type: string }
+                  region: { type: string }
+                  extensions:
+                    type: array
+                    nullable: true
+                    items: { $ref: '#/components/schemas/Extension' }
+                  reported_at: { type: string, format: date-time, nullable: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   # ------------------------------------------------------------------ datapacks
   /api/v1/datapacks:

@@ -33,7 +33,7 @@ func TestAction_DeregisterClearsInventoryAndLive(t *testing.T) {
 		WithArgs(args...).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	e, err := svc.Action(testEnvID, acctA, "deregister")
+	e, err := svc.Action(testEnvID, acctA, "deregister", false)
 	if err != nil || e == nil {
 		t.Fatalf("Action(deregister) = (%v, %v), want the environment", e, err)
 	}

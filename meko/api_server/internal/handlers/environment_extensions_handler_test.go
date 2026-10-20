@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,5 +185,131 @@ func TestExtensions_OtherAccountIsNotFound(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("the catalog was read for an environment the caller cannot see: %v", err)
+	}
+}
+
+const regionExtensionsPath = "/api/v1/environments/resources/extensions"
+
+// managedRow is a READY MANAGED amp environment. accountID is empty for the usual
+// operator registration, which belongs to no account.
+func managedRow(accountID string) *sqlmock.Rows {
+	return sqlmock.NewRows(scopeRowCols).AddRow(
+		envUUID, "amp-managed-use1", accountID, "cloud", "us-east-1", "READY", "", 0, "",
+		0, 400, "", nil, "", "", "[]", true, keyA, time.Now(), "amp", "[]", nil, "MANAGED", false,
+	)
+}
+
+const pickQueryPrefix = `SELECT uuid FROM meko_system\.environments\s+` +
+	`WHERE type = 'MANAGED' AND COALESCE\(kind, 'meko'\) = 'amp'`
+
+// expectPickManagedEnv is the pick finding envUUID in us-east-1, inside the read-only
+// transaction PickManagedEnv rolls back, then the environment read back by uuid.
+func expectPickManagedEnv(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(pickQueryPrefix).
+		WithArgs("us-east-1").
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	mock.ExpectRollback()
+	mock.ExpectQuery(`WHERE e\.uuid = \$1`).
+		WithArgs(envUUID).
+		WillReturnRows(managedRow(""))
+}
+
+func TestExtensionsByRegion_RequiresARegion(t *testing.T) {
+	h, mock, done := newExtensionsHandler(t)
+	defer done()
+	for _, target := range []string{regionExtensionsPath, regionExtensionsPath + "?region=%20"} {
+		rec := fleetRequest(t, h.ExtensionsByRegion, http.MethodGet, target, "", "", "")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400: %s", target, rec.Code, rec.Body.String())
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("a request with no region reached the DB: %v", err)
+	}
+}
+
+// The same answers the region PATCH gives when nothing is eligible: 404 for a region
+// with no MANAGED environment, a retryable 503 for one whose environments cannot take
+// a new pool right now.
+func TestExtensionsByRegion_NothingEligible(t *testing.T) {
+	for _, tc := range []struct {
+		code   string
+		status int
+		served bool
+	}{
+		{"NOT_FOUND", http.StatusNotFound, false},
+		{"ENVIRONMENT_UNAVAILABLE", http.StatusServiceUnavailable, true},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			h, mock, done := newExtensionsHandler(t)
+			defer done()
+			mock.ExpectBegin()
+			mock.ExpectQuery(pickQueryPrefix).
+				WithArgs("us-east-1").
+				WillReturnRows(sqlmock.NewRows([]string{"uuid"}))
+			mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM meko_system\.environments`).
+				WithArgs("us-east-1").
+				WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(tc.served))
+			mock.ExpectRollback()
+
+			rec := fleetRequest(t, h.ExtensionsByRegion, http.MethodGet,
+				regionExtensionsPath+"?region=us-east-1", "", "", "")
+			if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.code) {
+				t.Fatalf("status = %d, want %d %s: %s", rec.Code, tc.status, tc.code, rec.Body.String())
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+// A MANAGED environment has no account, so an account header must not narrow the
+// lookup: the mock is strict, and an account-scoped query would fail it.
+func TestExtensionsByRegion_ServesThePickedEnvironmentsCatalog(t *testing.T) {
+	h, mock, done := newExtensionsHandler(t)
+	defer done()
+	expectPickManagedEnv(mock)
+	mock.ExpectQuery(`FROM meko_system\.environment_extensions`).
+		WithArgs(envUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"catalog", "reported_at"}).
+			AddRow([]byte(`[{"name":"pgvector","version":"0.8.2","builtin":true,"preload":false}]`), time.Now()))
+
+	rec := fleetRequest(t, h.ExtensionsByRegion, http.MethodGet,
+		regionExtensionsPath+"?region=us-east-1", acctB, "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	data := extensionsBody(t, rec.Body.Bytes())
+	if string(data["environment_id"]) != `"amp-managed-use1"` || string(data["region"]) != `"us-east-1"` ||
+		string(data["reported_at"]) == "null" {
+		t.Fatalf("got %s, want amp-managed-use1 in us-east-1 with a reported_at", rec.Body.String())
+	}
+	var exts []map[string]any
+	if err := json.Unmarshal(data["extensions"], &exts); err != nil || len(exts) != 1 || exts[0]["name"] != "pgvector" {
+		t.Fatalf("got %s, want the relayed pgvector entry", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestExtensionsByRegion_NeverReportedIsNull(t *testing.T) {
+	h, mock, done := newExtensionsHandler(t)
+	defer done()
+	expectPickManagedEnv(mock)
+	mock.ExpectQuery(`FROM meko_system\.environment_extensions`).
+		WithArgs(envUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"catalog", "reported_at"}))
+
+	rec := fleetRequest(t, h.ExtensionsByRegion, http.MethodGet,
+		regionExtensionsPath+"?region=us-east-1", "", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	data := extensionsBody(t, rec.Body.Bytes())
+	if string(data["extensions"]) != "null" || string(data["reported_at"]) != "null" {
+		t.Fatalf("got %s, want extensions and reported_at null", rec.Body.String())
 	}
 }

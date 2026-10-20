@@ -66,6 +66,41 @@ func (s *EnvironmentService) Extensions(envUUID string) (ExtensionCatalog, error
 	return ExtensionCatalog{Extensions: exts, ReportedAt: at}, nil
 }
 
+// RegionExtensionCatalog is GET /environments/resources/extensions: the catalog of the
+// MANAGED environment a region resolves to, and which environment that was.
+type RegionExtensionCatalog struct {
+	EnvironmentID string `json:"environment_id"`
+	Region        string `json:"region"`
+	ExtensionCatalog
+}
+
+// ExtensionsByRegion returns the catalog of the environment a new storage pool would be
+// pinned to in region, by the same rule a first region PATCH uses; it pins nothing.
+// ErrNoManagedEnv when the region has no MANAGED amp environment, ErrManagedEnvUnavailable
+// when it has one that cannot take a new pool right now.
+func (s *EnvironmentService) ExtensionsByRegion(region string) (RegionExtensionCatalog, error) {
+	region = strings.TrimSpace(region)
+	if region == "" {
+		return RegionExtensionCatalog{}, fmt.Errorf("%w: region is required", ErrValidation)
+	}
+	envUUID, err := s.repo.PickManagedEnv(region)
+	if err != nil {
+		return RegionExtensionCatalog{}, err
+	}
+	e, err := s.repo.GetByUUID(envUUID)
+	if err != nil {
+		return RegionExtensionCatalog{}, err
+	}
+	if e == nil {
+		return RegionExtensionCatalog{}, fmt.Errorf("%w: %s", ErrNoManagedEnv, region)
+	}
+	cat, err := s.Extensions(e.UUID)
+	if err != nil {
+		return RegionExtensionCatalog{}, err
+	}
+	return RegionExtensionCatalog{EnvironmentID: e.ID, Region: e.Region, ExtensionCatalog: cat}, nil
+}
+
 // KindExtension is the desired-state kind an amp agent converges into its
 // controller's extension catalog (registerExtension / deregisterExtension).
 const KindExtension = "extension"

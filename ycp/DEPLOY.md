@@ -365,7 +365,10 @@ may each register `prod` and each gets its own environment; neither can address 
 overwrite the other's. Re-registering your own name is refused (409) rather than
 resetting it: an environment is never replaceable by registering over it.
 Deregister it if it is no longer needed, and register the replacement under a new
-name.
+name. A MANAGED environment is shared by every storage pool pinned to it, so
+deregistering one also needs `?force=true` (on `DELETE`, or on the `PATCH` carrying
+`{"action":"deregister"}`) from a caller sending no account header; otherwise it is a
+409, or a 403 with the header.
 
 The id an operator uses is unchanged by that. Rows are keyed internally by a uuid,
 which is what the desired-resources table joins on; the fleet API's `{id}` path

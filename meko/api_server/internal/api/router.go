@@ -583,6 +583,9 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		// above (the storage pool is the tenant key), distinct from the account-scoped
 		// per-environment /environments/:id/tasks on the fleet group.
 		poolRoutes.GET("/environments/resources/tasks", tasksH.ListByRegion)
+		// The catalog of the MANAGED environment a region resolves to, keyed by region
+		// alone; the account-scoped per-environment one is /environments/:id/extensions.
+		poolRoutes.GET("/environments/resources/extensions", envH.ExtensionsByRegion)
 		fleet.GET("/environments/:id/metrics",
 			handlers.NewEnvironmentMetricsHandler(reg.envSvc, reg.metricsSvc).Get)
 		fleet.GET("/environments/:id/tasks", tasksH.List)

@@ -42,6 +42,27 @@ func envLookupError(c echo.Context, err error) error {
 	return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 }
 
+// actionError answers a refused lifecycle action, shared by PATCH and DELETE because
+// both deregister.
+func actionError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, service.ErrValidation):
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+	case errors.Is(err, service.ErrManagedRequiresOperator):
+		return apiError(c, http.StatusForbidden, "MANAGED_REQUIRES_OPERATOR", err.Error())
+	case errors.Is(err, service.ErrManagedNeedsForce):
+		return apiError(c, http.StatusConflict, "MANAGED_ENVIRONMENT", err.Error())
+	}
+	return envLookupError(c, err)
+}
+
+// forceParam reads ?force=. A malformed value is false, which for the one action that
+// reads it is a refusal rather than a deregistration.
+func forceParam(c echo.Context) bool {
+	force, err := strconv.ParseBool(c.QueryParam("force"))
+	return err == nil && force
+}
+
 // ---- console / admin ----
 
 // List returns the caller's environments, or the whole fleet when unscoped.
@@ -196,12 +217,9 @@ func (h *EnvironmentHandler) Action(c echo.Context) error {
 	if !bindJSON(c, &body) {
 		return nil
 	}
-	e, err := h.svc.Action(c.Param("id"), accountScope(c), body.Action)
+	e, err := h.svc.Action(c.Param("id"), accountScope(c), body.Action, forceParam(c))
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
-		}
-		return envLookupError(c, err)
+		return actionError(c, err)
 	}
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
@@ -215,11 +233,12 @@ func (h *EnvironmentHandler) Action(c echo.Context) error {
 // Deregister marks the environment DEREGISTERED. A state change, not a row delete:
 // the fleet keeps the record (and its history) after an environment goes away. The
 // response carries the environment's api_key_id so YBM can revoke the key nothing
-// authenticates with any more.
+// authenticates with any more. A MANAGED environment needs ?force=true from an
+// unscoped caller.
 func (h *EnvironmentHandler) Deregister(c echo.Context) error {
-	e, err := h.svc.Action(c.Param("id"), accountScope(c), "deregister")
+	e, err := h.svc.Action(c.Param("id"), accountScope(c), "deregister", forceParam(c))
 	if err != nil {
-		return envLookupError(c, err)
+		return actionError(c, err)
 	}
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
@@ -430,6 +449,31 @@ func (h *EnvironmentHandler) Extensions(c echo.Context) error {
 	}
 	cat, err := h.svc.Extensions(e.UUID)
 	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "EXTENSION_LIST_FAILED", err.Error())
+	}
+	return ok(c, http.StatusOK, cat)
+}
+
+// ExtensionsByRegion answers GET /environments/resources/extensions?region=: the
+// catalog of the MANAGED environment a new storage pool would land on in that region.
+// Same null-means-unknown contract as Extensions. 404 when the region has no MANAGED amp
+// environment and 503 when none can take a new pool right now, as the region PATCH
+// answers.
+//
+// No accountScope: admin-secret-only, the same tenancy model as the region resources
+// routes. See the route wiring in router.go.
+func (h *EnvironmentHandler) ExtensionsByRegion(c echo.Context) error {
+	cat, err := h.svc.ExtensionsByRegion(c.QueryParam("region"))
+	if err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		if errors.Is(err, service.ErrNoManagedEnv) {
+			return apiError(c, http.StatusNotFound, "NOT_FOUND", err.Error())
+		}
+		if errors.Is(err, service.ErrManagedEnvUnavailable) {
+			return apiError(c, http.StatusServiceUnavailable, "ENVIRONMENT_UNAVAILABLE", err.Error())
+		}
 		return apiError(c, http.StatusInternalServerError, "EXTENSION_LIST_FAILED", err.Error())
 	}
 	return ok(c, http.StatusOK, cat)

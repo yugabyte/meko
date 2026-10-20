@@ -635,3 +635,53 @@ func TestApplyStoragePoolPatches_AFailedCommitBumpsNothing(t *testing.T) {
 	}
 	wantBumps(t, bumped)
 }
+
+// PickManagedEnv runs the pin rule in a transaction it rolls back, so it writes
+// nothing, and reports the same three outcomes a first-touch PATCH does.
+func TestPickManagedEnv(t *testing.T) {
+	for _, tc := range []struct {
+		wantErr error
+		name    string
+		picked  bool
+		served  bool
+	}{
+		{name: "an eligible environment", picked: true},
+		{name: "region has no environment", wantErr: ErrNoEligibleEnvironment},
+		{name: "region's environments unavailable", served: true, wantErr: ErrEnvironmentUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			repo := NewEnvironmentRepo(db)
+
+			mock.ExpectBegin()
+			rows := sqlmock.NewRows([]string{"uuid"})
+			if tc.picked {
+				rows.AddRow(envUUID)
+			}
+			mock.ExpectQuery(pickQuery).WithArgs(poolRegion).WillReturnRows(rows)
+			if !tc.picked {
+				mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM meko_system\.environments`).
+					WithArgs(poolRegion).
+					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(tc.served))
+			}
+			mock.ExpectRollback()
+
+			got, err := repo.PickManagedEnv(poolRegion)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+			case err != nil || got != envUUID:
+				t.Fatalf("PickManagedEnv = %q, %v; want %q", got, err, envUUID)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet expectations: %v", err)
+			}
+		})
+	}
+}

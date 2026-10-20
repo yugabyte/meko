@@ -234,6 +234,18 @@ func assignStoragePoolEnvTx(tx *sql.Tx, storagePool, region string) (string, err
 	}
 }
 
+// PickManagedEnv returns the environment a first PATCH for a new storage pool would
+// pin in region, without pinning it: the same rule and errors as pickManagedEnvTx,
+// in a transaction that writes nothing. A pool already mapped there may sit elsewhere.
+func (r *EnvironmentRepo) PickManagedEnv(region string) (string, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // reads only, so there is nothing to keep
+	return pickManagedEnvTx(tx, region)
+}
+
 // pickManagedEnvTx deterministically chooses one eligible MANAGED amp environment in a
 // region: READY before DEGRADED, then the oldest, with uuid as a stable tiebreak so the
 // choice never depends on scan order.

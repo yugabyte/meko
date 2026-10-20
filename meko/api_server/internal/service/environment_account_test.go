@@ -105,7 +105,7 @@ func TestAction_DeniesOtherAccountWithoutWriting(t *testing.T) {
 
 	expectScopedGet(mock, acctB, sqlmock.NewRows(envRowCols))
 
-	e, err := svc.Action(testEnvID, acctB, "deregister")
+	e, err := svc.Action(testEnvID, acctB, "deregister", false)
 	if err != nil {
 		t.Fatalf("Action: %v", err)
 	}
