@@ -54,6 +54,7 @@ export function CommandPalette({
   onMoveSession,
   onOpenPr,
   onRenameSession,
+  onSessionToTop,
   onSettings,
   onStarted,
   askAgentk,
@@ -72,6 +73,8 @@ export function CommandPalette({
   onOpenPr: () => void;
   /** Opens the Rename session dialog for the session on screen. */
   onRenameSession: () => void;
+  /** Moves the session on screen to the top of its project's list; left out when it's already there. */
+  onSessionToTop?: () => void;
   onSettings: () => void;
   /** A session started from a pasted link (in a project it may just have opened), or one AgentK proposed. */
   onStarted: (r: StartFromLinkResult) => void;
@@ -350,6 +353,15 @@ export function CommandPalette({
         run: onRenameSession,
       });
     }
+    if (currentSession && onSessionToTop) {
+      out.push({
+        id: 'session-to-top',
+        label: ['Move ', { session: currentSession.name }, ' to top'],
+        hint: 'Action',
+        keywords: 'move top first pin priority order reorder session',
+        run: onSessionToTop,
+      });
+    }
     if (currentSession) {
       out.push({
         id: 'attach-files',
@@ -403,7 +415,7 @@ export function CommandPalette({
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];

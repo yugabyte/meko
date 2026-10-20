@@ -607,6 +607,13 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN untrusted INTEGER;
   `,
+  // 39: position: a session's place in its project's list, lowest first. New sessions and Move to top
+  // take one below the project's lowest, so nothing is renumbered. Existing ones keep their oldest-first order.
+  `
+  ALTER TABLE sessions ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+  UPDATE sessions SET position = (SELECT COUNT(*) FROM sessions o WHERE o.project_id = sessions.project_id
+    AND (o.created_at < sessions.created_at OR (o.created_at = sessions.created_at AND o.id < sessions.id)));
+  `,
 ];
 
 export function openDb(path: string): Db {

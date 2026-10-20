@@ -537,13 +537,14 @@ export class SessionManager {
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
-                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, position)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      (SELECT COALESCE(MIN(position), 0) - 1 FROM sessions WHERE project_id = ?))`,
         id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null);
+        push?.remote ?? null, push ? push.branch : null, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -1862,11 +1863,23 @@ export class SessionManager {
     return this.get(id);
   }
 
-  /** `PATCH /api/sessions/:id`: a new base (setBase), then a new name (rename); a bad name changes neither. */
+  /** `PATCH /api/sessions/:id`: a new base (setBase), Move to top (toTop), then a new name (rename); a bad name changes none. */
   async edit(id: string, req: UpdateSessionRequest): Promise<Session> {
     if (req.name !== undefined) sessionName(req.name);
+    if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
     if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
+    if (req.toTop) this.toTop(id);
     return this.rename(id, { name: req.name });
+  }
+
+  /** Puts a session first in its project's list: one below the lowest position, so no other row moves. */
+  toTop(id: string): void {
+    const r = this.row(id);
+    if (r.desired === 'archived') throw new HttpError(409, 'This session is archived, so it can\'t be moved.');
+    const others = get<{ m: number | null }>(this.db,
+      'SELECT MIN(position) AS m FROM sessions WHERE project_id = ? AND desired = \'running\' AND id != ?', r.project_id, id)?.m;
+    if (others === null || others === undefined || r.position < others) return;
+    this.update(id, { position: others - 1 });
   }
 
   /**

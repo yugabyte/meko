@@ -262,6 +262,7 @@ export function SessionSheet({
   onMekoCalls,
   onMove,
   onRename,
+  onToTop,
   onAct,
   onClose,
 }: {
@@ -291,6 +292,8 @@ export function SessionSheet({
   onMove: () => void;
   /** Opens the Rename session dialog. */
   onRename: () => void;
+  /** Moves the session to the top of its project's list; left out when it's already there. */
+  onToTop?: () => void;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   onClose: () => void;
 }) {
@@ -336,6 +339,7 @@ export function SessionSheet({
         <SheetItem hint="›" onClick={then(onRename)}>
           Rename session
         </SheetItem>
+        {onToTop && <SheetItem onClick={then(onToTop)}>Move to top</SheetItem>}
         {onMekoCalls && (
           <SheetItem hint="›" onClick={then(onMekoCalls)}>
             Meko calls

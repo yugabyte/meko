@@ -866,6 +866,37 @@ textarea.input {
 .rail-sess-name {
   overflow-wrap: anywhere;
 }
+/* Move to top sits over the stage chip, shown in its place while the row is hovered or focused. */
+.rail-sess-row {
+  position: relative;
+  display: grid;
+}
+.rail-sess-top {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+.rail-sess-row:hover .rail-sess-top,
+.rail-sess-row:focus-within .rail-sess-top {
+  visibility: visible;
+}
+.rail-sess-row:hover:has(.rail-sess-top) .stchip,
+.rail-sess-row:focus-within:has(.rail-sess-top) .stchip {
+  visibility: hidden;
+}
+.rail-sess-top:hover {
+  color: var(--accent);
+}
 .rail-sess-new {
   display: block;
   padding-left: 27px;

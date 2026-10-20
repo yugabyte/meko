@@ -397,6 +397,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }
   };
 
+  const sessionToTop = async (id: string) => {
+    try {
+      await api.updateSession(id, { toTop: true });
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+  };
+
   // A New session dialog whose project was closed meanwhile closes. One for a project just opened
   // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
@@ -510,6 +518,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           setModal({ kind: 'new-session', projectId });
         }}
         onRenameSession={(sessionId) => setModal({ kind: 'rename', sessionId })}
+        onSessionToTop={(sessionId) => void sessionToTop(sessionId)}
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
@@ -568,6 +577,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
+            onToTop={(sessionId) => void sessionToTop(sessionId)}
             onMenu={openDrawer}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
@@ -658,6 +668,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
+          onSessionToTop={currentSession && live[0]?.id !== currentSession.id ? () => void sessionToTop(currentSession.id) : undefined}
           onSettings={() => setModal({ kind: 'settings' })}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
