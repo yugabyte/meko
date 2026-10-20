@@ -1,0 +1,23 @@
+# values-byoc.yaml enables the rag workers but sets image.tag "" on purpose: the env
+# preset's ECR-scheme tag does not exist under quay.io/yugabyte, so inheriting it would
+# ImagePullBackOff. meko.image must fail fast at render instead, so an in-place upgrade
+# that forgets the hint's RAG_TAG errors loudly rather than deploying dead pods (MEKO-999).
+#
+#   helm unittest charts/meko
+suite: byoc rag tag required
+templates:
+  - templates/rag-agent/deployment-text.yaml
+  - templates/rag-agent/configmap.yaml
+values:
+  - ../values-gcp.yaml
+  - ../values-dev.yaml
+  - ../values-byoc.yaml
+tests:
+  - it: fails to render when the rag image tag is not supplied
+    template: templates/rag-agent/deployment-text.yaml
+    set:
+      apiServer.image.tag: t
+      mekoMcpServer.image.tag: t
+    asserts:
+      - failedTemplate:
+          errorMessage: image tag is required (repository=meko-rag-agent) — set <comp>.image.tag

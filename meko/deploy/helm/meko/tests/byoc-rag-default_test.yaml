@@ -1,0 +1,46 @@
+# RAG is a core BYOC component, so values-byoc.yaml turns the rag workers ON by
+# default (MEKO-999). A BYOC cluster has no rag-worker pool and no GPU, so the preset
+# clears the text/conversations node selectors and runs pdf CPU-only — otherwise the
+# pods sit unschedulable and nothing a user uploads is ever ingested.
+#
+#   helm unittest charts/meko
+suite: byoc rag default
+templates:
+  - templates/rag-agent/deployment-text.yaml
+  - templates/rag-agent/deployment-conversations.yaml
+  - templates/rag-agent/deployment-pdf.yaml
+  - templates/rag-agent/configmap.yaml
+values:
+  - ../values-gcp.yaml
+  - ../values-dev.yaml
+  - ../values-byoc.yaml
+set:
+  apiServer.image.tag: t
+  mekoMcpServer.image.tag: t
+  ragAgent.text.image.tag: t
+  ragAgent.conversations.image.tag: t
+  ragAgent.pdf.image.tag: t
+tests:
+  - it: schedules the text worker on any node (no rag-worker pool pin)
+    template: templates/rag-agent/deployment-text.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.nodeSelector
+
+  - it: schedules the conversations worker on any node
+    template: templates/rag-agent/deployment-conversations.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.nodeSelector
+
+  - it: runs the pdf worker CPU-only — no GPU request, no GPU node pin or toleration
+    template: templates/rag-agent/deployment-pdf.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.nodeSelector
+      - notExists:
+          path: spec.template.spec.tolerations
+      - notExists:
+          path: spec.template.spec.containers[0].resources.requests["nvidia.com/gpu"]
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits["nvidia.com/gpu"]

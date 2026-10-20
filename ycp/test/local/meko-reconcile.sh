@@ -99,9 +99,9 @@ done
 # Defaults from meko/api_server/internal/service/dataplane_release.go. Kept in step
 # with it by hand: this script runs against a released stack, so a drifted default
 # fails loudly at pull time rather than silently testing the wrong images.
-MEKO_API_TAG="${MEKO_API_TAG:-0.261013.0-b56d9722f}"
-MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.261013.0-b56d9722f}"
-MEKO_UI_TAG="${MEKO_UI_TAG:-0.261013.0-b56d9722f}"
+MEKO_API_TAG="${MEKO_API_TAG:-0.261019.0-40f3d0b64}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.261019.0-40f3d0b64}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-0.261019.0-40f3d0b64}"
 
 cleanup() {
   rc=$?
@@ -219,7 +219,12 @@ k -n "$NS" create secret generic meko-data-plane "${creds[@]}" \
 #
 # This is the install hint's command, with the local agent image substituted for the
 # Quay one, the pull secret named, and values-byoc-bundled-db.yaml in place of the
-# hint's Foundation, which kind cannot run. If it drifts otherwise, the hint is wrong.
+# hint's Foundation, which kind cannot run. One deliberate exception besides the DB:
+# ragAgent is turned off (values-byoc now runs it, but RAG embeds on Bedrock and reads
+# the KB bucket from S3, neither of which a kind cluster can reach — there is nothing to
+# exercise, so this skips the three rag image pulls and the AWS creds/KB bucket the hint
+# otherwise sets. The real-cluster harness, ycp-on-cluster.sh, runs RAG on.) If it drifts
+# otherwise, the hint is wrong.
 #
 # values-byoc.yaml turns langfuse on with migrate.enabled, so — same as the hint —
 # this needs its seven dataPlaneSecrets.langfuse* values AND the S3 event store (a
@@ -239,6 +244,7 @@ log "installing the stack and the reconcile-agent"
 helm --kube-context "$CTX" upgrade --install meko "$CHART" -n "$NS" \
   -f "$CHART/values-aws.yaml" -f "$CHART/values-dev.yaml" -f "$CHART/values-byoc.yaml" \
   -f "$CHART/values-byoc-bundled-db.yaml" \
+  --set ragAgent.enabled=false \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \

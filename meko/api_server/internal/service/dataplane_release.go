@@ -42,14 +42,14 @@ type DataPlaneRelease struct {
 // migrations reference the dist_rag schema, so a data plane on a stock image fails its
 // first migration.
 //
-// APIServer, MCPServer, UI and InferenceGateway are rendered: the meko install hint
-// prints one tag each. values-byoc.yaml now enables the inference gateway, so its tag
-// has to be passed or the gateway falls through to the env preset's ECR tag under
-// quay.io/yugabyte. RAGWorker is still carried unprinted — values-byoc disables the
-// RAG worker and the provisioner (langfuse is on, but its images come from the
-// operator's own dataPlaneSecrets/image --set flags, not a pinned release tag here) —
-// and Database is read by nothing at all, the chart owning that image. Wiring those up
-// or deleting them is https://github.com/yugabyte/meko/issues/1319.
+// APIServer, MCPServer, UI, InferenceGateway and RAGWorker are rendered: the meko
+// install hint prints one tag each. values-byoc.yaml now enables the inference gateway
+// and the rag workers, so their tags have to be passed or they fall through to the env
+// preset's ECR tag under quay.io/yugabyte. The provisioner stays off (langfuse is on,
+// but its images come from the operator's own dataPlaneSecrets/image --set flags, not a
+// pinned release tag here), and Database is read by nothing at all, the chart owning
+// that image. Wiring those up or deleting them is
+// https://github.com/yugabyte/meko/issues/1319.
 var pinnedDataPlaneRelease = DataPlaneRelease{
 	// Mirrored to Quay by meko/jenkins/scripts/mirror-database-image.sh rather than
 	// built: it is a YugabyteDB release artifact carrying MAGE and pg_dist_rag, and a
@@ -57,16 +57,17 @@ var pinnedDataPlaneRelease = DataPlaneRelease{
 	// not this repo's, so it moves independently of the release below.
 	Database: "quay.io/yugabyte/meko-yugabytedb:2026.1.0.0-b1-meko-2",
 
-	// One release, built by meko/jenkins on 2026-10-13 from b56d9722f1 — the first with
-	// MEKO-831's retry-safe data migration 1, without which a migrate that fails once
-	// leaves the data schema dirty for good. Host-qualified
+	// One release, built by meko/jenkins on 2026-10-19 from 40f3d0b64 — current main, so
+	// the install hint serves images that know the RAG-on-BYOC wiring this release adds.
+	// Still at or above MEKO-831's retry-safe data migration 1, without which a migrate
+	// that fails once leaves the data schema dirty for good. Host-qualified
 	// like the database above, so qualifyImage leaves every reference alone and the
 	// registry argument decides nothing.
-	APIServer:        "quay.io/yugabyte/meko-api-server:0.261013.0-b56d9722f",
-	MCPServer:        "quay.io/yugabyte/meko-mcp-server:0.261013.0-b56d9722f",
-	UI:               "quay.io/yugabyte/meko-ui:0.261013.0-b56d9722f",
-	RAGWorker:        "quay.io/yugabyte/meko-rag-agent:0.261013.0-b56d9722f",
-	InferenceGateway: "quay.io/yugabyte/meko-inference-gateway:0.261013.0-b56d9722f",
+	APIServer:        "quay.io/yugabyte/meko-api-server:0.261019.0-40f3d0b64",
+	MCPServer:        "quay.io/yugabyte/meko-mcp-server:0.261019.0-40f3d0b64",
+	UI:               "quay.io/yugabyte/meko-ui:0.261019.0-40f3d0b64",
+	RAGWorker:        "quay.io/yugabyte/meko-rag-agent:0.261019.0-40f3d0b64",
+	InferenceGateway: "quay.io/yugabyte/meko-inference-gateway:0.261019.0-40f3d0b64",
 }
 
 // dataPlaneComponents maps the name an operator writes in --dataplane-image to the

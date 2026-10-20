@@ -31,11 +31,10 @@ spec:
         {{- end }}
     spec:
       {{- include "meko.imagePullSecrets" . }}
-      {{- /* Without a GPU pool (gpu.enabled=false — no shipping preset sets this
-             today; values-byoc.yaml leaves ragAgent off entirely, and only the
-             opt-in values-byoc-full.yaml turns it on), this worker still runs:
-             PDF ingestion falls back to CPU and is slower, not absent. Only pin
-             it to a GPU node when one is expected. */}}
+      {{- /* Without a GPU pool (gpu.enabled=false — values-byoc.yaml sets it, since a
+             BYOC cluster has no GPU pool), this worker still runs: PDF ingestion falls
+             back to CPU and is slower, not absent. Only pin it to a GPU node when one
+             is expected. */}}
       {{- if $c.gpu.enabled }}
       {{- with $c.gpu.nodeSelector }}
       nodeSelector:

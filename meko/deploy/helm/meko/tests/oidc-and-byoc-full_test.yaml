@@ -19,6 +19,11 @@ set:
     eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/langfuse
   # values-byoc has no database of its own; this is the Foundation's.
   database.host: fdn-yb-tserver-conn.fdn.svc.cluster.local
+  # values-byoc sets ragAgent image.tag "" so an unset tag fails fast rather than
+  # ImagePullBackOff; the hint passes the real RAG_TAG. Supply one suite-wide.
+  ragAgent.text.image.tag: t
+  ragAgent.conversations.image.tag: t
+  ragAgent.pdf.image.tag: t
 tests:
   - it: wires the OIDC flags and env, and passes the client secret by env var only
     template: templates/api-server/deployment.yaml

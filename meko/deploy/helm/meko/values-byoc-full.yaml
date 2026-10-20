@@ -1,5 +1,6 @@
 # ============================================================================
-# BYOC opt-in — the components values-byoc.yaml leaves off, for the ones that can
+# BYOC opt-in — switches the inference gateway's LLM to OpenAI (the rag workers it also
+# lists are already on in values-byoc; the settings here are redundant with it), for the ones that can
 # actually run in one namespace.
 #
 # Pass it AFTER values-byoc.yaml, which is what lets it win:

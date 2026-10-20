@@ -62,6 +62,15 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 		// unset, the two fall back to different regions.
 		"BEDROCK_REGION=us-east-1",
 		`--set-string mekoMcpServer.staticEnv.awsRegion="${BEDROCK_REGION}"`,
+		// values-byoc.yaml turns the rag workers ON (MEKO-999), so the hint carries
+		// their required image tag and the credentials + KB bucket they ingest from.
+		"RAG_TAG=",
+		`--set-string ragAgent.text.image.tag="${RAG_TAG}"`,
+		"--set dataPlaneSecrets.ragAwsAccessKeyId=",
+		"--set dataPlaneSecrets.s3AccessKey=",
+		"KB_S3_BUCKET=",
+		`--set-string ragAgent.config.AWS_S3_BUCKET_NAME="${KB_S3_BUCKET}"`,
+		`--set-string apiServer.config.S3_BUCKET="${KB_S3_BUCKET}"`,
 		// values-byoc.yaml also turns langfuse on with migrate.enabled, so a
 		// fresh install needs its seven dataPlaneSecrets.langfuse* values or it
 		// fails at dataplane-secrets.yaml's own fail-fast guard.
@@ -105,6 +114,7 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 			strings.HasPrefix(line, "LANGFUSE_OWNER_EMAIL=") ||
 			strings.HasPrefix(line, "LANGFUSE_S3_BUCKET=") || strings.HasPrefix(line, "LANGFUSE_S3_REGION=") ||
 			strings.HasPrefix(line, "LANGFUSE_S3_KEY=") || strings.HasPrefix(line, "LANGFUSE_S3_SECRET=") ||
+			strings.HasPrefix(line, "KB_S3_BUCKET=") ||
 			strings.HasPrefix(line, "BYOC_PASSWORD=") || strings.HasPrefix(line, "DD_API_KEY=") ||
 			strings.HasPrefix(line, "AGENT_API_KEY=") {
 			continue
@@ -113,10 +123,10 @@ func TestInstallHint_MekoIsRunnableAsPrinted(t *testing.T) {
 	}
 }
 
-// values-byoc.yaml leaves the rag workers and the provisioner off, and an
-// overlay passed AFTER it is the only thing that turns one back on — helm's last-wins
-// ordering is the whole mechanism. The hint is where an operator is told that, so the slot has to be in
-// the pasted command and not just in the prose.
+// values-byoc.yaml leaves the provisioner off and runs the gateway on Bedrock; an
+// overlay passed AFTER it (values-byoc-full.yaml) switches the gateway to OpenAI —
+// helm's last-wins ordering is the whole mechanism. The hint is where an operator is
+// told that, so the slot has to be in the pasted command and not just in the prose.
 func TestInstallHint_MekoCanEnableTheDisabledComponents(t *testing.T) {
 	hint := mekoHint(t)
 

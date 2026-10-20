@@ -65,6 +65,12 @@ tests:
     values:
       - ../values-byoc.yaml
     set:
+      # values-byoc runs on a Foundation universe (MEKO-916) and the rag workers are
+      # on (MEKO-999), so the render needs a database host.
+      database.host: fdn.ns.svc.cluster.local
+      ragAgent.text.image.tag: t
+      ragAgent.conversations.image.tag: t
+      ragAgent.pdf.image.tag: t
       # values-byoc turns langfuse on, which needs these to render at all.
       langfuse.s3AuthMode: iam-role
       langfuse.config.LANGFUSE_S3_EVENT_UPLOAD_BUCKET: b

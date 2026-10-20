@@ -125,10 +125,15 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "API_TAG=%s\n", tagOf(rel.APIServer))
 	fmt.Fprintf(&b, "MCP_TAG=%s\n", tagOf(rel.MCPServer))
 	fmt.Fprintf(&b, "UI_TAG=%s\n", tagOf(rel.UI))
-	// values-byoc.yaml enables the inference gateway, so its tag is no longer
-	// optional here: unset, it falls through to the env preset's ECR tag under
-	// quay.io/yugabyte and the pod never pulls.
+	// values-byoc.yaml enables the inference gateway and the rag workers, so their
+	// tags are no longer optional here: unset, they fall through to the env preset's
+	// ECR tag under quay.io/yugabyte and the pod never pulls.
 	fmt.Fprintf(&b, "GW_TAG=%s\n", tagOf(rel.InferenceGateway))
+	// Footprint next to the tag so the operator sees the cost before installing: the
+	// three always-on rag Deployments request ~2 CPU / 7Gi memory / 24Gi ephemeral
+	// storage on this preset (limits 6 CPU / 12Gi / 36Gi). A cluster without that spare
+	// capacity fails the --wait install rather than a pod later.
+	fmt.Fprintf(&b, "RAG_TAG=%s   # 3 always-on rag pods, ~2 CPU / 7Gi RAM / 24Gi disk requested (6 / 12Gi / 36Gi limits)\n", tagOf(rel.RAGWorker))
 	fmt.Fprintf(&b, "AGENT_TAG=<agent image tag>     # quay.io/yugabyte/ycp-reconciler-agent\n")
 	fmt.Fprintf(&b, "AGENT_API_KEY='%s'   # shown once by the YCP console; revocable there\n", apiKeyPlaceholder)
 	// The gateway's Secret is mounted with envFrom and no optional=true, so an
@@ -136,13 +141,20 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	// feature. In the header rather than inline for the reason above: the control
 	// plane cannot know them, and a command carrying a placeholder looks pasteable
 	// and is not.
-	fmt.Fprintf(&b, "BEDROCK_KEY=<aws access key id>        # inference gateway + MCP-server embedding, bedrock\n")
-	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>  # principal needs bedrock:InvokeModel on the chat and Titan models\n")
+	fmt.Fprintf(&b, "BEDROCK_KEY=<aws access key id>        # gateway + MCP embedding + rag workers, bedrock & S3\n")
+	fmt.Fprintf(&b, "BEDROCK_SECRET=<aws secret access key>  # needs bedrock:InvokeModel on the chat and Titan models,\n")
+	fmt.Fprintf(&b, "                               # and s3:GetObject/PutObject/DeleteObject/ListBucket on KB_S3_BUCKET below\n")
 	// One region for every embedding call the MCP server makes. Unset, mem0
 	// (memories) and the query embedder (KB/conversation search) fall back to
 	// different regions, and Bedrock model access is enabled per region.
 	fmt.Fprintf(&b, "BEDROCK_REGION=us-east-1       # Titan v1 must be enabled here: memory, KB and conversation\n")
 	fmt.Fprintf(&b, "                               # embedding from the MCP server all call Bedrock in this region\n")
+	// The rag workers ingest uploaded knowledge-base files: the api-server writes them
+	// to this bucket and the workers read them back, so both point at it. The workers'
+	// one AWS_REGION serves Bedrock and S3, so the bucket must sit in BEDROCK_REGION —
+	// default it to that rather than a second region the operator could leave mismatched.
+	fmt.Fprintf(&b, "KB_S3_BUCKET=<your s3 bucket>  # knowledge-base document store (uploads + rag reads)\n")
+	fmt.Fprintf(&b, "KB_S3_REGION=\"${BEDROCK_REGION}\"   # must match BEDROCK_REGION: rag's one AWS_REGION serves Bedrock + S3\n")
 	fmt.Fprintf(&b, "QUAY_USER=<robot name>         # e.g. yugabyte+something\n")
 	fmt.Fprintf(&b, "QUAY_TOKEN=<robot token>\n")
 	// The one langfuse field a chart cannot invent for itself: everything else
@@ -160,21 +172,21 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	// Worth a line of its own rather than a footnote: without it the stack comes up
 	// entirely green and remembers nothing, which reads as a bug rather than a
 	// missing credential. The refs are optional, so empty installs fine.
-	fmt.Fprintf(&b, "OPENAI_KEY=                    # no key, no memory extraction and no RAG\n")
+	fmt.Fprintf(&b, "OPENAI_KEY=                    # no key, no memory extraction (RAG and embedding use Bedrock)\n")
 	// Single-quoted like the amp hint's: a pasted credential carrying $, & or a
 	// space would otherwise be expanded by the shell and land wrong in its Secret.
 	fmt.Fprintf(&b, "BYOC_PASSWORD='<byoc password>'  # BasicAuth password for the metrics door\n")
 	fmt.Fprintf(&b, "DD_API_KEY='<datadog api key>'   # logs fan-out to Datadog\n")
 	fmt.Fprintf(&b, "POD_METRICS=true               # per-pod CPU/mem; needs a cluster-scoped ClusterRole\n")
 	fmt.Fprintf(&b, "                               # for node metrics — false to stay namespace-scoped\n")
-	// The extension point. values-byoc.yaml leaves the rag workers, langfuse and
-	// the provisioner off; an overlay passed after it is what turns any of them
-	// back on, and helm's last-wins ordering is the whole mechanism. Empty by
-	// default so the paste is unchanged for an operator who wants the base stack.
+	// The extension point. values-byoc.yaml leaves the provisioner off; an overlay
+	// passed after it is what turns something back on, and helm's last-wins ordering
+	// is the whole mechanism. Empty by default so the paste is unchanged for an
+	// operator who wants the base stack.
 	fmt.Fprintf(&b, "EXTRA_VALUES=                  # overlays applied after values-byoc.yaml, e.g.\n")
 	fmt.Fprintf(&b, "#   EXTRA_VALUES=\"-f %s/values-byoc-full.yaml\"\n", chart)
-	fmt.Fprintf(&b, "#   moves the inference gateway onto OpenAI and adds the rag workers;\n")
-	fmt.Fprintf(&b, "#   needs OPENAI_KEY\n\n")
+	fmt.Fprintf(&b, "#   switches the inference gateway's LLM from Bedrock to OpenAI; needs OPENAI_KEY.\n")
+	fmt.Fprintf(&b, "#   (The rag workers are on by default — this overlay is not needed for them.)\n\n")
 
 	fmt.Fprintf(&b, "# 1 — four credentials. The agent's API key; a pull secret, since every image\n")
 	fmt.Fprintf(&b, "#      in this release is on private Quay and %s is the name\n", mekoPullSecretName)
@@ -223,6 +235,11 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "  --set-string mekoMcpServer.image.tag=\"${MCP_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoUi.image.tag=\"${UI_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string inferenceGateway.image.tag=\"${GW_TAG}\" \\\n")
+	// The rag workers (knowledge-base ingestion) are on in values-byoc. Their image
+	// tag is required whenever ragAgent.enabled, and each worker is tagged separately.
+	fmt.Fprintf(&b, "  --set-string ragAgent.text.image.tag=\"${RAG_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string ragAgent.conversations.image.tag=\"${RAG_TAG}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string ragAgent.pdf.image.tag=\"${RAG_TAG}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.awsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
 	// The MCP server embeds KB/conversation search queries AND, under values-byoc's
@@ -232,6 +249,20 @@ func mekoReconcileInstallHint(ycpURL, envID, accountID, byocMetricsURL string, r
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.mcpAwsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
 	fmt.Fprintf(&b, "  --set dataPlaneSecrets.mcpAwsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
 	fmt.Fprintf(&b, "  --set-string mekoMcpServer.staticEnv.awsRegion=\"${BEDROCK_REGION}\" \\\n")
+	// The rag workers read uploaded files from the KB bucket (ragAws) and the
+	// api-server writes them there (s3AccessKey) — same bucket, same principal as
+	// Bedrock. Without the creds every source scan fails with "Unable to locate
+	// credentials" and nothing a user uploads is ingested.
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.ragAwsAccessKeyId=\"${BEDROCK_KEY}\" \\\n")
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.ragAwsSecretAccessKey=\"${BEDROCK_SECRET}\" \\\n")
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.s3AccessKey=\"${BEDROCK_KEY}\" \\\n")
+	fmt.Fprintf(&b, "  --set dataPlaneSecrets.s3SecretKey=\"${BEDROCK_SECRET}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string apiServer.config.S3_BUCKET=\"${KB_S3_BUCKET}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string apiServer.config.S3_REGION=\"${KB_S3_REGION}\" \\\n")
+	fmt.Fprintf(&b, "  --set-string ragAgent.config.AWS_S3_BUCKET_NAME=\"${KB_S3_BUCKET}\" \\\n")
+	// The workers' AWS_REGION is their Bedrock (Titan) region, not the bucket's — keep
+	// the KB bucket in BEDROCK_REGION to avoid a cross-region S3 read.
+	fmt.Fprintf(&b, "  --set-string ragAgent.config.AWS_REGION=\"${BEDROCK_REGION}\" \\\n")
 	// values-byoc.yaml turns langfuse on with migrate.enabled — a fresh install
 	// fails at dataplane-secrets.yaml's own fail-fast guard without these seven
 	// crypto fields AND the S3 event store below.

@@ -236,8 +236,8 @@ helm upgrade --install meko $CHART -n $NS \
   --set dataPlaneSecrets.awsAccessKeyId=AKIA… --set dataPlaneSecrets.awsSecretAccessKey=… …
 ```
 
-`values-byoc-full.yaml` moves it onto **openai** and adds the rag text worker, so that
-one needs `dataPlaneSecrets.openaiApiKey` instead — and there the chart catches it at
+`values-byoc-full.yaml` switches the gateway's LLM onto **openai**, so that one needs
+`dataPlaneSecrets.openaiApiKey` instead — and there the chart catches it at
 render time, failing the install with that reason rather than installing a pod that
 exits with `openai.OpenAIError: Missing credentials` and reports 0/1 forever:
 

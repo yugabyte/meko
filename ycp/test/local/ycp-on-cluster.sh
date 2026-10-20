@@ -33,8 +33,8 @@
 #   fails the install with the class it wanted and the ones it found.
 #     ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --storage-class standard-rwo
 #
-#   --full moves the inference gateway onto the openai provider and adds the rag text
-#   worker. It needs OPENAI_API_KEY — the chart refuses to render an openai gateway
+#   --full moves the inference gateway's LLM onto the openai provider (the rag workers
+#   are already on by default in values-byoc). It needs OPENAI_API_KEY — the chart refuses to render an openai gateway
 #   without a key, rather than installing a pod that exits at startup. Without --full
 #   the gateway still runs, on bedrock, which needs BEDROCK_KEY/BEDROCK_SECRET.
 #     OPENAI_API_KEY=sk-... ./ycp/test/local/ycp-on-cluster.sh --context <ctx> --all --full
@@ -70,12 +70,17 @@ YCP_IMAGE="${YCP_IMAGE:-}"
 # The pinned data-plane release (meko/api_server/internal/service/dataplane_release.go).
 # One value today — meko/jenkins versions every component together — but kept as three
 # because the pin in dataplane_release.go may name different tags.
-MEKO_API_TAG="${MEKO_API_TAG:-0.261013.0-b56d9722f}"
-MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.261013.0-b56d9722f}"
-MEKO_UI_TAG="${MEKO_UI_TAG:-0.261013.0-b56d9722f}"
+MEKO_API_TAG="${MEKO_API_TAG:-0.261019.0-40f3d0b64}"
+MEKO_MCP_TAG="${MEKO_MCP_TAG:-0.261019.0-40f3d0b64}"
+MEKO_UI_TAG="${MEKO_UI_TAG:-0.261019.0-40f3d0b64}"
+MEKO_RAG_TAG="${MEKO_RAG_TAG:-0.261019.0-40f3d0b64}"
+# The knowledge-base S3 bucket the rag workers read and the api-server writes. Optional:
+# set it (and have BEDROCK_KEY reach it) to exercise RAG ingestion end to end; empty
+# deploys the workers but they cannot read uploads.
+MEKO_KB_S3_BUCKET="${MEKO_KB_S3_BUCKET:-}"
 # Overlays applied AFTER values-byoc.yaml, which is what lets them win. Empty is the
-# base stack; --full appends values-byoc-full.yaml, which moves the gateway onto
-# openai and adds the rag workers. Free-form so a caller can pass a values file of
+# base stack; --full appends values-byoc-full.yaml, which moves the gateway's LLM onto
+# openai (the rag workers are already on in values-byoc). Free-form so a caller can pass a values file of
 # their own, which is the same mechanism the install hint prints.
 EXTRA_VALUES="${EXTRA_VALUES:-}"
 FOUNDATION=0
@@ -541,7 +546,10 @@ if [ "$FOUNDATION" = "1" ]; then
   DB_VALUES=(--set-string database.host="${YB_HOST%:*}")
 fi
 # values-byoc.yaml LAST but for the database and EXTRA_VALUES: it is what makes this
-# one self-contained namespace.
+# one self-contained namespace. ragAgent is ON (values-byoc's default), so this passes
+# the rag image tags and reuses the Bedrock principal for the workers' ragAws creds and
+# the api-server's KB-upload S3 — mirroring the install hint, so this harness exercises
+# the RAG path too. Set MEKO_KB_S3_BUCKET (reachable by BEDROCK_KEY) to ingest end to end.
 # shellcheck disable=SC2086 # EXTRA_VALUES is a flag list, and must word-split.
 h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   -f "$CHART/values-$CLOUD.yaml" -f "$CHART/values-$ENVPRESET.yaml" -f "$CHART/values-byoc.yaml" \
@@ -549,9 +557,20 @@ h upgrade --install "$MEKO_NS" "$CHART" -n "$MEKO_NS" \
   --set-string dataPlaneSecrets.openaiApiKey="${OPENAI_API_KEY:-}" \
   --set-string dataPlaneSecrets.mcpAwsAccessKeyId="${BEDROCK_KEY:-${AWS_ACCESS_KEY_ID:-}}" \
   --set-string dataPlaneSecrets.mcpAwsSecretAccessKey="${BEDROCK_SECRET:-${AWS_SECRET_ACCESS_KEY:-}}" \
+  --set-string dataPlaneSecrets.ragAwsAccessKeyId="${BEDROCK_KEY:-${AWS_ACCESS_KEY_ID:-}}" \
+  --set-string dataPlaneSecrets.ragAwsSecretAccessKey="${BEDROCK_SECRET:-${AWS_SECRET_ACCESS_KEY:-}}" \
+  --set-string dataPlaneSecrets.s3AccessKey="${BEDROCK_KEY:-${AWS_ACCESS_KEY_ID:-}}" \
+  --set-string dataPlaneSecrets.s3SecretKey="${BEDROCK_SECRET:-${AWS_SECRET_ACCESS_KEY:-}}" \
+  --set-string apiServer.config.S3_BUCKET="$MEKO_KB_S3_BUCKET" \
+  --set-string apiServer.config.S3_REGION="${BEDROCK_REGION:-us-east-1}" \
+  --set-string ragAgent.config.AWS_S3_BUCKET_NAME="$MEKO_KB_S3_BUCKET" \
+  --set-string ragAgent.config.AWS_REGION="${BEDROCK_REGION:-us-east-1}" \
   --set-string apiServer.image.tag="$MEKO_API_TAG" \
   --set-string mekoMcpServer.image.tag="$MEKO_MCP_TAG" \
   --set-string mekoUi.image.tag="$MEKO_UI_TAG" \
+  --set-string ragAgent.text.image.tag="$MEKO_RAG_TAG" \
+  --set-string ragAgent.conversations.image.tag="$MEKO_RAG_TAG" \
+  --set-string ragAgent.pdf.image.tag="$MEKO_RAG_TAG" \
   --set reconcileAgent.enabled=true \
   --set reconcileAgent.ycpUrl="$YCP_URL" \
   --set reconcileAgent.envName="$ENV_ID" \

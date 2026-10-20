@@ -33,10 +33,10 @@
 # matter (dataPlaneSecrets, below) and reads the rest with optional=true, so an
 # unused credential costs its own feature instead of leaving a pod stuck in
 # CreateContainerConfigError. What you lose by supplying nothing:
-#   - no OpenAI key    -> no memory extraction (llmProvider default openai) and no
-#                         RAG. Memory EMBEDDING uses Bedrock here (mekoMcpServer.
-#                         staticEnv.embedderProvider=aws_bedrock), so it needs the MCP
-#                         Bedrock creds below, not this key.
+#   - no OpenAI key    -> no memory extraction (llmProvider default openai). Memory
+#                         and RAG EMBEDDING use Bedrock here (mekoMcpServer.staticEnv.
+#                         embedderProvider=aws_bedrock; the rag workers embed with
+#                         Titan), so they need the Bedrock creds below, not this key.
 #   - no MCP Bedrock creds (dataPlaneSecrets.mcpAwsAccessKeyId/.mcpAwsSecretAccessKey)
 #                      -> memory_add/search and KB/conversation search cannot embed;
 #                         the install hint supplies these from BEDROCK_KEY.
@@ -209,6 +209,11 @@ apiServer:
     LANGFUSE_DB_HOST: ""
     # In-namespace traffic to a database this release owns, same as DB_SSL_MODE.
     LANGFUSE_DB_SSL_MODE: disable
+    # Emptied for the same reason as LANGFUSE_HOST above: the env preset points this
+    # at hosted dev's shared KB bucket (meko-kb-store), so left set a BYOC api-server
+    # would write KB uploads into OUR bucket. The install hint sets it from KB_S3_BUCKET;
+    # a manual install passes its own. Blank means "unset", not "inherit".
+    S3_BUCKET: ""
 
 mekoMcpServer:
   image:
@@ -294,20 +299,20 @@ mekoUi:
 # the two endpoints blanked below, and — for the default bedrock provider —
 # dataPlaneSecrets.awsAccessKeyId / .awsSecretAccessKey, which render the
 # inference-gateway-aws Secret its Deployment mounts with envFrom. `-f
-# values-byoc-full.yaml` after this file switches it to openai instead, and turns on
-# the rag workers.
+# values-byoc-full.yaml` after this file switches the gateway to openai instead (it
+# does NOT change the rag workers, which are on below regardless).
+#
+# ragAgent is ON (the rag workers ARE knowledge-base ingestion + retrieval, a core
+# component — see the block below). text/conversations schedule anywhere and pdf runs
+# CPU-only here, so no rag-worker or GPU pool is needed. It needs an image tag and
+# dataPlaneSecrets.ragAwsAccessKeyId / .ragAwsSecretAccessKey + ragAgent.config.
+# AWS_S3_BUCKET_NAME (S3 reads of uploaded files + Bedrock Titan embedding), which the
+# install hint supplies — without them every source scan fails and no uploaded file is
+# processed. mekoMcpServer, also on, needs dataPlaneSecrets.mcpAwsAccessKeyId /
+# .mcpAwsSecretAccessKey for the same embedder, or KB and conversation search embed
+# nothing.
 #
 # Off here:
-#   ragAgent    — enableable with that overlay, or directly: text and conversations
-#                 run anywhere (null their nodeSelector if the cluster has no
-#                 rag-worker pool); pdf runs CPU-degraded without a GPU pool
-#                 (ragAgent.gpu.enabled=false) rather than needing one. Needs
-#                 dataPlaneSecrets.ragAwsAccessKeyId / .ragAwsSecretAccessKey for
-#                 S3 reads and Bedrock Titan embeddings (the seeded indexes' embedder):
-#                 without them every source scan fails and no uploaded file is
-#                 processed. mekoMcpServer, which stays on, needs dataPlaneSecrets.
-#                 mcpAwsAccessKeyId / .mcpAwsSecretAccessKey for the same embedder,
-#                 or KB and conversation search embed nothing.
 #   provisioner — deliberately not: it renders ClusterRoles and a CRD, and manages
 #                 per-tenant namespaces, which is the opposite of one namespace.
 #
@@ -354,10 +359,47 @@ inferenceGateway:
     INFERENCE_MCP_ENDPOINT: ""
     INFERENCE_CORS_ORIGINS: ""
 ragAgent:
-  enabled: false
-  text: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
-  conversations: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
-  pdf: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent } }
+  # ON by default: RAG (knowledge-base ingestion + retrieval) is a core BYOC
+  # component, not an add-on. The chart pins text/conversations to a
+  # node_type=rag-worker pool and pdf to a GPU; a BYOC cluster has neither, so the
+  # selectors are cleared (schedule on any node) and pdf runs CPU-only
+  # (gpu.enabled=false). The workers embed with Bedrock Titan and read uploaded
+  # files from the KB bucket, so they need dataPlaneSecrets.ragAwsAccessKeyId /
+  # .ragAwsSecretAccessKey and ragAgent.config.AWS_S3_BUCKET_NAME — the install hint
+  # supplies them (one principal; it also needs s3:DeleteObject for the KB delete
+  # path). Turn pdf back onto a GPU pool with ragAgent.gpu.enabled=true.
+  enabled: true
+  # tag: "" on all three, deliberately: the env preset supplies an ECR-scheme tag that
+  # does NOT exist under quay.io/yugabyte, so inheriting it would send the pods to
+  # ImagePullBackOff. Empty makes meko.image fail fast at render instead — the install
+  # hint (and the e2e harness) pass the real RAG_TAG via --set, which overrides this.
+  text:
+    image: { registry: quay.io/yugabyte, repository: meko-rag-agent, tag: "" }
+    # null (not {}) so the merge drops the chart's node_type=rag-worker default.
+    nodeSelector: null
+  conversations:
+    image: { registry: quay.io/yugabyte, repository: meko-rag-agent, tag: "" }
+    nodeSelector: null
+  pdf: { image: { registry: quay.io/yugabyte, repository: meko-rag-agent, tag: "" } }
+  gpu:
+    enabled: false
+  openai:
+    # Keep the OPENAI knowledge_bases row's key working on installs seeded before
+    # the Titan switch (data/000001 never reruns, so an older row still embeds with
+    # OpenAI). The ref is optional, so this is free on a fresh Titan-seeded install.
+    enabled: true
+  config:
+    # The env presets point these at a shared Langfuse ELB a customer cluster cannot
+    # reach; blank is the honest value — the workers read them by configMapKeyRef, so
+    # the keys must stay present. (Tracing the rag workers to the bundled langfuse
+    # would need a configmap fill-in like apiServer.config.LANGFUSE_HOST — follow-up.)
+    TXT_LANGFUSE_HOST: ""
+    PDF_LANGFUSE_HOST: ""
+    # Emptied like apiServer.config.S3_BUCKET above: the env preset sets this to the
+    # shared hosted-dev KB bucket (meko-kb-store), so left set the workers would read a
+    # BYOC tenant's uploads from OUR bucket. The hint sets it from KB_S3_BUCKET; blank
+    # means "unset", not "inherit".
+    AWS_S3_BUCKET_NAME: ""
 langfuse:
   enabled: true
   # The chart default (values.yaml) is an internet-facing LoadBalancer on both

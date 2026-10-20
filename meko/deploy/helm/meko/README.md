@@ -29,8 +29,9 @@ values-byoc.yaml       mode preset — a self-contained data plane in ONE namesp
                        Foundation's universe (database.host), no Secrets by hand
 values-byoc-bundled-db.yaml  dev overlay — a single-node yugabyted in the release instead
                        of a Foundation, for kind. AFTER values-byoc.yaml
-values-byoc-full.yaml  opt-in overlay — moves the inference gateway onto OpenAI and
-                       adds the rag text worker. AFTER values-byoc.yaml; needs an OpenAI key
+values-byoc-full.yaml  opt-in overlay — switches the inference gateway's LLM to OpenAI.
+                       AFTER values-byoc.yaml; needs an OpenAI key. (Rag workers are
+                       already on by default — this overlay is not needed for them.)
 ```
 
 Compose a cloud preset + an env preset at install:
@@ -346,14 +347,31 @@ issuer's own pages. What it serves is `/auth/oidc/login`, `/auth/oidc/callback`,
 are issued and validated by this server, whichever IdP is on.
 
 `values-byoc.yaml` runs the inference gateway on **bedrock** (which needs
-`dataPlaneSecrets.awsAccessKeyId` / `.awsSecretAccessKey`) and leaves the rag workers
-and the provisioner off. Appending `-f charts/meko/values-byoc-full.yaml` —
-later `-f` wins, which is the whole mechanism — switches the gateway to **openai** and
-adds the rag text worker, so it needs `--set dataPlaneSecrets.openaiApiKey=sk-...`,
-without which the render fails rather than installing a gateway that exits at startup.
-Any install with the rag workers on also needs `dataPlaneSecrets.ragAwsAccessKeyId` /
-`.ragAwsSecretAccessKey`; without them the workers start but cannot read an uploaded
-file from S3 or embed it with Bedrock Titan, so nothing a user uploads is processed.
+`dataPlaneSecrets.awsAccessKeyId` / `.awsSecretAccessKey`) and runs the **rag workers**
+(knowledge-base ingestion + retrieval) on Bedrock too, leaving only the provisioner off.
+The rag workers schedule on any node here (no `node_type=rag-worker` pool) and the PDF
+worker runs CPU-only (`ragAgent.gpu.enabled=false`). **They are three always-on
+Deployments (1 replica each): on the install-hint preset they request ~2 CPU / 7Gi
+memory / 24Gi ephemeral storage in total (limits 6 CPU / 12Gi / 36Gi), so the cluster
+needs that much free schedulable capacity or a `--wait` install fails to settle.**
+
+| rag Deployment | CPU req / limit | Memory req / limit | Ephemeral req / limit |
+|---|---|---|---|
+| text | 500m / 2 | 2Gi / 4Gi | 8Gi / 12Gi |
+| conversations | 500m / 2 | 2Gi / 4Gi | 8Gi / 12Gi |
+| pdf (CPU-only) | 1 / 2 | 3Gi / 4Gi | 8Gi / 12Gi |
+| **total** | **2 / 6** | **7Gi / 12Gi** | **24Gi / 36Gi** |
+
+They need
+`dataPlaneSecrets.ragAwsAccessKeyId` / `.ragAwsSecretAccessKey` and
+`ragAgent.config.AWS_S3_BUCKET_NAME` (plus the api-server's `dataPlaneSecrets.s3AccessKey`
+/ `.s3SecretKey` + `apiServer.config.S3_BUCKET` for the same bucket) — without them the
+workers start but cannot read an uploaded file from S3 or embed it with Bedrock Titan, so
+nothing a user uploads is processed. The install hint supplies all of these from one
+`BEDROCK_KEY` principal (it needs `bedrock:InvokeModel` plus `s3:Get/Put/Delete/ListBucket` on
+the KB bucket). Appending `-f charts/meko/values-byoc-full.yaml` — later `-f` wins, which
+is the whole mechanism — switches the gateway's LLM to **openai**, so it needs
+`--set dataPlaneSecrets.openaiApiKey=sk-...`; it does NOT change the rag workers.
 The MCP server needs `dataPlaneSecrets.mcpAwsAccessKeyId` / `.mcpAwsSecretAccessKey` too, to
 embed KB and conversation search queries with the same model; without them those searches
 answer empty, and — since memory embedding defaults to Bedrock
@@ -602,13 +620,14 @@ diff <(helm template t /tmp/meko-chart-base/charts/meko -f … ) \
 - **AWS parity**: `-f values-aws.yaml` renders byte-identical to the current
   kustomize manifests (verified dev+prod). GKE-only wiring (GCE ingress,
   imagePullSecrets, ManagedCertificate) is gated on `global.cloud`/ingress class.
-- **rag-agent**: text and conversations need a `rag-worker` node pool
-  (`node_type=rag-worker`) by default; the PDF worker needs a GPU pool
-  (`node_type=gpu` + `cloud.google.com/gke-accelerator`) only while
-  `ragAgent.gpu.enabled` is true (the default) — set it false on a cluster with
-  no GPU pool and PDF ingestion still runs, on CPU, rather than staying
-  Pending. text/conversations' `nodeSelector` isn't gated the same way; null it
-  out explicitly if the target cluster has no `rag-worker` pool either.
+- **rag-agent**: the chart default pins text and conversations to a `rag-worker`
+  node pool (`node_type=rag-worker`) and the PDF worker to a GPU pool
+  (`node_type=gpu` + `cloud.google.com/gke-accelerator`, while `ragAgent.gpu.enabled`
+  is true, the chart default). **`values-byoc.yaml` overrides both** so the rag workers
+  run on BYOC without a dedicated pool: it nulls the text/conversations `nodeSelector`
+  and sets `ragAgent.gpu.enabled=false` (PDF ingestion runs on CPU). A non-BYOC install
+  on a cluster without those pools must do the same (null the selectors / set gpu off)
+  or the pods stay Pending.
 - **CRD**: `mekouseraccounts.saas.mekodata.ai` is templated with
   `helm.sh/resource-policy: keep` — `helm uninstall` will NOT remove it (protects
   tenant data). Delete manually if you truly want it gone.
