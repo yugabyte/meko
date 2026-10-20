@@ -69,9 +69,9 @@ export function defaultAgentChoice(harnesses: HarnessStatus[], stored: HarnessId
   return agents.length > 1 ? { agents, value: agents.includes(stored) ? stored : agents[0] } : null;
 }
 
-/** A project's open sessions in the order the rail and the phone's tabs list them: oldest first. */
+/** A project's open sessions in the order the rail and the tabs list them: by position, newest and moved-to-top first. */
 export function openSessions(p: ProjectWithSessions): Session[] {
-  return liveSessions(p).sort((a, b) => a.createdAt - b.createdAt);
+  return liveSessions(p).sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
 }
 
 /**

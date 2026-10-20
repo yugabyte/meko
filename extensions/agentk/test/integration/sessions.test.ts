@@ -269,6 +269,28 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(() => env.core.sessions.rename(s.id, { name: 'Fourth' })).toThrow(expect.objectContaining({ status: 409 }));
   });
 
+  it('lists a new session first, and moves a session to the top of its project', async () => {
+    const p = await newProject();
+    const one = await env.core.sessions.create(p.id, { name: 'One', prompt: 'hi', kind: 'quick' });
+    const two = await env.core.sessions.create(p.id, { name: 'Two', prompt: 'hi', kind: 'quick' });
+    const three = await env.core.sessions.create(p.id, { name: 'Three', prompt: 'hi', kind: 'quick' });
+    const order = () => env.core.state().projects[0].sessions.filter((s) => s.desired === 'running').sort((a, b) => a.position - b.position).map((s) => s.name);
+    expect(order()).toEqual(['Three', 'Two', 'One']);
+
+    await env.core.sessions.edit(one.id, { toTop: true });
+    expect(order()).toEqual(['One', 'Three', 'Two']);
+    const top = env.core.sessions.row(one.id).position;
+    await env.core.sessions.edit(one.id, { toTop: true });
+    expect(env.core.sessions.row(one.id).position).toBe(top);
+    await expect(env.core.sessions.edit(two.id, { toTop: 'yes' as unknown as boolean })).rejects.toMatchObject({ status: 400 });
+
+    await waitFor(() => env.core.sessions.get(three.id).status, (st) => st === 'idle', 10000, 'first turn');
+    await env.core.sessions.action(three.id, 'archive');
+    await expect(env.core.sessions.edit(three.id, { toTop: true })).rejects.toMatchObject({ status: 409 });
+    await env.core.sessions.edit(two.id, { toTop: true });
+    expect(order()).toEqual(['Two', 'One']);
+  });
+
   it("changes a session's base to a branch it can be compared with, and refuses one it can't have", async () => {
     const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'ignore' });
     // A release branch one file past main, and a branch with no history in common.

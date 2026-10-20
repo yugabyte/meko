@@ -83,6 +83,7 @@ export interface SessionRow {
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
+  position: number;
   /** Prompts waiting for Claude: JSON map of prompt name to { state, vars }. */
   pending_prompts: string;
   /** The PR head that last got a CI-fix prompt (or was handed to the user after the cap). */
@@ -297,6 +298,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     discarding: !!r.discarding,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
+    position: r.position,
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,

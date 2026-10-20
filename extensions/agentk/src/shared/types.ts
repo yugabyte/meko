@@ -798,6 +798,8 @@ export interface Session {
   /** Set while status is `starting`. */
   startup: StartupState | null;
   lastEventAt: number | null;
+  /** Its place in the project's list, lowest first: a new session, or one moved to the top, goes first. */
+  position: number;
   createdAt: number;
   archivedAt: number | null;
   recoveredAt: number | null;
@@ -1952,6 +1954,8 @@ export interface UpdateSessionRequest {
    * Not for a review or a session with a PR, whose base is the PR's.
    */
   baseBranch?: string;
+  /** Moves the session to the top of its project's list. */
+  toTop?: boolean;
 }
 
 export interface AttachDatapackRequest {
@@ -2251,7 +2255,8 @@ export type TermServerMessage =
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
 //        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
 //        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
-//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone)
+//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
+//        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
 //        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)
