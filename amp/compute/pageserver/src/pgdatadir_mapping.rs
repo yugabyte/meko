@@ -23,7 +23,7 @@ use pageserver_api::key::{
 };
 use pageserver_api::keyspace::KeySpaceRandomAccum;
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
-use postgres_ffi::{BLCKSZ, TransactionId};
+use postgres_ffi::{BLCKSZ, PgMajorVersion, TransactionId};
 use postgres_ffi_types::forknum::{FSM_FORKNUM, MAIN_FORKNUM, VISIBILITYMAP_FORKNUM};
 use postgres_ffi_types::{Oid, RepOriginId, TimestampTz};
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,7 @@ use strum::IntoEnumIterator;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, warn};
 use utils::bin_ser::{BeSer, DeserializeError};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::pausable_failpoint;
 use wal_decoder::models::record::NeonWalRecord;
@@ -39,6 +40,7 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use super::page_server::{PageReconstructError, Timeline};
 use crate::aux_file;
+use crate::config::PageServerConf;
 use crate::context::{PerfInstrumentFutureExt, RequestContext, RequestContextBuilder};
 use crate::keyspace::{KeySpace, KeySpaceAccum};
 use crate::metrics::{
@@ -602,18 +604,15 @@ impl Timeline {
             return Ok(Some(nblocks));
         }
 
-        if allow_missing && !self.get_rel_exists_in_reldir(tag, version, ctx).await? {
-            return Ok(None);
-        }
-
-        if (tag.forknum == FSM_FORKNUM || tag.forknum == VISIBILITYMAP_FORKNUM)
-            && !self.get_rel_exists_in_reldir(tag, version, ctx).await?
+        let fsm_or_vm = tag.forknum == FSM_FORKNUM || tag.forknum == VISIBILITYMAP_FORKNUM;
+        if (allow_missing || fsm_or_vm) && !self.get_rel_exists_in_reldir(tag, version, ctx).await?
         {
-            // FIXME: Postgres sometimes calls smgrcreate() to create
-            // FSM, and smgrnblocks() on it immediately afterwards,
-            // without extending it.  Tolerate that by claiming that
-            // any non-existent FSM fork has size 0.
-            return Ok(Some(0));
+            // Under `allow_missing` a missing fork of any kind is `None`.
+            // Otherwise this is an FSM/VM fork. FIXME: Postgres sometimes
+            // calls smgrcreate() to create FSM, and smgrnblocks() on it
+            // immediately afterwards, without extending it. Tolerate that
+            // by claiming that any non-existent FSM fork has size 0.
+            return Ok(if allow_missing { None } else { Some(0) });
         }
 
         let key = rel_size_to_key(tag);
@@ -628,11 +627,7 @@ impl Timeline {
             // `SMGR_TRUNCATE_FSM/_VM` ingest. Same spirit as the
             // smgrcreate-then-smgrnblocks tolerance above; scoped to FSM/VM
             // so a missing MAIN-fork size still surfaces as an error.
-            Err(PageReconstructError::MissingKey(_))
-                if tag.forknum == FSM_FORKNUM || tag.forknum == VISIBILITYMAP_FORKNUM =>
-            {
-                return Ok(Some(0));
-            }
+            Err(PageReconstructError::MissingKey(_)) if fsm_or_vm => return Ok(Some(0)),
             Err(e) => return Err(e),
         };
         let nblocks = buf.get_u32_le();
@@ -1489,10 +1484,11 @@ fn latest_rel_size_cache_hit(
 /// It is created by the 'begin_record' function. It is called for each WAL
 /// record, so that all the modifications by a one WAL record appear atomic.
 pub struct DatadirModification<'a> {
-    /// The timeline this modification applies to. You can access this to
-    /// read the state, but note that any pending updates are *not* reflected
-    /// in the state in 'tline' yet.
-    pub tline: &'a Timeline,
+    /// The timeline this modification applies to. Private so code outside this
+    /// module reads only through the modification: committed state below its
+    /// record, plus the batch's pending metadata writes, the record's own
+    /// included. The rel-size cache is the exception (`pageserver.md`).
+    tline: &'a Timeline,
 
     /// Current LSN of the modification
     lsn: Lsn,
@@ -1760,19 +1756,12 @@ impl DatadirModification<'_> {
         {
             return Ok(nblocks);
         }
-        if !self
-            .tline
-            .get_rel_exists(rel, Version::Modified(self), ctx)
-            .await?
-        {
+        if !self.get_rel_exists(rel, ctx).await? {
             // create it with 0 size initially, the logic below will extend it
             self.put_rel_creation(rel, 0, ctx).await?;
             Ok(0)
         } else {
-            Ok(self
-                .tline
-                .get_rel_size(rel, Version::Modified(self), ctx)
-                .await?)
+            Ok(self.get_rel_size(rel, ctx).await?)
         }
     }
 
@@ -2227,11 +2216,7 @@ impl DatadirModification<'_> {
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
         ensure_walingest!(rel.relnode != 0, RelationError::InvalidRelnode);
-        if self
-            .tline
-            .get_rel_exists(rel, Version::Modified(self), ctx)
-            .await?
-        {
+        if self.get_rel_exists(rel, ctx).await? {
             let size_key = rel_size_to_key(rel);
             // Fetch the old size first
             let old_size = self.get(size_key, ctx).await?.get_u32_le();
@@ -2786,6 +2771,132 @@ impl DatadirModification<'_> {
 
     fn lsn_before_record(&self) -> Lsn {
         Lsn(self.lsn.0.saturating_sub(1))
+    }
+
+    // Ingest's reads: the `Timeline` reads at `Version::Modified(self)`.
+
+    pub(crate) async fn list_rels(
+        &self,
+        spcnode: Oid,
+        dbnode: Oid,
+        ctx: &RequestContext,
+    ) -> Result<HashSet<RelTag>, PageReconstructError> {
+        self.tline
+            .list_rels(spcnode, dbnode, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn get_relmap_file(
+        &self,
+        spcnode: Oid,
+        dbnode: Oid,
+        ctx: &RequestContext,
+    ) -> Result<Bytes, PageReconstructError> {
+        self.tline
+            .get_relmap_file(spcnode, dbnode, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn get_rel_exists(
+        &self,
+        rel: RelTag,
+        ctx: &RequestContext,
+    ) -> Result<bool, PageReconstructError> {
+        self.tline
+            .get_rel_exists(rel, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn get_rel_size(
+        &self,
+        rel: RelTag,
+        ctx: &RequestContext,
+    ) -> Result<BlockNumber, PageReconstructError> {
+        self.tline
+            .get_rel_size(rel, Version::Modified(self), ctx)
+            .await
+    }
+
+    /// `None` if the relation doesn't exist. Only accurate on shard 0: other shards see the size
+    /// up to the highest page they store, or `None` if they store none.
+    pub(crate) async fn get_rel_size_if_exists(
+        &self,
+        rel: RelTag,
+        ctx: &RequestContext,
+    ) -> Result<Option<BlockNumber>, PageReconstructError> {
+        self.tline
+            .get_rel_size_in_reldir(rel, Version::Modified(self), true, ctx)
+            .await
+    }
+
+    pub(crate) async fn get_rel_page(
+        &self,
+        rel: RelTag,
+        blknum: BlockNumber,
+        ctx: &RequestContext,
+    ) -> Result<Bytes, PageReconstructError> {
+        self.tline
+            .get_rel_page_at_lsn(rel, blknum, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn list_slru_segments(
+        &self,
+        kind: SlruKind,
+        ctx: &RequestContext,
+    ) -> Result<HashSet<u32>, PageReconstructError> {
+        self.tline
+            .list_slru_segments(kind, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn get_slru_segment_exists(
+        &self,
+        kind: SlruKind,
+        segno: u32,
+        ctx: &RequestContext,
+    ) -> Result<bool, PageReconstructError> {
+        self.tline
+            .get_slru_segment_exists(kind, segno, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn get_slru_segment_size(
+        &self,
+        kind: SlruKind,
+        segno: u32,
+        ctx: &RequestContext,
+    ) -> Result<BlockNumber, PageReconstructError> {
+        self.tline
+            .get_slru_segment_size(kind, segno, Version::Modified(self), ctx)
+            .await
+    }
+
+    pub(crate) async fn list_twophase_files(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<HashSet<u64>, PageReconstructError> {
+        self.tline
+            .list_twophase_files(Version::Modified(self), ctx)
+            .await
+    }
+
+    // Timeline properties and side effects ingest needs.
+
+    pub(crate) fn branch_id(&self) -> BranchId {
+        self.tline.branch_id
+    }
+
+    pub(crate) fn pg_version(&self) -> PgMajorVersion {
+        self.tline.pg_version
+    }
+
+    pub(crate) fn conf(&self) -> &'static PageServerConf {
+        self.tline.conf
+    }
+
+    pub(crate) fn prepare_basebackup(&self, lsn: Lsn) {
+        self.tline.prepare_basebackup(lsn)
     }
 
     /// Get a key from the sparse keyspace. Automatically converts the missing key error

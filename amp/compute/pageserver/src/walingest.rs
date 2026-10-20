@@ -49,7 +49,7 @@ use crate::ZERO_PAGE;
 use crate::context::RequestContext;
 use crate::metrics::WAL_INGEST;
 use crate::page_server::{PageReconstructError, Timeline};
-use crate::pgdatadir_mapping::{DatadirModification, Version};
+use crate::pgdatadir_mapping::DatadirModification;
 use crate::span::debug_assert_current_span_has_branch_id;
 
 enum_pgversion! {CheckPoint, pgv::CheckPoint}
@@ -442,9 +442,9 @@ impl WalIngest {
         // its view of the VM relation size. Out of caution, error instead of failing WAL ingestion,
         // as there has historically been cases where PostgreSQL has cleared spurious VM pages. See:
         // https://github.com/neondatabase/neon/pull/10634.
-        let Some(vm_size) = get_relsize(modification, vm_rel, ctx).await? else {
+        let Some(vm_size) = modification.get_rel_size_if_exists(vm_rel, ctx).await? else {
             critical_timeline!(
-                modification.tline.branch_id,
+                modification.branch_id(),
                 // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                 None::<&AtomicBool>,
                 "clear_vm_bits for unknown VM relation {vm_rel}"
@@ -454,7 +454,7 @@ impl WalIngest {
         if let Some(blknum) = new_vm_blk {
             if blknum >= vm_size {
                 critical_timeline!(
-                    modification.tline.branch_id,
+                    modification.branch_id(),
                     // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
                     "new_vm_blk {blknum} not in {vm_rel} of size {vm_size}"
@@ -465,7 +465,7 @@ impl WalIngest {
         if let Some(blknum) = old_vm_blk {
             if blknum >= vm_size {
                 critical_timeline!(
-                    modification.tline.branch_id,
+                    modification.branch_id(),
                     // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
                     "old_vm_blk {blknum} not in {vm_rel} of size {vm_size}"
@@ -540,26 +540,14 @@ impl WalIngest {
         } = create;
 
         let rels = modification
-            .tline
-            .list_rels(
-                src_tablespace_id,
-                src_db_id,
-                Version::Modified(modification),
-                ctx,
-            )
+            .list_rels(src_tablespace_id, src_db_id, ctx)
             .await?;
 
         debug!("ingest_xlog_dbase_create: {} rels", rels.len());
 
         // Copy relfilemap
         let filemap = modification
-            .tline
-            .get_relmap_file(
-                src_tablespace_id,
-                src_db_id,
-                Version::Modified(modification),
-                ctx,
-            )
+            .get_relmap_file(src_tablespace_id, src_db_id, ctx)
             .await?;
         modification
             .put_relmap_file(tablespace_id, db_id, filemap, ctx)
@@ -571,10 +559,7 @@ impl WalIngest {
             assert_eq!(src_rel.spcnode, src_tablespace_id);
             assert_eq!(src_rel.dbnode, src_db_id);
 
-            let nblocks = modification
-                .tline
-                .get_rel_size(src_rel, Version::Modified(modification), ctx)
-                .await?;
+            let nblocks = modification.get_rel_size(src_rel, ctx).await?;
             let dst_rel = RelTag {
                 spcnode: tablespace_id,
                 dbnode: db_id,
@@ -593,10 +578,7 @@ impl WalIngest {
                     blknum, src_rel, src_key, dst_rel
                 );
 
-                let content = modification
-                    .tline
-                    .get_rel_page_at_lsn(src_rel, blknum, Version::Modified(modification), ctx)
-                    .await?;
+                let content = modification.get_rel_page(src_rel, blknum, ctx).await?;
                 modification.put_rel_page_image(dst_rel, blknum, content)?;
                 num_blocks_copied += 1;
             }
@@ -687,7 +669,10 @@ impl WalIngest {
                 fsm_physical_page_no += 1;
             }
             // Truncate the FSM relation size, if it even has one.
-            let nblocks = get_relsize(modification, rel, ctx).await?.unwrap_or(0);
+            let nblocks = modification
+                .get_rel_size_if_exists(rel, ctx)
+                .await?
+                .unwrap_or(0);
             if nblocks > fsm_physical_page_no {
                 self.put_rel_truncation(modification, rel, fsm_physical_page_no, ctx)
                     .await?;
@@ -725,7 +710,10 @@ impl WalIngest {
                 vm_page_no += 1;
             }
             // Truncate this shard's view of the VM relation size, if it even has one.
-            let nblocks = get_relsize(modification, rel, ctx).await?.unwrap_or(0);
+            let nblocks = modification
+                .get_rel_size_if_exists(rel, ctx)
+                .await?
+                .unwrap_or(0);
             if nblocks > vm_page_no {
                 self.put_rel_truncation(modification, rel, vm_page_no, ctx)
                     .await?;
@@ -797,7 +785,7 @@ impl WalIngest {
     ) -> Result<(), WalIngestError> {
         let (xact_common, is_commit, is_prepared) = match record {
             XactRecord::Prepare(XactPrepare { xl_xid, data }) => {
-                let xid: u64 = if modification.tline.pg_version.has_64bit_twophase() {
+                let xid: u64 = if modification.pg_version().has_64bit_twophase() {
                     self.adjust_to_full_transaction_id(xl_xid)?
                 } else {
                     xl_xid as u64
@@ -823,7 +811,7 @@ impl WalIngest {
         let mut rpageno = pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;
         let mut page_xids: Vec<TransactionId> = vec![parsed.xid];
 
-        self.warn_on_ingest_lag(modification.tline.conf, parsed.xact_time);
+        self.warn_on_ingest_lag(modification.conf(), parsed.xact_time);
 
         for subxact in &parsed.subxacts {
             let subxact_pageno = subxact / pg_constants::CLOG_XACTS_PER_PAGE;
@@ -902,7 +890,7 @@ impl WalIngest {
                 xl_xid, parsed.xid, lsn,
             );
 
-            let xid: u64 = if modification.tline.pg_version.has_64bit_twophase() {
+            let xid: u64 = if modification.pg_version().has_64bit_twophase() {
                 self.adjust_to_full_transaction_id(parsed.xid)?
             } else {
                 parsed.xid as u64
@@ -952,7 +940,7 @@ impl WalIngest {
         // First, make an important safety check:
         // the current endpoint page must not be eligible for removal.
         // See SimpleLruTruncate() in slru.c
-        if dispatch_pgversion!(modification.tline.pg_version, {
+        if dispatch_pgversion!(modification.pg_version(), {
             pgv::nonrelfile_utils::clogpage_precedes(latest_page_number, pageno)
         }) {
             info!("could not truncate directory pg_xact apparent wraparound");
@@ -965,14 +953,10 @@ impl WalIngest {
         // will block waiting for the last valid LSN to advance up to
         // it. So we use the previous record's LSN in the get calls
         // instead.
-        for segno in modification
-            .tline
-            .list_slru_segments(SlruKind::Clog, Version::Modified(modification), ctx)
-            .await?
-        {
+        for segno in modification.list_slru_segments(SlruKind::Clog, ctx).await? {
             let segpage = segno * pg_constants::SLRU_PAGES_PER_SEGMENT;
 
-            let may_delete = dispatch_pgversion!(modification.tline.pg_version, {
+            let may_delete = dispatch_pgversion!(modification.pg_version(), {
                 pgv::nonrelfile_utils::slru_may_delete_clogsegment(segpage, pageno)
             });
 
@@ -1196,7 +1180,7 @@ impl WalIngest {
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
         let RawXlogRecord { info, lsn, mut buf } = raw_record;
-        let pg_version = modification.tline.pg_version;
+        let pg_version = modification.pg_version();
 
         if info == pg_constants::XLOG_PARAMETER_CHANGE {
             let CheckPoint::V18(cp) = &mut self.checkpoint;
@@ -1251,10 +1235,7 @@ impl WalIngest {
                 if xlog_checkpoint.oldestActiveXid == pg_constants::INVALID_TRANSACTION_ID
                     && info == pg_constants::XLOG_CHECKPOINT_SHUTDOWN
                 {
-                    let prepared = modification
-                        .tline
-                        .list_twophase_files(Version::Modified(modification), ctx)
-                        .await?;
+                    let prepared = modification.list_twophase_files(ctx).await?;
                     let oldest_active_xid = if pg_version.has_64bit_twophase() {
                         let mut oldest_active_full_xid = cp.nextXid.value;
                         for &xid in &prepared {
@@ -1331,7 +1312,7 @@ impl WalIngest {
         });
 
         if info == pg_constants::XLOG_CHECKPOINT_SHUTDOWN {
-            modification.tline.prepare_basebackup(lsn);
+            modification.prepare_basebackup(lsn);
         }
 
         Ok(())
@@ -1481,12 +1462,12 @@ impl WalIngest {
                 }
 
                 static LOGGED: RateLimitPerPgVersion = RateLimitPerPgVersion::new();
-                if let Some(rate_limiter) = LOGGED.rate_limiter(modification.tline.pg_version) {
+                if let Some(rate_limiter) = LOGGED.rate_limiter(modification.pg_version()) {
                     if let Ok(mut locked) = rate_limiter.try_lock() {
                         locked.call(|| {
                             info!(
                                 lsn=%modification.get_lsn(),
-                                pg_version=%modification.tline.pg_version,
+                                pg_version=%modification.pg_version(),
                                 rel=%rel,
                                 "Filled {} gap blocks on rel extend to {} from {}",
                                 gap_blocks_filled,
@@ -1532,8 +1513,7 @@ impl WalIngest {
         // record.
         // TODO: would be nice if to be more explicit about it
         let old_nblocks = if !modification
-            .tline
-            .get_slru_segment_exists(kind, segno, Version::Modified(modification), ctx)
+            .get_slru_segment_exists(kind, segno, ctx)
             .await?
         {
             // create it with 0 size initially, the logic below will extend it
@@ -1542,10 +1522,7 @@ impl WalIngest {
                 .await?;
             0
         } else {
-            modification
-                .tline
-                .get_slru_segment_size(kind, segno, Version::Modified(modification), ctx)
-                .await?
+            modification.get_slru_segment_size(kind, segno, ctx).await?
         };
 
         if new_nblocks > old_nblocks {
@@ -1562,29 +1539,6 @@ impl WalIngest {
         }
         Ok(())
     }
-}
-
-/// Returns the size of the relation as of this modification, or None if the relation doesn't exist.
-///
-/// This is only accurate on shard 0. On other shards, it will return the size up to the highest
-/// page number stored in the shard, or None if the shard does not have any pages for it.
-async fn get_relsize(
-    modification: &DatadirModification<'_>,
-    rel: RelTag,
-    ctx: &RequestContext,
-) -> Result<Option<BlockNumber>, PageReconstructError> {
-    if !modification
-        .tline
-        .get_rel_exists(rel, Version::Modified(modification), ctx)
-        .await?
-    {
-        return Ok(None);
-    }
-    modification
-        .tline
-        .get_rel_size(rel, Version::Modified(modification), ctx)
-        .await
-        .map(Some)
 }
 
 #[cfg(test)]

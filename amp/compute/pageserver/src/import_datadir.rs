@@ -70,10 +70,14 @@ pub async fn import_timeline_from_postgres_datadir(
 
             let mut file = tokio::fs::File::open(absolute_path).await?;
             let len = metadata.len() as usize;
-            if let Some(control_file) =
-                import_file(&mut modification, relative_path, &mut file, len, ctx).await?
-            {
-                pg_control = Some(control_file);
+            match import_file(&mut modification, relative_path, &mut file, len, ctx).await? {
+                ImportedFile::ControlFile(control_file) => pg_control = Some(*control_file),
+                // yb_amp.signal is not necessarily the last file, but the final commit moves the
+                // LSN on again.
+                ImportedFile::PrevRecordLsn(prev_lsn) => {
+                    tline.writer().await.finish_write(prev_lsn)
+                }
+                ImportedFile::Other => {}
             }
             modification.flush(ctx).await?;
         }
@@ -335,22 +339,29 @@ async fn import_wal(
     Ok(())
 }
 
+/// What [`import_file`] found that its caller has to act on.
+enum ImportedFile {
+    ControlFile(Box<ControlFileData>),
+    PrevRecordLsn(Lsn),
+    Other,
+}
+
 async fn import_file(
     modification: &mut DatadirModification<'_>,
     file_path: &Path,
     reader: &mut (impl AsyncRead + Send + Sync + Unpin),
     len: usize,
     ctx: &RequestContext,
-) -> Result<Option<ControlFileData>> {
+) -> Result<ImportedFile> {
     let file_name = match file_path.file_name() {
         Some(name) => name.to_string_lossy(),
-        None => return Ok(None),
+        None => return Ok(ImportedFile::Other),
     };
 
     if file_name.starts_with('.') {
         // tar archives on macOs, created without COPYFILE_DISABLE=1 env var
         // will contain "fork files", skip them.
-        return Ok(None);
+        return Ok(ImportedFile::Other);
     }
 
     if file_path.starts_with("global") {
@@ -369,7 +380,7 @@ async fn import_file(
 
                 // Import it as ControlFile
                 modification.put_control_file(bytes)?;
-                return Ok(Some(pg_control));
+                return Ok(ImportedFile::ControlFile(Box::new(pg_control)));
             }
             "pg_filenode.map" => {
                 let bytes = read_all_bytes(reader).await?;
@@ -466,13 +477,8 @@ async fn import_file(
             }
         };
 
-        // yb_amp.signal is not necessarily the last file, that we handle
-        // but it is ok to call `finish_write()`, because final `modification.commit()`
-        // will update lsn once more to the final one.
-        let writer = modification.tline.writer().await;
-        writer.finish_write(prev_lsn);
-
         debug!("imported neon signal {}", prev_lsn);
+        return Ok(ImportedFile::PrevRecordLsn(prev_lsn));
     } else if file_path.starts_with("pg_tblspc") {
         // TODO Backups exported from neon won't have pg_tblspc, but we will need
         // this to import arbitrary postgres databases.
@@ -484,7 +490,7 @@ async fn import_file(
         );
     }
 
-    Ok(None)
+    Ok(ImportedFile::Other)
 }
 
 async fn read_all_bytes(reader: &mut (impl AsyncRead + Unpin)) -> Result<Bytes> {

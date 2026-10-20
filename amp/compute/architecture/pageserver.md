@@ -979,17 +979,22 @@ lands, so run it locally when touching this rule.
 already upserted at the record's own LSN are visible to the replaying
 record, and on a reconnect with the pageserver still up so are later
 records' rows. Every ingest read therefore sees committed state
-**strictly below** the record's LSN (`DatadirModification::get` and the
-`Version::Modified` reldir scans), while same-record pending writes
-stay visible through the modification's pending map and the rel-size
-cache. An inclusive read is identical on the first pass but makes
-replay see its own or later prior-pass effects: `put_rel_extend`
-no-ops, the rel-size cache pins at the replay-start size, gap-fill
-stamps all-zero images over live tail blocks, a replayed PREPARE fails
-`FileAlreadyExists` on every reconnect, and directory read-modify-writes
-rebuild rows inside the window from later state
-([#1627](https://github.com/yugabyte/meko/issues/1627)). Regression
-tests: `test/integration/compute/slow/restart_relsize_zero_shadow.rs`,
+**strictly below** the record's LSN (`DatadirModification::get` and
+`DatadirModification::scan`), while same-record pending writes stay
+visible through the modification's pending map and the rel-size cache.
+The per-record ingest code (`ingest_record` and its handlers in
+`walingest.rs`) gets only the `DatadirModification`, whose `tline` is
+private, so it cannot pick another read point. The drivers that hold the
+`Timeline` (the walreceiver, the datadir import, the checkpoint loaded
+when a stream starts) read outside that boundary. An inclusive read is
+identical on the first pass but makes replay see its own or later
+prior-pass effects: `put_rel_extend` no-ops, the rel-size cache pins at
+the replay-start size, gap-fill stamps all-zero images over live tail
+blocks, a replayed PREPARE fails `FileAlreadyExists` on every reconnect,
+and directory read-modify-writes rebuild rows inside the window from
+later state ([#1627](https://github.com/yugabyte/meko/issues/1627)).
+Regression tests:
+`test/integration/compute/slow/restart_relsize_zero_shadow.rs`,
 `test/integration/compute/fast/twophase_replay.rs`.
 
 **Replay windows are quarantined.** A walreceiver connection that
@@ -1024,7 +1029,10 @@ tracking the replay position. And `set_cached_rel_size` never rewinds a
 shared entry to the replay position: the replayer's own reads tolerate
 a newer entry (they miss and fall through to an LSN-correct YB read),
 while an external `nblocks` read arriving mid-window must never pin a
-mid-window size into a compute for its lifetime.
+mid-window size into a compute for its lifetime. The exception is an
+entry stamped at exactly the replayed record's LSN: on a reconnect over
+a live pageserver it hits, so the record that last changed a relation's
+size reads back its own first-pass size instead of the pre-record one.
 
 **FSM/VM tolerance.** The rel-directory can list an FSM or
 visibility-map forknum at a record's pre-record LSN while that
