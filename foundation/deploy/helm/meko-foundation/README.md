@@ -111,6 +111,31 @@ the setting that puts a finalizer on the object. Know two things before using it
   kubectl -n amp-foundation delete foundation foundation
   ```
 
+**Never delete the namespace first**, under either policy. The operator's own
+CRs — `YBUniverse`, `YBProvider` and the rest — carry its finalizer, the
+operator is deleted with the namespace, and the namespace then stays in
+`Terminating` for good; deleting it again does nothing. Delete the `Foundation`
+with `deletionPolicy: Delete` first, or the `operator.yugabyte.io` CRs yourself
+(universe first, provider last), and the namespace after.
+
+A namespace already stuck that way reports
+`finalizer.k8soperator.yugabyte.com` (or `meko.yugabyte.com/teardown`, the
+`Foundation`'s) under `NamespaceFinalizersRemaining`. Nothing is left that can
+clear them, so remove them by hand. **First check where the universe ran**: if
+a provider zone's `kubeNamespace` put it in another namespace, its pods, PVCs
+and Services are still running there and nothing will tear them down once the
+finalizers go — delete them yourself.
+
+```bash
+NS=amp-foundation
+for kind in foundations.meko.yugabyte.com \
+    $(kubectl api-resources --api-group=operator.yugabyte.io --namespaced -o name); do
+  for obj in $(kubectl -n "$NS" get "$kind" -o name); do
+    kubectl -n "$NS" patch "$obj" --type merge -p '{"metadata":{"finalizers":null}}'
+  done
+done
+```
+
 `helm uninstall` of this chart removes the controller and nothing else: the
 universe, the yugaware release and the operator's CRDs all outlive it. Removing
 the CRD chart does not delete the CRD either — it carries

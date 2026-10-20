@@ -10,6 +10,11 @@ name: Amp control-plane GKE cleanup (itest-dev)
 # named after its helm release (<namespace>-yugaware), and a namespace delete
 # never reclaims a cluster-scoped object — so a cancelled run leaves one behind
 # that collides with the next run reusing that namespace name.
+#
+# A foundation namespace cannot simply be deleted: its operator.yugabyte.io CRs
+# carry the operator's finalizer, the operator goes with the namespace, and the
+# namespace then hangs in Terminating forever. So the sweep deletes those CRs
+# first, and frees any namespace already stuck that way.
 on:
   schedule:
     - cron: '0 */6 * * *'    # every 6 hours
@@ -27,7 +32,7 @@ jobs:
   sweep:
     name: Amp GKE cleanup — sweep stale ci-pr namespaces and orphaned cluster RBAC
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       CI_NS_MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '6' }}
     steps:
@@ -46,19 +51,86 @@ jobs:
         run: |
           now=$(date +%s)
           threshold=$(( CI_NS_MAX_AGE_HOURS * 3600 ))
-          deleted=0
-          # name<space>creationTimestamp, one namespace per line.
-          kubectl get ns -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}' \
-            | grep '^ci-pr-' | while read -r name ts; do
-                created=$(date -d "$ts" +%s)
-                age=$(( now - created ))
-                if [ "$age" -ge "$threshold" ]; then
+          # `-o name` prints NAME.GROUP. The Foundation goes first: under
+          # deletionPolicy Delete its controller tears the universe down, and
+          # its finalizer strands the namespace like the operator's does. Then
+          # the universe, the other operator kinds, and the provider last.
+          OPKINDS=$(kubectl api-resources --api-group=operator.yugabyte.io --namespaced=true -o name)
+          [ -n "$OPKINDS" ] || { echo "::error::could not list operator.yugabyte.io kinds"; exit 1; }
+          FDN=$(kubectl api-resources --api-group=meko.yugabyte.com -o name | grep '^foundations\.' || true)
+          ORDER="$FDN ybuniverses.operator.yugabyte.io $(echo "$OPKINDS" \
+            | grep -vE '^(ybuniverses|ybproviders)\.' | tr '\n' ' ') ybproviders.operator.yugabyte.io"
+
+          # True when objects remain OR the API call failed: an error must
+          # never read as "none left", or the namespace is deleted with its
+          # finalizers still held.
+          present() {  # ns kind
+            out=$(kubectl -n "$1" get "$2" -o name) || return 0
+            [ -n "$out" ]
+          }
+          unfinalize() {  # ns kind
+            for obj in $(kubectl -n "$1" get "$2" -o name); do
+              kubectl -n "$1" patch "$obj" --type merge -p '{"metadata":{"finalizers":null}}' || true
+            done
+          }
+          # Waiting is pointless with no operator to act on the delete, and a
+          # 6m wait per kind per namespace would blow the job timeout.
+          operator_ready() {  # ns
+            kubectl -n "$1" get pods -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[*].ready}{"\n"}{end}' \
+              | awk '/yugaware/ && /true/ && !/false/ { f = 1 } END { exit !f }'
+          }
+
+          # The lane's Teardown order, with its bounded wait and last-resort
+          # finalizer removal. Fails when anything is left, so the namespace
+          # is kept for the next sweep rather than stranded.
+          drain_crs() {  # ns
+            polls=2; operator_ready "$1" && polls=72
+            for kind in $ORDER; do
+              present "$1" "$kind" || continue
+              kubectl -n "$1" delete "$kind" --all --wait=false || true
+              for _ in $(seq 1 "$polls"); do
+                present "$1" "$kind" || break
+                sleep 5
+              done
+              if present "$1" "$kind"; then
+                echo "::warning::$1: $kind still present; removing its finalizer"
+                unfinalize "$1" "$kind"
+                sleep 2
+                present "$1" "$kind" && return 1
+              fi
+            done
+            return 0
+          }
+
+          # name<space>creationTimestamp<space>deletionTimestamp, one per line.
+          kubectl get ns -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.creationTimestamp} {.metadata.deletionTimestamp}{"\n"}{end}' \
+            | grep '^ci-pr-' | while read -r name ts dts; do
+                if [ -n "$dts" ]; then
+                  # Already Terminating. Give a live teardown 30m; past that,
+                  # whatever still holds a finalizer holds it forever — its
+                  # controller was deleted with the namespace — and
+                  # `kubectl delete ns` is a no-op from here. The lane asserts
+                  # the universe lives in this namespace, so its pods are
+                  # already gone and dropping the finalizer orphans nothing.
+                  if [ $(( now - $(date -d "$dts" +%s) )) -ge 1800 ]; then
+                    for kind in $ORDER; do
+                      if present "$name" "$kind"; then
+                        echo "unsticking $name: removing finalizers from $kind"
+                        unfinalize "$name" "$kind"
+                      fi
+                    done
+                  fi
+                  continue
+                fi
+                age=$(( now - $(date -d "$ts" +%s) ))
+                if [ "$age" -lt "$threshold" ]; then
+                  echo "keeping  $name (age $(( age / 3600 ))h < ${CI_NS_MAX_AGE_HOURS}h)"
+                elif drain_crs "$name"; then
                   echo "deleting $name (age $(( age / 3600 ))h)"
                   helm -n "$name" uninstall yb-amp-controller >/dev/null 2>&1 || true
                   kubectl delete ns "$name" --wait=false || true
-                  deleted=$(( deleted + 1 ))
                 else
-                  echo "keeping  $name (age $(( age / 3600 ))h < ${CI_NS_MAX_AGE_HOURS}h)"
+                  echo "::warning::$name: could not remove its CRs; leaving it for the next sweep"
                 fi
               done
           echo "sweep complete"
@@ -68,6 +140,7 @@ jobs:
       # exists. Keyed on the namespace rather than on age, so a live foundation
       # run is never touched however long it takes.
       - name: Delete orphaned yugaware cluster RBAC
+        if: always()
         run: |
           kubectl get clusterrole,clusterrolebinding -o name \
             | grep -E '/(ci-pr-[^/]*)-yugaware$' | while read -r obj; do

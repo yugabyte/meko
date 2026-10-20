@@ -647,7 +647,10 @@ Every CR carries the operator's finalizer and only the operator can clear it, so
 no longer declares, and only then uninstalls yugaware. Doing it the other way
 leaves a finalizer with nothing to satisfy it and the namespace hangs in
 `Terminating` forever — `kubectl delete ns` is a no-op on a Terminating
-namespace, so nothing recovers it.
+namespace, and the only way out is removing the finalizer by hand. The CI reaper
+(`amp-control-plane-gke-cleanup.yml`) therefore drains the CRs before deleting
+a `ci-pr-*` namespace, and unsticks one that has been Terminating for over 30
+minutes.
 
 For the same reason, **a CR that did not go stops the uninstall.** `down`
 otherwise collects failures and carries on, so that one bad object does not

@@ -1005,9 +1005,9 @@ jobs:
       # tidy. The CR carries the operator's finalizer, and only the operator can
       # clear it — so uninstalling yugaware first and then deleting the namespace
       # strands a finalizer with nothing left to satisfy it, and the namespace
-      # hangs in Terminating forever. Nothing recovers that: the reaper's
-      # `kubectl delete ns` is a no-op on a Terminating namespace. Since NS is
-      # per-PR, the next push would land on a permanently-stuck namespace.
+      # hangs in Terminating. The reaper frees FNS only on its first 6-hourly
+      # sweep after 30 minutes, and FNS is per-PR, so the next push lands on
+      # it first.
       #
       # --wait=false plus a bounded poll rather than a blocking delete, so a
       # genuinely wedged operator costs a couple of minutes here instead of the
@@ -1027,7 +1027,7 @@ jobs:
           # disappears, and the provider can only go once the universe
           # referencing it has. Everything else is a registration in between.
           KINDS=$(kubectl api-resources --api-group=operator.yugabyte.io \
-            --namespaced=true -o name 2>/dev/null | grep -vxE 'ybuniverses|ybproviders' | tr '\n' ' ')
+            --namespaced=true -o name 2>/dev/null | grep -vE '^(ybuniverses|ybproviders)\.' | tr '\n' ' ')
           #
           # Six minutes, not two: deleting a Ready universe is a YBA task, and
           # a budget shorter than the task guarantees the warning below on
