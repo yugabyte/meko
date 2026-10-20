@@ -265,23 +265,7 @@ impl Timeline {
     where
         Self: Sized,
     {
-        DatadirModification {
-            tline: self,
-            pending_lsns: Vec::new(),
-            pending_metadata_pages: HashMap::new(),
-            pending_data_batch: None,
-            pending_nblocks: 0,
-            pending_directory_entries: Vec::new(),
-            pending_gc_drop_shrink_events: Vec::new(),
-            pending_metadata_bytes: 0,
-            lsn,
-        }
-    }
-
-    pub fn begin_modification_for_import(&self, lsn: Lsn) -> DatadirModification
-    where
-        Self: Sized,
-    {
+        debug_assert!(lsn.is_valid(), "a modification starts at a real LSN");
         DatadirModification {
             tline: self,
             pending_lsns: Vec::new(),

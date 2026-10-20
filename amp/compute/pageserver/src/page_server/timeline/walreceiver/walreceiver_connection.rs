@@ -432,9 +432,9 @@ pub(super) async fn handle_walreceiver_connection(
                     next_record_lsn
                 );
 
-                // We start the modification at 0 because each interpreted record
-                // advances it to its end LSN. 0 is just an initialization placeholder.
-                let mut modification = timeline.begin_modification(Lsn(0));
+                // None until a record, or the batch end, gives it a real LSN: a modification started
+                // at a placeholder would commit that placeholder through `finish_write`.
+                let mut modification: Option<DatadirModification<'_>> = None;
 
                 async fn commit(
                     modification: &mut DatadirModification<'_>,
@@ -492,10 +492,14 @@ pub(super) async fn handle_walreceiver_connection(
                         maybe_checkpoint_stale = false;
                     }
 
+                    let modification = modification.get_or_insert_with(|| {
+                        timeline.begin_modification(interpreted.next_record_lsn)
+                    });
+
                     if matches!(interpreted.flush_uncommitted, FlushUncommittedRecords::Yes)
                         && uncommitted_records > 0
                     {
-                        commit(&mut modification, &ctx, &mut uncommitted_records).await?;
+                        commit(modification, &ctx, &mut uncommitted_records).await?;
                     }
 
                     let local_next_record_lsn = interpreted.next_record_lsn;
@@ -505,7 +509,7 @@ pub(super) async fn handle_walreceiver_connection(
                     }
 
                     let ingested = walingest
-                        .ingest_record(interpreted, &mut modification, &ctx)
+                        .ingest_record(interpreted, modification, &ctx)
                         .await;
                     // Checked on the typed error, before `with_context` flattens
                     // it into anyhow. `modification` is an uncommitted buffer, so
@@ -545,7 +549,7 @@ pub(super) async fn handle_walreceiver_connection(
                         || modification.approx_pending_bytes()
                             > DatadirModification::MAX_PENDING_BYTES
                     {
-                        commit(&mut modification, &ctx, &mut uncommitted_records).await?;
+                        commit(modification, &ctx, &mut uncommitted_records).await?;
                     }
                 }
 
@@ -553,16 +557,22 @@ pub(super) async fn handle_walreceiver_connection(
                 // need to advance last record LSN on all shards. If we've not ingested the latest
                 // record, then set the LSN of the modification past it. This way all shards
                 // advance their last record LSN at the same time.
-                let needs_last_record_lsn_advance = if next_record_lsn > modification.get_lsn() {
-                    modification.set_lsn(next_record_lsn).unwrap();
-                    true
-                } else {
-                    false
-                };
-
-                if uncommitted_records > 0 || needs_last_record_lsn_advance {
-                    // Commit any uncommitted records
-                    commit(&mut modification, &ctx, &mut uncommitted_records).await?;
+                match modification.as_mut() {
+                    Some(modification) => {
+                        let advance = next_record_lsn > modification.get_lsn();
+                        if advance {
+                            modification
+                                .set_lsn(next_record_lsn)
+                                .context("advance to the batch end")?;
+                        }
+                        if advance || uncommitted_records > 0 {
+                            commit(modification, &ctx, &mut uncommitted_records).await?;
+                        }
+                    }
+                    None => {
+                        let mut modification = timeline.begin_modification(next_record_lsn);
+                        commit(&mut modification, &ctx, &mut uncommitted_records).await?;
+                    }
                 }
 
                 if !caught_up && streaming_lsn >= end_of_wal {

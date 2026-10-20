@@ -54,7 +54,7 @@ pub async fn import_timeline_from_postgres_datadir(
 
     // TODO this shoud be start_lsn, which is not necessarily equal to end_lsn (aka lsn)
     // Then fishing out pg_control would be unnecessary
-    let mut modification = tline.begin_modification_for_import(pgdata_lsn);
+    let mut modification = tline.begin_modification(pgdata_lsn);
     modification.init_empty()?;
 
     // Import all but pg_wal
@@ -301,7 +301,7 @@ async fn import_wal(
         waldecoder.feed_bytes(&buf);
 
         let mut nrecords = 0;
-        let mut modification = tline.begin_modification_for_import(last_lsn);
+        let mut modification = tline.begin_modification(last_lsn);
         while last_lsn <= endpoint {
             if let Some((lsn, recdata)) = waldecoder.poll_decode()? {
                 let interpreted = InterpretedWalRecord::from_bytes(recdata, lsn, tline.pg_version)?;
