@@ -24,6 +24,7 @@ use crate::db;
 /// cadence backs off to `8 x gc_period` (8 s here), so the tick that acts the
 /// drop can be that late.
 const HOLD_MS: u32 = 35_000;
+const MATERIALISE_HOLD: &str = "ps::materialise-redo-one";
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.endpoint_port();
@@ -34,10 +35,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.endpoint_create_on_branch("ep_gc_dm", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let http = c.endpoint_ps_http_port("ep_gc_dm")?;
-    let ps = c.daemon_client(http)?;
 
     step("Arm the materialise-hold failpoint on the branch pageserver");
-    set_failpoint(&ps, http, &format!("return({HOLD_MS})")).await?;
+    c.set_failpoint(http, MATERIALISE_HOLD, &format!("return({HOLD_MS})")).await?;
 
     step("Cross the image-chain threshold on one block (held job)");
     db::batch(
@@ -92,12 +92,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
     }
     if !deferred {
-        let _ = set_failpoint(&ps, http, "off").await;
+        let _ = c.set_failpoint(http, MATERIALISE_HOLD, "off").await;
         bail!("drop was not deferred — expected pages=0 with the queue row still present while the job was held");
     }
 
     step("Job lands → fork quiet → drop acts → everything reclaimed");
-    let _ = set_failpoint(&ps, http, "off").await; // new jobs run normally; held ones wake on their timer
+    let _ = c.set_failpoint(http, MATERIALISE_HOLD, "off").await; // new jobs run normally; held ones wake on their timer
     let (mut pages, mut queue) = (i64::MAX, i64::MAX);
     for i in 0..40 {
         db::batch(
@@ -119,22 +119,5 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
             "deferred drop did not fully reclaim: pages_left={pages} queue_left={queue}"
         );
     }
-    Ok(())
-}
-
-/// Configure the `ps::materialise-redo-one` failpoint on the branch's
-/// pageserver. `actions` is a fail-crate action string (`"return(20000)"`
-/// holds each job that long; `"off"` clears).
-async fn set_failpoint(
-    ps: &reqwest::Client,
-    http_port: u16,
-    actions: &str,
-) -> anyhow::Result<()> {
-    let url = format!("http://127.0.0.1:{http_port}/v1/failpoints");
-    ps.put(&url)
-        .json(&serde_json::json!([{ "name": "ps::materialise-redo-one", "actions": actions }]))
-        .send()
-        .await?
-        .error_for_status()?;
     Ok(())
 }

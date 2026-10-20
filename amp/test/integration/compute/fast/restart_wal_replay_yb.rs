@@ -74,12 +74,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     step("Verify PS catch-up via HTTP API (avoid compute restart instability)");
-    let http = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(http_timeout);
     let mut last_record_lsn = String::new();
     let ps_http = c.ps_http_port();
     while Instant::now() < deadline {
-        if let Some(lsn) = last_record_lsn_of(&http, ps_http, branch).await {
+        if let Ok(lsn) = c.ps_last_record_lsn(ps_http, branch).await {
             if !lsn.is_empty() && lsn != "0/0" && lsn != ts_start_lsn {
                 last_record_lsn = lsn;
                 break;
@@ -126,17 +125,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     tee_println!("  pageserver log clean of corruption markers");
 
     Ok(())
-}
-
-/// `last_record_lsn` from the PS branch-detail endpoint.
-async fn last_record_lsn_of(
-    http: &reqwest::Client,
-    ps_http: u16,
-    branch: &str,
-) -> Option<String> {
-    let url = format!("http://127.0.0.1:{ps_http}/v1/branch/{branch}");
-    let v: serde_json::Value = http.get(&url).send().await.ok()?.json().await.ok()?;
-    v.get("last_record_lsn")?.as_str().map(str::to_string)
 }
 
 fn dump_tail(path: &std::path::Path, n: usize, label: &str) {

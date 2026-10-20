@@ -2724,21 +2724,29 @@ impl std::fmt::Display for VersionedKeySpaceQuery {
     }
 }
 
+/// Where the record ending at `new_end` starts, given where the last ingested record ends:
+/// `None` when it isn't past it, i.e. a replayed or repeated record, which was noted on its first
+/// pass.
+fn new_record_start(last_end: Lsn, new_end: Lsn) -> Option<Lsn> {
+    (new_end > last_end).then_some(last_end)
+}
+
 impl Timeline {
     pub(crate) fn finish_write(&self, new_lsn: Lsn) {
         assert!(new_lsn.is_aligned());
 
+        // A new record starts where the current `last` ends; that start is its
+        // `prev_record_lsn`, which PageWriter pairs with `consistent_lsn` when
+        // persisting `branch_state`. A replayed or repeated record changes nothing.
+        let Some(new_start) = new_record_start(self.last_record_lsn.load().last, new_lsn) else {
+            return;
+        };
         self.metrics.last_record_lsn_gauge.set(new_lsn.0 as i64);
-        // Snapshot the current `last` before advancing — that's the
-        // record's `prev_record_lsn`. PageWriter will pair it with
-        // `consistent_lsn` when persisting `branch_state`, so
-        // a restart can hand the safekeeper the correct `xl_prev`.
-        let prev_for_new = self.last_record_lsn.load().last;
         // Note before advancing: once `wait_lsn(new_lsn)` returns, a flush
         // must see this record in its frontier, or `/flush?lsn=` could
         // persist `consistent_lsn` one record short and still return 200.
         if let Some(pw) = self.page_writer.as_ref() {
-            pw.note_record_lsn(new_lsn, prev_for_new);
+            pw.note_record_lsn(new_lsn, new_start);
         }
         self.last_record_lsn.advance(new_lsn);
     }
@@ -3365,6 +3373,16 @@ fn chain_to_value_reconstruct_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `finish_write` itself needs a `Timeline`; `fast/prev_record_lsn_replay.rs` covers it.
+    #[test]
+    fn a_record_that_does_not_advance_is_not_noted() {
+        // A record ending at 0x250 after one ending at 0x200 starts at 0x200.
+        assert_eq!(new_record_start(Lsn(0x200), Lsn(0x250)), Some(Lsn(0x200)));
+        // Replayed with the last record already ending at 0x250, or repeated: not new.
+        assert_eq!(new_record_start(Lsn(0x250), Lsn(0x250)), None);
+        assert_eq!(new_record_start(Lsn(0x250), Lsn(0x200)), None);
+    }
 
     /// `reconstruct_value`'s poison arm has to stay recognisable after the
     /// `.context(..)` it adds, because WAL ingest checks it to decide whether

@@ -68,7 +68,8 @@ async fn run_inner(c: &Cluster, branch: &str, pg_port: u16) -> anyhow::Result<()
     step("seed, then hold consistent_lsn with the failpoint");
     db::batch(&compute, "CREATE TABLE tp_replay (id INT PRIMARY KEY)").await?;
     c.flush_branch(ps_http, branch, &compute).await?;
-    set_failpoint(c, ps_http, "return").await?;
+    c.set_failpoint(ps_http, HOLD_CONSISTENT_LSN, "return")
+        .await?;
     // An UPDATE that started before the failpoint was armed can still land:
     // take the frontier once two reads a moment apart agree.
     let mut frontier = c
@@ -174,16 +175,6 @@ async fn run_inner(c: &Cluster, branch: &str, pg_port: u16) -> anyhow::Result<()
     if n != "1,2,3" {
         bail!("rows after COMMIT PREPARED: {n:?}, want \"1,2,3\"");
     }
-    Ok(())
-}
-
-async fn set_failpoint(c: &Cluster, ps_http: u16, actions: &str) -> anyhow::Result<()> {
-    c.daemon_client(ps_http)?
-        .put(format!("http://127.0.0.1:{ps_http}/v1/failpoints"))
-        .json(&serde_json::json!([{ "name": HOLD_CONSISTENT_LSN, "actions": actions }]))
-        .send()
-        .await?
-        .error_for_status()?;
     Ok(())
 }
 

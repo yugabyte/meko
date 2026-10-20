@@ -32,6 +32,15 @@ fn progress_cell() -> &'static Mutex<Instant> {
     LAST_PROGRESS.get_or_init(|| Mutex::new(Instant::now()))
 }
 
+/// An `X/Y` LSN as a number.
+pub fn parse_lsn(text: &str) -> anyhow::Result<u64> {
+    let (hi, lo) = text
+        .trim()
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("bad lsn {text}"))?;
+    Ok((u64::from_str_radix(hi, 16)? << 32) | u64::from_str_radix(lo, 16)?)
+}
+
 /// Merge bare `key = value` lines into the toml's existing `[section]`
 /// table (inserted right after the header) if present, else append the
 /// section. A PS-config test must NOT append a second `[section]`: the
@@ -1065,22 +1074,68 @@ impl Cluster {
             .next())
     }
 
+    /// `last_record_lsn` from the pageserver's branch-detail endpoint, as `X/Y` text.
+    pub async fn ps_last_record_lsn(
+        &self,
+        ps_http_port: u16,
+        branch: &str,
+    ) -> anyhow::Result<String> {
+        let info: serde_json::Value = self
+            .daemon_client(ps_http_port)?
+            .get(format!(
+                "http://127.0.0.1:{ps_http_port}/v1/branch/{branch}"
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        info["last_record_lsn"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("no last_record_lsn in the branch detail: {info}"))
+    }
+
+    /// Set failpoint `name` to `actions` on the pageserver at `ps_http_port`.
+    pub async fn set_failpoint(
+        &self,
+        ps_http_port: u16,
+        name: &str,
+        actions: &str,
+    ) -> anyhow::Result<()> {
+        self.daemon_client(ps_http_port)?
+            .put(format!("http://127.0.0.1:{ps_http_port}/v1/failpoints"))
+            .json(&serde_json::json!([{ "name": name, "actions": actions }]))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
     /// The branch's durable ingest frontier as the pageserver has recorded it
     /// in `amp_storage.branch_state`. `None` until that daemon initialises.
     pub async fn consistent_lsn(&self, branch_id: &str) -> anyhow::Result<Option<i64>> {
+        Ok(self.branch_state_lsns(branch_id).await?.0)
+    }
+
+    /// `(consistent_lsn, prev_record_lsn)` from the branch's `amp_storage.branch_state` row.
+    pub async fn branch_state_lsns(
+        &self,
+        branch_id: &str,
+    ) -> anyhow::Result<(Option<i64>, Option<i64>)> {
         let conninfo = crate::db::yb_conn(&self.yb_host, self.yb_port, &self.db_name);
         let client = crate::db::connect(&conninfo)
             .await
             .context("connect to the run's YB db")?;
         let row = client
             .query_one(
-                "SELECT consistent_lsn FROM amp_storage.branch_state \
+                "SELECT consistent_lsn, prev_record_lsn FROM amp_storage.branch_state \
                  WHERE branch_id = $1::text::uuid",
                 &[&branch_id],
             )
             .await
-            .context("consistent_lsn query")?;
-        Ok(row.get(0))
+            .context("branch_state query")?;
+        Ok((row.get(0), row.get(1)))
     }
 
     /// The port the launcher allocated for the branch's read_write endpoint's

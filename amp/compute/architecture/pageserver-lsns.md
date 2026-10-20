@@ -92,9 +92,10 @@ must read `consistent_lsn`.
 as `applied_lsn` — both advance per record as walingest commits.
 
 **Advances:** `Timeline::finish_write(new_lsn)` after each
-`DatadirModification::commit()`. Before advancing, it snapshots the current
-`last` as the new record's `prev` and hands the pair to
-`PageWriter::note_record_lsn`. Never written to YB directly.
+`DatadirModification::commit()`. For a record past the current `last`, it
+takes that `last` as the new record's `prev`, hands the pair to
+`PageWriter::note_record_lsn`, then advances; a record at or below `last` (a
+replay or a repeat) changes nothing. Never written to YB directly.
 
 **Read by:**
 - `wait_lsn()` — getpage blocks until this reaches the requested LSN.
@@ -126,8 +127,10 @@ re-streamed and re-ingested idempotently.
   `last → prev`).
 - Persisted: `amp_storage.branch_state.prev_record_lsn` (nullable column).
 
-**Advances:** Each `finish_write` inserts the `(last → prev)` pair via
-`note_record_lsn`. At flush time, `peek_prev_at_or_below(flushed_lsn)` reads
+**Advances:** Each `finish_write` that moves `last_record_lsn` forward
+inserts the `(last → prev)` pair via `note_record_lsn`. One that doesn't, a
+record replayed on a reconnect or reported twice, is skipped: it was noted
+on its first pass, and `last_record_lsn` is not its prev. At flush time, `peek_prev_at_or_below(flushed_lsn)` reads
 the pairing for the highest noted record at or below the flushed LSN and
 passes it to `advance_consistent_lsn`; the notes are pruned only after that
 UPDATE succeeds. The SQL uses

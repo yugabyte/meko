@@ -262,20 +262,19 @@ pub struct PageWriter {
     /// `advance_consistent_lsn` succeeds. Initialised to 0 at
     /// construction; attach seeds it from the persisted row.
     consistent_lsn_watermark: std::sync::atomic::AtomicU64,
-    /// `(last_record_lsn → prev_record_lsn)` for WAL records the
-    /// walreceiver has finish_write'd but PageWriter hasn't yet
-    /// persisted via `advance_consistent_lsn`. Populated by
-    /// `Timeline::finish_write` (which knows both values atomically
-    /// from `RecordLsn::cnt_advance`). Its highest key is the flush's
-    /// ingest frontier. A flush pairs that frontier with its prev in the
-    /// UPDATE and prunes entries ≤ it only once the UPDATE succeeds, so a
-    /// failed UPDATE leaves the frontier here for the next flush to retry.
+    /// `(record end → record start)` for WAL records not yet persisted via
+    /// `advance_consistent_lsn`. `Timeline::finish_write` adds one entry per
+    /// record that moves `last_record_lsn` forward, with the previous
+    /// `last_record_lsn` as the start; a replayed or repeated record adds
+    /// none. Its highest key is the flush's ingest frontier. A flush pairs
+    /// that frontier with its start in the UPDATE and prunes entries ≤ it
+    /// only once the UPDATE succeeds, so a failed UPDATE leaves the frontier
+    /// here for the next flush to retry.
     ///
-    /// When the lookup misses (rare race: a record's pages landed in
-    /// the buffer before its `finish_write` ran, and a flush fired
-    /// between the two), we persist `dc_lsn` with `prev = NULL`
-    /// — same as before this tracker existed; the walreceiver
-    /// re-derives prev on restart.
+    /// When the lookup misses (rare race: a record's pages landed in the
+    /// buffer before its `finish_write` ran, and a flush fired between the
+    /// two), the UPDATE passes `prev = NULL` and `COALESCE` keeps the column's
+    /// existing value.
     record_lsn_history: std::sync::Mutex<std::collections::BTreeMap<Lsn, Lsn>>,
     /// `Arc<AtomicLsn>` of the timeline's `consistent_lsn` — the value
     /// the walreceiver loop forwards to the safekeeper in

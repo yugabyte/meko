@@ -25,14 +25,6 @@ const ENDPOINT: &str = "ep_gc_fork";
 const DOOMED: &str = "gc_fork_doomed";
 
 /// `X/Y` pg_lsn text → u64.
-fn lsn_u64(text: &str) -> anyhow::Result<u64> {
-    let (hi, lo) = text
-        .trim()
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("bad lsn {text}"))?;
-    Ok((u64::from_str_radix(hi, 16)? << 32) | u64::from_str_radix(lo, 16)?)
-}
-
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
     let pg_port = c.endpoint_port();
@@ -62,7 +54,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await?;
     let doomed = db::query_text(&parent, "SELECT pg_current_wal_flush_lsn()::text").await?;
-    let doomed_u64 = lsn_u64(&doomed)?;
+    let doomed_u64 = crate::cluster::parse_lsn(&doomed)?;
 
     step("Advance the parent past the fork point, then let the cutoff pass it");
     // Bounded churn — pushing the head is cheap; what gates the cutoff
