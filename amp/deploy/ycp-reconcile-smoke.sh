@@ -288,17 +288,7 @@ fi
 # runner/cluster clock skew cannot misfile a line. Whether a write WAKES a held read
 # is judged after the last desired-state write below (lp_check_woken), across every
 # write this script makes.
-lp_reads() {
-  LP_TEXT="$1" python3 - <<'PY'
-import os, re
-pat = re.compile(r'agent/desired-state\?since=\d+&wait=([0-9.a-zµ]+)"? .*?latency=([0-9.a-zµ]+)')
-unit = {"h": 3600, "m": 60, "s": 1, "ms": 1e-3, "us": 1e-6, "µs": 1e-6, "ns": 1e-9}
-def secs(d):
-    return sum(float(n) * unit[u] for n, u in re.findall(r'([0-9.]+)(h|ms|m|s|us|µs|ns)', d))
-for w, l in pat.findall(os.environ["LP_TEXT"]):
-    print(secs(w), secs(l))
-PY
-}
+lp_reads() { python3 "$(dirname "$0")/ycp_longpoll_reads.py" <<<"$1"; }
 hdr "the agent long-polls desired state"
 if [ -z "${LP_BEFORE:-}" ]; then
   bad "no access log was captured before the spec edit (it did not run)"

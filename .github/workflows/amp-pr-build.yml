@@ -706,6 +706,10 @@ jobs:
       - name: helm unittest (ingress shard chart)
         run: helm unittest deploy/helm/yb-amp-ingress
 
+      # The access-log parser behind ycp-reconcile-smoke.sh's long-poll checks.
+      - name: ycp-reconcile-smoke long-poll parser
+        run: python3 -m unittest discover -s deploy -p 'test_ycp_longpoll_reads.py'
+
 
   # Every download amp's builds make is verified against downloads_checksum.txt,
   # and these are the checks that keep that true without a build: the checker's
