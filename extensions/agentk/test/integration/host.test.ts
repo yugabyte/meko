@@ -283,7 +283,7 @@ describe('a session host from an older version', () => {
   });
 });
 
-describe('agent-k-local host and attach (the commands)', () => {
+describe('agent-k-local host, attach, stop and start (the commands)', () => {
   const cli = fileURLToPath(new URL('../../src/server/cli.ts', import.meta.url));
   const tsx = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url));
   let home: string;
@@ -345,9 +345,32 @@ describe('agent-k-local host and attach (the commands)', () => {
     }
     expect(refused).toContain('The AgentK Local server for this home is running');
     expect((await host.panes()).size).toBe(1);
-    rmSync(lock);
 
-    expect(execFileSync(tsx, [cli, 'host', 'stop'], { env, encoding: 'utf8' })).toContain('Stopped the session host and the 1 session(s) in it. They resume when the server starts.');
+    // `stop` can't signal a server on another host sharing this home.
+    writeFileSync(lock, JSON.stringify({ host: 'elsewhere', pid: 1, version: 'x', port: 7777, startedAt: Date.now(), beatAt: Date.now() }));
+    refused = '';
+    try {
+      execFileSync(tsx, [cli, 'stop'], { env, stdio: 'pipe' });
+    } catch (e) {
+      refused = String((e as { stderr: Buffer }).stderr);
+    }
+    expect(refused).toContain('runs on elsewhere (pid 1): stop it there');
+    expect((await host.panes()).size).toBe(1);
+
+    // A lease whose live pid isn't a server (left by a crash, the pid since reused: here, this test) isn't signalled.
+    writeFileSync(lock, JSON.stringify({ host: hostname(), pid: process.pid, version: 'x', port: 7777, startedAt: Date.now(), beatAt: Date.now() }));
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped AgentK Local and the 1 session(s) in it. They resume at: agent-k-local serve');
     await waitFor(() => host.serverRunning(), (up) => !up, 10000, 'host down');
+    rmSync(lock);
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK Local is not running.');
+
+    // Without services there is nothing for `start` to start.
+    refused = '';
+    try {
+      execFileSync(tsx, [cli, 'start'], { env, stdio: 'pipe' });
+    } catch (e) {
+      refused = String((e as { stderr: Buffer }).stderr);
+    }
+    expect(refused).toContain('No background services run this home');
   }, 60000);
 });

@@ -265,6 +265,7 @@ Design: [`docs/design.md`](extensions/agentk/docs/design.md), an index with one 
 | Command | What it does |
 |---|---|
 | `agent-k-local status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
+| `agent-k-local stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `agent-k-local logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
 | `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
 | `agent-k-local uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |

@@ -22,6 +22,15 @@ server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one
 restarted (`agent-k-local host restart`), which the server's log says. `agent-k-local host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
 the host again at once and resume them all. With the server stopped, they resume when it starts.
+`agent-k-local stop` stops both, the server first, and `agent-k-local start` starts them again.
+Installed services stop through systemd (`systemctl --user stop`) or launchd (`bootout`), since
+both restart a process that is only killed or exits on its own. Then it checks the server's lease:
+a server outside the service (`serve` by hand, or any server without services) gets SIGTERM, but
+only when the lease names this machine and its pid is an `agent-k-local serve` (after a crash the
+pid can be another process's); a lease held on another host is refused. The host goes last:
+its service is stopped, then any host still on the socket (a detached one a server started before
+the services were installed) gets a stop request. The services still start again at the next login (or
+boot, with lingering) or reinstall; `start` starts them sooner.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
 (`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….host.plist`), with `RunAtLoad`
@@ -46,8 +55,8 @@ recovery resumes them in the host (auto-continuing a turn that was cut off). `ag
 uninstall` removes the tmux service too. Removing it ends the tmux server on its socket, which
 every AgentK home on the account shared.
 
-All of this sits behind one interface in `src/server/service.ts` (install, start, restart, state,
-remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.
+All of this sits behind one interface in `src/server/service.ts` (install, start, stop, restart,
+state, remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.
 `servicesFor(home)` uses the installed services only when their `AK_HOME` is exactly this home, so
 a dev server or a second home never acts on another install's services.
 

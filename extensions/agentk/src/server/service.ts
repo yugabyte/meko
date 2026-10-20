@@ -52,6 +52,8 @@ export interface ServiceManager {
   removeLegacyTmux(): void;
   /** Starts a service that isn't running; leaves a running one alone. */
   start(s: Service): void;
+  /** Stops a service until `start`, the next login or a reinstall (its supervisor doesn't bring it back sooner). */
+  stop(s: Service): void;
   state(s: Service): { running: boolean; text: string };
   /** Stops both services (and an old tmux one) and deletes their files. */
   remove(): void;
@@ -59,8 +61,6 @@ export interface ServiceManager {
   bootCheck(): BootCheck;
   /** A command that shows why a service isn't running. */
   statusHint(s: Service): string;
-  /** A command that stops a service until it's started again. */
-  stopHint(s: Service): string;
 }
 
 export type Runner = (cmd: string, args: string[]) => { ok: boolean; out: string; err: string };
@@ -147,6 +147,10 @@ export class SystemdServices implements ServiceManager {
     must(this.run, 'systemctl', ['--user', 'restart', this.id(s)]);
   }
 
+  stop(s: Service): void {
+    must(this.run, 'systemctl', ['--user', 'stop', this.id(s)]);
+  }
+
   state(s: Service): { running: boolean; text: string } {
     // is-active prints the state on stdout and exits non-zero unless it is active.
     const text = this.run('systemctl', ['--user', 'is-active', this.id(s)]).out || 'inactive';
@@ -189,10 +193,6 @@ export class SystemdServices implements ServiceManager {
 
   statusHint(s: Service): string {
     return `systemctl --user status ${this.id(s)}`;
-  }
-
-  stopHint(s: Service): string {
-    return `systemctl --user stop ${this.id(s)}`;
   }
 }
 
@@ -306,6 +306,14 @@ export class LaunchdServices implements ServiceManager {
     else this.bootstrap(s);
   }
 
+  stop(s: Service): void {
+    // KeepAlive restarts a killed job: unload it (`start`, the next login or a reinstall loads it again).
+    this.unload(s);
+    // unload waits 5 s; the server's ExitTimeOut is 15 s.
+    for (let i = 0; i < 150 && this.loaded(s); i++) this.pause(100);
+    if (this.loaded(s)) throw new ServiceError(`${this.id(s)} didn't stop. Check: ${this.statusHint(s)}`);
+  }
+
   state(s: Service): { running: boolean; text: string } {
     const r = this.run('launchctl', ['print', this.target(s)]);
     if (!r.ok) return { running: false, text: 'not loaded' };
@@ -345,11 +353,6 @@ export class LaunchdServices implements ServiceManager {
 
   statusHint(s: Service): string {
     return `launchctl print ${this.target(s)}`;
-  }
-
-  stopHint(s: Service): string {
-    // KeepAlive restarts a job that is only killed: unload it (the next login, or a reinstall, loads it again).
-    return `launchctl bootout ${this.target(s)}`;
   }
 }
 
