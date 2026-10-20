@@ -954,13 +954,18 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await env.core.stop();
     await env.killHost();
     const launches = argvLog(env).length;
+    const core = env.core as unknown as { services: () => unknown; legacyTmuxPanes: () => Promise<Set<string>> };
     const services = (hostInstalled: boolean) => () => ({ legacyTmuxInstalled: () => true, installed: (svc: string) => svc === 'host' && hostInstalled });
-    (env.core as unknown as { services: () => unknown }).services = services(false);
-    await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+    // No host service, or one but this session still in tmux (a tmux version reinstalled after the move).
+    for (const [host, inTmux] of [[false, []], [true, [s.paneName]]] as const) {
+      core.services = services(host);
+      core.legacyTmuxPanes = async () => new Set(inTmux);
+      await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+    }
     expect(argvLog(env).length).toBe(launches);
-    // With the host service installed the install moved off tmux already: the tmux service is a
-    // leftover, and refusing would roll back every update.
-    (env.core as unknown as { services: () => unknown }).services = services(true);
+    // Only a pane this home doesn't know (a deleted session's): the tmux service is a leftover of
+    // the move, and refusing would roll back every update.
+    core.legacyTmuxPanes = async () => new Set(['ak-deleted-session']);
     await env.core.start();
     await waitFor(() => argvLog(env).length, (n) => n > launches, 10000, 'resumed in the host');
   });

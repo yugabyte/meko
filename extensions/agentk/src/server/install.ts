@@ -160,12 +160,13 @@ function installServices(paths: Paths): boolean {
   mkdirSync(paths.logs, { recursive: true }); // launchd opens its log files before starting a job
   // A version before the session host: stop its server, then its tmux service and the Claudes in
   // it, so none runs twice; the new server's recovery resumes them in the session host. With the
-  // host service installed, the tmux service is a leftover of the move off tmux: remove just it,
-  // so the host and its sessions keep running.
+  // host service installed, stop just the server (it may be that version's, which would start its
+  // sessions in tmux again) and the tmux service, so the host and its sessions keep running.
   if (svc.legacyTmuxInstalled()) {
     if (svc.installed('host')) {
+      if (svc.installed('server')) svc.stop('server');
       svc.removeLegacyTmux();
-      ui.ok('tmux', "removed an older version's leftover tmux service");
+      ui.ok('tmux', "removed an older version's tmux service; any session still in it resumes in the session host");
     } else {
       svc.remove();
       ui.ok('tmux', "removed an older version's tmux service; its sessions resume in the session host");
