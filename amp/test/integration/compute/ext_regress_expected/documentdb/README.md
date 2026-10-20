@@ -41,7 +41,7 @@ collation, and amp's builtin `C.UTF-8` orders the argument lists differently fro
 upstream's libc `en_US.UTF-8`. Same root cause as
 `documentdb_test_helpers_1.out`.
 
-## `dynamic_cursor_selection_tests_1.out`, `bson_aggregation_pipeline_tests_geonear_1.out`
+## `dynamic_cursor_selection_tests_pg17_1.out`, `bson_aggregation_pipeline_tests_geonear_1.out`, `bson_geospatial_index_pushdown_tests_1.out`
 
 The 2d/2dsphere GIST operator classes are gated out of the install SQL because
 amp does not ship postgis, so creating a geospatial index fails:
@@ -51,9 +51,10 @@ ERROR:  operator class "documentdb_api_catalog.bson_gist_geometry_ops_2d" does n
 ERROR:  The $geoNear operator needs either a 2d or 2dsphere index, but no such index exists
 ```
 
-These two capture that as the expected behaviour. If amp ever ships postgis and
-the gate is removed, both stop matching and should be deleted rather than
-regenerated.
+The pushdown test also calls postgis's own `st_geomfromewkb`. These capture that
+as the expected behaviour. If amp ever ships postgis and the gate is removed,
+they stop matching and should be deleted rather than regenerated. On PG17 and
+later, 1.0's schedule runs `dynamic_cursor_selection_tests` as `_pg17`.
 
 ## Not blessed: amp's own log lines
 
@@ -64,6 +65,14 @@ extension's own messages, and no upstream expected file contains them. They are
 `normalize_modified.sed` (the hook `bin/diff` provides for running against an
 existing cluster), so they are filtered from both sides. Blessing them would
 freeze one run's LSN into an expected file and fail on the next.
+
+## Not blessed: internal connection strings
+
+documentdb logs the conninfo of its internal connections at DEBUG
+(`executing "..." via connection to "host=localhost port=58050 ... dbname=regression ..."`),
+which names upstream's temp instance in the expected files and the live compute's
+port and `contrib_regression` here. The port changes per run, so `extensions.sh`
+normalizes port and dbname on both sides instead of blessing it.
 
 ## Not blessed: bson output format
 

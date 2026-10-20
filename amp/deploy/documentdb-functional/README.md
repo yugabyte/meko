@@ -1,7 +1,7 @@
 # DocumentDB functional-test gate
 
-Upstream documentdb gates its own PRs on an allowlist of about 10,500
-functional tests. These are the tests from
+Up to 0.116-0, upstream documentdb gated its own PRs on an allowlist of about
+10,500 functional tests. These are the tests from
 [documentdb/functional-tests](https://github.com/documentdb/functional-tests)
 that pass reliably on `documentdb-local`. This directory runs that same gate
 against an amp documentdb endpoint's gateway, which is the path a customer's
@@ -10,18 +10,21 @@ driver or mongosh takes. It is the `/ci amp_deploy_gke_documentdb` suite
 
 ## What runs
 
-The gate comes from the documentdb **release amp ships**, not from upstream's
-`main`. [`run.sh`](run.sh) downloads the `v<version>` source tarball, verifies
-it against a pinned sha256, and takes three things from
+The gate comes from the **0.116-0** release, not from upstream's `main`, while
+the endpoint runs the release amp ships (1.0-0). 1.0 replaced the allowlist with
+a known-failures model: about 50,000 tests, with failing and flaky lists under
+strict xfail. This gate has not been ported to it yet, so it still runs 0.116's
+~10,500 tests against the 1.0 gateway. [`run.sh`](run.sh) downloads the
+`v0.116-0` source tarball through `scripts/safe_curl.sh`, against its pin in
+`downloads_checksum.txt`, and takes three things from
 `documentdb-local/functional-tests/`:
 
 - `config/allowlist.yml`;
 - `config/image.yml`, the functional-tests image, pinned by digest;
 - `tools/functional_gate.py`, upstream's gate tooling.
 
-A documentdb version bump therefore brings its own allowlist and test image.
-Keep `DOCUMENTDB_VERSION` / `DOCUMENTDB_SHA256` in `run.sh` in step with the
-documentdb row in [`deploy/extensions/extensions.yaml`](../extensions/extensions.yaml).
+The three must come from one release: the allowlist's node IDs name tests in the
+suite the image pins. `GATE_VERSION` in `run.sh` sets that release.
 
 Against a deployed controller, `run.sh`:
 

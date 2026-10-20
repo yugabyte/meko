@@ -74,17 +74,17 @@
     },
     {
       "name": "documentdb",
-      "version": "0.116-0",
+      "version": "1.0-0",
       "description": "MongoDB-compatible document store",
       "preload": true,
       "requires": [
         "pgvector",
         "pg_cron"
       ],
-      "imageRevision": 3,
       "settings": {
         "cron.database_name": "documentdb",
-        "documentdb.bg_worker_database_name": "documentdb"
+        "documentdb.bg_worker_database_name": "documentdb",
+        "documentdb.alternate_index_handler_name": "extended_rum"
       }
     }
   ]

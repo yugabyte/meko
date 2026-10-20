@@ -43,7 +43,8 @@ type Extension struct {
 	// Library is the shared-library basename when it differs from Name — the
 	// shared_preload_libraries entry for a Preload extension. Empty means Name.
 	// Comma-separated when one image ships more than one (documentdb's ships
-	// pg_documentdb_core and pg_documentdb); the chart passes it through verbatim.
+	// pg_documentdb_core, pg_documentdb and pg_documentdb_extended_rum); the chart
+	// passes it through verbatim.
 	Library string
 
 	// ImageRef pins a complete image reference instead of deriving the amp-built
@@ -176,8 +177,9 @@ var builtin = []Extension{
 	// documentdb, documentdb_extended_rum). `CREATE EXTENSION documentdb CASCADE`
 	// installs documentdb_core with it, plus pg_cron, tsm_system_rows and vector;
 	// without CASCADE it fails on the first missing one. documentdb_extended_rum
-	// is not a requirement and is created separately, if at all. Preload: true — pg_documentdb_core and pg_documentdb must be in
-	// shared_preload_libraries, so opting in on a live endpoint is a restart. Its
+	// is not a requirement and compute_ctl creates it after documentdb. Preload:
+	// true — pg_documentdb_core, pg_documentdb and pg_documentdb_extended_rum must
+	// be in shared_preload_libraries, so opting in on a live endpoint is a restart. Its
 	// .control ships `superuser = true`, so it is not trusted. Requires pgvector
 	// and pg_cron, which its .control names; tsm_system_rows is also required but
 	// ships inside the compute's Postgres, so it is not a catalog entry. postgis
@@ -189,17 +191,17 @@ var builtin = []Extension{
 	// pg_documentdb is preloaded: the gateway serves nothing until it exists.
 	// Both settings name that database — pg_cron refuses CREATE EXTENSION
 	// anywhere but cron.database_name, and documentdb's background index builds
-	// run in documentdb.bg_worker_database_name. Both are startup-only. Revision
-	// 1 was published from an early recipe that still created the postgis
-	// operator classes; revision 3 is the recipe after the download-checksum
-	// change moved extension.Dockerfile onto safe_curl.sh.
-	{Name: "documentdb", Version: "0.116-0", ImageRevision: 3, Default: false, Preload: true,
+	// run in documentdb.bg_worker_database_name. Both are startup-only. New
+	// indexes go on the extended_rum access method, which compute_ctl creates
+	// (documentdb_extended_rum) because pg_documentdb_extended_rum is preloaded.
+	{Name: "documentdb", Version: "1.0-0", Default: false, Preload: true,
 		Description: "DocumentDB — MongoDB-compatible document store",
-		Library:     "pg_documentdb_core,pg_documentdb",
+		Library:     "pg_documentdb_core,pg_documentdb,pg_documentdb_extended_rum",
 		Requires:    []string{"pgvector", "pg_cron"},
 		Settings: map[string]string{
-			"cron.database_name":                 "documentdb",
-			"documentdb.bg_worker_database_name": "documentdb",
+			"cron.database_name":                      "documentdb",
+			"documentdb.bg_worker_database_name":      "documentdb",
+			"documentdb.alternate_index_handler_name": "extended_rum",
 		}},
 }
 

@@ -543,6 +543,16 @@ running SQL:
   holds the pod un-Ready until the extension exists, so a transient failure
   must not be final. A fork inherits both from its parent. `CASCADE` creates
   documentdb_core, pg_cron, tsm_system_rows and vector.
+- When `pg_documentdb_extended_rum` is preloaded too, as the catalog entry does,
+  the same statement goes on to `CREATE EXTENSION IF NOT EXISTS
+  documentdb_extended_rum CASCADE`. That creates the `extended_rum` index access
+  method, which the catalog's `documentdb.alternate_index_handler_name` selects
+  for new indexes, so without it no index can be built. It has to follow
+  documentdb, whose types its install script uses, and its library refuses to
+  load unless preloaded. Both run in one implicit transaction, as upstream
+  creates them, so a failure of either leaves neither and the gateway stays
+  un-Ready while the step retries. The pg_regress run pins the handler back to
+  `rum`, since upstream's `basic_schedule` never creates `documentdb_extended_rum`.
 - It is a database of its own so documentdb's catalog and collections stay out
   of the user's `postgres`.
 - The catalog's documentdb entry sets `cron.database_name` and
@@ -571,6 +581,14 @@ of truth, `TestEngineTableMatchesManifest` asserts
 [`engines.go`](../../controller/internal/extensions/engines.go) matches it, and
 and the UI's bundled fallback catalog is generated from it (see "Adding a new
 extension" below).
+
+**Usage telemetry.** From 1.0, upstream's `documentdb-local` image reports
+anonymous usage to Scarf by default, from its entrypoint script only (its
+`PRIVACY.md`). amp builds the extension and gateway from the source tarball and
+never runs that image, so nothing amp ships sends it. Anything that does run
+`ghcr.io/documentdb/documentdb/documentdb-local` must set
+`DOCUMENTDB_USAGE_TELEMETRY=false`. The gateway's separate OpenTelemetry export
+is off unless configured.
 
 ### documentdb and postgis
 
@@ -860,8 +878,9 @@ example.
 - **DocumentDB functional-test gate** — `/ci amp_deploy_gke_documentdb` runs
   upstream documentdb's own PR gate against the deployed gateway
   ([`deploy/documentdb-functional/`](../../deploy/documentdb-functional/README.md)).
-  That is the ~10,500 allowlisted functional tests, taken from the release amp
-  ships, minus amp's reasoned exclusions. It passes only if every gated test
+  That is 0.116-0's ~10,500 allowlisted functional tests, run against the 1.0-0
+  gateway until the gate is ported to 1.0's known-failures model, minus amp's
+  reasoned exclusions. It passes only if every gated test
   passes.
 
 ## Code anchors

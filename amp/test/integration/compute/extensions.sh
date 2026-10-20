@@ -950,6 +950,10 @@ MK
           cat "$REG_SRC/bin/normalize.sed"
           echo '/^DEBUG:  \[YBAMP_SMGR\]/d'
           echo '/^LOG:  ConsoleURL not set, skipping forwarding$/d'
+          # documentdb's internal connections log their conninfo, which names
+          # upstream's temp instance (port=58050 dbname=regression) in the
+          # expected files and this run's compute here.
+          echo 's/via connection to "host=localhost port=[0-9]+ user=REGRESSION_USER dbname=[A-Za-z0-9_]+ /via connection to "host=localhost port=PORT user=REGRESSION_USER dbname=DB /g'
         } >"$REG_SRC/bin/normalize_modified.sed"
         echo ">>> regress normalize ($EXT_NAME): amp log lines filtered from both sides"
       fi

@@ -42,7 +42,8 @@ func TestResolveBranchExtensionsResolvesThroughTheCatalog(t *testing.T) {
 }
 
 // documentdb's shared_preload_libraries entry is NOT its catalog name: its one
-// image ships pg_documentdb_core.so and pg_documentdb.so, so preloading
+// image ships pg_documentdb_core.so, pg_documentdb.so and
+// pg_documentdb_extended_rum.so, so preloading
 // "documentdb" is a `could not access file "documentdb"` FATAL at postmaster
 // start. This assembler is the only producer of the deploy spec, so Library has
 // to survive it — and it silently did not once already: the refactor that moved
@@ -65,12 +66,13 @@ func TestResolveBranchExtensionsCarriesThePreloadLibrary(t *testing.T) {
 	want := []deploy.Extension{
 		{
 			Name:    "documentdb",
-			Image:   "quay.io/yugabyte/amp-ext-documentdb:0.116-0-r3",
+			Image:   "quay.io/yugabyte/amp-ext-documentdb:1.0-0",
 			Preload: true,
-			Library: "pg_documentdb_core,pg_documentdb",
+			Library: "pg_documentdb_core,pg_documentdb,pg_documentdb_extended_rum",
 			Settings: map[string]string{
-				"cron.database_name":                 "documentdb",
-				"documentdb.bg_worker_database_name": "documentdb",
+				"cron.database_name":                      "documentdb",
+				"documentdb.bg_worker_database_name":      "documentdb",
+				"documentdb.alternate_index_handler_name": "extended_rum",
 			},
 		},
 		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2"},

@@ -206,16 +206,10 @@ extensions:
 
   - name: documentdb
     description: MongoDB-compatible document store
-    # 0.116-0 is the current release and the first line supporting PG18, which
-    # upstream calls its paved-road default — so it builds against the forked
-    # PG18 ABI base with no back-porting.
-    version: "0.116-0"
-    # 0.116-0 (revision 1) was published from an early recipe that still created
-    # the postgis GIST operator classes, so CREATE EXTENSION failed on it.
-    # Revision 3: the download-checksum change (extension.Dockerfile fetching
-    # through safe_curl.sh) changed the recipe revision 2 was built from.
-    image_revision: 3
-    url: https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
+    # The 1.0 GA release. Only a GA tag goes here: the 1.0 RCs install the same
+    # extversion, 1.0-0, with no supported upgrade from an RC to GA.
+    version: "1.0-0"
+    url: https://github.com/documentdb/documentdb/archive/refs/tags/v1.0-0.tar.gz
     # Drops postgis from `requires` AND gates the postgis-dependent geospatial
     # GIST op classes out of the install SQL (the `requires` line alone is not
     # enough — see compute/architecture/extensions.md), and points the build at
@@ -225,7 +219,7 @@ extensions:
     # documentdb_extended_rum. `CREATE EXTENSION documentdb CASCADE` installs
     # documentdb_core and the requirements below with it; without CASCADE it
     # fails on the first missing one. documentdb_extended_rum is not a
-    # requirement and is created separately, if at all.
+    # requirement: compute_ctl creates it separately, after documentdb.
     control: documentdb
     # documentdb.control names these in its own `requires`, so CREATE EXTENSION
     # documentdb fails with "extension pg_cron is not available" unless they are
@@ -236,30 +230,40 @@ extensions:
     # documentdb.control ships `superuser = true`, so CREATE EXTENSION is
     # superuser-only — not trusted.
     trusted: false
-    # shared_preload_libraries must carry pg_documentdb_core and pg_documentdb
-    # (upstream also requires pg_cron there, which the engine bundle brings), so
-    # opting in on a live endpoint needs a postmaster restart.
+    # shared_preload_libraries must carry pg_documentdb_core, pg_documentdb and
+    # pg_documentdb_extended_rum (upstream also requires pg_cron there, which the
+    # engine bundle brings), so opting in on a live endpoint needs a postmaster
+    # restart.
     preload: true
     # The libraries to preload, which are NOT the CREATE EXTENSION name: this one
-    # image ships pg_documentdb_core.so and pg_documentdb.so, and preloading
-    # "documentdb" is a `could not access file "documentdb"` FATAL at startup.
-    # Comma-separated because shared_preload_libraries takes a list and this row
-    # needs two of them.
-    library: pg_documentdb_core,pg_documentdb
+    # image ships pg_documentdb_core.so, pg_documentdb.so and
+    # pg_documentdb_extended_rum.so, and preloading "documentdb" is a
+    # `could not access file "documentdb"` FATAL at startup. Comma-separated
+    # because shared_preload_libraries takes a list. pg_documentdb_extended_rum
+    # errors out of _PG_init unless it is preloaded, and compute_ctl creates its
+    # extension only when it is.
+    library: pg_documentdb_core,pg_documentdb,pg_documentdb_extended_rum
     # Server settings an endpoint mounting it starts with; the controller
     # catalog's Settings mirror these. compute_ctl creates the extension in a
     # `documentdb` database whenever pg_documentdb is preloaded — the gateway
     # serves nothing until it exists — and both name that database: pg_cron
     # refuses CREATE EXTENSION anywhere but cron.database_name, and documentdb's
     # background index builds run in documentdb.bg_worker_database_name.
+    # alternate_index_handler_name builds new indexes on the extended_rum access
+    # method, as upstream's own setup does; that access method exists only once
+    # documentdb_extended_rum is created.
     settings:
       cron.database_name: documentdb
       documentdb.bg_worker_database_name: documentdb
+      documentdb.alternate_index_handler_name: extended_rum
     prep: ""
     dockerfile: ""
     # A bare `make` also descends into internal/pg_documentdb_distributed, which
     # wants Citus. install-documentdb builds and installs just the three we ship.
-    make_targets: install-documentdb
+    # DISABLE_STRICT_CFLAGS is upstream's own switch: from 1.0 it builds with
+    # -Werror -Wstrict-prototypes, and the forked server's storage/ipc.h declares
+    # pg_signal_backend_hook_type with an empty parameter list.
+    make_targets: install-documentdb DISABLE_STRICT_CFLAGS=yes
     # Upstream's own pg_regress suite. The patch names the tests in REGRESS and
     # puts the extension loads in REGRESS_OPTS, so the pgxs driver can run it at
     # the live compute. REGRESS is derived from upstream's basic_schedule (104
@@ -299,3 +303,6 @@ extensions:
         # REGRESS_OPTS pins to contrib_regression.
         - cron.database_name=contrib_regression
         - documentdb.bg_worker_database_name=contrib_regression
+        # basic_schedule runs on the built-in rum handler and never creates
+        # documentdb_extended_rum, so undo the row's extended_rum setting.
+        - documentdb.alternate_index_handler_name=rum

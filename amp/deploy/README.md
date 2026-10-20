@@ -591,8 +591,8 @@ deploy/extensions/build.sh --push pgvector   # build + push just pgvector
 The chart mounts them via `endpoint.extensions`
 (`{ name, image, preload, library }` — `library` is the
 `shared_preload_libraries` entry when it differs from `name`, as documentdb's
-one image ships `pg_documentdb_core.so` and `pg_documentdb.so` and has no
-`documentdb.so`),
+one image ships `pg_documentdb_core.so`, `pg_documentdb.so` and
+`pg_documentdb_extended_rum.so` and has no `documentdb.so`),
 rendering one read-only ImageVolume per entry at `/extensions/<name>` and
 deriving `extension_control_path` / `dynamic_library_path` (and any preload
 entry for `EXTRA_SHARED_PRELOAD_LIBRARIES`) from the list. An image amp does **not**

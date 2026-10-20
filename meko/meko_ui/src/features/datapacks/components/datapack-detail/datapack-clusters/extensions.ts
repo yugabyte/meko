@@ -26,7 +26,7 @@ export const AMP_EXTENSIONS: AmpExtension[] = [
     description: "SQL Server (T-SQL) compatibility functions",
   },
   { name: "age", version: "1.8.0", description: "Apache AGE — openCypher graph" },
-  { name: "documentdb", version: "0.116-0", description: "MongoDB-compatible document store" },
+  { name: "documentdb", version: "1.0-0", description: "MongoDB-compatible document store" },
 ];
 
 export type DbEngine = {

@@ -315,7 +315,7 @@ func TestImageTag(t *testing.T) {
 		}
 	}
 	c := NewCatalog("quay.io/yugabyte")
-	if got := c.Resolve([]string{"documentdb"})[0].Image; got != "quay.io/yugabyte/amp-ext-documentdb:0.116-0-r3" {
+	if got := c.Resolve([]string{"documentdb"})[0].Image; got != "quay.io/yugabyte/amp-ext-documentdb:1.0-0" {
 		t.Errorf("documentdb resolves to %q", got)
 	}
 }

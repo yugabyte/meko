@@ -2,11 +2,11 @@
 # Run upstream documentdb's functional-test gate against an amp documentdb
 # endpoint's gateway — the `/ci amp_deploy_gke_documentdb` suite.
 #
-# Upstream gates its own PRs on an allowlist of the functional tests
+# Upstream gated its PRs up to 0.116-0 on an allowlist of the functional tests
 # (github.com/documentdb/functional-tests) that pass reliably on
-# documentdb-local. This runs that same gate, with upstream's own tooling, at
-# the release amp ships (the documentdb tarball's documentdb-local/
-# functional-tests/), against the gateway a customer would reach:
+# documentdb-local. This runs that gate, with upstream's own tooling from the
+# 0.116-0 tarball's documentdb-local/functional-tests/, against the gateway a
+# customer would reach on the release amp ships:
 #
 #   1. create an engine:"documentdb" cluster and an endpoint through the amp API,
 #      and wait for its gateway: compute_ctl creates the extension in a
@@ -45,11 +45,14 @@ PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
 POOL_NAME="pool-smoke"
 CLUSTER_NAME="docfunc-$(date +%s)"
 
-# The documentdb release amp builds (deploy/extensions/extensions.yaml) carries
-# the gate it was released against. Pinned like the extension source.
-DOCUMENTDB_VERSION="0.116-0"
-DOCUMENTDB_URL="https://github.com/documentdb/documentdb/archive/refs/tags/v${DOCUMENTDB_VERSION}.tar.gz"
-DOCUMENTDB_SHA256="09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d"
+# The gate kit (allowlist, pinned test image, gate tool) comes from 0.116-0's
+# tarball even though amp ships 1.0-0 (deploy/extensions/extensions.yaml): 1.0
+# replaced the allowlist with a known-failures model over the whole ~50k-test
+# suite, which this script has not been ported to. The three files must come
+# from one release, since the allowlist's node IDs name tests in the suite the
+# image pins. The tarball is pinned in downloads_checksum.txt.
+GATE_VERSION="0.116-0"
+GATE_URL="https://github.com/documentdb/documentdb/archive/refs/tags/v${GATE_VERSION}.tar.gz"
 
 BASE="http://127.0.0.1:${PF_PORT}/api/v1"
 work=$(mktemp -d)
@@ -76,13 +79,12 @@ cleanup() {
 trap cleanup EXIT
 
 # --- 0. the release's gate, verified ---
-log "fetching documentdb v$DOCUMENTDB_VERSION (functional-test gate)"
-curl -fsSL --retry 3 -o "$work/src.tgz" "$DOCUMENTDB_URL" || die "download failed: $DOCUMENTDB_URL"
-echo "$DOCUMENTDB_SHA256  $work/src.tgz" | sha256sum -c - >/dev/null || die "checksum mismatch for $DOCUMENTDB_URL"
+log "fetching documentdb v$GATE_VERSION (functional-test gate)"
+sh "$here/../../scripts/safe_curl.sh" fetch "$GATE_URL" "$work/src.tgz" || die "verified download failed: $GATE_URL"
 mkdir -p "$work/src"
 tar -xzf "$work/src.tgz" -C "$work/src" --strip-components=1 \
   --wildcards '*/documentdb-local/functional-tests/config/*' '*/documentdb-local/functional-tests/tools/*' ||
-  die "the v$DOCUMENTDB_VERSION tarball has no documentdb-local/functional-tests"
+  die "the v$GATE_VERSION tarball has no documentdb-local/functional-tests"
 FT="$work/src/documentdb-local/functional-tests"
 python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --user pyyaml || die "PyYAML unavailable"
 IMAGE=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["image"])' "$FT/config/image.yml")

@@ -96,7 +96,7 @@ SMOKE_DOCUMENTDB_ALLOWED_CIDRS="${SMOKE_DOCUMENTDB_ALLOWED_CIDRS:-}"
 # verifies the gateway's certificate against the endpoint's CA.
 COMPUTE_TLS="${COMPUTE_TLS:-disable}"
 COMPUTE_TLS_SERVICE_DNS="${COMPUTE_TLS_SERVICE_DNS:-1}"
-DOCUMENTDB_CLIENT_IMAGE="${DOCUMENTDB_CLIENT_IMAGE:-ghcr.io/documentdb/functional-tests@sha256:79ed3d433bc2664655a31064a66eee3bef3cc2a8b4eabfaab3e3ef62d44ce3ba}"
+DOCUMENTDB_CLIENT_IMAGE="${DOCUMENTDB_CLIENT_IMAGE:-ghcr.io/documentdb/functional-tests@sha256:1f56281e601c2eeb5698556258aa9633792bc070be454653f8d2717030e114f9}"
 # Path to psql INSIDE the endpoint pod (PG v18 install; not needed on the host).
 PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
 KEEP="${KEEP:-0}"
@@ -1078,8 +1078,8 @@ SQL
   out=$(kubectl -n "$NS" exec -i "$DPOD" -c endpoint -- \
     "$PSQL_BIN" -h 127.0.0.1 -p 55433 -U cloud_admin -d documentdb -tA -v ON_ERROR_STOP=1 \
     -c "SELECT 'EXT:'||extversion FROM pg_extension WHERE extname = 'documentdb'" 2>&1)
-  echo "$out" | grep -q '^EXT:0.116-0$' &&
-    ok "documentdb 0.116-0 created by compute_ctl in database documentdb" ||
+  echo "$out" | grep -q '^EXT:1.0-0$' &&
+    ok "documentdb 1.0-0 created by compute_ctl in database documentdb" ||
     bad "documentdb extension not in database documentdb (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   # cluster_ip: the client reaches the gateway through a port-forward to the

@@ -66,7 +66,8 @@ fn extension_queries(libs: &str) -> Vec<String> {
 }
 
 /// Extensions that live in a database of their own, keyed like
-/// [`PRELOADED_EXTENSIONS`] by a preloaded library: `(library, database, extension)`.
+/// [`PRELOADED_EXTENSIONS`] by a preloaded library:
+/// `(library, database, extension, companions)`.
 ///
 /// documentdb is the one. Its gateway sidecar serves nothing until the extension
 /// exists (it retries its startup on `3F000` and never binds its port), so an
@@ -77,7 +78,26 @@ fn extension_queries(libs: &str) -> Vec<String> {
 /// database (the controller's catalog sets both): `CASCADE` creates pg_cron in
 /// it, which pg_cron refuses anywhere else, and documentdb's background index
 /// builds run there.
-const DATABASE_EXTENSIONS: &[(&str, &str, &str)] = &[("pg_documentdb", "documentdb", "documentdb")];
+///
+/// `companions` are `(library, extension)` pairs created in the same database,
+/// after the extension, each only when its own library is preloaded too.
+/// documentdb_extended_rum's install script refers to documentdb's types and
+/// functions, so it must follow documentdb, and its library errors out of
+/// `_PG_init` unless preloaded. It creates the `extended_rum` access method the
+/// catalog's `documentdb.alternate_index_handler_name` selects, without which no
+/// new index can be built.
+type DatabaseExtensionEntry = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+const DATABASE_EXTENSIONS: &[DatabaseExtensionEntry] = &[(
+    "pg_documentdb",
+    "documentdb",
+    "documentdb",
+    &[("pg_documentdb_extended_rum", "documentdb_extended_rum")],
+)];
 
 /// A database and the extension to create in it, for [`DATABASE_EXTENSIONS`].
 #[derive(Debug, PartialEq, Eq)]
@@ -93,6 +113,11 @@ pub struct DatabaseExtension {
     /// in". The statement sets `public` for itself, which is where a user's own
     /// `CREATE EXTENSION ... CASCADE` would put them. documentdb's own schemas are
     /// fixed by its control files.
+    ///
+    /// The companions follow in the same string, so they run in one implicit
+    /// transaction with it, as upstream's own setup creates them: a companion
+    /// that fails rolls back the extension too, and the retry keeps the gateway
+    /// un-Ready rather than serving a database where no index can be built.
     pub create: String,
 }
 
@@ -111,12 +136,20 @@ fn database_extensions(libs: &str) -> Vec<DatabaseExtension> {
     let preloaded: Vec<&str> = libs.split(',').map(str::trim).collect();
     DATABASE_EXTENSIONS
         .iter()
-        .filter(|(library, _, _)| preloaded.contains(library))
-        .map(|(_, database, extension)| DatabaseExtension {
-            database,
-            create: format!(
+        .filter(|(library, _, _, _)| preloaded.contains(library))
+        .map(|(_, database, extension, companions)| {
+            let mut create = format!(
                 "SET search_path = public; CREATE EXTENSION IF NOT EXISTS {extension} CASCADE"
-            ),
+            );
+            for (_, companion) in companions
+                .iter()
+                .filter(|(library, _)| preloaded.contains(library))
+            {
+                create.push_str(&format!(
+                    "; CREATE EXTENSION IF NOT EXISTS {companion} CASCADE"
+                ));
+            }
+            DatabaseExtension { database, create }
         })
         .collect()
 }
@@ -1315,6 +1348,24 @@ mod tests {
         assert!(database_extensions("yb_amp,pg_documentdb_core").is_empty());
         // Names, not substrings.
         assert!(database_extensions("yb_amp,pg_documentdb_extended_rum").is_empty());
+    }
+
+    /// documentdb_extended_rum follows documentdb in the same statement, and only
+    /// when its library is preloaded: its `_PG_init` refuses to run otherwise.
+    #[test]
+    fn documentdb_extended_rum_is_created_after_documentdb_when_preloaded() {
+        assert_eq!(
+            database_extensions(
+                "yb_amp,pg_cron,pg_documentdb_core,pg_documentdb,pg_documentdb_extended_rum"
+            ),
+            vec![DatabaseExtension {
+                database: "documentdb",
+                create: "SET search_path = public; \
+                         CREATE EXTENSION IF NOT EXISTS documentdb CASCADE; \
+                         CREATE EXTENSION IF NOT EXISTS documentdb_extended_rum CASCADE"
+                    .to_string(),
+            }]
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ WORKDIR /src
 # The patch makes the gateway serve every certificate in its cert file, not just
 # the leaf, as Postgres does: a leaf issued through an intermediate fails at a
 # client that trusts only the root.
-ARG DOCUMENTDB_VERSION=0.116-0
+ARG DOCUMENTDB_VERSION=1.0-0
 RUN --mount=type=bind,source=downloads_checksum.txt,target=/safe_curl/downloads_checksum.txt \
     --mount=type=bind,source=scripts/safe_curl.sh,target=/safe_curl/scripts/safe_curl.sh \
     --mount=type=bind,source=compute/image/patches/documentdb-gateway-cert-chain.patch,target=/patches/documentdb-gateway-cert-chain.patch \

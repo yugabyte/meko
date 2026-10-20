@@ -69,6 +69,8 @@ d950bc29155f31017567e23a31d268ff672e98276c0e9d062512fb7870351f03  https://github
 0bcb960953db2d139535d1a4deb7e66264015bfd82937a4c6d11dd5433f7b499  https://api.github.com/repos/HexaCluster/hexabridge-ybamp/tarball/4f1bb16db442d8b3fe66246bc9c1f0ad79ed949a
 f8f91063cb3f511d8e4eb8a2b54ae282d833b961deca9e4e622c4b63953d54f3  https://api.github.com/repos/HexaCluster/hexabridge-mssql-ybamp/tarball/d0b159b31fb5f71d9ebb9f9da6ea1871df8f205c
 c9036f9fb6fe545aa20e333743c661810966288cda9922ac89f4d82d9ee6e99b  https://github.com/apache/age/archive/refs/tags/PG18/v1.8.0-rc0.tar.gz
+e5a7313a50dcc0e9d69fecf7d39f140fa6f7877c37951f54d8900eb7de0edfb9  https://github.com/documentdb/documentdb/archive/refs/tags/v1.0-0.tar.gz
+# 0.116-0: the functional-test gate kit (deploy/documentdb-functional/run.sh).
 09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d  https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
 
 # yugaware Helm charts a foundation deploy may name — the amp-foundation-gke

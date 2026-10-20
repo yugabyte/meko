@@ -247,9 +247,10 @@ tree="$(docker export "$cid" | tar -tf -)"
 # equal the image version (pg_cron ships pg_cron--1.0.sql + upgrade scripts, not
 # pg_cron--1.6.7.sql) — so match any versioned SQL rather than a pinned name.
 # The .so is named for the control basename only when the image ships exactly
-# one. documentdb's ships pg_documentdb_core.so and pg_documentdb.so and no
-# documentdb.so — which is precisely why it sets `library` — so assert the
-# libraries that field names instead, or this fails on a correctly built image.
+# one. documentdb's ships pg_documentdb_core.so, pg_documentdb.so and
+# pg_documentdb_extended_rum.so and no documentdb.so — which is precisely why it
+# sets `library` — so assert the libraries that field names instead, or this
+# fails on a correctly built image.
 want=("share/postgresql/extension/${control}.control")
 if [ -n "$library" ]; then
   IFS=',' read -ra libs <<<"$library"

@@ -1,17 +1,18 @@
-diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/Makefile.cflags ddb-new/Makefile.cflags
---- a/Makefile.cflags	2026-08-21 13:29:36.000000000 -0700
-+++ b/Makefile.cflags	2026-09-04 22:43:07.210588484 -0700
-@@ -1,6 +1,8 @@
+diff -u a/Makefile.cflags b/Makefile.cflags
+--- a/Makefile.cflags	2026-10-19 15:41:59.033453386 -0700
++++ b/Makefile.cflags	2026-10-19 15:42:10.759442543 -0700
+@@ -1,7 +1,9 @@
  
  
+ PG_CONFIG ?= pg_config
 -LIBBSON := $(shell pkg-config --cflags libbson-static-1.0)
 +# amp: the ABI base installs libbson under /usr/local (ENABLE_MONGOC=OFF), which
 +# ships no .pc file.
 +LIBBSON := -pthread -DBSON_STATIC -isystem /usr/local/include/libbson-1.0
  
- DOCUMENTDB_CORE_DIR = $(OSS_SRC_DIR)/pg_documentdb_core
- DOCUMENTDB_DIR = $(OSS_SRC_DIR)/pg_documentdb
-@@ -14,6 +16,14 @@
+ OSS_POSTGRES_MAJOR_VERSION := $(firstword $(subst ., ,$(word 2,$(shell $(PG_CONFIG) --version))))
+ 
+@@ -25,6 +27,14 @@
  PG_CPPFLAGS = $(LIBBSON) -I$(libpq_srcdir) -Isrc -Iinclude -Ibuild/include/
  PG_LDFLAGS = $(shell pkg-config --static --libs --cflags libbson-static-1.0) -L/usr/lib
  PG_LDFLAGS += -Wl,-rpath=$(shell $(PG_CONFIG) --pkglibdir)
@@ -26,7 +27,7 @@ diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/Makefile
  
  ifeq ($(USE_DOCUMENTDB_CORE),1)
  DOCUMENTDB_CORE_LIB = $(DOCUMENTDB_CORE_DIR)/pg_documentdb_core.so
-@@ -159,4 +169,6 @@
+@@ -170,4 +180,6 @@
  EXTENSION_SQL_ONLY_DEFINES += -D__CORE_SCHEMA__=$(CORE_SCHEMA_NAME)
  EXTENSION_SQL_ONLY_DEFINES += -D__CORE_SCHEMA_V2__=$(CORE_SCHEMA_NAME_V2)
  
@@ -34,9 +35,9 @@ diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/Makefile
 +# amp: gates out the postgis-dependent geospatial GIST op classes in
 +# documentdb--0.24-0.sql; amp does not ship postgis.
 +SQL_DEFINES = $(EXTENSION_SQL_ONLY_DEFINES) -D__AMP_NO_POSTGIS__
-diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb/documentdb.control ddb-new/pg_documentdb/documentdb.control
---- a/pg_documentdb/documentdb.control	2026-08-21 13:29:36.000000000 -0700
-+++ b/pg_documentdb/documentdb.control	2026-09-04 22:43:07.210588484 -0700
+diff -u a/pg_documentdb/documentdb.control b/pg_documentdb/documentdb.control
+--- a/pg_documentdb/documentdb.control	2026-10-19 15:41:58.411453939 -0700
++++ b/pg_documentdb/documentdb.control	2026-10-19 15:41:59.930452588 -0700
 @@ -3,4 +3,5 @@
  module_pathname = '$libdir/pg_documentdb'
  relocatable = false
@@ -44,9 +45,9 @@ diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_docum
 -requires = 'documentdb_core, pg_cron, tsm_system_rows, vector, postgis'
 +# amp: postgis is not shipped — see documentdb-no-postgis.patch.
 +requires = 'documentdb_core, pg_cron, tsm_system_rows, vector'
-diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb/sql/documentdb--0.24-0.sql ddb-new/pg_documentdb/sql/documentdb--0.24-0.sql
---- a/pg_documentdb/sql/documentdb--0.24-0.sql	2026-08-21 13:29:36.000000000 -0700
-+++ b/pg_documentdb/sql/documentdb--0.24-0.sql	2026-09-04 22:43:07.226588470 -0700
+diff -u a/pg_documentdb/sql/documentdb--0.24-0.sql b/pg_documentdb/sql/documentdb--0.24-0.sql
+--- a/pg_documentdb/sql/documentdb--0.24-0.sql	2026-10-19 15:41:58.489453870 -0700
++++ b/pg_documentdb/sql/documentdb--0.24-0.sql	2026-10-19 15:41:59.930452588 -0700
 @@ -46,10 +46,28 @@
  #include "udfs/query/bson_dollar_geospatial--0.10-0.sql"
  #include "operators/bson_geospatial_operators--0.16-0.sql"
@@ -76,9 +77,9 @@ diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_docum
  
  
  /*
-diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb/src/test/regress/Makefile ddb-new/pg_documentdb/src/test/regress/Makefile
---- a/pg_documentdb/src/test/regress/Makefile	2026-08-21 13:29:36.000000000 -0700
-+++ b/pg_documentdb/src/test/regress/Makefile	2026-09-04 22:43:07.211588484 -0700
+diff -u a/pg_documentdb/src/test/regress/Makefile b/pg_documentdb/src/test/regress/Makefile
+--- a/pg_documentdb/src/test/regress/Makefile	2026-10-19 15:41:58.748453640 -0700
++++ b/pg_documentdb/src/test/regress/Makefile	2026-10-19 15:42:10.786442518 -0700
 @@ -1,7 +1,28 @@
  
  BASEPATH:=../../../
@@ -111,7 +112,7 @@ diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_docum
  
 @@ -13,6 +34,18 @@
  
- pg_major_version := $(shell $(PG_CONFIG) --version | awk -F' ' '{ print $$2 }' | awk -F'.' '{ print $$1 }' | awk -F'r' '{ print $$1 }')
+ pg_major_version := $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
  
 +# amp: the full basic_schedule, as the test list the pgxs driver reads. Derived
 +# from upstream's schedule rather than copied, so a version bump that adds or
@@ -128,9 +129,9 @@ diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_docum
  EXTENSIONLOAD :=  --load-extension=tsm_system_rows --load-extension=pg_cron --load-extension=vector --load-extension=postgis --load-extension=documentdb_core --load-extension=documentdb
  
  MAKEFILE_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
-diff -u -r '--exclude=build' '--exclude=.deps' '--exclude=log' ddb-orig/pg_documentdb_core/Makefile ddb-new/pg_documentdb_core/Makefile
---- a/pg_documentdb_core/Makefile	2026-08-21 13:29:36.000000000 -0700
-+++ b/pg_documentdb_core/Makefile	2026-09-04 22:43:07.211588484 -0700
+diff -u a/pg_documentdb_core/Makefile b/pg_documentdb_core/Makefile
+--- a/pg_documentdb_core/Makefile	2026-10-19 15:41:58.320454020 -0700
++++ b/pg_documentdb_core/Makefile	2026-10-19 15:41:59.930452588 -0700
 @@ -26,12 +26,22 @@
  # compilation configuration
  include $(OSS_SRC_DIR)/Makefile.cflags
