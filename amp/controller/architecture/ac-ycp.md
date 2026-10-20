@@ -215,6 +215,18 @@ address alone is not evidence — it is set at create and never cleared, so befo
 endpoint left in that state past `StuckAfter` is stuck, which degrades the
 environment; the reason stays on the row.
 
+An endpoint with no address whose `create_task` has `failed` is `error` with the
+task's error, not `provisioning` (CLOUDGA-37682). The controller records the row
+before deploying and keeps it until its failed-create sweep reclaims it, so the
+address cannot tell a create still running from one that is over; `create_task` is
+the task that created the endpoint, whichever kind — a `create_endpoint`, or the
+`create_cluster` or `branch` that made a writer — read from the task log on every
+list. The agent reports it as the row's `Failure`, which degrades the environment on
+that tick. Once the sweep removes the row the agent creates the endpoint again. An
+endpoint with an address is judged by its health even if its create task later
+failed, and a controller that predates `create_task` leaves the row `provisioning`
+until it goes stuck.
+
 `health` is absent when the controller predates it, runs a deployer with no pods to
 read, or failed to read them, and the agent cannot tell those apart. So an endpoint
 that has reported a verdict keeps it through a tick without one — otherwise one

@@ -125,6 +125,42 @@ func (s *MemStore) ActiveByKind(_ context.Context, kind string) (*Task, error) {
 	return nil, nil
 }
 
+// EndpointCreateTasks mirrors PgStore's. s.order is created_at order, so a later
+// task naming the same endpoint replaces an earlier one: newest wins. The arg is
+// matched as the exact text PgStore compares, not parsed, so the two agree on an
+// id written in any other form.
+func (s *MemStore) EndpointCreateTasks(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]*Task, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]uuid.UUID, len(ids))
+	for _, id := range ids {
+		want[id.String()] = id
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[uuid.UUID]*Task{}
+	for _, tid := range s.order {
+		t := s.tasks[tid]
+		for _, sid := range t.StepIDs {
+			st := s.stepsByID[sid]
+			if st == nil || st.Kind != StepCreateEndpoint {
+				continue
+			}
+			var args struct {
+				EndpointID string `json:"endpoint_id"`
+			}
+			if json.Unmarshal(st.Args, &args) != nil {
+				continue
+			}
+			if id, ok := want[args.EndpointID]; ok {
+				out[id] = cloneTask(t)
+			}
+		}
+	}
+	return out, nil
+}
+
 // Candidates mirrors PgStore's: pending tasks, plus running ones whose execution
 // lease nobody holds, oldest first. The lock table it consults is this store's
 // own, the way the real one lives in the same database as the tasks.

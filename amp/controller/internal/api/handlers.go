@@ -1268,6 +1268,7 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
 	out := endpointToAPI(ep, c.documentDBGatewayReachable(branchExts, ep))
 	out.Health = c.endpointHealth(ctx, []core.Endpoint{ep})[ep.ID]
+	out.CreateTask = c.endpointCreateTasks(ctx, []core.Endpoint{ep})[ep.ID]
 	return GetEndpoint200JSONResponse(out), nil
 }
 
@@ -1333,10 +1334,12 @@ func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRe
 	// One lookup for the page: every endpoint here is on the same branch.
 	branchExts := c.branchExtensions(ctx, request.PoolId, request.ClusterId, request.BranchId)
 	health := c.endpointHealth(ctx, endpoints)
+	created := c.endpointCreateTasks(ctx, endpoints)
 	out := make([]Endpoint, 0, len(endpoints))
 	for _, e := range endpoints {
 		ep := endpointToAPI(e, c.documentDBGatewayReachable(branchExts, e))
 		ep.Health = health[e.ID]
+		ep.CreateTask = created[e.ID]
 		out = append(out, ep)
 	}
 	return ListEndpoints200JSONResponse(EndpointList{Endpoints: out, Total: total, Count: len(out)}), nil
@@ -2157,6 +2160,35 @@ func (c *Controllers) endpointHealth(ctx context.Context, eps []core.Endpoint) m
 		}
 		reason := h.Reason
 		out[e.ID] = &EndpointHealth{Status: NotReady, Reason: &reason}
+	}
+	return out
+}
+
+// endpointCreateTasks reads the task that created each endpoint, in one query.
+// Like endpointHealth it returns nil when the read fails: absent means unknown,
+// and failing the list over it would hide every endpoint to report on one.
+func (c *Controllers) endpointCreateTasks(ctx context.Context, eps []core.Endpoint) map[uuid.UUID]*EndpointCreateTask {
+	if c.tasks == nil || len(eps) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(eps))
+	for i, e := range eps {
+		ids[i] = e.ID
+	}
+	got, err := c.tasks.EndpointCreateTasks(ctx, ids)
+	if err != nil {
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "endpoint create tasks unreadable", slog.String("error", err.Error()))
+		return nil
+	}
+	out := make(map[uuid.UUID]*EndpointCreateTask, len(got))
+	for id, t := range got {
+		out[id] = &EndpointCreateTask{
+			Id:        t.ID,
+			Kind:      t.Kind,
+			Status:    TaskStatus(t.Status),
+			Error:     t.Error,
+			ErrorCode: t.ErrorCode,
+		}
 	}
 	return out
 }

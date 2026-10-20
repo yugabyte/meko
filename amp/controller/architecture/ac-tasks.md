@@ -67,7 +67,10 @@ sketch in §8.1 of the high-level doc):
   task is created; `result` and `status` are updated as it runs, and `started_at`
   (migration 0014) is stamped each time an attempt starts — `updated_at` is
   rewritten by every transition, so it is the only record of when a step began.
-  These rows **are** the write-ahead log.
+  These rows **are** the write-ahead log. A `create_endpoint` step's
+  `args->>'endpoint_id'` is indexed (migration 0015): it is the only link from an
+  endpoint to the task that created it for all three kinds that create one, and the
+  endpoint API reads it as `create_task` on every list.
 - **`subtasks`** (migration `0006`) — a third kind of row, and the exception to
   everything above. A task that fans out over a set it cannot know until Execute time
   creates one subtask per item and **runs them itself**, in its own process. A subtask

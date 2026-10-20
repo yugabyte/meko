@@ -2579,6 +2579,35 @@ components:
           format: date-time
         health:
           $ref: '#/components/schemas/EndpointHealth'
+        create_task:
+          $ref: '#/components/schemas/EndpointCreateTask'
+
+    EndpointCreateTask:
+      type: object
+      required: [id, kind, status]
+      description: |
+        The task that created this endpoint, read from the task log at request
+        time. The endpoint row is written before its compute is deployed and is
+        kept if the deploy fails, until the failed-create sweep reclaims it, so an
+        endpoint with no `address` may be one that is still coming up or one whose
+        create has already failed — `status` says which. The task may be a
+        `create_endpoint`, or a `create_cluster` or `branch` that created a writer.
+        Absent when the endpoint predates the task log, or the read failed.
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          description: The task's kind.
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        error:
+          type: string
+          description: Why the task failed. Absent unless `status` is `failed`.
+        error_code:
+          type: string
+          description: The failed task's machine-readable error code, when it has one.
 
     EndpointHealth:
       type: object

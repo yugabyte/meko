@@ -147,6 +147,12 @@ func (s *Service) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 	return s.store.List(ctx, f, limit, offset)
 }
 
+// EndpointCreateTasks returns the task that created each of ids, keyed by
+// endpoint; see Store.EndpointCreateTasks.
+func (s *Service) EndpointCreateTasks(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*Task, error) {
+	return s.store.EndpointCreateTasks(ctx, ids)
+}
+
 // Result returns the result payload of the task's final step that recorded one
 // — the task's user-facing outcome (e.g. a resize's in-place status), as opaque
 // JSON. Returns nil when the task has no steps or none recorded a result.

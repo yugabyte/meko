@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"meko/ycp/internal/api"
 	"meko/ycp/internal/ycpclient"
 	"meko/ycp/reconcile"
@@ -342,6 +344,38 @@ func TestInventoryCarriesBackendDetail(t *testing.T) {
 	}
 }
 
+// An endpoint whose create failed while its row stays listed (CLOUDGA-37682): the
+// backend says "error" and the engine puts its failure in Failed, so the row shows
+// the controller's reason — even once the stuck timer has fired too — and, being
+// one tenant's endpoint, it does not stop the environment taking new pools.
+func TestInventoryShowsAFailedCreateOnItsListedRow(t *testing.T) {
+	ro := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/ro"}
+	cause := errors.New("create_endpoint task t1 failed: 0/6 nodes are available: 3 Insufficient ephemeral-storage")
+	for name, stuck := range map[string]map[reconcile.ResourceKey]time.Duration{
+		"before the stuck timer": nil,
+		"after the stuck timer":  {ro: 15 * time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := reconcile.Result{
+				Actual:  []reconcile.Actual{{Key: ro, State: "error", Failure: cause}},
+				Failed:  map[reconcile.ResourceKey]error{ro: cause},
+				Failing: map[reconcile.ResourceKey]error{ro: cause},
+				Stuck:   stuck,
+			}
+			rows := inventory(res)
+			if len(rows) != 1 {
+				t.Fatalf("rows = %+v, want one row for ro", rows)
+			}
+			if got := rows[0]; got.State != "error" || got.Error != cause.Error() {
+				t.Errorf("ro row = %+v, want state error carrying %q", got, cause)
+			}
+			if !acceptsNewPools(res) {
+				t.Error("one tenant's failed endpoint turned new pools away")
+			}
+		})
+	}
+}
+
 // A DEGRADED environment takes new pools only when what degrades it sits under one
 // storage pool (CLOUDGA-37501).
 func TestAcceptsNewPools(t *testing.T) {
@@ -379,5 +413,60 @@ func TestAcceptsNewPools(t *testing.T) {
 		if got := acceptsNewPools(tc.res); got != tc.want {
 			t.Errorf("%s: acceptsNewPools = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// What YCP is actually sent for a failed create on a listed row (CLOUDGA-37682):
+// the row as `error` with the controller's reason, and the environment DEGRADED
+// on that report — and READY again once the row stops failing.
+func TestReportDegradesOnAFailedCreate(t *testing.T) {
+	var got api.StatusReport
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/agent/status" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		got = api.StatusReport{}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	m := newAgentMetrics("amp")
+	a := &agent{ycp: ycpclient.New(srv.URL, "key", srv.Client()), metrics: m}
+
+	ro := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/ro"}
+	cause := errors.New("create_endpoint task t1 failed: 0/6 nodes are available: 3 Insufficient ephemeral-storage")
+	failed := reconcile.Result{
+		Actual:  []reconcile.Actual{{Key: ro, State: "error", Failure: cause}},
+		Failed:  map[reconcile.ResourceKey]error{ro: cause},
+		Failing: map[reconcile.ResourceKey]error{ro: cause},
+	}
+	m.tick(failed, nil, time.Millisecond)
+	if err := a.Report(t.Context(), api.DesiredState{Revision: 7}, failed); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if got.EnvironmentState != api.StateDegraded {
+		t.Errorf("environment = %q, want %q", got.EnvironmentState, api.StateDegraded)
+	}
+	if len(got.Resources) != 1 || got.Resources[0].State != "error" || got.Resources[0].Error != cause.Error() {
+		t.Errorf("resources = %+v, want ro as error carrying %q", got.Resources, cause)
+	}
+	if !got.AcceptsNewPools {
+		t.Error("one tenant's failed endpoint turned new pools away")
+	}
+	if v := testutil.ToFloat64(m.resources.WithLabelValues("failed")); v != 1 {
+		t.Errorf("failed resources metric = %v, want 1", v)
+	}
+
+	recovered := reconcile.Result{Actual: []reconcile.Actual{{Key: ro, Ready: true, State: "ready"}}}
+	m.tick(recovered, nil, time.Millisecond)
+	if err := a.Report(t.Context(), api.DesiredState{Revision: 7}, recovered); err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if got.EnvironmentState != api.StateReady || got.Resources[0].Error != "" {
+		t.Errorf("after recovery: environment=%q row=%+v, want READY and no error", got.EnvironmentState, got.Resources[0])
+	}
+	if v := testutil.ToFloat64(m.resources.WithLabelValues("failed")); v != 0 {
+		t.Errorf("failed resources metric after recovery = %v, want 0", v)
 	}
 }

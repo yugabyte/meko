@@ -1032,7 +1032,16 @@ type Endpoint struct {
 	// load-balancer address; for `cluster_ip`, the endpoint's in-cluster Service
 	// DNS. None is a pod address, so a pod replacement leaves all of them correct.
 	Connectivity *EndpointConnectivity `json:"connectivity,omitempty"`
-	CreatedAt    time.Time             `json:"created_at"`
+
+	// CreateTask The task that created this endpoint, read from the task log at request
+	// time. The endpoint row is written before its compute is deployed and is
+	// kept if the deploy fails, until the failed-create sweep reclaims it, so an
+	// endpoint with no `address` may be one that is still coming up or one whose
+	// create has already failed — `status` says which. The task may be a
+	// `create_endpoint`, or a `create_cluster` or `branch` that created a writer.
+	// Absent when the endpoint predates the task log, or the read failed.
+	CreateTask *EndpointCreateTask `json:"create_task,omitempty"`
+	CreatedAt  time.Time           `json:"created_at"`
 
 	// DocumentdbAddress MongoDB wire-protocol address (host:port) for this endpoint's
 	// documentdb gateway. Present only when the branch has the `documentdb`
@@ -1294,6 +1303,29 @@ type EndpointConnectivity struct {
 // proxy, and is rejected with 400 unless the deployment declares its
 // shards see real client addresses (`--deploy-ingress-source-filtering`).
 type EndpointConnectivityMode string
+
+// EndpointCreateTask The task that created this endpoint, read from the task log at request
+// time. The endpoint row is written before its compute is deployed and is
+// kept if the deploy fails, until the failed-create sweep reclaims it, so an
+// endpoint with no `address` may be one that is still coming up or one whose
+// create has already failed — `status` says which. The task may be a
+// `create_endpoint`, or a `create_cluster` or `branch` that created a writer.
+// Absent when the endpoint predates the task log, or the read failed.
+type EndpointCreateTask struct {
+	// Error Why the task failed. Absent unless `status` is `failed`.
+	Error *string `json:"error,omitempty"`
+
+	// ErrorCode The failed task's machine-readable error code, when it has one.
+	ErrorCode *string            `json:"error_code,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Kind The task's kind.
+	Kind string `json:"kind"`
+
+	// Status The lifecycle state of a task, or of one of its subtasks — they share it,
+	// because a subtask is one step with durable status.
+	Status TaskStatus `json:"status"`
+}
 
 // EndpointHealth Whether the endpoint's pod is serving right now, read from the workload
 // at request time rather than stored. `address` says only that the endpoint

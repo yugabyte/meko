@@ -294,8 +294,11 @@ type ResourceStatus struct {
 	//   blocked   the agent is not permitted: credentials, a scope it lacks, or a
 	//             quota no rewrite clears. Neither the spec nor the resource is
 	//             wrong.
-	//   error     a create/delete that failed for a resource the backend does not
-	//             list, so there is no backend state to override.
+	//   error     a create/delete that failed. Either the backend does not list the
+	//             resource, so there is no backend state to override, or it lists
+	//             one whose create task failed (an amp endpoint between a failed
+	//             deploy and the controller's sweep), and the row keeps its Attrs.
+	//             Error says why either way.
 	//
 	// A reader that does not know a value must fall back to showing Error, never
 	// to the immutability sentence: reporting a rejected endpoint as immutable is

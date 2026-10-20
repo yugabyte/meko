@@ -543,6 +543,10 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 					epKey := reconcile.ResourceKey{Kind: KindEndpoint, Name: epPath}
 					h, readAt := b.endpointHealth(epKey, ep.Health)
 					ready, state, detail := endpointState(ep.Address, h, readAt, b.clock())
+					failure := endpointCreateFailure(ep.Address, ep.CreateTask)
+					if failure != nil {
+						state = "error"
+					}
 					out = append(out, reconcile.Actual{
 						Key:         epKey,
 						Parent:      reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
@@ -550,6 +554,7 @@ func (b *Backend) listTree(ctx context.Context) ([]reconcile.Actual, index, erro
 						Ready:       ready,
 						State:       state,
 						Detail:      detail,
+						Failure:     failure,
 						Attrs:       endpointAttrs(ep, b.endpointCA(ctx, epKey, p.Id, cl.Id, ep)),
 					})
 				}
@@ -1821,6 +1826,27 @@ func (b *Backend) clock() time.Time {
 		return b.now()
 	}
 	return time.Now()
+}
+
+// endpointCreateFailure is why an endpoint's create failed, or nil. The
+// controller writes the row before deploying and keeps it after a failed deploy
+// until its failed-create sweep reclaims it, so "no address" alone cannot tell a
+// create still running from one that is over; the task that created it can, and
+// the controller reports it on the row whichever task kind that was
+// (CLOUDGA-37682). An endpoint that has an address is judged by its health
+// instead: the create got far enough to deploy it.
+func endpointCreateFailure(address string, ct *ampclient.EndpointCreateTask) error {
+	if address != "" || ct == nil || ct.Status != ampclient.TaskStatusFailed {
+		return nil
+	}
+	msg, kind := "no error reported", ct.Kind
+	if ct.Error != nil && *ct.Error != "" {
+		msg = *ct.Error
+	}
+	if kind == "" {
+		kind = "create"
+	}
+	return fmt.Errorf("%s task %s failed: %s", kind, ct.Id, msg)
 }
 
 // endpointState reads an endpoint's readiness. The address says only that it

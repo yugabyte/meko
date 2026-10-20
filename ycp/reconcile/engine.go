@@ -120,6 +120,13 @@ type Actual struct {
 	// resource must say so with a row; one it cannot read and nobody declared may
 	// be dropped, since nothing is derived from its absence.
 	DiscoveryError error
+	// Failure, when non-nil, is the backend's own observation that a declared
+	// resource has failed — work it issued earlier and that ended in an error while
+	// the resource stays listed, so no verb of this tick would report it. The
+	// engine reports it in Failed and Failing, which degrades the environment on
+	// the tick it is seen rather than once the stuck timer fires. It plans and
+	// backs off nothing: the row's diff is unchanged.
+	Failure error
 }
 
 // Backend is the pluggable target the engine drives. Implementations translate

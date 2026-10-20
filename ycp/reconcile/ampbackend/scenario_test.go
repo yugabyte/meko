@@ -36,11 +36,25 @@ type treeServer struct {
 	latest    map[string]string // "<kind>/<name>" -> its newest task id
 	posts     map[string]int    // "<kind>/<name>" -> creates issued
 	seq       int
+	// recordEarly lists an endpoint, with no address, as soon as its create is
+	// planned, as the real controller does; the task then only deploys it.
+	recordEarly bool
+	// noCreateTask lists endpoints without create_task, as a controller that
+	// predates it does.
+	noCreateTask bool
 }
 
-type treeEndpoint struct{ id, role string }
+// treeEndpoint is an endpoint row. pending is one recordEarly listed before its
+// deploy, which has no address; createTask is the task that created it.
+type treeEndpoint struct {
+	id, role   string
+	pending    bool
+	createTask string
+}
 
 type treeTask struct {
+	// kind is the controller's task kind, as create_task reports it.
+	kind              string
 	status, err, code string
 	// apply is the task's effect on the tree, run when it succeeds.
 	apply func()
@@ -93,16 +107,26 @@ func (s *treeServer) serve(w http.ResponseWriter, r *http.Request) {
 			Role string
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		s.plan(w, KindEndpoint, req.Name, func() {
-			s.endpoints[req.Name] = treeEndpoint{id: fmt.Sprintf("99999999-9999-9999-9999-%012d", s.seq), role: req.Role}
+		epID := fmt.Sprintf("99999999-9999-9999-9999-%012d", s.seq+1)
+		var taskID string
+		taskID = s.plan(w, KindEndpoint, req.Name, func() {
+			s.endpoints[req.Name] = treeEndpoint{id: epID, role: req.Role, createTask: taskID}
 		})
+		s.tasks[taskID].kind = "create_endpoint"
+		if s.recordEarly {
+			s.endpoints[req.Name] = treeEndpoint{id: epID, role: req.Role, pending: true, createTask: taskID}
+		}
 	case len(seg) == 7 && seg[6] == "endpoints":
 		var rows []string
 		if seg[3] == genClusterID {
 			for name, ep := range s.endpoints {
+				addr := "ep.host:5433"
+				if ep.pending {
+					addr = ""
+				}
 				rows = append(rows, fmt.Sprintf(`{"id":%q,"name":%q,"branch_id":%q,"cluster_id":%q,"role":%q,`+
-					`"address":"ep.host:5433","resources":{"cpu":"2","memory":"4Gi"},%s}`,
-					ep.id, name, genBranchID, genClusterID, ep.role, ts))
+					`"address":%q,"resources":{"cpu":"2","memory":"4Gi"},%s%s}`,
+					ep.id, name, genBranchID, genClusterID, ep.role, addr, ts, s.createTaskField(ep)))
 			}
 		}
 		fmt.Fprintf(w, `{"endpoints":[%s]}`, strings.Join(rows, ","))
@@ -136,8 +160,27 @@ func (s *treeServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// plan records a running task for kind/name and answers 202 with it. Caller holds mu.
-func (s *treeServer) plan(w http.ResponseWriter, kind, name string, apply func()) {
+// createTaskField is the create_task an endpoint row carries, as `,"create_task":…`,
+// or "" when it has none. Caller holds mu.
+func (s *treeServer) createTaskField(ep treeEndpoint) string {
+	tk, ok := s.tasks[ep.createTask]
+	if s.noCreateTask || !ok {
+		return ""
+	}
+	ct := map[string]any{"id": ep.createTask, "kind": tk.kind, "status": tk.status}
+	if tk.err != "" {
+		ct["error"] = tk.err
+	}
+	if tk.code != "" {
+		ct["error_code"] = tk.code
+	}
+	b, _ := json.Marshal(ct)
+	return `,"create_task":` + string(b)
+}
+
+// plan records a running task for kind/name, answers 202 with it, and returns its
+// id. Caller holds mu.
+func (s *treeServer) plan(w http.ResponseWriter, kind, name string, apply func()) string {
 	s.seq++
 	id := fmt.Sprintf("77777777-0000-0000-0000-%012d", s.seq)
 	s.tasks[id] = &treeTask{status: "running", apply: apply}
@@ -147,6 +190,27 @@ func (s *treeServer) plan(w http.ResponseWriter, kind, name string, apply func()
 	}
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprintf(w, `{"id":%q,"kind":"create","status":"running","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`, id)
+	return id
+}
+
+// reclaim removes an endpoint row, as the controller's failed-create sweep does.
+func (s *treeServer) reclaim(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.endpoints, name)
+}
+
+// seedFailedWriter lists an address-less endpoint whose create failed inside a
+// task of taskKind that this agent never issued — a writer a create_cluster or
+// branch made, or one created before the agent restarted.
+func (s *treeServer) seedFailedWriter(name, taskKind, cause string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	id := fmt.Sprintf("77777777-0000-0000-0000-%012d", s.seq)
+	s.tasks[id] = &treeTask{kind: taskKind, status: "failed", err: cause}
+	s.endpoints[name] = treeEndpoint{id: fmt.Sprintf("99999999-9999-9999-9999-%012d", s.seq),
+		role: "read_write", pending: true, createTask: id}
 }
 
 // succeed and fail settle kind/name's newest task, as the worker would.
@@ -373,5 +437,264 @@ func TestScenarioFailedCreateRetries(t *testing.T) {
 	// would read its create mark again: List must drop it.
 	if _, kept := sc.b.creating[endpointKey("ro")]; kept {
 		t.Error("ro's create mark outlived its listing")
+	}
+}
+
+// restart replaces the agent's backend and engine with fresh ones over the same
+// controller, as a pod restart does: nothing the old process remembered survives.
+func (sc *scenario) restart() {
+	b, err := New(sc.srv.url, "", nil, noCtl())
+	if err != nil {
+		sc.t.Fatalf("New: %v", err)
+	}
+	sc.b = b
+	sc.eng = reconcile.New(b, reconcile.Options{BaseBackoff: time.Nanosecond, MaxBackoff: time.Nanosecond})
+}
+
+func actualOf(res reconcile.Result, k reconcile.ResourceKey) (reconcile.Actual, bool) {
+	for _, a := range res.Actual {
+		if a.Key == k {
+			return a, true
+		}
+	}
+	return reconcile.Actual{}, false
+}
+
+// assertFailedRow checks a row reads as a failed create: state error, not Ready,
+// and the controller's own error in Failed — which is what degrades the
+// environment on this tick.
+func assertFailedRow(t *testing.T, res reconcile.Result, k reconcile.ResourceKey, wants ...string) {
+	t.Helper()
+	a, ok := actualOf(res, k)
+	if !ok || a.State != "error" || a.Ready || a.Detail != "" {
+		t.Fatalf("%s = %+v (listed %v), want an unready error row whose reason is the failure alone", k, a, ok)
+	}
+	err, failed := res.Failed[k]
+	if !failed {
+		t.Fatalf("%s not in Failed (failed=%v)", k, res.Failed)
+	}
+	for _, w := range wants {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("%s failure = %q, want it to contain %q", k, err, w)
+		}
+	}
+}
+
+const capacity = "deploy endpoint: pod could not be scheduled: 0/6 nodes are available: 3 Insufficient ephemeral-storage"
+
+// CLOUDGA-37682. The controller lists an endpoint before deploying it and keeps
+// the row after the deploy fails, until its sweep reclaims it. In between the row
+// must read as failed, on every tick, without a second create; once reclaimed the
+// create is issued again and the old failure does not stick to the new attempt.
+func TestScenarioFailedCreateIsReportedOnTheListedRow(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.recordEarly = true
+	ro := endpointRes("ro", "read_only")
+	desired := tree(endpointRes("rw", "read_write"), ro)
+
+	sc.tick(desired...)
+	res := sc.tick(desired...)
+	if a, _ := actualOf(res, endpointKey("ro")); a.State != "provisioning" {
+		t.Fatalf("ro while its task runs = %q, want provisioning", a.State)
+	}
+	if _, failed := res.Failed[endpointKey("ro")]; failed {
+		t.Fatal("ro failed while its task is still running")
+	}
+
+	sc.srv.fail(KindEndpoint, "ro", capacity, "")
+	for i := 0; i < 3; i++ {
+		assertFailedRow(t, sc.tick(desired...), endpointKey("ro"), "create_endpoint task", capacity)
+	}
+	if n := sc.srv.creates(KindEndpoint, "ro"); n != 1 {
+		t.Fatalf("create calls while the failed row is listed = %d, want 1", n)
+	}
+
+	sc.srv.reclaim("ro")
+	sc.tick(desired...)
+	if n := sc.srv.creates(KindEndpoint, "ro"); n != 2 {
+		t.Fatalf("create calls once reclaimed = %d, want 2", n)
+	}
+	res = sc.tick(desired...)
+	if a, _ := actualOf(res, endpointKey("ro")); a.State != "provisioning" {
+		t.Fatalf("ro on its retry = %q, want provisioning — the old failure must not stick", a.State)
+	}
+	if _, failed := res.Failed[endpointKey("ro")]; failed {
+		t.Fatalf("ro on its retry still failed: %v", res.Failed[endpointKey("ro")])
+	}
+
+	sc.srv.succeed(KindEndpoint, "ro")
+	res = sc.tick(desired...)
+	if a, _ := actualOf(res, endpointKey("ro")); a.State != "ready" || len(res.Failed) != 0 {
+		t.Fatalf("ro once deployed = %q, failed=%v; want ready and nothing failed", a.State, res.Failed)
+	}
+}
+
+// The failure is read from the controller every tick, not remembered, so an agent
+// that restarts after the create failed reports it on its first tick.
+func TestScenarioFailedCreateSurvivesAnAgentRestart(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.recordEarly = true
+	desired := tree(endpointRes("rw", "read_write"), endpointRes("ro", "read_only"))
+	sc.tick(desired...)
+	sc.srv.fail(KindEndpoint, "ro", capacity, "")
+
+	sc.restart()
+	assertFailedRow(t, sc.tick(desired...), endpointKey("ro"), capacity)
+	if n := sc.srv.creates(KindEndpoint, "ro"); n != 1 {
+		t.Fatalf("create calls after the restart = %d, want 1 — the row is listed", n)
+	}
+}
+
+// A writer is created inside a create_cluster or branch task, not by this agent's
+// own create: the same failure, reported the same way.
+func TestScenarioFailedWriterOfAnotherTaskKind(t *testing.T) {
+	for _, kind := range []string{"create_cluster", "branch"} {
+		t.Run(kind, func(t *testing.T) {
+			sc := newScenario(t)
+			sc.srv.seedFailedWriter("w", kind, capacity)
+			desired := tree(endpointRes("rw", "read_write"), endpointRes("w", "read_write"))
+			for i := 0; i < 2; i++ {
+				assertFailedRow(t, sc.tick(desired...), endpointKey("w"), kind+" task", capacity)
+			}
+			if n := sc.srv.creates(KindEndpoint, "w"); n != 0 {
+				t.Errorf("create calls = %d, want 0 — the row is listed", n)
+			}
+		})
+	}
+}
+
+// A failed endpoint nobody declares any more is collected, and its failure is
+// owed to no one: it must not degrade the environment while the delete runs.
+func TestScenarioWithdrawnFailedEndpointIsCollectedNotReported(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.seedFailedWriter("w", "create_cluster", capacity)
+	res := sc.tick(tree(endpointRes("rw", "read_write"))...)
+	if _, failed := res.Failed[endpointKey("w")]; failed {
+		t.Fatalf("withdrawn w reported failed: %v", res.Failed[endpointKey("w")])
+	}
+	sc.srv.mu.Lock()
+	_, deleting := sc.srv.latest["delete-"+KindEndpoint+"/w"]
+	sc.srv.mu.Unlock()
+	if !deleting {
+		t.Error("withdrawn w was not deleted")
+	}
+}
+
+// A controller that predates create_task says nothing about the create, so the
+// row is what it always was: provisioning, left to the stuck timer.
+func TestScenarioControllerWithoutCreateTask(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.recordEarly, sc.srv.noCreateTask = true, true
+	desired := tree(endpointRes("rw", "read_write"), endpointRes("ro", "read_only"))
+	sc.tick(desired...)
+	sc.srv.fail(KindEndpoint, "ro", capacity, "")
+	res := sc.tick(desired...)
+	if a, _ := actualOf(res, endpointKey("ro")); a.State != "provisioning" || a.Failure != nil {
+		t.Fatalf("ro = %+v, want provisioning with no failure", a)
+	}
+	if _, failed := res.Failed[endpointKey("ro")]; failed {
+		t.Fatal("ro failed with nothing to say so")
+	}
+}
+
+// A create task that failed after the endpoint was deployed (a later step of a
+// create_cluster, say) leaves a working endpoint: it reads as its address and
+// health say, not as a failed create.
+func TestScenarioDeployedEndpointOfAFailedTaskIsNotFailed(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.seedFailedWriter("w", "create_cluster", "a later step failed")
+	sc.srv.mu.Lock()
+	ep := sc.srv.endpoints["w"]
+	ep.pending = false
+	sc.srv.endpoints["w"] = ep
+	sc.srv.mu.Unlock()
+
+	res := sc.tick(tree(endpointRes("rw", "read_write"), endpointRes("w", "read_write"))...)
+	if a, _ := actualOf(res, endpointKey("w")); a.State != "ready" || a.Failure != nil {
+		t.Fatalf("w = %+v, want ready", a)
+	}
+	if len(res.Failed) != 0 {
+		t.Fatalf("failed = %v, want none", res.Failed)
+	}
+}
+
+// settleWithoutDeploy marks kind/name's newest task succeeded without running
+// its effect: a create that finished before its address was recorded.
+func (s *treeServer) settleWithoutDeploy(kind, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.task(kind, name).status = "succeeded"
+}
+
+func (s *treeServer) setNoCreateTask(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noCreateTask = v
+}
+
+// create_task absent means unknown — the controller's lookup failed, or it is an
+// older one mid-rollback — so a failed row goes back to provisioning rather than
+// keeping a verdict nothing is reporting any more, and is failed again once the
+// field is back.
+func TestScenarioCreateTaskThatGoesMissingIsUnknownNotFailed(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.recordEarly = true
+	desired := tree(endpointRes("rw", "read_write"), endpointRes("ro", "read_only"))
+	sc.tick(desired...)
+	sc.srv.fail(KindEndpoint, "ro", capacity, "")
+	assertFailedRow(t, sc.tick(desired...), endpointKey("ro"), capacity)
+
+	sc.srv.setNoCreateTask(true)
+	res := sc.tick(desired...)
+	if a, _ := actualOf(res, endpointKey("ro")); a.State != "provisioning" || a.Failure != nil {
+		t.Fatalf("ro without create_task = %+v, want provisioning", a)
+	}
+	if _, failed := res.Failed[endpointKey("ro")]; failed {
+		t.Fatal("ro still failed with nothing reporting it")
+	}
+
+	sc.srv.setNoCreateTask(false)
+	assertFailedRow(t, sc.tick(desired...), endpointKey("ro"), capacity)
+	if n := sc.srv.creates(KindEndpoint, "ro"); n != 1 {
+		t.Errorf("create calls = %d, want 1 — the row stayed listed throughout", n)
+	}
+}
+
+// A create that succeeded is not a failure, address or not: the endpoint stays
+// provisioning until its address lands.
+func TestScenarioSucceededCreateWithoutAnAddressIsProvisioning(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.recordEarly = true
+	desired := tree(endpointRes("rw", "read_write"), endpointRes("ro", "read_only"))
+	sc.tick(desired...)
+	sc.srv.settleWithoutDeploy(KindEndpoint, "ro")
+	res := sc.tick(desired...)
+	if a, _ := actualOf(res, endpointKey("ro")); a.State != "provisioning" || a.Failure != nil {
+		t.Fatalf("ro = %+v, want provisioning", a)
+	}
+	if len(res.Failed) != 0 {
+		t.Fatalf("failed = %v, want none", res.Failed)
+	}
+}
+
+// One endpoint's failed create says nothing about its neighbours: only it is
+// failed, and the others keep converging.
+func TestScenarioFailedCreateIsConfinedToItsEndpoint(t *testing.T) {
+	sc := newScenario(t)
+	sc.srv.recordEarly = true
+	desired := tree(endpointRes("rw", "read_write"), endpointRes("ro1", "read_only"), endpointRes("ro2", "read_only"))
+	sc.tick(desired...)
+	sc.srv.fail(KindEndpoint, "ro1", capacity, "")
+	sc.srv.succeed(KindEndpoint, "ro2")
+	res := sc.tick(desired...)
+
+	assertFailedRow(t, res, endpointKey("ro1"), capacity)
+	if len(res.Failed) != 1 {
+		t.Errorf("failed = %v, want only ro1", res.Failed)
+	}
+	for _, name := range []string{"rw", "ro2"} {
+		if a, _ := actualOf(res, endpointKey(name)); a.State != "ready" || a.Failure != nil {
+			t.Errorf("%s = %+v, want ready", name, a)
+		}
 	}
 }

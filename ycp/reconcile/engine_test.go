@@ -681,6 +681,151 @@ func TestReconcileClearsBackoffOnceConverged(t *testing.T) {
 	}
 }
 
+// A failure the backend observed on a listed row is reported like a failed verb,
+// for a declared resource only: a withdrawn one is being collected, and nothing
+// it failed at is owed to anyone. It plans no action and records no backoff.
+func TestActualFailureIsReportedFailed(t *testing.T) {
+	f := newFake()
+	ep, gone := key("endpoint", "p/c/main/rw"), key("endpoint", "p/c/main/old")
+	cause := errors.New("controller task failed: insufficient ephemeral-storage")
+	f.actual = []Actual{
+		{Key: ep, State: "error", Failure: cause},
+		{Key: gone, State: "error", Failure: cause},
+	}
+	e := New(f, Options{})
+
+	res, err := e.Reconcile(context.Background(), []api.DesiredResource{d("endpoint", "p/c/main/rw", 0)}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed[ep] != cause || res.Failing[ep] != cause {
+		t.Errorf("declared row: failed=%v failing=%v, want the row's failure in both", res.Failed[ep], res.Failing[ep])
+	}
+	if _, ok := res.Failed[gone]; ok {
+		t.Errorf("withdrawn row reported failed: %v", res.Failed[gone])
+	}
+	if res.NoOp != 1 {
+		t.Errorf("noop=%d, want 1 — a reported failure changes no plan", res.NoOp)
+	}
+	e.mu.Lock()
+	_, backing := e.failures[ep]
+	e.mu.Unlock()
+	if backing {
+		t.Error("a reported failure recorded a backoff")
+	}
+}
+
+// How a row's Failure composes with everything else the tick can say about the
+// same resource. Each case is a way the two could be confused: an action's own
+// verdict overwritten by the row's, an unread row reported as failed, a failure
+// that lingers after the row stops carrying it, or one that grows a backoff.
+func TestActualFailureComposition(t *testing.T) {
+	ep := key("endpoint", "p/c/main/rw")
+	cause := errors.New("create task failed: insufficient ephemeral-storage")
+	newEngine := func(f *fakeBackend) *Engine { return New(f, Options{}) }
+	tick := func(t *testing.T, e *Engine, gen int64) Result {
+		t.Helper()
+		res, err := e.Reconcile(context.Background(), []api.DesiredResource{d("endpoint", "p/c/main/rw", gen)}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	t.Run("an update's own failure wins over the row's", func(t *testing.T) {
+		f := newFake()
+		f.actual = []Actual{{Key: ep, State: "error", Failure: cause}}
+		f.failCall[ep] = 1
+		res := tick(t, newEngine(f), 1)
+		if err := res.Failed[ep]; err == nil || err.Error() != "forced failure" {
+			t.Errorf("failed = %v, want the update's own error", err)
+		}
+	})
+
+	t.Run("an update in flight is reported alongside the failure", func(t *testing.T) {
+		f := newFake()
+		f.actual = []Actual{{Key: ep, State: "error", Failure: cause}}
+		f.pending[ep] = true
+		res := tick(t, newEngine(f), 1)
+		if res.Failed[ep] != cause {
+			t.Errorf("failed = %v, want the row's failure", res.Failed[ep])
+		}
+		if _, ok := res.Updating[ep]; !ok {
+			t.Error("the in-flight update is not reported")
+		}
+	})
+
+	t.Run("an update backing off still leaves the row failed", func(t *testing.T) {
+		// Declared at a generation above 0, so every tick plans an Update; once it
+		// fails it backs off, and the ticks in between attempt nothing. The row's
+		// failure must still degrade those ticks.
+		f := newFake()
+		f.actual = []Actual{{Key: ep, State: "error", Failure: cause}}
+		f.failCall[ep] = 1
+		now := time.Unix(0, 0)
+		e := New(f, Options{Now: func() time.Time { return now }, BaseBackoff: time.Hour, MaxBackoff: time.Hour})
+		if res := tick(t, e, 2); res.Failed[ep] == nil || res.Failed[ep].Error() != "forced failure" {
+			t.Fatalf("tick 1: failed = %v, want the update's error", res.Failed[ep])
+		}
+		for i := 0; i < 3; i++ {
+			now = now.Add(time.Minute)
+			res := tick(t, e, 2)
+			if res.Failed[ep] != cause {
+				t.Fatalf("backing off, tick %d: failed = %v, want the row's failure", i, res.Failed[ep])
+			}
+			if err := res.Failing[ep]; err == nil || err.Error() != "forced failure" {
+				t.Fatalf("backing off, tick %d: failing = %v, want the update's own error kept", i, err)
+			}
+		}
+		if f.attempts[ep] != 1 {
+			t.Errorf("update attempts = %d, want 1 — the backoff holds", f.attempts[ep])
+		}
+	})
+
+	t.Run("an unread row is unreadable, not failed", func(t *testing.T) {
+		f := newFake()
+		f.actual = []Actual{{Key: ep, Failure: cause, DiscoveryError: errors.New("controller unreachable")}}
+		res := tick(t, newEngine(f), 0)
+		if _, failed := res.Failed[ep]; failed {
+			t.Errorf("unread row reported failed: %v", res.Failed[ep])
+		}
+		if _, ok := res.Unreadable[ep]; !ok {
+			t.Error("unread row not reported unreadable")
+		}
+	})
+
+	t.Run("a preexisting row nobody declares is not failed", func(t *testing.T) {
+		f := newFake()
+		ctl := key("controller", "amp")
+		f.actual = []Actual{{Key: ctl, Preexisting: true, Failure: cause}}
+		res, err := newEngine(f).Reconcile(context.Background(), nil, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, failed := res.Failed[ctl]; failed || len(f.deletes) != 0 {
+			t.Errorf("failed=%v deletes=%v, want neither", res.Failed, f.deletes)
+		}
+	})
+
+	t.Run("reported every tick it is carried, and no longer once it is not", func(t *testing.T) {
+		f := newFake()
+		e := newEngine(f)
+		f.actual = []Actual{{Key: ep, State: "error", Failure: cause}}
+		for i := 0; i < 3; i++ {
+			if res := tick(t, e, 0); res.Failed[ep] != cause || res.Failing[ep] != cause {
+				t.Fatalf("tick %d: failed=%v failing=%v", i, res.Failed[ep], res.Failing[ep])
+			}
+		}
+		if f.attempts[ep] != 0 {
+			t.Errorf("verb calls = %d, want none — a reported failure plans nothing", f.attempts[ep])
+		}
+		f.actual = []Actual{{Key: ep, Ready: true, State: "ready"}}
+		if res := tick(t, e, 0); len(res.Failed)+len(res.Failing) != 0 {
+			t.Errorf("after recovery failed=%v failing=%v, want none", res.Failed, res.Failing)
+		}
+	})
+}
+
 // A rejection and a block are permanent on exactly the same terms as an
 // unsupported verb — issued once, never re-issued, and not enough to degrade the
 // environment — and each keeps its own reason all the way to the Result, because

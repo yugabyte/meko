@@ -173,6 +173,13 @@ cluster.
    the row is no evidence it is still there — and the tick reports DEGRADED,
    because it converged only the part it could see.
 
+   A listed row can also carry a failure no verb of the tick would report — a create
+   whose task failed while its resource stays listed (an amp endpoint, until the
+   controller's failed-create sweep), so the diff plans nothing for it. The backend
+   puts that on `Actual.Failure`, and the engine reports a declared row's failure as
+   `Failed`: the tick is DEGRADED at once instead of after `StuckAfter`, with no
+   action planned and no backoff recorded.
+
    The other exception to "listed and not desired means collect it" is a resource
    the backend did not create and cannot delete — the amp controller, which the
    agent runs inside. Such a row is marked `Preexisting` and is reported but never

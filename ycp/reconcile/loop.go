@@ -133,12 +133,15 @@ type Result struct {
 	Deleted  int
 	NoOp     int
 	Deferred int // eligible next tick (parent not ready, or backing off)
-	// Failed maps a resource to the retryable error from its attempt this tick.
+	// Failed maps a resource to the retryable error from its attempt this tick, or,
+	// for a declared resource nothing was attempted for, the failure its row
+	// carries (Actual.Failure). An attempt's own error wins over the row's.
 	Failed map[ResourceKey]error
 	// Failing maps every resource whose last attempt failed and has not succeeded
 	// since to that error: Failed plus those waiting out their backoff, which this
 	// tick did not retry. Failed alone sees a resource only on the ticks its retry
-	// lands on, so it cannot say how many are failing.
+	// lands on, so it cannot say how many are failing. A row's Failure is here too,
+	// on every tick it is carried, unless an attempt's error already is.
 	Failing map[ResourceKey]error
 	// Unreadable maps a resource the backend could not read this tick
 	// (Actual.DiscoveryError) to why. Nothing was issued for it — not a create,
@@ -315,6 +318,17 @@ func (e *Engine) Reconcile(ctx context.Context, desired []api.DesiredResource, f
 		res.Failing[k] = f.lastErr
 	}
 	e.mu.Unlock()
+	for _, a := range actual {
+		if _, want := desiredByKey[a.Key]; a.Failure == nil || a.DiscoveryError != nil || !want {
+			continue
+		}
+		if _, ok := res.Failed[a.Key]; !ok {
+			res.Failed[a.Key] = a.Failure
+		}
+		if _, ok := res.Failing[a.Key]; !ok {
+			res.Failing[a.Key] = a.Failure
+		}
+	}
 	return res, nil
 }
 

@@ -211,6 +211,12 @@ type Store interface {
 	// `pending` has not been claimed, so it holds no lease at all and a probe
 	// would miss it entirely.
 	ActiveByKind(ctx context.Context, kind string) (*Task, error)
+
+	// EndpointCreateTasks returns, for each of ids, the newest task carrying a
+	// create_endpoint step whose args name it — whatever the task's kind, since
+	// create_cluster and branch create a writer through the same step. An id with
+	// no such task (an endpoint that predates the task log) is absent.
+	EndpointCreateTasks(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*Task, error)
 }
 
 // Prior is a task's status and owner as Claim found them. Read in the statement
@@ -643,6 +649,57 @@ type trailing struct {
 func (t trailing) Scan(dest ...any) error { return t.row.Scan(append(dest, t.extra...)...) }
 
 // scanTask scans the taskColumns projection (uuid columns cast to text).
+// EndpointCreateTasks reads through the task_steps_create_endpoint index (0015).
+// Newest by created_at: an endpoint id is minted once per create, so more than
+// one task naming it is not expected, and the newest is the one still deciding.
+func (s *PgStore) EndpointCreateTasks(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*Task, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	refs := make([]string, len(ids))
+	for i, id := range ids {
+		refs[i] = id.String()
+	}
+	rows, err := s.pool.Query(ctx, `SELECT latest.endpoint_id, `+taskColumns+`
+		FROM (SELECT DISTINCT ON (st.args->>'endpoint_id') st.args->>'endpoint_id' AS endpoint_id, st.task_id
+		        FROM task_steps st JOIN tasks t ON t.id = st.task_id
+		       WHERE st.kind = 'create_endpoint' AND st.args->>'endpoint_id' = ANY($1::text[])
+		       ORDER BY st.args->>'endpoint_id', t.created_at DESC, t.id DESC) latest
+		JOIN tasks ON tasks.id = latest.task_id`, refs)
+	if err != nil {
+		return nil, fmt.Errorf("read endpoint create tasks: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]*Task, len(ids))
+	for rows.Next() {
+		var ref string
+		t, err := scanTask(prefixedRow{rows, &ref})
+		if err != nil {
+			return nil, fmt.Errorf("scan endpoint create task: %w", err)
+		}
+		id, err := uuid.Parse(ref)
+		if err != nil {
+			return nil, fmt.Errorf("parse endpoint id %q: %w", ref, err)
+		}
+		out[id] = t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read endpoint create tasks: %w", err)
+	}
+	return out, nil
+}
+
+// prefixedRow scans one leading column into first, then hands the rest to the
+// caller's Scan — so scanTask can read a row that carries a key before its columns.
+type prefixedRow struct {
+	r     row
+	first any
+}
+
+func (p prefixedRow) Scan(dest ...any) error {
+	return p.r.Scan(append([]any{p.first}, dest...)...)
+}
+
 func scanTask(r row) (*Task, error) {
 	var (
 		idStr      string
