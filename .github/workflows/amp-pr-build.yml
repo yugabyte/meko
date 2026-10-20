@@ -155,6 +155,7 @@ jobs:
               # only versions.txt would skip the jobs that test it.
               - 'amp/versions.txt'
               - '.github/actions/yb-version/**'
+              - '.github/actions/fetch-pg-submodule/**'
               - '.github/workflows/amp-pr-build.yml'
             controller:
               - 'amp/controller/**'

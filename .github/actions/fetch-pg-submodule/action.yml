@@ -50,10 +50,14 @@ runs:
         git config --global --add \
           url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
           "https://github.com/yugabyte/amp-postgres"
+        # Shallow, at the depth `make submodules` uses: a full clone of
+        # amp-postgres is most of this step's time. Its default branch shares no
+        # history with the pin, so git fetches the pinned SHA directly.
+        #
         # A freshly-minted App token can briefly 404 ("Repository not found")
         # before it propagates — retry so slow propagation doesn't fail the job.
         for attempt in 1 2 3 4 5; do
-          git submodule update --init --recursive && exit 0
+          git submodule update --init --recursive --depth 2 && exit 0
           echo "submodule fetch failed (attempt $attempt/5); retrying in 10s..." >&2
           sleep 10
         done
