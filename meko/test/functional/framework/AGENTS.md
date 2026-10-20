@@ -93,6 +93,14 @@ quietly.
 - Only ever modify or delete resources **the framework created** (namespaces
   labeled `mekoqa-*` / `mekoqa-managed-by`, tagged instances). Never touch other
   teams' namespaces, workloads, or cluster-scoped objects. Tag and reap.
+- **A kept env is a decision, and it must not live forever.** Before every launch,
+  check its parameters for a keep flag (`--env-mode keep` / `keep-failed`,
+  `--setup-only`, portal `--keep-env` / `--keep-env-failed`, MCP `keep_env` /
+  `keep_env_failed`, Jenkins `KEEP_ENV` / `KEEP_ENV_ON_FAILURE`), including one
+  copied from an earlier run. Set one only when the user asked for a kept env; ask
+  when the task seems to need one. Remove every kept env when the investigation
+  ends, as [`RUNNING.md`](../docs/RUNNING.md#keeping-an-environment) describes, and
+  tell the user which env is kept and how it will be removed.
 
 ## 9. Result honesty & reproducibility
 - The status taxonomy (`passed` / `failed` / `env_failed` / `broken` /

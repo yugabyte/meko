@@ -141,8 +141,8 @@ Work through these questions and write down the answer to each.
 | Does the same failure show up in unrelated tests at the same time? | the stack or the cluster |
 
 If the evidence does not settle it, say so in the notes and keep the claim as an inference.
-Reproduce before you call it a product bug: rerun the one test, and for a stack failure keep the
-environment (`--keep-env-failed`) and look at it live.
+Reproduce before you call it a product bug: rerun the one test, as in
+[Reproducing locally](#reproducing-locally).
 
 ### 6. Act
 
@@ -197,14 +197,16 @@ reason is a harness or cluster problem to fix, not a flake to rerun.
 
 ## Reproducing locally
 
-Rerun the one test with the failing run's image tag and options, keeping the stack on failure:
+Rerun the one test with the failing run's image tag and options:
 
 ```bash
 go run ./framework/cmd/mekoqa run --test <name> --image-version <tag> \
-  --kube-context <ctx> --env-mode keep-failed --seed <seed> \
+  --kube-context <ctx> --seed <seed> \
   -o secrets.quay=env:MEKOQA_QUAY -o <the options of the failed run> --portal ""
 ```
 
+Add `--env-mode keep-failed` only when the user asked to keep the stack, and remove it with
+`go run ./framework/cmd/mekoqa env rm <id>` when the investigation ends.
 The seed is on the run page. The `-o` options of a portal-triggered run are in the parameters
 of its Jenkins build (`OPTIONS`), and the portal's `default_options` apply on top. See [`RUNNING.md`](RUNNING.md) for the details and for
 attaching later runs to the kept stack with `--env <id>`.

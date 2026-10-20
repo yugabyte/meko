@@ -258,8 +258,8 @@ framework refuses a `meko-*` image from anywhere else.
 
 ## Keeping an environment
 
-By default the stack is torn down after the run. Keep it to debug a failure or to run more
-tests against it.
+By default the stack is torn down after the run. Keep it only when you need it live, to debug a
+failure or to run more tests against it, and remove it when done.
 
 | Setting | Behavior |
 |---|---|
@@ -267,7 +267,7 @@ tests against it.
 | `--env-mode keep-failed`, `--keep-env-failed`, `KEEP_ENV_ON_FAILURE` | keep it only when something did not pass |
 | `--setup-only` | build the stack, skip the test bodies, keep it |
 | `--env <id>` (`--env-mode attach`) | run against a kept stack and tear nothing down |
-| `--ttl 8h` | auto-reap a kept stack after a duration |
+| `--ttl 8h` | expire a kept stack after a duration, enforced only by a scheduled `mekoqa task reap` on the same registry |
 | `--env-name` | a label for the kept entry |
 
 ```bash
@@ -277,11 +277,20 @@ mekoqa run --tag regression --env <id> -o secrets.quay=env:MEKOQA_QUAY
 mekoqa env rm <id>
 ```
 
-`env ls` reads `~/.mekoqa/envs.json` (`--registry`), so it lists only what this machine kept. A
-stack kept by Jenkins is findable by label on the cluster:
-`kubectl get ns -l mekoqa-keep=true`. A kept stack costs cluster CPU, so remove it when done.
+`env ls` reads `~/.mekoqa/envs.json` (`--registry`), so it lists only what this machine kept.
 `mekoqa env rm <id>` reconstructs its teardown from the registry, and `--force` drops the entry
 even when teardown fails.
+
+A stack kept by the portal or Jenkins is in no registry, so `env rm` cannot reach it. Remove it
+by hand, and only the run you kept. `<run>` is the portal run id's first ten letters and digits,
+lowercased; a build without `RUN_ID` gets a random one, shown in its console as the
+`mekoqa-st-<run>` namespace. Every namespace the run leaves, and the cluster RBAC of its YBA,
+has `<run>` in its name:
+
+```bash
+kubectl --context <ctx> get ns,clusterrole,clusterrolebinding -o name | grep '<run>'
+kubectl --context <ctx> delete <those names> --wait=false
+```
 
 ## Exit codes
 

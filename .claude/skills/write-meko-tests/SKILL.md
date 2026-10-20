@@ -112,7 +112,8 @@ for anything with accounts, and `--portal ""` for a local debug run. Without the
 mock the account tests skip, so check the skip count.
 
 Run the test alone and at `--parallel 4`. Use `--env-mode keep-failed` to look at a failed
-stack. Break the thing the test guards once, on purpose, to prove the test can see the bug.
+stack only when the user asked, and `mekoqa env rm <id>` when you are done. Break the thing
+the test guards once, on purpose, to prove the test can see the bug.
 
 Before you push, from `meko/test/functional`:
 

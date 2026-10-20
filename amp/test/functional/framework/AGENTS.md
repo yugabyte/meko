@@ -92,6 +92,17 @@ quietly.
 - Only ever modify or delete resources **the framework created** (namespaces
   labeled `ampqa-*` / `ampqa-managed-by`, tagged instances). Never touch other
   teams' namespaces, workloads, or cluster-scoped objects. Tag and reap.
+- **A kept env is a decision, and it must not live forever.** Before every launch,
+  check its parameters for a keep flag (`--env-mode keep` / `keep-failed`,
+  `--setup-only`), including one copied from an earlier run. Set one only when
+  the user asked for a kept env; ask when the task seems to need one. Remove every
+  kept env when the investigation ends with `ampqa env rm <id>` on the machine
+  that kept it. When the kept env is the run's control plane, that removes only
+  its namespace, so if the run also deploys a backing (`env.yb_deploy`), keep it
+  with `--env-mode keep` (or `keep-failed`) and `--reap-plan <file>`, never
+  `--setup-only`, which writes no plan; end it with `ampqa env reap --plan <file>`,
+  then `ampqa env rm <id> --skip-teardown`. Tell the user which env is kept and
+  how it will be removed.
 
 ## 9. Result honesty & reproducibility
 - The status taxonomy (`passed` / `failed` / `env_failed` / `broken` /
