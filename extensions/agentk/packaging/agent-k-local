@@ -52,7 +52,10 @@ if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
     to=${rest#* }
     failed=$((attempts - 1))
     if [ "$failed" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
-      echo "agent-k-local: version $to failed to start $failed times; rolling back to $from" >&2
+      msg="version $to failed to start $failed times; rolling back to $from"
+      echo "agent-k-local: $msg" >&2
+      # In server.log too, beside the failed starts' errors: stderr may reach no one.
+      { [ -d "$ak_home/logs" ] && printf '%s WARN %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >> "$ak_home/logs/server.log"; } 2>/dev/null || true
       ln -sfn "$from" "$ak_home/app/current.rollback"
       # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
       "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' \

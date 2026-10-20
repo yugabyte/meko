@@ -589,12 +589,14 @@ describe('bin wrapper rollback', () => {
     expect(existsSync(join(root, 'bad-versions'))).toBe(false);
   });
 
-  it('rolls back after the third failed start', () => {
+  it('rolls back after the third failed start, saying so in server.log', () => {
     writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 3 }));
+    mkdirSync(join(root, 'logs'));
     expect(runServe()).toBe('old 0.1.0');
     expect(readlinkSync(join(root, 'app', 'current'))).toBe('0.1.0');
     expect(readFileSync(join(root, 'bad-versions'), 'utf8').trim()).toBe('0.2.0');
     expect(existsSync(join(root, 'update-pending.json'))).toBe(false);
+    expect(readFileSync(join(root, 'logs', 'server.log'), 'utf8')).toMatch(/^\S+Z WARN version 0\.2\.0 failed to start 3 times; rolling back to 0\.1\.0\n$/);
   });
 
   it('ignores the pending file for commands other than serve', () => {

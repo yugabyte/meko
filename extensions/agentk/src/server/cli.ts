@@ -120,12 +120,22 @@ async function serve(): Promise<void> {
   });
   core.updateStatus = () => updater.status();
 
-  const tls = await loadTls(paths, cfg);
-  await core.start();
-  const webDir = findWebDir(here);
-  if (!webDir) log.warn('web assets not found; run `npm run build:web` (or use the Vite dev server)');
-  app = await buildServer(core, { tls, webDir, updater: updater.enabled ? updater : null });
-  await app.listen({ host: cfg.server.bind, port: cfg.server.port });
+  let tls: Awaited<ReturnType<typeof loadTls>>;
+  try {
+    tls = await loadTls(paths, cfg);
+    await core.start();
+    const webDir = findWebDir(here);
+    if (!webDir) log.warn('web assets not found; run `npm run build:web` (or use the Vite dev server)');
+    app = await buildServer(core, { tls, webDir, updater: updater.enabled ? updater : null });
+    await app.listen({ host: cfg.server.bind, port: cfg.server.port });
+  } catch (e) {
+    // In server.log, not only on stderr, which may reach no one (a journal that isn't kept): a
+    // start that keeps failing after an update is rolled back by the launcher, and this says why.
+    log.error(`AgentK Local ${v} couldn't start: ${errMsg(e)}`);
+    clearInterval(beat);
+    lock.release();
+    process.exit(1);
+  }
 
   const url = baseUrl(cfg, !!tls);
   log.info(`AgentK Local ${v} listening on ${url}`);

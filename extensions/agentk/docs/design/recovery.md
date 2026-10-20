@@ -45,15 +45,22 @@ back; reinstalling never reloads a loaded host job.
 moved an install off it by itself on its first start after the update (it added the host service,
 ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
 on 2026-10-09 and was removed about a week later. A Claude must never run in tmux and in the host at
-once, so what's left is a guard: while the tmux service is installed (`legacyTmuxInstalled`), the
-server refuses to start, saying to run `agent-k-local install`. An install that updated itself from
-a tmux version therefore fails to start and rolls back to it (the launcher's rollback; see
-[Releases](releases.md)), with its sessions still running in tmux. `agent-k-local install`, which
-the installer runs, moves it: before it installs the services it removes the old ones, stopping
-the old server first and then the tmux service, which ends the Claudes in it, and the new server's
-recovery resumes them in the host (auto-continuing a turn that was cut off). `agent-k-local
-uninstall` removes the tmux service too. Removing it ends the tmux server on its socket, which
-every AgentK home on the account shared.
+once, so what's left is a guard: while the tmux service is installed (`legacyTmuxInstalled`) and
+the host service isn't, the server refuses to start, saying to run `agent-k-local install`. An
+install that updated itself from a tmux version therefore fails to start and rolls back to it (the
+launcher's rollback; see [Releases](releases.md)), with its sessions still running in tmux.
+`agent-k-local install`, which the installer runs, moves it: before it installs the services it
+removes the old ones, stopping the old server first and then the tmux service, which ends the
+Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
+was cut off). `agent-k-local uninstall` removes the tmux service too. Removing it ends the tmux
+server on its socket, which every AgentK home on the account shared.
+
+An install can have both services: the move kept the tmux service while any `ak-` pane it didn't
+end was still in tmux (it ended only this home's sessions, so a deleted session's Claude, or
+another home's, kept it there). Its sessions already run in the host, so the server starts and logs
+a warning, and leaves the tmux service running rather than end the Claudes still in it.
+`agent-k-local install` then removes only the tmux service, leaving the host and its sessions
+alone. (Refusing there, as versions 0.20261018.3 to 0.20261020.2 did, rolled back every update.)
 
 All of this sits behind one interface in `src/server/service.ts` (install, start, stop, restart,
 state, remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.

@@ -411,9 +411,15 @@ export class Core extends EventEmitter {
     // A version before the session host ran sessions in tmux, and they may still run there: a host
     // would start each one a second time. `install` ends them (it removes the tmux service), and
     // this version's recovery then resumes them in the host. Refusing here also lets an update
-    // from such a version roll back by itself.
-    if (this.services()?.legacyTmuxInstalled()) {
-      throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+    // from such a version roll back by itself. With the host service installed, the install moved
+    // off tmux already and the tmux service is a leftover (the move kept it while a pane it didn't
+    // know, such as a deleted session's, was still in tmux): refusing would roll back every update.
+    const svc = this.services();
+    if (svc?.legacyTmuxInstalled()) {
+      if (!svc.installed('host')) {
+        throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+      }
+      this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: agent-k-local install");
     }
     // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
     // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on
