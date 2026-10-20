@@ -197,6 +197,7 @@ func runSetupOnly(c *cobra.Command, tests []core.Test, provider core.EnvProvider
 	}
 
 	for _, e := range recorded {
+		markKeptOnCluster(c, e)
 		printKeptEnv(c, e)
 	}
 	// If nothing kept the provider's stack, it is not part of a recorded env, so

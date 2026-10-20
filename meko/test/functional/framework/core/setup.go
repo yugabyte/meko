@@ -18,7 +18,7 @@ type StandingEnv struct {
 	Shape    string            // environment shape (e.g. "single_stack")
 	Provider string            // logical provider name: how `env rm` rebuilds a teardowner
 	Ref      string            // attach ref the provider's Attach understands (env rm)
-	TTL      time.Duration     // 0 → never auto-reaped (a standing dev env)
+	TTL      time.Duration     // 0 → mekoqa run applies its default keep TTL
 	Info     map[string]string // connection info + teardown-reconstruction data
 }
 

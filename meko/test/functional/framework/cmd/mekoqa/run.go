@@ -99,6 +99,11 @@ available), distinct from a genuine all-pass.`,
 			if merr != nil {
 				return &exitError{code: 2, err: merr}
 			}
+			if c.Flags().Changed("ttl") {
+				if err := validateKeepTTL(envTTL); err != nil {
+					return &exitError{code: 2, err: err}
+				}
+			}
 			// --env attaches to a standing environment: resolve the registry entry to
 			// the matching provider + connection overrides BEFORE loading config, so
 			// the derived env.k8s.* keys layer in as normal
@@ -396,7 +401,7 @@ available), distinct from a genuine all-pass.`,
 	cmd.Flags().StringVar(&envMode, "env-mode", "build", "environment lifecycle: build (provision, run, tear down) | keep (provision, run, RECORD the env, skip teardown) | keep-failed (tear down when green, keep+record when anything failed) | attach (attach to --env, run, skip teardown)")
 	cmd.Flags().BoolVar(&setupOnly, "setup-only", false, "stand each selected test's environment up and skip its body, leaving it recorded and running (forces keep)")
 	cmd.Flags().StringVar(&envName, "env-name", "", "label for an env recorded by --env-mode keep / --setup-only (default: the provider's own)")
-	cmd.Flags().DurationVar(&envTTL, "ttl", 0, "auto-reap a kept/setup-only env after this long (default 0: never, reap explicitly with env rm)")
+	cmd.Flags().DurationVar(&envTTL, "ttl", 0, "auto-reap a kept/setup-only env after this long (default 24h, at most 48h)")
 	cmd.Flags().StringVar(&regPath, "registry", "", "registry file path for --env / kept envs (default ~/.mekoqa/envs.json)")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "write per-result JSON files under <out-dir>/<runid> (e.g. ./mekoqa-out); default from report.out_dir")
 	cmd.Flags().StringVar(&reapPlan, "reap-plan", "", "write this run's reap plan here so a killed run can be cleaned up later (default <out-dir>/reap-plan.json)")

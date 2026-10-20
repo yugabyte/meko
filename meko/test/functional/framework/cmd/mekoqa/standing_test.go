@@ -138,6 +138,15 @@ func TestStandingEntryAppliesOverrides(t *testing.T) {
 	if keep.TTL != time.Hour {
 		t.Errorf("ttl = %s, want 1h (env default kept)", keep.TTL)
 	}
+
+	env.TTL = 0
+	if got := standingEntry(env, "", 0, false).TTL; got != defaultKeepTTL {
+		t.Errorf("ttl = %s, want %s: a kept env with no TTL must still expire", got, defaultKeepTTL)
+	}
+	env.TTL = 100 * time.Hour
+	if got := standingEntry(env, "", 0, false).TTL; got != maxKeepTTL {
+		t.Errorf("ttl = %s, want the %s cap", got, maxKeepTTL)
+	}
 }
 
 type envListEnvelope struct {
@@ -257,5 +266,29 @@ func TestRecordSuccessKeepsEnv(t *testing.T) {
 	}
 	if _, ok, _ := reg.Get(stored.ID); !ok {
 		t.Error("recorded env not found in the registry")
+	}
+}
+
+func TestValidateKeepTTL(t *testing.T) {
+	for _, tc := range []struct {
+		ttl time.Duration
+		ok  bool
+	}{
+		{0, false}, {-time.Hour, false}, {time.Minute, true}, {maxKeepTTL, true}, {maxKeepTTL + time.Hour, false},
+	} {
+		if err := validateKeepTTL(tc.ttl); (err == nil) != tc.ok {
+			t.Errorf("validateKeepTTL(%s) = %v, want ok=%v", tc.ttl, err, tc.ok)
+		}
+	}
+}
+
+func TestRunRejectsTTLOutOfRange(t *testing.T) {
+	root := buildRoot()
+	root.SetArgs([]string{"run", "--test", "functional/stack_health", "--ttl", "49h", "--dry-run"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	var ee *exitError
+	if err := root.Execute(); !asExitError(err, &ee) || ee.code != 2 {
+		t.Fatalf("error = %v, want usage exitError(2)", err)
 	}
 }

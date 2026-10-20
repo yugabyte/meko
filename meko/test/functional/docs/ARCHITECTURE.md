@@ -370,10 +370,10 @@ deleted. The run never touches another namespace, workload or cluster-scoped obj
 | `attach` | attach to `--env <id>`, run, skip teardown |
 
 `--setup-only` stands each selected test's environment up, skips its body and keeps it. A kept
-environment gets the labels `mekoqa-keep=true`, which stops the janitor reaping it on age, and
-a registry entry in `~/.mekoqa/envs.json` (`--registry`). `mekoqa env ls` lists entries,
-`mekoqa env rm <id>` tears one down from its recorded plan, and `--ttl` auto-reaps after a
-duration. The registry file lives on the machine that ran the command. On Jenkins the
+environment gets the label `mekoqa-keep=true` and a `mekoqa-keep-until` annotation from `--ttl`
+(default 24h, at most 48h), and a registry entry in `~/.mekoqa/envs.json` (`--registry`). The
+`meko-cleaner` janitor reaps it once `mekoqa-keep-until` passes, and at 48h of age regardless.
+`mekoqa env ls` lists entries and `mekoqa env rm <id>` tears one down from its recorded plan. The registry file lives on the machine that ran the command. On Jenkins the
 build's container is gone afterwards, so there the namespace labels are the only record.
 
 ## Reporting

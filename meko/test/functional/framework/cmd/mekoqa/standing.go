@@ -38,6 +38,21 @@ func runSetupTeardown(sr *core.SetupResult, tdTimeout time.Duration, warnf func(
 	return err
 }
 
+// A kept env always expires. With no expiry the cluster janitor once held
+// keep-failed stacks forever and left meko-dev at ~40 nodes. meko-cleaner reaps
+// any kept namespace at maxKeepTTL of age on its own.
+const (
+	defaultKeepTTL = 24 * time.Hour
+	maxKeepTTL     = 48 * time.Hour
+)
+
+func validateKeepTTL(ttl time.Duration) error {
+	if ttl <= 0 || ttl > maxKeepTTL {
+		return fmt.Errorf("--ttl %s: want more than 0 and at most %s", ttl, maxKeepTTL)
+	}
+	return nil
+}
+
 // standingEntry builds the registry entry from a StandingEnv, applying the
 // --name / --ttl overrides. The connection info plus the reconstruction keys
 // (provider name + attach ref) all live in Data so `env rm` can reap it in a
@@ -58,6 +73,10 @@ func standingEntry(env *core.StandingEnv, name string, ttl time.Duration, ttlSet
 	if ttlSet {
 		effTTL = ttl
 	}
+	if effTTL <= 0 {
+		effTTL = defaultKeepTTL
+	}
+	effTTL = min(effTTL, maxKeepTTL)
 	return registry.Entry{
 		Name:     label,
 		Shape:    env.Shape,

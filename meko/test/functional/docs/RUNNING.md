@@ -267,7 +267,7 @@ failure or to run more tests against it, and remove it when done.
 | `--env-mode keep-failed`, `--keep-env-failed`, `KEEP_ENV_ON_FAILURE` | keep it only when something did not pass |
 | `--setup-only` | build the stack, skip the test bodies, keep it |
 | `--env <id>` (`--env-mode attach`) | run against a kept stack and tear nothing down |
-| `--ttl 8h` | expire a kept stack after a duration, enforced only by a scheduled `mekoqa task reap` on the same registry |
+| `--ttl 8h` | expire a kept stack after a duration, default 24h, at most 48h. Portal `keep_hours`, Jenkins `KEEP_HOURS` |
 | `--env-name` | a label for the kept entry |
 
 ```bash
@@ -278,6 +278,8 @@ mekoqa env rm <id>
 ```
 
 `env ls` reads `~/.mekoqa/envs.json` (`--registry`), so it lists only what this machine kept.
+The `meko-cleaner` Jenkins job deletes a kept stack once `mekoqa-keep-until` passes, and at 48h
+of age whatever that says.
 `mekoqa env rm <id>` reconstructs its teardown from the registry, and `--force` drops the entry
 even when teardown fails.
 
