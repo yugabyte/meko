@@ -467,8 +467,10 @@ func (a *agent) WaitChange(ctx context.Context, d time.Duration) bool {
 	since := a.lastGood.ChangeToken
 	deadline := time.Now().Add(d)
 	for {
-		hold := min(time.Until(deadline), longPollMaxHold)
-		if hold <= 0 {
+		// Whole seconds, the unit the hold is asked for in. Under a second left, the tick
+		// just waits it out.
+		hold := min(time.Until(deadline), longPollMaxHold).Truncate(time.Second)
+		if hold < time.Second {
 			return false
 		}
 		start := time.Now()

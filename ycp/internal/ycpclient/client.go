@@ -107,8 +107,9 @@ func (c *Client) Desired(ctx context.Context) (api.DesiredState, error) {
 
 // DesiredSince is Desired as a long-poll: the control plane holds the request until
 // the environment's change token differs from since, or wait runs out, and answers
-// with the current state either way. The request's HTTP timeout is stretched by wait,
-// or the client's own would cut the hold off.
+// with the current state either way. wait is sent in whole seconds; a fraction is
+// dropped. The request's HTTP timeout is stretched by wait, or the client's own would
+// cut the hold off.
 //
 // A control plane that predates long-polling ignores both parameters and answers at
 // once without LongPoll set; telling the two apart is the caller's job.
@@ -117,7 +118,8 @@ func (c *Client) DesiredSince(ctx context.Context, since int64, wait time.Durati
 	if hc.Timeout > 0 {
 		hc.Timeout += wait
 	}
-	q := url.Values{"since": {strconv.FormatInt(since, 10)}, "wait": {wait.Truncate(time.Millisecond).String()}}
+	// Whole seconds: YBM's pass-through takes wait as an integer, and YCP accepts it too.
+	q := url.Values{"since": {strconv.FormatInt(since, 10)}, "wait": {strconv.FormatInt(int64(wait/time.Second), 10)}}
 	return c.desired(ctx, &hc, "/agent/desired-state?"+q.Encode())
 }
 

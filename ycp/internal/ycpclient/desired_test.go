@@ -9,8 +9,9 @@ import (
 	"time"
 )
 
-// The hold is sent as since/wait, and the client's own timeout is stretched by the
-// wait: a 50ms client asked to hold 200ms must not give up on a server holding 100ms.
+// The hold is sent as since/wait, wait in whole seconds, and the client's own timeout is
+// stretched by the wait: a 50ms client asked to hold 2s must not give up on a server
+// holding 100ms.
 func TestDesiredSince_StretchesTheTimeoutByTheWait(t *testing.T) {
 	var gotSince, gotWait string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23,12 +24,12 @@ func TestDesiredSince_StretchesTheTimeoutByTheWait(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "k", &http.Client{Timeout: 50 * time.Millisecond})
-	ds, err := c.DesiredSince(context.Background(), 7, 200*time.Millisecond)
+	ds, err := c.DesiredSince(context.Background(), 7, 2500*time.Millisecond)
 	if err != nil {
 		t.Fatalf("DesiredSince: %v", err)
 	}
-	if gotSince != "7" || gotWait != "200ms" {
-		t.Errorf("sent since=%q wait=%q, want 7 and 200ms", gotSince, gotWait)
+	if gotSince != "7" || gotWait != "2" {
+		t.Errorf("sent since=%q wait=%q, want 7 and 2", gotSince, gotWait)
 	}
 	if ds.ChangeToken != 8 || !ds.LongPoll {
 		t.Errorf("decoded %+v, want change_token 8 with long_poll", ds)

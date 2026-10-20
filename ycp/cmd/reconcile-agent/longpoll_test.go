@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ func desiredServer(t *testing.T, hold bool, body map[string]any, status int) (*h
 	var reads int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&reads, 1)
-		if wait, err := time.ParseDuration(r.URL.Query().Get("wait")); hold && err == nil {
-			time.Sleep(wait)
+		if wait, err := strconv.Atoi(r.URL.Query().Get("wait")); hold && err == nil {
+			time.Sleep(time.Duration(wait) * time.Second)
 		}
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": body})
@@ -44,7 +45,7 @@ func TestWaitChange_AChangeIsHandedToTheNextDesired(t *testing.T) {
 	}, http.StatusOK)
 	a := longPollAgent(srv, api.DesiredState{ChangeToken: 7})
 
-	if !a.WaitChange(context.Background(), time.Second) {
+	if !a.WaitChange(context.Background(), 2*time.Second) {
 		t.Fatal("WaitChange = false for a moved token")
 	}
 	ds, fresh, err := a.Desired(context.Background())
@@ -63,17 +64,18 @@ func TestWaitChange_AChangeIsHandedToTheNextDesired(t *testing.T) {
 // interval longer than the control plane's cap takes several.
 func TestWaitChange_UnchangedHoldsUntilTheTickIsDue(t *testing.T) {
 	defer func(old time.Duration) { longPollMaxHold = old }(longPollMaxHold)
-	longPollMaxHold = 40 * time.Millisecond
+	longPollMaxHold = time.Second
 	srv, reads := desiredServer(t, true,
 		map[string]any{"change_token": 7, "long_poll": true}, http.StatusOK)
 	a := longPollAgent(srv, api.DesiredState{ChangeToken: 7})
 
 	start := time.Now()
-	if a.WaitChange(context.Background(), 100*time.Millisecond) {
+	if a.WaitChange(context.Background(), 2500*time.Millisecond) {
 		t.Fatal("WaitChange = true for an unchanged token")
 	}
-	if took := time.Since(start); took < 80*time.Millisecond {
-		t.Errorf("returned after %s, want about the 100ms it was given", took)
+	// Two 1s holds; the last 0.5s is under a whole second, so the tick waits it out.
+	if took := time.Since(start); took < 2*time.Second {
+		t.Errorf("returned after %s, want the two whole-second holds", took)
 	}
 	if n := atomic.LoadInt32(reads); n < 2 {
 		t.Errorf("%d reads, want a second hold after the first ran its course", n)
@@ -93,10 +95,10 @@ func TestWaitChange_AnOldControlPlaneFallsBackToTicking(t *testing.T) {
 			srv, reads := desiredServer(t, false, map[string]any{"revision": tc.revision}, http.StatusOK)
 			a := longPollAgent(srv, api.DesiredState{Revision: 3})
 
-			if got := a.WaitChange(context.Background(), time.Second); got != tc.want {
+			if got := a.WaitChange(context.Background(), 2*time.Second); got != tc.want {
 				t.Errorf("WaitChange = %v, want %v", got, tc.want)
 			}
-			if a.WaitChange(context.Background(), time.Second) {
+			if a.WaitChange(context.Background(), 2*time.Second) {
 				t.Error("a second wait inside the re-probe window reported a change")
 			}
 			if n := atomic.LoadInt32(reads); n != 1 {
@@ -111,10 +113,10 @@ func TestWaitChange_AFailedHoldWaitsOutTheTick(t *testing.T) {
 	srv, reads := desiredServer(t, false, map[string]any{}, http.StatusGatewayTimeout)
 	a := longPollAgent(srv, api.DesiredState{ChangeToken: 7})
 
-	if a.WaitChange(context.Background(), time.Second) {
+	if a.WaitChange(context.Background(), 2*time.Second) {
 		t.Fatal("WaitChange = true for a failed read")
 	}
-	if a.WaitChange(context.Background(), time.Second) || atomic.LoadInt32(reads) != 1 {
+	if a.WaitChange(context.Background(), 2*time.Second) || atomic.LoadInt32(reads) != 1 {
 		t.Errorf("%d reads, want long-polling paused after a failure", atomic.LoadInt32(reads))
 	}
 }
@@ -125,7 +127,7 @@ func TestWaitChange_NothingToCompareAgainst(t *testing.T) {
 	a := longPollAgent(srv, api.DesiredState{})
 	a.haveGood = false
 
-	if a.WaitChange(context.Background(), time.Second) || atomic.LoadInt32(reads) != 0 {
+	if a.WaitChange(context.Background(), 2*time.Second) || atomic.LoadInt32(reads) != 0 {
 		t.Error("long-polled with no last-good state")
 	}
 }
@@ -137,10 +139,10 @@ func TestWaitChange_AnUnheldUnchangedAnswerPauses(t *testing.T) {
 	srv, reads := desiredServer(t, false, map[string]any{"change_token": 7, "long_poll": true}, http.StatusOK)
 	a := longPollAgent(srv, api.DesiredState{ChangeToken: 7})
 
-	if a.WaitChange(context.Background(), time.Second) {
+	if a.WaitChange(context.Background(), 2*time.Second) {
 		t.Fatal("WaitChange = true for an unchanged token")
 	}
-	if a.WaitChange(context.Background(), time.Second) || atomic.LoadInt32(reads) != 1 {
+	if a.WaitChange(context.Background(), 2*time.Second) || atomic.LoadInt32(reads) != 1 {
 		t.Errorf("%d reads, want long-polling paused after an unheld answer", atomic.LoadInt32(reads))
 	}
 }
@@ -157,10 +159,21 @@ func TestWaitChange_AStalledHoldIsCutAtTheTick(t *testing.T) {
 		lastGood: api.DesiredState{ChangeToken: 7}, haveGood: true,
 	}
 	start := time.Now()
-	if a.WaitChange(context.Background(), 100*time.Millisecond) {
+	if a.WaitChange(context.Background(), 2*time.Second) {
 		t.Fatal("WaitChange = true for a stalled read")
 	}
-	if took := time.Since(start); took > 100*time.Millisecond+longPollSlack+time.Second {
-		t.Errorf("WaitChange took %s, want it cut near 100ms + %s", took, longPollSlack)
+	if took := time.Since(start); took < time.Second || took > 2*time.Second+longPollSlack+time.Second {
+		t.Errorf("WaitChange took %s, want it cut near 2s + %s", took, longPollSlack)
+	}
+}
+
+// wait goes out in whole seconds, so with under a second left there is no hold worth
+// asking for: the tick waits the remainder out without a read.
+func TestWaitChange_UnderASecondLeftSkipsTheHold(t *testing.T) {
+	srv, reads := desiredServer(t, true, map[string]any{"change_token": 7, "long_poll": true}, http.StatusOK)
+	a := longPollAgent(srv, api.DesiredState{ChangeToken: 7})
+
+	if a.WaitChange(context.Background(), 900*time.Millisecond) || atomic.LoadInt32(reads) != 0 {
+		t.Errorf("held a read with 900ms left (%d reads)", atomic.LoadInt32(reads))
 	}
 }

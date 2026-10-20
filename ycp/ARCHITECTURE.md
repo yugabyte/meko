@@ -134,7 +134,7 @@ cluster.
 
    **A tick starts `RECONCILE_INTERVAL` (10s) after the last one, or as soon as desired
    state changes.** Between ticks the agent long-polls
-   `/agent/desired-state?since=<change_token>&wait=<rest of the interval>`.
+   `/agent/desired-state?since=<change_token>&wait=<rest of the interval, in whole seconds>`.
    - **The token:** `meko_system.environment_desired_revs.rev`. The repository bumps
      it after every desired-state write that changed a row commits, so it moves on
      creates and deletes, which the response's `revision` (the max generation) does
