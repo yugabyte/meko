@@ -6,8 +6,8 @@
 //! walingest.rs handles a few things like implicit relation creation and extension.
 //! Clarify that)
 //!
-use std::collections::{BTreeSet, HashMap, HashSet, hash_map};
-use std::ops::ControlFlow;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map};
+use std::ops::{ControlFlow, Range};
 use std::sync::Arc;
 
 use crate::walingest::{WalIngestError, WalIngestErrorKind};
@@ -318,7 +318,7 @@ impl Timeline {
                         "read beyond EOF at {} blk {} at {}, size is {}: returning all-zeros page",
                         tag,
                         blknum,
-                        version.get_lsn(),
+                        version.rel_size_cache_lsn(),
                         nblocks
                     );
                     return Ok(ZERO_PAGE.clone());
@@ -714,16 +714,12 @@ impl Timeline {
         version: Version<'_>,
         ctx: &RequestContext,
     ) -> Result<HashSet<RelTag>, PageReconstructError> {
-        let key_range = rel_tag_sparse_key_range(spcnode, dbnode);
-        // Ingest reads the state just before its record, like `DatadirModification::get`.
-        let lsn = match version {
-            Version::LsnRange(lsns) => lsns.effective_lsn,
-            Version::Modified(modification) => modification.lsn_before_record(),
-        };
-        let results = self.scan(KeySpace::single(key_range), lsn, ctx).await?;
+        let results = version
+            .scan(self, rel_tag_sparse_key_range(spcnode, dbnode), ctx)
+            .await?;
         let mut rels = HashSet::new();
         for (key, val) in results {
-            let val = RelDirExists::decode(&val?).map_err(|_| {
+            let val = RelDirExists::decode(&val).map_err(|_| {
                 PageReconstructError::Other(anyhow::anyhow!(
                     "invalid reldir key: decode failed, {}",
                     key
@@ -753,28 +749,25 @@ impl Timeline {
                 relnode: key.field4,
                 forknum: key.field5,
             };
-            if val == RelDirExists::Removed {
-                debug_assert!(!rels.contains(&tag), "removed reltag in v2");
-                continue;
-            }
-            let did_not_contain = rels.insert(tag);
-            debug_assert!(did_not_contain, "duplicate reltag in v2");
-        }
-        // Overlay this modification's uncommitted markers; the scan above
-        // reads the Timeline and cannot see them.
-        if let Version::Modified(modification) = version {
-            for (tag, marker) in modification.pending_reldir_markers(spcnode, dbnode) {
-                match marker {
-                    RelDirExists::Exists => {
-                        rels.insert(tag);
-                    }
-                    RelDirExists::Removed => {
-                        rels.remove(&tag);
-                    }
-                }
+            if val == RelDirExists::Exists {
+                rels.insert(tag);
             }
         }
         Ok(rels)
+    }
+
+    /// Values in `range` at `lsn`; fails if any key fails.
+    async fn scan_range(
+        &self,
+        range: Range<Key>,
+        lsn: Lsn,
+        ctx: &RequestContext,
+    ) -> Result<BTreeMap<Key, Bytes>, PageReconstructError> {
+        self.scan(KeySpace::single(range), lsn, ctx)
+            .await?
+            .into_iter()
+            .map(|(k, v)| v.map(|v| (k, v)))
+            .collect()
     }
 
     /// Get a list of all existing relations in given tablespace and database.
@@ -1360,7 +1353,7 @@ impl Timeline {
     /// of the timeline and snapshot cache, which key includes LSN and so can be used by replicas to get relation size
     /// at the particular LSN (snapshot).
     pub fn get_cached_rel_size(&self, tag: &RelTag, version: Version<'_>) -> Option<BlockNumber> {
-        let lsn = version.get_lsn();
+        let lsn = version.rel_size_cache_lsn();
         {
             let is_ingest = matches!(version, Version::Modified(_));
             let rel_size_cache = self.rel_size_latest_cache.read().unwrap();
@@ -1394,7 +1387,7 @@ impl Timeline {
 
     /// Update cached relation size if there is no more recent update
     pub fn update_cached_rel_size(&self, tag: RelTag, version: Version<'_>, nblocks: BlockNumber) {
-        let lsn = version.get_lsn();
+        let lsn = version.rel_size_cache_lsn();
         if version.is_latest() {
             let mut rel_size_cache = self.rel_size_latest_cache.write().unwrap();
             match rel_size_cache.entry(tag) {
@@ -1572,14 +1565,12 @@ impl DatadirModification<'_> {
         dbnode: Oid,
         ctx: &RequestContext,
     ) -> Result<Vec<(RelTag, RelDirExists)>, PageReconstructError> {
-        let range = rel_tag_sparse_key_range(spcnode, dbnode);
         let results = self
-            .tline
-            .scan(KeySpace::single(range), self.lsn_before_record(), ctx)
+            .scan(rel_tag_sparse_key_range(spcnode, dbnode), ctx)
             .await?;
         let mut out = Vec::new();
         for (key, val) in results {
-            let Ok(marker) = RelDirExists::decode(&val?) else {
+            let Ok(marker) = RelDirExists::decode(&val) else {
                 continue;
             };
             out.push((
@@ -1591,54 +1582,45 @@ impl DatadirModification<'_> {
                 },
                 marker,
             ));
-        }
-        // Pending markers from this modification shadow the scan.
-        for (tag, marker) in self.pending_reldir_markers(spcnode, dbnode) {
-            out.retain(|(t, _)| *t != tag);
-            out.push((tag, marker));
         }
         Ok(out)
     }
 
-    /// Sparse-reldir markers written by *this* modification and not yet
-    /// committed, for one database.
-    ///
-    /// `list_rels_v2` scans the Timeline, which cannot see pending writes.
-    /// The v1 directory read went through [`Version::get`] → [`Self::get`]
-    /// and so picked them up for free; this restores that. Without it a
-    /// batch containing `XLOG_SMGR_CREATE` followed by `XLOG_DBASE_DROP`
-    /// on the same database loses the new relation: `drop_dbdir` reads at
-    /// `Version::Modified` and would not see it, so its size never leaves
-    /// `pending_nblocks`.
-    pub(crate) fn pending_reldir_markers(
+    /// Like [`Self::get`], for a range of metadata keys: data keys can't be scanned.
+    async fn scan(
         &self,
-        spcnode: Oid,
-        dbnode: Oid,
-    ) -> Vec<(RelTag, RelDirExists)> {
-        let range = rel_tag_sparse_key_range(spcnode, dbnode);
-        let mut out = Vec::new();
+        range: Range<Key>,
+        ctx: &RequestContext,
+    ) -> Result<BTreeMap<Key, Bytes>, PageReconstructError> {
+        let mut out = self
+            .tline
+            .scan_range(range.clone(), self.lsn_before_record(), ctx)
+            .await?;
+        // Pending writes are not in the Timeline yet: without them SMGR_CREATE then DBASE_DROP in
+        // one batch would miss the new relation.
         for (compact, values) in &self.pending_metadata_pages {
             let key = Key::from_compact(*compact);
-            if key < range.start || key >= range.end {
+            if !range.contains(&key) {
                 continue;
             }
-            let Some((_, _, Value::Image(img))) = values.last() else {
-                continue;
-            };
-            let Ok(marker) = RelDirExists::decode(img) else {
-                continue;
-            };
-            out.push((
-                RelTag {
-                    spcnode,
-                    dbnode,
-                    relnode: key.field4,
-                    forknum: key.field5,
-                },
-                marker,
-            ));
+            if let Some(pending) = Self::newest_pending_image(values) {
+                out.insert(key, pending?);
+            }
         }
-        out
+        Ok(out)
+    }
+
+    /// The newest of one key's pending writes. Metadata updates are always images: reading back
+    /// a pending WAL record would need walredo, which nothing does.
+    fn newest_pending_image(
+        values: &[(Lsn, usize, Value)],
+    ) -> Option<Result<Bytes, PageReconstructError>> {
+        values.last().map(|(_, _, value)| match value {
+            Value::Image(img) => Ok(img.clone()),
+            _ => Err(PageReconstructError::Other(anyhow::anyhow!(
+                "unexpected pending WAL record"
+            ))),
+        })
     }
 
     pub(crate) fn has_dirty_data(&self) -> bool {
@@ -2774,21 +2756,13 @@ impl DatadirModification<'_> {
         if !Self::is_data_key(&key) {
             // Have we already updated the same key? Read the latest pending updated
             // version in that case.
-            if let Some(values) = self.pending_metadata_pages.get(&key.to_compact()) {
-                if let Some((_, _, value)) = values.last() {
-                    return if let Value::Image(img) = value {
-                        Ok(img.clone())
-                    } else {
-                        // Currently, we never need to read back a WAL record that we
-                        // inserted in the same "transaction". All the metadata updates
-                        // work directly with Images, and we never need to read actual
-                        // data pages. We could handle this if we had to, by calling
-                        // the walredo manager, but let's keep it simple for now.
-                        Err(PageReconstructError::Other(anyhow::anyhow!(
-                            "unexpected pending WAL record"
-                        )))
-                    };
-                }
+            if let Some(pending) = self
+                .pending_metadata_pages
+                .get(&key.to_compact())
+                .map(Vec::as_slice)
+                .and_then(Self::newest_pending_image)
+            {
+                return pending;
             }
         } else {
             // This is an expensive check, so we only do it in debug mode. If reading a data key,
@@ -2964,10 +2938,25 @@ impl Version<'_> {
         }
     }
 
-    pub fn get_lsn(&self) -> Lsn {
+    /// The LSN rel-size cache entries are stamped and looked up at: the record's own LSN for
+    /// ingest. Reads use [`Self::get`] and [`Self::scan`] instead.
+    pub fn rel_size_cache_lsn(&self) -> Lsn {
         match self {
             Version::LsnRange(lsns) => lsns.effective_lsn,
             Version::Modified(modification) => modification.lsn,
+        }
+    }
+
+    /// Read a key range, like [`Self::get`].
+    async fn scan(
+        &self,
+        timeline: &Timeline,
+        range: Range<Key>,
+        ctx: &RequestContext,
+    ) -> Result<BTreeMap<Key, Bytes>, PageReconstructError> {
+        match self {
+            Version::LsnRange(lsns) => timeline.scan_range(range, lsns.effective_lsn, ctx).await,
+            Version::Modified(modification) => modification.scan(range, ctx).await,
         }
     }
 
