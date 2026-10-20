@@ -4358,6 +4358,7 @@ div[id^='dak-mermaid-'] .label {
   flex: none;
 }
 .topbar-menu {
+  position: relative;
   color: var(--ink);
 }
 .topbar-title {
@@ -4373,6 +4374,10 @@ div[id^='dak-mermaid-'] .label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.topbar-title b .dot {
+  margin-right: 7px;
+  vertical-align: 1px;
 }
 .topbar-sub {
   font-size: 12px;

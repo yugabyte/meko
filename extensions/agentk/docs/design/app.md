@@ -304,8 +304,10 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
 app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
 top of the screen, in place of `⌘K`), and, with the setting on, lists the sessions under their projects as on a desktop.
-The app bar also holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
-can switch sessions without opening the drawer (each tab shows its status and stage). The session header,
+With the setting off, the app bar holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
+can switch sessions without opening the drawer (each tab shows its status and stage); with it on, the drawer
+lists them instead and the app bar names the session and its project, with the session's status dot, and puts
+a dot on the drawer button while another session in the project needs you. The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a

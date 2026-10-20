@@ -76,3 +76,12 @@ const sessions = browserToggle(SESSIONS_KEY, false);
 export const railSessionsSaved = sessions.saved;
 export const saveRailSessions = sessions.save;
 export const useRailSessions = sessions.use;
+
+/**
+ * Whether the session screen shows the session tabs (above the terminal, or in a phone's app bar): not
+ * while the pane lists the sessions and is shown. A phone's drawer always shows the pane, whatever the
+ * wide layout's hidden setting says.
+ */
+export function sessionTabsShown(railSessions: boolean, railHidden: boolean, mobile: boolean): boolean {
+  return !railSessions || (railHidden && !mobile);
+}
