@@ -36,10 +36,11 @@ import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
-import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, toProject } from './store.js';
+import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, sessionRows, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { SessionHost } from './hostclient.js';
+import { legacyTmuxPanes } from './legacytmux.js';
 import { servicesFor, type ServiceManager } from './service.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
@@ -53,6 +54,8 @@ export interface CoreOptions {
   host?: SessionHost;
   /** The background services (server, session host); tests pass none. */
   services?: () => ServiceManager | null;
+  /** The tmux sessions on older versions' socket (legacytmux.ts); tests pass their own. */
+  legacyTmuxPanes?: () => Promise<Set<string>>;
   log?: Logger;
   /** Timers for reconcile, GitHub polling and the share syncs. Tests turn these off. */
   timers?: boolean;
@@ -105,6 +108,7 @@ export class Core extends EventEmitter {
   readonly mekoLog: MekoCallLog;
   readonly host: SessionHost;
   readonly services: () => ServiceManager | null;
+  readonly legacyTmuxPanes: () => Promise<Set<string>>;
   readonly log: Logger;
   readonly projects: ProjectService;
   readonly worktrees: WorktreePool;
@@ -183,6 +187,7 @@ export class Core extends EventEmitter {
     });
     this.meko.onTrace = (t) => this.mekoLog.record(t);
     this.services = o.services ?? (() => servicesFor(o.paths.home));
+    this.legacyTmuxPanes = o.legacyTmuxPanes ?? (() => legacyTmuxPanes(o.paths));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
     this.timersOn = o.timers ?? true;
     this.username = safeUsername();
@@ -411,9 +416,18 @@ export class Core extends EventEmitter {
     // A version before the session host ran sessions in tmux, and they may still run there: a host
     // would start each one a second time. `install` ends them (it removes the tmux service), and
     // this version's recovery then resumes them in the host. Refusing here also lets an update
-    // from such a version roll back by itself.
-    if (this.services()?.legacyTmuxInstalled()) {
-      throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+    // from such a version roll back by itself. The host service alone doesn't prove the sessions
+    // left tmux (a tmux version reinstalled after the move keeps its file), so with it installed
+    // this refuses only while a session of this home that isn't archived is still in tmux.
+    // Otherwise the tmux service is a leftover (the move kept it while a pane it didn't know, such
+    // as a deleted session's, was still in tmux), and refusing would roll back every update.
+    const svc = this.services();
+    if (svc?.legacyTmuxInstalled()) {
+      const inTmux = svc.installed('host') ? await this.legacyTmuxPanes() : null;
+      if (!inTmux || sessionRows(this.db).some((r) => r.status !== 'archived' && inTmux.has(r.tmux_name))) {
+        throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+      }
+      this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: agent-k-local install");
     }
     // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
     // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on

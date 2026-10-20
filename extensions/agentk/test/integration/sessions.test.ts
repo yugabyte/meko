@@ -947,16 +947,27 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await waitFor(() => captureLog(env).length, (n) => n > captured, 10000, 'catch-up capture on boot');
   });
 
-  it("won't start while a version before the session host's tmux service is installed, so no Claude runs twice", async () => {
+  it("won't start while a version before the session host's tmux service is installed, so no Claude runs twice, but starts beside a leftover one", async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'In tmux too', prompt: 'hi', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
     await env.core.stop();
     await env.killHost();
     const launches = argvLog(env).length;
-    (env.core as unknown as { services: () => unknown }).services = () => ({ legacyTmuxInstalled: () => true });
-    await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+    const core = env.core as unknown as { services: () => unknown; legacyTmuxPanes: () => Promise<Set<string>> };
+    const services = (hostInstalled: boolean) => () => ({ legacyTmuxInstalled: () => true, installed: (svc: string) => svc === 'host' && hostInstalled });
+    // No host service, or one but this session still in tmux (a tmux version reinstalled after the move).
+    for (const [host, inTmux] of [[false, []], [true, [s.paneName]]] as const) {
+      core.services = services(host);
+      core.legacyTmuxPanes = async () => new Set(inTmux);
+      await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+    }
     expect(argvLog(env).length).toBe(launches);
+    // Only a pane this home doesn't know (a deleted session's): the tmux service is a leftover of
+    // the move, and refusing would roll back every update.
+    core.legacyTmuxPanes = async () => new Set(['ak-deleted-session']);
+    await env.core.start();
+    await waitFor(() => argvLog(env).length, (n) => n > launches, 10000, 'resumed in the host');
   });
 
   it('waits for a session that is still starting before archiving it, and leaves no Claude behind', async () => {

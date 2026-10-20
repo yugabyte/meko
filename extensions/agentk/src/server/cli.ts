@@ -8,13 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
 import { findMekoCaptureScript } from './capture.js';
 import { loginShell, scrubSessionMarkers } from './launcher.js';
-import { dbPath, isLoopback, loadConfig, resolveMeko } from './config.js';
+import { dbPath, isLoopback, loadConfig, resolveMeko, type Config } from './config.js';
 import { Core } from './core.js';
 import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
-import { errMsg, fileLogger } from './log.js';
+import { errMsg, fileLogger, type Logger } from './log.js';
 import { probeLocal } from './health.js';
 import { MekoClient } from './meko.js';
-import { getPaths, tildify, withLocalBin } from './paths.js';
+import { getPaths, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
 import { hostServices, servicesFor } from './service.js';
@@ -72,8 +72,22 @@ async function serve(): Promise<void> {
     uncountStart(paths, v);
     process.exit(EXIT_BUSY);
   }
-  const db = openDb(dbPath(paths, cfg));
   const log = fileLogger(join(paths.logs, 'server.log'));
+  try {
+    await startServer(paths, cfg, v, lock, log);
+  } catch (e) {
+    // In server.log, not only on stderr, which may reach no one (a journal that isn't kept): a
+    // start that keeps failing after an update (a migration, the guard in Core.start) is rolled
+    // back by the launcher, and this says why. The lease goes too, so the next start needn't wait.
+    log.error(`AgentK Local ${v} couldn't start: ${errMsg(e)}`);
+    lock.release();
+    process.exit(1);
+  }
+}
+
+/** A start once it holds the home's lease: the database, Core, the web server, and the updater. */
+async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceLock, log: Logger): Promise<void> {
+  const db = openDb(dbPath(paths, cfg));
   let core: Core | null = null;
   const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
   const mekoCaptureScript = cfg.meko.captureTranscripts ? findMekoCaptureScript() : null;
