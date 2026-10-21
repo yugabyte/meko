@@ -286,8 +286,9 @@ counts.
   localhost client, paths from the data folder) carry `nolint` comments with the reason.
 - Tests use a temporary data folder and never touch `~/.meko`. The server's tests start it
   in-process on port 0. The supervisor's tests re-run the test binary as the stub child.
-- Commits are `chore(backend): ...`: nothing in `backend/` ships in AgentK Local's release, and a
-  `feat` would make `main` cut an AgentK release with no AgentK change in it.
+- Commits are `chore(meko): ...` (or `chore(meko/<area>): ...`): nothing in `backend/` ships in
+  AgentK Local's release, and a `feat` would make `main` cut an AgentK release with no AgentK
+  change in it.
 
 ## Its own stack, no api_server code
 

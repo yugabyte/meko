@@ -106,7 +106,7 @@ describe('dependabot config', () => {
 
   it('writes subjects that pass the title rules', () => {
     for (const u of updates()) {
-      // A scope would add (deps) to the type, e.g. deps(deps): ...
+      // A scope would add (deps) after the prefix's component, e.g. deps(agentk)(deps): ...
       expect(u.scope, u.ecosystem).toBe(false);
       for (const dev of u.ecosystem === 'npm' ? [false, true] : [false]) {
         const s = subject(u, dev, 'bump the production group across 1 directory with 12 updates');

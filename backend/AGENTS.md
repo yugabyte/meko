@@ -50,8 +50,9 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 
 ## Rules
 
-- Commits and PR titles are `chore(backend): ...`. Nothing here ships in AgentK Local's release
-  yet, and any `feat`, `fix`, `perf` or `deps` commit on `main` cuts an AgentK release.
+- Commits and PR titles are `chore(meko): ...` (or `chore(meko/<area>): ...`). Nothing here
+  ships in AgentK Local's release yet, and any `feat`, `fix`, `perf` or `deps` commit on `main`
+  cuts an AgentK release.
 - Keep `docs/design.md` and this file current in the same commit as the code, and check the
   change against [REVIEW.md](REVIEW.md).
 - Every database call goes through `internal/store`. The only other package that imports the

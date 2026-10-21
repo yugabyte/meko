@@ -13,8 +13,9 @@ Part of the [AgentK Local design](../design.md).
   the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
   every component's jobs, run or skipped) and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
-  from 0 for each release that day. Commit subjects are `<type>[(<component>)][!]: <summary>`
-  with one of nine types (`scripts/check-title.sh`), and PRs are squash-merged with the PR title
+  from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
+  with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
+  `scripts/check-title.sh`), and PRs are squash-merged with the PR title
   as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit since the last release
   runs the tests and cuts the next version, and those subjects become the release notes; `ci`,
   `test`, `docs`, `nit` and `chore` don't release.

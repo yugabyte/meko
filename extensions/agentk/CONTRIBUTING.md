@@ -51,15 +51,17 @@ PRs, squash-merged once the `CI gate` and `PR title` checks pass.
 
 ## Commits
 
-Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
+Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, like
 [Conventional Commits](https://www.conventionalcommits.org/) but with exactly these types:
 
 - Release: `feat`, `fix`, `perf`, `deps`.
 - Don't release: `ci`, `test`, `docs`, `nit` (comment-only changes, typos, formatting, refactors
   with no behavior change), `chore`.
 
-The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
-and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
+The component names the part of the repo: `agentk` for AgentK Local, `meko` for Meko
+(`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
+slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
+(`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
 repo root; the
@@ -76,9 +78,9 @@ gets its own PR. `@types/node` stays on the Node major we ship (22). `typescript
 until typescript-eslint supports TypeScript 7
 ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
 so its majors don't come at all; drop that `ignore` rule once it lands. Dependabot's commit subjects (and so its PR
-titles) follow the title and release rules: every npm bump is `deps: …` and releases once merged
+titles) follow the title and release rules: every npm bump is `deps(agentk): …` and releases once merged
 (the web UI's libraries are devDependencies bundled into the release, so dev-tool bumps release
-too), while `ci: …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
+too), while `ci(repo): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
 breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
 `release.yml`) is bumped by hand.
 

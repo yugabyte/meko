@@ -19,5 +19,6 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] The engine stores only through the store API, its dependencies stay pinned, and nothing copies
       or cites prod Meko's private code.
 - [ ] `third_party/` is vendored and unchanged; an upgrade replaces the files and updates `VERSION`.
-- [ ] Commits are `chore(backend): ...`: nothing in `backend/` ships in AgentK Local's release yet.
+- [ ] Commits are `chore(meko): ...` (or `chore(meko/<area>): ...`): nothing in `backend/` ships
+      in AgentK Local's release yet.
 - [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code.

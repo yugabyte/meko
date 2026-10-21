@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Commits carry no agent attribution, and subjects and PR titles use `<type>[(<component>)]: <summary>` so the release workflow can cut releases.
+description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Commits carry no agent attribution, and subjects and PR titles use `<type>(<component>[/<area>]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
 ---
 
 # Committing in agent-k-local
@@ -24,7 +24,7 @@ pass `--author` or change the identity.
 ## Subject format
 
 ```
-<type>[(<component>)][!]: <summary>
+<type>(<component>[/<area>])[!]: <summary>
 ```
 
 The release workflow reads commit subjects: a push to `main` with any `feat`, `fix`, `perf` or
@@ -55,10 +55,21 @@ There is no `refactor`, `build`, `style` or `revert`:
 
 The rest of the subject:
 
-- `(<component>)` is optional: any lowercase name (letters, digits, dashes) for the part of the
-  code it touches, e.g. `server`, `web`, `auth`, `host`, `worktree`, `meko`, `update`,
-  `release`, `install`.
-- `!` after the type or component marks a breaking change (`feat!:`, `fix(web)!:`), or add a
+- `(<component>)` is required: the part of the repo the change is in, one of
+
+  | Component | Where |
+  |---|---|
+  | `agentk` | AgentK Local, `extensions/agentk` |
+  | `meko` | Meko, `backend/` |
+  | `repo` | The shared root: `.github/`, `scripts/`, root docs, `.claude/` |
+
+  A change that spans two takes the one it's mainly for. A root file that belongs to one
+  component (`release.yml` builds AgentK) takes that component, not `repo`. The list is
+  `COMPONENTS` in `scripts/check-title.sh`; a new extension adds its name there.
+- `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the
+  component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (AgentK's Meko
+  integration), `agentk/update`, `meko/store`.
+- `!` after the component marks a breaking change (`feat(agentk)!:`, `fix(agentk/web)!:`), or add a
   `BREAKING CHANGE:` footer. Only `feat`, `fix`, `perf` and `deps` can be breaking: a breaking
   change ships, so it needs a releasing type.
 - Summary: imperative mood, lowercase except proper nouns (Homebrew, Meko), no trailing period
@@ -68,13 +79,13 @@ The rest of the subject:
 Check a subject before using it; it prints what's wrong and the rules:
 
 ```sh
-sh scripts/check-title.sh "fix(host): resume sessions after a host reboot"
+sh scripts/check-title.sh "fix(agentk/host): resume sessions after a host reboot"
 ```
 
 Example:
 
 ```
-fix(host): resume sessions with claude --resume after a host reboot
+fix(agentk/host): resume sessions with claude --resume after a reboot
 
 The server now reconciles state.db against the session host on boot and
 relaunches any session whose pane is gone, so a devserver crash no longer
