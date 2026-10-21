@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"syscall"
 )
 
@@ -157,9 +156,6 @@ func existingAncestor(path string) string {
 // SharedTmp is the shared local folder localFallback uses; tests replace it.
 var SharedTmp = "/var/tmp"
 
-// CurrentUser looks up this user for localFallback's folder name; tests replace it.
-var CurrentUser = user.Current
-
 // localFallback is a local-disk data folder for a home folder on a network filesystem:
 // $XDG_STATE_HOME/meko if that's local, else /var/tmp/<user>/meko (as AgentK does
 // for its state.db).
@@ -170,32 +166,15 @@ func localFallback() (string, error) {
 			return dir, nil
 		}
 	}
-	name, err := userFolder()
+	u, err := user.Current()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(SharedTmp, name, "meko")
+	dir := filepath.Join(SharedTmp, u.Username, "meko")
 	if err := EnsurePrivateDir(dir); err != nil {
 		return "", err
 	}
 	return dir, nil
-}
-
-// userFolder names this user's folder in SharedTmp: the login name, or the numeric uid when the
-// uid has no account (a container run with an arbitrary uid). Any other lookup error, such as a
-// directory service that's briefly unreachable, is returned: falling back then would move a user
-// who has a name to a different, empty data folder. EnsurePrivateDir still checks the folder is
-// this user's.
-func userFolder() (string, error) {
-	u, err := CurrentUser()
-	var unknown user.UnknownUserIdError
-	switch {
-	case errors.As(err, &unknown) || (err == nil && u.Username == ""):
-		return strconv.Itoa(os.Getuid()), nil
-	case err != nil:
-		return "", err
-	}
-	return u.Username, nil
 }
 
 // EnsurePrivateDir creates dir in a shared place like /var/tmp, where another user could have
