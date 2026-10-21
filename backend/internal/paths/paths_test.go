@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -71,6 +72,11 @@ func TestResolve(t *testing.T) {
 	want = filepath.Join(SharedTmp, strconv.Itoa(os.Getuid()), "meko")
 	if got, err = Resolve(""); err != nil || got != want {
 		t.Fatalf("fallback for an unknown uid: got %q, %v", got, err)
+	}
+	// Any other lookup failure (a directory service that's down) is an error, not a different folder.
+	CurrentUser = func() (*user.User, error) { return nil, errors.New("user: lookup userid 1: sssd down") }
+	if got, err = Resolve(""); err == nil || !strings.Contains(err.Error(), "sssd down") {
+		t.Fatalf("a failed lookup: got %q, %v", got, err)
 	}
 
 	// A folder the user named on NFS is refused, with the reason.

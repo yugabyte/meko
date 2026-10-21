@@ -167,7 +167,11 @@ func localFallback() (string, error) {
 			return dir, nil
 		}
 	}
-	dir := filepath.Join(SharedTmp, userFolder(), "meko")
+	name, err := userFolder()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(SharedTmp, name, "meko")
 	if err := EnsurePrivateDir(dir); err != nil {
 		return "", err
 	}
@@ -175,13 +179,20 @@ func localFallback() (string, error) {
 }
 
 // userFolder names this user's folder in SharedTmp: the login name, or the numeric uid when the
-// uid has no account the system can look up (a container run with an arbitrary uid, or a
-// directory user the lookup can't see). EnsurePrivateDir still checks the folder is this user's.
-func userFolder() string {
-	if u, err := CurrentUser(); err == nil && u.Username != "" {
-		return u.Username
+// uid has no account (a container run with an arbitrary uid). Any other lookup error, such as a
+// directory service that's briefly unreachable, is returned: falling back then would move a user
+// who has a name to a different, empty data folder. EnsurePrivateDir still checks the folder is
+// this user's.
+func userFolder() (string, error) {
+	u, err := CurrentUser()
+	var unknown user.UnknownUserIdError
+	switch {
+	case errors.As(err, &unknown) || (err == nil && u.Username == ""):
+		return strconv.Itoa(os.Getuid()), nil
+	case err != nil:
+		return "", err
 	}
-	return strconv.Itoa(os.Getuid())
+	return u.Username, nil
 }
 
 // EnsurePrivateDir creates dir in a shared place like /var/tmp, where another user could have
