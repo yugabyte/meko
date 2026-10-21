@@ -279,7 +279,7 @@ counts.
 
 ## Build, test and CI
 
-- Go 1.25, to match `api_server`. `CGO_ENABLED=1`, `-tags sqlite_fts5`. On the RHEL 8 dev servers
+- Go 1.25 at first, to match `api_server`; 1.26 since golang.org/x/sys 0.49 (#212). `CGO_ENABLED=1`, `-tags sqlite_fts5`. On the RHEL 8 dev servers
   that means `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc`, as for node-pty.
 - `make build`, `make test` (`go test -race ./...`), `make lint` (`go vet`, gofmt, golangci-lint).
 - A `backend` CI job (in `.github/workflows/ci.yml`) runs on ubuntu-latest and macos-15, the
@@ -313,7 +313,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 
 | Path | What |
 |---|---|
-| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid, golang.org/x/sys (macOS statfs) |
+| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko/backend`, Go 1.26 (1.25 until #212); echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid, golang.org/x/sys (macOS statfs) |
 | `backend/cmd/meko/main.go` | Entry point |
 | `backend/internal/cli/` | `start`, `stop`, `status`, `serve`, `version`; detaching `serve` (setsid), pid file, waiting until `/api/v1/status` reports the new server |
 | `backend/internal/config/` | Defaults, `config.toml`, `MEKO_*` env, flags; precedence |
@@ -341,7 +341,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 | Risk | Mitigation |
 |---|---|
 | cgo builds per platform; nothing has run on a Mac yet | The CI job builds and tests on macos-15 (Apple Silicon) from the first PR |
-| Dev servers have Go 1.24.1; the module asks for 1.25 | Go downloads 1.25 on first build. `go.mod`'s `go` line is a hard minimum, so where downloads are blocked (`GOTOOLCHAIN=local`), install Go 1.25 |
+| Dev servers have Go 1.24.1; the module asks for 1.26 | Go downloads 1.26 on first build. `go.mod`'s `go` line is a hard minimum, so where downloads are blocked (`GOTOOLCHAIN=local`), install Go 1.26. A golangci-lint built with an older Go refuses to lint (CI's is current) |
 | Vendored C code (sqlite-vec) goes stale | Pinned version file and its LICENSE; upgrading is a copy plus a test run |
 | Slow CI from compiling SQLite (54 s) | Cache Go's build cache in the workflow |
 | A detached `serve` dies silently at start | `start` waits up to 10 s for `/api/v1/status` to report the new server's pid; if it doesn't, it stops the server and prints `logs/start.log`, which holds errors from before logging starts |

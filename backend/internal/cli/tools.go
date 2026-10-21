@@ -33,11 +33,11 @@ var cliConversation = func() string {
 // toolTimeout bounds one CLI tool call: a search of a large datapack takes about a second.
 const toolTimeout = time.Minute
 
-// toolFlags are the flags and argument of search, add, datapacks and token.
+// toolFlags are the flags and argument of the tool commands and token.
 type toolFlags struct {
 	text, datapack, source string
 	limit                  int
-	json, mcp              bool
+	json, mcp, yes         bool
 }
 
 // toolError is a tool's in-band error reply.
@@ -137,7 +137,8 @@ func (t *toolSession) datapackID(ctx context.Context, named string) (string, err
 	return "", fmt.Errorf("no datapack is named %q (meko datapacks lists them)", named)
 }
 
-// runTool runs search, add or datapacks against the running server.
+// runTool runs a tool command (search, add_memory, datapacks, create_datapack, delete_datapack)
+// against the running server.
 func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
@@ -157,10 +158,14 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 	switch cmd {
 	case "datapacks":
 		err = toolDatapacks(ctx, t, f, stdout)
-	case "add":
+	case "add_memory":
 		err = toolAdd(ctx, t, f, stdin, stdout)
 	case "search":
 		err = toolSearch(ctx, t, f, stdout)
+	case "create_datapack":
+		err = toolCreateDatapack(ctx, t, f, stdout)
+	case "delete_datapack":
+		err = toolDeleteDatapack(ctx, t, f, stdout)
 	}
 	if err != nil {
 		return fail(stderr, err)
@@ -189,6 +194,51 @@ func toolDatapacks(ctx context.Context, t *toolSession, f toolFlags, stdout io.W
 		}
 		fmt.Fprintln(stdout, line)
 	}
+	return nil
+}
+
+func toolCreateDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
+	name := strings.TrimSpace(f.text)
+	if name == "" {
+		return errors.New("give the new datapack's name: meko create_datapack <name>")
+	}
+	reply, err := t.call(ctx, "datapack_create", map[string]any{"name": name})
+	if err != nil || f.json {
+		fmt.Fprintln(stdout, reply)
+		return err
+	}
+	var r struct {
+		ID   string `json:"datapack_id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(reply), &r); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Created datapack %s (%s).\n", r.Name, r.ID)
+	return nil
+}
+
+// toolDeleteDatapack deletes a datapack, named or by id, only with --yes: everything in it goes
+// for good.
+func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
+	named := strings.TrimSpace(f.text)
+	if named == "" {
+		return errors.New("name the datapack to delete: meko delete_datapack <name|id> --yes")
+	}
+	id, err := t.datapackID(ctx, named)
+	if err != nil {
+		return err
+	}
+	if !f.yes {
+		return fmt.Errorf("this deletes datapack %s and everything in it (memories, conversations, "+
+			"artifacts) for good. Run it again with --yes", named)
+	}
+	reply, err := t.call(ctx, "datapack_delete", map[string]any{"datapack_id": id})
+	if err != nil || f.json {
+		fmt.Fprintln(stdout, reply)
+		return err
+	}
+	fmt.Fprintf(stdout, "Deleted datapack %s.\n", named)
 	return nil
 }
 

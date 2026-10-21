@@ -14,7 +14,7 @@ step:
 | #204 | The `/api/v1` REST subset meko_ui calls |
 
 Milestone 3 puts milestone 2's service layer (`internal/memory`) on the wire. Agents (Claude Code,
-AgentK, and the CLI's `search`, `add` and `datapacks`) reach Meko over MCP, and meko_ui (from
+AgentK, and the CLI's tool commands) reach Meko over MCP, and meko_ui (from
 milestone 6) over `/api/v1`, with Meko Cloud's tool names, arguments and reply shapes, written here
 from scratch.
 
@@ -164,11 +164,13 @@ A slow search must never make other requests wait (the PRD). The 500 ms p95 targ
 
 ## CLI (#202)
 
-`meko search "<question>"`, `meko add "<text>"` and `meko datapacks` are MCP clients of the
-running server: they call `context_search`, `memory_add` and `datapack_list` on `/mcp` with the
-admin token, as agent `meko_cli`, so each shows exactly what an agent would get. Their calls carry a
-fixed conversation id derived from `meko-cli` (Cloud's tools require one). `--datapack` takes a
-name or an id, `--json` prints the raw reply, and they exit 3 when no server runs. `meko token
+`meko search "<question>"`, `meko add_memory "<text>"`, `meko datapacks`, `meko create_datapack
+<name>` and `meko delete_datapack <name|id> --yes` are MCP clients of the running server: they call
+`context_search`, `memory_add`, `datapack_list`, `datapack_create` and `datapack_delete` on `/mcp`
+with the admin token, as agent `meko_cli`, so each shows exactly what an agent would get. Their
+calls carry a fixed conversation id derived from `meko-cli` (Cloud's tools require one).
+`--datapack` takes a name or an id, `--json` prints the raw reply, and they exit 3 when no server
+runs. `delete_datapack` deletes the datapack and everything in it, so it refuses without `--yes`. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
 Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.
 

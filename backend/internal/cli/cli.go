@@ -1,5 +1,5 @@
 // Package cli is the meko command: start, stop, status, serve, version, token, and the MCP
-// calls search, add and datapacks.
+// calls search, add_memory, datapacks, create_datapack and delete_datapack.
 package cli
 
 import (
@@ -31,12 +31,15 @@ Usage:
   meko token     print the token MCP and REST clients send (Authorization: Bearer <token>);
                  --mcp prints the claude mcp add command that registers Meko with Claude Code
 
-  meko search "<question>"   search memories and past conversations (context_search)
-  meko add "<text>"          save a memory, word for word (memory_add); - or no text reads stdin
-  meko datapacks             list the datapacks
-                 search and add take --datapack NAME|ID (default: the default datapack);
+  meko search "<question>"       search memories and past conversations (context_search)
+  meko add_memory "<text>"       save a memory, word for word (memory_add); - or no text reads stdin
+  meko datapacks                 list the datapacks
+  meko create_datapack <name>    create a datapack (datapack_create)
+  meko delete_datapack <name|id> --yes
+                                 delete a datapack and everything in it, for good (datapack_delete)
+                 search and add_memory take --datapack NAME|ID (default: the default datapack);
                  search takes --source auto|memory|conversation and --limit N;
-                 all three take --json for the tool's raw reply
+                 all five take --json for the tool's raw reply
 
 Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
 start and serve also take --port (default 7778) and --log-level (debug, info, warn, error).
@@ -56,13 +59,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	var detached bool
 	var t toolFlags
 	switch cmd {
-	case "search", "add", "datapacks":
+	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack":
 		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
 	case "token":
 		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
 	}
-	if cmd == "search" || cmd == "add" {
+	if cmd == "search" || cmd == "add_memory" {
 		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id")
+	}
+	if cmd == "delete_datapack" {
+		fs.BoolVar(&t.yes, "yes", false, "confirm the delete")
 	}
 	if cmd == "search" {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory or conversation")
@@ -77,7 +83,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
 	switch cmd {
-	case "start", "stop", "status", "serve", "version", "token", "search", "add", "datapacks":
+	case "start", "stop", "status", "serve", "version", "token", "search", "add_memory", "datapacks",
+		"create_datapack", "delete_datapack":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -85,8 +92,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(rest); err != nil {
 		return exitUsage
 	}
-	// search and add take one argument, and their flags may follow it.
-	if (cmd == "search" || cmd == "add") && fs.NArg() > 0 {
+	// These take one argument, and their flags may follow it.
+	if (cmd == "search" || cmd == "add_memory" || cmd == "create_datapack" || cmd == "delete_datapack") &&
+		fs.NArg() > 0 {
 		t.text = fs.Arg(0)
 		if err := fs.Parse(fs.Args()[1:]); err != nil {
 			return exitUsage
@@ -111,7 +119,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runStatus(l, stdout, stderr)
 	case "token":
 		return runToken(l, t.mcp, stdout, stderr)
-	case "search", "add", "datapacks":
+	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack":
 		return runTool(l, cmd, t, os.Stdin, stdout, stderr)
 	}
 	// start loads the config too, so a bad file is reported before anything starts.

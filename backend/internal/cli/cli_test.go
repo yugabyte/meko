@@ -509,14 +509,29 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 
 	code, out, errs = run("datapacks", "--data-dir", dir)
 	want(t, "datapacks", code, 0, out+errs, "  default  (Created by Meko on first start.)")
-	code, out, errs = run("add", "--data-dir", dir, "the build cache is in engine/.models", "--datapack", "default")
-	want(t, "add", code, 0, out+errs, "Added memory ")
+	code, out, errs = run("add_memory", "--data-dir", dir, "the build cache is in engine/.models", "--datapack", "default")
+	want(t, "add_memory", code, 0, out+errs, "Added memory ")
 	code, out, errs = run("search", "--data-dir", dir, "the build cache is in engine/.models", "--limit", "3")
 	want(t, "search", code, 0, out+errs, "the build cache is in engine/.models  (meko_cli, ")
 	code, out, errs = run("search", "--data-dir", dir, "x", "--json", "--source", "memory")
 	want(t, "search --json", code, 0, out+errs, `"knowledge_base":null`)
-	code, _, errs = run("add", "--data-dir", dir, "x", "--datapack", "nope")
-	want(t, "add to a missing datapack", code, 1, errs, `no datapack is named "nope"`)
+	code, _, errs = run("add_memory", "--data-dir", dir, "x", "--datapack", "nope")
+	want(t, "add_memory to a missing datapack", code, 1, errs, `no datapack is named "nope"`)
+
+	// A datapack made, used by name, and deleted only with --yes.
+	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
+	want(t, "create_datapack", code, 0, out+errs, "Created datapack scratch-notes (")
+	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
+	want(t, "create_datapack twice", code, 1, out+errs, "CONFLICT")
+	code, out, errs = run("add_memory", "--data-dir", dir, "kept in scratch", "--datapack", "scratch-notes")
+	want(t, "add_memory by name", code, 0, out+errs, "Added memory ")
+	code, _, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
+	want(t, "delete_datapack without --yes", code, 1, errs, "Run it again with --yes")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes", "--yes")
+	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes.")
+	if _, out, _ = run("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
+		t.Errorf("the deleted datapack is still listed:\n%s", out)
+	}
 
 	_, tok, _ := run("token", "--data-dir", dir)
 	code, out, _ = run("token", "--data-dir", dir, "--mcp")

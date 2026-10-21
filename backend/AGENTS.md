@@ -10,7 +10,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, and `search`, `add` and `datapacks` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
+| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
 | `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
@@ -44,7 +44,8 @@ make lint                                           # go vet, gofmt, golangci-li
 make bench                                          # the search budget at 200 MB (minutes; not in CI)
 ```
 
-It needs Go 1.25 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum)
+It needs Go 1.26 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum,
+and a dependency bump can raise it, as golang.org/x/sys 0.49 did in #212)
 and a C compiler, because cgo is on; the Makefile sets it and the build tags. The engine needs
 Node 22.13+ and npm. The first engine test run downloads the embedding model (23 MB) into
 `engine/.models` (git-ignored; `MEKO_TEST_MODELS` moves it). SQLite and sqlite-vec
