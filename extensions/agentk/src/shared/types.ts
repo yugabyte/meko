@@ -707,7 +707,7 @@ export interface LearnProgress {
   step: 'extract' | 'search' | 'check' | 'save' | 'turn';
   /** The facts Claude found (0 while extracting, and for a turn). */
   facts: number;
-  /** Facts written, corrected or found already saved so far (in `save`). */
+  /** Facts the save part has been through so far, whatever became of each: written, corrected, found already saved or failed to write (in `save`). */
   done: number;
   /** When the learn step started (ms). */
   startedAt: number;

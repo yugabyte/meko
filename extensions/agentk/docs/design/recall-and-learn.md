@@ -96,14 +96,14 @@ clears `discarding`.
 
 **Its progress.** `Session.learnProgress` says where a running step is: through the mod,
 `extract` (Claude looks back over the session), `search` (AgentK looks up what Meko has on each
-fact), `check` (the duplicate check) and `save` (`done` of `facts` written so far); `turn` for a
-typed step. `Learner.progress()` reads it from the open `meko_learns` row and the step's job, and
+fact), `check` (the duplicate check) and `save` (`done` of `facts` gone through so far, a failed
+write included); `turn` for a typed step. `Learner.progress()` reads it from the open `meko_learns` row and the step's job, and
 each part pushes the state as it starts (and `save` after each fact), so the labels follow the step
 (`learnStepText()` in `src/web/util.ts`: *Finding what it learned*, *Saving 2 of 3 to Meko*), with
 the time since it started (`Elapsed` in `common.tsx`). Merge & Close's pill says which part of the close the session is
 in, `Session.closeStep` (`closeStep()` in `src/server/store.ts`): waiting for GitHub to merge the
-PR, merged and waiting for Claude's turn to end, the learn step (as above, with its time), or
-cleaning up (`closingText()` in `src/web/util.ts`).
+PR (even while a Save learnings step runs), then, once merged, the learn step (as above, with its
+time), waiting for Claude's turn to end, or cleaning up (`closingText()` in `src/web/util.ts`).
 
 **Only what's new.** Each step looks back over the whole session, but asks only for what earlier
 saves didn't cover. The prompt says to leave out what Claude saved itself (its `memory_add` calls are

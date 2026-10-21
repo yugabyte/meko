@@ -614,7 +614,7 @@ export function learnStepText(p: LearnProgress): string {
     case 'search': return `Looking up ${facts(p.facts)} in Meko`;
     case 'check': return `Checking ${facts(p.facts)} against Meko`;
     case 'save': return `Saving ${Math.min(p.done + 1, p.facts)} of ${p.facts} to Meko`;
-    case 'turn': return 'Claude is saving what it learned';
+    case 'turn': return 'AgentK is saving what it learned in a turn';
   }
 }
 
@@ -628,9 +628,9 @@ export function closingText(s: Pick<Session, 'closeStep' | 'learnProgress' | 'pr
   const pr = s.prNumber ? `PR #${s.prNumber}` : 'the PR';
   switch (s.closeStep) {
     case 'merge': return `Waiting for GitHub to merge ${pr}`;
-    case 'turn': return 'Merged; closing when AgentK finishes its turn';
-    case 'learn': return s.learnProgress ? `Merged; ${learnStepText(s.learnProgress).replace(/^\w/, (c) => c.toLowerCase())}` : 'Merged; saving learnings';
-    case 'cleanup': return 'Merged; cleaning up';
+    case 'turn': return 'Merged. Closing when AgentK finishes its turn';
+    case 'learn': return `Merged. ${s.learnProgress ? learnStepText(s.learnProgress) : 'Saving learnings'}`;
+    case 'cleanup': return 'Merged. Cleaning up';
     default: return 'Merging and closing';
   }
 }

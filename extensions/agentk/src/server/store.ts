@@ -248,14 +248,16 @@ export interface SessionRuntime {
 }
 
 /**
- * Where a session in Merge & Close is (`Session.closeStep`): learning first, since a learn step can
- * also be Save learnings' still running; then not merged yet; then merged but in a turn (the close
- * waits for its end, Lifecycle.merged); else cleaning up. Null in every other stage.
+ * Where a session in Merge & Close is (`Session.closeStep`): not merged yet, whatever else runs (a
+ * Save learnings step can run while GitHub hasn't merged it); then learning, the close's own step
+ * or Save learnings' still running, before a turn, since a typed learn step is one; then merged
+ * but in a turn (the close waits for its end, Lifecycle.merged); else cleaning up. Null in every
+ * other stage.
  */
 export function closeStep(stage: Stage, s: { learning: boolean; merged: boolean; inTurn: boolean }): CloseStep | null {
   if (stage !== 'merge') return null;
-  if (s.learning) return 'learn';
   if (!s.merged) return 'merge';
+  if (s.learning) return 'learn';
   return s.inTurn ? 'turn' : 'cleanup';
 }
 

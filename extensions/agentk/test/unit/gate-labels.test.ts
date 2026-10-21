@@ -102,9 +102,9 @@ describe('the progress of a Discard or Merge & Close', () => {
 
   it.each([
     ['merge', null, 'Waiting for GitHub to merge PR #7'],
-    ['learn', at('check', 2), 'Merged; checking 2 facts against Meko'],
+    ['learn', at('check', 2), 'Merged. Checking 2 facts against Meko'],
     // A state from before the step's first push.
-    ['learn', null, 'Merged; saving learnings'],
+    ['learn', null, 'Merged. Saving learnings'],
     [null, null, 'Merging and closing'],
   ] as [Session['closeStep'], LearnProgress | null, string][])('says where Merge & Close is (%s)', (closeStep, learnProgress, text) => {
     expect(closingText({ closeStep, learnProgress, prNumber: 7 })).toBe(text);
@@ -112,10 +112,11 @@ describe('the progress of a Discard or Merge & Close', () => {
 
   it('tells the steps of Merge & Close apart, and none outside it', () => {
     const step = (over: Partial<{ learning: boolean; merged: boolean; inTurn: boolean }>) => closeStep('merge', { learning: false, merged: false, inTurn: false, ...over });
-    expect(step({ inTurn: true })).toBe('merge');
+    // Not merged yet, even while asking GitHub (busy) or with Save learnings running.
+    expect(step({ inTurn: true, learning: true })).toBe('merge');
     expect(step({ merged: true, inTurn: true })).toBe('turn');
-    // Save learnings still running when the PR merged counts as the close's learn step.
-    expect(step({ learning: true })).toBe('learn');
+    // Merged with a learn step running: the close's own, or Save learnings' still going. A typed one is a turn too.
+    expect(step({ merged: true, learning: true, inTurn: true })).toBe('learn');
     expect(step({ merged: true })).toBe('cleanup');
     expect(closeStep('review', { learning: true, merged: true, inTurn: false })).toBeNull();
   });
