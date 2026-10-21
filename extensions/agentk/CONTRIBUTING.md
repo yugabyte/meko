@@ -78,9 +78,9 @@ gets its own PR. `@types/node` stays on the Node major we ship (22). `typescript
 until typescript-eslint supports TypeScript 7
 ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
 so its majors don't come at all; drop that `ignore` rule once it lands. Dependabot's commit subjects (and so its PR
-titles) follow the title and release rules: every npm bump is `deps: …` and releases once merged
+titles) follow the title and release rules: every npm bump is `deps(agentk): …` and releases once merged
 (the web UI's libraries are devDependencies bundled into the release, so dev-tool bumps release
-too), while `ci: …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
+too), while `ci(repo): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
 breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
 `release.yml`) is bumped by hand.
 

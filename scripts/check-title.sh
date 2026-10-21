@@ -52,7 +52,7 @@ case $title in
 esac
 
 printf '%s\n' "$title" | grep -qE '^[^:]+: ' ||
-  fail 'Start with "<type>: " or "<type>(<component>): " (a colon, then a space).'
+  fail 'Start with "<type>(<component>): " (a colon, then a space).'
 
 head=${title%%: *}
 summary=${title#*: }

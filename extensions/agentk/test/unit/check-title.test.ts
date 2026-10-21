@@ -96,7 +96,7 @@ describe('check-title.sh', () => {
   });
 
   it('counts characters, not bytes, in any locale', () => {
-    // 72 characters, 140 bytes in UTF-8.
+    // 72 characters, 190 bytes in UTF-8.
     const title = `fix(agentk): ${'—'.repeat(59)}`;
     for (const LC_ALL of ['C', 'en_US.UTF-8']) {
       const env = { ...process.env, LC_ALL };
