@@ -19,6 +19,7 @@ import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles } from './claude.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { kiroDeletesSettled } from './kiro.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
@@ -88,12 +89,15 @@ const KIRO_MEKO_TTL_MS = 10_000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
-/** How long stopping waits for transcript captures still running (systemd and launchd allow 15 s to stop). */
+/** How long stopping waits for transcript captures and Kiro's one-shot runs still running (systemd and launchd allow 15 s to stop). */
 const STOP_CAPTURE_MS = 5000;
 /** How long asking gh for its login may take (a session's start waits for it). */
 const GH_LOGIN_TIMEOUT_MS = 5000;
 /** After gh took too long to give its login, how long it isn't asked again (starts go on without it). */
 const GH_LOGIN_RETRY_MS = 60_000;
+
+/** Waits for `p`, but at most `ms`. */
+const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms).unref())]);
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -498,8 +502,13 @@ export class Core extends EventEmitter {
     this.learn.stop();
     this.knowledge.stop();
     await this.closeHooks();
-    // Let the last turns reach Meko; one cut off here catches up when the server starts again.
-    await this.capture.settled(STOP_CAPTURE_MS);
+    // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
+    // one-shot runs still going (the plan read, deleting a run's session) get as long to end, rather
+    // than outliving the server.
+    await Promise.all([
+      this.capture.settled(STOP_CAPTURE_MS),
+      within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
+    ]);
     await this.meko.close();
   }
 

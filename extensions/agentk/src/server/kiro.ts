@@ -418,8 +418,20 @@ function inDays(n: string | undefined, now: number): string | null {
   return n ? new Date(now + Number(n) * 86_400_000).toISOString().slice(0, 10) : null;
 }
 
+/** The session deletes still running, for `kiroDeletesSettled`. */
+const deleting = new Set<Promise<void>>();
+
 /** Deletes one of Kiro's saved sessions (an Ask AgentK run's), in the background; never throws. */
 export function deleteKiroSession(command: string, id: string, cwd: string): void {
   if (!SESSION_ID.test(id)) return;
-  execFile(command, ['chat', '--delete-session', id], { cwd, timeout: 15_000 }, () => undefined).stdin?.end();
+  const done = new Promise<void>((resolve) => {
+    execFile(command, ['chat', '--delete-session', id], { cwd, timeout: 15_000 }, () => resolve()).stdin?.end();
+  });
+  deleting.add(done);
+  void done.then(() => deleting.delete(done));
+}
+
+/** Resolves once no session delete is running (including ones started meanwhile). Never throws. */
+export async function kiroDeletesSettled(): Promise<void> {
+  while (deleting.size) await Promise.all(deleting);
 }
