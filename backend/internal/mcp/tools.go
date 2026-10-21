@@ -220,6 +220,7 @@ func allTools() []*tool {
 	out = append(out, memoryTools()...)
 	out = append(out, conversationTools()...)
 	out = append(out, datapackTools()...)
+	out = append(out, artifactTools()...)
 	out = append(out, usageTools()...)
 	return out
 }

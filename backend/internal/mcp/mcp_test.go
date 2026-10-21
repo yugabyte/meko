@@ -141,7 +141,7 @@ func TestClaudeCodesHandshake(t *testing.T) {
 		"memory_get_by_id", "memory_update", "memory_delete_by_id", "memory_delete_all", "conversation_create",
 		"conversation_add_message", "conversation_get", "conversation_list", "conversation_update",
 		"conversation_delete", "datapack_list", "datapack_search", "datapack_create", "datapack_describe",
-		"datapack_update", "datapack_delete", "track_token_usage"} {
+		"datapack_update", "datapack_delete", "track_token_usage", "memory_promote", "artifact_put", "artifact_get"} {
 		if names[want] == nil {
 			t.Errorf("tools/list lacks %s", want)
 		}

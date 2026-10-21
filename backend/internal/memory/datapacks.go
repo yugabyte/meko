@@ -135,6 +135,6 @@ func (s *Service) CountDatapack(ctx context.Context, id string) (DatapackCounts,
 	if err != nil {
 		return DatapackCounts{}, err
 	}
-	// Every memory is a learning until it's kept or promoted.
-	return DatapackCounts{Memories: c.Memories, Learnings: c.Memories, Conversations: c.Conversations}, nil
+	return DatapackCounts{Memories: c.Memories, Learnings: c.Learnings, Promoted: c.Promoted,
+		Conversations: c.Conversations}, nil
 }

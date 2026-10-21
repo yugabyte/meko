@@ -36,7 +36,7 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 |---|---|
 | LLM extraction of memories from turns, and its LLM | Runs asynchronously from a durable queue in SQLite, which that milestone adds in its own migration. As in prod, only a turn's input is extracted, with earlier turns as context. The engine's `getLastMessages` will read Go's messages table. |
 | Links from turns to the memories they produced | A `message_memories` table written in the same transaction that marks a turn extracted (prod infers the link from timestamps). |
-| Learnings (keep, promote, counts) | Prod's rules: every new memory starts unreviewed (promotion action NULL); keep sets `keep_as_memory`, one-way; promote moves the memory into the datapack's collective memory and deletes it; counts are `memory_count`, `learnings_count` and `collective_memory_count`. |
+| Learnings (keep, promote, counts) | Built in milestone 3: [api.md](api.md). |
 | Re-embedding, and embedders other than the local one | Until then the model is locked at first start (below). |
 
 ## Key decisions

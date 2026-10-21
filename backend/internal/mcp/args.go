@@ -174,3 +174,9 @@ func (a args) jsonValue(name string, v any) (present, ok bool) {
 	}
 	return true, json.Unmarshal(raw, v) == nil
 }
+
+// jsonString is s as a JSON string value.
+func jsonString(s string) json.RawMessage {
+	b, _ := json.Marshal(s) //nolint:errchkjson // a string always encodes
+	return b
+}

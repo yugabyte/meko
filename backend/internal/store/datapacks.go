@@ -112,15 +112,21 @@ func (s *Store) getDatapackW(ctx context.Context, id string) (Datapack, error) {
 
 // DatapackCounts are what a datapack holds, for describe.
 type DatapackCounts struct {
-	Memories      int // the local user's memories
+	Memories      int // the user's memories: learnings and kept
+	Learnings     int // the user's memories waiting for a decision
+	Promoted      int // the datapack's collective memories
 	Conversations int
 }
 
 // CountDatapack counts what a datapack holds of the user's.
 func (s *Store) CountDatapack(ctx context.Context, id, userID string) (DatapackCounts, error) {
 	var c DatapackCounts
-	err := s.r.QueryRowContext(ctx, "SELECT (SELECT count(*) FROM memories WHERE datapack_id = ? AND user_id = ?), "+
-		"(SELECT count(*) FROM conversations WHERE datapack_id = ?)", id, userID, id).Scan(&c.Memories, &c.Conversations)
+	err := s.r.QueryRowContext(ctx, "SELECT "+
+		"(SELECT count(*) FROM memories WHERE datapack_id = ? AND user_id = ?), "+
+		"(SELECT count(*) FROM memories WHERE datapack_id = ? AND user_id = ? AND promotion_action = ''), "+
+		"(SELECT count(*) FROM promoted_memories WHERE datapack_id = ?), "+
+		"(SELECT count(*) FROM conversations WHERE datapack_id = ?)",
+		id, userID, id, userID, id, id).Scan(&c.Memories, &c.Learnings, &c.Promoted, &c.Conversations)
 	return c, err
 }
 

@@ -134,16 +134,22 @@ func (s *Service) SearchMemories(ctx context.Context, r Search) ([]engine.Memory
 	return res, s.engineErr(err)
 }
 
-// UpdateMemory replaces a memory of the local user's.
+// UpdateMemory replaces a memory of the local user's, or returns ErrPromoted for one promoted.
 func (s *Service) UpdateMemory(ctx context.Context, datapack, id, text string) error {
+	if err := s.promoted(ctx, datapack, id); err != nil {
+		return err
+	}
 	if _, err := s.own(ctx, datapack, id); err != nil {
 		return err
 	}
 	return s.engineErr(s.eng.Update(ctx, datapack, id, text))
 }
 
-// DeleteMemory deletes a memory of the local user's.
+// DeleteMemory deletes a memory of the local user's, or returns ErrPromoted for one promoted.
 func (s *Service) DeleteMemory(ctx context.Context, datapack, id string) error {
+	if err := s.promoted(ctx, datapack, id); err != nil {
+		return err
+	}
 	if _, err := s.own(ctx, datapack, id); err != nil {
 		return err
 	}
@@ -274,6 +280,7 @@ func (s *Service) DeleteAllMemories(ctx context.Context, datapack, agentID, conv
 type Page struct {
 	DatapackID string
 	AgentID    string // "" for every agent's
+	Scope      string // store.ScopeLearnings for learnings only; "" or store.ScopeMemories for all
 	Query      string // a case-insensitive substring of the text
 	Page       int    // from 1
 	PageSize   int
@@ -285,7 +292,7 @@ func (s *Service) ListMemoryPage(ctx context.Context, p Page) ([]engine.Memory, 
 		return nil, 0, err
 	}
 	recs, total, err := s.st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: p.DatapackID, UserID: s.userID,
-		AgentID: p.AgentID, Query: p.Query, Limit: p.PageSize, Offset: (max(p.Page, 1) - 1) * p.PageSize})
+		AgentID: p.AgentID, Scope: p.Scope, Query: p.Query, Limit: p.PageSize, Offset: (max(p.Page, 1) - 1) * p.PageSize})
 	if err != nil {
 		return nil, 0, err
 	}

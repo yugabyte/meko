@@ -113,9 +113,10 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
 | `context_search` | `{results: {knowledge_base, memory, conversation: {hits, thread}}, token_savings}` | See below. |
 | `memory_add` | `{"results": [{id, memory, event: "ADD", actor_id, role}]}` | Verbatim. `messages_missing`. |
 | `memory_search` | `{"results": [{id, memory, hash, score, raw_similarity_score, created_at, updated_at, user_id, agent_id, run_id, role, metadata}]}` | Every agent's memories. Cosine below 0.2 dropped. `run_id` narrows to a conversation. |
-| `memory_get_all` | `{criteria, memories: [{id, data, agent_id, conversation_id, user_id, created_at, is_mine}], top_k, total, page, page_size, total_pages}` | The 20 newest; `total` counts them all. There's no `page` argument, as in Cloud. `promoted: true` lists promoted memories (PR 3). |
+| `memory_get_all` | `{criteria, memories: [{id, data, agent_id, conversation_id, user_id, created_at, is_mine}], top_k, total, page, page_size, total_pages}` | The 20 newest; `total` counts them all. There's no `page` argument, as in Cloud. `promoted: true` lists promoted memories instead: `{criteria, promoted_memories: [{id, conversation_id, agent_id, data, created_at, promoted_to_kb_at}], total, page, page_size, total_pages}`. |
 | `memory_get_by_id` | The memory, without a score. | |
-| `memory_update`, `memory_delete_by_id` | `{"message": "Memory updated successfully!"}` / `"... deleted ..."` | The writer's agent only. |
+| `memory_update`, `memory_delete_by_id` | `{"message": "Memory updated successfully!"}` / `"... deleted ..."` | The writer's agent only. A promoted id gets `memory_is_promoted` (with `memory_id`, `promoted_row_id`, `operation`). |
+| `memory_promote` | `{inserted_ids, updated_ids, not_found_ids}` | `memory_ids_required`, `invalid_memory_id`. A kept memory, or one that isn't the local user's, is not found. |
 | `memory_delete_all` | `{"message": "Memories deleted successfully!"}` | One agent's memories; `run_id` must be a 32-hex conversation id (`invalid_run_id`). Only an absent, null or empty `run_id` deletes them all; one that's blank after normalizing (`-`, spaces) is refused, as in Cloud. |
 | `conversation_create` | `{id, agent_id, user_id, app_id: null, run_id, title, metadata, created_at, updated_at}` | The same `session_id` is the same conversation. `invalid_title`, `invalid_metadata`. |
 | `conversation_add_message` | `{status: "accepted", message_id, conversation_id[, conversation_search_skipped]}` | `not_found`, `agent_id_mismatch`. |
@@ -128,6 +129,8 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
 | `datapack_describe` | The row plus `memory_count, learnings_count, collective_memory_count, knowledge_count, knowledge_chunk_count, knowledge_base_file_count, shared_knowledge_count, conversation_count, conversation_search_opt_out` | Knowledge counts are 0 until milestone 4. |
 | `datapack_update` / `_delete` | `{"message": "datapack updated"}` / `"... deleted"` | Update also sets the conversation-search opt-out; nothing to change replies `{"result": "nothing_to_update"}`. |
 | `track_token_usage` | `{"recorded": true}` | Token counts go to the call log. A missing `conversation_id`, a negative count or a bad datapack replies `{"recorded": false, "error"}`. |
+| `artifact_put` | `{artifact_id, content_hash, filename, content_type, size_bytes, stored_in: "db", created_at}` | 5 MiB at most (`artifact_too_large`); `invalid_base64`. The same bytes are kept once. |
+| `artifact_get` | The same, plus `content_base64` | Always inline, never `local_path`. `ARTIFACT_NOT_FOUND`. |
 
 Milestone 4 (#170) adds `knowledgebase_search` and the knowledge-file tools; they aren't in
 `tools/list` until then.
@@ -167,3 +170,48 @@ fixed conversation id derived from `meko-cli` (Cloud's tools require one). `--da
 name or an id, `--json` prints the raw reply, and they exit 3 when no server runs. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
 Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.
+
+## Learnings, promotion and artifacts (PR 3)
+
+`0005_learnings_artifacts.sql` adds them.
+
+- **Learnings**: `memories.promotion_action` is `''` for a learning (every memory starts as one,
+  as in Meko Cloud) and `keep_as_memory` once the user keeps it (`POST /keep-as-memory`, in PR 4).
+  The memory list's `scope=learnings` is the learnings; `scope=memories` (the default) is learnings
+  and kept memories.
+- **Promotion** (`memory_promote`, and `POST /promote-memories` in PR 4) moves learnings into the
+  datapack's collective memory, as Cloud does. Each is copied into `promoted_memories` with its id,
+  text, provenance and dates, the copy commits, and then the memory is deleted through the engine
+  (which also unlinks mem0's entities), so memory search no longer finds it. If the engine can't
+  delete it, the copy is removed and it's reported in `not_found_ids`: it stays a learning. A kept
+  memory isn't a learning, so it's not found too, as in Cloud. A separate table hides promoted
+  memories from search without a filter on every scan. Updating or deleting a promoted id gets
+  `memory_is_promoted`.
+- **Counts** (`datapack_describe`): `memory_count` is learnings and kept, `learnings_count` the
+  learnings, `collective_memory_count` and `shared_knowledge_count` the promoted ones.
+- Promoted memories are text only, not searchable, until milestone 4 (#170) embeds them into the
+  knowledge base.
+- **Provenance**: `memories.connector_id` (`''` for none) beside `agent_id`, `conversation_id`
+  and `source`, so every memory records where it came from from day one. Nothing sets it until
+  connectors arrive (#194), and replies don't show it yet.
+- **Artifacts**: `artifacts` holds the bytes in the database, once per datapack and SHA-256, up to
+  5 MiB (Cloud's limit). `artifact_get` returns them inline as `content_base64`, which AgentK reads
+  as well as Cloud's `local_path`, and records when the file was last read. The bytes move with the
+  database in milestone 7's export, and count toward the 200 MB content target.
+
+## AgentK's calls (PR 3)
+
+`internal/mcp/agentk_contract_test.go` replays every call AgentK Local's Meko client makes
+(`extensions/agentk/src/server/meko.ts`), with the same tool names and arguments:
+
+- `check` (a ping);
+- `ensureConversation`, including the service conversation with a null datapack;
+- `listDatapacks`, `createDatapack`, `setDatapackDescription`, `describeDatapack`;
+- `retitleConversation`;
+- `addMemory`, `similar`, `updateMemory` (as the writer and with a null agent);
+- `search`;
+- `putArtifact`, `getArtifact`.
+
+It checks each reply has every field MekoClient reads. When a method in `meko.ts` changes a call
+or reads a new field, change its step there. #189 moves AgentK's own tests onto a real Meko and
+retires this replay.
