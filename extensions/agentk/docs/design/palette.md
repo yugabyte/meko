@@ -95,7 +95,8 @@ doesn't offer Ask AgentK while no agent is available, `AppState.askAgentk`). On 
 user's agent list): the system prompt below plus the answer's JSON schema (Kiro has no schema
 option), no tools, no MCP servers, no hooks. The answer is the `runFinished` event's `finalText`, its
 JSON object read even inside a code fence; Kiro keeps every run as a session, so AgentK deletes the
-ask's (`chat --delete-session`) once it has the answer. `[ask_agentk] model` is Claude's; Kiro uses
+ask's (`chat --delete-session`) once it has the answer, in the background (a server that is
+stopping waits up to 5 seconds for deletes still running). `[ask_agentk] model` is Claude's; Kiro uses
 its own default. On Claude Code, the server runs it once per ask (`[claude] command`), with the
 arguments as an array: `-p --model <[ask_agentk] model> --output-format json --json-schema <answer>
 --tools "" --strict-mcp-config --setting-sources user --settings {"disableAllHooks":true}

@@ -20,8 +20,10 @@ function setup() {
       id, id, id, harness, `ak/${id}`, `tok-${id}`);
   const runs: string[][] = [];
   let answer = reply(usage('Estimated Usage | resets on 2099-01-01 | KIRO FREE\nCredits (10 of 50 covered in plan), 20%'));
+  let gate = Promise.resolve();
   const runner: AskRunner = async (_cmd, args) => {
     runs.push(args);
+    await gate;
     return answer;
   };
   let changes = 0;
@@ -37,7 +39,13 @@ function setup() {
     mkdirSync(join(kiroHome, 'sessions', 'cli'), { recursive: true });
     writeFileSync(join(kiroHome, 'sessions', 'cli', `${id}.json`), JSON.stringify({ session_id: id, cwd: dir }));
   };
-  return { db, cwd, session, kiroSession, runs, deleted, make, setAnswer: (a: AskRun) => (answer = a), changes: () => changes };
+  /** Holds the runs started from now on until the returned function is called. */
+  const hold = () => {
+    let open!: () => void;
+    gate = new Promise<void>((r) => (open = r));
+    return open;
+  };
+  return { db, cwd, session, kiroSession, runs, deleted, make, hold, setAnswer: (a: AskRun) => (answer = a), changes: () => changes };
 }
 
 describe("Kiro's plan reading", () => {
@@ -61,13 +69,22 @@ describe("Kiro's plan reading", () => {
     expect(t.make().current()).toMatchObject({ used: 10 });
   });
 
-  it('reads on the first Kiro session only, one read at a time', async () => {
+  it('reads on the first Kiro session only, one read at a time, and settles once the read in flight and its sweep are done', async () => {
     const t = setup();
     const store = t.make();
     t.session('k1', 'kiro');
+    const open = t.hold();
     store.sessionCreated();
     store.sessionCreated();
-    await store.refresh();
+    // What Core.stop waits on: not done while the run is held.
+    let done = false;
+    const settled = store.settled().then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(done).toBe(false);
+    open();
+    await settled;
+    expect(t.runs).toHaveLength(1);
+    expect(t.deleted).toEqual(['u-1']);
     t.session('k2', 'kiro');
     store.sessionCreated();
     await store.refresh();

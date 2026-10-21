@@ -64,6 +64,11 @@ export class KiroPlanStore {
     return this.reading;
   }
 
+  /** Resolves once the read running now, if any, is done (the deletes it started may still run). Never throws. */
+  settled(): Promise<void> {
+    return this.reading ?? Promise.resolve();
+  }
+
   /** A Kiro session was just created: the first one in AgentK reads the plan, rather than waiting for the hour. */
   sessionCreated(): void {
     const n = get<{ n: number }>(this.deps.db, `SELECT COUNT(*) AS n FROM sessions WHERE harness = 'kiro'`)?.n ?? 0;

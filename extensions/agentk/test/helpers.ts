@@ -254,9 +254,16 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
       await core.stop().catch(() => undefined);
       await killHost();
       db.close();
-      // core.stop() waited for the transcript captures that write into fakeDir; the retries cover
-      // any other late writer (removing a folder while something writes into it fails with ENOTEMPTY).
-      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      // core.stop() waited for what writes into the home after a test: the transcript captures (into
+      // fakeDir) and Kiro's one-shot runs (into FAKE_KIRO_DIR). Anything else still writing fails the
+      // removal with ENOTEMPTY, retries or not: they only try the folder again, and remove nothing
+      // written after their first pass. Name what was left, to find the writer.
+      try {
+        rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch (e) {
+        const left = existsSync(home) ? readdirSync(home, { recursive: true }).join(', ') : 'nothing';
+        throw new Error(`removing the test home failed (${(e as Error).message}); left in it: ${left}`, { cause: e });
+      }
     },
   };
 }
