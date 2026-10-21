@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LauncherSpec } from './launcher.js';
 import { claudePath, type Paths } from './paths.js';
+import { writeScript } from './scriptfile.js';
 
 /**
  * Markers a running Claude Code session puts in its children's environment.
@@ -178,17 +179,13 @@ export function hooksSettingsPath(paths: Paths): string {
 export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] } = {}): void {
   mkdirSync(paths.run, { recursive: true });
   const script = hookScriptPath(paths);
-  writeFileSync(script, HOOK_SCRIPT);
-  chmodSync(script, 0o755);
+  writeScript(script, HOOK_SCRIPT);
   const guard = guardScriptPath(paths);
-  writeFileSync(guard, GUARD_SCRIPT);
-  chmodSync(guard, 0o755);
+  writeScript(guard, GUARD_SCRIPT);
   const context = contextScriptPath(paths);
-  writeFileSync(context, CONTEXT_SCRIPT);
-  chmodSync(context, 0o755);
+  writeScript(context, CONTEXT_SCRIPT);
   const statusLine = statusLineScriptPath(paths);
-  writeFileSync(statusLine, STATUSLINE_SCRIPT);
-  chmodSync(statusLine, 0o755);
+  writeScript(statusLine, STATUSLINE_SCRIPT);
   // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE, or
   // this file for sessions launched before the variable existed).
   const mine = userStatusLine(null, statusLine);

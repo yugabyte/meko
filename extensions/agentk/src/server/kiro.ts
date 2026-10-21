@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { KiroPlan } from '../shared/types.js';
 import type { Paths } from './paths.js';
+import { writeScript } from './scriptfile.js';
 
 /**
  * Kiro CLI (`kiro-cli`), what AgentK needs of it outside the adapter (src/server/harness/kiro.ts):
@@ -54,9 +55,7 @@ exit 2
 
 export function writeKiroGuardScript(paths: Paths): void {
   mkdirSync(paths.run, { recursive: true });
-  const file = kiroGuardScriptPath(paths);
-  writeFileSync(file, KIRO_GUARD_SCRIPT);
-  chmodSync(file, 0o755);
+  writeScript(kiroGuardScriptPath(paths), KIRO_GUARD_SCRIPT);
 }
 
 type Json = Record<string, unknown>;
