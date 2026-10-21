@@ -332,12 +332,12 @@ export class SessionManager {
     this.loadUsage();
     return sessionRows(this.db, projectId)
       .filter((r) => r.desired === 'running')
-      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open));
+      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open, this.core.learn.progress(r.id)));
   }
 
   get(id: string): Session {
     const row = this.row(id);
-    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open);
+    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open, this.core.learn.progress(id));
   }
 
   row(id: string): SessionRow {

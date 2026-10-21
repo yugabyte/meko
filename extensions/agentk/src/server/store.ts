@@ -4,7 +4,7 @@ import { heldSummary } from './heldreviews.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, CiState, DatapackRef, DiffStat, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, CiState, CloseStep, DatapackRef, DiffStat, LearnProgress, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -247,7 +247,19 @@ export interface SessionRuntime {
   approvalQueued: boolean;
 }
 
-export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
+/**
+ * Where a session in Merge & Close is (`Session.closeStep`): learning first, since a learn step can
+ * also be Save learnings' still running; then not merged yet; then merged but in a turn (the close
+ * waits for its end, Lifecycle.merged); else cleaning up. Null in every other stage.
+ */
+export function closeStep(stage: Stage, s: { learning: boolean; merged: boolean; inTurn: boolean }): CloseStep | null {
+  if (stage !== 'merge') return null;
+  if (s.learning) return 'learn';
+  if (!s.merged) return 'merge';
+  return s.inTurn ? 'turn' : 'cleanup';
+}
+
+export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number, learnProgress: LearnProgress | null): Session {
   const design = get<{ updated_at: number; source: string | null; source_told: string | null }>(db, 'SELECT updated_at, source, source_told FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
@@ -294,7 +306,13 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     asking: rt.asking,
     mekoCall: rt.mekoCall,
     approvalQueued: rt.approvalQueued,
-    learning: !!get(db, 'SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND ended_at IS NULL', r.id),
+    learning: !!learnProgress,
+    learnProgress,
+    closeStep: closeStep(r.stage, {
+      learning: !!learnProgress,
+      merged: r.stage === 'merge' && !!get(db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'merged'", r.id),
+      inTurn: r.status === 'working' || r.status === 'starting' || rt.busy,
+    }),
     discarding: !!r.discarding,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,

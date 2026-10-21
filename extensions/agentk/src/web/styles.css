@@ -1369,6 +1369,13 @@ textarea.input {
   color: var(--ok);
   border-style: solid;
 }
+/* A running time after a Busy label (Elapsed in common.tsx): the learn step a Discard or Merge & Close waits on. */
+.elapsed {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .blockers {
   padding: 0 14px 7px;
   font-size: 12px;

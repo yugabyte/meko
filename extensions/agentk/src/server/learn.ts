@@ -10,7 +10,7 @@ import { LEARN_AGENT } from './mekousage.js';
 import { claudePath } from './paths.js';
 import { HttpError } from './projects.js';
 import { SAVING_RULE } from './prompts.js';
-import type { DatapackRef } from '../shared/types.js';
+import type { DatapackRef, LearnProgress } from '../shared/types.js';
 import { sessionDatapack, sessionRepo, sessionRow, type SessionRow } from './store.js';
 import { agentName } from '../shared/harnesses.js';
 
@@ -250,6 +250,8 @@ interface Job {
   saves: number;
   updates: number;
   skips: number;
+  /** Facts the save part has been through, whatever became of each (for `Session.learnProgress`). */
+  tried: number;
   /** Questions marked taught (a fact answering them was written) or dismissed (Meko already said it). */
   taught: number;
   dismissed: number;
@@ -317,6 +319,17 @@ export class Learner {
   /** True while the session has a learn step running. */
   running(sessionId: string): boolean {
     return !!this.openRow(sessionId);
+  }
+
+  /** Where the session's running learn step is (`Session.learnProgress`); null when none runs. */
+  progress(sessionId: string): LearnProgress | null {
+    const row = this.openRow(sessionId);
+    if (!row) return null;
+    const job = this.jobs.get(row.id);
+    // A step through the mod has its job until it closes (steps left open by an earlier server are
+    // closed at startup), so a missing one reads as just started.
+    if (row.path !== 'mod' || !job) return { step: row.path === 'turn' ? 'turn' : 'extract', facts: 0, done: 0, startedAt: row.started_at };
+    return { step: job.step, facts: job.facts.length, done: job.tried, startedAt: row.started_at };
   }
 
   /** The dedicated datapack the session saves to, when Meko is on; null otherwise. */
@@ -430,7 +443,7 @@ export class Learner {
       if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
     }, this.timeoutMs);
     timer.unref?.();
-    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions, saves: 0, updates: 0, skips: 0, taught: 0, dismissed: 0, timer });
+    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions, saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer });
     run(this.db, 'UPDATE meko_learns SET questions = ? WHERE id = ?', questions.length, id);
     this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions) });
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
@@ -469,6 +482,7 @@ export class Learner {
     run(this.db, 'UPDATE meko_learns SET candidates = ? WHERE id = ?', job.facts.length, job.id);
     if (!job.facts.length) return this.finish(job);
     job.step = 'search';
+    this.core.changed(); // Session.learnProgress
     void this.search(row, job);
   }
 
@@ -485,6 +499,7 @@ export class Learner {
     }
     if (!this.jobs.has(job.id)) return; // timed out meanwhile
     job.step = 'check';
+    this.core.changed();
     this.core.sessions.mod.queueLearn(job.sessionId, { id: job.id, kind: 'check', prompt: dedupPrompt(job.facts, job.similar), model: DEDUP_MODEL });
   }
 
@@ -493,6 +508,7 @@ export class Learner {
     const decided = parseDecisions(body.text);
     if (!decided) return this.fail(job, 'dedup', "the check against what Meko has didn't answer in a form AgentK could read");
     job.step = 'save';
+    this.core.changed();
     void this.save(row, job, decided);
   }
 
@@ -533,6 +549,8 @@ export class Learner {
           } catch (e) {
             this.core.log.warn(`saving a learned fact for ${row.id} failed`, errMsg(e));
           }
+          job.tried++;
+          this.core.changed(); // the count saved so far
         }
       }));
     } catch (e) {

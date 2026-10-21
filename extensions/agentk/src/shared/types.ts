@@ -697,6 +697,29 @@ export interface Project {
   createdAt: number;
 }
 
+/** A running learn step's place (`Session.learnProgress`), for the UI to say what a Discard or Merge & Close waits on. */
+export interface LearnProgress {
+  /**
+   * Through the mod: `extract`, Claude looks back over the session for what it learned; `search`,
+   * AgentK finds what Meko already has on each fact; `check`, a small model checks them against
+   * it; `save`, AgentK writes them. Without the mod, `turn`: Claude saves them itself in a typed turn.
+   */
+  step: 'extract' | 'search' | 'check' | 'save' | 'turn';
+  /** The facts Claude found (0 while extracting, and for a turn). */
+  facts: number;
+  /** Facts written, corrected or found already saved so far (in `save`). */
+  done: number;
+  /** When the learn step started (ms). */
+  startedAt: number;
+}
+
+/**
+ * Where a session in Merge & Close is: `merge`, waiting for GitHub to merge the PR; `turn`, merged
+ * and waiting for Claude's turn to end; `learn`, saving what it learned (`Session.learnProgress`);
+ * `cleanup`, letting go of the worktree and branches.
+ */
+export type CloseStep = 'merge' | 'turn' | 'learn' | 'cleanup';
+
 export interface Session {
   id: string;
   projectId: string;
@@ -783,6 +806,10 @@ export interface Session {
   approvalQueued: boolean;
   /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
   learning: boolean;
+  /** Where that learn step is, while `learning`; null otherwise. */
+  learnProgress: LearnProgress | null;
+  /** Where Merge & Close is, while the session is in that stage; null in every other stage. */
+  closeStep: CloseStep | null;
   /** Claude is running a Meko tool call, as AgentK's mod reports it; false without the mod. */
   mekoCall: boolean;
   /** Discard was asked for: the session is discarded once its learn step ends. */

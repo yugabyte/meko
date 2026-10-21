@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { ReviewingPr, Session } from '../../src/shared/types.js';
-import { headerApproves, mergeGate, openPrGate, queuedText, updateShowing } from '../../src/web/util.js';
+import type { LearnProgress, ReviewingPr, Session } from '../../src/shared/types.js';
+import { closingText, elapsedText, headerApproves, learnStepText, mergeGate, openPrGate, queuedText, updateShowing } from '../../src/web/util.js';
+import { closeStep } from '../../src/server/store.js';
 
 const session = (over: Partial<Session> = {}) =>
   ({
@@ -84,5 +85,42 @@ describe('updateShowing', () => {
     ['once the session is gone', pr(), null, true],
   ] as const)('%s', (_what, before, now, showing) => {
     expect(updateShowing(before, now)).toBe(showing);
+  });
+});
+
+describe('the progress of a Discard or Merge & Close', () => {
+  const at = (step: LearnProgress['step'], facts = 0, done = 0): LearnProgress => ({ step, facts, done, startedAt: 0 });
+
+  it.each([
+    [at('search', 1), 'Looking up 1 fact in Meko'],
+    [at('save', 4, 0), 'Saving 1 of 4 to Meko'],
+    // Past the last fact, before the step closes.
+    [at('save', 4, 4), 'Saving 4 of 4 to Meko'],
+  ])('says what the learn step is doing (%o)', (p, text) => {
+    expect(learnStepText(p)).toBe(text);
+  });
+
+  it.each([
+    ['merge', null, 'Waiting for GitHub to merge PR #7'],
+    ['learn', at('check', 2), 'Merged; checking 2 facts against Meko'],
+    // A state from before the step's first push.
+    ['learn', null, 'Merged; saving learnings'],
+    [null, null, 'Merging and closing'],
+  ] as [Session['closeStep'], LearnProgress | null, string][])('says where Merge & Close is (%s)', (closeStep, learnProgress, text) => {
+    expect(closingText({ closeStep, learnProgress, prNumber: 7 })).toBe(text);
+  });
+
+  it('tells the steps of Merge & Close apart, and none outside it', () => {
+    const step = (over: Partial<{ learning: boolean; merged: boolean; inTurn: boolean }>) => closeStep('merge', { learning: false, merged: false, inTurn: false, ...over });
+    expect(step({ inTurn: true })).toBe('merge');
+    expect(step({ merged: true, inTurn: true })).toBe('turn');
+    // Save learnings still running when the PR merged counts as the close's learn step.
+    expect(step({ learning: true })).toBe('learn');
+    expect(step({ merged: true })).toBe('cleanup');
+    expect(closeStep('review', { learning: true, merged: true, inTurn: false })).toBeNull();
+  });
+
+  it('counts the time in seconds, then minutes', () => {
+    expect([-5, 59_999, 125_000].map(elapsedText)).toEqual(['0s', '59s', '2m 05s']);
   });
 });

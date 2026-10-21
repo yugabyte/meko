@@ -4,8 +4,8 @@ import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
-import { agentName } from '../util';
-import { Busy, trapTab } from './common';
+import { agentName, discardingText } from '../util';
+import { Busy, Elapsed, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -144,7 +144,8 @@ export function EndSessionButton({
     return (
       <span className="confirm-inline">
         <span className="confirm-prompt">
-          <Busy label="Saving learnings, then discarding" />
+          <Busy label={discardingText(session)} />
+          {session.learnProgress && <Elapsed since={session.learnProgress.startedAt} />}
         </span>
         <button className="btn danger" disabled={busy || disabled} onClick={() => run('discard', { skipLearn: true })}>
           Discard now
