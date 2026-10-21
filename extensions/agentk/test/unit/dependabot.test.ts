@@ -19,6 +19,7 @@ interface Group {
 
 interface Update {
   ecosystem: string;
+  directory: string;
   prefix?: string;
   prefixDev?: string;
   scope: boolean;
@@ -34,7 +35,7 @@ function updates(): Update[] {
   for (const line of CONFIG.split('\n')) {
     const eco = /^ {2}- package-ecosystem: (\S+)/.exec(line);
     if (eco) {
-      out.push({ ecosystem: eco[1]!, scope: false, assignees: [], groups: [] });
+      out.push({ ecosystem: eco[1]!, directory: '', scope: false, assignees: [], groups: [] });
       list = null;
       continue;
     }
@@ -47,6 +48,7 @@ function updates(): Update[] {
     }
     list = /^ {4}assignees:$/.test(line) ? u.assignees : null;
     section = /^ {4}(\S+):/.exec(line)?.[1] ?? section;
+    u.directory = /^ {4}directory: (\S+)/.exec(line)?.[1] ?? u.directory;
     const kv = /^ {6}(prefix|prefix-development|include): (\S+)/.exec(line);
     if (kv?.[1] === 'prefix') u.prefix = kv[2];
     if (kv?.[1] === 'prefix-development') u.prefixDev = kv[2];
@@ -71,11 +73,12 @@ function subject(u: Update, dev: boolean, what: string): string {
   return `${type}${u.scope ? (dev ? '(deps-dev)' : '(deps)') : ''}: ${what}`;
 }
 
-const byEcosystem = (name: string) => {
-  const u = updates().find((x) => x.ecosystem === name);
-  if (!u) throw new Error(`no ${name} entry in .github/dependabot.yml`);
+const byDirectory = (dir: string) => {
+  const u = updates().find((x) => x.directory === dir);
+  if (!u) throw new Error(`no entry for ${dir} in .github/dependabot.yml`);
   return u;
 };
+const AGENTK = '/extensions/agentk';
 
 let root: string;
 let repo: string;
@@ -94,20 +97,21 @@ const notes = () => spawnSync('sh', [NOTES], { cwd: repo, encoding: 'utf8' });
 const checkTitle = (title: string) => spawnSync('sh', [CHECK, '--no-length', title], { encoding: 'utf8' });
 
 describe('dependabot config', () => {
-  it('covers npm and GitHub Actions, assigns every PR, and sets its commit prefixes', () => {
-    expect(updates().map((u) => u.ecosystem).sort()).toEqual(['github-actions', 'npm']);
+  it("covers AgentK's npm, Meko's Go modules and engine, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
+    expect(updates().map((u) => `${u.ecosystem} ${u.directory}`).sort()).toEqual(
+      ['github-actions /', 'gomod /backend', 'npm /backend/engine', `npm ${AGENTK}`]);
     for (const u of updates()) {
-      expect(u.assignees, u.ecosystem).not.toEqual([]);
+      expect(u.assignees, u.directory).not.toEqual([]);
       // Without an explicit prefix Dependabot guesses one from the repo's history.
-      expect(u.prefix, u.ecosystem).toBeTruthy();
+      expect(u.prefix, u.directory).toBeTruthy();
+      if (u.ecosystem === 'npm') expect(u.prefixDev, u.directory).toBeTruthy();
     }
-    expect(byEcosystem('npm').prefixDev).toBeTruthy();
   });
 
   it('writes subjects that pass the title rules', () => {
     for (const u of updates()) {
       // A scope would add (deps) after the prefix's component, e.g. deps(agentk)(deps): ...
-      expect(u.scope, u.ecosystem).toBe(false);
+      expect(u.scope, u.directory).toBe(false);
       for (const dev of u.ecosystem === 'npm' ? [false, true] : [false]) {
         const s = subject(u, dev, 'bump the production group across 1 directory with 12 updates');
         const r = checkTitle(s);
@@ -117,7 +121,7 @@ describe('dependabot config', () => {
   });
 
   it('keeps packages with peer ranges on each other in one group', () => {
-    const npm = byEcosystem('npm');
+    const npm = byDirectory(AGENTK);
     const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as {
       dependencies: Record<string, string>;
       devDependencies: Record<string, string>;
@@ -140,7 +144,7 @@ describe('dependabot config', () => {
   });
 
   it('releases runtime and web UI dependency bumps', () => {
-    const npm = byEcosystem('npm');
+    const npm = byDirectory(AGENTK);
     commit(subject(npm, false, 'bump fastify from 5.12.5 to 5.13.0'));
     let r = notes();
     expect(r.status).toBe(0);
@@ -154,8 +158,14 @@ describe('dependabot config', () => {
     expect(r.stdout).toContain('bump dompurify from 3.4.16 to 3.4.17');
   });
 
-  it('does not release action bumps on their own', () => {
-    commit(subject(byEcosystem('github-actions'), false, 'bump actions/checkout from 4 to 5'));
+  // Nothing in backend/ ships in AgentK's release yet, so Meko's bumps release nothing either.
+  it.each([
+    ['/', false, 'bump actions/checkout from 4 to 5'],
+    ['/backend', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0'],
+    ['/backend/engine', false, 'bump mem0ai from 3.1.2 to 3.1.3'],
+    ['/backend/engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
+  ])('does not release a bump in %s (dev %s) on its own', (dir, dev, what) => {
+    commit(subject(byDirectory(dir), dev, what));
     expect(notes().status).toBe(3);
   });
 });
