@@ -224,10 +224,12 @@ export class InviteService {
         const grant = asGrant(d.grant);
         const r = this.row(d.id);
         if (!r) {
-          const state: InviteState = baseline ? 'baseline' : 'shared';
+          // Joined here through a share link: offered even on the first sync, and not announced (they know).
+          const joinedHere = this.acceptedAt.has(d.id);
+          const state: InviteState = baseline && !joinedHere ? 'baseline' : 'shared';
           write(`INSERT INTO datapack_invites(datapack_id, name, grant_role, owner_name, owner_email, repo_remote, state, first_seen_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, d.id, d.name, grant, d.ownerName, d.ownerEmail, remote, state, now);
-          if (!baseline) notices.push(notice(d.id, d.name, d.ownerName ?? d.ownerEmail, grant, false));
+          if (!baseline && !joinedHere) notices.push(notice(d.id, d.name, d.ownerName ?? d.ownerEmail, grant, false));
           continue;
         }
         // Accepted (here or in Meko): no invite left to act on. An invite already told about isn't told again.
@@ -291,6 +293,20 @@ export class InviteService {
     run(this.db, `UPDATE datapack_invites SET invite_id = NULL, state = 'shared' WHERE datapack_id = ?`, datapackId);
     // Shown now: if creating the project fails after this, the banner mustn't still offer Decline.
     this.core.changed();
+  }
+
+  /**
+   * We joined the datapack through a share link here: the next sync doesn't announce it, and doesn't
+   * take it for gone while datapack_list catches up.
+   */
+  joinedHere(datapackId: string): void {
+    this.acceptedAt.set(datapackId, Date.now());
+  }
+
+  /** The datapack's share or invite, while it's still open (not yet a project here, not declined). */
+  openShare(datapackId: string): DatapackInvite | null {
+    const r = this.row(datapackId);
+    return r && ['invited', 'shared', 'later'].includes(r.state) ? toInvite(r) : null;
   }
 
   /** A project here now uses the datapack. */

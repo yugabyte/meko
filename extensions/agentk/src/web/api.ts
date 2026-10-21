@@ -1,5 +1,10 @@
 import type {
   AppState,
+  JoinByLinkRequest,
+  JoinByLinkResult,
+  ShareLink,
+  ShareLinkChange,
+  ShareLinkState,
   AskAgentkRequest,
   AskAgentkResult,
   AskAnswerRequest,
@@ -153,6 +158,9 @@ export const api = {
     post<DatapackPeople>(`/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}/resend`),
   revokeDatapackInvite: (id: string, inviteId: string) =>
     request<DatapackPeople>('DELETE', `/api/meko/datapacks/${enc(id)}/people/invites/${enc(inviteId)}`),
+  datapackShareLink: (id: string) => get<ShareLinkState>(`/api/meko/datapacks/${enc(id)}/share-link`),
+  setDatapackShareLink: (id: string, b: ShareLinkChange) => request<ShareLink>('PUT', `/api/meko/datapacks/${enc(id)}/share-link`, b),
+  joinByLink: (b: JoinByLinkRequest) => post<JoinByLinkResult>('/api/meko/share-links/join', b),
   shareContacts: () => get<ShareContact[]>('/api/share-contacts'),
   forgetShareContact: (email: string) => request<void>('DELETE', `/api/share-contacts/${enc(email)}`),
   checkInvites: () => post<InviteCheck>('/api/invites/check'),

@@ -1,5 +1,6 @@
 // Command palette labels and filtering. Pure, so it's unit-tested.
-import { STAGE_LABELS, type AskAgentkAction, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch } from '../shared/types';
+import { shareLinkToken } from '../shared/mekourls';
+import { STAGE_LABELS, type AskAgentkAction, type JoinByLinkResult, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch } from '../shared/types';
 
 /** A piece of a palette label: plain text, or a session's or project's name, drawn in its own style. */
 export type LabelPart = string | { session: string } | { project: string };
@@ -108,6 +109,23 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
 export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Find a session by what it’s about…', 'Paste a GitHub PR or issue link…'];
 /** The placeholder with reduced motion, which doesn't rotate. */
 export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session by what it’s about or paste a GitHub link…';
+
+/**
+ * The palette item for a Meko share link pasted on its own: only one on this Meko's web app, so a
+ * look-alike link is never offered. Picking it joins; pasting doesn't.
+ */
+export function joinEntry(text: string, webUrl: string | null): { id: string; label: LabelPart[]; hint: string } | null {
+  return shareLinkToken(text, webUrl) ? { id: 'join-link', label: ['Join the datapack this link shares'], hint: 'Meko share link' } : null;
+}
+
+/** What joining by a share link came to, when there's no share to open or project to go to. */
+export function joinedText(r: JoinByLinkResult): string {
+  const what = r.name ?? 'the datapack';
+  const did = r.alreadyMember ? `You already have access to ${what}` : `You joined ${what}${r.grant ? ` as ${r.grant}` : ''}`;
+  if (!r.name) return `${did}. It shows in Open project once Meko lists it.`;
+  if (r.grant === 'viewer') return `${did}. A viewer can’t open it as a project: attach it to one from the project’s Datapacks box.`;
+  return `${did}. Pick it in Open project, or attach it to a project from the project’s Datapacks box.`;
+}
 
 /** A palette item for an action AgentK proposed; `edit` opens New session with the task instead of starting it. */
 export interface AskEntry {

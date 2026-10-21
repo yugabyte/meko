@@ -281,8 +281,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
-      share notifies once. While Meko's API URL isn't known the share and invite routes answer 409
-      saying to set the web app URL, and the invite sync skips Meko's invites.
+      share notifies once (one joined here by its share link not at all). While Meko's API URL isn't
+      known the share and invite routes answer 409 saying to set the web app URL, and the invite sync
+      skips Meko's invites. A share link's token is never logged or stored, and joining by a pasted
+      link sends its token to Meko only for a link on the configured web app, and only when picked.
 - [ ] Nothing that identifies a person or their work goes into the usage stats report
       (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
       field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and

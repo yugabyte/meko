@@ -1,4 +1,4 @@
-import type { DatapackMember, DatapackPeople, DatapackPendingInvite, ShareGrant } from '../shared/types.js';
+import type { DatapackMember, DatapackPeople, DatapackPendingInvite, LinkGrant, ShareGrant } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
 import { strOrNull } from './meko.js';
 
@@ -20,10 +20,40 @@ export interface IncomingShare {
   ownerEmail: string | null;
 }
 
+/** A datapack's share link as Meko keeps it. The token is a secret: never log it. */
+export interface ShareLinkRow {
+  active: boolean;
+  /** Null until the link is first turned on. */
+  token: string | null;
+  grant: LinkGrant;
+  joined: number;
+  atLinkRole: number;
+}
+
+/** A change to a share link, in Meko's words: one per call. */
+export type MekoShareLinkChange = { status: 'active' | 'off' } | { grant: LinkGrant } | { reset: true };
+
+export interface RedeemedShareLink {
+  datapackId: string;
+  grant: LinkGrant | null;
+  alreadyMember: boolean;
+}
+
 export class MekoApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
     super(message);
   }
+}
+
+/**
+ * Meko answered without an error but not in the shape AgentK reads: a 502, since Meko's API
+ * changed (`apiFailure` passes on only Meko's own refusals).
+ */
+const badReply = (what: string) => new MekoApiError(200, 'BAD_REPLY', `Meko's answer to ${what} wasn't in a shape AgentK understands.`);
+
+/** Meko answers like this when it has no such route (an older or self-hosted Meko): 405, 501, or a 404 with no error code. */
+export function routeMissing(e: unknown): boolean {
+  return e instanceof MekoApiError && (e.status === 405 || e.status === 501 || (e.status === 404 && e.code === 'HTTP_404'));
 }
 
 type Json = Record<string, unknown>;
@@ -39,6 +69,26 @@ export function asGrant(v: unknown): ShareGrant | null {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
+
+export function asLinkGrant(v: unknown): LinkGrant | null {
+  const g = asGrant(v);
+  return g === 'viewer' || g === 'contributor' ? g : null;
+}
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+
+function toShareLink(r: Json | undefined): ShareLinkRow {
+  const l = r?.share_link;
+  if (!l || typeof l !== 'object' || Array.isArray(l)) throw badReply('the share link');
+  const link = l as Json;
+  return {
+    active: link.status === 'active',
+    token: strOrNull(link.token),
+    grant: asLinkGrant(link.grant) ?? 'viewer',
+    joined: count(link.redemption_count),
+    atLinkRole: count(link.members_at_link_role),
+  };
+}
 
 /**
  * Whether a URL answers like Meko's REST API: its share route replies with Meko's JSON envelope
@@ -173,6 +223,24 @@ export class MekoApi {
       .map((r) => ({ inviteId: str(r.invite_id), email: str(r.recipient_email_id), grant: asGrant(r.grant) ?? 'viewer' }))
       .filter((r) => r.inviteId);
     return { members, invites };
+  }
+
+  /** The datapack's share link (403 unless we're its owner or a maintainer). */
+  async shareLink(datapackId: string): Promise<ShareLinkRow> {
+    return toShareLink(await this.request<Json>('GET', `/datapacks/${encodeURIComponent(datapackId)}/share-link`));
+  }
+
+  /** One change to the share link: Meko takes one per call. */
+  async setShareLink(datapackId: string, change: MekoShareLinkChange): Promise<ShareLinkRow> {
+    return toShareLink(await this.request<Json>('PUT', `/datapacks/${encodeURIComponent(datapackId)}/share-link`, change));
+  }
+
+  /** Joins the datapack a share link's token is for. */
+  async redeemShareLink(token: string): Promise<RedeemedShareLink> {
+    const r = await this.request<Json>('POST', `/share/${encodeURIComponent(token)}/redeem`);
+    const datapackId = str(r?.datapack_id);
+    if (!datapackId) throw badReply('join by link');
+    return { datapackId, grant: asLinkGrant(r.grant), alreadyMember: r.already_member === true };
   }
 
   /**

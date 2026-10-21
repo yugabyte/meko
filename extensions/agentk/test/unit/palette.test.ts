@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AskAgentkAction, LinkPlan, ProjectWithSessions, SessionMatch } from '../../src/shared/types.js';
-import { askEntries, filterItems, findEntries, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import type { AskAgentkAction, JoinByLinkResult, LinkPlan, ProjectWithSessions, SessionMatch } from '../../src/shared/types.js';
+import { askEntries, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -78,6 +78,17 @@ describe('a pasted GitHub link', () => {
     ]],
   ])('%s', (_, plan, want) => {
     expect(rows(plan)).toEqual(want);
+  });
+});
+
+describe('a pasted Meko share link', () => {
+  it('offers to join it, and says what joining came to when there is nothing to open', () => {
+    expect(joinEntry(' https://cloud.mekodata.ai/share/abc ', 'https://cloud.mekodata.ai')?.id).toBe('join-link');
+    expect(joinEntry('https://cloud.mekodata.ai/share/abc', null)).toBeNull();
+    const r: JoinByLinkResult = { datapackId: 'd', name: 'adlc/proj/x/y', grant: 'viewer', alreadyMember: false, invite: null, project: null };
+    expect(joinedText(r)).toMatch(/^You joined adlc\/proj\/x\/y as viewer\. A viewer can’t open it as a project/);
+    expect(joinedText({ ...r, name: null })).toBe('You joined the datapack as viewer. It shows in Open project once Meko lists it.');
+    expect(joinedText({ ...r, grant: 'contributor', alreadyMember: true })).toMatch(/^You already have access to adlc\/proj\/x\/y\. Pick it in Open project/);
   });
 });
 

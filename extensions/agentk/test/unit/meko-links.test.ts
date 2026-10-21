@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { shareLinkToken, shareLinkUrl } from '../../src/shared/mekourls.js';
 import { httpHost, mekoKeyLinkBase, mekoKeyLinks } from '../../src/web/util.js';
 
 /** No MCP or web app URL from the environment or Claude Code's settings. */
@@ -54,5 +55,30 @@ describe('Meko sign-up links', () => {
     expect(mekoKeyLinkBase(typed(''), { ...env, envWebUrl: '' })).toBeNull();
     // Meko Cloud's URL is saved as empty, so it's the environment's server too.
     expect(mekoKeyLinkBase(typed('https://mcp.mekodata.ai/mcp/'), { ...env, envWebUrl: '' })).toBeNull();
+  });
+});
+
+describe('Meko share links', () => {
+  const web = 'https://cloud.mekodata.ai';
+  it.each([
+    ['https://cloud.mekodata.ai/share/abc', web, 'abc'],
+    [' https://cloud.mekodata.ai/share/a%2Bb/?x=1#y ', web, 'a+b'],
+    ['https://meko.example.com/eu/share/abc', 'https://meko.example.com/eu/', 'abc'],
+    ['https://evil.example/share/abc', web, null],
+    ['https://cloud.mekodata.ai.evil.example/share/abc', web, null],
+    ['http://cloud.mekodata.ai/share/abc', web, null],
+    ['https://cloud.mekodata.ai/datapacks/abc', web, null],
+    ['https://cloud.mekodata.ai/share/', web, null],
+    ['https://cloud.mekodata.ai/share/a/b', web, null],
+    ['see https://cloud.mekodata.ai/share/abc', web, null],
+    ['https://cloud.mekodata.ai/share/abc', null, null],
+  ])('reads the token of %j on %s', (text, webUrl, token) => {
+    expect(shareLinkToken(text, webUrl)).toBe(token);
+  });
+
+  it('builds the link for a token, which reads back as that token', () => {
+    const url = shareLinkUrl('https://cloud.mekodata.ai/', 'a+b/c');
+    expect(url).toBe('https://cloud.mekodata.ai/share/a%2Bb%2Fc');
+    expect(shareLinkToken(url, web)).toBe('a+b/c');
   });
 });

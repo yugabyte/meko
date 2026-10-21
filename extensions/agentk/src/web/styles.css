@@ -2600,6 +2600,21 @@ div[id^='dak-mermaid-'] .label {
   display: flex;
   gap: 6px;
 }
+/* The Share dialog's share link (ShareLink.tsx): rows that wrap, the URL field taking what's left. */
+.share-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.share-link-head {
+  justify-content: space-between;
+}
+.share-link-url {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 12px;
+}
 /* The people invited before, suggested under the Emails field (ShareSuggestions.tsx). */
 .share-suggest {
   display: flex;

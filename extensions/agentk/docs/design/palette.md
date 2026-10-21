@@ -61,6 +61,16 @@ palette meanwhile doesn't stop the start; the session shows up in the state. The
 says which project or datapack to use beyond the project it showed: the server works the rest out
 again when it starts, and uses an open project that fits by then instead of opening another.
 
+## Joining by a Meko share link
+
+A datapack's share link (`{web app}/share/{token}`) pasted on its own gives one item, **Join the
+datapack this link shares** (`joinEntry()` in `src/web/palette.ts`), and no Ask AgentK item or
+session search. Only a link on the Meko web app AgentK uses counts (`shareLinkToken()` in
+`src/shared/mekourls.ts`, from `AppState.meko.webUrl`). Picking it joins, with *Joining* meanwhile;
+then the palette opens the Open project dialog with the share chosen, or goes to the project here
+that already uses the datapack, or stays open saying what to do (`joinedText()`). The rest is in
+[Sharing a project](sharing.md).
+
 ## Ask AgentK
 
 The palette (`⌘K`, or **Ask AgentK** at the top of the rail) also takes an instruction or a question
@@ -69,7 +79,7 @@ Dark mode to Code and add tests", "which sessions need me?". Its placeholder rot
 through what it takes (asking, commands, sessions, GitHub links), on every screen size; with
 reduced motion it doesn't rotate and names them all at once.
 
-**Asking.** Any text that isn't a GitHub link gets an **Ask AgentK: "…"** item, after the commands
+**Asking.** Any text that isn't a GitHub link or a Meko share link gets an **Ask AgentK: "…"** item, after the commands
 that match and before the [sessions found](#finding-a-session). A sentence matches no command (the
 filter needs every word), so the item comes first and Enter picks it; `⌘Enter` (`Ctrl+Enter`) asks whatever else matches. The browser sends the text,
 the exchange so far (the last 10, kept only while the palette is open) and what's on screen to
