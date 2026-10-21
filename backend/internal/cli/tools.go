@@ -81,10 +81,11 @@ func connectTools(ctx context.Context, l paths.Layout) (*toolSession, error) {
 	return &toolSession{s}, nil
 }
 
-// call calls a tool as the CLI's agent and returns its reply's text, or its in-band error.
+// call calls a tool, as the CLI's agent where the tool takes one (the datapack tools don't), and
+// returns its reply's text, or its in-band error.
 func (t *toolSession) call(ctx context.Context, name string, args map[string]any) (string, error) {
 	args["conversation_id"] = cliConversation
-	if _, ok := args["agent_id"]; !ok && name != "datapack_list" {
+	if _, ok := args["agent_id"]; !ok && !strings.HasPrefix(name, "datapack_") {
 		args["agent_id"] = cliAgent
 	}
 	res, err := t.s.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: args})
@@ -137,6 +138,22 @@ func (t *toolSession) datapackID(ctx context.Context, named string) (string, err
 	return "", fmt.Errorf("no datapack is named %q (meko datapacks lists them)", named)
 }
 
+// defaultDatapackID is the default datapack's id, or "" once it has been deleted (Meko makes it
+// only on first start).
+func (t *toolSession) defaultDatapackID(ctx context.Context) (string, error) {
+	text, err := t.call(ctx, "datapack_describe", map[string]any{})
+	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var d struct {
+		ID string `json:"datapack_id"`
+	}
+	return d.ID, json.Unmarshal([]byte(text), &d)
+}
+
 // runTool runs a tool command (search, add_memory, datapacks, create_datapack, delete_datapack)
 // against the running server.
 func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -166,6 +183,10 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		err = toolCreateDatapack(ctx, t, f, stdout)
 	case "delete_datapack":
 		err = toolDeleteDatapack(ctx, t, f, stdout)
+	}
+	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
+		err = errors.New("there's no default datapack (it was deleted): pass --datapack NAME|ID " +
+			"(meko datapacks lists them)")
 	}
 	if err != nil {
 		return fail(stderr, err)
@@ -230,8 +251,13 @@ func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout
 		return err
 	}
 	if !f.yes {
+		also := ""
+		if def, derr := t.defaultDatapackID(ctx); derr == nil && def == id {
+			also = " It's the default datapack: Meko doesn't make another, so search and add_memory " +
+				"will need --datapack afterwards."
+		}
 		return fmt.Errorf("this deletes datapack %s and everything in it (memories, conversations, "+
-			"artifacts) for good. Run it again with --yes", named)
+			"artifacts) for good.%s Run it again with --yes", named, also)
 	}
 	reply, err := t.call(ctx, "datapack_delete", map[string]any{"datapack_id": id})
 	if err != nil || f.json {

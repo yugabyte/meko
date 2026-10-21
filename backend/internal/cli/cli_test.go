@@ -537,4 +537,13 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	code, out, _ = run("token", "--data-dir", dir, "--mcp")
 	want(t, "token --mcp", code, 0, out, "claude mcp add --transport http meko http://127.0.0.1:"+port+
 		"/mcp --header \"Authorization: Bearer "+strings.TrimSpace(tok)+"\"")
+
+	// The default datapack isn't made again, so deleting it says so, and calls that name none then
+	// ask for --datapack.
+	code, _, errs = run("delete_datapack", "--data-dir", dir, "default")
+	want(t, "delete_datapack default without --yes", code, 1, errs, "It's the default datapack")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--yes")
+	want(t, "delete_datapack default", code, 0, out+errs, "Deleted datapack default.")
+	code, _, errs = run("add_memory", "--data-dir", dir, "x")
+	want(t, "add_memory with no default", code, 1, errs, "there's no default datapack (it was deleted): pass --datapack")
 }

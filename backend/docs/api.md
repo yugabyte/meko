@@ -167,10 +167,13 @@ A slow search must never make other requests wait (the PRD). The 500 ms p95 targ
 `meko search "<question>"`, `meko add_memory "<text>"`, `meko datapacks`, `meko create_datapack
 <name>` and `meko delete_datapack <name|id> --yes` are MCP clients of the running server: they call
 `context_search`, `memory_add`, `datapack_list`, `datapack_create` and `datapack_delete` on `/mcp`
-with the admin token, as agent `meko_cli`, so each shows exactly what an agent would get. Their
-calls carry a fixed conversation id derived from `meko-cli` (Cloud's tools require one).
-`--datapack` takes a name or an id, `--json` prints the raw reply, and they exit 3 when no server
-runs. `delete_datapack` deletes the datapack and everything in it, so it refuses without `--yes`. `meko token
+with the admin token, so each shows exactly what an agent would get. `search` and `add_memory`
+call as agent `meko_cli`; the datapack tools take no agent. Their calls carry a fixed conversation
+id derived from `meko-cli` (Cloud's tools require one). `--datapack` takes a name or an id,
+`--json` prints the raw reply, and they exit 3 when no server runs. `delete_datapack` deletes the
+datapack and everything in it, so it refuses without `--yes`, and says so when that's the default
+datapack: Meko makes the default only on first start, and once it's gone `search` and
+`add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
 Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.
 

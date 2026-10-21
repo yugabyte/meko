@@ -37,7 +37,8 @@ Usage:
   meko create_datapack <name>    create a datapack (datapack_create)
   meko delete_datapack <name|id> --yes
                                  delete a datapack and everything in it, for good (datapack_delete)
-                 search and add_memory take --datapack NAME|ID (default: the default datapack);
+                 search and add_memory take --datapack NAME|ID (default: the default datapack,
+                 which Meko makes on first start and doesn't make again once deleted);
                  search takes --source auto|memory|conversation and --limit N;
                  all five take --json for the tool's raw reply
 
