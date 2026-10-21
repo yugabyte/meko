@@ -34,7 +34,17 @@ type ConversationSearch struct {
 // Server is the [server] table.
 type Server struct {
 	Port int `toml:"port"`
+	// Auth is "token" (the default: /mcp and the data routes need the client or admin token) or
+	// "none" (they need no credential; every local user can read and write the memories). Also
+	// MEKO_AUTH.
+	Auth string `toml:"auth"`
 }
+
+// Auth modes.
+const (
+	AuthToken = "token"
+	AuthNone  = "none"
+)
 
 // Engine is the [engine] table: where the memory engine and its Node are. Empty means the usual
 // places (internal/engine).
@@ -50,7 +60,7 @@ type Log struct {
 
 // Default is the configuration with nothing set.
 func Default() Config {
-	return Config{Server: Server{Port: DefaultPort}, Log: Log{Level: "info"}}
+	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"}}
 }
 
 // Overrides are settings given as flags; zero values mean unset.
@@ -84,6 +94,9 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 		}
 		c.Server.Port = p
 	}
+	if v := env("MEKO_AUTH"); v != "" {
+		c.Server.Auth = v
+	}
 	if v := env("MEKO_LOG_LEVEL"); v != "" {
 		c.Log.Level = v
 	}
@@ -105,6 +118,10 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 func (c Config) validate() error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("port %d is out of range: use 1 to 65535", c.Server.Port)
+	}
+	// An unknown mode is refused, so a typo never turns auth off.
+	if c.Server.Auth != AuthToken && c.Server.Auth != AuthNone {
+		return fmt.Errorf("server.auth %q isn't one of %q, %q", c.Server.Auth, AuthToken, AuthNone)
 	}
 	if _, err := c.Log.SlogLevel(); err != nil {
 		return err

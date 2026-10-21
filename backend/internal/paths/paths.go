@@ -3,6 +3,7 @@
 //	<root>/            0700
 //	  config.toml      optional
 //	  meko.db          the only database (0600)
+//	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
 //	    children/      each child's pid and process group, for stop
 //	  logs/            meko.log, start.log, engine.log
@@ -30,7 +31,8 @@ type Layout struct {
 	Lock        string
 	Pid         string
 	Port        string
-	Token       string
+	Token       string // the admin token, new at each start
+	ClientToken string // the clients' token, kept across restarts
 	Log         string
 	StartLog    string
 	StoreSock   string // the store API the engine calls
@@ -55,6 +57,7 @@ func New(root string) Layout {
 		Pid:         filepath.Join(run, "meko.pid"),
 		Port:        filepath.Join(run, "meko.port"),
 		Token:       filepath.Join(run, "admin.token"),
+		ClientToken: filepath.Join(root, "client.token"),
 		Log:         filepath.Join(logs, "meko.log"),
 		StartLog:    filepath.Join(logs, "start.log"),
 		StoreSock:   filepath.Join(run, "store.sock"),

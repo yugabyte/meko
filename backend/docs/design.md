@@ -44,13 +44,13 @@ backend/
   go.mod                      module github.com/yugabyte/meko/backend
   cmd/meko/main.go      entry point: parses the CLI, nothing else
   internal/
-    cli/                      start, stop, status, serve, version
+    cli/                      start, stop, status, serve, version, token
     config/                   defaults, config.toml, flags, env
     paths/                    data folder layout and permissions
     server/                   echo server, middleware, health
     envelope/                 the {data, error} reply envelope (moved here from server/ in milestone 2)
     storeapi/                 the store API the memory engine calls (milestone 2, memory-engine.md)
-    auth/                     the admin token; API keys join in milestone 3
+    auth/                     the admin token, and the client token (milestone 3, api.md)
     store/                    open, connections, migrations, typed queries
       migrations/             0001_init.sql, ... (embedded, append-only)
     sqlitevec/                cgo glue that compiles sqlite-vec in
@@ -220,17 +220,20 @@ echo v4, the same framework as prod's `api_server`, so handlers ported from it k
 
 ### Auth
 
-This phase has one client, the CLI, so there is one credential: the admin token.
+The foundation had one client, the CLI, so one credential: the admin token. Milestone 3 added
+the client token for MCP and REST clients (last bullet).
 
 - `serve` generates 32 random bytes at each start and writes them to `run/admin.token` (0600, in
   a 0700 folder). So only the OS user who runs Meko can read it. The CLI sends it as
   `Authorization: Bearer <token>`. It's compared in constant time and never logged.
-- Every route except `/healthz` needs it.
+- Every route except `/healthz` needs it, or since milestone 3 the client token (or nothing, with
+  `[server] auth = "none"`), except `/api/v1/status` and `/api/v1/version`, which take only it.
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
   rebinding. Any request with an `Origin` header is refused, since no browser client exists yet.
   That keeps web pages open in the user's browser from reaching the server.
-- Later clients bring their own credentials: API keys (stored hashed) with MCP in milestone 3,
-  and browser access with the UI in milestone 4.
+- Milestone 3 added the client token, kept across restarts, for MCP and REST clients, and an
+  opt-in `[server] auth = "none"`; the admin-only routes stay admin-only
+  ([api.md](api.md)). Per-client API keys are #195, and browser access comes with the UI.
 
 ## Supervisor
 
@@ -310,7 +313,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 | `backend/internal/config/` | Defaults, `config.toml`, `MEKO_*` env, flags; precedence |
 | `backend/internal/paths/` | Data folder layout, 0700/0600 permissions, the network-filesystem check (statfs on macOS, `/proc/self/mountinfo` on Linux) |
 | `backend/internal/server/` | echo setup, middleware (request id, recover, access log, Host and Origin checks, auth, body limit), `/healthz`, `/api/v1/status`, `/api/v1/version`, graceful shutdown. The envelope it replies with is in `backend/internal/envelope/` since milestone 2 |
-| `backend/internal/auth/` | Admin token: generate, write, read (CLI side), constant-time check |
+| `backend/internal/auth/` | Admin token: generate, write, read (CLI side), constant-time check. Milestone 3 adds the client token ([api.md](api.md)) |
 | `backend/internal/store/` + `migrations/0001_init.sql` | Open (writer + reader pools, pragmas), migrations with a pre-migration backup, `settings` and `datapacks` queries, default datapack |
 | `backend/internal/sqlitevec/` | cgo glue registering sqlite-vec with `sqlite3_auto_extension` |
 | `backend/third_party/sqlite-vec/` | sqlite-vec 0.1.9 amalgamation (`sqlite-vec.c/.h`, 10.2k lines), its licenses, a VERSION file with the tarball's SHA-256, a README, and SQLite's header (`sqlite3-binding.h`, 14.4k lines) copied from mattn's module, since cgo can't point at the module cache. Built with `SQLITE_CORE`, sqlite-vec needs no `sqlite3ext.h` |
@@ -374,11 +377,11 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
 | 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
-| 3 | MCP | `/mcp` (Streamable HTTP, stateless) with prod's tool names, arguments and reply shapes; API keys (`keys create/list/revoke`, stored hashed) |
-| 4 | REST API and UI | The `/api/v1` subset meko_ui calls, serving the pinned meko_ui package at `/`, browser access |
-| 5 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash |
-| 6 | Move to Meko Cloud | The export bundle, and prod's import API |
-| 7 | Install and release | launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest |
+| 3 | MCP and REST | Being built: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
+| 4 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash (#170) |
+| 5 | Install and release | Native builds with Meko's own Node, launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest (#171) |
+| 6 | Web UI | The pinned meko_ui package served at `/`, local mode in meko_ui, browser access (#172) |
+| 7 | Move to Meko Cloud | The export bundle, and prod's import API (#173) |
 
 ## Questions and decisions
 
@@ -387,7 +390,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 | How should the Go server and the Node engine talk to each other? (`go-node-link`) | HTTP/JSON over unix sockets, one each way | As proposed: Go serves the store API on `run/store.sock`, the engine its API on `run/engine.sock`, with a per-start token. Built in milestone 2; the foundation's supervisor and `run/` layout already assume it. |
 | How do we reuse prod's api_server code? (`api-server-reuse`) | No copy for now; build what Meko needs as its own stack | No code is copied from `api_server` and nothing waits on prod. Meko writes its own handlers, store and envelope, keeping only prod's wire shapes (the `{data, error}` envelope now; MCP and REST shapes later). |
 | Which default port? (`default-port`) | 7778 | 7778, configurable with `--port`, `MEKO_PORT` or `config.toml`; `serve` exits with a clear error if it's taken, with no random fallback. |
-| How does the browser authenticate in this phase? (`browser-auth`) | No browser login; CLI only | CLI-only access with the local admin token; no API keys yet. API keys come with MCP (milestone 3), browser access with the UI (milestone 4). |
+| How does the browser authenticate in this phase? (`browser-auth`) | No browser login; CLI only | CLI-only access with the local admin token; no API keys yet. API keys come with MCP (milestone 3), browser access with the UI (milestone 4). Since revised: milestone 3 added a client token instead of keys, per-client API keys are #195, and the UI is milestone 6 (#172). |
 | How should the change be reviewed, given 25.6k lines of vendored SQLite and sqlite-vec code? (asked while coding) | Break the third-party code into its own PR; stacked PRs: base layout, third party, functionality | Three stacked PRs, one `chore(backend)` commit each (see Delivery). The header-version test moved into `internal/sqlitevec` so PR 2 stands alone. |
 | Which commit type? (came up while coding) | (no question asked; follows the repo's rules) | `chore(backend)`: nothing in `backend/` ships in AgentK Local's release, so a releasing type would cut an empty AgentK release. |
 | Check the third-party code in, or pull it at build time? (asked while coding) | Store third-party code in yugabyte forks, as yugabyte-db does; forks will take time, so copy the code for now | Vendored in `backend/third_party` for now (option A). The target is two public forks, `yugabyte/go-sqlite3` (mattn/go-sqlite3, SQLite's source) and `yugabyte/sqlite-vec` (with a Go package added), required from `go.mod` with a `replace` for go-sqlite3; then `third_party/` goes away. Creating them was refused by an org policy (HTTP 403), so an org owner has to make them. |

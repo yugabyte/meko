@@ -20,10 +20,19 @@ import (
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
-const token = "secret-token"
+const (
+	token       = "secret-token"
+	clientToken = "client-token"
+)
 
 // start runs a server on a free port and returns its base URL and log.
 func start(t *testing.T) (*Server, string, *bytes.Buffer) {
+	t.Helper()
+	return startWith(t, "")
+}
+
+// startWith runs a server with an auth mode ("" for the default).
+func startWith(t *testing.T, authMode string) (*Server, string, *bytes.Buffer) {
 	t.Helper()
 	ln, err := Listen(0)
 	if err != nil {
@@ -32,10 +41,12 @@ func start(t *testing.T) (*Server, string, *bytes.Buffer) {
 	port := tcpPort(t, ln)
 	var logs bytes.Buffer
 	s := New(Options{
-		Info:   Info{Version: "test", DataDir: "/data", PID: 42, StartedAt: time.Now()},
-		Port:   port,
-		Token:  token,
-		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		Info:        Info{Version: "test", DataDir: "/data", PID: 42, StartedAt: time.Now()},
+		Port:        port,
+		Token:       token,
+		ClientToken: clientToken,
+		Auth:        authMode,
+		Logger:      slog.New(slog.NewJSONHandler(&logs, nil)),
 		Children: func() []supervisor.Status {
 			return []supervisor.Status{{Name: "engine", State: supervisor.Running}}
 		},
@@ -119,6 +130,66 @@ func TestAccess(t *testing.T) {
 	}
 }
 
+// probe is a data route that reports the credential a request got in with.
+func probe(s *Server) {
+	s.e.GET("/api/v1/probe", func(c echo.Context) error { return envelope.OK(c, Credential(c)) })
+}
+
+func TestCredentials(t *testing.T) {
+	admin := map[string]string{"Authorization": "Bearer " + token}
+	client := map[string]string{"Authorization": "Bearer " + clientToken}
+	wrong := map[string]string{"Authorization": "Bearer nope"}
+	cases := []struct {
+		name, auth, path string
+		header           map[string]string
+		want             int
+		wantCred         string
+	}{
+		{name: "admin on a data route", path: "/api/v1/probe", header: admin, want: 200, wantCred: CredentialAdmin},
+		{name: "client on a data route", path: "/api/v1/probe", header: client, want: 200, wantCred: CredentialClient},
+		{name: "nothing on a data route", path: "/api/v1/probe", want: 401},
+		{name: "wrong token on a data route", path: "/api/v1/probe", header: wrong, want: 401},
+		{name: "client on status", path: "/api/v1/status", header: client, want: 403},
+		{name: "client on version", path: "/api/v1/version", header: client, want: 403},
+		{name: "auth off: nothing", auth: "none", path: "/api/v1/probe", want: 200, wantCred: CredentialNone},
+		{name: "auth off: a wrong token is ignored", auth: "none", path: "/api/v1/probe", header: wrong, want: 200,
+			wantCred: CredentialNone},
+		{name: "auth off: the client token still counts", auth: "none", path: "/api/v1/probe", header: client,
+			want: 200, wantCred: CredentialClient},
+		{name: "auth off: status still needs the admin token", auth: "none", path: "/api/v1/status", want: 401},
+		{name: "auth off: and the client token isn't enough", auth: "none", path: "/api/v1/status", header: client,
+			want: 403},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, base, _ := startWith(t, tc.auth)
+			probe(s)
+			status, env := get(t, base+tc.path, tc.header, "")
+			if status != tc.want {
+				t.Fatalf("status %d, want %d (%+v)", status, tc.want, env.Error)
+			}
+			if tc.wantCred != "" && env.Data != tc.wantCred {
+				t.Errorf("credential %v, want %s", env.Data, tc.wantCred)
+			}
+		})
+	}
+}
+
+func TestUnauthorizedAsksForABearer(t *testing.T) {
+	s, base, _ := start(t)
+	probe(s)
+	for _, path := range []string{"/api/v1/probe", "/api/v1/status"} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 401 || resp.Header.Get("WWW-Authenticate") != "Bearer" {
+			t.Errorf("%s: status %d, WWW-Authenticate %q", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+		}
+	}
+}
+
 func TestStatusReply(t *testing.T) {
 	_, base, _ := start(t)
 	_, env := get(t, base+"/api/v1/status", map[string]string{"Authorization": "Bearer " + token}, "")
@@ -127,7 +198,7 @@ func TestStatusReply(t *testing.T) {
 	if err := json.Unmarshal(b, &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.PID != 42 || st.DataDir != "/data" || st.Version != "test" ||
+	if st.PID != 42 || st.DataDir != "/data" || st.Version != "test" || st.Auth != "token" ||
 		len(st.Children) != 1 || st.Children[0].State != supervisor.Running {
 		t.Fatalf("status %+v", st)
 	}

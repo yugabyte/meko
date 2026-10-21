@@ -1,4 +1,4 @@
-// Package cli is the meko command: start, stop, status, serve and version.
+// Package cli is the meko command: start, stop, status, serve, version and token.
 package cli
 
 import (
@@ -27,6 +27,7 @@ Usage:
   meko status    show whether it's running, and its port, version and children
   meko serve     run the server in the foreground
   meko version   show versions
+  meko token     print the token MCP and REST clients send (Authorization: Bearer <token>)
 
 Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
 start and serve also take --port (default 7778) and --log-level (debug, info, warn, error).
@@ -53,7 +54,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
 	switch cmd {
-	case "start", "stop", "status", "serve", "version":
+	case "start", "stop", "status", "serve", "version", "token":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -78,6 +79,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runStop(l, stdout, stderr)
 	case "status":
 		return runStatus(l, stdout, stderr)
+	case "token":
+		return runToken(l, stdout, stderr)
 	}
 	// start loads the config too, so a bad file is reported before anything starts.
 	cfg, err := config.Load(l.Config, os.Getenv, o)

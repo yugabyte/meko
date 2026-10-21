@@ -33,6 +33,8 @@ func TestMain(m *testing.M) {
 		testEmbedder = os.Getenv(testEmbedderEnv)
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
+	// Only in the tests' own process: a test sets it for the serve it starts.
+	_ = os.Unsetenv("MEKO_AUTH")
 	os.Exit(m.Run())
 }
 
@@ -153,6 +155,7 @@ func TestStartStatusStop(t *testing.T) {
 
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "Children: none")
+	want(t, "status's auth", code, 0, out, "Auth:     token")
 
 	code, _, errs = run("serve", "--data-dir", dir, "--port", strconv.Itoa(freePort(t)))
 	want(t, "second serve", code, 1, errs, "already running for "+dir)
@@ -172,6 +175,56 @@ func TestStartStatusStop(t *testing.T) {
 			t.Errorf("%s left behind", p)
 		}
 	}
+}
+
+func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
+	dir, port := setup(t)
+	code, tok, errs := run("token", "--data-dir", dir) // before any server: made now
+	want(t, "token", code, 0, tok+errs, "")
+	if len(strings.TrimSpace(tok)) != 64 {
+		t.Fatalf("token %q", tok)
+	}
+	for i := 0; i < 2; i++ {
+		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
+		want(t, "start", started, 0, out+serrs, "is running")
+		_, again, _ := run("token", "--data-dir", dir)
+		if again != tok {
+			t.Fatalf("start %d: token %q, want %q", i, again, tok)
+		}
+		stopped, sout, _ := run("stop", "--data-dir", dir)
+		want(t, "stop", stopped, 0, sout, "stopped")
+	}
+	if _, err := os.Stat(paths.New(dir).ClientToken); err != nil {
+		t.Errorf("stop must keep the client token: %v", err)
+	}
+
+	// Deleted while a server runs, it isn't made again: the server keeps the token it loaded.
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	if err := os.Remove(paths.New(dir).ClientToken); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs = run("token", "--data-dir", dir)
+	want(t, "token with the file gone", code, 1, errs, "Restart Meko")
+	if _, err := os.Stat(paths.New(dir).ClientToken); !os.IsNotExist(err) {
+		t.Fatalf("token made a new file while the server runs: %v", err)
+	}
+}
+
+func TestStartRefusesAnUnknownAuthMode(t *testing.T) {
+	dir, port := setup(t)
+	t.Setenv("MEKO_AUTH", "off")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 1, out+errs, `server.auth "off"`)
+}
+
+func TestStatusWarnsWhenAuthIsOff(t *testing.T) {
+	dir, port := setup(t)
+	t.Setenv("MEKO_AUTH", "none")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "Auth:     none (every user and program on this machine")
 }
 
 func TestStalePidFileDoesntBlockStart(t *testing.T) {

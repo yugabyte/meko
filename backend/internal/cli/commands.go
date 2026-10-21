@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"runtime"
@@ -13,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/store"
@@ -188,6 +191,11 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		engineLine += " (" + st.Engine.Reason + ")"
 	}
 	fmt.Fprintln(stdout, engineLine)
+	if st.Auth == config.AuthNone {
+		fmt.Fprintln(stdout, "  Auth:     none (every user and program on this machine can read and write your memories)")
+	} else {
+		fmt.Fprintln(stdout, "  Auth:     token (meko token prints it)")
+	}
 	if len(st.Children) == 0 {
 		fmt.Fprintf(stdout, "  Children: none\n")
 	}
@@ -198,6 +206,35 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, line)
 	}
+	return exitOK
+}
+
+// runToken prints the client token, making it if no server has yet. It reads the data folder, so
+// it works whether or not the server runs. While one runs it only reads: the server keeps the token
+// it loaded at start, so a token made now (after the file was deleted to replace it) would be one
+// the server refuses.
+func runToken(l paths.Layout, stdout, stderr io.Writer) int {
+	if err := l.Ensure(); err != nil {
+		return fail(stderr, err)
+	}
+	up, err := running(l.Lock)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	var tok string
+	if up {
+		tok, err = auth.ReadClientToken(l.ClientToken)
+		if errors.Is(err, fs.ErrNotExist) {
+			err = fmt.Errorf("%s is gone, but the running server still takes the token it loaded at start. "+
+				"Restart Meko (meko stop, then meko start) to make a new one", l.ClientToken)
+		}
+	} else {
+		tok, err = auth.EnsureClientToken(l.ClientToken)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	fmt.Fprintln(stdout, tok)
 	return exitOK
 }
 

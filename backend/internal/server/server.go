@@ -1,6 +1,6 @@
-// Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and admin-token
-// checks, and the foundation's routes (replies use internal/envelope). /mcp, the rest of
-// /api/v1 and the UI are mounted in later milestones.
+// Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and token checks, and
+// the foundation's routes (replies use internal/envelope). /mcp and the rest of /api/v1 come in
+// the later PRs of milestone 3 (docs/api.md), and the UI in a later milestone.
 package server
 
 import (
@@ -19,6 +19,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/store"
@@ -42,9 +43,14 @@ type Info struct {
 
 // Options configure a Server.
 type Options struct {
-	Info     Info
-	Port     int    // the port it listens on, for the Host check
-	Token    string // the admin token
+	Info  Info
+	Port  int    // the port it listens on, for the Host check
+	Token string // the admin token
+	// ClientToken is the clients' token, accepted on every route but the admin-only ones.
+	ClientToken string
+	// Auth is config.AuthToken, or config.AuthNone to let /mcp and the data routes take requests
+	// with no credential.
+	Auth     string
 	Logger   *slog.Logger
 	Children func() []supervisor.Status
 	Engine   func(ctx context.Context) memory.EngineStatus // nil reports no engine
@@ -61,6 +67,9 @@ type Server struct {
 func New(opts Options) *Server {
 	if opts.Children == nil {
 		opts.Children = func() []supervisor.Status { return nil }
+	}
+	if opts.Auth == "" {
+		opts.Auth = config.AuthToken
 	}
 	if opts.Engine == nil {
 		opts.Engine = func(context.Context) memory.EngineStatus {
@@ -149,15 +158,55 @@ func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// requireToken checks the admin token on every route but /healthz. It keys on the matched
-// route, never the raw URL.
+// Credentials a request can carry, as Credential reports them.
+const (
+	CredentialAdmin  = "admin"  // the admin token: the CLI
+	CredentialClient = "client" // the client token: MCP and REST clients
+	CredentialNone   = "none"   // nothing, with [server] auth = "none"
+)
+
+const credentialKey = "meko.credential" //nolint:gosec // G101: a context key, not a secret
+
+// Credential is the credential a request was let in with.
+func Credential(c echo.Context) string {
+	v, _ := c.Get(credentialKey).(string)
+	return v
+}
+
+// adminOnly are the routes only the CLI's admin token opens, whatever the auth setting: they
+// describe the server itself.
+var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true}
+
+// requireToken lets a request in by its credential: /healthz needs none; the admin-only routes
+// need the admin token; every other route takes the admin or the client token, or nothing when
+// auth is "none". It keys on the matched route, never the raw URL.
 func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		if c.Path() == "/healthz" || auth.CheckBearer(c.Request().Header.Get(echo.HeaderAuthorization), s.opts.Token) {
+		if c.Path() == "/healthz" {
 			return next(c)
 		}
-		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
-			"Missing or wrong admin token. Use the meko CLI, which reads it from the data folder.")
+		h := c.Request().Header.Get(echo.HeaderAuthorization)
+		isClient := s.opts.ClientToken != "" && auth.CheckBearer(h, s.opts.ClientToken)
+		switch {
+		case auth.CheckBearer(h, s.opts.Token):
+			c.Set(credentialKey, CredentialAdmin)
+		case adminOnly[c.Path()] && isClient:
+			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
+				"This route needs the admin token. Use the meko CLI, which reads it from the data folder.")
+		case adminOnly[c.Path()]:
+			c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
+			return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
+				"Missing or wrong admin token. Use the meko CLI, which reads it from the data folder.")
+		case isClient:
+			c.Set(credentialKey, CredentialClient)
+		case s.opts.Auth == config.AuthNone:
+			c.Set(credentialKey, CredentialNone)
+		default:
+			c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
+			return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
+				"Missing or wrong token. Send the client token (meko token prints it) as Authorization: Bearer <token>.")
+		}
+		return next(c)
 	}
 }
 
@@ -175,6 +224,7 @@ type StatusReply struct {
 	UptimeSeconds int64               `json:"uptime_seconds"`
 	Children      []supervisor.Status `json:"children"`
 	Engine        memory.EngineStatus `json:"engine"`
+	Auth          string              `json:"auth"` // token, or none
 }
 
 func (s *Server) status(c echo.Context) error {
@@ -186,7 +236,7 @@ func (s *Server) status(c echo.Context) error {
 	return envelope.OK(c, StatusReply{
 		Version: i.Version, PID: i.PID, Port: s.opts.Port, DataDir: i.DataDir, StartedAt: i.StartedAt,
 		UptimeSeconds: int64(time.Since(i.StartedAt).Seconds()), Children: children,
-		Engine: s.opts.Engine(c.Request().Context()),
+		Engine: s.opts.Engine(c.Request().Context()), Auth: s.opts.Auth,
 	})
 }
 
