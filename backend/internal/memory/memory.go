@@ -12,6 +12,7 @@ import (
 
 	"github.com/yugabyte/meko-local/backend/internal/engine"
 	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
 // Errors the service returns, besides the engine's (engine.ErrUnavailable, *engine.NotReadyError).
@@ -28,6 +29,7 @@ type Service struct {
 	userID   string
 	log      *slog.Logger
 	noEngine string
+	child    func() (supervisor.Status, bool)
 }
 
 // Options configure a Service.
@@ -36,11 +38,13 @@ type Options struct {
 	Log    *slog.Logger
 	// NoEngine, if set, says why serve couldn't start the engine (no Node, or it isn't built).
 	NoEngine string
+	// EngineChild, if set, is the supervisor's status of the engine's child process.
+	EngineChild func() (supervisor.Status, bool)
 }
 
 // New is the service over st and the engine eng.
 func New(st *store.Store, eng *engine.Client, o Options) *Service {
-	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noEngine: o.NoEngine}
+	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noEngine: o.NoEngine, child: o.EngineChild}
 }
 
 // UserID is the install's local user, the user_id on every memory.
@@ -122,26 +126,42 @@ func (s *Service) SearchMemories(ctx context.Context, r Search) ([]engine.Memory
 	return res, s.engineErr(err)
 }
 
-// UpdateMemory replaces a memory's text.
+// UpdateMemory replaces a memory of the local user's.
 func (s *Service) UpdateMemory(ctx context.Context, datapack, id, text string) error {
+	if _, err := s.own(ctx, datapack, id); err != nil {
+		return err
+	}
 	return s.engineErr(s.eng.Update(ctx, datapack, id, text))
 }
 
-// DeleteMemory deletes a memory.
+// DeleteMemory deletes a memory of the local user's.
 func (s *Service) DeleteMemory(ctx context.Context, datapack, id string) error {
+	if _, err := s.own(ctx, datapack, id); err != nil {
+		return err
+	}
 	return s.engineErr(s.eng.Delete(ctx, datapack, id))
 }
 
-// GetMemory is one memory of the datapack, or ErrNotFound.
+// GetMemory is one of the local user's memories in the datapack, or ErrNotFound.
 func (s *Service) GetMemory(ctx context.Context, datapack, id string) (engine.Memory, error) {
-	rec, err := s.st.GetVector(ctx, store.Memories, datapack, id)
+	rec, err := s.own(ctx, datapack, id)
 	if err != nil {
 		return engine.Memory{}, err
 	}
-	if rec == nil {
-		return engine.Memory{}, ErrNotFound
-	}
 	return fromRecord(datapack, *rec), nil
+}
+
+// own is the stored memory if it's the local user's, else ErrNotFound: get, update and delete
+// reach only the memories search and list can.
+func (s *Service) own(ctx context.Context, datapack, id string) (*store.Record, error) {
+	rec, err := s.st.GetVector(ctx, store.Memories, datapack, id)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil || rec.Payload["user_id"] != s.userID {
+		return nil, ErrNotFound
+	}
+	return rec, nil
 }
 
 // ListMemories is the datapack's memories of the local user that match f, oldest first, up to
@@ -194,7 +214,8 @@ func fromRecord(datapack string, r store.Record) engine.Memory {
 }
 
 // EngineStatus is the engine's state for status reports: starting (no answer yet), loading (its
-// model), ready, error, or unavailable (with why).
+// model), ready, error (it says why), restarting (it crashed and the supervisor restarts it),
+// failed (it crashed too often and isn't restarted), or unavailable (it can't be started).
 type EngineStatus struct {
 	State    string           `json:"state"`
 	Reason   string           `json:"reason,omitempty"` // why it isn't ready
@@ -210,6 +231,13 @@ func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
 	defer cancel()
 	h, err := s.eng.Health(ctx)
 	if err != nil {
+		if s.child != nil {
+			if c, ok := s.child(); ok && c.State == supervisor.Failed {
+				return EngineStatus{State: "failed", Reason: c.LastError}
+			} else if ok && c.State == supervisor.Backoff {
+				return EngineStatus{State: "restarting", Reason: c.LastError}
+			}
+		}
 		return EngineStatus{State: "starting", Reason: "not answering yet"}
 	}
 	return EngineStatus{State: h.State, Reason: h.Error, Embedder: &h.Embedder}

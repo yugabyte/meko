@@ -57,8 +57,11 @@ type APIError struct {
 
 func (e *APIError) Error() string { return e.Message }
 
-// FindNode picks the Node binary: o.Node if set, then the one shipped next to meko-local
-// (<bin>/../node/bin/node), then node on PATH. Never AgentK's own. It must be MinNode or newer.
+// FindNode picks the Node binary: o.Node alone if it's set (configured explicitly, it replaces the
+// search); otherwise the one shipped next to meko-local (<bin>/../node/bin/node), then node on PATH.
+// It must be MinNode or newer. It doesn't check whose Node it found: AgentK's own is used only if
+// meko-local is installed inside AgentK's app folder or AgentK's node leads PATH, which packaging
+// avoids.
 func FindNode(o Options) (string, error) {
 	var candidates []string
 	if o.Node != "" {
@@ -202,7 +205,8 @@ type Health struct {
 	Embedder Embedder `json:"embedder"`
 }
 
-// Health asks the engine how it is. It fails with ErrUnavailable if nothing answers.
+// Health asks the engine how it is. It fails with ErrUnavailable if nothing accepts the connection,
+// and with ctx's error if the engine accepts it but doesn't answer before ctx ends.
 func (c *Client) Health(ctx context.Context) (Health, error) {
 	var h Health
 	err := c.call(ctx, http.MethodGet, "/healthz", nil, &h)

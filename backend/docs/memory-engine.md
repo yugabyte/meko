@@ -52,8 +52,8 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 | **Conversation and message ids are prod's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback; prod's ids keep the Cloud move lossless. Ids are unique per datapack, and the first agent owns the conversation. |
 | **Conversation search keeps prod's shape with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, the top 3 conversations whole (50 turns at most) | Prod's 0.35 suits its embedding models. With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. No reranker until milestone 4 (`rerank_score` is null). |
 | **The engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
-| **Meko Local finds its own Node**: `[engine] node` (or `MEKO_LOCAL_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | Never AgentK's. Release packaging of Node is milestone 5. |
-| **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid | A reused pid is never hit. The engine also exits on its own when its parent changes or `store.sock` goes away. |
+| **Meko Local finds its own Node**: `[engine] node` (or `MEKO_LOCAL_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko-local isn't installed in AgentK's app folder). Release packaging of Node is milestone 5. |
+| **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new engine. The engine also exits on its own when its parent changes or `store.sock` goes away. |
 
 ## Layout (#179–#181)
 
@@ -86,8 +86,11 @@ flowchart LR
   the TCP port. A data folder whose socket paths would pass 103 bytes (macOS's limit) is refused.
 - Go never holds a write transaction while it waits on the engine, which calls back into the
   store API and needs the single writer.
-- `/api/v1/status` reports the engine: `state` (starting, loading, ready, error, unavailable),
-  `reason`, and the embedder. `meko-local status` prints it.
+- `/api/v1/status` reports the engine: `state` (starting, loading, ready, error, restarting,
+  failed, unavailable), `reason`, and the embedder. When the engine doesn't answer, the
+  supervisor's state of its child says whether it's starting, restarting after a crash, or failed.
+  `meko-local status` prints it.
+- Get, update and delete reach only the local user's memories, as search and list do.
 
 ### Data folder additions
 
@@ -150,7 +153,7 @@ TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` 
 | `src/main.ts` | Sets `MEM0_TELEMETRY=false` and `MEM0_DIR` before mem0 loads, then runs `app.ts`. |
 | `src/app.ts` | The embedder, the providers, the API, then the hello; exits when the Go server goes. It retries a failed model load or hello with backoff (1 s up to 60 s, staying `loading` and saying why); only another model already in the store (`MODEL_CHANGED`) leaves it in `error`. It sets umask 077, so the model cache and mem0's config are the user's only. |
 | `src/providers.ts` | `MekoStore`, `MekoHistory`, `NoLLM` and `register()`, which wraps mem0's factories. |
-| `src/embedder.ts`, `src/embedworker.ts` | The worker-thread embedder (mean-pooled, normalized, batches of 32), and a hashing embedder for tests (`MEKO_LOCAL_TEST_EMBEDDER=hash` on `serve`). |
+| `src/embedder.ts`, `src/embedworker.ts` | The worker-thread embedder (mean-pooled, normalized, batches of 32), and a hashing embedder for tests (set only by the CLI's tests, never by an environment variable of the shipped binary). |
 | `src/engine.ts` | One mem0 `Memory` per datapack; verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, prod's reply shape), update, delete, embed. |
 | `src/scoring.ts` | Meko's score: `min((semantic + bm25 + boost) / (1 + [bm25 > 0] + 0.5·[boost > 0]), 1)`. |
 | `src/server.ts` | The API on `engine.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`. It logs routes, statuses and timings only, never an error's message. |
@@ -204,4 +207,6 @@ In `make test` on Linux and macOS (CI caches the model):
   back; an engine with another model refused; with MiniLM, a paraphrase found with a 0–1 score and
   its cosine, an identifier above 0.75, and conversation search's cutoff; turns waiting for the
   engine; no memory text in `engine.log`; `serve` starting the engine and `stop` stopping it, and
-  `stop` killing a hung serve's recorded children.
+  `stop` killing a hung serve's recorded children, and `stop` and the next `serve` killing those
+  of a serve killed from outside; a recorded pid now held by another group leader left alone; get,
+  update and delete refusing another user's memory; a crashed engine's status.

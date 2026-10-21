@@ -11,6 +11,7 @@ import (
 
 	"github.com/yugabyte/meko-local/backend/internal/engine"
 	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
 func TestMemoriesThroughTheEngine(t *testing.T) {
@@ -51,9 +52,9 @@ func TestMemoriesThroughTheEngine(t *testing.T) {
 			t.Errorf("scores %v %v", *r.Score, *r.RawSimilarityScore)
 		}
 	}
-	res, _ = h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, ConversationID: "other", Query: "zebra"})
-	if len(res) != 0 {
-		t.Errorf("conversation filter: %+v", res)
+	res, err = h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, ConversationID: "other", Query: "zebra"})
+	if err != nil || len(res) != 0 {
+		t.Errorf("conversation filter: %+v %v", res, err)
 	}
 
 	list, total, err := h.svc.ListMemories(ctx, h.dp, store.Filter{"role": "assistant"}, 0)
@@ -73,12 +74,28 @@ func TestMemoriesThroughTheEngine(t *testing.T) {
 	if _, err = h.svc.GetMemory(ctx, h.dp, id); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get after delete: %v", err)
 	}
-	if res, _ := h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, Query: "zebra password crimson"}); len(res) > 0 &&
-		res[0].ID == id {
-		t.Error("a deleted memory was found")
+	if res, err = h.svc.SearchMemories(ctx, Search{DatapackID: h.dp, Query: "zebra password crimson"}); err != nil ||
+		len(res) > 0 && res[0].ID == id {
+		t.Errorf("a deleted memory was found, or the search failed: %v", err)
 	}
 	if err = h.svc.DeleteMemory(ctx, h.dp, id); !errors.Is(err, ErrNotFound) {
 		t.Errorf("delete of a deleted memory: %v", err)
+	}
+	// Another user's memory (written by mem0 for another user_id) is out of reach.
+	vec := make([]float32, 384)
+	vec[0] = 1
+	if err = h.st.InsertVectors(ctx, store.Memories, h.dp, []string{"theirs"}, [][]float32{vec},
+		[]map[string]any{{"data": "their memory", "user_id": "someone-else"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.svc.GetMemory(ctx, h.dp, "theirs"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get of another user's memory: %v", err)
+	}
+	if err = h.svc.UpdateMemory(ctx, h.dp, "theirs", "mine now"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("update of another user's memory: %v", err)
+	}
+	if err = h.svc.DeleteMemory(ctx, h.dp, "theirs"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("delete of another user's memory: %v", err)
 	}
 	if _, err = h.svc.AddMemory(ctx, AddMemory{DatapackID: "nope", Text: "x"}); !errors.Is(err, ErrNoDatapack) {
 		t.Errorf("an unknown datapack: %v", err)
@@ -191,5 +208,24 @@ func TestParaphraseAndIdentifierSearch(t *testing.T) {
 		if *top.Score < c.minScore || *top.Score > 1 || *top.RawSimilarityScore < 0.5 || *top.RawSimilarityScore > 1 {
 			t.Errorf("%q: score %.3f, cosine %.3f", c.query, *top.Score, *top.RawSimilarityScore)
 		}
+	}
+}
+
+// A crashed engine's status says what the supervisor does about it, not "starting".
+func TestEngineStatusOfACrashedEngine(t *testing.T) {
+	child := supervisor.Status{Name: engine.Name, State: supervisor.Failed, LastError: "exited: exit status 1"}
+	s := New(nil, engine.NewClient("/nonexistent/engine.sock", "tok"), Options{
+		EngineChild: func() (supervisor.Status, bool) { return child, true },
+	})
+	if st := s.EngineStatus(context.Background()); st.State != "failed" || st.Reason != child.LastError {
+		t.Errorf("failed: %+v", st)
+	}
+	child.State = supervisor.Backoff
+	if st := s.EngineStatus(context.Background()); st.State != "restarting" {
+		t.Errorf("in backoff: %+v", st)
+	}
+	child.State = supervisor.Starting
+	if st := s.EngineStatus(context.Background()); st.State != "starting" {
+		t.Errorf("starting: %+v", st)
 	}
 }

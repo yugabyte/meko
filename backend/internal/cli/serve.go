@@ -32,9 +32,10 @@ const (
 	childStopTimeout = 15 * time.Second
 )
 
-// TestEmbedderEnv, for tests only, makes the engine use a deterministic hashing embedder instead of
-// downloading its model.
-const TestEmbedderEnv = "MEKO_LOCAL_TEST_EMBEDDER"
+// testEmbedder, if set, makes the engine use a deterministic hashing embedder instead of
+// downloading its model. Only this package's tests set it (cli_test.go's TestMain), so no
+// environment can switch the shipped binary's model.
+var testEmbedder string
 
 // ServeOptions configure Serve.
 type ServeOptions struct {
@@ -158,7 +159,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	sup := supervisor.New(log)
 	noEngine := startEngine(sup, l, cfg, internalToken, log)
 	svc := memory.New(st, engine.NewClient(l.EngineSock, internalToken), memory.Options{
-		UserID: userID, Log: log, NoEngine: noEngine,
+		UserID: userID, Log: log, NoEngine: noEngine, EngineChild: func() (supervisor.Status, bool) {
+			for _, c := range sup.Statuses() {
+				if c.Name == engine.Name {
+					return c, true
+				}
+			}
+			return supervisor.Status{}, false
+		},
 	})
 
 	srv := server.New(server.Options{
@@ -202,7 +210,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 // startEngine starts the memory engine under sup, or says why it can't (no Node, or the engine
 // isn't built): the server then runs without it, and memory features say why.
 func startEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string, log *slog.Logger) string {
-	o := engine.Options{Node: cfg.Engine.Node, Dir: cfg.Engine.Dir, TestEmbedder: os.Getenv(TestEmbedderEnv)}
+	o := engine.Options{Node: cfg.Engine.Node, Dir: cfg.Engine.Dir, TestEmbedder: testEmbedder}
 	node, err := engine.FindNode(o)
 	if err == nil {
 		var dir string

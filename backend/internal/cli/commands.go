@@ -16,7 +16,6 @@ import (
 	"github.com/yugabyte/meko-local/backend/internal/config"
 	"github.com/yugabyte/meko-local/backend/internal/paths"
 	"github.com/yugabyte/meko-local/backend/internal/store"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 	"github.com/yugabyte/meko-local/backend/internal/version"
 )
 
@@ -123,7 +122,6 @@ func runStop(l paths.Layout, stdout, stderr io.Writer) int {
 	}
 	if !up {
 		cleanRunFiles(l) // left behind if the server was killed
-		_, _ = supervisor.KillRecorded(l.ChildrenDir)
 		fmt.Fprintln(stdout, "Meko Local isn't running.")
 		return exitOK
 	}
@@ -143,9 +141,7 @@ func runStop(l paths.Layout, stdout, stderr io.Writer) int {
 	if !waitUnlocked(l.Lock, 5*time.Second) {
 		return fail(stderr, fmt.Errorf("pid %d didn't stop, even after SIGKILL", pid))
 	}
-	// Its children are in process groups of their own, which the SIGKILL didn't reach.
-	_, _ = supervisor.KillRecorded(l.ChildrenDir)
-	cleanRunFiles(l)
+	cleanRunFiles(l) // and its children, in process groups the SIGKILL didn't reach
 	fmt.Fprintf(stdout, "Meko Local didn't stop within %s, so it was killed.\n", stopTimeout)
 	return exitOK
 }

@@ -266,7 +266,7 @@ func TestUnixHTTPCheck(t *testing.T) {
 	}
 }
 
-// A running child's pid and process group are recorded, and the record goes when it stops.
+// A running child's pid, process group and start are recorded, and the record goes when it stops.
 func TestPidFile(t *testing.T) {
 	s, _ := newSupervisor()
 	sp := spec(t, "healthy")
@@ -274,7 +274,7 @@ func TestPidFile(t *testing.T) {
 	s.Start(sp)
 	st := waitFor(t, s, "running", func(st Status) bool { return st.State == Running })
 	b, err := os.ReadFile(sp.PidFile)
-	if want := fmt.Sprintf("%d %d\n", st.PID, st.PID); err != nil || string(b) != want {
+	if want, _ := Record(st.PID); err != nil || string(b) != want {
 		t.Fatalf("pid file %q, %v; want %q", b, err, want)
 	}
 	if err := s.Stop(context.Background()); err != nil {
@@ -293,18 +293,29 @@ func TestKillRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leader := exec.Command(exe)
-	leader.Env = append(os.Environ(), "STUB_MODE=stubborn", "STUB_READY="+filepath.Join(dir, "ready"))
-	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err = leader.Start(); err != nil {
+	start := func() (*exec.Cmd, chan struct{}) {
+		cmd := exec.Command(exe)
+		cmd.Env = append(os.Environ(), "STUB_MODE=stubborn", "STUB_READY="+filepath.Join(dir, "ready"))
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err = cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		exited := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(exited) }()
+		return cmd, exited
+	}
+	leader, exited := start()
+	other, otherExited := start() // a group leader whose pid a stale record names
+	defer func() { _ = syscall.Kill(-other.Process.Pid, syscall.SIGKILL) }()
+	rec, err := Record(leader.Process.Pid)
+	if err != nil {
 		t.Fatal(err)
 	}
-	exited := make(chan struct{})
-	go func() { _ = leader.Wait(); close(exited) }()
-	pid := leader.Process.Pid
 	records := map[string]string{
-		"engine": fmt.Sprintf("%d %d\n", pid, pid),
-		"reused": fmt.Sprintf("%d %d\n", os.Getpid(), os.Getpid()+100000),
+		"engine": rec,
+		"reused": fmt.Sprintf("%d %d 0:0\n", other.Process.Pid, other.Process.Pid),
+		"group":  fmt.Sprintf("%d %d %s\n", os.Getpid(), os.Getpid()+100000, "x"),
+		"old":    fmt.Sprintf("%d %d\n", other.Process.Pid, other.Process.Pid),
 		"junk":   "not a pid\n",
 	}
 	for name, rec := range records {
@@ -320,6 +331,11 @@ func TestKillRecorded(t *testing.T) {
 	case <-exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the recorded child is still running")
+	}
+	select {
+	case <-otherExited:
+		t.Fatal("a process that reused a recorded pid was killed")
+	case <-time.After(200 * time.Millisecond):
 	}
 	for name := range records {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {

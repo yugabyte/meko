@@ -64,7 +64,8 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   an error's message.
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
   ports, never `~/.meko-local` or port 7778. Tests that need no model start the engine with the
-  hashing embedder (`MEKO_LOCAL_TEST_EMBEDDER=hash`).
+  hashing embedder (`engine.Options.TestEmbedder`; the CLI's tests set it through their own
+  `MEKO_TEST_EMBEDDER`, which only the test binary reads).
 - `third_party/` is vendored code, never edited (sqlite-vec and SQLite's headers; see
   `third_party/sqlite-vec/README.md`). It moves to yugabyte forks once those exist.
 - Lint is `.golangci.yml`: prod Meko's config with the changes listed at its top. Fix findings

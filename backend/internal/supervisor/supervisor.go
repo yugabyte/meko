@@ -27,7 +27,7 @@ type Spec struct {
 	Env     []string // added to this process's environment
 	Dir     string
 	LogFile string // stdout and stderr, appended
-	// PidFile, if set, holds "<pid> <pgid>" while the child runs, so stop can still reach its
+	// PidFile, if set, holds the child's Record while it runs, so stop can still reach its
 	// process group after killing a serve that hung (KillRecorded).
 	PidFile string
 
@@ -222,8 +222,11 @@ func (c *child) once(ctx context.Context) (time.Duration, error) {
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	if c.spec.PidFile != "" {
-		// The child leads its own group (Setpgid), so its pgid is its pid.
-		if err := writeFile(c.spec.PidFile, fmt.Sprintf("%d %d\n", pid, pid)); err != nil {
+		rec, err := Record(pid)
+		if err == nil {
+			err = writeFile(c.spec.PidFile, rec)
+		}
+		if err != nil {
 			c.log.Warn("can't record the child's pid; stop can't reach it if serve hangs", "error", err)
 		}
 		defer func() { _ = os.Remove(c.spec.PidFile) }()
@@ -326,9 +329,20 @@ func writeFile(path, data string) error {
 	return os.Rename(tmp, path)
 }
 
+// Record is what PidFile holds for a child that leads its own process group (Setpgid): its pid,
+// its pgid (the same) and when it started, "<pid> <pgid> <start>".
+func Record(pid int) (string, error) {
+	start, err := processStart(pid)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d %d %s\n", pid, pid, start), nil
+}
+
 // KillRecorded sends SIGKILL to the process group of each child recorded in dir (PidFile) and
-// removes the records. A group is killed only while its leader still has the recorded pgid, so a
-// reused pid is never hit. It's for after serve itself was killed, or before a new serve starts.
+// removes the records. A group is killed only while its leader still has the recorded pgid and
+// started when the record says, so a pid reused since (after a crash or a reboot) is never hit.
+// It's for after serve itself was killed, or before a new serve starts.
 func KillRecorded(dir string) (killed int, err error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -343,17 +357,26 @@ func KillRecorded(dir string) (killed int, err error) {
 		if err != nil {
 			continue
 		}
-		var pid, pgid int
-		if _, err := fmt.Sscanf(string(b), "%d %d", &pid, &pgid); err == nil && pid > 1 && pgid > 1 {
-			if got, err := syscall.Getpgid(pid); err == nil && got == pgid {
-				if syscall.Kill(-pgid, syscall.SIGKILL) == nil {
-					killed++
-				}
-			}
+		if pgid, ok := liveGroup(string(b)); ok && syscall.Kill(-pgid, syscall.SIGKILL) == nil {
+			killed++
 		}
 		_ = os.Remove(path)
 	}
 	return killed, nil
+}
+
+// liveGroup is the process group a Record names, if its leader is still the process recorded.
+func liveGroup(rec string) (int, bool) {
+	var pid, pgid int
+	var start string
+	if _, err := fmt.Sscanf(rec, "%d %d %s", &pid, &pgid, &start); err != nil || pid <= 1 || pgid <= 1 {
+		return 0, false
+	}
+	if got, err := syscall.Getpgid(pid); err != nil || got != pgid {
+		return 0, false
+	}
+	now, err := processStart(pid)
+	return pgid, err == nil && now == start
 }
 
 // UnixHTTPCheck is a Health function that GETs path over the unix socket and wants a 2xx.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
 // lockedError means another server holds the data folder's lock.
@@ -60,11 +61,13 @@ func acquireServeLock(path string) (*os.File, error) {
 	}
 }
 
-// cleanRunFiles removes the run files a killed server left, holding the lock while it does so a
-// server starting at the same moment can't lose the files it just wrote. It does nothing if a
-// server holds the lock.
+// cleanRunFiles kills the children a killed server left (their process groups, which the server's
+// own kill didn't reach) and removes its run files. It holds the lock while it does, so a server
+// starting at the same moment can't lose the files it just wrote or the engine it just started. It
+// does nothing if a server holds the lock.
 func cleanRunFiles(l paths.Layout) {
 	if f, err := acquireLock(l.Lock); err == nil {
+		_, _ = supervisor.KillRecorded(l.ChildrenDir)
 		removeRunFiles(l)
 		releaseLock(f)
 	}

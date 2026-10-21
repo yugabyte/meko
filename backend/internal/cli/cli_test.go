@@ -17,6 +17,7 @@ import (
 
 	"github.com/yugabyte/meko-local/backend/internal/config"
 	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
 // TestMain doubles as the meko-local binary: start re-runs os.Executable() (this test binary)
@@ -29,10 +30,14 @@ func TestMain(m *testing.M) {
 		if mode := os.Getenv("MEKO_TEST_SERVE"); mode != "" {
 			hungServe(mode)
 		}
+		testEmbedder = os.Getenv(testEmbedderEnv)
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
 }
+
+// testEmbedderEnv passes testEmbedder to the serve a test starts (as this test binary).
+const testEmbedderEnv = "MEKO_TEST_EMBEDDER"
 
 // hungServe stands in for a serve that takes the lock and writes its pid but never answers;
 // "hang-ignore-term" also ignores SIGTERM, so only SIGKILL stops it.
@@ -56,7 +61,10 @@ func hungServe(mode string) {
 		if err := child.Start(); err != nil {
 			os.Exit(2)
 		}
-		rec := fmt.Sprintf("%d %d\n", child.Process.Pid, child.Process.Pid)
+		rec, err := supervisor.Record(child.Process.Pid)
+		if err != nil {
+			os.Exit(2)
+		}
 		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "engine"), []byte(rec)); err != nil {
 			os.Exit(2)
 		}
@@ -281,11 +289,12 @@ func TestStopKillsAServerThatIgnoresSIGTERM(t *testing.T) {
 }
 
 // stop's SIGKILL path also kills the children a hung server recorded, in their own groups.
-func TestStopKillsAHungServersChildren(t *testing.T) {
-	dir, _ := setup(t)
+// startHungServe starts a serve that hangs after recording a child in its own process group, as
+// serve records the engine, and returns it and the child's pid.
+func startHungServe(t *testing.T, dir string) (*exec.Cmd, int) {
+	t.Helper()
 	l := paths.New(dir)
 	t.Setenv("MEKO_TEST_SERVE", "hang-with-child")
-	shorten(t, &stopTimeout, time.Second)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -304,14 +313,66 @@ func TestStopKillsAHungServersChildren(t *testing.T) {
 			t.Fatal("the hung serve never recorded its child")
 		}
 	}
-	code, out, errs := run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out+errs, "so it was killed")
-	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(child, 0) == nil; time.Sleep(50 * time.Millisecond) {
+	t.Cleanup(func() { _ = syscall.Kill(-child, syscall.SIGKILL) })
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if up, _ := running(l.Lock); up {
+			break
+		}
 		if time.Now().After(deadline) {
-			_ = syscall.Kill(-child, syscall.SIGKILL)
-			t.Fatal("the child outlived stop")
+			t.Fatal("the hung serve never took the lock")
 		}
 	}
+	t.Setenv("MEKO_TEST_SERVE", "")
+	return cmd, child
+}
+
+// waitGone waits for the child's process to end, and checks its record is gone.
+func waitGone(t *testing.T, dir string, child int, after string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(child, 0) == nil; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the child outlived %s", after)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(paths.New(dir).ChildrenDir, "engine")); !os.IsNotExist(err) {
+		t.Errorf("the child's record outlived %s: %v", after, err)
+	}
+}
+
+func TestStopKillsAHungServersChildren(t *testing.T) {
+	dir, _ := setup(t)
+	shorten(t, &stopTimeout, time.Second)
+	_, child := startHungServe(t, dir)
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "so it was killed")
+	waitGone(t, dir, child, "stop")
+}
+
+// A serve killed from outside leaves its child: stop, finding no server, kills it.
+func TestStopKillsAKilledServersChildren(t *testing.T) {
+	dir, _ := setup(t)
+	serve, child := startHungServe(t, dir)
+	_ = serve.Process.Kill()
+	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
+		t.Fatal("the killed serve's lock wasn't released")
+	}
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "isn't running")
+	waitGone(t, dir, child, "stop")
+}
+
+// A serve killed from outside leaves its child: the next serve kills it before starting its own.
+func TestServeKillsAKilledServersChildren(t *testing.T) {
+	dir, port := setup(t)
+	serve, child := startHungServe(t, dir)
+	_ = serve.Process.Kill()
+	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
+		t.Fatal("the killed serve's lock wasn't released")
+	}
+	t.Setenv("MEKO_LOCAL_ENGINE_DIR", t.TempDir()) // no engine, so no new record
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko Local is running")
+	waitGone(t, dir, child, "the next serve's start")
 }
 
 // serve starts the engine (with the test embedder), status reports it ready, and stop stops it.
@@ -328,7 +389,7 @@ func TestServeRunsTheEngine(t *testing.T) {
 	}
 	dir, port := setup(t)
 	t.Setenv("MEKO_LOCAL_ENGINE_DIR", engineDir)
-	t.Setenv(TestEmbedderEnv, "hash")
+	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "Meko Local is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
