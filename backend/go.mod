@@ -1,6 +1,6 @@
 module github.com/yugabyte/meko/backend
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -8,7 +8,7 @@ require (
 	github.com/labstack/echo/v4 v4.16.0
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
