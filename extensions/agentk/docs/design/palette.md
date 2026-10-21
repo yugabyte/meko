@@ -65,7 +65,7 @@ again when it starts, and uses an open project that fits by then instead of open
 
 A datapack's share link (`{web app}/share/{token}`) pasted on its own gives one item, **Join the
 datapack this link shares** (`joinEntry()` in `src/web/palette.ts`), and no Ask AgentK item or
-session search. Only a link on the Meko web app AgentK uses counts (`shareLinkToken()` in
+session search; `⌘Enter` doesn't ask either, so the token goes only to Meko. Only a link on the Meko web app AgentK uses counts (`shareLinkToken()` in
 `src/shared/mekourls.ts`, from `AppState.meko.webUrl`). Picking it joins, with *Joining* meanwhile;
 then the palette opens the Open project dialog with the share chosen, or goes to the project here
 that already uses the datapack, or stays open saying what to do (`joinedText()`). The rest is in

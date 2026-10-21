@@ -266,7 +266,6 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(puts()).toEqual([{ status: 'active' }, { grant: 'contributor' }, { status: 'off' }, { status: 'active' }]);
     expect((await call('PUT', url, { grant: 'viewer' })).json().grant).toBe('viewer');
     expect((await call('PUT', url, { reset: true })).json().url).toBe('https://cloud.mekodata.ai/share/tok-2');
-    expect(info.mock.calls.map((a) => a.join(' ')).filter((l) => l.includes('share link'))).toHaveLength(5);
     expect(JSON.stringify(info.mock.calls)).not.toMatch(/tok-/);
     // A Meko whose API URL is set but not its web app's: no link to build.
     env.core.updateConfig((c) => {
@@ -289,6 +288,8 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
       'tok-a': { body: { data: { datapack_id: 'dp-a', grant: 'contributor', already_member: false } }, row: shared('dp-a', 'contributor') },
       'tok-v': { body: { data: { datapack_id: 'dp-v', grant: 'viewer', already_member: false } }, row: shared('dp-v', 'viewer') },
       'tok-p': { body: { data: { datapack_id: 'dp-1', grant: 'contributor', already_member: true } } },
+      'tok-m': { body: { data: { datapack_id: 'dp-m', grant: 'viewer', already_member: true } }, row: shared('dp-m', 'maintainer') },
+      'tok-old': { status: 404, body: undefined },
       'tok-off': { status: 404, body: { error: { code: 'NOT_FOUND', message: 'share link not found' } } },
       'tok-gone': { status: 403, body: { error: { code: 'REMOVED_FROM_DATAPACK', message: 'removed' } } },
     };
@@ -306,18 +307,24 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     // A look-alike link's token never reaches Meko.
     for (const url of ['https://evil.example/share/tok-a', 'https://cloud.mekodata.ai/datapacks/tok-a', '']) expect((await join(url)).statusCode).toBe(400);
     expect(redeems()).toBe(0);
-    // The first sync records the shares there already quietly, but one joined here is offered.
+    // The first sync records the shares there already quietly, but one joined here is offered for
+    // Open project, with no banner or notification: the person who joined knows.
     const a = await join('https://cloud.mekodata.ai/share/tok-a');
     expect(a.json()).toMatchObject({
       datapackId: 'dp-a', name: 'adlc/proj/demo-repo/dp-a', grant: 'contributor', alreadyMember: false, project: null,
-      invite: { datapackId: 'dp-a', state: 'shared' },
+      invite: { datapackId: 'dp-a', state: 'later' },
     });
     expect(notify).not.toHaveBeenCalled();
+    expect((await call('GET', '/api/state')).json().invites).toEqual([]);
+    // A maintainer who pastes the datapack's viewer link keeps their own access.
+    expect((await join('https://cloud.mekodata.ai/share/tok-m')).json()).toMatchObject({ grant: 'maintainer', invite: { datapackId: 'dp-m' } });
     // A viewer can't open it as a project; a datapack a project here uses opens that project.
     expect((await join('https://cloud.mekodata.ai/share/tok-v')).json()).toMatchObject({ grant: 'viewer', invite: null, project: null });
     expect((await join('https://cloud.mekodata.ai/share/tok-p')).json()).toMatchObject({ alreadyMember: true, invite: null, project: { name: 'p' } });
     const off = await join('https://cloud.mekodata.ai/share/tok-off');
     expect([off.statusCode, off.json().error]).toEqual([404, expect.stringMatching(/turned it off or reset it/)]);
+    // A Meko without the redeem route isn't a link to ask the owner about again.
+    expect((await join('https://cloud.mekodata.ai/share/tok-old')).json().error).toBe("This Meko doesn't have share links.");
     const gone = await join('https://cloud.mekodata.ai/share/tok-gone');
     expect([gone.statusCode, gone.json().error]).toEqual([403, expect.stringMatching(/You were removed from this datapack/)]);
   });

@@ -27,7 +27,7 @@ import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
-import { MekoApiError, asLinkGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
+import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
 import { resolveMekoWebUrl } from './config.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
@@ -427,7 +427,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (e instanceof MekoApiError && e.code === 'REMOVED_FROM_DATAPACK') {
         throw new HttpError(403, "You were removed from this datapack, so its link doesn't let you back in. Ask its owner to invite you again.");
       }
-      if (e instanceof MekoApiError && (e.status === 405 || e.status === 501)) throw new HttpError(409, "This Meko doesn't have share links.");
+      if (routeMissing(e)) throw new HttpError(409, "This Meko doesn't have share links.");
       if (e instanceof MekoApiError && e.status === 404) {
         throw new HttpError(404, "This link doesn't work any more: its owner may have turned it off or reset it. Ask them for a new one.");
       }
@@ -436,7 +436,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const id = joined.datapackId;
     core.invites.joinedHere(id);
     core.log.info(`joined datapack ${id} through a share link${joined.alreadyMember ? ' (already a member)' : ''}`);
-    // The share as the Open project dialog offers it: from one datapack_list, synced with it.
+    // The share as the Open project dialog offers it. joinedHere() made any sync already running
+    // read Meko again, so the rows sync() uses are from after the join, ours or its own.
     let listed: MekoDatapackRow | undefined;
     try {
       const stamp = core.invites.stamp();
@@ -448,7 +449,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }
     const project = get<{ id: string; name: string }>(db, `SELECT p.id, p.name FROM project_datapacks d JOIN projects p ON p.id = d.project_id
                            WHERE d.datapack_id = ? AND p.deleted_at IS NULL ORDER BY d.role = 'dedicated' DESC, p.position LIMIT 1`, id) ?? null;
-    const grant = asLinkGrant(listed?.grant) ?? joined.grant;
+    // Our access as the datapack list has it (a maintainer may paste a viewer link), else the link's.
+    const grant: JoinByLinkResult['grant'] = listed?.grant === 'owner' ? 'owner' : asGrant(listed?.grant) ?? joined.grant;
     const share = project ? null : core.invites.openShare(id);
     return {
       datapackId: id,

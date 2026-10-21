@@ -224,16 +224,18 @@ export class InviteService {
         const grant = asGrant(d.grant);
         const r = this.row(d.id);
         if (!r) {
-          // Joined here through a share link: offered even on the first sync, and not announced (they know).
+          // Joined here through a share link: they know, so no banner or notification, but it's
+          // offered in Open project (as after Later), even on the first sync.
           const joinedHere = this.acceptedAt.has(d.id);
-          const state: InviteState = baseline && !joinedHere ? 'baseline' : 'shared';
+          const state: InviteState = joinedHere ? 'later' : baseline ? 'baseline' : 'shared';
           write(`INSERT INTO datapack_invites(datapack_id, name, grant_role, owner_name, owner_email, repo_remote, state, first_seen_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, d.id, d.name, grant, d.ownerName, d.ownerEmail, remote, state, now);
           if (!baseline && !joinedHere) notices.push(notice(d.id, d.name, d.ownerName ?? d.ownerEmail, grant, false));
           continue;
         }
         // Accepted (here or in Meko): no invite left to act on. An invite already told about isn't told again.
-        const state = r.state === 'invited' ? 'shared' : r.state;
+        // An invite joined here through a share link instead: no banner for it either.
+        const state = r.state === 'invited' ? (this.acceptedAt.has(d.id) ? 'later' : 'shared') : r.state;
         write(`UPDATE datapack_invites SET name = ?, invite_id = NULL, grant_role = ?, owner_name = ?, owner_email = ?, repo_remote = ?, state = ?
                WHERE datapack_id = ? AND (name IS NOT ? OR invite_id IS NOT NULL OR grant_role IS NOT ? OR owner_name IS NOT ?
                OR owner_email IS NOT ? OR repo_remote IS NOT ? OR state IS NOT ?)`,
@@ -296,10 +298,12 @@ export class InviteService {
   }
 
   /**
-   * We joined the datapack through a share link here: the next sync doesn't announce it, and doesn't
-   * take it for gone while datapack_list catches up.
+   * We joined the datapack through a share link here: the next sync offers it in Open project
+   * without a banner or notification, and doesn't take it for gone while datapack_list catches up.
+   * A sync that read Meko before this reads it again.
    */
   joinedHere(datapackId: string): void {
+    this.gen++;
     this.acceptedAt.set(datapackId, Date.now());
   }
 

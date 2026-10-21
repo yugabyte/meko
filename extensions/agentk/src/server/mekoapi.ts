@@ -70,7 +70,7 @@ export function asGrant(v: unknown): ShareGrant | null {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
 
-export function asLinkGrant(v: unknown): LinkGrant | null {
+function asLinkGrant(v: unknown): LinkGrant | null {
   const g = asGrant(v);
   return g === 'viewer' || g === 'contributor' ? g : null;
 }
@@ -81,10 +81,14 @@ function toShareLink(r: Json | undefined): ShareLinkRow {
   const l = r?.share_link;
   if (!l || typeof l !== 'object' || Array.isArray(l)) throw badReply('the share link');
   const link = l as Json;
+  // No role yet (a link never turned on) is Meko's default, viewer, as its web app reads it; a role
+  // AgentK doesn't know is Meko's API changing.
+  const grant = link.grant == null || link.grant === '' ? 'viewer' : asLinkGrant(link.grant);
+  if (!grant) throw badReply('the share link');
   return {
     active: link.status === 'active',
     token: strOrNull(link.token),
-    grant: asLinkGrant(link.grant) ?? 'viewer',
+    grant,
     joined: count(link.redemption_count),
     atLinkRole: count(link.members_at_link_role),
   };

@@ -532,7 +532,8 @@ export function CommandPalette({
                 setIdx((i) => Math.max(0, i - 1));
               } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                if (askAgentk) void ask(q);
+                // Never a pasted share link: its token goes to Meko only.
+                if (askAgentk && !join) void ask(q);
               } else if (e.key === 'Enter') {
                 e.preventDefault();
                 choose(shown[idx]);

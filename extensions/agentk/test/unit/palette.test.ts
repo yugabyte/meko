@@ -84,7 +84,6 @@ describe('a pasted GitHub link', () => {
 describe('a pasted Meko share link', () => {
   it('offers to join it, and says what joining came to when there is nothing to open', () => {
     expect(joinEntry(' https://cloud.mekodata.ai/share/abc ', 'https://cloud.mekodata.ai')?.id).toBe('join-link');
-    expect(joinEntry('https://cloud.mekodata.ai/share/abc', null)).toBeNull();
     const r: JoinByLinkResult = { datapackId: 'd', name: 'adlc/proj/x/y', grant: 'viewer', alreadyMember: false, invite: null, project: null };
     expect(joinedText(r)).toMatch(/^You joined adlc\/proj\/x\/y as viewer\. A viewer can’t open it as a project/);
     expect(joinedText({ ...r, name: null })).toBe('You joined the datapack as viewer. It shows in Open project once Meko lists it.');

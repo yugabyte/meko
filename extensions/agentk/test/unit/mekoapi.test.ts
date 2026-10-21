@@ -68,6 +68,8 @@ describe('MekoApi', () => {
     // An answer of another shape means Meko's API changed: an error, not an empty link.
     f.handle(() => ok({}));
     await expect(f.api.shareLink('d')).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    f.handle(() => ok({ share_link: { status: 'active', token: 't', grant: 'maintainer' } }));
+    await expect(f.api.shareLink('d')).rejects.toMatchObject({ code: 'BAD_REPLY' });
     await expect(f.api.redeemShareLink('t')).rejects.toMatchObject({ code: 'BAD_REPLY' });
   });
 

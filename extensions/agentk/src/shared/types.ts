@@ -1202,10 +1202,11 @@ export interface JoinByLinkResult {
   datapackId: string;
   /** From the datapack list; null while Meko's list doesn't show it yet. */
   name: string | null;
-  grant: LinkGrant | null;
+  /** Our access: from the datapack list (a maintainer may paste a viewer link), else the link's role. */
+  grant: ShareGrant | 'owner' | null;
   /** They had access already: nothing changed in Meko. */
   alreadyMember: boolean;
-  /** The share to open as a project (a project datapack, not a viewer one, no project here uses it). */
+  /** The share to open as a project (a project datapack, not a viewer one, no project here uses it). Not a banner. */
   invite: DatapackInvite | null;
   /** The open project here that already uses the datapack. */
   project: { id: string; name: string } | null;
