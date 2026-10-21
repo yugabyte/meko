@@ -633,9 +633,11 @@ export function openDb(path: string): Db {
     }
   }
   const db = new DatabaseSync(path);
+  // NORMAL, not FULL: in WAL mode FULL fsyncs on every commit, on the event loop (node:sqlite is
+  // synchronous), and on a busy disk one commit can hold every request for hundreds of ms.
   db.exec(`
     PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = FULL;
+    PRAGMA synchronous = NORMAL;
     PRAGMA foreign_keys = ON;
     PRAGMA busy_timeout = 5000;
   `);
