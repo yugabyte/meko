@@ -203,6 +203,19 @@ var builtin = []Extension{
 			"documentdb.bg_worker_database_name":      "documentdb",
 			"documentdb.alternate_index_handler_name": "extended_rum",
 		}},
+	// pgaudit: its _PG_init errors unless loaded from shared_preload_libraries,
+	// and CREATE EXTENSION loads it, so it cannot be created without Preload.
+	{Name: "pgaudit", Version: "18.0", Default: false, Preload: true,
+		Description: "Session and object audit logging"},
+	// pg_hint_plan: hints apply only in a session that has loaded the library,
+	// and CREATE EXTENSION does not load it (it only creates the hint table).
+	{Name: "pg_hint_plan", Version: "1.8.1", Default: false, Preload: true,
+		Description: "Planner hints in SQL comments"},
+	// hypopg and hll: CREATE EXTENSION loads the library, so no Preload.
+	{Name: "hypopg", Version: "1.4.3", Default: false, Preload: false,
+		Description: "Hypothetical indexes"},
+	{Name: "hll", Version: "2.21", Default: false, Preload: false,
+		Description: "HyperLogLog distinct-count sketches"},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.

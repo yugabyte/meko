@@ -306,3 +306,67 @@ extensions:
         # basic_schedule runs on the built-in rum handler and never creates
         # documentdb_extended_rum, so undo the row's extended_rum setting.
         - documentdb.alternate_index_handler_name=rum
+
+  - name: pgaudit
+    description: Session and object audit logging
+    # The PG18 release, and the version Aurora 18 ships.
+    version: "18.0"
+    url: https://github.com/pgaudit/pgaudit/archive/refs/tags/18.0.tar.gz
+    patch: ""
+    control: pgaudit
+    # The .control ships no `trusted`, so CREATE EXTENSION is superuser-only.
+    trusted: false
+    # _PG_init errors unless it runs from shared_preload_libraries, and CREATE
+    # EXTENSION loads the library, so it cannot even be created without preload.
+    preload: true
+    prep: ""
+    dockerfile: ""
+    regress:
+      driver: pgxs
+
+  - name: pg_hint_plan
+    description: Planner hints in SQL comments
+    # The latest PG18 release. Aurora 18 ships 1.8.0, which crashes planning an
+    # index hint on a table with a hypopg index.
+    version: "1.8.1"
+    url: https://github.com/ossc-db/pg_hint_plan/archive/refs/tags/REL18_1_8_1.tar.gz
+    patch: ""
+    control: pg_hint_plan
+    trusted: false
+    # Hints apply only in a session that has loaded the library, and CREATE
+    # EXTENSION does not load it: it only creates the hint table.
+    preload: true
+    prep: ""
+    dockerfile: ""
+    regress:
+      driver: pgxs
+      # The hint-table tests need query IDs, which extensions.sh turns off.
+      pg_settings:
+        - compute_query_id=auto
+
+  - name: hypopg
+    description: Hypothetical indexes
+    version: "1.4.3"
+    url: https://github.com/HypoPG/hypopg/archive/refs/tags/1.4.3.tar.gz
+    patch: ""
+    control: hypopg
+    trusted: false
+    # CREATE EXTENSION loads the library, which installs the planner hooks.
+    preload: false
+    prep: ""
+    dockerfile: ""
+    regress:
+      driver: pgxs
+
+  - name: hll
+    description: HyperLogLog distinct-count sketches
+    version: "2.21"
+    url: https://github.com/citusdata/postgresql-hll/archive/refs/tags/v2.21.tar.gz
+    patch: ""
+    control: hll
+    trusted: false
+    preload: false
+    prep: ""
+    dockerfile: ""
+    regress:
+      driver: pgxs

@@ -465,6 +465,26 @@ jobs:
           INTEGRATION_PORT_BASE: "23000"
         run: test/integration/compute/extensions.sh --ext documentdb ${{ steps.quay.outputs.cache }}
 
+      - name: Local extension regression suite (pgaudit)
+        env:
+          INTEGRATION_PORT_BASE: "25000"
+        run: test/integration/compute/extensions.sh --ext pgaudit --regress ${{ steps.quay.outputs.cache }}
+
+      - name: Local extension regression suite (pg_hint_plan)
+        env:
+          INTEGRATION_PORT_BASE: "26000"
+        run: test/integration/compute/extensions.sh --ext pg_hint_plan --regress ${{ steps.quay.outputs.cache }}
+
+      - name: Local extension regression suite (hypopg)
+        env:
+          INTEGRATION_PORT_BASE: "27000"
+        run: test/integration/compute/extensions.sh --ext hypopg --regress ${{ steps.quay.outputs.cache }}
+
+      - name: Local extension regression suite (hll)
+        env:
+          INTEGRATION_PORT_BASE: "28000"
+        run: test/integration/compute/extensions.sh --ext hll --regress ${{ steps.quay.outputs.cache }}
+
       - name: Collect YugabyteDB logs
         if: failure()
         # yugabyted writes master/tserver/postgres logs under <base_dir>/logs

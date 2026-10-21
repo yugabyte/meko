@@ -858,8 +858,10 @@ include Makefile
 amp-print-%:
 	@echo '$($*)'
 MK
-    REGRESS_TESTS="$(make -s -C "$REG_SRC" -f "$WRAP" amp-print-REGRESS PG_CONFIG="$PG_CONFIG")"
-    REGRESS_OPTS="$(make -s -C "$REG_SRC" -f "$WRAP" amp-print-REGRESS_OPTS PG_CONFIG="$PG_CONFIG")"
+    # USE_PGXS=1 as extension.Dockerfile builds it: without it, pgaudit's
+    # Makefile includes the contrib tree's contrib-global.mk instead of PGXS.
+    REGRESS_TESTS="$(make -s -C "$REG_SRC" -f "$WRAP" amp-print-REGRESS USE_PGXS=1 PG_CONFIG="$PG_CONFIG")"
+    REGRESS_OPTS="$(make -s -C "$REG_SRC" -f "$WRAP" amp-print-REGRESS_OPTS USE_PGXS=1 PG_CONFIG="$PG_CONFIG")"
     rm -f "$WRAP"
     [[ -n "$REGRESS_TESTS" ]] || {
       echo ">>> FAIL $EXT_NAME: no REGRESS tests found in Makefile" >&2
@@ -927,8 +929,7 @@ MK
     # Keyed on bin/diff specifically, not on bin/ existing: that is the only
     # program pg_regress resolves through PATH, so a suite shipping some
     # unrelated bin/ must not have it shadow the system tools for everything
-    # else. Absent for pgvector, pg_cron, hexabridge and age, which keep the
-    # plain diff they pass with today.
+    # else. A suite without one gets amp's wrapper below instead.
     REG_PATH="$PATH"
     if [[ -x "$REG_SRC/bin/diff" ]]; then
       REG_PATH="$REG_SRC/bin:$PATH"
@@ -957,6 +958,30 @@ MK
         } >"$REG_SRC/bin/normalize_modified.sed"
         echo ">>> regress normalize ($EXT_NAME): amp log lines filtered from both sides"
       fi
+    else
+      # No diff hook of its own: drop the same amp lines, plus the smgr's LOG
+      # lines (pg_hint_plan's tests run at client_min_messages = log), from
+      # both files before the real diff. pg_regress runs
+      # `diff <opts> <expected> <result>`.
+      AMP_REAL_DIFF="$(command -v diff)"
+      export AMP_REAL_DIFF
+      mkdir -p "$REG_SRC/.amp_bin"
+      cat >"$REG_SRC/.amp_bin/diff" <<'SH'
+#!/usr/bin/env bash
+amp_filter() {
+  sed -E '/^(DEBUG|LOG):  \[YBAMP_SMGR\]/d; /^LOG:  ConsoleURL not set, skipping forwarding$/d' "$1"
+}
+a="${*:$#-1:1}" b="${*:$#:1}"
+fa="$(mktemp)" fb="$(mktemp)"
+amp_filter "$a" >"$fa"
+amp_filter "$b" >"$fb"
+"$AMP_REAL_DIFF" "${@:1:$#-2}" --label "$a" --label "$b" "$fa" "$fb"
+rc=$?
+rm -f "$fa" "$fb"
+exit "$rc"
+SH
+      chmod +x "$REG_SRC/.amp_bin/diff"
+      REG_PATH="$REG_SRC/.amp_bin:$PATH"
     fi
     if ! (cd "$REG_SRC" && export PATH="$REG_PATH" && "$PG_REGRESS" \
       --bindir="$PGINST/bin" \

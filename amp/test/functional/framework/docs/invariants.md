@@ -56,7 +56,7 @@ means nobody has broken this guarantee on purpose yet.
 | With the endpoint user split, Postgres holds no YugabyteDB credential and cannot change the pageserver's or safekeeper's state, and LFC prewarm still works | features/amp_endpoint_user_split | none, pod_delete | minutes | |
 | With a customer role, clients log in as a non-superuser that cannot reach the pod, keeping their password; cloud_admin has none, a customer's own role is never taken over, and forks and restarts keep it | features/amp_endpoint_customer_role | none, pod_delete | minutes | |
 | A cancelled task stops at a step boundary, ends failed as cancelled, and blocks nothing after it | features/amp_task_cancel; stress/branch_churn | none | minutes | |
-| Every extension the release commits to is present and works | features/pg_extensions_matrix, features/amp_cluster_engine, features/amp_extension_age, features/amp_extension_hexabridge, features/amp_extension_hexabridge_mssql, features/amp_extension_pg_cron, features/amp_extension_pgvector, features/amp_extension_registry (an operator-registered image) | none, pod_delete | minutes | |
+| Every extension the release commits to is present and works | features/pg_extensions_matrix, features/amp_cluster_engine, features/amp_extension_age, features/amp_extension_hexabridge, features/amp_extension_hexabridge_mssql, features/amp_extension_hll, features/amp_extension_hypopg, features/amp_extension_pg_cron, features/amp_extension_pg_hint_plan, features/amp_extension_pgaudit, features/amp_extension_pgvector, features/amp_extension_registry (an operator-registered image) | none, pod_delete | minutes | |
 | The shipped deployment is what the release claims: release build, declared RBAC, working metrics | features/amp_release_build, features/amp_byoc_scope, features/amp_otel_pipeline, features/backing_config_contract | none | minutes | |
 | A migration lands every source row and never leaks the source password | features/amp_voyager_migration | none | minutes | |
 | Sustained real load does not degrade past the gate | features/amp_product_health; stress/combined_load, stress/load_sustain; perf/tpcc, perf/pgbench, perf/sysbench, perf/microbench, perf/lifecycle, perf/multitenant, perf/ops_latency, perf/idle_footprint, perf/branch_depth | none, pod_delete, process_kill, process_restart | minutes to hours | |
@@ -102,3 +102,6 @@ deletion.
 - `features/amp_extension_hexabridge_mssql`, and the `sqlserver` case of
   `features/amp_cluster_engine`: the same, for the hexabridge_mssql entry and
   the `sqlserver` engine.
+- `features/amp_extension_pgaudit`, `features/amp_extension_pg_hint_plan`,
+  `features/amp_extension_hypopg`, `features/amp_extension_hll`: the same, for
+  those four entries.

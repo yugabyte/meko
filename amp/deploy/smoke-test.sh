@@ -44,7 +44,9 @@
 # /extensions/hexabridge, `CREATE EXTENSION hexabridge` (superuser-only), and an
 # Oracle-compat function returns its expected value; and its SQL Server sibling
 # through engine:"sqlserver", which must seed hexabridge_mssql, mount it, and
-# answer T-SQL calls in schema sys. Then the other half of the
+# answer T-SQL calls in schema sys. Then pgaudit, pg_hint_plan, hypopg and hll on
+# one endpoint: all four mounted, both preloads in shared_preload_libraries, and
+# `CREATE EXTENSION` for each. Then the other half of the
 # API: addBranchExtensions on the still-live pgvector+age branch — union pg_cron
 # in, assert getBranch reports the unioned set, the live endpoint is redeployed
 # with the new mount, and its address survives the redeploy unchanged. Finally,
@@ -817,6 +819,57 @@ SQL
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$MPROJ")
     st=$(poll_task "$tid")
     [ "$st" = succeeded ] && ok "sqlserver cluster cascade deleted" || bad "sqlserver cluster delete task=$st"
+  fi
+
+  hdr "externalized extensions: pgaudit, pg_hint_plan, hypopg and hll on one endpoint, two preloads"
+
+  # pgaudit and pg_hint_plan both preload, so the chart joins two libraries into
+  # one shared_preload_libraries; a bad join stops the postmaster.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"auroraproj","extensions":["pgaudit","pg_hint_plan","hypopg","hll"]}')
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "cluster created (extensions:[pgaudit,pg_hint_plan,hypopg,hll])" || bad "pgaudit/pg_hint_plan/hypopg/hll cluster task=$st"
+  APROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="auroraproj")|.id')
+  ADEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$APROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$APROJ" ] && [ -n "$ADEF" ] && ok "cluster materialized ($APROJ / $ADEF)" || bad "pgaudit/pg_hint_plan/hypopg/hll cluster not materialized"
+
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$APROJ/branches/$ADEF/endpoints" "{\"role\":\"read_write\",\"password\":\"$EP_PASSWORD\"}")
+  st=$(poll_task "$tid")
+  [ "$st" = succeeded ] && ok "create_endpoint(pgaudit,pg_hint_plan,hypopg,hll) succeeded" || bad "create_endpoint(pgaudit,pg_hint_plan,hypopg,hll) task=$st"
+  AEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$APROJ/branches/$ADEF/endpoints" | jq -r '.endpoints[0].id')
+  APOD=$(wait_ready_pod "$AEP")
+  [ -n "$APOD" ] && ok "pgaudit/pg_hint_plan/hypopg/hll endpoint pod Ready ($APOD)" || bad "pgaudit/pg_hint_plan/hypopg/hll endpoint pod not Ready"
+
+  for e in pgaudit pg_hint_plan hypopg hll; do
+    kubectl -n "$NS" exec "$APOD" -- test -f "/extensions/$e/share/postgresql/extension/$e.control" &&
+      ok "$e ImageVolume mounted (/extensions/$e)" || bad "$e ImageVolume not mounted"
+  done
+
+  spl=$(psql_pod "$APOD" 127.0.0.1 55433 <<<'SHOW shared_preload_libraries;' 2>&1)
+  if echo "$spl" | grep -q 'pgaudit' && echo "$spl" | grep -q 'pg_hint_plan'; then
+    ok "shared_preload_libraries includes pgaudit and pg_hint_plan ($spl)"
+  else
+    bad "pgaudit or pg_hint_plan not in shared_preload_libraries (got: $spl)"
+  fi
+
+  out=$(
+    psql_pod "$APOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS pgaudit;
+CREATE EXTENSION IF NOT EXISTS pg_hint_plan;
+CREATE EXTENSION IF NOT EXISTS hypopg;
+CREATE EXTENSION IF NOT EXISTS hll;
+SELECT 'INSTALLED:'||string_agg(extname, ',' ORDER BY extname) FROM pg_extension WHERE extname IN ('pgaudit','pg_hint_plan','hypopg','hll');
+SQL
+  )
+  echo "$out" | grep -q '^INSTALLED:hll,hypopg,pg_hint_plan,pgaudit$' &&
+    ok "CREATE EXTENSION pgaudit, pg_hint_plan, hypopg, hll" ||
+    bad "CREATE EXTENSION pgaudit/pg_hint_plan/hypopg/hll failed (got: $(echo "$out" | tr '\n' ' '))"
+
+  if [ "$KEEP" = "1" ]; then
+    echo "  KEEP set: leaving cluster $APROJ (endpoint pod $APOD) up for inspection"
+  else
+    IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$APROJ")
+    st=$(poll_task "$tid")
+    [ "$st" = succeeded ] && ok "pgaudit/pg_hint_plan/hypopg/hll cluster cascade deleted" || bad "pgaudit/pg_hint_plan/hypopg/hll cluster delete task=$st"
   fi
 
   hdr "extension registry: an admin registers a third-party image, a branch mounts it"

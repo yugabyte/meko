@@ -86,6 +86,28 @@
         "documentdb.bg_worker_database_name": "documentdb",
         "documentdb.alternate_index_handler_name": "extended_rum"
       }
+    },
+    {
+      "name": "pgaudit",
+      "version": "18.0",
+      "description": "Session and object audit logging",
+      "preload": true
+    },
+    {
+      "name": "pg_hint_plan",
+      "version": "1.8.1",
+      "description": "Planner hints in SQL comments",
+      "preload": true
+    },
+    {
+      "name": "hypopg",
+      "version": "1.4.3",
+      "description": "Hypothetical indexes"
+    },
+    {
+      "name": "hll",
+      "version": "2.21",
+      "description": "HyperLogLog distinct-count sketches"
     }
   ]
 }

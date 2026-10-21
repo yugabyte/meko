@@ -295,7 +295,8 @@ fetches is verified too. `patch` then applies from the manifest.
 
 Which suite is per the manifest row's `regress:` block:
 
-- `driver: pgxs` (pgvector, pg_cron, age, hexabridge_mssql) — reads `REGRESS` /
+- `driver: pgxs` (pgvector, pg_cron, age, hexabridge_mssql, pgaudit, pg_hint_plan,
+  hypopg, hll): reads `REGRESS` /
   `REGRESS_OPTS` from the extension's Makefile and runs `pg_regress` straight at
   the live compute,
   stripping any `--temp-instance` / `--temp-config` (pg_cron's Makefile would

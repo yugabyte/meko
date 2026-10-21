@@ -1,0 +1,97 @@
+-- directory paths and dlsuffix are passed to us in environment variables
+\getenv abs_srcdir PG_ABS_SRCDIR
+\set filename :abs_srcdir '/data/data.csv'
+LOAD 'pg_hint_plan';
+SET search_path TO public;
+SET pg_hint_plan.debug_print TO on;
+SET client_min_messages TO LOG;
+SET pg_hint_plan.enable_hint TO on;
+CREATE EXTENSION file_fdw;
+ERROR:  extension "file_fdw" is not available
+HINT:  The extension must first be installed on the system where PostgreSQL is running.
+CREATE SERVER file_server FOREIGN DATA WRAPPER file_fdw;
+ERROR:  foreign-data wrapper "file_fdw" does not exist
+CREATE USER MAPPING FOR PUBLIC SERVER file_server;
+ERROR:  server "file_server" does not exist
+CREATE FOREIGN TABLE ft1 (id int, val int) SERVER file_server OPTIONS (format 'csv', filename :'filename');
+ERROR:  server "file_server" does not exist
+-- foreign table test
+SELECT * FROM ft1;
+ERROR:  relation "ft1" does not exist
+LINE 1: SELECT * FROM ft1;
+                      ^
+\t
+SELECT explain_filter('
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+');
+ERROR:  relation "ft1" does not exist
+LINE 2: EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_...
+                                                   ^
+QUERY:  
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+----
+---- No. S-1-5 object type for the hint
+----
+-- No. S-1-5-6
+SELECT explain_filter('
+/*+SeqScan(t1)SeqScan(ft_1)SeqScan(ft_2)*/
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+');
+ERROR:  relation "ft1" does not exist
+LINE 3: EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_...
+                                                   ^
+QUERY:  
+/*+SeqScan(t1)SeqScan(ft_1)SeqScan(ft_2)*/
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+----
+---- No. J-1-6 object type for the hint
+----
+-- No. J-1-6-6
+SELECT explain_filter('
+/*+MergeJoin(ft_1 ft_2)Leading(ft_1 ft_2 t1)*/
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+');
+ERROR:  relation "ft1" does not exist
+LINE 3: EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_...
+                                                   ^
+QUERY:  
+/*+MergeJoin(ft_1 ft_2)Leading(ft_1 ft_2 t1)*/
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+----
+---- No. L-1-6 object type for the hint
+----
+-- No. L-1-6-6
+SELECT explain_filter('
+/*+Leading(ft_1 ft_2 t1)*/
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+');
+ERROR:  relation "ft1" does not exist
+LINE 3: EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_...
+                                                   ^
+QUERY:  
+/*+Leading(ft_1 ft_2 t1)*/
+EXPLAIN (COSTS false) SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement
+----
+---- No. R-1-6 object type for the hint
+----
+-- No. R-1-6-6
+SELECT explain_filter('
+/*+Rows(ft_1 ft_2 #1)Leading(ft_1 ft_2 t1)*/
+EXPLAIN SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+');
+ERROR:  relation "ft1" does not exist
+LINE 3: EXPLAIN SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 ...
+                                     ^
+QUERY:  
+/*+Rows(ft_1 ft_2 #1)Leading(ft_1 ft_2 t1)*/
+EXPLAIN SELECT * FROM s1.t1, ft1 ft_1, ft1 ft_2 WHERE t1.c1 = ft_1.id AND t1.c1 = ft_2.id;
+
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement

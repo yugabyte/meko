@@ -93,6 +93,22 @@ func TestCatalogResolveAge(t *testing.T) {
 	}
 }
 
+// The extensions Aurora 18 and YugabyteDB both ship. pgaudit and pg_hint_plan
+// preload under their own names, so neither sets Library.
+func TestCatalogResolveAuroraParityExtensions(t *testing.T) {
+	c := NewCatalog("quay.io/yugabyte")
+	got := c.Resolve([]string{"pgaudit", "pg_hint_plan", "hypopg", "hll"})
+	want := []Resolved{
+		{Name: "pgaudit", Image: "quay.io/yugabyte/amp-ext-pgaudit:18.0", Preload: true},
+		{Name: "pg_hint_plan", Image: "quay.io/yugabyte/amp-ext-pg_hint_plan:1.8.1", Preload: true},
+		{Name: "hypopg", Image: "quay.io/yugabyte/amp-ext-hypopg:1.4.3", Preload: false},
+		{Name: "hll", Image: "quay.io/yugabyte/amp-ext-hll:2.21", Preload: false},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resolve = %+v, want %+v", got, want)
+	}
+}
+
 func TestCatalogResolveEmptyRegistryYieldsBareRef(t *testing.T) {
 	c := NewCatalog("")
 	got := c.Resolve([]string{"pgvector"})
@@ -226,6 +242,36 @@ func TestCatalogRequiresMatchesManifest(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("catalog requires = %v, manifest requires = %v", got, want)
+	}
+}
+
+// The chart preloads from this table and the local harness from the manifest,
+// so a mismatch passes extensions.sh and fails on a real endpoint, or the reverse.
+func TestCatalogPreloadMatchesManifest(t *testing.T) {
+	const generated = "../../../amp_ui/src/config/extensions.json"
+	raw, err := os.ReadFile(generated)
+	if err != nil {
+		t.Skipf("generated UI catalog not readable (%v); amp_ui may be absent", err)
+	}
+	var cfg struct {
+		Extensions []struct {
+			Name    string `json:"name"`
+			Preload bool   `json:"preload"`
+		} `json:"extensions"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse %s: %v", generated, err)
+	}
+	want := map[string]bool{}
+	for _, e := range cfg.Extensions {
+		want[e.Name] = e.Preload
+	}
+	got := map[string]bool{}
+	for _, e := range builtin {
+		got[e.Name] = e.Preload
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("catalog preload = %v, manifest preload = %v", got, want)
 	}
 }
 

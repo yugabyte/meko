@@ -76,6 +76,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK warns at load: `could not decode across a padding-shaped gap`, `past the 8-probe budget`, or `padding-shaped gap starts below the anchor floor`; then either the PS fails to decode WAL at the gap (`interpreted wal reader: failed to decode`, `invalid xlog page header` with `xlp_magic=0`), or the load fails with `end-of-WAL record-boundary scan failed` | the hole scan found a gap that could be `XLOG_SWITCH` padding but couldn't confirm it, and kept the rows above it rather than risk deleting acked WAL. If it was a real hole, flush is past the segment end, so the segment reader zero-fills the gap as if it were padding and the PS decoder chokes on the zeros; or the anchor walk descends into it and fails the load (**P**). Escalate with the branch id and the gap LSNs from the warning; don't delete rows by hand | **P** |
 | SK: `safekeeper_timelines` is 0, no error logged, walproposer and PS stuck `connecting`; writes block on `SyncRep` | `load_timeline` is blocked on a YB statement that never returns — no error, so nothing retries | **Q** |
 | Compute postmaster exits at startup: `FATAL: could not access file "<lib>"` | `shared_preload_libraries` names a library the endpoint image does not ship, usually a chart newer than the image | **S** |
+| Compute is up, but every DDL statement fails: `ERROR: could not access file "pgaudit"` | a database created pgaudit, and its endpoint came up without the pgaudit mount (a controller older than pgaudit's catalog entry) | **S** |
 
 ---
 
@@ -514,6 +515,15 @@ Find which list named it: `kubectl -n <ns> get configmap <release> -o yaml | gre
 The reverse case boots: an endpoint image older than [#1572] that mounts a `preload: true`
 extension starts with `yb_amp` and its extensions only, so the exporter's `stat_statements`
 collector errors and `/insights` is empty. Upgrade the endpoint image.
+
+The same message as an `ERROR` on each DDL statement, with the postmaster up, comes from
+pgaudit's event triggers, which call into its library on every DDL. In a database that ran
+`CREATE EXTENSION pgaudit`, all DDL fails once the endpoint comes up without the pgaudit mount,
+as it does when a controller older than pgaudit's catalog entry redeploys it. Upgrading the
+controller restores the mount. Until then, run
+`ALTER EVENT TRIGGER pgaudit_ddl_command_end DISABLE` and
+`ALTER EVENT TRIGGER pgaudit_sql_drop DISABLE` in each such database, and `ENABLE` both once the
+mount is back.
 
 [#1446]: https://github.com/yugabyte/meko/issues/1446
 [#1572]: https://github.com/yugabyte/meko/issues/1572

@@ -72,6 +72,10 @@ c9036f9fb6fe545aa20e333743c661810966288cda9922ac89f4d82d9ee6e99b  https://github
 e5a7313a50dcc0e9d69fecf7d39f140fa6f7877c37951f54d8900eb7de0edfb9  https://github.com/documentdb/documentdb/archive/refs/tags/v1.0-0.tar.gz
 # 0.116-0: the functional-test gate kit (deploy/documentdb-functional/run.sh).
 09bff8c573669f4281c5ad9352946a03e91f5c697cb9d537d9e76330d63f1a4d  https://github.com/documentdb/documentdb/archive/refs/tags/v0.116-0.tar.gz
+988e8afeda320ebe0a3e632ef6b6bce5d3a08346c2e100a173a585c9521d1fa5  https://github.com/pgaudit/pgaudit/archive/refs/tags/18.0.tar.gz
+a4fca485e54fe8e67f9104595ab254aee17cf766d0f261666f5079965d225f6a  https://github.com/ossc-db/pg_hint_plan/archive/refs/tags/REL18_1_8_1.tar.gz
+498a961d88cf37057fd9e98027d06fe805c8959d51895c3d9b94c9eb4e14f706  https://github.com/HypoPG/hypopg/archive/refs/tags/1.4.3.tar.gz
+808de7603e6f954690b7f1a4514f264ce0557f8c4bb9a0e8c0ba0249df4098ce  https://github.com/citusdata/postgresql-hll/archive/refs/tags/v2.21.tar.gz
 
 # yugaware Helm charts a foundation deploy may name — the amp-foundation-gke
 # workflow's chart_version input.

@@ -4,8 +4,9 @@ This page describes how yb-amp ships PostgreSQL extensions **outside** the
 endpoint image — each extension is built into its own tiny OCI image and mounted
 into the endpoint pod as a Kubernetes **ImageVolume**, with PostgreSQL pointed at
 it via `extension_control_path` / `dynamic_library_path` (both PG18 features).
-`pgvector`, `pg_cron`, `hexabridge`, `hexabridge_mssql`, and `age` (Apache AGE)
-are delivered this way; the pipeline is generic so adding another is a manifest row plus a catalog
+`pgvector`, `pg_cron`, `hexabridge`, `hexabridge_mssql`, `age` (Apache AGE),
+`pgaudit`, `pg_hint_plan`, `hypopg` and `hll` are delivered this way; the pipeline
+is generic so adding another is a manifest row plus a catalog
 entry. An image amp does **not** build reaches an endpoint by a different route:
 an operator **registers** it through the API, and nothing in the product names
 it — see "[Registering an extension image](#registering-an-extension-image)".
@@ -842,7 +843,7 @@ example.
   ImageVolume — the extension analogue of `pg_regress.sh` for core Postgres (#608)
   —   driven by the manifest row's `regress:` block: `driver: pgxs` runs
   `pg_regress` from the extension's Makefile `REGRESS` (pgvector, pg_cron, age,
-  hexabridge_mssql)
+  hexabridge_mssql, pgaudit, pg_hint_plan, hypopg, hll)
   against the live compute; `driver: script` runs the extension's own runner
   (hexabridge's `scripts/regression.sh`). The suite lives in the source tree (not
   the `FROM scratch` image), so the driver re-fetches the source as
@@ -856,7 +857,9 @@ example.
   real K8s ImageVolume path end-to-end: pgvector and `age` co-mounted on one
   endpoint (asserting both `/extensions/<name>` mounts, the pgvector data query,
   and an AGE `cypher()` round-trip), then pg_cron and hexabridge on their own,
-  then hexabridge_mssql through `engine: "sqlserver"`,
+  then hexabridge_mssql through `engine: "sqlserver"`, then pgaudit,
+  pg_hint_plan, hypopg and hll on one endpoint (both preloads in
+  `shared_preload_libraries`),
   then the **registration** path — a non-admin `PUT` refused with 403, an admin
   registering `ext_fixtures/postgis.json`, a cluster opting in, the pod carrying
   the registered layout (`share/extension`, the bundled `system/libgeos_c.so.1`,
