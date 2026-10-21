@@ -1,6 +1,6 @@
 // Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and token checks, and
-// the foundation's routes (replies use internal/envelope). /mcp is mounted on it (Options.MCP);
-// the rest of /api/v1 comes in #204 (docs/api.md), and the UI in a later milestone.
+// the foundation's routes (replies use internal/envelope). /mcp (Options.MCP) and the rest of
+// /api/v1 (Options.REST) are mounted on it; the UI comes in a later milestone.
 package server
 
 import (
