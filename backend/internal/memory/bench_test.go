@@ -18,7 +18,8 @@ import (
 // The search budget at Meko Local's 200 MB target, in one datapack: make bench. Memories and turns
 // are loaded straight into the store with random vectors (loading 200 MB through the model would
 // take an hour and time the same searches); the searches then run through the real engine, model
-// included.
+// included. Each conversation search's query has a chunk planted near it in threadConversations
+// conversations, so it gets hits and assembles a full thread.
 const (
 	memoryBytes = 50 << 20
 	turnBytes   = 150 << 20
@@ -48,6 +49,27 @@ func TestSearchBudget(t *testing.T) {
 		var n float64
 		for i := range v {
 			v[i] = float32(rng.NormFloat64())
+			n += float64(v[i] * v[i])
+		}
+		for i := range v {
+			v[i] /= float32(math.Sqrt(n))
+		}
+		return v
+	}
+
+	queries := make([]string, searches)
+	for i := range queries {
+		queries[i] = text(40) // about six words
+	}
+	qvecs, err := h.svc.eng.Embed(ctx, queries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	near := func(q []float32) []float32 { // about 0.04 in cosine distance
+		v := vec()
+		var n float64
+		for i := range v {
+			v[i] = q[i] + 0.3*v[i]
 			n += float64(v[i] * v[i])
 		}
 		for i := range v {
@@ -103,6 +125,9 @@ func TestSearchBudget(t *testing.T) {
 			for i, p := range pending {
 				ids[i], vecs[i] = p.Rowid, vec()
 			}
+			if conv < searches*threadConversations {
+				vecs[0] = near(qvecs[conv/threadConversations])
+			}
 			if err := h.st.PutChunkVectors(ctx, ids, vecs); err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +140,7 @@ func TestSearchBudget(t *testing.T) {
 	time1 := func(name string, f func(q string) error) {
 		var ds []time.Duration
 		for i := 0; i < searches; i++ {
-			q := text(40) // about six words
+			q := queries[i]
 			s := time.Now()
 			if err := f(q); err != nil {
 				t.Fatal(err)
@@ -145,7 +170,11 @@ func TestSearchBudget(t *testing.T) {
 		return err
 	})
 	time1("conversation search", func(q string) error {
-		_, err := h.svc.SearchConversations(ctx, h.dp, "", q)
+		res, err := h.svc.SearchConversations(ctx, h.dp, "", q)
+		if err == nil && (len(res.Hits) < threadConversations || len(res.Thread) != threadTurns) {
+			err = fmt.Errorf("%d hits and %d thread turns: the planted chunks weren't found", len(res.Hits),
+				len(res.Thread))
+		}
 		return err
 	})
 }

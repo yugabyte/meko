@@ -292,6 +292,15 @@ func (s *Store) Messages(ctx context.Context, datapack, conversationID string, l
 		datapack, conversationID, min(max(limit, 1), 1000), max(offset, 0))
 }
 
+// LatestMessages is a conversation's turns counted from the newest: up to limit of them, skipping
+// the offset newest, returned oldest first.
+func (s *Store) LatestMessages(ctx context.Context, datapack, conversationID string, limit, offset int) (
+	[]Message, error) {
+	return messagesWhere(ctx, s.r, datapackMatch+" AND c.id = ? AND m.rowid IN (SELECT rowid FROM messages "+
+		"WHERE conversation_rowid = c.rowid ORDER BY rowid DESC LIMIT ? OFFSET ?)",
+		datapack, conversationID, min(max(limit, 1), 1000), max(offset, 0))
+}
+
 // ConversationSearchOptOut says whether a datapack opted out of conversation search.
 func (s *Store) ConversationSearchOptOut(ctx context.Context, datapack string) (bool, error) {
 	var out bool
@@ -343,7 +352,8 @@ func (s *Store) PendingChunks(ctx context.Context, limit int) ([]Chunk, error) {
 }
 
 // PutChunkVectors stores chunks' vectors, making them searchable. A chunk deleted meanwhile is
-// skipped, and one of a conversation in no datapack (never searchable) is deleted.
+// skipped, and one that can't be searched is deleted: its conversation is in no datapack, or its
+// datapack opted out of conversation search since the turn arrived.
 func (s *Store) PutChunkVectors(ctx context.Context, rowids []int64, vectors [][]float32) error {
 	dims, err := s.vectorDims(ctx)
 	if err != nil {
@@ -361,16 +371,18 @@ func (s *Store) PutChunkVectors(ctx context.Context, rowids []int64, vectors [][
 		}
 		var dp sql.NullString
 		var conv string
-		err = tx.QueryRowContext(ctx, "SELECT c.datapack_id, c.id FROM message_chunks k "+
-			"JOIN messages m ON m.rowid = k.message_rowid JOIN conversations c ON c.rowid = m.conversation_rowid "+
-			"WHERE k.rowid = ? AND k.embedded = 0", id).Scan(&dp, &conv)
+		var optedOut bool
+		err = tx.QueryRowContext(ctx, "SELECT c.datapack_id, c.id, COALESCE(d.conversation_search_opt_out, 0) "+
+			"FROM message_chunks k JOIN messages m ON m.rowid = k.message_rowid "+
+			"JOIN conversations c ON c.rowid = m.conversation_rowid LEFT JOIN datapacks d ON d.id = c.datapack_id "+
+			"WHERE k.rowid = ? AND k.embedded = 0", id).Scan(&dp, &conv, &optedOut)
 		if errors.Is(err, sql.ErrNoRows) { // deleted meanwhile
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		if !dp.Valid { // a conversation in no datapack can't be searched: drop the chunk
+		if !dp.Valid || optedOut { // it can't be searched: drop the chunk
 			if _, err := tx.ExecContext(ctx, "DELETE FROM message_chunks WHERE rowid = ?", id); err != nil {
 				return err
 			}

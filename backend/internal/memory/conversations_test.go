@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +68,10 @@ func TestConversationsThroughTheEngine(t *testing.T) {
 	if err != nil || again.ID != c.ID || again.Title != "Design talk" {
 		t.Errorf("create is idempotent per session: %+v %v", again, err)
 	}
+	if _, err = h.svc.CreateConversation(ctx, CreateConversation{AgentID: "someone-else", DatapackID: h.dp,
+		SessionID: "session-1", Title: "Mine"}); !errors.Is(err, ErrAgentMismatch) {
+		t.Errorf("another agent's session: %v", err)
+	}
 	_, err = h.svc.CreateConversation(ctx, CreateConversation{DatapackID: h.dp, Title: " "})
 	if !errors.Is(err, ErrBadRequest) {
 		t.Errorf("no title: %v", err)
@@ -93,7 +99,7 @@ func TestConversationsThroughTheEngine(t *testing.T) {
 		t.Errorf("another agent's conversation: %v", err)
 	}
 	if _, err = h.svc.AddMessage(ctx, AddMessage{ConversationID: "ffffffffffffffffffffffffffffffff", DatapackID: h.dp,
-		Input: "x"}); !errors.Is(err, ErrNotFound) {
+		Input: "x"}); !errors.Is(err, ErrNoConversation) || err.Error() != "no such conversation" {
 		t.Errorf("a missing conversation: %v", err)
 	}
 
@@ -173,6 +179,104 @@ func TestTurnsWaitForTheEngine(t *testing.T) {
 	res, err := h.svc.SearchConversations(ctx, h.dp, "", "where does the vector index live")
 	if err != nil || len(res.Hits) == 0 {
 		t.Errorf("after the engine came back: %+v %v", res, err)
+	}
+}
+
+// A substantive turn that won't be searchable says why, and leaves no chunks to embed.
+func TestSearchSkipped(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, hashEmbedder)
+	inDatapack, err := h.svc.CreateConversation(ctx, CreateConversation{DatapackID: h.dp, SessionID: "s1", Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inNone, err := h.svc.CreateConversation(ctx, CreateConversation{SessionID: "s2", Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		r    AddMessage
+		want string
+	}{
+		{AddMessage{ConversationID: inNone.ID, Input: "Where does the vector index live?", Output: longTurn}, "no_datapack"},
+		{AddMessage{ConversationID: inDatapack.ID, DatapackID: h.dp, Input: "Where does the vector index live?",
+			Output: longTurn, SkipSearchEmbed: true}, "caller_skip_search_embed"},
+		{AddMessage{ConversationID: inDatapack.ID, DatapackID: h.dp, Input: "ok", Output: "thanks"}, ""},
+	} {
+		r, err := h.svc.AddMessage(ctx, c.r)
+		if err != nil || r.SearchSkipped != c.want {
+			t.Errorf("%q: %+v %v", c.want, r, err)
+		}
+	}
+	if p, err := h.st.PendingChunks(ctx, 10); err != nil || len(p) != 0 {
+		t.Errorf("chunks to embed: %+v %v", p, err)
+	}
+}
+
+// The thread holds the turns of the best threadConversations conversations: each one's most recent
+// searchable turns, threadTurns in all, oldest first.
+func TestConversationThread(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, hashEmbedder)
+	const query = "where does the vector index live"
+	conv := func(session string) string {
+		c, err := h.svc.CreateConversation(ctx, CreateConversation{DatapackID: h.dp, SessionID: session, Title: "t"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	add := func(c, seed, input, output string) {
+		if _, err := h.svc.AddMessage(ctx, AddMessage{ConversationID: c, DatapackID: h.dp, Seed: seed, Input: input,
+			Output: output}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	long := conv("long")
+	add(long, "hit", query+"?", longTurn)
+	// More turns than one page of the store's reads (1000), so the newest are past the first page.
+	for i := 0; i < 1010; i++ {
+		add(long, fmt.Sprint("filler-", i), fmt.Sprintf("filler %04d: lunch plans, coffee, bicycles and parking", i), "ok")
+	}
+	for _, s := range []string{"b", "c", "d"} {
+		add(conv(s), "hit", "Where is the vector index?", longTurn+" ("+s+")")
+	}
+	if err := h.svc.EmbedPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.svc.SearchConversations(ctx, h.dp, "", query)
+	if err != nil || len(res.Hits) < 4 {
+		t.Fatalf("hits: %+v %v", res.Hits, err)
+	}
+	if len(res.Thread) != threadTurns {
+		t.Errorf("%d turns in the thread, want %d", len(res.Thread), threadTurns)
+	}
+	convs := map[string]bool{}
+	contents := make([]string, 0, len(res.Thread))
+	var fillers []string
+	for _, turn := range res.Thread {
+		convs[turn.ConversationID] = true
+		contents = append(contents, turn.Content)
+		if strings.HasPrefix(turn.Content, "filler") {
+			fillers = append(fillers, turn.Content)
+		}
+	}
+	if !sort.StringsAreSorted(fillers) {
+		t.Errorf("turns not oldest first: %v", fillers)
+	}
+	all := strings.Join(contents, "\n")
+	if len(convs) > threadConversations || !convs[long] {
+		t.Errorf("conversations in the thread: %v", convs)
+	}
+	if !strings.Contains(all, "filler 1009") || strings.Contains(all, "filler 0959") {
+		t.Errorf("the long conversation's newest turns weren't the ones kept:\n%s", all)
+	}
+
+	// The cutoff comes from Options.
+	strict := New(h.st, engine.NewClient(h.l.EngineSock, h.token), Options{UserID: h.userID, MaxDistance: 1e-6})
+	if res, err := strict.SearchConversations(ctx, h.dp, "", query); err != nil || len(res.Hits) != 0 {
+		t.Errorf("hits past a 1e-6 cutoff: %+v %v", res.Hits, err)
 	}
 }
 

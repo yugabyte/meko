@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -161,5 +163,95 @@ func TestConversationSearchOptOut(t *testing.T) {
 	}
 	if err := s.SetConversationSearchOptOut(ctx, "nope", true); !errors.Is(err, ErrNoDatapack) {
 		t.Errorf("unknown datapack: %v", err)
+	}
+
+	// A turn that arrived before the opt-out, still waiting for its vector, isn't made searchable.
+	if err := s.SetConversationSearchOptOut(ctx, "a", false); err != nil {
+		t.Fatal(err)
+	}
+	c1 := Conversation{ID: "c1", DatapackID: "a", AgentID: "ag", Title: "t"}
+	if _, _, err := s.CreateConversation(ctx, c1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.AddMessage(ctx, "a", Message{ID: "m1", ConversationID: "c1"}, []string{"waiting"}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.PendingChunks(ctx, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending: %+v %v", pending, err)
+	}
+	if err = s.SetConversationSearchOptOut(ctx, "a", true); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.PutChunkVectors(ctx, []int64{pending[0].Rowid}, [][]float32{unit(1, 0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := s.SearchChunks(ctx, "a", unit(1, 0, 0), 10, ""); len(hits) != 0 {
+		t.Errorf("a turn embedded after the opt-out: %+v", hits)
+	}
+	if p, _ := s.PendingChunks(ctx, 10); len(p) != 0 {
+		t.Errorf("still pending: %+v", p)
+	}
+}
+
+// A vector embedded for a chunk deleted meanwhile never lands on a newer chunk: rowids aren't reused.
+func TestChunkRowidsAreNotReused(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	for _, id := range []string{"c1", "c2"} {
+		c := Conversation{ID: id, DatapackID: "a", AgentID: "ag", Title: "t"}
+		if _, _, err := s.CreateConversation(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.AddMessage(ctx, "a", Message{ID: "m1", ConversationID: "c1"}, []string{"old"}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.PendingChunks(ctx, 10)
+	if err != nil || len(old) != 1 {
+		t.Fatalf("pending: %+v %v", old, err)
+	}
+	if err = s.DeleteConversation(ctx, "a", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = s.AddMessage(ctx, "a", Message{ID: "m2", ConversationID: "c2"}, []string{"new"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.PutChunkVectors(ctx, []int64{old[0].Rowid}, [][]float32{unit(1, 0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.PendingChunks(ctx, 10); len(p) != 1 || p[0].Text != "new" || p[0].Rowid == old[0].Rowid {
+		t.Errorf("the new chunk took the deleted one's vector or rowid: %+v (old %d)", p, old[0].Rowid)
+	}
+}
+
+func TestLatestMessages(t *testing.T) {
+	ctx := context.Background()
+	s := openMem(t)
+	c1 := Conversation{ID: "c1", DatapackID: "a", AgentID: "ag", Title: "t"}
+	if _, _, err := s.CreateConversation(ctx, c1); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		if _, _, err := s.AddMessage(ctx, "a", Message{ID: fmt.Sprint("m", i), ConversationID: "c1"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(limit, offset int) string {
+		msgs, err := s.LatestMessages(ctx, "a", "c1", limit, offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			out = append(out, m.ID)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := ids(2, 0); got != "m4 m5" {
+		t.Errorf("newest two: %s", got)
+	}
+	if got := ids(2, 2); got != "m2 m3" {
+		t.Errorf("the two before them: %s", got)
 	}
 }

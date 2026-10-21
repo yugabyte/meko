@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/yugabyte/meko-local/backend/internal/engine"
 	"github.com/yugabyte/meko-local/backend/internal/store"
 )
 
@@ -27,8 +28,8 @@ const (
 	chunkOverlap = 256
 	// searchCandidates is how many nearest chunks a conversation search looks at.
 	searchCandidates = 10
-	// threadConversations is how many matched conversations come back whole, and threadTurns the
-	// most turns they bring in all (the most recent kept).
+	// threadConversations is how many matched conversations make the thread, and threadTurns the
+	// most turns they bring in all: their most recent searchable turns.
 	threadConversations = 3
 	threadTurns         = 50
 	// DefaultMaxDistance is the farthest (cosine distance) a chunk may be from the query to be a hit.
@@ -39,12 +40,13 @@ const (
 
 // More errors the conversation calls return.
 var (
-	ErrAgentMismatch = errors.New("the conversation belongs to another agent")
+	ErrAgentMismatch  = errors.New("the conversation belongs to another agent")
+	ErrNoConversation = errors.New("no such conversation")
 )
 
 // hexID is a 32-hex id: the seed itself when it already is one (hyphens dropped), the first 32 hex
 // characters of the seed's SHA-256 otherwise, or random for no seed. Prod derives conversation ids
-// from session ids and message ids from seeds this way, so the same seed is the same row.
+// from session ids this way, so the same session is the same conversation.
 func hexID(seed string) string {
 	if seed == "" {
 		b := make([]byte, 16)
@@ -98,16 +100,22 @@ type CreateConversation struct {
 }
 
 // CreateConversation makes a conversation, or returns the datapack's existing one for the session.
+// The id comes from the session id alone, as in prod, so a session id another agent already used in
+// the datapack is ErrAgentMismatch: that conversation isn't the caller's to add to.
 func (s *Service) CreateConversation(ctx context.Context, r CreateConversation) (store.Conversation, error) {
 	if strings.TrimSpace(r.Title) == "" {
 		return store.Conversation{}, fmt.Errorf("%w: a conversation needs a title", ErrBadRequest)
 	}
+	agent := agentOr(r.AgentID)
 	c, _, err := s.st.CreateConversation(ctx, store.Conversation{
-		ID: hexID(r.SessionID), DatapackID: r.DatapackID, AgentID: agentOr(r.AgentID), SessionID: r.SessionID,
+		ID: hexID(r.SessionID), DatapackID: r.DatapackID, AgentID: agent, SessionID: r.SessionID,
 		RunID: r.RunID, Title: r.Title, Metadata: r.Metadata,
 	})
-	if errors.Is(err, store.ErrNoDatapack) {
+	switch {
+	case errors.Is(err, store.ErrNoDatapack):
 		return store.Conversation{}, ErrNoDatapack
+	case err == nil && c.AgentID != agent:
+		return store.Conversation{}, ErrAgentMismatch
 	}
 	return c, err
 }
@@ -116,7 +124,7 @@ func (s *Service) CreateConversation(ctx context.Context, r CreateConversation) 
 func (s *Service) conversation(ctx context.Context, datapack, id, agentID string) (store.Conversation, error) {
 	c, err := s.st.GetConversation(ctx, datapack, normalizeID(id))
 	if errors.Is(err, store.ErrNotFound) {
-		return c, ErrNotFound
+		return c, ErrNoConversation
 	}
 	if err == nil && c.AgentID != agentOr(agentID) {
 		return c, ErrAgentMismatch
@@ -138,8 +146,10 @@ type AddMessage struct {
 	SkipSearchEmbed bool
 }
 
-// AddedMessage is what adding a turn did. SearchSkipped says why the turn won't be searchable,
-// as prod's reply does: "datapack_opted_out", "caller_skip_search_embed" or "no_datapack".
+// AddedMessage is what adding a turn did. SearchSkipped says why a substantive turn won't be
+// searchable, as prod's reply does: "datapack_opted_out", "caller_skip_search_embed" or
+// "no_datapack". A turn too short to search (under 40 characters each way) is left out silently,
+// with SearchSkipped empty, as in prod.
 type AddedMessage struct {
 	Status         string `json:"status"`
 	MessageID      string `json:"message_id"`
@@ -260,8 +270,9 @@ func (s *Service) DeleteConversation(ctx context.Context, datapack, id, agentID 
 	return s.st.DeleteConversation(ctx, datapack, c.ID)
 }
 
-// SetConversationSearchOptOut opts a datapack out of conversation search (new turns aren't
-// embedded; ones already embedded stay searchable), or back in.
+// SetConversationSearchOptOut opts a datapack out of conversation search, or back in. Opted out,
+// its new turns aren't embedded, nor are earlier ones still waiting for their vectors (the store
+// drops them when they come); turns already embedded stay searchable.
 func (s *Service) SetConversationSearchOptOut(ctx context.Context, datapack string, optOut bool) error {
 	err := s.st.SetConversationSearchOptOut(ctx, datapack, optOut)
 	if errors.Is(err, store.ErrNoDatapack) {
@@ -296,7 +307,8 @@ type ConversationResults struct {
 }
 
 // SearchConversations finds past turns of the datapack near the query, outside the caller's own
-// conversation: the hits within the distance cutoff, and the best few conversations whole.
+// conversation: the hits within the distance cutoff, and a thread of the best few conversations'
+// most recent searchable turns, oldest first.
 func (s *Service) SearchConversations(ctx context.Context, datapack, exclude, query string) (
 	ConversationResults, error) {
 	if strings.TrimSpace(query) == "" {
@@ -314,11 +326,14 @@ func (s *Service) SearchConversations(ctx context.Context, datapack, exclude, qu
 		return ConversationResults{}, err
 	}
 	out := ConversationResults{Hits: []ConversationHit{}, Thread: []ThreadTurn{}}
-	nearest := map[string]float64{} // message id -> its nearest candidate
+	// A turn's nearest candidate chunk. Message ids are unique only within a conversation.
+	type turnKey struct{ conversation, message string }
+	nearest := map[turnKey]float64{}
 	var convs []string
 	for _, h := range cands {
-		if d, ok := nearest[h.MessageID]; !ok || h.Distance < d {
-			nearest[h.MessageID] = h.Distance
+		k := turnKey{h.ConversationID, h.MessageID}
+		if d, ok := nearest[k]; !ok || h.Distance < d {
+			nearest[k] = h.Distance
 		}
 		if h.Distance > s.maxDistance {
 			continue
@@ -331,15 +346,11 @@ func (s *Service) SearchConversations(ctx context.Context, datapack, exclude, qu
 	}
 	var turns []store.Message
 	for _, c := range convs {
-		msgs, err := s.st.Messages(ctx, datapack, c, 1000, 0)
+		recent, err := s.recentTurns(ctx, datapack, c, threadTurns)
 		if err != nil {
 			return ConversationResults{}, err
 		}
-		for _, m := range msgs {
-			if isSubstantive(m.Input, m.Output) {
-				turns = append(turns, m)
-			}
-		}
+		turns = append(turns, recent...)
 	}
 	sort.SliceStable(turns, func(i, j int) bool { return turns[i].CreatedAt.Before(turns[j].CreatedAt) })
 	if len(turns) > threadTurns {
@@ -348,10 +359,35 @@ func (s *Service) SearchConversations(ctx context.Context, datapack, exclude, qu
 	for _, m := range turns {
 		t := ThreadTurn{Content: strings.TrimSpace(m.Input + "\n\n" + m.Output), ConversationID: m.ConversationID,
 			MessageID: m.ID, UserID: s.userID}
-		if d, ok := nearest[m.ID]; ok {
+		if d, ok := nearest[turnKey{m.ConversationID, m.ID}]; ok {
 			t.Distance = &d
 		}
 		out.Thread = append(out.Thread, t)
+	}
+	return out, nil
+}
+
+// recentTurns is up to n of a conversation's most recent searchable (substantive) turns, oldest
+// first, read back from the newest a page at a time.
+func (s *Service) recentTurns(ctx context.Context, datapack, conversation string, n int) ([]store.Message, error) {
+	const page = 200
+	var out []store.Message // newest first
+	for offset := 0; len(out) < n; offset += page {
+		msgs, err := s.st.LatestMessages(ctx, datapack, conversation, page, offset)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(msgs) - 1; i >= 0 && len(out) < n; i-- {
+			if isSubstantive(msgs[i].Input, msgs[i].Output) {
+				out = append(out, msgs[i])
+			}
+		}
+		if len(msgs) < page {
+			break
+		}
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
 }
@@ -387,7 +423,12 @@ func (s *Service) RunEmbedder(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		if err := s.EmbedPending(ctx); err != nil && ctx.Err() == nil {
-			s.log.Debug("chunks wait for the engine", "error", err)
+			var notReady *engine.NotReadyError
+			if errors.Is(err, engine.ErrUnavailable) || errors.As(err, &notReady) {
+				s.log.Debug("chunks wait for the engine", "error", err)
+			} else {
+				s.log.Warn("can't embed turns for conversation search; retrying", "error", err)
+			}
 		}
 		select {
 		case <-ctx.Done():

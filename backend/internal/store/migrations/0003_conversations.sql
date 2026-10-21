@@ -36,9 +36,10 @@ CREATE TABLE messages (
 ) STRICT;
 
 -- A turn's text in overlapping windows, each embedded for conversation search. embedded is 0 until
--- its vector is in message_chunks_vec (the engine may be down when the turn arrives).
+-- its vector is in message_chunks_vec (the engine may be down when the turn arrives). AUTOINCREMENT:
+-- a rowid is never reused, so a vector embedded for a chunk deleted meanwhile can't land on another.
 CREATE TABLE message_chunks (
-  rowid         INTEGER PRIMARY KEY,
+  rowid         INTEGER PRIMARY KEY AUTOINCREMENT,
   message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
   chunk_index   INTEGER NOT NULL,
   text          TEXT NOT NULL,
