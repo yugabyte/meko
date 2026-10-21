@@ -1,6 +1,6 @@
 # Meko backend: MCP and REST
 
-Status: approved; being built. Milestone 3 of the backend (issue #169), on the foundation in
+Status: approved; built. Milestone 3 of the backend (issue #169), on the foundation in
 [design.md](design.md) and the memory engine in [memory-engine.md](memory-engine.md). Built in
 stacked PRs; each section below names the PR that adds it, so the doc matches the code at every
 step:
@@ -8,16 +8,16 @@ step:
 | PR | Adds |
 |---|---|
 | #197 | The rename from Meko Local to Meko (merged) |
-| 1 | The client token, the `[server] auth` setting, the call log; this doc |
-| 2 | MCP at `/mcp`, the search slots, and `meko search`, `add` and `datapacks` |
-| 3 | Learnings (keep and promote), artifacts, provenance, and the replay of AgentK's Meko calls |
-| 4 | The `/api/v1` REST subset meko_ui calls |
+| #201 | The client token, the `[server] auth` setting, the call log; this doc |
+| #202 | MCP at `/mcp`, the search slots, and `meko search`, `add` and `datapacks` |
+| #203 | Learnings (keep and promote), artifacts, provenance, and the replay of AgentK's Meko calls |
+| #204 | The `/api/v1` REST subset meko_ui calls |
 
 Milestone 3 puts milestone 2's service layer (`internal/memory`) on the wire. Agents (Claude Code,
 AgentK) reach Meko over MCP, and meko_ui (from milestone 6) and the CLI over `/api/v1`, with Meko
 Cloud's tool names, arguments and reply shapes, written here from scratch.
 
-## Auth (PR 1)
+## Auth (#201)
 
 | Route | Admin token | Client token | No credential |
 |---|---|---|---|
@@ -46,7 +46,7 @@ Cloud's tool names, arguments and reply shapes, written here from scratch.
   never the token. Every 401 says `WWW-Authenticate: Bearer`.
 - Per-client API keys, which the PRD asks for, are #195.
 
-## The call log (PR 1)
+## The call log (#201)
 
 `call_log` (`0004_call_log.sql`) gets one row per MCP tool call, which replaces Langfuse's traces
 for metrics. Each row records:
@@ -62,7 +62,7 @@ It never holds arguments, text or tokens. It has no foreign key to datapacks, so
 datapack's history stays until it's pruned. `serve` prunes rows older than 90 days at start and
 then daily (`memory.RunCallPruner`). The rows don't count toward the 200 MB content target.
 
-## MCP at /mcp (PR 2)
+## MCP at /mcp (#202)
 
 `internal/mcp` serves Meko Cloud's tools on the official `modelcontextprotocol/go-sdk` (v1.8.0),
 mounted at `/mcp` behind the server's Host, Origin and credential checks, with an 8 MB body limit.
@@ -149,7 +149,7 @@ Milestone 4 (#170) adds `knowledgebase_search` and the knowledge-file tools; the
   against a baseline of 10000 (Cloud's for a datapack with no knowledge files). Each source is
   there only when it returned something.
 
-## Responsiveness (PR 2)
+## Responsiveness (#202)
 
 A slow search must never make other requests wait (the PRD). The 500 ms p95 target at 200 MB is
 #192's.
@@ -161,7 +161,7 @@ A slow search must never make other requests wait (the PRD). The 500 ms p95 targ
 - No write transaction is open while Go waits on the engine: the engine calls back into the store
   API and needs the single writer.
 
-## CLI (PR 2)
+## CLI (#202)
 
 `meko search "<question>"`, `meko add "<text>"` and `meko datapacks` are MCP clients of the
 running server: they call `context_search`, `memory_add` and `datapack_list` on `/mcp` with the
@@ -171,15 +171,15 @@ name or an id, `--json` prints the raw reply, and they exit 3 when no server run
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
 Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.
 
-## Learnings, promotion and artifacts (PR 3)
+## Learnings, promotion and artifacts (#203)
 
 `0005_learnings_artifacts.sql` adds them.
 
 - **Learnings**: `memories.promotion_action` is `''` for a learning (every memory starts as one,
-  as in Meko Cloud) and `keep_as_memory` once the user keeps it (`POST /keep-as-memory`, in PR 4).
+  as in Meko Cloud) and `keep_as_memory` once the user keeps it (`POST /keep-as-memory`, in #204).
   The memory list's `scope=learnings` is the learnings; `scope=memories` (the default) is learnings
   and kept memories.
-- **Promotion** (`memory_promote`, and `POST /promote-memories` in PR 4) moves learnings into the
+- **Promotion** (`memory_promote`, and `POST /promote-memories` in #204) moves learnings into the
   datapack's collective memory, as Cloud does. Each is copied into `promoted_memories` with every
   column of its row but the lemmas (id, text, provenance, role, actor, hash, both dates), the copy
   commits, and then the memory is deleted through the engine (which also unlinks mem0's entities),
@@ -206,7 +206,7 @@ Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services 
   read-only as in Cloud: that time is bookkeeping, not a change to the artifact. The bytes move
   with the database in milestone 7's export, and count toward the 200 MB content target.
 
-## AgentK's calls (PR 3)
+## AgentK's calls (#203)
 
 `internal/mcp/agentk_contract_test.go` replays every call AgentK Local's Meko client makes
 (`extensions/agentk/src/server/meko.ts`), with the same tool names and arguments:
@@ -223,7 +223,7 @@ It checks each reply has every field MekoClient reads. When a method in `meko.ts
 or reads a new field, change its step there. #189 moves AgentK's own tests onto a real Meko and
 retires this replay.
 
-## REST at /api/v1 (PR 4)
+## REST at /api/v1 (#204)
 
 `internal/rest` serves the routes meko_ui calls, with Meko Cloud's paths and shapes in the
 `{data, error}` envelope, mounted on the server's `/api/v1` group (1 MB body limit), behind the
