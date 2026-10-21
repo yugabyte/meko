@@ -4,7 +4,7 @@
 import { Memory } from "mem0ai/oss";
 
 import type { LocalEmbedder } from "./embedder.js";
-import { MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
+import { ACTOR_KEY, MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
 import { mekoScore, type ScoreDetails } from "./scoring.js";
 
 /** A failure with an HTTP status and a code, for the engine API to reply with. */
@@ -117,7 +117,9 @@ export class Engine {
    * Stores each non-system message as a memory, verbatim, as prod's memory_add does: with its role,
    * the speaker's name as actor_id, and the conversation it came from. No entities are linked
    * (mem0 links them only for extracted memories). System messages and blank ones are left out,
-   * as mem0 leaves them out; a message that isn't {role, content} strings refuses the request.
+   * as mem0 leaves them out; a message that isn't {role, content} strings, or whose name isn't a
+   * string, refuses the request.
+   * The speaker travels under ACTOR_KEY, set from the message alone so metadata can't claim one.
    */
   async add(req: AddRequest): Promise<{ results: Array<Record<string, unknown>> }> {
     requireIds(req);
@@ -131,6 +133,9 @@ export class Engine {
       if (typeof m !== "object" || m === null || typeof m.role !== "string" || typeof m.content !== "string") {
         throw new HttpError(400, "BAD_REQUEST", "each message must have a role and a content string");
       }
+      if (m.name !== undefined && typeof m.name !== "string") {
+        throw new HttpError(400, "BAD_REQUEST", "a message's name must be a string");
+      }
     }
     const mem = this.memory(req.datapack_id);
     const results: Array<Record<string, unknown>> = [];
@@ -139,7 +144,7 @@ export class Engine {
       const metadata: Record<string, unknown> = {
         ...(req.metadata ?? {}),
         role: m.role,
-        ...(m.name && { actor_id: m.name }),
+        [ACTOR_KEY]: m.name || undefined,
         ...(req.conversation_id && { meko_conversation_id: req.conversation_id }),
       };
       const r = await mem.add(m.content, {
@@ -149,7 +154,7 @@ export class Engine {
         infer: false,
       });
       for (const x of r.results) {
-        results.push({ id: x.id, memory: x.memory, event: "ADD", actor_id: m.name ?? null, role: m.role });
+        results.push({ id: x.id, memory: x.memory, event: "ADD", actor_id: m.name || null, role: m.role });
       }
     }
     return { results };
