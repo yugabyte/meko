@@ -129,7 +129,7 @@ jobs:
 
       # The Go end-to-end tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
       - name: Cache the embedding model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: backend/engine/.models
           key: embedding-model-all-MiniLM-L6-v2-751bff3-q8
