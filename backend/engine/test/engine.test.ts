@@ -114,6 +114,7 @@ describe("with a store", () => {
         { role: "system", content: "skipped" },
         { role: "user", content: "AgentK sessions survive server restarts." },
         { role: "assistant", content: "Noted.", name: "helper" },
+        { role: "user", content: "An empty name is no actor.", name: "" },
       ],
       // Only a message's name sets the actor.
       metadata: { source_note: "test", actor_id: "claimed", meko_actor_id: "claimed" },
@@ -123,6 +124,7 @@ describe("with a store", () => {
       [
         ["AgentK sessions survive server restarts.", "ADD", "user", null],
         ["Noted.", "ADD", "assistant", "helper"],
+        ["An empty name is no actor.", "ADD", "user", null],
       ],
     );
     const rows = [...fake.rows.get("dp1")!.values()].map((x) => x.payload);
@@ -133,13 +135,19 @@ describe("with a store", () => {
     assert.equal(rows[0].source_note, "test");
     assert.equal(rows[0].actor_id, undefined);
     assert.equal(rows[1].actor_id, "helper");
+    assert.equal(rows[2].actor_id, undefined);
     assert.ok(rows.every((p) => !("meko_actor_id" in p)));
     assert.equal(fake.rows.get("dp1_entities")?.size ?? 0, 0);
-    assert.equal(fake.history.filter((h) => h.action === "ADD").length, 2);
+    assert.equal(fake.history.filter((h) => h.action === "ADD").length, 3);
   });
 
   test("refuses a message that isn't {role, content} strings", async () => {
-    for (const messages of [[{ role: "user", content: [{ type: "text", text: "x" }] }], [null], ["x"]]) {
+    for (const messages of [
+      [{ role: "user", content: [{ type: "text", text: "x" }] }],
+      [null],
+      ["x"],
+      [{ role: "user", content: "x", name: 7 }],
+    ]) {
       await assert.rejects(
         engine.add({ datapack_id: "dp1", user_id: "u", messages: messages as any }),
         (e: HttpError) => e.status === 400,
