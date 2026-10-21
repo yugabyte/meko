@@ -143,7 +143,7 @@ jobs:
           version: v2.14.0
           working-directory: backend
 
-      - run: go vet -tags sqlite_fts5 ./...
+      - run: go vet -tags sqlite_fts5,sqlite_vec ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: npm run typecheck
         working-directory: backend/engine

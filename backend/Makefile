@@ -1,9 +1,10 @@
-# Meko's Go backend. cgo is required: sqlite-vec and SQLite are compiled in, and FTS5
-# needs the sqlite_fts5 tag. On RHEL 8 set CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc.
+# Meko's Go backend. cgo is required: SQLite and sqlite-vec are compiled in, from the
+# yugabyte/go-sqlite3 fork (go.mod's replace). FTS5 needs the sqlite_fts5 tag and sqlite-vec the
+# sqlite_vec tag. On RHEL 8 set CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc.
 # The memory engine (engine/) is TypeScript and needs Node 22.13 or newer and npm.
 
 export CGO_ENABLED := 1
-TAGS    := sqlite_fts5
+TAGS    := sqlite_fts5,sqlite_vec
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 PKG     := github.com/yugabyte/meko/backend/internal/version
@@ -32,7 +33,7 @@ test: engine
 
 # The search budget at 200 MB of content (a few minutes; not in CI).
 bench: engine
-	go test -tags "$(TAGS) bench" -run TestSearchBudget -v -timeout 60m ./internal/memory/
+	go test -tags $(TAGS),bench -run TestSearchBudget -v -timeout 60m ./internal/memory/
 
 # golangci-lint v2 (https://golangci-lint.run) must be installed; CI pins its version.
 lint: engine/node_modules/.package-lock.json

@@ -24,6 +24,18 @@ func open(t *testing.T) *Store {
 	return s
 }
 
+// The driver is go.mod's replace (yugabyte/go-sqlite3): a new tag there that changes either
+// version updates these on purpose.
+func TestLibVersions(t *testing.T) {
+	v, err := LibVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.SQLite != "3.53.4" || v.SQLiteVec != "v0.1.9" {
+		t.Fatalf("SQLite %s and sqlite-vec %s; want 3.53.4 and v0.1.9", v.SQLite, v.SQLiteVec)
+	}
+}
+
 func TestMigrateFreshAndAgain(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

@@ -66,8 +66,8 @@ updates:
     commit-message:
       prefix: chore(meko)
     ignore:
-      # mattn/go-sqlite3 carries SQLite, whose header is copied into backend/third_party/sqlite-vec
-      # (TestHeadersMatchCompiledSQLite checks they match), so it's upgraded by hand with the copy.
+      # go.mod replaces mattn/go-sqlite3 with a tag of the yugabyte/go-sqlite3 fork (SQLite with
+      # sqlite-vec), so a bump of the require line would change nothing: upgrade the fork's tag by hand.
       - dependency-name: "github.com/mattn/go-sqlite3"
     groups:
       # Minor and patch bumps together; each major gets its own PR.
