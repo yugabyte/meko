@@ -121,9 +121,9 @@ export type EndpointRole = "read_write" | "read_only";
  *  The `ingress_*` pair gives those same two exposures from a SHARED load
  *  balancer — a port on an ingress shard — so creating one provisions nothing in
  *  the cloud. They are refused with 400 unless the deployment has ingress
- *  enabled, and they take no `allowed_cidrs`: the load balancer is shared, so a
- *  per-endpoint allowlist cannot be a per-Service field, and the middleware that
- *  will do it is not built yet. */
+ *  enabled. Their `allowed_cidrs` is enforced by the shard's per-endpoint
+ *  middleware, and a non-empty list is refused with 400 unless the deployment
+ *  sets `--deploy-ingress-source-filtering`. */
 export type EndpointConnectivityMode =
   | "cluster_ip"
   | "ingress_internal"
@@ -133,7 +133,8 @@ export type EndpointConnectivityMode =
 export type EndpointConnectivity = {
   mode?: EndpointConnectivityMode;
   /** Sources allowed to reach the load balancer, as CIDRs. Empty is
-   *  unrestricted — on `nlb_external` that means the public internet. */
+   *  unrestricted — on `nlb_external` and `ingress_external` that means the
+   *  public internet. */
   allowed_cidrs?: string[];
 };
 export type Endpoint = {

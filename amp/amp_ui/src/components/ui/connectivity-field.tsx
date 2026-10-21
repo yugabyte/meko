@@ -36,14 +36,12 @@ export function parseCidrs(raw: string): string[] {
     .filter(Boolean);
 }
 
-/** Whether the mode takes an allowlist, which is NOT the same question as
- *  whether it has a load balancer. An ingress endpoint has one but shares it, so
- *  `loadBalancerSourceRanges` — a per-Service field — cannot express a
- *  per-endpoint allowlist; the controller refuses `allowed_cidrs` there with a
- *  400 until the shard's own middleware does the filtering. Offering the field
- *  anyway would collect a value the API rejects. */
+/** Whether the mode takes an allowlist: every mode with a load balancer. On an
+ *  ingress_* mode the controller accepts one only when the deployment declares
+ *  that its shards see client addresses (--deploy-ingress-source-filtering)
+ *  and otherwise refuses it with a 400 naming the flag, which the form surfaces. */
 export function takesAllowedCidrs(mode: EndpointConnectivityMode): boolean {
-  return mode === "nlb_internal" || mode === "nlb_external";
+  return mode !== "cluster_ip";
 }
 
 /** The label shown for each mode, also used by the wizard's Review step. */
@@ -85,12 +83,8 @@ export function ConnectivityField({
           onValueChange={(v) => {
             const mode = v as EndpointConnectivityMode;
             // Drop the allowlist when the new mode does not take one, rather
-            // than only hiding the input. The value lives in the caller's state
-            // and both submit paths send it unconditionally, so a CIDR typed on
-            // an nlb_* mode would otherwise still be posted after switching to
-            // an ingress_* one — earning a 400 that names a field no longer on
-            // screen. Not a problem before this commit: cluster_ip was the only
-            // mode hiding the input, and its connectivity block is dropped whole.
+            // than only hiding the input. Submit drops the block on cluster_ip,
+            // but the wizard's Review row prints any typed CIDRs whatever the mode.
             onChange({
               ...value,
               mode,
@@ -137,18 +131,8 @@ export function ConnectivityField({
 /** The warning for an external load balancer left open to everything. Rendered
  *  by the caller, so each layout can place it where its own errors go. */
 export function ConnectivityWarning({ value }: { value: Connectivity }) {
-  // ingress_external is unconditional: it takes no allowlist at all, so there is
-  // no entry the user could make that would narrow it.
-  if (value.mode === "ingress_external") {
-    return (
-      <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">
-        An external ingress shard puts Postgres on the public internet, with password authentication
-        as the only barrier. Per-endpoint allowlists are not available on the shared modes yet — use
-        NLB (external) for an endpoint that needs one.
-      </p>
-    );
-  }
-  if (value.mode !== "nlb_external" || value.allowedCidrs.trim()) return null;
+  const external = value.mode === "nlb_external" || value.mode === "ingress_external";
+  if (!external || value.allowedCidrs.trim()) return null;
   return (
     <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500">
       An external load balancer with no allowed CIDRs puts Postgres on the public internet, with

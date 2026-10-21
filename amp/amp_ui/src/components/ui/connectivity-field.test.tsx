@@ -11,32 +11,28 @@ import type { EndpointConnectivityMode } from "@/lib/api/types";
 afterEach(cleanup);
 
 describe("ConnectivityField", () => {
-  // The controller refuses allowed_cidrs on the ingress_* modes with a 400,
-  // because a shared load balancer cannot carry a per-endpoint allowlist. A
-  // field offered there collects a value the API rejects, so this tracks the
-  // API's refusal rather than "does the mode have a load balancer".
-  it("offers an allowlist only for the modes the API accepts one on", () => {
-    const takes: EndpointConnectivityMode[] = ["nlb_internal", "nlb_external"];
-    const refuses: EndpointConnectivityMode[] = [
-      "cluster_ip",
+  it("offers an allowlist on every mode with a load balancer", () => {
+    const takes: EndpointConnectivityMode[] = [
+      "nlb_internal",
+      "nlb_external",
       "ingress_internal",
       "ingress_external",
     ];
     for (const m of takes) expect(takesAllowedCidrs(m)).toBe(true);
-    for (const m of refuses) expect(takesAllowedCidrs(m)).toBe(false);
+    expect(takesAllowedCidrs("cluster_ip")).toBe(false);
   });
 
-  it("hides the CIDR input on an ingress mode and shows it on an nlb one", () => {
+  it("hides the CIDR input on cluster_ip and shows it on an ingress mode", () => {
     const { rerender } = render(
-      <ConnectivityField
-        value={{ mode: "ingress_internal", allowedCidrs: "" }}
-        onChange={vi.fn()}
-      />,
+      <ConnectivityField value={{ mode: "cluster_ip", allowedCidrs: "" }} onChange={vi.fn()} />,
     );
     expect(screen.queryByLabelText(/allowed cidrs/i)).toBeNull();
 
     rerender(
-      <ConnectivityField value={{ mode: "nlb_internal", allowedCidrs: "" }} onChange={vi.fn()} />,
+      <ConnectivityField
+        value={{ mode: "ingress_internal", allowedCidrs: "" }}
+        onChange={vi.fn()}
+      />,
     );
     expect(screen.getByLabelText(/allowed cidrs/i)).toBeTruthy();
   });
@@ -55,10 +51,8 @@ describe("ConnectivityField", () => {
     for (const m of modes) expect(CONNECTIVITY_LABELS[m]).toBeTruthy();
   });
 
-  // Hiding the input is not enough: the value lives in the caller's state and
-  // both submit paths post it unconditionally, so a CIDR typed on an nlb_* mode
-  // would reach the API on an ingress_* create and earn a 400 naming a field
-  // that is no longer on screen.
+  // Hiding the input is not enough: the wizard's Review row prints any typed
+  // CIDRs whatever the mode.
   it("clears a typed allowlist when switching to a mode that takes none", () => {
     const onChange = vi.fn();
     render(
@@ -70,22 +64,24 @@ describe("ConnectivityField", () => {
     // Radix renders a native-select fallback in jsdom; drive the handler through it.
     const trigger = screen.getByRole("combobox");
     fireEvent.click(trigger);
-    const opt = screen.getByText(CONNECTIVITY_LABELS.ingress_internal);
+    const opt = screen.getByText(CONNECTIVITY_LABELS.cluster_ip);
     fireEvent.click(opt);
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "ingress_internal", allowedCidrs: "" }),
+      expect.objectContaining({ mode: "cluster_ip", allowedCidrs: "" }),
     );
   });
 });
 
 describe("ConnectivityWarning", () => {
-  // Unconditional for ingress_external: it takes no allowlist, so unlike
-  // nlb_external there is no entry that would narrow it.
-  it("warns on ingress_external even with CIDRs typed", () => {
-    render(
-      <ConnectivityWarning value={{ mode: "ingress_external", allowedCidrs: "10.0.0.0/8" }} />,
+  it("warns on ingress_external with no CIDRs, and not once one is typed", () => {
+    const { rerender } = render(
+      <ConnectivityWarning value={{ mode: "ingress_external", allowedCidrs: "" }} />,
     );
     expect(screen.getByText(/public internet/i)).toBeTruthy();
+    rerender(
+      <ConnectivityWarning value={{ mode: "ingress_external", allowedCidrs: "10.0.0.0/8" }} />,
+    );
+    expect(screen.queryByText(/public internet/i)).toBeNull();
   });
 
   it("stays quiet on an internal ingress shard", () => {
