@@ -66,6 +66,10 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Engine dependencies are pinned exactly in `engine/package.json`; `engine/.npmrc` keeps npm from
   installing mem0ai's peers. Prod Meko's code is private: copy none of it and cite none of its
   paths (state the behavior instead).
+- Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`chore(meko): ...`)
+  and the engine's npm packages (`chore(meko/engine): ...`) every Monday, with minor and patch
+  bumps grouped and `mem0ai` in a PR of its own. `mattn/go-sqlite3` is left out: upgrade it by hand
+  with its header (`third_party/sqlite-vec/README.md`).
 - Neither log ever holds memory or turn text: only ids, counts and timings. The engine never logs
   an error's message.
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free

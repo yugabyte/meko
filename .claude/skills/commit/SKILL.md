@@ -37,7 +37,7 @@ nine types:
 | `feat` | yes | New user-visible behavior |
 | `fix` | yes | Bug fixes, including build or packaging fixes that change what ships |
 | `perf` | yes | Faster, same behavior |
-| `deps` | yes | Dependency bumps (Dependabot's npm PRs use it too) |
+| `deps` | yes | Dependency bumps that ship (Dependabot's AgentK npm PRs use it too); Meko's are `chore(meko)`, since nothing in `backend/` ships yet |
 | `ci` | no | Workflows, Dependabot config, GitHub Actions bumps |
 | `test` | no | Tests only |
 | `docs` | no | Markdown docs: README, CONTRIBUTING, AGENTS, REVIEW, `docs/` |
