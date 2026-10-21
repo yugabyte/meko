@@ -1,4 +1,6 @@
-package server
+// Package envelope is the {data, error} reply every Meko Local API uses: the HTTP server's /api/v1,
+// and the internal store API the engine calls.
+package envelope
 
 import (
 	"errors"
@@ -22,11 +24,13 @@ type Error struct {
 	Details []string `json:"details,omitempty"`
 }
 
-func ok(c echo.Context, data any) error {
+// OK replies 200 with data.
+func OK(c echo.Context, data any) error {
 	return c.JSON(http.StatusOK, Response{Data: data})
 }
 
-func apiError(c echo.Context, status int, code, message string) error {
+// Fail replies with status and an error.
+func Fail(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, Response{Error: &Error{Code: code, Message: message}})
 }
 
@@ -39,10 +43,10 @@ var statusCodes = map[int]string{
 	http.StatusRequestEntityTooLarge: "PAYLOAD_TOO_LARGE",
 }
 
-// errorHandler writes every error as an envelope. An HTTP error below 500 keeps its status and
+// ErrorHandler writes every error as an envelope. An HTTP error below 500 keeps its status and
 // message; anything else (a 5xx HTTP error too) is logged and the caller gets a generic message,
 // so internal details (paths, SQL) never reach a reply.
-func errorHandler(log *slog.Logger) echo.HTTPErrorHandler {
+func ErrorHandler(log *slog.Logger) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		if c.Response().Committed {
 			return
@@ -57,11 +61,11 @@ func errorHandler(log *slog.Logger) echo.HTTPErrorHandler {
 			if !isString || msg == "" {
 				msg = http.StatusText(he.Code)
 			}
-			_ = apiError(c, he.Code, code, msg)
+			_ = Fail(c, he.Code, code, msg)
 			return
 		}
 		log.Error("request failed", "method", c.Request().Method, "route", c.Path(),
 			"request_id", c.Response().Header().Get(echo.HeaderXRequestID), "error", err)
-		_ = apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not complete the request. Please try again.")
+		_ = Fail(c, http.StatusInternalServerError, "INTERNAL_ERROR", "Could not complete the request. Please try again.")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko-local/backend/internal/auth"
+	"github.com/yugabyte/meko-local/backend/internal/envelope"
 	"github.com/yugabyte/meko-local/backend/internal/paths"
 	"github.com/yugabyte/meko-local/backend/internal/server"
 )
@@ -53,7 +54,7 @@ func (c *client) get(ctx context.Context, path string, data any) error {
 		return err
 	}
 	defer resp.Body.Close()
-	env := server.Response{Data: data}
+	env := envelope.Response{Data: data}
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		return fmt.Errorf("unexpected reply from %s (%s): %w", path, resp.Status, err)
 	}

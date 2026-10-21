@@ -16,6 +16,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/yugabyte/meko-local/backend/internal/envelope"
 	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
@@ -53,7 +54,7 @@ func tcpPort(t *testing.T, ln net.Listener) int {
 	return a.Port
 }
 
-func get(t *testing.T, url string, header map[string]string, host string) (int, Response) {
+func get(t *testing.T, url string, header map[string]string, host string) (int, envelope.Response) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	for k, v := range header {
@@ -68,7 +69,7 @@ func get(t *testing.T, url string, header map[string]string, host string) (int, 
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	var env Response
+	var env envelope.Response
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatalf("%s: not an envelope: %s", url, body)
 	}

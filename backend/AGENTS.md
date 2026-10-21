@@ -14,7 +14,9 @@ repo are in the root [AGENTS.md](../AGENTS.md).
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
 | `internal/sqlitevec/` | cgo glue that compiles `third_party/sqlite-vec` in and registers it. |
-| `internal/server/` | The HTTP server on 127.0.0.1: the `{data, error}` envelope, the Host, Origin and admin-token checks, `/healthz` and `/api/v1`. |
+| `internal/server/` | The HTTP server on 127.0.0.1: the Host, Origin and admin-token checks, `/healthz` and `/api/v1`. |
+| `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
+| `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/auth/` | The admin token the CLI uses (API keys come with MCP). |
 | `internal/supervisor/` | Child processes (the Node engine, later): process groups, health checks, backoff, stop. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
