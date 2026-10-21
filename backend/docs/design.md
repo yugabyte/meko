@@ -117,8 +117,12 @@ A client that needs Meko running, such as AgentK, runs `meko start`. It must not
 The database must sit on a local disk, not a network filesystem: SQLite's WAL locking doesn't
 work there, and neither does `flock` across hosts. When the default folder is on a network
 filesystem (NFS, SMB, sshfs and the others in AgentK's `install.ts` list), the default moves to
-local disk instead, as AgentK's installer does for `state.db` (`extensions/agentk/src/server/install.ts`). An explicit `--data-dir` on a
-network filesystem is refused with a message saying why.
+local disk instead, as AgentK's installer does for `state.db` (`extensions/agentk/src/server/install.ts`):
+`$XDG_STATE_HOME/meko` if that's local, else `/var/tmp/<user>/meko`, where `<user>` is the login
+name, or the numeric uid when the uid has no account (a container run with an arbitrary uid). Any
+other lookup failure, such as an unreachable directory service, is an error rather than a move to
+a different, empty folder. An explicit `--data-dir` on a network filesystem is refused with a message
+saying why.
 
 Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. The foundation has
 few keys:
@@ -352,7 +356,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 Automated, in `go test -race ./...` (Linux and macOS in CI):
 
 - **config**: precedence of flags, env, file and defaults; a bad `config.toml` gives an error naming the file and line.
-- **paths**: folder and file permissions; the network-filesystem check refuses an explicit network path (faked filesystem type); a parent writable by others (or by a group that isn't the user's) is refused; the folder ends 0700; the `/var/tmp` fallback.
+- **paths**: folder and file permissions; the network-filesystem check refuses an explicit network path (faked filesystem type); a parent writable by others (or by a group that isn't the user's) is refused; the folder ends 0700; the `/var/tmp` fallback, named by the uid for a uid with no account, and an error for any other failed lookup.
 - **sqlitevec**: sqlite-vec loads (`vec_version()` is v0.1.9) and the vendored headers' SQLite version matches the compiled one.
 - **store**: migrations apply on a fresh file and are a no-op on a current one; `user_version` matches; the backup file is written before a migration; a newer database or a gap in the migrations is refused; a `vec0` table with a partition key answers KNN within a datapack; FTS5 is compiled in; the default datapack is created once with a UUID and a name that isn't `meko_default_datapack*`.
 - **server** (in-process on port 0): `/healthz` answers without auth; `/api/v1/*` needs the admin token (401 without it or with a wrong one); a foreign Host gets 403; any `Origin` header is refused; replies use the envelope with `error` omitted on success; an internal error returns the generic message and logs the cause.

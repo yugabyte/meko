@@ -1,9 +1,11 @@
 package paths
 
 import (
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -53,11 +55,10 @@ func TestResolve(t *testing.T) {
 	oldTmp := SharedTmp
 	SharedTmp = t.TempDir()
 	t.Cleanup(func() { SharedTmp = oldTmp })
-	u, err := user.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(SharedTmp, u.Username, "meko")
+	oldUser := CurrentUser
+	t.Cleanup(func() { CurrentUser = oldUser })
+	CurrentUser = func() (*user.User, error) { return &user.User{Username: "mekouser"}, nil }
+	want := filepath.Join(SharedTmp, "mekouser", "meko")
 	got, err := Resolve("")
 	if err != nil || got != want {
 		t.Fatalf("default on NFS without XDG: got %q, %v", got, err)
@@ -65,6 +66,17 @@ func TestResolve(t *testing.T) {
 	fi, err := os.Stat(want)
 	if err != nil || fi.Mode().Perm() != 0o700 {
 		t.Fatalf("fallback folder: %v, %v", fi, err)
+	}
+	// A uid with no account the system can look up (a container's arbitrary uid) uses the number.
+	CurrentUser = func() (*user.User, error) { return nil, user.UnknownUserIdError(os.Getuid()) }
+	want = filepath.Join(SharedTmp, strconv.Itoa(os.Getuid()), "meko")
+	if got, err = Resolve(""); err != nil || got != want {
+		t.Fatalf("fallback for an unknown uid: got %q, %v", got, err)
+	}
+	// Any other lookup failure (a directory service that's down) is an error, not a different folder.
+	CurrentUser = func() (*user.User, error) { return nil, errors.New("user: lookup userid 1: sssd down") }
+	if got, err = Resolve(""); err == nil || !strings.Contains(err.Error(), "sssd down") {
+		t.Fatalf("a failed lookup: got %q, %v", got, err)
 	}
 
 	// A folder the user named on NFS is refused, with the reason.
