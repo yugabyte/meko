@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync/atomic"
 
 	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" driver
 	"github.com/yugabyte/meko-local/backend/internal/sqlitevec"
@@ -27,6 +28,7 @@ type Store struct {
 	path string
 	w    *sql.DB
 	r    *sql.DB
+	dims atomic.Int64 // the vector tables' width once known (vectors.go)
 }
 
 // Open opens (creating it if needed, readable only by this user) the database at path.

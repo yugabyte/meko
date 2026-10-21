@@ -32,8 +32,12 @@ func TestMigrateFreshAndAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v, err := s.SchemaVersion(ctx); err != nil || v != 1 {
-		t.Fatalf("version %d, %v", v, err)
+	ms, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.SchemaVersion(ctx); err != nil || v != len(ms) {
+		t.Fatalf("version %d, %v; want %d", v, err, len(ms))
 	}
 	if _, err := os.Stat(s.BackupPath(0)); !os.IsNotExist(err) {
 		t.Errorf("a fresh database shouldn't be backed up: %v", err)
@@ -179,5 +183,37 @@ func TestVectorAndFullTextSearch(t *testing.T) {
 	}
 	if err := s.r.QueryRow("SELECT rowid FROM f WHERE f MATCH 'dp:b AND restarts'").Scan(&id); err != nil || id != 2 {
 		t.Fatalf("fts in datapack b: %d, %v", id, err)
+	}
+}
+
+func TestLocalUserIDAndDatapackExists(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u1, err := s.EnsureLocalUserID(ctx)
+	if err != nil || uuid.Validate(u1) != nil {
+		t.Fatalf("local user id %q, %v", u1, err)
+	}
+	install, _ := s.EnsureInstallID(ctx)
+	if u2, _ := s.EnsureLocalUserID(ctx); u2 != u1 || u1 == install {
+		t.Errorf("local user id %q then %q (install id %q)", u1, u2, install)
+	}
+	dp, err := s.EnsureDefaultDatapack(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.DatapackExists(ctx, dp); !ok || err != nil {
+		t.Errorf("the default datapack: %v %v", ok, err)
+	}
+	if ok, err := s.DatapackExists(ctx, "nope"); ok || err != nil {
+		t.Errorf("a missing datapack: %v %v", ok, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DatapackExists(ctx, dp); err == nil {
+		t.Error("an error from the database (closed) wasn't passed on")
 	}
 }
