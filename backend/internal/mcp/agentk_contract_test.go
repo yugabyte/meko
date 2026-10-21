@@ -42,8 +42,8 @@ func TestAgentKContract(t *testing.T) {
 		t.Fatalf("listDatapacks: %s", r.Text)
 	}
 	row := obj(r.List[0])
-	if row["datapack_id"] == "" || row["datapack_name"] == "" || row["grant"] != "owner" || row["created_at"] == nil ||
-		row["user_id"] == nil {
+	if str(row["datapack_id"]) == "" || str(row["datapack_name"]) == "" || row["grant"] != "owner" ||
+		row["created_at"] == nil || row["user_id"] == nil {
 		t.Errorf("listDatapacks row: %v", row)
 	}
 

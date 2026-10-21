@@ -330,7 +330,7 @@ func TestPromoteAndArtifacts(t *testing.T) {
 	r = ok(t, e, "memory_get_all", map[string]any{"conversation_id": "c", "promoted": true})
 	pm := arr(r.JSON["promoted_memories"])
 	if len(pm) != 1 || obj(pm[0])["data"] != "the team uses trunk-based development" ||
-		obj(pm[0])["promoted_to_kb_at"] == nil {
+		obj(pm[0])["promoted_to_kb_at"] != nil {
 		t.Errorf("promoted list: %s", r.Text)
 	}
 	r = ok(t, e, "datapack_describe", map[string]any{"conversation_id": "c"})

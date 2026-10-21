@@ -357,5 +357,12 @@ func memoryPromote(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.svc.PromoteMemories(ctx, dp, agent, ids)
+	p, err := c.svc.PromoteMemories(ctx, dp, agent, ids)
+	if err != nil && len(p.Inserted)+len(p.NotFound) > 0 {
+		return nil, &partial{err: err, done: map[string]any{"inserted_ids": p.Inserted, "not_found_ids": p.NotFound}}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }

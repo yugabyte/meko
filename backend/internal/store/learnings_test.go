@@ -12,7 +12,8 @@ func TestKeepAndPromote(t *testing.T) {
 	s := openMem(t)
 	for _, id := range []string{"m1", "m2", "m3"} {
 		insert(t, s, Memories, "a", id, unit(1, 0, 0), map[string]any{"data": "text of " + id, "user_id": "u",
-			"agent_id": "ag", "meko_conversation_id": "conv", "createdAt": "2026-10-01T10:00:00.000Z", "tag": "t"})
+			"agent_id": "ag", "meko_conversation_id": "conv", "createdAt": "2026-10-01T10:00:00.000Z",
+			"updatedAt": "2026-10-02T10:00:00.000Z", "role": "user", "actor_id": "hari", "hash": "h-" + id, "tag": "t"})
 	}
 	insert(t, s, Memories, "a", "theirs", unit(1, 0, 0), map[string]any{"data": "x", "user_id": "other"})
 
@@ -36,16 +37,27 @@ func TestKeepAndPromote(t *testing.T) {
 		t.Errorf("memories %d", total)
 	}
 
-	// Promote copies a learning with its provenance and dates; a kept one isn't a learning.
+	// Promote copies a learning with every column of its row; a kept one isn't a learning.
 	p, err := s.CopyToPromoted(ctx, "a", "u", "m2", "promoter")
 	if err != nil || p.ID != "m2" || p.Text != "text of m2" || p.AgentID != "ag" || p.ConversationID != "conv" ||
-		p.Payload["tag"] != "t" || p.PromotedBy != "promoter" || p.CreatedAt.Day() != 1 || p.ConnectorID != "" {
+		p.Payload["tag"] != "t" || p.PromotedBy != "promoter" || p.CreatedAt.Day() != 1 || p.ConnectorID != "" ||
+		p.UpdatedAt.Day() != 2 || p.Role != "user" || p.ActorID != "hari" || p.Hash != "h-m2" {
 		t.Fatalf("copy %+v, %v", p, err)
 	}
-	for _, id := range []string{"m1", "m2", "theirs", "nope"} {
+	for _, id := range []string{"m1", "theirs", "nope"} {
 		if _, err = s.CopyToPromoted(ctx, "a", "u", id, "p"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("copy %s: %v", id, err)
 		}
+	}
+	// Copied but not yet deleted (a promotion cut short): promoting again resumes with the same copy.
+	if again, aerr := s.CopyToPromoted(ctx, "a", "u", "m2", "p"); aerr != nil || again.PromotedBy != "promoter" {
+		t.Errorf("resume %+v, %v", again, aerr)
+	}
+	if err = s.DeleteVector(ctx, Memories, "a", "m2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CopyToPromoted(ctx, "a", "u", "m2", "p"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("copy once the memory is gone: %v", err)
 	}
 	if yes, _ := s.IsPromoted(ctx, "a", "m2"); !yes {
 		t.Error("m2 should be promoted")

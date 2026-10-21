@@ -28,9 +28,13 @@ type Promoted struct {
 	ConversationID string
 	ConnectorID    string
 	Source         string
+	Role           string
+	ActorID        string
 	Text           string
+	Hash           string
 	Payload        map[string]any
 	CreatedAt      time.Time
+	UpdatedAt      time.Time
 	PromotedAt     time.Time
 	PromotedBy     string
 }
@@ -57,9 +61,11 @@ func (s *Store) KeepMemories(ctx context.Context, datapack, userID string, ids [
 	return int(n), err
 }
 
-// CopyToPromoted copies one of the user's learnings into promoted_memories, keeping its id, text,
-// provenance and date, or returns ErrNotFound (no such learning: missing, someone else's, or
-// already kept). The memory itself stays until the caller deletes it through the engine.
+// CopyToPromoted copies one of the user's learnings into promoted_memories, keeping every column
+// but the lemmatized text, or returns ErrNotFound (no such learning: missing, someone else's, or
+// already kept). The memory itself stays until the caller deletes it through the engine. A learning
+// already copied by a promotion that didn't get to delete it returns that copy, so promoting it
+// again finishes the job.
 func (s *Store) CopyToPromoted(ctx context.Context, datapack, userID, id, promotedBy string) (Promoted, error) {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -67,19 +73,30 @@ func (s *Store) CopyToPromoted(ctx context.Context, datapack, userID, id, promot
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(timeLayout)
+	const learning = "FROM memories WHERE datapack_id = ? AND user_id = ? AND id = ? AND promotion_action = ''"
 	res, err := tx.ExecContext(ctx, "INSERT INTO promoted_memories(id, datapack_id, user_id, agent_id, "+
-		"conversation_id, connector_id, source, text, payload, created_at, promoted_at, promoted_by) "+
-		"SELECT id, datapack_id, user_id, agent_id, conversation_id, connector_id, source, text, payload, "+
-		"created_at, ?, ? FROM memories WHERE datapack_id = ? AND user_id = ? AND id = ? AND promotion_action = '' "+
-		"ON CONFLICT(id) DO NOTHING", now, promotedBy, datapack, userID, id)
+		"conversation_id, connector_id, source, role, actor_id, text, hash, payload, created_at, updated_at, "+
+		"promoted_at, promoted_by) SELECT id, datapack_id, user_id, agent_id, conversation_id, connector_id, "+
+		"source, role, actor_id, text, hash, payload, created_at, updated_at, ?, ? "+learning+
+		" ON CONFLICT(id) DO NOTHING", now, promotedBy, datapack, userID, id)
 	if err != nil {
 		return Promoted{}, err
 	}
-	if n, rerr := res.RowsAffected(); rerr != nil || n == 0 {
-		if rerr == nil {
-			rerr = ErrNotFound
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Promoted{}, err
+	}
+	if n == 0 { // no such learning, or one already copied (its copy has the same id)
+		var one int
+		err = tx.QueryRowContext(ctx, "SELECT 1 "+learning+
+			" AND EXISTS (SELECT 1 FROM promoted_memories p WHERE p.id = memories.id AND p.datapack_id = ?)",
+			datapack, userID, id, datapack).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Promoted{}, ErrNotFound
 		}
-		return Promoted{}, rerr
+		if err != nil {
+			return Promoted{}, err
+		}
 	}
 	p, err := scanPromoted(tx.QueryRowContext(ctx, "SELECT "+promotedCols+" FROM promoted_memories WHERE id = ?", id))
 	if err != nil {
@@ -88,14 +105,14 @@ func (s *Store) CopyToPromoted(ctx context.Context, datapack, userID, id, promot
 	return p, tx.Commit()
 }
 
-const promotedCols = "id, datapack_id, user_id, agent_id, conversation_id, connector_id, source, text, payload, " +
-	"created_at, promoted_at, promoted_by"
+const promotedCols = "id, datapack_id, user_id, agent_id, conversation_id, connector_id, source, role, actor_id, " +
+	"text, hash, payload, created_at, updated_at, promoted_at, promoted_by"
 
 func scanPromoted(row interface{ Scan(...any) error }) (Promoted, error) {
 	var p Promoted
-	var payload, created, promoted string
+	var payload, created, updated, promoted string
 	if err := row.Scan(&p.ID, &p.DatapackID, &p.UserID, &p.AgentID, &p.ConversationID, &p.ConnectorID, &p.Source,
-		&p.Text, &payload, &created, &promoted, &p.PromotedBy); err != nil {
+		&p.Role, &p.ActorID, &p.Text, &p.Hash, &payload, &created, &updated, &promoted, &p.PromotedBy); err != nil {
 		return Promoted{}, err
 	}
 	if err := json.Unmarshal([]byte(payload), &p.Payload); err != nil {
@@ -103,6 +120,9 @@ func scanPromoted(row interface{ Scan(...any) error }) (Promoted, error) {
 	}
 	var err error
 	if p.CreatedAt, err = time.Parse(timeLayout, created); err != nil {
+		return Promoted{}, err
+	}
+	if p.UpdatedAt, err = time.Parse(timeLayout, updated); err != nil {
 		return Promoted{}, err
 	}
 	if p.PromotedAt, err = time.Parse(timeLayout, promoted); err != nil {

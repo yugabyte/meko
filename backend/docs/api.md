@@ -180,24 +180,31 @@ Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services 
   The memory list's `scope=learnings` is the learnings; `scope=memories` (the default) is learnings
   and kept memories.
 - **Promotion** (`memory_promote`, and `POST /promote-memories` in PR 4) moves learnings into the
-  datapack's collective memory, as Cloud does. Each is copied into `promoted_memories` with its id,
-  text, provenance and dates, the copy commits, and then the memory is deleted through the engine
-  (which also unlinks mem0's entities), so memory search no longer finds it. If the engine can't
-  delete it, the copy is removed and it's reported in `not_found_ids`: it stays a learning. A kept
-  memory isn't a learning, so it's not found too, as in Cloud. A separate table hides promoted
-  memories from search without a filter on every scan. Updating or deleting a promoted id gets
-  `memory_is_promoted`.
+  datapack's collective memory, as Cloud does. Each is copied into `promoted_memories` with every
+  column of its row but the lemmas (id, text, provenance, role, actor, hash, both dates), the copy
+  commits, and then the memory is deleted through the engine (which also unlinks mem0's entities),
+  so memory search no longer finds it. An id given twice is promoted once. A kept memory isn't a
+  learning, so it's not found, as in Cloud. A separate table hides promoted memories from search
+  without a filter on every scan. Updating or deleting a promoted id gets `memory_is_promoted`.
+- **When the engine fails a delete**, the copy is removed only while the memory is still there: a
+  request cut off after the engine got it may still have deleted it, and then the copy is all
+  that's left (it's reported inserted). With the engine down or starting, the call stops with
+  `engine_unavailable` so the caller retries; any other failure leaves that one a learning, in
+  `not_found_ids`. An error after some ids were done carries `inserted_ids` and `not_found_ids`
+  beside `error` and `detail`. A memory left copied but not deleted (the undo failed too) is
+  finished by promoting it again.
 - **Counts** (`datapack_describe`): `memory_count` is learnings and kept, `learnings_count` the
   learnings, `collective_memory_count` and `shared_knowledge_count` the promoted ones.
 - Promoted memories are text only, not searchable, until milestone 4 (#170) embeds them into the
-  knowledge base.
+  knowledge base; until then their `promoted_to_kb_at` is null.
 - **Provenance**: `memories.connector_id` (`''` for none) beside `agent_id`, `conversation_id`
   and `source`, so every memory records where it came from from day one. Nothing sets it until
   connectors arrive (#194), and replies don't show it yet.
 - **Artifacts**: `artifacts` holds the bytes in the database, once per datapack and SHA-256, up to
   5 MiB (Cloud's limit). `artifact_get` returns them inline as `content_base64`, which AgentK reads
-  as well as Cloud's `local_path`, and records when the file was last read. The bytes move with the
-  database in milestone 7's export, and count toward the 200 MB content target.
+  as well as Cloud's `local_path`, and records when the file was last read. It's annotated
+  read-only as in Cloud: that time is bookkeeping, not a change to the artifact. The bytes move
+  with the database in milestone 7's export, and count toward the 200 MB content target.
 
 ## AgentK's calls (PR 3)
 

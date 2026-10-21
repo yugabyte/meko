@@ -25,6 +25,8 @@ func artifactTools() []*tool {
 			run: artifactPut,
 		},
 		{
+			// Read-only as Cloud annotates it: the one write, the file's last-read time, is
+			// bookkeeping, not a change to the artifact.
 			name: "artifact_get", title: "Get Artifact", kind: readOnly, failCode: "artifact_get_failed",
 			desc: "Read back a file kept with artifact_put, by its content_hash. The bytes come back as " +
 				"content_base64.",

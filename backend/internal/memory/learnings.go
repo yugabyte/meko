@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -31,15 +32,26 @@ type Promotion struct {
 // PromoteMemories moves the given learnings into the datapack's collective memory, as Meko Cloud
 // does: each is copied with its id, text and provenance, then deleted from the memories through
 // the engine, so memory search no longer finds it. One that isn't the local user's learning (kept
-// ones included, as in Cloud) is not found. If the engine can't delete one, its copy is removed
-// and it's reported not found: it stays a learning. The writer is never held while the engine
-// works: the copy commits first.
+// ones included, as in Cloud) is not found. The writer is never held while the engine works: the
+// copy commits first.
+//
+// If the engine fails to delete one, its copy is removed only while the memory is still there (a
+// request cut off after the engine got it may still have deleted it, and then the copy is all that
+// is left). With the engine down or starting, the call stops with that error, so the caller can
+// retry; any other failure leaves that one a learning and reports it not found. On an error, the
+// Promotion returned says what was done before it. A memory copied but not deleted (the undo
+// failed too) is finished by promoting it again.
 func (s *Service) PromoteMemories(ctx context.Context, datapack, agentID string, ids []string) (Promotion, error) {
 	out := Promotion{Inserted: []string{}, Updated: []string{}, NotFound: []string{}}
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return out, err
 	}
+	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
 		_, err := s.st.CopyToPromoted(ctx, datapack, s.userID, id, agentOr(agentID))
 		if errors.Is(err, store.ErrNotFound) {
 			out.NotFound = append(out.NotFound, id)
@@ -48,17 +60,31 @@ func (s *Service) PromoteMemories(ctx context.Context, datapack, agentID string,
 		if err != nil {
 			return out, err
 		}
-		if derr := s.engineErr(s.eng.Delete(ctx, datapack, id)); derr != nil && !errors.Is(derr, ErrNotFound) {
-			if rerr := s.st.DeletePromoted(context.WithoutCancel(ctx), datapack, id); rerr != nil && s.log != nil {
-				s.log.Error("couldn't undo a promotion", "memory_id", id, "error", rerr)
-			}
-			if s.log != nil {
-				s.log.Warn("couldn't promote a memory: the engine didn't delete it", "memory_id", id, "error", derr)
-			}
-			out.NotFound = append(out.NotFound, id)
+		derr := s.engineErr(s.eng.Delete(ctx, datapack, id))
+		if derr == nil || errors.Is(derr, ErrNotFound) {
+			out.Inserted = append(out.Inserted, id)
 			continue
 		}
-		out.Inserted = append(out.Inserted, id)
+		bg := context.WithoutCancel(ctx)
+		rec, gerr := s.st.GetVector(bg, store.Memories, datapack, id)
+		switch {
+		case gerr != nil: // can't tell whether the memory is gone: keep the copy, which loses nothing
+			return out, errors.Join(derr, gerr)
+		case rec == nil: // the engine deleted it after all
+			out.Inserted = append(out.Inserted, id)
+			continue
+		}
+		if rerr := s.st.DeletePromoted(bg, datapack, id); rerr != nil && s.log != nil {
+			s.log.Error("couldn't undo a promotion", "memory_id", id, "error", rerr)
+		}
+		var notReady *engine.NotReadyError
+		if errors.Is(derr, engine.ErrUnavailable) || errors.As(derr, &notReady) || ctx.Err() != nil {
+			return out, derr
+		}
+		if s.log != nil {
+			s.log.Warn("couldn't promote a memory: the engine didn't delete it", "memory_id", id, "error", derr)
+		}
+		out.NotFound = append(out.NotFound, id)
 	}
 	return out, nil
 }

@@ -8,8 +8,9 @@ ALTER TABLE memories ADD COLUMN promotion_action TEXT NOT NULL DEFAULT '';
 -- agent_id, conversation_id and source, every memory records where it came from.
 ALTER TABLE memories ADD COLUMN connector_id TEXT NOT NULL DEFAULT '';
 
--- The datapack's collective memory: memories promoted out of memories, keeping their id, text,
--- provenance and dates. Text only until milestone 4 brings them into the knowledge base.
+-- The datapack's collective memory: memories promoted out of memories, keeping every column of
+-- theirs but the lemmatized text (id, text, provenance, role, actor, hash and both dates), so the
+-- move to Cloud loses nothing. Text only until milestone 4 brings them into the knowledge base.
 CREATE TABLE promoted_memories (
   rowid           INTEGER PRIMARY KEY,
   id              TEXT NOT NULL UNIQUE,          -- the memory's id
@@ -19,9 +20,13 @@ CREATE TABLE promoted_memories (
   conversation_id TEXT NOT NULL DEFAULT '',
   connector_id    TEXT NOT NULL DEFAULT '',
   source          TEXT NOT NULL DEFAULT '',
+  role            TEXT NOT NULL DEFAULT '',
+  actor_id        TEXT NOT NULL DEFAULT '',
   text            TEXT NOT NULL,
+  hash            TEXT NOT NULL DEFAULT '',
   payload         TEXT NOT NULL DEFAULT '{}',    -- the rest of the memory's mem0 payload
   created_at      TEXT NOT NULL,                 -- the memory's
+  updated_at      TEXT NOT NULL,                 -- the memory's
   promoted_at     TEXT NOT NULL,
   promoted_by     TEXT NOT NULL DEFAULT ''       -- the agent that promoted it
 ) STRICT;

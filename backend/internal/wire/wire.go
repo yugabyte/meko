@@ -282,7 +282,7 @@ type PromotedItem struct {
 	AgentID        string  `json:"agent_id,omitempty"`
 	Data           string  `json:"data"`
 	CreatedAt      string  `json:"created_at"`
-	PromotedToKBAt string  `json:"promoted_to_kb_at"`
+	PromotedToKBAt *string `json:"promoted_to_kb_at"` // null until milestone 4 embeds it into the knowledge base
 }
 
 // PromotedList is a page of promoted memories.
@@ -300,8 +300,7 @@ func PromotedListOf(ps []store.Promoted, criteria map[string]any, total, page, p
 	out := PromotedList{Criteria: criteria, PromotedMemories: make([]PromotedItem, len(ps)), Total: total,
 		Page: max(page, 1), PageSize: pageSize, TotalPages: max(1, (total+pageSize-1)/max(pageSize, 1))}
 	for i, p := range ps {
-		it := PromotedItem{ID: p.ID, AgentID: p.AgentID, Data: p.Text, CreatedAt: Time(p.CreatedAt),
-			PromotedToKBAt: Time(p.PromotedAt)}
+		it := PromotedItem{ID: p.ID, AgentID: p.AgentID, Data: p.Text, CreatedAt: Time(p.CreatedAt)}
 		if p.ConversationID != "" {
 			it.ConversationID = &p.ConversationID
 		}
