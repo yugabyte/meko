@@ -14,9 +14,9 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@huggingface/transformers": "4.3.0",
+    "@huggingface/transformers": "4.3.1",
     "better-sqlite3": "file:stubs/better-sqlite3",
-    "compromise": "14.17.0",
+    "compromise": "14.18.0",
     "mem0ai": "3.1.2",
     "natural": "8.1.1"
   },
