@@ -184,6 +184,12 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	if len(strings.TrimSpace(tok)) != 64 {
 		t.Fatalf("token %q", tok)
 	}
+	// A killed server's port file is left behind; with no server, --mcp names the configured port.
+	if err := paths.WriteFile(paths.New(dir).Port, []byte("1\n")); err != nil {
+		t.Fatal(err)
+	}
+	code, mcpOut, _ := run("token", "--data-dir", dir, "--mcp")
+	want(t, "token --mcp with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")

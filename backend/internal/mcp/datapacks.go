@@ -185,11 +185,12 @@ func datapackSearch(ctx context.Context, c *call, a args) (any, error) {
 	sortDatapacks(ds, by)
 	limit = min(max(limit, 1), maxSearchPage)
 	total := len(ds)
-	page := ds[min(offset, total):min(offset+limit, total)]
-	out := map[string]any{"datapacks": datapackRows(page, c.svc.UserID()), "has_more": offset+limit < total,
+	start := min(offset, total) // before adding limit, so a huge cursor can't overflow
+	end := min(start+limit, total)
+	out := map[string]any{"datapacks": datapackRows(ds[start:end], c.svc.UserID()), "has_more": end < total,
 		"next_cursor": "", "total": nil}
-	if offset+limit < total {
-		out["next_cursor"] = strconv.Itoa(offset + limit)
+	if end < total {
+		out["next_cursor"] = strconv.Itoa(end)
 	}
 	if withTotal {
 		out["total"] = total
@@ -213,9 +214,13 @@ func datapackCreate(ctx context.Context, c *call, a args) (any, error) {
 	return map[string]string{"datapack_id": d.ID, "agent_id": memory.DefaultAgentID, "name": d.Name}, nil
 }
 
-// datapackError is a datapack write's error with the codes Cloud's API gives them.
+// datapackError is a datapack write's error with the codes Cloud's API gives them. Cloud's
+// datapack_update and datapack_delete pass on its API's error, so a missing datapack is NOT_FOUND
+// there rather than the datapack_access_denied other tools reply.
 func datapackError(err error) error {
 	switch {
+	case errors.Is(err, memory.ErrNoDatapack):
+		return fail("NOT_FOUND", "No such datapack.")
 	case errors.Is(err, memory.ErrDuplicateName):
 		return fail("CONFLICT", "A datapack with that name already exists.")
 	case errors.Is(err, memory.ErrBadRequest):
@@ -311,10 +316,7 @@ func datapackDelete(ctx context.Context, c *call, a args) (any, error) {
 	}
 	c.rec.DatapackID = id
 	if err = c.svc.DeleteDatapack(ctx, id); err != nil {
-		if errors.Is(err, memory.ErrNoDatapack) {
-			return nil, fail("NOT_FOUND", "No such datapack.")
-		}
-		return nil, err
+		return nil, datapackError(err)
 	}
 	return map[string]string{"message": "datapack deleted"}, nil
 }

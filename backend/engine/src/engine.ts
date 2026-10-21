@@ -67,15 +67,33 @@ export const MAX_LIMIT = 100;
 export const MIN_CANDIDATES = 240;
 /** Most texts one embed call takes. */
 export const MAX_EMBED = 256;
+/**
+ * Most datapacks whose mem0 Memory is kept. The least recently used is dropped past it, so a
+ * deleted datapack's (which no call reaches again) doesn't stay until the engine restarts. A
+ * Memory holds no data of its own: a dropped one is rebuilt on its datapack's next call.
+ */
+export const MAX_DATAPACKS = 256;
 
 export class Engine {
   private readonly memories = new Map<string, Memory>();
 
-  constructor(private readonly embedder: LocalEmbedder) {}
+  constructor(
+    private readonly embedder: LocalEmbedder,
+    private readonly maxDatapacks = MAX_DATAPACKS,
+  ) {}
+
+  /** How many datapacks' Memory objects are kept. */
+  get datapacksKept(): number {
+    return this.memories.size;
+  }
 
   private memory(datapackId: string): Memory {
     let m = this.memories.get(datapackId);
-    if (!m) {
+    if (m) {
+      // Most recently used last: a Map iterates in insertion order.
+      this.memories.delete(datapackId);
+      this.memories.set(datapackId, m);
+    } else {
       m = new Memory({
         version: "v1.1",
         embedder: { provider: PROVIDERS.embedder, config: { embeddingDims: this.embedder.info.dims } },
@@ -88,6 +106,9 @@ export class Engine {
         historyStore: { provider: PROVIDERS.history, config: { datapackId } as Record<string, string> },
       });
       this.memories.set(datapackId, m);
+      if (this.memories.size > this.maxDatapacks) {
+        this.memories.delete(this.memories.keys().next().value!);
+      }
     }
     return m;
   }

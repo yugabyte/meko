@@ -44,6 +44,7 @@ func conversationTools() []*tool {
 				{name: "metadata", typ: "string", nullable: true, desc: "A JSON object, as a string, to keep with it."},
 				{name: "seed", typ: "string", nullable: true,
 					desc: "A stable string for the turn: the same seed is the same turn."},
+				{name: "skip_search_embed", typ: "boolean", hidden: true}, // internal, unadvertised as in Cloud
 				pDatapack,
 			},
 			run: conversationAddMessage,

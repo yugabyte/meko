@@ -156,6 +156,10 @@ func TestClaudeCodesHandshake(t *testing.T) {
 		!strings.Contains(strings.Join(toStrings(schema["required"]), ","), "text") {
 		t.Errorf("memory_add's description: %v", add)
 	}
+	// Cloud's internal arguments are read but not advertised.
+	if obj(obj(names["conversation_add_message"]["inputSchema"])["properties"])["skip_search_embed"] != nil {
+		t.Errorf("conversation_add_message advertises skip_search_embed")
+	}
 }
 
 func toStrings(v any) []string {

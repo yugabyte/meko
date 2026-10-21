@@ -154,7 +154,7 @@ TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` 
 | `src/app.ts` | The embedder, the providers, the API, then the hello; exits when the Go server goes. It retries a failed model load or hello with backoff (1 s up to 60 s, staying `loading` and saying why); only another model already in the store (`MODEL_CHANGED`) leaves it in `error`. It sets umask 077, so the model cache and mem0's config are the user's only. |
 | `src/providers.ts` | `MekoStore`, `MekoHistory`, `NoLLM` and `register()`, which wraps mem0's factories. |
 | `src/embedder.ts`, `src/embedworker.ts` | The worker-thread embedder (mean-pooled, normalized, batches of 32), and a hashing embedder for tests (set only by the CLI's tests, never by an environment variable of the shipped binary). |
-| `src/engine.ts` | One mem0 `Memory` per datapack; verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, prod's reply shape), update, delete, embed. |
+| `src/engine.ts` | One mem0 `Memory` per datapack, the 256 most recently used kept (a dropped one is rebuilt on its next call); verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, prod's reply shape), update, delete, embed. |
 | `src/scoring.ts` | Meko's score: `min((semantic + bm25 + boost) / (1 + [bm25 > 0] + 0.5·[boost > 0]), 1)`. |
 | `src/server.ts` | The API on `engine.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`. It logs routes, statuses and timings only, never an error's message. |
 

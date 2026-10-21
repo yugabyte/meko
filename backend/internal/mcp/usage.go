@@ -50,6 +50,10 @@ func trackTokenUsage(ctx context.Context, c *call, a args) (any, error) {
 		return notRecorded("token counts must be non-negative")
 	}
 	if _, err = c.datapack(ctx, a); err != nil {
+		var te *toolError
+		if errors.As(err, &te) {
+			return notRecorded(te.Code)
+		}
 		return nil, err
 	}
 	c.rec.InputTokens, c.rec.OutputTokens = in, out

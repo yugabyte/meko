@@ -72,6 +72,9 @@ func TestMemoryTools(t *testing.T) {
 
 	wantError(t, e, "memory_delete_all", map[string]any{"conversation_id": "c", "agent_id": "claude_code:a",
 		"run_id": "not-a-conversation"}, "invalid_run_id")
+	// A run_id that's blank only after normalizing doesn't widen the delete to every conversation.
+	wantError(t, e, "memory_delete_all", map[string]any{"conversation_id": "c", "agent_id": "claude_code:a",
+		"run_id": " - "}, "invalid_run_id")
 	ok(t, e, "memory_delete_all", map[string]any{"conversation_id": "c", "agent_id": "claude_code:a"})
 	r = ok(t, e, "memory_get_all", map[string]any{"conversation_id": "c"})
 	if num(r.JSON["total"]) != 1 {
@@ -224,6 +227,16 @@ func TestDatapackTools(t *testing.T) {
 		t.Errorf("search page: %s", r.Text)
 	}
 	wantError(t, e, "datapack_search", with("grant", "viewer"), "invalid_grant")
+	if r = ok(t, e, "datapack_search", with("cursor", "9223372036854775807")); len(arr(r.JSON["datapacks"])) != 0 ||
+		r.JSON["has_more"] != false {
+		t.Errorf("search past the end: %s", r.Text)
+	}
+	// A refused rename changes nothing else it was given.
+	wantError(t, e, "datapack_update", with("datapack_id", id, "name", "default", "conversation_search_opt_out", true),
+		"CONFLICT")
+	if r = ok(t, e, "datapack_describe", with("datapack_id", id)); r.JSON["conversation_search_opt_out"] != false {
+		t.Errorf("opt-out written by a refused update: %s", r.Text)
+	}
 
 	r = ok(t, e, "datapack_update", with("datapack_id", id, "description", "AgentK Local project \"b\""))
 	if r.JSON["message"] != "datapack updated" {
@@ -241,6 +254,9 @@ func TestDatapackTools(t *testing.T) {
 
 	ok(t, e, "datapack_delete", with("datapack_id", id))
 	wantError(t, e, "datapack_describe", with("datapack_id", id), "datapack_access_denied")
+	// Update and delete pass on the API's code for a missing datapack, as Cloud's do.
+	wantError(t, e, "datapack_update", with("datapack_id", id, "description", "x"), "NOT_FOUND")
+	wantError(t, e, "datapack_delete", with("datapack_id", id), "NOT_FOUND")
 	// With the default datapack gone too, a call that names none has nowhere to go.
 	ok(t, e, "datapack_delete", with("datapack_id", e.DatapackID))
 	wantError(t, e, "memory_add", map[string]any{"text": "x", "conversation_id": "c"}, "datapack_id_required")
@@ -260,6 +276,17 @@ func TestTrackTokenUsage(t *testing.T) {
 	r = call(t, e, "track_token_usage", map[string]any{"conversation_id": "c", "name": "x", "input_tokens": -1})
 	if r.JSON["recorded"] != false {
 		t.Errorf("negative: %s", r.Text)
+	}
+	r = call(t, e, "track_token_usage", map[string]any{"conversation_id": "c", "name": "x",
+		"datapack_id": "00000000-0000-0000-0000-000000000000"})
+	if r.JSON["recorded"] != false || r.JSON["error"] != "datapack_access_denied" {
+		t.Errorf("missing datapack: %s", r.Text)
+	}
+	all, _ := e.Store.Calls(context.Background(), "", time.Time{})
+	for _, c := range all {
+		if c.ErrorCode != "" && c.OK {
+			t.Errorf("a call that recorded nothing is logged as ok: %+v", c)
+		}
 	}
 	calls, _ := e.Store.Calls(context.Background(), e.DatapackID, time.Time{})
 	if len(calls) == 0 || calls[0].InputTokens != 120 || calls[0].OutputTokens != 30 {

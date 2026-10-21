@@ -205,6 +205,21 @@ describe("with a store", () => {
     assert.equal(vectors[0].length, 384);
     await assert.rejects(engine.embed({ texts: new Array(257).fill("x") }), (e: HttpError) => e.status === 400);
   });
+
+  test("keeps the most recently used datapacks' Memory, and rebuilds a dropped one", async () => {
+    const small = new Engine(embedder, 2);
+    const add = (dp: string) =>
+      small.add({ datapack_id: dp, user_id: "u", agent_id: "a", messages: [{ role: "user", content: `lru ${dp}` }] });
+    await add("lru-a");
+    await add("lru-b");
+    await small.search({ datapack_id: "lru-a", user_id: "u", query: "lru" }); // a is now newer than b
+    await add("lru-c");
+    assert.equal(small.datapacksKept, 2);
+    // b was dropped; its memories are in the store, so its next call finds them.
+    const { results } = await small.search({ datapack_id: "lru-b", user_id: "u", query: "lru lru-b" });
+    assert.equal(results[0]?.memory, "lru lru-b");
+    assert.equal(small.datapacksKept, 2);
+  });
 });
 
 describe("startUp", () => {

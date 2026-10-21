@@ -86,17 +86,25 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
   unexpected failure is logged and replies with the tool's failure code (`search_failed`,
   `memory_add_failed`, ...) and a generic detail.
 - **Shared rules**, as Cloud's:
-  - An empty `conversation_id` gets `conversation_id_required`, except on `conversation_list`,
-    `memory_search` and `track_token_usage`. Hyphens are stripped.
+  - An empty `conversation_id` gets `conversation_id_required`, with Cloud's exceptions.
+    `conversation_create` and `conversation_list` don't need one. `memory_search` advertises it
+    as required but takes a blank one. The tools that act on a conversation
+    (`conversation_add_message`, `_get`, `_update`, `_delete`) look a blank id up like any other
+    and reply `not_found`. `track_token_usage` replies `{"recorded": false, "error":
+    "conversation_id_required"}`. Hyphens are stripped.
   - A blank `agent_id` is `meko_agent`.
   - A blank `datapack_id` is the default datapack. If the user has deleted it, a call naming
     none gets `datapack_id_required`, as Cloud answers a caller with no default. A datapack that
-    doesn't exist gets `datapack_access_denied`.
+    doesn't exist gets `datapack_access_denied`, except on `datapack_update` and `datapack_delete`,
+    which pass on Cloud's API code, `NOT_FOUND`.
   - Memory ids must be UUIDs (`invalid_memory_id`). One that's missing, someone else's, or
     (for update and delete) another agent's gets `not_found`.
   - With the engine down: `engine_unavailable`, saying why.
 - Every call is recorded in the call log, with its counts and steps and the credential it came in
-  with.
+  with. A call that replied with an error, in-band or in plain text, is recorded as failed, with
+  its code.
+- Cloud's internal arguments (`conversation_add_message`'s `skip_search_embed`) are read but left
+  out of `tools/list`.
 - One SDK server per credential (admin, client, none) is made up front, so a tool knows the
   credential it records without reading the request.
 
@@ -105,10 +113,10 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
 | `context_search` | `{results: {knowledge_base, memory, conversation: {hits, thread}}, token_savings}` | See below. |
 | `memory_add` | `{"results": [{id, memory, event: "ADD", actor_id, role}]}` | Verbatim. `messages_missing`. |
 | `memory_search` | `{"results": [{id, memory, hash, score, raw_similarity_score, created_at, updated_at, user_id, agent_id, run_id, role, metadata}]}` | Every agent's memories. Cosine below 0.2 dropped. `run_id` narrows to a conversation. |
-| `memory_get_all` | `{criteria, memories: [{id, data, agent_id, conversation_id, user_id, created_at, is_mine}], top_k, total, page, page_size, total_pages}` | Newest first, 20 to a page. `promoted: true` lists promoted memories (PR 3). |
+| `memory_get_all` | `{criteria, memories: [{id, data, agent_id, conversation_id, user_id, created_at, is_mine}], top_k, total, page, page_size, total_pages}` | The 20 newest; `total` counts them all. There's no `page` argument, as in Cloud. `promoted: true` lists promoted memories (PR 3). |
 | `memory_get_by_id` | The memory, without a score. | |
 | `memory_update`, `memory_delete_by_id` | `{"message": "Memory updated successfully!"}` / `"... deleted ..."` | The writer's agent only. |
-| `memory_delete_all` | `{"message": "Memories deleted successfully!"}` | One agent's memories; `run_id` must be a 32-hex conversation id (`invalid_run_id`). |
+| `memory_delete_all` | `{"message": "Memories deleted successfully!"}` | One agent's memories; `run_id` must be a 32-hex conversation id (`invalid_run_id`). Only an absent, null or empty `run_id` deletes them all; one that's blank after normalizing (`-`, spaces) is refused, as in Cloud. |
 | `conversation_create` | `{id, agent_id, user_id, app_id: null, run_id, title, metadata, created_at, updated_at}` | The same `session_id` is the same conversation. `invalid_title`, `invalid_metadata`. |
 | `conversation_add_message` | `{status: "accepted", message_id, conversation_id[, conversation_search_skipped]}` | `not_found`, `agent_id_mismatch`. |
 | `conversation_get` | The create shape plus `message_count`, and `messages` with `include_messages`. | The owner agent only. |
@@ -119,7 +127,7 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
 | `datapack_create` | `{datapack_id, agent_id, name}` | 3 to 60 characters, no HTML: `VALIDATION_ERROR`; a taken name: `CONFLICT`. |
 | `datapack_describe` | The row plus `memory_count, learnings_count, collective_memory_count, knowledge_count, knowledge_chunk_count, knowledge_base_file_count, shared_knowledge_count, conversation_count, conversation_search_opt_out` | Knowledge counts are 0 until milestone 4. |
 | `datapack_update` / `_delete` | `{"message": "datapack updated"}` / `"... deleted"` | Update also sets the conversation-search opt-out; nothing to change replies `{"result": "nothing_to_update"}`. |
-| `track_token_usage` | `{"recorded": true}` | Token counts go to the call log. |
+| `track_token_usage` | `{"recorded": true}` | Token counts go to the call log. A missing `conversation_id`, a negative count or a bad datapack replies `{"recorded": false, "error"}`. |
 
 Milestone 4 (#170) adds `knowledgebase_search` and the knowledge-file tools; they aren't in
 `tools/list` until then.

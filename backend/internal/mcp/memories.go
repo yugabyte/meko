@@ -48,8 +48,8 @@ func memoryTools() []*tool {
 		},
 		{
 			name: "memory_get_all", title: "List Memories", kind: readOnly, failCode: "list_failed",
-			desc: "List the datapack's memories, newest first, 20 to a page. Set promoted to list the " +
-				"memories promoted to the datapack's collective memory instead.",
+			desc: "List the datapack's 20 newest memories; total says how many it holds. Set promoted to " +
+				"list the memories promoted to the datapack's collective memory instead.",
 			params: []param{
 				pConversation, pAgent, pDatapack,
 				{name: "run_id", typ: "string", nullable: true, desc: "Ignored; kept for clients that send it."},
@@ -108,10 +108,12 @@ func memoryAdd(ctx context.Context, c *call, a args) (any, error) {
 		return nil, err
 	}
 	if !ok {
+		c.rec.ErrorCode = "invalid_metadata"
 		return plainText("Error: metadata must be a valid JSON string."), nil
 	}
 	var msgs []engine.Message
 	if present, ok := a.jsonValue("messages", &msgs); !ok {
+		c.rec.ErrorCode = "invalid_messages"
 		return plainText("Error: messages must be a valid JSON array of {role, content} objects."), nil
 	} else if !present {
 		msgs = nil
@@ -275,12 +277,14 @@ func memoryDeleteAll(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	run, err := a.str("run_id")
+	raw, err := a.str("run_id")
 	if err != nil {
 		return nil, err
 	}
-	run = normalizeID(run)
-	if a.present("run_id") && run != "" && !isHex32(run) {
+	// As in Cloud, only an absent, null or empty run_id deletes them all. One given but blank after
+	// normalizing ("-", "  ") is refused, so it can't widen the delete to every conversation.
+	run := normalizeID(raw)
+	if raw != "" && !isHex32(run) {
 		return nil, fail("invalid_run_id", "run_id must be a conversation id: 32 lowercase hex chars, hyphens "+
 			"optional. Omit run_id to delete them all deliberately.")
 	}

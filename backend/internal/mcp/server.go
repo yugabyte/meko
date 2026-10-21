@@ -134,7 +134,8 @@ func (o Options) result(t *tool, c *call, reply any, err error) *sdk.CallToolRes
 	err = serviceError(err)
 	switch {
 	case err == nil:
-		c.rec.OK = true
+		// A few tools reply with their error rather than returning it, and set the code.
+		c.rec.OK = c.rec.ErrorCode == ""
 	case errors.As(err, &te):
 		c.rec.ErrorCode = te.Code
 		reply = te

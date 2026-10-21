@@ -239,8 +239,12 @@ func runToken(l paths.Layout, mcp bool, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, tok)
 		return exitOK
 	}
-	port, err := readInt(l.Port)
-	if err != nil {
+	// Only a running server's port file is current: one killed rather than stopped leaves its file.
+	var port int
+	if up {
+		port, err = readInt(l.Port)
+	}
+	if !up || err != nil {
 		cfg, cerr := config.Load(l.Config, os.Getenv, config.Overrides{})
 		if cerr != nil {
 			return fail(stderr, cerr)

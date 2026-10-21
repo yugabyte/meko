@@ -28,6 +28,7 @@ type param struct {
 	name, typ, desc string // typ: string, integer, boolean or array (of strings)
 	required        bool
 	nullable        bool // anyOf [type, null], default null, as Cloud advertises optional strings
+	hidden          bool // read, but left out of the input schema (Cloud's internal arguments)
 	def             any
 }
 
@@ -172,6 +173,9 @@ func (t *tool) schema() map[string]any {
 	props := map[string]any{}
 	required := []string{}
 	for _, p := range t.params {
+		if p.hidden {
+			continue
+		}
 		var s map[string]any
 		switch {
 		case p.typ == "array":

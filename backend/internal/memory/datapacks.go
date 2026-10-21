@@ -80,7 +80,8 @@ func (s *Service) CreateDatapack(ctx context.Context, name, description string) 
 }
 
 // UpdateDatapack changes what's given of a datapack's name, description and conversation-search
-// opt-out (nil leaves it).
+// opt-out (nil leaves it). The rename goes first: it's the part that can be refused (a taken
+// name), and an opt-out written before a refusal would drop new turns from search unannounced.
 func (s *Service) UpdateDatapack(ctx context.Context, id string, name, description *string, optOut *bool) (
 	store.Datapack, error) {
 	if name != nil {
@@ -90,19 +91,22 @@ func (s *Service) UpdateDatapack(ctx context.Context, id string, name, descripti
 		}
 		name = &n
 	}
-	if optOut != nil {
-		if err := s.SetConversationSearchOptOut(ctx, id, *optOut); err != nil {
-			return store.Datapack{}, err
-		}
-	}
 	d, err := s.st.UpdateDatapack(ctx, id, name, description)
 	switch {
 	case errors.Is(err, store.ErrNoDatapack):
 		return d, ErrNoDatapack
 	case errors.Is(err, store.ErrDuplicateName):
 		return d, ErrDuplicateName
+	case err != nil:
+		return d, err
 	}
-	return d, err
+	if optOut != nil {
+		if err = s.SetConversationSearchOptOut(ctx, id, *optOut); err != nil {
+			return d, err
+		}
+		d.ConversationSearchOptOut = *optOut
+	}
+	return d, nil
 }
 
 // DeleteDatapack deletes a datapack and everything in it.
