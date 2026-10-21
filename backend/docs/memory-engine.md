@@ -49,8 +49,8 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 | **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded, and the runtime milestone 4's cross-encoder needs. mem0-ts has no local transformers.js embedder, so the engine adds one. Changing the model needs re-embedding, which is deferred, so an engine reporting another model is refused. |
 | **No LLM:** mem0 always builds one, so the engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction is deferred. |
 | **Verbatim adds link no entities** | As in prod and upstream mem0: entities are linked for extracted memories (and on a text update). Search still queries the entity store and scores the boost. |
-| **Conversation and message ids are prod's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback; prod's ids keep the Cloud move lossless. Ids are unique per datapack, and the first agent owns the conversation. |
-| **Conversation search keeps prod's shape with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, the top 3 conversations whole (50 turns at most) | Prod's 0.35 suits its embedding models. With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. No reranker until milestone 4 (`rerank_score` is null). |
+| **Conversation and message ids are prod's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback; prod's ids keep the Cloud move lossless. Ids are unique per datapack, and the first agent owns the conversation: another agent creating one with the same session id is refused (`ErrAgentMismatch`) rather than handed a conversation it can't add to. |
+| **Conversation search keeps prod's shape with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, and a thread of the top 3 conversations' most recent searchable turns (50 in all, oldest first) | Prod's 0.35 suits its embedding models. With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. No reranker until milestone 4 (`rerank_score` is null). |
 | **The engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
 | **Meko Local finds its own Node**: `[engine] node` (or `MEKO_LOCAL_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko-local isn't installed in AgentK's app folder). Release packaging of Node is milestone 5. |
 | **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new engine. The engine also exits on its own when its parent changes or `store.sock` goes away. |
@@ -170,9 +170,16 @@ them (240 nearest memories and 240 keyword hits for the default limit of 10).
   `UpdateConversation`, `DeleteConversation`, `SetConversationSearchOptOut`,
   `SearchConversations`: what milestone 3's conversation tools and `context_search` call.
 - A turn is searchable when its input or output has 40 characters or more, its conversation has
-  a datapack, the datapack hasn't opted out, and the caller didn't ask to skip it. Adding a turn
-  never waits on the engine: its chunks are stored unembedded, and `RunEmbedder` (started by
-  `serve`) embeds them right away, and every 30 s catches any the engine missed while down.
+  a datapack, the datapack hasn't opted out, and the caller didn't ask to skip it; the reply's
+  `conversation_search_skipped` names which of the last three kept a substantive turn out (a short
+  turn is left out silently, as in prod). Adding a turn never waits on the engine: its chunks are
+  stored unembedded, and `RunEmbedder` (started by `serve`) embeds them right away, and every 30 s
+  catches any the engine missed while down (logged at debug while the engine is down or loading,
+  as a warning for any other failure).
+- Opting out also keeps turns that were still waiting for their vectors out of search: the store
+  drops a chunk whose datapack opted out when its vector arrives. A chunk's rowid is never reused
+  (`AUTOINCREMENT`), so a vector computed for a chunk deleted meanwhile can't land on a newer one.
+- A missing conversation is `ErrNoConversation` ("no such conversation").
 - Deleting a conversation keeps the memories that name it, as in prod.
 
 ## Measured
@@ -185,8 +192,30 @@ On an 8-core Linux x64 dev server, with MiniLM q8 on transformers.js:
   adds 1 to the divisor): a paraphrase with cosine 0.61 scored 0.33. With 200 more memories, rare
   terms carry real weight: the same paraphrase scored 0.78 and an exact identifier
   (`MIN_MEMORY_SCORE`, cosine 0.81) 0.90, above AgentK's 0.75 recall cut.
-- At 200 MB of content in one datapack: measured with conversation search, in the last PR of the
-  stack (`make bench`).
+- At 200 MB of content in one datapack (`make bench`: 50 MB of memories, about 210k, and 150 MB of
+  turns, about 225k chunks, with random vectors and Zipf-distributed words; searches through the
+  real engine and model):
+
+  | Search | p50 | p95 |
+  |---|---|---|
+  | Memory search (limit 10) | 771 ms | 1,072 ms |
+  | of which: vector scan (240 candidates) | 419 ms | 464 ms |
+  | of which: keyword search | 337 ms | 496 ms |
+  | of which: embedding the query | 7 ms | 15 ms |
+  | Conversation search (hits in 3 conversations, a full 50-turn thread) | 230 ms | 256 ms |
+
+  These were measured on a shared host (load average about 4 on its 8 cores). An earlier run on
+  the quiet host measured the same store parts at 390 ms and 226 ms p50, and memory search at
+  664 ms p50 and 772 ms p95. Each conversation search's query has chunks planted near it, so the
+  thread is assembled every time.
+
+  This misses the 300 ms first proposed for memory search. sqlite-vec 0.1.9 scans every vector of
+  the partition, at about 1.1 ms per 1,000 (int8 and bit quantization measured no faster), so at
+  this size the scan alone is most of it; a datapack of 20k memories scans in about 25 ms. Below
+  this would take an ANN index (sqlite.org's vec1, for one) or smaller partitions. Keyword search
+  drops query terms in half or more of all rows: FTS5's `bm25()` weighs them at 1e-6, and
+  matching them made every row a candidate (366 ms before, 138 ms after, measured over 200k
+  memories in the store alone).
 
 ## Test plan
 
@@ -196,7 +225,8 @@ In `make test` on Linux and macOS (CI caches the model):
   and without pushed-down filters, keyword search (positive scores, quoting, datapack isolation,
   dropped common terms), the model lock, every delete path taking vectors along. With #182:
   conversations and turns (idempotence, seed dedupe, null datapacks), chunk search excluding a
-  conversation, the opt-out.
+  conversation, the opt-out (a waiting chunk dropped when its vector arrives), chunk rowids never
+  reused, reading a conversation's newest turns.
 - **storeapi** (#179): the token, each route's shapes and refusals, the hello.
 - **engine** (#180; `tsx --test`, with a fake store): the factory override, Meko scoring, prod's reply
   shape, verbatim adds with role and actor and no entities, refusing extraction, update, delete;
@@ -209,4 +239,7 @@ In `make test` on Linux and macOS (CI caches the model):
   engine; no memory text in `engine.log`; `serve` starting the engine and `stop` stopping it, and
   `stop` killing a hung serve's recorded children, and `stop` and the next `serve` killing those
   of a serve killed from outside; a recorded pid now held by another group leader left alone; get,
-  update and delete refusing another user's memory; a crashed engine's status.
+  update and delete refusing another user's memory; a crashed engine's status. For conversations:
+  another agent's session refused, each `conversation_search_skipped` reason, and the thread (three
+  conversations, 50 turns, the newest of a conversation past 1000 turns, oldest first, the cutoff
+  from the options).

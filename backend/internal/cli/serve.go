@@ -159,7 +159,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	sup := supervisor.New(log)
 	noEngine := startEngine(sup, l, cfg, internalToken, log)
 	svc := memory.New(st, engine.NewClient(l.EngineSock, internalToken), memory.Options{
-		UserID: userID, Log: log, NoEngine: noEngine, EngineChild: func() (supervisor.Status, bool) {
+		UserID: userID, Log: log, NoEngine: noEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
+		EngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
 				if c.Name == engine.Name {
 					return c, true
@@ -168,6 +169,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			return supervisor.Status{}, false
 		},
 	})
+	// Embeds turns for conversation search as they arrive, and any the engine missed while down.
+	embedCtx, stopEmbedder := context.WithCancel(context.Background())
+	embedderDone := make(chan struct{})
+	go func() {
+		defer close(embedderDone)
+		svc.RunEmbedder(embedCtx)
+	}()
 
 	srv := server.New(server.Options{
 		Info: server.Info{
@@ -192,6 +200,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err := srv.Shutdown(drain); err != nil {
 		log.Warn("requests didn't finish in time", "error", err)
 	}
+	stopEmbedder()
+	<-embedderDone
 	stop, cancelStop := context.WithTimeout(context.Background(), childStopTimeout)
 	defer cancelStop()
 	if err := sup.Stop(stop); err != nil {

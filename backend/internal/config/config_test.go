@@ -100,3 +100,25 @@ func TestEngineSettings(t *testing.T) {
 		t.Fatalf("env over the file: %+v %v", c.Engine, err)
 	}
 }
+
+func TestConversationSearchDistance(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		file string
+		want float64
+		ok   bool
+	}{
+		{"", 0, true},
+		{"[conversation_search]\nmax_distance = 0.4\n", 0.4, true},
+		{"[conversation_search]\nmax_distance = 3\n", 0, false},
+	} {
+		path := filepath.Join(dir, "config.toml")
+		if err := os.WriteFile(path, []byte(c.file), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(path, func(string) string { return "" }, Overrides{})
+		if c.ok != (err == nil) || c.ok && got.ConversationSearch.MaxDistance != c.want {
+			t.Errorf("%q: %v %v", c.file, got.ConversationSearch, err)
+		}
+	}
+}

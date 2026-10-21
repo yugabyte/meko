@@ -19,7 +19,7 @@ conversations). The rules for the whole repo are in the root [AGENTS.md](../AGEN
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
-| `internal/memory/` | The service milestone 3's MCP and REST will call: memories through the engine (conversations and conversation search come next). |
+| `internal/memory/` | The service milestone 3's MCP and REST will call: memories (through the engine), conversations, conversation search, and the sweep that embeds turns. |
 | `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko Local's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (API keys come with MCP). |
 | `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
@@ -37,6 +37,7 @@ make build                                          # bin/meko-local
 make engine                                         # npm ci (when the lockfile changes) and build engine/dist
 make test                                           # builds the engine, then go test -race and the engine's tests
 make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the engine
+make bench                                          # the search budget at 200 MB (minutes; not in CI)
 ```
 
 It needs Go 1.25 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum)
