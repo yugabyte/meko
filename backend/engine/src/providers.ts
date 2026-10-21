@@ -22,15 +22,31 @@ export const PROVIDERS = { store: "meko_store", history: "meko_history", embedde
 
 const enc = encodeURIComponent;
 
+/**
+ * mem0's Memory.search (3.1.2) asks the store for max(topK × 4, 60) semantic and keyword candidates,
+ * ranks them by its own score and keeps topK. The engine rescores mem0's results, so a datapack's
+ * collection returns only topK / 4 of what it's asked for: then mem0's candidates are exactly the
+ * topK it returns, it cuts none, and Meko's score picks from all of them. The entity collection is
+ * searched as asked. (Only Memory.search searches a datapack's collection while extraction is off.)
+ */
+export const MEM0_OVERFETCH = 4;
+
 /** A mem0 vector store whose collection is a datapack ("<id>") or its entities ("<id>_entities"). */
 export class MekoStore implements VectorStore {
   private readonly base: string;
+  private readonly memories: boolean;
 
   constructor(
     private readonly store: StoreClient,
     collectionName: string,
   ) {
     this.base = `/v1/collections/${enc(collectionName)}`;
+    this.memories = !collectionName.endsWith("_entities");
+  }
+
+  /** How many candidates to fetch when mem0 asks for topK: see MEM0_OVERFETCH. */
+  private candidates(topK: number): number {
+    return this.memories ? Math.ceil(topK / MEM0_OVERFETCH) : topK;
   }
 
   async insert(vectors: number[][], ids: string[], payloads: Record<string, any>[]): Promise<void> {
@@ -40,7 +56,7 @@ export class MekoStore implements VectorStore {
   async search(query: number[], topK = 10, filters?: SearchFilters): Promise<VectorStoreResult[]> {
     const r = await this.store.request<{ results: VectorStoreResult[] }>("POST", `${this.base}/search`, {
       vector: query,
-      top_k: topK,
+      top_k: this.candidates(topK),
       filters: filters ?? {},
     });
     return r.results;
@@ -49,7 +65,7 @@ export class MekoStore implements VectorStore {
   async keywordSearch(query: string, topK = 10, filters?: SearchFilters): Promise<VectorStoreResult[] | null> {
     const r = await this.store.request<{ results: VectorStoreResult[] }>("POST", `${this.base}/keyword-search`, {
       query,
-      top_k: topK,
+      top_k: this.candidates(topK),
       filters: filters ?? {},
     });
     return r.results;

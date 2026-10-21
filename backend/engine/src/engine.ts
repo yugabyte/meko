@@ -4,7 +4,7 @@
 import { Memory } from "mem0ai/oss";
 
 import type { LocalEmbedder } from "./embedder.js";
-import { PROVIDERS } from "./providers.js";
+import { MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
 import { mekoScore, type ScoreDetails } from "./scoring.js";
 
 /** A failure with an HTTP status and a code, for the engine API to reply with. */
@@ -63,6 +63,8 @@ export interface MemoryResult {
 
 /** Most results one search returns. */
 export const MAX_LIMIT = 100;
+/** Fewest memories a search rescores: the nearest by cosine, and as many by keyword. */
+export const MIN_CANDIDATES = 240;
 /** Most texts one embed call takes. */
 export const MAX_EMBED = 256;
 
@@ -93,7 +95,8 @@ export class Engine {
   /**
    * Stores each non-system message as a memory, verbatim, as prod's memory_add does: with its role,
    * the speaker's name as actor_id, and the conversation it came from. No entities are linked
-   * (mem0 links them only for extracted memories).
+   * (mem0 links them only for extracted memories). System messages and blank ones are left out,
+   * as mem0 leaves them out; a message that isn't {role, content} strings refuses the request.
    */
   async add(req: AddRequest): Promise<{ results: Array<Record<string, unknown>> }> {
     requireIds(req);
@@ -103,11 +106,15 @@ export class Engine {
     if (!Array.isArray(req.messages) || req.messages.length === 0) {
       throw new HttpError(400, "BAD_REQUEST", "messages must be a non-empty list");
     }
+    for (const m of req.messages) {
+      if (typeof m !== "object" || m === null || typeof m.role !== "string" || typeof m.content !== "string") {
+        throw new HttpError(400, "BAD_REQUEST", "each message must have a role and a content string");
+      }
+    }
     const mem = this.memory(req.datapack_id);
     const results: Array<Record<string, unknown>> = [];
     for (const m of req.messages) {
-      if (!m || typeof m.role !== "string" || typeof m.content !== "string" || m.role === "system") continue;
-      if (m.content.trim() === "") continue;
+      if (m.role === "system" || m.content.trim() === "") continue;
       const metadata: Record<string, unknown> = {
         ...(req.metadata ?? {}),
         role: m.role,
@@ -129,20 +136,24 @@ export class Engine {
 
   /**
    * mem0's hybrid search (semantic candidates, BM25 and entity boosts), rescored the way Meko
-   * scores: each memory divided by what it earned. mem0 is asked for its whole candidate pool so
-   * the rescoring, not upstream's ranking, picks the top results.
+   * scores: each memory divided by what it earned. mem0 is asked for as many results as it has
+   * candidates (the store returns topK of the 4 × topK mem0 asks it for: see MEM0_OVERFETCH), so
+   * mem0 cuts nothing and the rescoring, not upstream's ranking, picks the top results.
    */
   async search(req: SearchRequest): Promise<{ results: MemoryResult[] }> {
     requireIds(req);
     if (typeof req.query !== "string" || req.query.trim() === "") {
       throw new HttpError(400, "BAD_REQUEST", "query must be a non-empty string");
     }
+    if (req.limit !== undefined && (typeof req.limit !== "number" || !Number.isFinite(req.limit))) {
+      throw new HttpError(400, "BAD_REQUEST", "limit must be a number");
+    }
     const limit = Math.min(Math.max(Math.trunc(req.limit ?? 10), 1), MAX_LIMIT);
     const filters: Record<string, string> = { user_id: req.user_id };
     if (req.agent_id) filters.agent_id = req.agent_id;
     if (req.conversation_id) filters.meko_conversation_id = req.conversation_id;
     const r = await this.memory(req.datapack_id).search(req.query, {
-      topK: Math.max(limit * 4, 60),
+      topK: Math.max(limit * MEM0_OVERFETCH * 4, MIN_CANDIDATES),
       filters,
       explain: true,
     });

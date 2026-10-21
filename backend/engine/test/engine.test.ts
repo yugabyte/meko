@@ -1,15 +1,21 @@
 process.env.MEM0_TELEMETRY = "false";
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { EmbedderFactory, HistoryManagerFactory, LLMFactory, VectorStoreFactory } from "mem0ai/oss";
 
+import { startUp } from "../src/app.js";
 import { HashEmbedder } from "../src/embedder.js";
 import { Engine, HttpError, toResult } from "../src/engine.js";
 import { MekoHistory, MekoStore, NoLLM, PROVIDERS, register } from "../src/providers.js";
 import { mekoScore } from "../src/scoring.js";
-import { StoreClient } from "../src/storeclient.js";
+import { startServer, type Health } from "../src/server.js";
+import { StoreClient, StoreError } from "../src/storeclient.js";
 import { startFakeStore, type FakeStore } from "./fakestore.js";
 
 describe("mekoScore", () => {
@@ -129,6 +135,15 @@ describe("with a store", () => {
     assert.equal(fake.history.filter((h) => h.action === "ADD").length, 2);
   });
 
+  test("refuses a message that isn't {role, content} strings", async () => {
+    for (const messages of [[{ role: "user", content: [{ type: "text", text: "x" }] }], [null], ["x"]]) {
+      await assert.rejects(
+        engine.add({ datapack_id: "dp1", user_id: "u", messages: messages as any }),
+        (e: HttpError) => e.status === 400,
+      );
+    }
+  });
+
   test("refuses extraction", async () => {
     await assert.rejects(
       engine.add({ datapack_id: "dp1", user_id: "u", messages: [{ role: "user", content: "x" }], infer: true }),
@@ -157,6 +172,21 @@ describe("with a store", () => {
     assert.ok(top.score! > top.raw_similarity_score! / 2);
     const other = await engine.search({ datapack_id: "dp2", user_id: "other", query: "rate limit" });
     assert.equal(other.results.length, 0, "another user's memories");
+    await assert.rejects(
+      engine.search({ datapack_id: "dp2", user_id: "u", query: "rate", limit: "abc" as any }),
+      (e: HttpError) => e.status === 400,
+    );
+  });
+
+  test("search rescores all of mem0's candidates: mem0 cuts none", async () => {
+    fake.requests.length = 0;
+    await engine.search({ datapack_id: "dp2", user_id: "u", query: "rate limit", limit: 10 });
+    const asked = fake.requests.filter((r) => r.path.endsWith("search")).map((r) => [r.path, r.body.top_k]);
+    assert.deepEqual(asked, [
+      ["/v1/collections/dp2/search", 240],
+      ["/v1/collections/dp2/keyword-search", 240],
+      ["/v1/collections/dp2_entities/search", 500], // entities are searched as mem0 asks
+    ]);
   });
 
   test("update and delete go through mem0, and a missing id is a 404", async () => {
@@ -174,5 +204,91 @@ describe("with a store", () => {
     assert.equal(vectors.length, 2);
     assert.equal(vectors[0].length, 384);
     await assert.rejects(engine.embed({ texts: new Array(257).fill("x") }), (e: HttpError) => e.status === 400);
+  });
+});
+
+describe("startUp", () => {
+  const info = { provider: "test", model: "m", dims: 2 };
+
+  test("retries a failed load or hello until it passes", async () => {
+    let loads = 0;
+    let hellos = 0;
+    const health: Health = { state: "loading", embedder: info };
+    const embedder = {
+      info,
+      ready: async () => {
+        if (++loads === 1) throw new Error("offline");
+      },
+    };
+    await startUp(
+      embedder,
+      async () => {
+        if (++hellos === 1) throw new StoreError(500, "INTERNAL_ERROR", "busy");
+      },
+      health,
+      1,
+    );
+    assert.deepEqual([loads, hellos, health.state, health.error], [3, 2, "ready", undefined]);
+  });
+
+  test("stops at another model in the store, saying why", async () => {
+    const health: Health = { state: "loading", embedder: info };
+    await startUp(
+      { info, ready: async () => {} },
+      async () => {
+        throw new StoreError(409, "MODEL_CHANGED", "the store holds vectors from another model");
+      },
+      health,
+      1,
+    );
+    assert.equal(health.state, "error");
+    assert.match(health.error!, /another model/);
+  });
+});
+
+describe("the API", () => {
+  let fake: FakeStore;
+  let server: http.Server;
+  let socket: string;
+
+  before(async () => {
+    fake = await startFakeStore();
+    const embedder = new HashEmbedder();
+    register(new StoreClient(fake.socket, fake.token), embedder);
+    socket = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mk-")), "engine.sock");
+    const health: Health = { state: "ready", embedder: embedder.info };
+    server = await startServer(socket, "tok", new Engine(embedder), () => health, () => {});
+  });
+  after(async () => {
+    server.close();
+    await fake.close();
+  });
+
+  const post = (route: string, body: string | Buffer) =>
+    new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const req = http.request(
+        { socketPath: socket, path: route, method: "POST", headers: { authorization: "Bearer tok" } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => resolve({ status: res.statusCode!, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+        },
+      );
+      req.on("error", reject);
+      req.end(body);
+    });
+
+  test("a body that isn't a JSON object is a 400", async () => {
+    for (const body of ["null", "[]", "3", "{"]) {
+      const r = await post("/v1/search", body);
+      assert.equal(r.status, 400, body);
+      assert.equal(r.body.error.code, "BAD_REQUEST");
+    }
+  });
+
+  test("a body over the limit gets its 413", async () => {
+    const r = await post("/v1/embed", Buffer.alloc(9 << 20, 0x20));
+    assert.equal(r.status, 413);
+    assert.equal(r.body.error.code, "PAYLOAD_TOO_LARGE");
   });
 });

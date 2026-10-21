@@ -20,55 +20,81 @@ export interface LocalEmbedder extends Embedder {
   close(): Promise<void>;
 }
 
-/** The default model: 384 dimensions, 8-bit quantized (about 23 MB). */
-export const DEFAULT_MODEL = { id: "Xenova/all-MiniLM-L6-v2", dtype: "q8", dims: 384 };
+/**
+ * The default model: 384 dimensions, 8-bit quantized (about 23 MB), at a pinned commit of its
+ * Hugging Face repo so every install downloads the same weights. The commit is part of the name the
+ * store's model lock compares.
+ */
+export const DEFAULT_MODEL = {
+  id: "Xenova/all-MiniLM-L6-v2",
+  revision: "751bff37182d3f1213fa05d7196b954e230abad9",
+  dtype: "q8",
+  dims: 384,
+};
 
 /** Texts per call to the model. */
 const BATCH = 32;
 
 type Pending = { resolve: (v: number[][]) => void; reject: (e: Error) => void };
 
-/** The local model, in a worker thread. */
+/** The local model, in a worker thread. A worker that failed is replaced on the next ready(). */
 export class WorkerEmbedder implements LocalEmbedder {
   readonly info: EmbedderInfo;
-  private readonly worker: Worker;
-  private readonly loaded: Promise<void>;
+  private worker!: Worker;
+  private loaded!: Promise<void>;
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
   private failure?: Error;
 
-  constructor(cacheDir: string, model = DEFAULT_MODEL) {
-    this.info = { provider: "transformers.js", model: `${model.id}@${model.dtype}`, dims: model.dims };
-    this.worker = new Worker(new URL("./embedworker.js", import.meta.url), {
-      workerData: { cacheDir, model: model.id, dtype: model.dtype },
+  constructor(
+    private readonly cacheDir: string,
+    private readonly model = DEFAULT_MODEL,
+  ) {
+    this.info = {
+      provider: "transformers.js",
+      model: `${model.id}@${model.revision}:${model.dtype}`,
+      dims: model.dims,
+    };
+    this.start();
+  }
+
+  private start(): void {
+    this.failure = undefined;
+    const { cacheDir, model } = this;
+    const worker = new Worker(new URL("./embedworker.js", import.meta.url), {
+      workerData: { cacheDir, model: model.id, revision: model.revision, dtype: model.dtype },
     });
+    this.worker = worker;
     this.loaded = new Promise((resolve, reject) => {
-      this.worker.on("message", (m: { type: string; id?: number; vectors?: number[][]; message?: string }) => {
+      worker.on("message", (m: { type: string; id?: number; vectors?: number[][]; message?: string }) => {
         if (m.type === "ready") return resolve();
-        if (m.type === "load-error") {
-          this.failure = new Error(m.message);
-          return reject(this.failure);
-        }
+        if (m.type === "load-error") return this.fail(worker, new Error(m.message), reject);
         const p = this.pending.get(m.id!);
         if (!p) return;
         this.pending.delete(m.id!);
         if (m.type === "vectors") p.resolve(m.vectors!);
         else p.reject(new Error(m.message));
       });
-      this.worker.on("error", (e) => this.fail(e, reject));
-      this.worker.on("exit", (code) => this.fail(new Error(`the embedding worker exited (${code})`), reject));
+      worker.on("error", (e) => this.fail(worker, e, reject));
+      worker.on("exit", (code) => this.fail(worker, new Error(`the embedding worker exited (${code})`), reject));
     });
     this.loaded.catch(() => undefined); // read through ready()
   }
 
-  private fail(e: Error, reject: (e: Error) => void): void {
+  private fail(worker: Worker, e: Error, reject: (e: Error) => void): void {
+    reject(e);
+    if (worker !== this.worker) return; // a replaced worker's exit
     this.failure ??= e;
-    reject(this.failure);
     for (const p of this.pending.values()) p.reject(this.failure);
     this.pending.clear();
   }
 
+  /** Waits for the model, first replacing a worker that failed (a download that failed offline). */
   ready(): Promise<void> {
+    if (this.failure) {
+      void this.worker.terminate();
+      this.start();
+    }
     return this.loaded;
   }
 
@@ -77,7 +103,7 @@ export class WorkerEmbedder implements LocalEmbedder {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    await this.loaded;
+    await this.ready();
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i += BATCH) {
       out.push(...(await this.call(texts.slice(i, i + BATCH))));

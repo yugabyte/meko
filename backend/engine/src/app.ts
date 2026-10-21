@@ -10,6 +10,9 @@ import { StoreClient, StoreError } from "./storeclient.js";
 
 /** How often the engine checks that the Go server is still there. */
 const PARENT_CHECK_MS = 1000;
+/** The first and the longest wait between tries at loading the model and saying hello. */
+const RETRY_MIN_MS = 1000;
+const RETRY_MAX_MS = 60_000;
 
 /** One JSON line per event on stderr, which the supervisor sends to logs/engine.log. Ids and counts only. */
 export function log(msg: string, fields: Record<string, unknown> = {}): void {
@@ -37,12 +40,14 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
 
   const health: Health = { state: "loading", embedder: embedder.info };
   const server = await startServer(engineSocket, token, engine, () => health, log);
+  const ours = fs.statSync(engineSocket).ino;
   log("engine listening", { embedder: embedder.info });
 
   const stop = async (why: string) => {
     log("engine stopping", { why });
     server.close();
-    fs.rmSync(engineSocket, { force: true });
+    // Only our own socket: a stale engine stopping late mustn't unlink its successor's.
+    if (fs.statSync(engineSocket, { throwIfNoEntry: false })?.ino === ours) fs.rmSync(engineSocket, { force: true });
     await embedder.close();
     process.exit(0);
   };
@@ -57,15 +62,38 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
     if (process.ppid !== parent || missing >= 3) void stop("the Go server is gone");
   }, PARENT_CHECK_MS).unref();
 
-  try {
-    await embedder.ready();
-    await store.request("POST", "/v1/engine/hello", embedder.info);
-    health.state = "ready";
-    log("engine ready", { embedder: embedder.info });
-  } catch (e) {
-    // Stay up and say why: the supervisor would only restart into the same failure.
-    health.state = "error";
-    health.error = e instanceof StoreError || e instanceof Error ? e.message : String(e);
-    log("engine can't start", { error: e instanceof StoreError ? e.code : (e as Error).name });
+  await startUp(embedder, () => store.request("POST", "/v1/engine/hello", embedder.info), health);
+}
+
+/**
+ * Loads the model and says hello, retrying what can pass on its own: the store not answering yet,
+ * a busy writer, a model download that failed offline. A different model already in the store
+ * won't, so that one is an error until the user re-embeds.
+ */
+export async function startUp(
+  embedder: Pick<LocalEmbedder, "ready" | "info">,
+  hello: () => Promise<unknown>,
+  health: Health,
+  firstWait = RETRY_MIN_MS,
+): Promise<void> {
+  for (let wait = firstWait; ; wait = Math.min(wait * 2, RETRY_MAX_MS)) {
+    try {
+      await embedder.ready();
+      await hello();
+      health.state = "ready";
+      delete health.error;
+      log("engine ready", { embedder: embedder.info });
+      return;
+    } catch (e) {
+      health.error = e instanceof Error ? e.message : String(e);
+      const code = e instanceof StoreError ? e.code : (e as Error).name;
+      if (e instanceof StoreError && e.code === "MODEL_CHANGED") {
+        health.state = "error";
+        log("engine can't start", { error: code });
+        return;
+      }
+      log("engine not ready; retrying", { error: code, retry_ms: wait });
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
 }

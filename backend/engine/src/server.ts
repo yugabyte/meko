@@ -88,25 +88,31 @@ export function startServer(
   });
 }
 
-function readJSON(req: http.IncomingMessage): Promise<unknown> {
+/** The request's JSON body, which must be an object. */
+function readJSON(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (c: Buffer) => {
+      if (size > MAX_BODY) return; // refused: the rest is read and dropped, so the 413 gets through
       size += c.length;
       if (size > MAX_BODY) {
-        reject(new HttpError(413, "PAYLOAD_TOO_LARGE", "request body too large"));
-        req.destroy();
-        return;
+        chunks.length = 0;
+        return reject(new HttpError(413, "PAYLOAD_TOO_LARGE", "request body too large"));
       }
       chunks.push(c);
     });
     req.on("end", () => {
+      let body: unknown;
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
       } catch {
-        reject(new HttpError(400, "BAD_REQUEST", "the body isn't JSON"));
+        return reject(new HttpError(400, "BAD_REQUEST", "the body isn't JSON"));
       }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        return reject(new HttpError(400, "BAD_REQUEST", "the body must be a JSON object"));
+      }
+      resolve(body as Record<string, unknown>);
     });
     req.on("error", reject);
   });

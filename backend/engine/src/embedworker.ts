@@ -4,14 +4,19 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { env, pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
 
-const { cacheDir, model, dtype } = workerData as { cacheDir: string; model: string; dtype: string };
+const { cacheDir, model, revision, dtype } = workerData as {
+  cacheDir: string;
+  model: string;
+  revision: string;
+  dtype: string;
+};
 const port = parentPort!;
 
 env.cacheDir = cacheDir;
 
 let extractor: FeatureExtractionPipeline;
 try {
-  extractor = await pipeline("feature-extraction", model, { dtype: dtype as "q8" });
+  extractor = await pipeline("feature-extraction", model, { revision, dtype: dtype as "q8" });
 } catch (e) {
   port.postMessage({
     type: "load-error",

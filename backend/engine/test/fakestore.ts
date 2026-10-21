@@ -1,6 +1,6 @@
 // A stand-in for the Go server's store API, in memory, for the engine's own tests: enough of each
 // route's behavior (equality filters, cosine search, term-count keyword scores) to drive mem0. The
-// real store is tested in Go, and the two together by the Go end-to-end tests.
+// real store API is tested in Go (internal/storeapi).
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
