@@ -1,13 +1,18 @@
 # Meko backend: foundation
 
 Status: approved. Built in three stacked PRs: #164 (layout), #165 (vendored sqlite-vec), #166 (the foundation).
-Milestone 2, the memory engine and conversations, is in [memory-engine.md](memory-engine.md). Part of Meko (product design: the "Meko Design" doc;
-requirements: the "Meko PRD").
+Milestone 2, the memory engine and conversations, is in [memory-engine.md](memory-engine.md). Part of Meko (product design: the Meko design doc;
+requirements: the Meko PRD).
 
 The product was called Meko Local until milestone 3 (#169), when the PRD named it Meko: the binary
 went from `meko-local` to `meko`, the environment variables from `MEKO_LOCAL_*` to `MEKO_*`, the
 data folder from `~/.meko-local` to `~/.meko`, and the Go module path to
 `github.com/yugabyte/meko/backend`. Nothing had been released, so nothing was migrated.
+Developers switching binaries: stop any `meko-local serve` first (`meko-local stop`), then move
+`~/.meko-local` to `~/.meko` by hand if you want its data. The new binary checks only
+`run/meko.lock`, so in a folder where an old server still runs it thinks no server is running.
+`meko stop` would then kill the old server's engine, recorded in `run/children/`. `meko start` would
+delete the `run/admin.token` that server's CLI still needs.
 
 The foundation is the Go program everything else plugs into: one binary, `meko`, that is
 both the CLI and the server, like yugabyted. This first milestone gives it a process model, a data
@@ -359,9 +364,9 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 
 | # | Branch | What | Review |
 |---|---|---|---|
-| 1 | `ak_hari90/meko-1-layout` | The module (`go.mod`), Makefile, lint config, CI workflow, `.gitignore`, the `version` package, a placeholder `main` that only answers `version`, `backend/AGENTS.md`, the root `AGENTS.md` row, and this design | Small; hand-written |
-| 2 | `ak_hari90/meko-2-sqlite-vec` (on 1) | `third_party/sqlite-vec` unchanged, `internal/sqlitevec` (cgo glue) and its test, `.gitattributes`, mattn in `go.mod` | Check the tarball's SHA-256 in `VERSION` and that the headers match mattn's; the glue is about 30 lines |
-| 3 | `ak_hari90/meko` (on 2) | Everything else: config, paths, logging, auth, store, server, supervisor, CLI, their tests, the map in `backend/AGENTS.md`, and `backend/REVIEW.md` | The functionality |
+| 1 | `ak_hari90/meko-local-1-layout` | The module (`go.mod`), Makefile, lint config, CI workflow, `.gitignore`, the `version` package, a placeholder `main` that only answers `version`, `backend/AGENTS.md`, the root `AGENTS.md` row, and this design | Small; hand-written |
+| 2 | `ak_hari90/meko-local-2-sqlite-vec` (on 1) | `third_party/sqlite-vec` unchanged, `internal/sqlitevec` (cgo glue) and its test, `.gitattributes`, mattn in `go.mod` | Check the tarball's SHA-256 in `VERSION` and that the headers match mattn's; the glue is about 30 lines |
+| 3 | `ak_hari90/meko-local` (on 2) | Everything else: config, paths, logging, auth, store, server, supervisor, CLI, their tests, the map in `backend/AGENTS.md`, and `backend/REVIEW.md` | The functionality |
 
 ## Later milestones
 
