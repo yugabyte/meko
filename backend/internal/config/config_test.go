@@ -20,11 +20,11 @@ func TestLoadPrecedence(t *testing.T) {
 		{name: "file", file: "[server]\nport = 9001\n[log]\nlevel = \"debug\"\n", wantPort: 9001, wantLevel: "debug"},
 		{
 			name: "env over file", file: "[server]\nport = 9001\n",
-			env:      map[string]string{"MEKO_LOCAL_PORT": "9002", "MEKO_LOCAL_LOG_LEVEL": "warn"},
+			env:      map[string]string{"MEKO_PORT": "9002", "MEKO_LOG_LEVEL": "warn"},
 			wantPort: 9002, wantLevel: "warn",
 		},
 		{
-			name: "flags over env", env: map[string]string{"MEKO_LOCAL_PORT": "9002"},
+			name: "flags over env", env: map[string]string{"MEKO_PORT": "9002"},
 			o:        Overrides{Port: 9003, LogLevel: "error"},
 			wantPort: 9003, wantLevel: "error",
 		},
@@ -58,8 +58,8 @@ func TestLoadErrors(t *testing.T) {
 		{name: "bad toml names file and line", file: "[server]\nport = \n", want: []string{"config.toml", "line 2"}},
 		{name: "unknown key", file: "[server]\nprot = 1\n", want: []string{"unknown setting server.prot"}},
 		{
-			name: "env port not a number", env: map[string]string{"MEKO_LOCAL_PORT": "abc"},
-			want: []string{`MEKO_LOCAL_PORT="abc"`},
+			name: "env port not a number", env: map[string]string{"MEKO_PORT": "abc"},
+			want: []string{`MEKO_PORT="abc"`},
 		},
 		{name: "port out of range", file: "[server]\nport = 70000\n", want: []string{"port 70000 is out of range"}},
 		{name: "bad level", file: "[log]\nlevel = \"loud\"\n", want: []string{`"loud"`}},
@@ -94,7 +94,7 @@ func TestEngineSettings(t *testing.T) {
 	if err != nil || c.Engine.Node != "/file/node" || c.Engine.Dir != "/file/engine" {
 		t.Fatalf("from the file: %+v %v", c.Engine, err)
 	}
-	env := map[string]string{"MEKO_LOCAL_NODE": "/env/node", "MEKO_LOCAL_ENGINE_DIR": "/env/engine"}
+	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_ENGINE_DIR": "/env/engine"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
 	if err != nil || c.Engine.Node != "/env/node" || c.Engine.Dir != "/env/engine" {
 		t.Fatalf("env over the file: %+v %v", c.Engine, err)

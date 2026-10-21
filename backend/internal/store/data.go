@@ -102,7 +102,7 @@ func (s *Store) EnsureDefaultDatapack(ctx context.Context) (string, error) {
 	now := time.Now().UTC().Format(timeLayout)
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO datapacks(id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		id, DefaultDatapackName, "Created by Meko Local on first start.", now, now); err != nil {
+		id, DefaultDatapackName, "Created by Meko on first start.", now, now); err != nil {
 		return "", err
 	}
 	if _, err := tx.ExecContext(ctx,

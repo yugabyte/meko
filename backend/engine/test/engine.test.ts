@@ -72,7 +72,7 @@ describe("with a store", () => {
   });
   after(() => fake.close());
 
-  test("mem0's factories build Meko Local's providers, and still build their own", () => {
+  test("mem0's factories build Meko's providers, and still build their own", () => {
     assert.ok(VectorStoreFactory.create(PROVIDERS.store, { collectionName: "dp" }) instanceof MekoStore);
     assert.ok(HistoryManagerFactory.create(PROVIDERS.history, { provider: "x", config: { datapackId: "dp" } } as any) instanceof
       MekoHistory);

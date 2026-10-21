@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/auth"
-	"github.com/yugabyte/meko-local/backend/internal/engine"
-	"github.com/yugabyte/meko-local/backend/internal/paths"
-	"github.com/yugabyte/meko-local/backend/internal/store"
-	"github.com/yugabyte/meko-local/backend/internal/storeapi"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/storeapi"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 // The embedders a test can start the engine with.
@@ -59,11 +59,11 @@ func engineDir(t *testing.T) (node, dir string) {
 	return node, dir
 }
 
-// modelsDir is where the real model is kept between runs: MEKO_LOCAL_TEST_MODELS, or
+// modelsDir is where the real model is kept between runs: MEKO_TEST_MODELS, or
 // engine/.models in this source tree (ignored by git).
 func modelsDir(t *testing.T, dir string) string {
 	t.Helper()
-	if d := os.Getenv("MEKO_LOCAL_TEST_MODELS"); d != "" {
+	if d := os.Getenv("MEKO_TEST_MODELS"); d != "" {
 		return d
 	}
 	d := filepath.Join(dir, ".models")

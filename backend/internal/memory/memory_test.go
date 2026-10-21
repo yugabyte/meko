@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/meko-local/backend/internal/engine"
-	"github.com/yugabyte/meko-local/backend/internal/store"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 func TestMemoriesThroughTheEngine(t *testing.T) {

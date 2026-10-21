@@ -22,7 +22,7 @@ export function log(msg: string, fields: Record<string, unknown> = {}): void {
 function need(env: NodeJS.ProcessEnv, name: string): string {
   const v = env[name];
   if (!v) {
-    log("missing environment variable; meko-local serve sets it", { name });
+    log("missing environment variable; meko serve sets it", { name });
     process.exit(2);
   }
   return v;

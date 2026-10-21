@@ -1,4 +1,4 @@
-module github.com/yugabyte/meko-local/backend
+module github.com/yugabyte/meko/backend
 
 go 1.25.0
 

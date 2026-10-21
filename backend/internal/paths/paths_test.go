@@ -31,7 +31,7 @@ func TestResolve(t *testing.T) {
 	t.Setenv(HomeEnv, "")
 
 	fakeFS(t, nil)
-	if got, err := Resolve(""); err != nil || got != filepath.Join(home, ".meko-local") {
+	if got, err := Resolve(""); err != nil || got != filepath.Join(home, ".meko") {
 		t.Fatalf("default: got %q, %v", got, err)
 	}
 	if got, err := Resolve(other); err != nil || got != other {
@@ -45,10 +45,10 @@ func TestResolve(t *testing.T) {
 	// A home folder on NFS moves the default to $XDG_STATE_HOME on local disk.
 	t.Setenv(HomeEnv, "")
 	fakeFS(t, map[string]string{home: "nfs4"})
-	if got, err := Resolve(""); err != nil || got != filepath.Join(xdg, "meko-local") {
+	if got, err := Resolve(""); err != nil || got != filepath.Join(xdg, "meko") {
 		t.Fatalf("default on NFS: got %q, %v", got, err)
 	}
-	// With no $XDG_STATE_HOME either, it moves to /var/tmp/<user>/meko-local, made private.
+	// With no $XDG_STATE_HOME either, it moves to /var/tmp/<user>/meko, made private.
 	t.Setenv("XDG_STATE_HOME", "")
 	oldTmp := SharedTmp
 	SharedTmp = t.TempDir()
@@ -57,7 +57,7 @@ func TestResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(SharedTmp, u.Username, "meko-local")
+	want := filepath.Join(SharedTmp, u.Username, "meko")
 	got, err := Resolve("")
 	if err != nil || got != want {
 		t.Fatalf("default on NFS without XDG: got %q, %v", got, err)
@@ -130,7 +130,7 @@ func TestEnsurePrivateDir(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			parent := filepath.Join(t.TempDir(), "user")
-			dir := filepath.Join(parent, "meko-local")
+			dir := filepath.Join(parent, "meko")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}

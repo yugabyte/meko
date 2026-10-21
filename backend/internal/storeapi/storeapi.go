@@ -17,9 +17,9 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"github.com/yugabyte/meko-local/backend/internal/auth"
-	"github.com/yugabyte/meko-local/backend/internal/envelope"
-	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/store"
 )
 
 // BodyLimit caps a request: an insert of a batch of vectors and payloads.

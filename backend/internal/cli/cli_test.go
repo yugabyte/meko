@@ -15,15 +15,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/config"
-	"github.com/yugabyte/meko-local/backend/internal/paths"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
-// TestMain doubles as the meko-local binary: start re-runs os.Executable() (this test binary)
+// TestMain doubles as the meko binary: start re-runs os.Executable() (this test binary)
 // as "serve ...".
 func TestMain(m *testing.M) {
-	for _, k := range []string{paths.HomeEnv, "MEKO_LOCAL_PORT", "MEKO_LOCAL_LOG_LEVEL"} {
+	for _, k := range []string{paths.HomeEnv, "MEKO_PORT", "MEKO_LOG_LEVEL"} {
 		_ = os.Unsetenv(k)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
@@ -146,7 +146,7 @@ func setup(t *testing.T) (dir, port string) {
 func TestStartStatusStop(t *testing.T) {
 	dir, port := setup(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko Local is running at http://127.0.0.1:"+port)
+	want(t, "start", code, 0, out+errs, "Meko is running at http://127.0.0.1:"+port)
 
 	code, out, _ = run("start", "--data-dir", dir, "--port", port)
 	want(t, "second start", code, 0, out, "already running")
@@ -158,7 +158,7 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "second serve", code, 1, errs, "already running for "+dir)
 
 	code, out, _ = run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out, "Meko Local stopped.")
+	want(t, "stop", code, 0, out, "Meko stopped.")
 
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status when stopped", code, exitNotRunning, out, "isn't running")
@@ -369,9 +369,9 @@ func TestServeKillsAKilledServersChildren(t *testing.T) {
 	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
 		t.Fatal("the killed serve's lock wasn't released")
 	}
-	t.Setenv("MEKO_LOCAL_ENGINE_DIR", t.TempDir()) // no engine, so no new record
+	t.Setenv("MEKO_ENGINE_DIR", t.TempDir()) // no engine, so no new record
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko Local is running")
+	want(t, "start", code, 0, out+errs, "Meko is running")
 	waitGone(t, dir, child, "the next serve's start")
 }
 
@@ -388,10 +388,10 @@ func TestServeRunsTheEngine(t *testing.T) {
 		t.Skip("the engine isn't built (make test builds it)")
 	}
 	dir, port := setup(t)
-	t.Setenv("MEKO_LOCAL_ENGINE_DIR", engineDir)
+	t.Setenv("MEKO_ENGINE_DIR", engineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko Local is running")
+	want(t, "start", code, 0, out+errs, "Meko is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		_, out, _ = run("status", "--data-dir", dir)
 		if strings.Contains(out, "Engine:   ready, test hash (384 dims)") && strings.Contains(out, "engine running") {
@@ -409,7 +409,7 @@ func TestServeRunsTheEngine(t *testing.T) {
 	var enginePid int
 	_, _ = fmt.Sscanf(string(b), "%d", &enginePid)
 	code, out, _ = run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out, "Meko Local stopped.")
+	want(t, "stop", code, 0, out, "Meko stopped.")
 	if enginePid == 0 || syscall.Kill(enginePid, 0) == nil {
 		t.Errorf("the engine (pid %d) outlived stop", enginePid)
 	}

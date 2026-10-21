@@ -1,7 +1,7 @@
 {
   "name": "better-sqlite3",
-  "version": "0.0.0-meko-local-stub",
+  "version": "0.0.0-meko-stub",
   "private": true,
-  "description": "Stands in for better-sqlite3, which mem0ai imports for stores Meko Local's engine never uses.",
+  "description": "Stands in for better-sqlite3, which mem0ai imports for stores Meko's engine never uses.",
   "main": "index.cjs"
 }

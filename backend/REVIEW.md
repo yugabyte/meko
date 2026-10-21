@@ -1,4 +1,4 @@
-# REVIEW.md: Meko Local backend
+# REVIEW.md: Meko backend
 
 What to check when reviewing a change to `backend/`, whether you're a person or an agent. Order
 findings by severity: **blocker** (breaks a rule below, loses data, or opens a security hole),

@@ -1,11 +1,11 @@
-// Package paths lays out Meko Local's data folder and picks where it lives.
+// Package paths lays out Meko's data folder and picks where it lives.
 //
 //	<root>/            0700
 //	  config.toml      optional
 //	  meko.db          the only database (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
 //	    children/      each child's pid and process group, for stop
-//	  logs/            meko-local.log, start.log, engine.log
+//	  logs/            meko.log, start.log, engine.log
 //	  models/          embedding model files, downloaded on first start
 //	  engine/          the engine's own state (mem0's config folder)
 package paths
@@ -51,11 +51,11 @@ func New(root string) Layout {
 		DB:          filepath.Join(root, "meko.db"),
 		RunDir:      run,
 		LogDir:      logs,
-		Lock:        filepath.Join(run, "meko-local.lock"),
-		Pid:         filepath.Join(run, "meko-local.pid"),
-		Port:        filepath.Join(run, "meko-local.port"),
+		Lock:        filepath.Join(run, "meko.lock"),
+		Pid:         filepath.Join(run, "meko.pid"),
+		Port:        filepath.Join(run, "meko.port"),
 		Token:       filepath.Join(run, "admin.token"),
-		Log:         filepath.Join(logs, "meko-local.log"),
+		Log:         filepath.Join(logs, "meko.log"),
 		StartLog:    filepath.Join(logs, "start.log"),
 		StoreSock:   filepath.Join(run, "store.sock"),
 		EngineSock:  filepath.Join(run, "engine.sock"),
@@ -89,7 +89,7 @@ func (l Layout) Ensure() error {
 }
 
 // HomeEnv names the environment variable that sets the data folder.
-const HomeEnv = "MEKO_LOCAL_HOME"
+const HomeEnv = "MEKO_HOME"
 
 // networkFS are filesystems SQLite's locking and flock can't be trusted on. The names are the
 // ones AgentK Local's installer checks (extensions/agentk/src/server/install.ts): Linux mount types and macOS
@@ -103,8 +103,8 @@ var networkFS = map[string]bool{
 // FSType returns the filesystem type of the folder that holds path. Tests replace it.
 var FSType = fsType
 
-// Resolve picks the data folder: explicit (from --data-dir) first, then MEKO_LOCAL_HOME, then
-// ~/.meko-local. A folder the user named on a network filesystem is refused; the default moves
+// Resolve picks the data folder: explicit (from --data-dir) first, then MEKO_HOME, then
+// ~/.meko. A folder the user named on a network filesystem is refused; the default moves
 // to local disk instead.
 func Resolve(explicit string) (string, error) {
 	named := explicit
@@ -126,7 +126,7 @@ func Resolve(explicit string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("can't find your home folder: %w. Set --data-dir or %s", err, HomeEnv)
 	}
-	def := filepath.Join(home, ".meko-local")
+	def := filepath.Join(home, ".meko")
 	if networkType(def) == "" {
 		return def, nil
 	}
@@ -154,11 +154,11 @@ func existingAncestor(path string) string {
 var SharedTmp = "/var/tmp"
 
 // localFallback is a local-disk data folder for a home folder on a network filesystem:
-// $XDG_STATE_HOME/meko-local if that's local, else /var/tmp/<user>/meko-local (as AgentK does
+// $XDG_STATE_HOME/meko if that's local, else /var/tmp/<user>/meko (as AgentK does
 // for its state.db).
 func localFallback() (string, error) {
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-		dir := filepath.Join(xdg, "meko-local")
+		dir := filepath.Join(xdg, "meko")
 		if networkType(dir) == "" {
 			return dir, nil
 		}
@@ -167,7 +167,7 @@ func localFallback() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(SharedTmp, u.Username, "meko-local")
+	dir := filepath.Join(SharedTmp, u.Username, "meko")
 	if err := EnsurePrivateDir(dir); err != nil {
 		return "", err
 	}

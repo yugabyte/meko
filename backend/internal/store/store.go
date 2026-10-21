@@ -1,4 +1,4 @@
-// Package store is Meko Local's only door to SQLite: every query lives here behind typed
+// Package store is Meko's only door to SQLite: every query lives here behind typed
 // methods. The only other package that imports the driver is internal/sqlitevec, which links
 // SQLite's C code (only its test runs a query).
 //
@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 
 	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" driver
-	"github.com/yugabyte/meko-local/backend/internal/sqlitevec"
+	"github.com/yugabyte/meko/backend/internal/sqlitevec"
 )
 
 // Readers is the size of the read pool.

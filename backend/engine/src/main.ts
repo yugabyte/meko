@@ -1,4 +1,4 @@
-// Entry point of Meko Local's memory engine, which `meko-local serve` runs as a supervised child.
+// Entry point of Meko's memory engine, which `meko serve` runs as a supervised child.
 // mem0 reads its telemetry switch and its config folder when it's first imported, so they're set
 // here before anything imports it, as is the umask.
 process.env.MEM0_TELEMETRY = "false";

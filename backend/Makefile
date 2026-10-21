@@ -1,4 +1,4 @@
-# Meko Local's Go backend. cgo is required: sqlite-vec and SQLite are compiled in, and FTS5
+# Meko's Go backend. cgo is required: sqlite-vec and SQLite are compiled in, and FTS5
 # needs the sqlite_fts5 tag. On RHEL 8 set CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc.
 # The memory engine (engine/) is TypeScript and needs Node 22.13 or newer and npm.
 
@@ -6,7 +6,7 @@ export CGO_ENABLED := 1
 TAGS    := sqlite_fts5
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-PKG     := github.com/yugabyte/meko-local/backend/internal/version
+PKG     := github.com/yugabyte/meko/backend/internal/version
 LDFLAGS := -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 
 ENGINE_SRC := $(wildcard engine/src/*.ts) engine/tsconfig.json engine/tsconfig.build.json
@@ -14,7 +14,7 @@ ENGINE_SRC := $(wildcard engine/src/*.ts) engine/tsconfig.json engine/tsconfig.b
 .PHONY: build engine test bench lint fmt clean
 
 build:
-	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko-local ./cmd/meko-local
+	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko ./cmd/meko
 
 # The engine's dependencies, installed again only when the lockfile changes.
 engine/node_modules/.package-lock.json: engine/package.json engine/package-lock.json

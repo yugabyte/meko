@@ -16,8 +16,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/yugabyte/meko-local/backend/internal/envelope"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 const token = "secret-token"

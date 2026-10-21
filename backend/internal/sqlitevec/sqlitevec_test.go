@@ -8,7 +8,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/yugabyte/meko-local/backend/internal/sqlitevec"
+	"github.com/yugabyte/meko/backend/internal/sqlitevec"
 )
 
 // The vendored header must match the SQLite that mattn compiles, and the sqlite-vec that loads must

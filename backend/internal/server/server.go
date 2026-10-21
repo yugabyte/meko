@@ -1,4 +1,4 @@
-// Package server is Meko Local's HTTP server on 127.0.0.1: the Host, Origin and admin-token
+// Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and admin-token
 // checks, and the foundation's routes (replies use internal/envelope). /mcp, the rest of
 // /api/v1 and the UI are mounted in later milestones.
 package server
@@ -18,11 +18,11 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
-	"github.com/yugabyte/meko-local/backend/internal/auth"
-	"github.com/yugabyte/meko-local/backend/internal/envelope"
-	"github.com/yugabyte/meko-local/backend/internal/memory"
-	"github.com/yugabyte/meko-local/backend/internal/store"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 // BodyLimit caps request bodies on /api/v1. Routes outside that group (uploads, later) set their
@@ -113,7 +113,7 @@ func Listen(port int) (net.Listener, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if errors.Is(err, syscall.EADDRINUSE) {
 		return nil, fmt.Errorf("port %d is already in use. Stop what's using it, or pick another port "+
-			"with --port, MEKO_LOCAL_PORT or [server] port in config.toml", port)
+			"with --port, MEKO_PORT or [server] port in config.toml", port)
 	}
 	return ln, err
 }
@@ -157,7 +157,7 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
-			"Missing or wrong admin token. Use the meko-local CLI, which reads it from the data folder.")
+			"Missing or wrong admin token. Use the meko CLI, which reads it from the data folder.")
 	}
 }
 

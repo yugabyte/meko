@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
 // serve waits out the instant lock the CLI's checks take, but not a lock a server keeps.

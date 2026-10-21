@@ -1,6 +1,6 @@
-# AGENTS.md: Meko Local backend
+# AGENTS.md: Meko backend
 
-Meko Local's Go backend: one binary, `meko-local`, that is both the CLI and the server, the way
+Meko's Go backend: one binary, `meko`, that is both the CLI and the server, the way
 yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/design.md](docs/design.md)
 (the foundation) and [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
 conversations). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
@@ -9,9 +9,9 @@ conversations). The rules for the whole repo are in the root [AGENTS.md](../AGEN
 
 | Path | What it is |
 |---|---|
-| `cmd/meko-local/` | The entry point: hands the arguments to `internal/cli`. |
+| `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
 | `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`. The data folder's `flock` says whether a server runs. |
-| `internal/config/` | Settings: flags, then `MEKO_LOCAL_*`, then `config.toml`, then defaults (port 7778). |
+| `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
 | `internal/sqlitevec/` | cgo glue that compiles `third_party/sqlite-vec` in and registers it. |
@@ -20,7 +20,7 @@ conversations). The rules for the whole repo are in the root [AGENTS.md](../AGEN
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
 | `internal/memory/` | The service milestone 3's MCP and REST will call: memories (through the engine), conversations, conversation search, and the sweep that embeds turns. |
-| `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko Local's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
+| `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (API keys come with MCP). |
 | `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
@@ -33,7 +33,7 @@ Run them in `backend/`:
 
 ```sh
 export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc   # RHEL 8 only; on macOS the Xcode command line tools are enough
-make build                                          # bin/meko-local
+make build                                          # bin/meko
 make engine                                         # npm ci (when the lockfile changes) and build engine/dist
 make test                                           # builds the engine, then go test -race and the engine's tests
 make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the engine
@@ -43,7 +43,7 @@ make bench                                          # the search budget at 200 M
 It needs Go 1.25 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum)
 and a C compiler, because cgo is on; the Makefile sets it and the build tags. The engine needs
 Node 22.13+ and npm. The first engine test run downloads the embedding model (23 MB) into
-`engine/.models` (git-ignored; `MEKO_LOCAL_TEST_MODELS` moves it). SQLite and sqlite-vec
+`engine/.models` (git-ignored; `MEKO_TEST_MODELS` moves it). SQLite and sqlite-vec
 are compiled into the binary, so the first build compiles SQLite and takes about a minute. CI runs build, lint
 and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 `.github/workflows/ci.yml`; `scripts/ci-scope.sh` decides), and the required `CI gate` fails when any of them fails.
@@ -64,7 +64,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Neither log ever holds memory or turn text: only ids, counts and timings. The engine never logs
   an error's message.
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
-  ports, never `~/.meko-local` or port 7778. Tests that need no model start the engine with the
+  ports, never `~/.meko` or port 7778. Tests that need no model start the engine with the
   hashing embedder (`engine.Options.TestEmbedder`; the CLI's tests set it through their own
   `MEKO_TEST_EMBEDDER`, which only the test binary reads).
 - `third_party/` is vendored code, never edited (sqlite-vec and SQLite's headers; see

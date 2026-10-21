@@ -82,7 +82,7 @@ func TestMigrateRefuses(t *testing.T) {
 	if _, err := s.w.Exec("PRAGMA user_version = 99"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Migrate(ctx); err == nil || !strings.Contains(err.Error(), "newer than this meko-local") {
+	if err := s.Migrate(ctx); err == nil || !strings.Contains(err.Error(), "newer than this meko") {
 		t.Fatalf("newer database: got %v", err)
 	}
 

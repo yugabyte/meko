@@ -1,6 +1,6 @@
 // Package auth holds the admin token: the CLI's credential while it's the only client. serve
 // makes a new one at each start and writes it to run/admin.token (0600), so only the OS user who
-// runs Meko Local can read it.
+// runs Meko can read it.
 package auth
 
 import (
@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
 // NewToken returns 32 random bytes, hex-encoded.

@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/yugabyte/meko-local/backend/internal/engine"
-	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/store"
 )
 
 // Conversation search and turn indexing follow prod Meko's parameters.

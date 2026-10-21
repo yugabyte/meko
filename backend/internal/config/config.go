@@ -1,4 +1,4 @@
-// Package config loads Meko Local's settings. Precedence: flags, then MEKO_LOCAL_* environment
+// Package config loads Meko's settings. Precedence: flags, then MEKO_* environment
 // variables, then config.toml in the data folder, then defaults.
 package config
 
@@ -39,8 +39,8 @@ type Server struct {
 // Engine is the [engine] table: where the memory engine and its Node are. Empty means the usual
 // places (internal/engine).
 type Engine struct {
-	Node string `toml:"node"` // also MEKO_LOCAL_NODE
-	Dir  string `toml:"dir"`  // the built engine; also MEKO_LOCAL_ENGINE_DIR
+	Node string `toml:"node"` // also MEKO_NODE
+	Dir  string `toml:"dir"`  // the built engine; also MEKO_ENGINE_DIR
 }
 
 // Log is the [log] table.
@@ -77,20 +77,20 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 			return Config{}, fmt.Errorf("%s: unknown setting %s", path, strings.Join(keys, ", "))
 		}
 	}
-	if v := env("MEKO_LOCAL_PORT"); v != "" {
+	if v := env("MEKO_PORT"); v != "" {
 		p, err := strconv.Atoi(v)
 		if err != nil {
-			return Config{}, fmt.Errorf("MEKO_LOCAL_PORT=%q isn't a port number", v)
+			return Config{}, fmt.Errorf("MEKO_PORT=%q isn't a port number", v)
 		}
 		c.Server.Port = p
 	}
-	if v := env("MEKO_LOCAL_LOG_LEVEL"); v != "" {
+	if v := env("MEKO_LOG_LEVEL"); v != "" {
 		c.Log.Level = v
 	}
-	if v := env("MEKO_LOCAL_NODE"); v != "" {
+	if v := env("MEKO_NODE"); v != "" {
 		c.Engine.Node = v
 	}
-	if v := env("MEKO_LOCAL_ENGINE_DIR"); v != "" {
+	if v := env("MEKO_ENGINE_DIR"); v != "" {
 		c.Engine.Dir = v
 	}
 	if o.Port != 0 {

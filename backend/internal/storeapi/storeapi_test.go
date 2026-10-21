@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/meko-local/backend/internal/envelope"
-	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/store"
 )
 
 const token = "internal-token"

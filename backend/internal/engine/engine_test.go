@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
 // fakeNode writes a script that prints version like node --version.
@@ -38,7 +38,7 @@ func TestFindNode(t *testing.T) {
 		}
 	}
 	if _, err := FindNode(Options{Node: filepath.Join(t.TempDir(), "none")}); err == nil ||
-		!strings.Contains(err.Error(), "MEKO_LOCAL_NODE") {
+		!strings.Contains(err.Error(), "MEKO_NODE") {
 		t.Errorf("a missing node: %v", err)
 	}
 }

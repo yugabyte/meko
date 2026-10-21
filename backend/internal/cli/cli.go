@@ -1,4 +1,4 @@
-// Package cli is the meko-local command: start, stop, status, serve and version.
+// Package cli is the meko command: start, stop, status, serve and version.
 package cli
 
 import (
@@ -7,8 +7,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/yugabyte/meko-local/backend/internal/config"
-	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
 // Exit codes.
@@ -19,16 +19,16 @@ const (
 	exitNotRunning = 3 // status, when no server runs
 )
 
-const usage = `meko-local runs Meko Local, a local Meko server.
+const usage = `meko runs Meko on this machine: the server, and the commands that manage it.
 
 Usage:
-  meko-local start     start the server in the background
-  meko-local stop      stop it
-  meko-local status    show whether it's running, and its port, version and children
-  meko-local serve     run the server in the foreground
-  meko-local version   show versions
+  meko start     start the server in the background
+  meko stop      stop it
+  meko status    show whether it's running, and its port, version and children
+  meko serve     run the server in the foreground
+  meko version   show versions
 
-Every command takes --data-dir (default ~/.meko-local, or MEKO_LOCAL_HOME).
+Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
 start and serve also take --port (default 7778) and --log-level (debug, info, warn, error).
 `
 
@@ -39,9 +39,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	cmd, rest := args[0], args[1:]
-	fs := flag.NewFlagSet("meko-local "+cmd, flag.ContinueOnError)
+	fs := flag.NewFlagSet("meko "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko-local, or MEKO_LOCAL_HOME)")
+	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko, or MEKO_HOME)")
 	var o config.Overrides
 	var detached bool
 	if cmd == "start" || cmd == "serve" {
@@ -55,14 +55,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "start", "stop", "status", "serve", "version":
 	default:
-		fmt.Fprintf(stderr, "meko-local: unknown command %q\n\n%s", cmd, usage)
+		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
 	}
 	if err := fs.Parse(rest); err != nil {
 		return exitUsage
 	}
 	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "meko-local %s: unexpected argument %q\n", cmd, fs.Arg(0))
+		fmt.Fprintf(stderr, "meko %s: unexpected argument %q\n", cmd, fs.Arg(0))
 		return exitUsage
 	}
 	if cmd == "version" {
@@ -98,6 +98,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func fail(stderr io.Writer, err error) int {
-	fmt.Fprintf(stderr, "meko-local: %v\n", err)
+	fmt.Fprintf(stderr, "meko: %v\n", err)
 	return exitError
 }

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/engine"
 )
 
 func TestIDs(t *testing.T) {

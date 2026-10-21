@@ -1,4 +1,4 @@
-// Package envelope is the {data, error} reply every Meko Local API uses: the HTTP server's /api/v1,
+// Package envelope is the {data, error} reply every Meko API uses: the HTTP server's /api/v1,
 // and the internal store API the engine calls.
 package envelope
 

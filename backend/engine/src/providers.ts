@@ -1,4 +1,4 @@
-// Meko Local's providers for mem0: a vector store and a history store over the Go server's store
+// Meko's providers for mem0: a vector store and a history store over the Go server's store
 // API, the embedder, and an LLM that refuses (no extraction in this milestone). mem0 builds its
 // providers by name in fixed switch statements, so register() wraps the exported factories'
 // create methods; mem0 looks them up at call time, so this needs no fork or patch.
@@ -17,8 +17,8 @@ import {
 
 import type { StoreClient } from "./storeclient.js";
 
-/** Provider names Meko Local registers. */
-export const PROVIDERS = { store: "meko_store", history: "meko_history", embedder: "meko_local", llm: "none" };
+/** Provider names Meko registers. */
+export const PROVIDERS = { store: "meko_store", history: "meko_history", embedder: "meko_embedder", llm: "none" };
 
 const enc = encodeURIComponent;
 
@@ -84,7 +84,7 @@ export class MekoStore implements VectorStore {
   }
 
   async deleteCol(): Promise<void> {
-    throw new Error("Meko Local's engine never drops a datapack's collection");
+    throw new Error("Meko's engine never drops a datapack's collection");
   }
 
   async list(filters?: SearchFilters, topK?: number): Promise<[VectorStoreResult[], number]> {
@@ -97,7 +97,7 @@ export class MekoStore implements VectorStore {
 
   // Only mem0's telemetry uses these.
   async getUserId(): Promise<string> {
-    return "meko-local";
+    return "meko";
   }
 
   async setUserId(): Promise<void> {}
@@ -157,7 +157,7 @@ export class MekoHistory {
   }
 
   async reset(): Promise<void> {
-    throw new Error("Meko Local's engine never resets memory history");
+    throw new Error("Meko's engine never resets memory history");
   }
 
   close(): void {}
@@ -173,17 +173,17 @@ export class MekoHistory {
 /** The LLM until extraction exists: mem0 always builds one, and this one is never meant to run. */
 export class NoLLM implements LLM {
   async generateResponse(): Promise<any> {
-    throw new Error("extraction isn't available in Meko Local yet");
+    throw new Error("extraction isn't available in Meko yet");
   }
 
   async generateChat(): Promise<LLMResponse> {
-    throw new Error("extraction isn't available in Meko Local yet");
+    throw new Error("extraction isn't available in Meko yet");
   }
 }
 
 let registered = false;
 
-/** Makes mem0's factories build Meko Local's providers. Other names still reach mem0's own. */
+/** Makes mem0's factories build Meko's providers. Other names still reach mem0's own. */
 export function register(store: StoreClient, embedder: Embedder): void {
   if (registered) return;
   registered = true;

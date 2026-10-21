@@ -1,8 +1,8 @@
 {
-  "name": "@meko-local/engine",
+  "name": "@meko/engine",
   "version": "0.0.0",
   "private": true,
-  "description": "Meko Local's memory engine: mem0 with Meko Local's providers, run as a child of meko-local serve.",
+  "description": "Meko's memory engine: mem0 with Meko's providers, run as a child of meko serve.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
