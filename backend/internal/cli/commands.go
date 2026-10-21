@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"runtime"
@@ -208,12 +210,27 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 }
 
 // runToken prints the client token, making it if no server has yet. It reads the data folder, so
-// it works whether or not the server runs.
+// it works whether or not the server runs. While one runs it only reads: the server keeps the token
+// it loaded at start, so a token made now (after the file was deleted to replace it) would be one
+// the server refuses.
 func runToken(l paths.Layout, stdout, stderr io.Writer) int {
 	if err := l.Ensure(); err != nil {
 		return fail(stderr, err)
 	}
-	tok, err := auth.EnsureClientToken(l.ClientToken)
+	up, err := running(l.Lock)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	var tok string
+	if up {
+		tok, err = auth.ReadClientToken(l.ClientToken)
+		if errors.Is(err, fs.ErrNotExist) {
+			err = fmt.Errorf("%s is gone, but the running server still takes the token it loaded at start. "+
+				"Restart Meko (meko stop, then meko start) to make a new one", l.ClientToken)
+		}
+	} else {
+		tok, err = auth.EnsureClientToken(l.ClientToken)
+	}
 	if err != nil {
 		return fail(stderr, err)
 	}

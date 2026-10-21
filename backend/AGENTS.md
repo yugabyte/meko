@@ -10,7 +10,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`. The data folder's `flock` says whether a server runs. |
+| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`. The data folder's `flock` says whether a server runs. |
 | `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
@@ -19,7 +19,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
-| `internal/memory/` | The service MCP and REST call: memories (through the engine), conversations, conversation search, the sweep that embeds turns, and the call log (recording and pruning). |
+| `internal/memory/` | The service MCP (from #202) and REST (from #204) call: memories (through the engine), conversations, conversation search, the sweep that embeds turns, and the call log (recording and pruning). |
 | `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), and the client token MCP and REST clients send (`client.token`, kept across restarts). |
 | `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |

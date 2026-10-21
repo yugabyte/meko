@@ -178,13 +178,15 @@ func TestCredentials(t *testing.T) {
 func TestUnauthorizedAsksForABearer(t *testing.T) {
 	s, base, _ := start(t)
 	probe(s)
-	resp, err := http.Get(base + "/api/v1/probe")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 401 || resp.Header.Get("WWW-Authenticate") != "Bearer" {
-		t.Fatalf("status %d, WWW-Authenticate %q", resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+	for _, path := range []string{"/api/v1/probe", "/api/v1/status"} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 401 || resp.Header.Get("WWW-Authenticate") != "Bearer" {
+			t.Errorf("%s: status %d, WWW-Authenticate %q", path, resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+		}
 	}
 }
 

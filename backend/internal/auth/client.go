@@ -18,8 +18,8 @@ import (
 
 // EnsureClientToken returns the client token at path, making it the first time. Making it is
 // atomic (a hard link of a complete temp file), so serve and the CLI asking at once agree on one
-// token. A token file that anyone but this user could read, or that this user doesn't own, is
-// refused rather than trusted.
+// token. A token file other users have any access to, or that this user doesn't own, is refused
+// rather than trusted.
 func EnsureClientToken(path string) (string, error) {
 	tok, err := ReadClientToken(path)
 	if !errors.Is(err, fs.ErrNotExist) {
@@ -61,7 +61,8 @@ func ReadClientToken(path string) (string, error) {
 		return "", fmt.Errorf("%s isn't a regular file. %s", path, fix)
 	}
 	if fi.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("%s can be read by other users (mode %v). %s", path, fi.Mode().Perm(), fix)
+		return "", fmt.Errorf("%s is open to other users (mode %v): only its owner may read or write it. %s", path,
+			fi.Mode().Perm(), fix)
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
 		return "", fmt.Errorf("%s is owned by another user. %s", path, fix)

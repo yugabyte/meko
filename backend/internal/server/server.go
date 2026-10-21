@@ -1,6 +1,6 @@
 // Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and token checks, and
-// the foundation's routes (replies use internal/envelope). /mcp and the rest of /api/v1 are
-// mounted on it; the UI comes in a later milestone.
+// the foundation's routes (replies use internal/envelope). /mcp and the rest of /api/v1 come in
+// the later PRs of milestone 3 (docs/api.md), and the UI in a later milestone.
 package server
 
 import (
@@ -194,6 +194,7 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 				"This route needs the admin token. Use the meko CLI, which reads it from the data folder.")
 		case adminOnly[c.Path()]:
+			c.Response().Header().Set(echo.HeaderWWWAuthenticate, "Bearer")
 			return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED",
 				"Missing or wrong admin token. Use the meko CLI, which reads it from the data folder.")
 		case isClient:

@@ -185,17 +185,29 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 		t.Fatalf("token %q", tok)
 	}
 	for i := 0; i < 2; i++ {
-		code, out, errs := run("start", "--data-dir", dir, "--port", port)
-		want(t, "start", code, 0, out+errs, "is running")
+		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
+		want(t, "start", started, 0, out+serrs, "is running")
 		_, again, _ := run("token", "--data-dir", dir)
 		if again != tok {
 			t.Fatalf("start %d: token %q, want %q", i, again, tok)
 		}
-		code, out, _ = run("stop", "--data-dir", dir)
-		want(t, "stop", code, 0, out, "stopped")
+		stopped, sout, _ := run("stop", "--data-dir", dir)
+		want(t, "stop", stopped, 0, sout, "stopped")
 	}
 	if _, err := os.Stat(paths.New(dir).ClientToken); err != nil {
 		t.Errorf("stop must keep the client token: %v", err)
+	}
+
+	// Deleted while a server runs, it isn't made again: the server keeps the token it loaded.
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	if err := os.Remove(paths.New(dir).ClientToken); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs = run("token", "--data-dir", dir)
+	want(t, "token with the file gone", code, 1, errs, "Restart Meko")
+	if _, err := os.Stat(paths.New(dir).ClientToken); !os.IsNotExist(err) {
+		t.Fatalf("token made a new file while the server runs: %v", err)
 	}
 }
 

@@ -31,9 +31,10 @@ Cloud's tool names, arguments and reply shapes, written here from scratch.
   `meko token`, if it runs first) makes it once, and it's kept across restarts, because Claude
   Code's MCP config and AgentK store it once. It lives outside `run/`, which `serve` clears at
   each start. Making it is atomic (a hard link of a complete temp file), so two processes making it
-  at once agree on one token. A token file that other users could read, that another user owns,
-  that isn't a regular file, or that holds no token is refused. Delete the file and restart to
-  replace it; every client then needs the new one.
+  at once agree on one token. A token file other users have any access to, that another user
+  owns, that isn't a regular file, or that holds no token is refused. Delete the file and restart
+  to replace it; every client then needs the new one. While the server runs, `meko token` only
+  reads the file, and says to restart when it's gone: the server keeps the token it loaded.
 - `meko token` prints it, whether or not the server runs.
 - **`[server] auth = "none"`** (or `MEKO_AUTH=none`) lets `/mcp` and the data routes take requests
   with no credential; any `Authorization` header is then ignored unless it's the client or admin
@@ -42,7 +43,7 @@ Cloud's tool names, arguments and reply shapes, written here from scratch.
   listens on 127.0.0.1 only, and the Host and Origin checks still apply. Each start logs a warning,
   and `meko status` shows `Auth: none` with what it means.
 - The credential a request got in with (`admin`, `client` or `none`) is recorded with each call,
-  never the token. A 401 says `WWW-Authenticate: Bearer`.
+  never the token. Every 401 says `WWW-Authenticate: Bearer`.
 - Per-client API keys, which the PRD asks for, are #195.
 
 ## The call log (PR 1)

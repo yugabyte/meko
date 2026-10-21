@@ -1,6 +1,6 @@
-// Package auth holds the admin token: the CLI's credential while it's the only client. serve
-// makes a new one at each start and writes it to run/admin.token (0600), so only the OS user who
-// runs Meko can read it.
+// Package auth holds Meko's two credentials. The admin token is the CLI's: serve makes a new one
+// at each start and writes it to run/admin.token (0600), so only the OS user who runs Meko can
+// read it. The client token is what MCP and REST clients send, kept across restarts (client.go).
 package auth
 
 import (

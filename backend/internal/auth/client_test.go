@@ -64,7 +64,13 @@ func TestClientTokenRefusesAnUnsafeFile(t *testing.T) {
 	}{
 		{"readable by others", func(p string) error {
 			return os.WriteFile(p, []byte(tok), 0o644) //nolint:gosec // G306: the unsafe file under test
-		}, "read by other users"},
+		}, "open to other users"},
+		{"writable by its group", func(p string) error {
+			if err := os.WriteFile(p, []byte(tok), 0o600); err != nil {
+				return err
+			}
+			return os.Chmod(p, 0o620)
+		}, "open to other users"},
 		{"not a token", func(p string) error { return os.WriteFile(p, []byte("hello"), 0o600) }, "doesn't hold a token"},
 		{"a symlink", func(p string) error {
 			target := filepath.Join(dir, "target")
