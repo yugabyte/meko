@@ -5,7 +5,7 @@ import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
 const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', kiro: '/harness-kiro.svg' };
 
@@ -353,6 +353,16 @@ export function Busy({ label }: { label: string }) {
       <Dots />
     </span>
   );
+}
+
+/** How long something has been running, since `since` (ms), ticking every second; hidden from screen readers. */
+export function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="elapsed" aria-hidden="true">{elapsedText(now - since)}</span>;
 }
 
 /** A tick drawn as a path, so it sits exactly in the middle of its circle whatever the font. */

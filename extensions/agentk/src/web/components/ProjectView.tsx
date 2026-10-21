@@ -19,10 +19,10 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, HarnessLogo, NotesIcon, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -782,7 +782,12 @@ function StageBar({
       break;
     }
     case 'merge':
-      gate = <span className="gate-pill"><Busy label="Merging and closing" /></span>;
+      gate = (
+        <span className="gate-pill">
+          <Busy label={closingText(session)} />
+          {session.closeStep === 'learn' && session.learnProgress && <Elapsed since={session.learnProgress.startedAt} />}
+        </span>
+      );
       break;
     case 'done':
       gate = <span className="gate-pill done">Done</span>;

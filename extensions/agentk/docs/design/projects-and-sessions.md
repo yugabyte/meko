@@ -187,10 +187,13 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
 - **Why SQLite.** You get transactions across projects, sessions and datapacks, an event history
   for the activity feed, and crash safety without hand-rolled atomic file writes. It's still one
   file you can back up or inspect with the `sqlite3` CLI.
-- **Settings.** `journal_mode=WAL`, `synchronous=FULL` (so a host crash never loses a committed
-  session record), `foreign_keys=ON` and `busy_timeout=5000`. There are so few writes that FULL
-  sync costs nothing noticeable. Old `session_events` are pruned after 30 days, except `merged`
-  events, which the Usage page counts.
+- **Settings.** `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON` and
+  `busy_timeout=5000`. With WAL, NORMAL keeps the database consistent through any crash. A crash
+  of the server loses nothing. An OS crash or power cut can lose only the last commits before it.
+  FULL was dropped because it fsyncs on every commit, and `node:sqlite` runs that on the event
+  loop. On a dev box whose disk other builds kept busy, a commit took up to 405 ms under FULL
+  (0.2 ms under NORMAL), and every request waited behind it. Old `session_events` are pruned
+  after 30 days, except `merged` events, which the Usage page counts.
 - **Not on NFS.** SQLite locking is unreliable on network filesystems. The installer checks the
   filesystem type of `~/.agent-k-local`. If it's NFS, the installer puts `state.db` on local disk
   (`$XDG_STATE_HOME`, then `/var/tmp/$USER`) and records the path in `config.toml`. The

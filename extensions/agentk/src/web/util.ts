@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -603,6 +603,42 @@ export function queuedText(session: Session): string | null {
   const first = session.mergeBlockers[0];
   const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
   return `✓ Merge queued: ${waits}`;
+}
+
+const facts = (n: number) => `${n} ${n === 1 ? 'fact' : 'facts'}`;
+
+/** What a running learn step is doing, in words (`Session.learnProgress`). */
+export function learnStepText(p: LearnProgress): string {
+  switch (p.step) {
+    case 'extract': return 'Finding what it learned';
+    case 'search': return `Looking up ${facts(p.facts)} in Meko`;
+    case 'check': return `Checking ${facts(p.facts)} against Meko`;
+    case 'save': return `Saving ${Math.min(p.done + 1, p.facts)} of ${p.facts} to Meko`;
+    case 'turn': return 'AgentK is saving what it learned in a turn';
+  }
+}
+
+/** What a Discard waits on while its learn step runs. */
+export function discardingText(s: Pick<Session, 'learnProgress'>): string {
+  return s.learnProgress ? `${learnStepText(s.learnProgress)}, then discarding` : 'Saving learnings, then discarding';
+}
+
+/** Where Merge & Close is, for the gate's pill (`Session.closeStep`). */
+export function closingText(s: Pick<Session, 'closeStep' | 'learnProgress' | 'prNumber'>): string {
+  const pr = s.prNumber ? `PR #${s.prNumber}` : 'the PR';
+  switch (s.closeStep) {
+    case 'merge': return `Waiting for GitHub to merge ${pr}`;
+    case 'turn': return 'Merged. Closing when AgentK finishes its turn';
+    case 'learn': return `Merged. ${s.learnProgress ? learnStepText(s.learnProgress) : 'Saving learnings'}`;
+    case 'cleanup': return 'Merged. Cleaning up';
+    default: return 'Merging and closing';
+  }
+}
+
+/** A running time as `42s` or `3m 05s`. */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 }
 
 /** A session tab's tooltip: name, what its dot means, stage and tokens. */
