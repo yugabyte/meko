@@ -52,6 +52,27 @@ describe('MekoApi', () => {
     expect(status.path).toBe('/datapacks/dp%201/knowledge-bases/document-status?document_key=k%2Fnotes.md');
   });
 
+  it("reads a share link, changes it one step a call, and joins by a link's token", async () => {
+    const f = fakeMekoApi();
+    f.handle((c) => c.path.startsWith('/share/')
+      ? ok({ datapack_id: 'd1', grant: 'Contributor', already_member: false })
+      : ok({ share_link: { status: 'active', token: 't 1', grant: 'contributor', redemption_count: 3, members_at_link_role: 2 } }));
+    expect(await f.api.shareLink('dp 1')).toEqual({ active: true, token: 't 1', grant: 'contributor', joined: 3, atLinkRole: 2 });
+    await f.api.setShareLink('dp 1', { reset: true });
+    expect(await f.api.redeemShareLink('t/1')).toEqual({ datapackId: 'd1', grant: 'contributor', alreadyMember: false });
+    expect(f.calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['GET', '/datapacks/dp%201/share-link', undefined],
+      ['PUT', '/datapacks/dp%201/share-link', { reset: true }],
+      ['POST', '/share/t%2F1/redeem', undefined],
+    ]);
+    // An answer of another shape means Meko's API changed: an error, not an empty link.
+    f.handle(() => ok({}));
+    await expect(f.api.shareLink('d')).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    f.handle(() => ok({ share_link: { status: 'active', token: 't', grant: 'maintainer' } }));
+    await expect(f.api.shareLink('d')).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    await expect(f.api.redeemShareLink('t')).rejects.toMatchObject({ code: 'BAD_REPLY' });
+  });
+
   it('says so when asked to share with no API URL', async () => {
     const api = new MekoApi(() => ({ baseUrl: null, apiKey: 'k' }));
     await expect(api.share('d', 'a@b.c', 'viewer')).rejects.toThrow(/API URL/);

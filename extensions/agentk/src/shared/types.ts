@@ -1166,6 +1166,52 @@ export interface ShareDatapackResult extends DatapackPeople {
   failed: ShareFailure[];
 }
 
+/** The roles a datapack's share link can give (Meko doesn't offer maintainer for links). */
+export type LinkGrant = 'viewer' | 'contributor';
+
+export const LINK_GRANTS: LinkGrant[] = ['viewer', 'contributor'];
+
+/** A datapack's share link: anyone signed in to Meko who opens `url` joins with `grant`. */
+export interface ShareLink {
+  active: boolean;
+  grant: LinkGrant;
+  /** `{web app}/share/{token}`; null while the link is off. */
+  url: string | null;
+  /** How many people have joined through it. */
+  joined: number;
+  /** How many members have the link's role through it: changing the role changes theirs too. */
+  atLinkRole: number;
+}
+
+/**
+ * GET /api/meko/datapacks/:id/share-link. With no link: `permission` (only the owner or a
+ * maintainer can share by link), `unsupported` (this Meko has no share links), `no-web-url` (Meko's
+ * web app URL isn't known, so the link can't be built).
+ */
+export type ShareLinkState = { link: ShareLink } | { link: null; unavailable: 'permission' | 'unsupported' | 'no-web-url' };
+
+/** PUT /api/meko/datapacks/:id/share-link: one change. Turning the link on names the role it gives. */
+export type ShareLinkChange = { active: true; grant: LinkGrant } | { active: false } | { grant: LinkGrant } | { reset: true };
+
+/** POST /api/meko/share-links/join: a share link pasted into Ask AgentK. */
+export interface JoinByLinkRequest {
+  url: string;
+}
+
+export interface JoinByLinkResult {
+  datapackId: string;
+  /** From the datapack list; null while Meko's list doesn't show it yet. */
+  name: string | null;
+  /** Our access: from the datapack list (a maintainer may paste a viewer link), else the link's role. */
+  grant: ShareGrant | 'owner' | null;
+  /** They had access already: nothing changed in Meko. */
+  alreadyMember: boolean;
+  /** The share to open as a project (a project datapack, not a viewer one, no project here uses it). Not a banner. */
+  invite: DatapackInvite | null;
+  /** The open project here that already uses the datapack. */
+  project: { id: string; name: string } | null;
+}
+
 /** Someone the Share dialog has invited before (in any project), suggested in it again. */
 export interface ShareContact {
   /** As last typed. */
@@ -2186,7 +2232,12 @@ export type TermServerMessage =
 //        the email is remembered for that GitHub login; every address invited is counted in the share contacts)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
-//        The four above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
+// GET    /api/meko/datapacks/:id/share-link    → ShareLinkState   (the datapack's share link, or why there's none)
+// PUT    /api/meko/datapacks/:id/share-link ShareLinkChange → ShareLink   (turns it on with a role, off, changes the
+//        role or resets it; the token is never logged)
+//        The six above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
+// POST   /api/meko/share-links/join JoinByLinkRequest → JoinByLinkResult   (joins the datapack a share link on Meko's
+//        web app shares, then syncs the shares; 400 for any other URL, which never reaches Meko)
 // GET    /api/share-contacts                   → ShareContact[]   (the people invited before, every project's, ranked:
 //        often and lately first)
 // DELETE /api/share-contacts/:email            → 204   (stops suggesting them; 404 when they weren't kept)

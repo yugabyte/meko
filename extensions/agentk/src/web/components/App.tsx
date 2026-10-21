@@ -672,6 +672,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onSettings={() => setModal({ kind: 'settings' })}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
+          mekoWebUrl={state.meko.webUrl}
+          onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onStarted={({ project, session }) => {
             // As after Open project and New session: both shown until a state push brings them.
             setOpened(project);

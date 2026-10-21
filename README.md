@@ -113,9 +113,11 @@ your phone can connect.
   the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
   header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
   Check **Don't save learnings** beside Merge & Close or Discard to close a session without it.
-- **Share a project** by sharing its dedicated datapack with someone. A project datapack shared
-  with you shows a banner and a notification, and opens as a new project with the repo and name
-  filled in. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
+- **Share a project** by sharing its dedicated datapack with someone, by email or with its share
+  link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
+  team is. A project datapack shared with you shows a banner and a notification, and opens as a new
+  project with the repo and name filled in; a share link pasted into Ask AgentK joins it and opens
+  it the same way. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
   When Claude Code is set up for another Meko server, or holds a token that can't see the
   projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko;
   AgentK never changes Claude Code's setup unless you ask.

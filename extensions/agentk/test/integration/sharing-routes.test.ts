@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { issueSetupToken } from '../../src/server/auth.js';
@@ -224,6 +224,109 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect((await call('DELETE', '/api/share-contacts/B%40example.com')).statusCode).toBe(204);
     expect((await call('DELETE', '/api/share-contacts/b%40example.com')).statusCode).toBe(404);
     expect((await contacts()).map((c) => c.email)).not.toContain('b@example.com');
+  });
+
+  it.each([
+    ['a 403', { status: 403, body: { error: { code: 'FORBIDDEN', message: 'owner or maintainer only' } } }, 'permission'],
+    ['a 405', { status: 405, body: { error: { code: 'METHOD_NOT_ALLOWED', message: 'not allowed' } } }, 'unsupported'],
+    ['a 404 with no error code', { status: 404 }, 'unsupported'],
+  ])('says why a datapack has no share link when Meko answers %s', async (_, reply, unavailable) => {
+    await project();
+    env.mekoApi.handle((c: ApiCall) => (c.path === '/datapacks/dp-1/share-link' ? reply : { body: { data: [] } }));
+    expect((await call('GET', '/api/meko/datapacks/dp-1/share-link')).json()).toEqual({ link: null, unavailable });
+  });
+
+  it('turns a share link on with the role picked, changes and resets it, and never logs its token', async () => {
+    expect((await call('GET', '/api/meko/datapacks/dp-1/share-link')).statusCode).toBe(404);
+    await project();
+    let link = { status: 'off', token: null as string | null, grant: 'viewer', redemption_count: 0, members_at_link_role: 0 };
+    env.mekoApi.handle((c: ApiCall) => {
+      if (c.path !== '/datapacks/dp-1/share-link') return { body: { data: [] } };
+      const b = (c.body ?? {}) as { status?: string; grant?: string; reset?: boolean };
+      if (b.status) link = { ...link, status: b.status, token: link.token ?? 'tok-1' };
+      if (b.grant) link = { ...link, grant: b.grant };
+      if (b.reset) link = { ...link, token: 'tok-2' };
+      return { body: { data: { share_link: link } } };
+    });
+    const info = vi.spyOn(env.core.log, 'info');
+    const url = '/api/meko/datapacks/dp-1/share-link';
+    expect((await call('GET', url)).json()).toEqual({ link: { active: false, grant: 'viewer', url: null, joined: 0, atLinkRole: 0 } });
+    // One change at a time; turning on names the role, and a link can't make a maintainer.
+    for (const bad of [{}, { active: true }, { active: false, reset: true }, { grant: 'maintainer' }, { reset: false }]) {
+      expect((await call('PUT', url, bad)).statusCode).toBe(400);
+    }
+    const puts = () => env.mekoApi.calls.filter((c) => c.method === 'PUT').map((c) => c.body);
+    expect(puts()).toEqual([]);
+    // Meko keeps viewer, so the role picked follows.
+    expect((await call('PUT', url, { active: true, grant: 'contributor' })).json())
+      .toEqual({ active: true, grant: 'contributor', url: 'https://cloud.mekodata.ai/share/tok-1', joined: 0, atLinkRole: 0 });
+    expect((await call('PUT', url, { active: false })).json()).toMatchObject({ active: false, url: null });
+    // On again with the role it has: one call.
+    await call('PUT', url, { active: true, grant: 'contributor' });
+    expect(puts()).toEqual([{ status: 'active' }, { grant: 'contributor' }, { status: 'off' }, { status: 'active' }]);
+    expect((await call('PUT', url, { grant: 'viewer' })).json().grant).toBe('viewer');
+    expect((await call('PUT', url, { reset: true })).json().url).toBe('https://cloud.mekodata.ai/share/tok-2');
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/tok-/);
+    // A Meko whose API URL is set but not its web app's: no link to build.
+    env.core.updateConfig((c) => {
+      c.meko.url = 'https://meko.example.com/mcp';
+      c.meko.apiUrl = 'https://meko.example.com/api/v1';
+    });
+    expect((await call('GET', url)).json()).toEqual({ link: null, unavailable: 'no-web-url' });
+    expect((await call('PUT', url, { reset: true })).statusCode).toBe(409);
+  });
+
+  it('joins by a share link from our Meko only, and offers the datapack as a project to open', async () => {
+    await project();
+    const rows: MekoDatapackRow[] = [
+      { id: 'dp-own', name: 'x', grant: 'owner', createdAt: null, ownerName: null, ownerEmail: null, description: null, ownerUserId: 'u-self' },
+    ];
+    (env.meko as { listDatapacks: unknown }).listDatapacks = async () => rows;
+    const shared = (id: string, grant: string): MekoDatapackRow =>
+      ({ id, name: `adlc/proj/demo-repo/${id}`, grant, createdAt: null, ownerName: 'Alice', ownerEmail: 'a@example.com', description: null, ownerUserId: 'u-a' });
+    const links: Record<string, { status?: number; body: unknown; row?: MekoDatapackRow }> = {
+      'tok-a': { body: { data: { datapack_id: 'dp-a', grant: 'contributor', already_member: false } }, row: shared('dp-a', 'contributor') },
+      'tok-v': { body: { data: { datapack_id: 'dp-v', grant: 'viewer', already_member: false } }, row: shared('dp-v', 'viewer') },
+      'tok-p': { body: { data: { datapack_id: 'dp-1', grant: 'contributor', already_member: true } } },
+      'tok-m': { body: { data: { datapack_id: 'dp-m', grant: 'viewer', already_member: true } }, row: shared('dp-m', 'maintainer') },
+      'tok-old': { status: 404, body: undefined },
+      'tok-off': { status: 404, body: { error: { code: 'NOT_FOUND', message: 'share link not found' } } },
+      'tok-gone': { status: 403, body: { error: { code: 'REMOVED_FROM_DATAPACK', message: 'removed' } } },
+    };
+    env.mekoApi.handle((c: ApiCall) => {
+      const token = /^\/share\/([^/]+)\/redeem$/.exec(c.path)?.[1];
+      if (!token) return { body: { data: [] } };
+      const l = links[token];
+      if (l.row && !rows.includes(l.row)) rows.push(l.row);
+      return { status: l.status, body: l.body };
+    });
+    const notify = vi.spyOn(env.core, 'notifyInvite');
+    const join = (url: string) => call('POST', '/api/meko/share-links/join', { url });
+    const redeems = () => env.mekoApi.calls.filter((c) => c.path.startsWith('/share/')).length;
+
+    // A look-alike link's token never reaches Meko.
+    for (const url of ['https://evil.example/share/tok-a', 'https://cloud.mekodata.ai/datapacks/tok-a', '']) expect((await join(url)).statusCode).toBe(400);
+    expect(redeems()).toBe(0);
+    // The first sync records the shares there already quietly, but one joined here is offered for
+    // Open project, with no banner or notification: the person who joined knows.
+    const a = await join('https://cloud.mekodata.ai/share/tok-a');
+    expect(a.json()).toMatchObject({
+      datapackId: 'dp-a', name: 'adlc/proj/demo-repo/dp-a', grant: 'contributor', alreadyMember: false, project: null,
+      invite: { datapackId: 'dp-a', state: 'later' },
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect((await call('GET', '/api/state')).json().invites).toEqual([]);
+    // A maintainer who pastes the datapack's viewer link keeps their own access.
+    expect((await join('https://cloud.mekodata.ai/share/tok-m')).json()).toMatchObject({ grant: 'maintainer', invite: { datapackId: 'dp-m' } });
+    // A viewer can't open it as a project; a datapack a project here uses opens that project.
+    expect((await join('https://cloud.mekodata.ai/share/tok-v')).json()).toMatchObject({ grant: 'viewer', invite: null, project: null });
+    expect((await join('https://cloud.mekodata.ai/share/tok-p')).json()).toMatchObject({ alreadyMember: true, invite: null, project: { name: 'p' } });
+    const off = await join('https://cloud.mekodata.ai/share/tok-off');
+    expect([off.statusCode, off.json().error]).toEqual([404, expect.stringMatching(/turned it off or reset it/)]);
+    // A Meko without the redeem route isn't a link to ask the owner about again.
+    expect((await join('https://cloud.mekodata.ai/share/tok-old')).json().error).toBe("This Meko doesn't have share links.");
+    const gone = await join('https://cloud.mekodata.ai/share/tok-gone');
+    expect([gone.statusCode, gone.json().error]).toEqual([403, expect.stringMatching(/You were removed from this datapack/)]);
   });
 
   it('lists invites in the state and puts one off with Later', async () => {

@@ -19,3 +19,34 @@ export function mekoWebUrl(mcpUrl: string, override = ''): string | null {
     return null;
   }
 }
+
+/** A datapack's share link: the web app's own `/share/{token}` page, where Meko signs the person in and joins them. */
+export function shareLinkUrl(webUrl: string, token: string): string {
+  return `${webUrl.replace(/\/+$/, '')}/share/${encodeURIComponent(token)}`;
+}
+
+/**
+ * The token of a share link pasted as `text`: only a link on this Meko's web app (same origin and
+ * path), so a look-alike link is never sent to Meko. Null for anything else.
+ */
+export function shareLinkToken(text: string, webUrl: string | null): string | null {
+  if (!webUrl) return null;
+  let link: URL;
+  let base: URL;
+  try {
+    link = new URL(text.trim());
+    base = new URL(webUrl);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(link.protocol) || link.origin !== base.origin) return null;
+  const prefix = `${base.pathname.replace(/\/+$/, '')}/share/`;
+  if (!link.pathname.startsWith(prefix)) return null;
+  const rest = link.pathname.slice(prefix.length).replace(/\/$/, '');
+  if (!rest || rest.includes('/')) return null;
+  try {
+    return decodeURIComponent(rest) || null;
+  } catch {
+    return null;
+  }
+}
