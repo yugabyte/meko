@@ -203,7 +203,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
 			Credential: server.CredentialOf}),
 		REST: func(g *echo.Group) {
-			rest.Register(g, rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken, Log: log})
+			rest.Register(g, rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken,
+				Credential: server.Credential, Log: log})
 		},
 	})
 	served := make(chan error, 1)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/labstack/echo/v4"
 
@@ -55,7 +56,8 @@ func (a *api) setProfile(c echo.Context) error {
 		return err
 	}
 	first, last := strings.TrimSpace(body.First), strings.TrimSpace(body.Last)
-	if first == "" || last == "" || len(first) > 100 || len(last) > 100 || strings.ContainsAny(first+last, "<>") {
+	if first == "" || last == "" || utf8.RuneCountInString(first) > 100 || utf8.RuneCountInString(last) > 100 ||
+		strings.ContainsAny(first+last, "<>") {
 		return badRequest(c, "first_name and last_name are 1 to 100 characters, with no HTML")
 	}
 	if err := a.Service.SetName(ctx(c), first, last); err != nil {
@@ -180,7 +182,8 @@ func (a *api) deleteDatapack(c echo.Context) error {
 }
 
 // provisionStatus is what the Connect page shows: the MCP URL and the key to send, the client
-// token (per-client keys are #195).
+// token (per-client keys are #195). Only a request that sent a credential gets it: with auth =
+// "none" anyone local reaches this route, and the token must keep its meaning once auth is back on.
 func (a *api) provisionStatus(c echo.Context) error {
 	id, ok, err := a.pathDatapack(c)
 	if !ok {
@@ -191,7 +194,7 @@ func (a *api) provisionStatus(c echo.Context) error {
 		return serviceError(c, err)
 	}
 	return envelope.OK(c, map[string]string{"datapack_id": d.ID, "datapack_name": d.Name,
-		"mcp_server_url": fmt.Sprintf("http://127.0.0.1:%d/mcp", a.Port), "mcp_api_key": a.ClientToken,
+		"mcp_server_url": fmt.Sprintf("http://127.0.0.1:%d/mcp", a.Port), "mcp_api_key": a.keyFor(c),
 		"db_user_name": "", "db_password": "", "db_conn_str": "", "deploy_env": "local"})
 }
 

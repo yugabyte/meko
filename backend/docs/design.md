@@ -193,7 +193,9 @@ CREATE TABLE memories (
 
 ### Schema in the foundation (0001_init.sql)
 
-- `settings(key, value)`: install id, the embedding model and dimension once known.
+- `settings(key, value)`: install id, the embedding model and dimension once known, and since
+  milestone 3 the local user's profile (`profile_first_name`, `profile_last_name`,
+  `profile_email`, `profile_onboarding_done`).
 - `datapacks(id, name UNIQUE, description, created_at, updated_at)`: a local default datapack
   is created on first start. It must not be named `meko_default_datapack*`, because meko_ui
   sets up Langfuse keys for datapacks with that name.

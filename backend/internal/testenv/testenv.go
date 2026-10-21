@@ -149,7 +149,8 @@ func Start(t *testing.T, o Options) *Env {
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: "test", Log: log,
 			Credential: server.CredentialOf}),
 		REST: func(g *echo.Group) {
-			rest.Register(g, rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Log: log})
+			rest.Register(g, rest.Options{Service: svc, Port: port, ClientToken: ClientToken,
+				Credential: server.Credential, Log: log})
 		},
 	})
 	go func() { _ = srv.Serve(ln) }()

@@ -109,6 +109,8 @@ func TestDatapackRoutes(t *testing.T) {
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "no"}, 400, "VALIDATION_ERROR")
 	wantErr(t, e, "GET", "/datapacks/not-a-uuid", nil, 400, "VALIDATION_ERROR")
 	wantErr(t, e, "GET", "/datapacks/00000000-0000-0000-0000-000000000000", nil, 404, "NOT_FOUND")
+	// Any form of the id Cloud's uuid column takes finds the datapack.
+	okData(t, e, "GET", "/datapacks/"+strings.ToUpper(id), nil, 200)
 	if list = arr(okData(t, e, "GET", "/datapacks", nil, 200)); obj(list[0])["datapack_id"] != id {
 		t.Errorf("newest first: %v", list)
 	}
@@ -179,9 +181,9 @@ func TestMemoryRoutes(t *testing.T) {
 		t.Errorf("memories after keep %v", page)
 	}
 	r := obj(okData(t, e, "POST", "/promote-memories", map[string]any{"datapack_id": e.DatapackID, "user_id": e.UserID,
-		"memory_ids": []string{ids[0], ids[1]}}, 200))
-	if len(arr(r["inserted_ids"])) != 1 || len(arr(r["not_found_ids"])) != 1 {
-		t.Errorf("promote (a kept one isn't a learning) %v", r)
+		"memory_ids": []string{ids[0], strings.ToUpper(ids[1])}}, 200))
+	if ins := arr(r["inserted_ids"]); len(ins) != 1 || ins[0] != ids[1] || len(arr(r["not_found_ids"])) != 1 {
+		t.Errorf("promote (a kept one isn't a learning; any case of an id) %v", r)
 	}
 	wantErr(t, e, "POST", "/promote-memories", map[string]any{"datapack_id": e.DatapackID, "memory_ids": []string{"x"}},
 		400, "VALIDATION_ERROR")
@@ -257,7 +259,15 @@ func TestConversationRoutes(t *testing.T) {
 	if len(page2) != 1 || arr(obj(page2[0])["memory_texts"])[0] != "saved during the second turn" {
 		t.Errorf("second page %v", page2)
 	}
+	// A page that the remaining turns exactly fill is the last.
+	for q, more := range map[string]bool{"?messages_limit=1": true, "?messages_limit=1&messages_offset=1": false,
+		"?messages_limit=2": false} {
+		if d = obj(obj(okData(t, e, "GET", base+"/"+conv.ID+q, nil, 200))["conversation"]); d["thread_has_more"] != more {
+			t.Errorf("%s: thread_has_more %v", q, d["thread_has_more"])
+		}
+	}
 	wantErr(t, e, "GET", base+"/"+strings.Repeat("0", 32), nil, 404, "NOT_FOUND")
+	wantErr(t, e, "GET", base+"/-", nil, 404, "NOT_FOUND") // not the latest conversation
 }
 
 func TestMetricsAndArtifacts(t *testing.T) {
@@ -322,5 +332,22 @@ func TestRESTNeedsACredential(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != 401 {
 		t.Errorf("no token: %d", resp.StatusCode)
+	}
+}
+
+// With auth off, the Connect page doesn't hand the client token to callers that sent none.
+func TestProvisionStatusWithAuthOff(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{Auth: "none"})
+	resp, err := http.Get(e.URL + "/api/v1/datapacks/" + e.DatapackID + "/provision-status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var r struct{ Data map[string]any }
+	if err = json.NewDecoder(resp.Body).Decode(&r); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("%d %v", resp.StatusCode, err)
+	}
+	if r.Data["mcp_api_key"] != "" || r.Data["mcp_server_url"] == "" {
+		t.Errorf("provision-status with no credential: %v", r.Data)
 	}
 }

@@ -34,6 +34,11 @@ func Fail(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, Response{Error: &Error{Code: code, Message: message}})
 }
 
+// FailDetails replies with status and an error that carries details.
+func FailDetails(c echo.Context, status int, code, message string, details []string) error {
+	return c.JSON(status, Response{Error: &Error{Code: code, Message: message, Details: details}})
+}
+
 var statusCodes = map[int]string{
 	http.StatusBadRequest:            "BAD_REQUEST",
 	http.StatusUnauthorized:          "UNAUTHORIZED",

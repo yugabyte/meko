@@ -106,12 +106,15 @@ func (a *api) memoryIDs(c echo.Context) (dp, agent string, ids []string, ok bool
 	if len(body.MemoryIDs) == 0 {
 		return "", "", nil, false, badRequest(c, "memory_ids is required")
 	}
-	for _, id := range body.MemoryIDs {
-		if u, perr := uuid.Parse(id); perr != nil || u.String() != strings.ToLower(id) {
+	ids = make([]string, len(body.MemoryIDs))
+	for i, id := range body.MemoryIDs {
+		u, perr := uuid.Parse(id)
+		if perr != nil || u.String() != strings.ToLower(id) {
 			return "", "", nil, false, badRequest(c, "memory_ids must be UUIDs")
 		}
+		ids[i] = u.String() // memory ids are stored lowercase
 	}
-	return dp, body.AgentID, body.MemoryIDs, true, nil
+	return dp, body.AgentID, ids, true, nil
 }
 
 func (a *api) promoteMemories(c echo.Context) error {
@@ -120,6 +123,16 @@ func (a *api) promoteMemories(c echo.Context) error {
 		return err
 	}
 	res, err := a.Service.PromoteMemories(ctx(c), dp, agent, ids)
+	if err != nil && len(res.Inserted) > 0 {
+		// Stopped partway: the generic failure, with the ids already promoted, so a retry knows.
+		a.Log.Error("promote stopped partway", "promoted", len(res.Inserted), "error", err)
+		details := make([]string, len(res.Inserted))
+		for i, id := range res.Inserted {
+			details[i] = "promoted " + id
+		}
+		return envelope.FailDetails(c, http.StatusInternalServerError, "INTERNAL_ERROR",
+			"Could not promote every memory. Please try again.", details)
+	}
 	if err != nil {
 		return serviceError(c, err)
 	}

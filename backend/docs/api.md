@@ -14,8 +14,9 @@ step:
 | #204 | The `/api/v1` REST subset meko_ui calls |
 
 Milestone 3 puts milestone 2's service layer (`internal/memory`) on the wire. Agents (Claude Code,
-AgentK) reach Meko over MCP, and meko_ui (from milestone 6) and the CLI over `/api/v1`, with Meko
-Cloud's tool names, arguments and reply shapes, written here from scratch.
+AgentK, and the CLI's `search`, `add` and `datapacks`) reach Meko over MCP, and meko_ui (from
+milestone 6) over `/api/v1`, with Meko Cloud's tool names, arguments and reply shapes, written here
+from scratch.
 
 ## Auth (#201)
 
@@ -229,27 +230,34 @@ retires this replay.
 `{data, error}` envelope, mounted on the server's `/api/v1` group (1 MB body limit), behind the
 same credential check as `/mcp`. Shapes MCP shares come from `internal/wire`; REST-only ones are in
 the package. The browser can't reach it until the web UI (#172) allows its origin, so its clients
-today are tests, scripts and the CLI.
+today are tests and scripts. (The CLI's one `/api/v1` call is `/api/v1/status`, which
+`internal/server` serves.)
 
 - A `datapack_id` that isn't a UUID gets 400 `VALIDATION_ERROR`, and one that doesn't exist
-  gets 404 with code `NOT_FOUND` (meko_ui reads a 404 without a code as a missing route).
+  gets 404 `NOT_FOUND`. Any form of UUID Cloud's uuid column takes (upper case, no hyphens,
+  braces) is read as the id. A route that isn't served gets 404 `NOT_FOUND` too, so a reply
+  doesn't tell the two apart, and a path that only matches a route's pattern, such as
+  `/datapacks/incoming-shares` (sharing isn't served), gets that route's 400.
 - A body that isn't JSON gets 400 `INVALID_JSON`.
 
 | Area | Routes | Notes |
 |---|---|---|
 | Local user | `GET /auth/config`, `GET /auth/me`, `PATCH /auth/me`, `PATCH /auth/me/profile`, `GET /auth/me/usage` | `{provider: "none"}`. `/auth/me` gives the install's user as `account_id`, the profile kept in `settings` (Local User until changed), `email_verified: true`, `user_type: "pro"`; onboarding starts done (meko_ui's onboarding isn't part of the local UI). Usage counts datapacks, conversations, searches, adds and tracked tokens. |
-| Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page. Agents are those seen in memories, conversations and the call log. |
+| Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page, only to a request that sent a credential: with `auth = "none"`, one that sent none gets `""`, so the token keeps its meaning once auth is back on. Agents are those seen in memories, conversations and the call log. |
 | Metrics | `GET /datapacks/:id/metrics`, `GET /datapacks/:id/token-savings` | From the call log (90 days): searches (`context_search` as hybrid, `memory_search` as memory), tokens sent and saved, score bands, agents, last access, 30 days of activity. Sizes come from the store. Extraction and knowledge-file fields are 0 until #190 and #170. |
 | Artifacts | `GET /datapacks/:id/artifacts`, `POST .../artifacts/:hash/download-url`, `GET .../artifacts/:hash` | Pages from 1 (25, at most 200), newest first, `q` on the filename. `download-url` has no `url` (the bytes are in the database), so meko_ui reads them from the `GET`. A hash that isn't 64 hex: 400 `INVALID_PARAM`; missing: 404 `ARTIFACT_NOT_FOUND`. |
-| Memories | `GET /memories`, `DELETE /memories/:id`, `POST /promote-memories`, `POST /keep-as-memory`, `GET /promoted-memories`, `DELETE /promoted-memories/:id` | The list takes `datapack_id`, `scope=learnings|memories`, `q` (any case) and pages of 20 (at most 100), newest first, `top_k: 0`, every row the local user's (`is_mine`). Promote and keep take `{datapack_id, memory_ids}` (UUIDs). |
+| Memories | `GET /memories`, `DELETE /memories/:id`, `POST /promote-memories`, `POST /keep-as-memory`, `GET /promoted-memories`, `DELETE /promoted-memories/:id` | The list takes `datapack_id`, `scope=learnings|memories`, `q` (any case) and pages of 20 (at most 100), newest first, `top_k: 0`, every row the local user's (`is_mine`). Promote and keep take `{datapack_id, memory_ids}` (UUIDs, any case). A promotion that stops partway (the engine went down) replies 500 `INTERNAL_ERROR` with `promoted <id>` in `details` for each one it did. |
 | Conversations | `GET /datapacks/:id/conversations`, `GET /datapacks/:id/conversations/:cid`, `PATCH /datapacks/:id/conversation-search-opt-out` | The list is most recently active first, 20 to a page (200 at most), with `first_message`, `messages`, `memories_added`; `q` matches the title or any turn. A conversation's thread is oldest first, 100 turns to a page (500 at most). Each turn carries the memories it produced, by time window (below). `llm_calls`, `latency_ms` and `total_tokens` are 0, and `can_index` false. |
 
 ### Which memories a turn produced
 
 Until extraction records which turn made which memory (#190), a turn's memories are those saved
 in its conversation (a memory's `conversation_id`) after the turn before it and no later than it,
-as Meko Cloud infers them. A memory saved during a turn counts for that turn, because AgentK records
-the turn when it ends. Promoted ones are listed apart (`promoted_memory_ids`, `promoted_memory_texts`).
+as Meko Cloud infers them. So a memory counts for a turn only when the agent records the turn
+(`conversation_add_message`) after that turn's `memory_add`s; a turn recorded before them gives
+them to the next turn. Turns come from the agents' own MCP calls (AgentK's Meko client records
+none), so the attribution depends on their order. Promoted ones are listed apart
+(`promoted_memory_ids`, `promoted_memory_texts`).
 
 Left for the web UI (#172): `/runtime-config.js`, the billing summary, the knowledge-file list and
 summary, and message traces. Meko has no sharing, so it has no sharing routes. `/me/meko-tokens`

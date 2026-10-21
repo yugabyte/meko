@@ -129,10 +129,13 @@ func (a *api) conversation(c echo.Context) error {
 	if err != nil {
 		return serviceError(c, err)
 	}
-	cs, turns, err := a.Service.ConversationThread(ctx(c), dp, c.Param("conversation"), limit, offset)
+	// One turn past the page says whether there's another page.
+	cs, turns, err := a.Service.ConversationThread(ctx(c), dp, c.Param("conversation"), limit+1, offset)
 	if err != nil {
 		return serviceError(c, err)
 	}
+	hasMore := len(turns) > limit
+	turns = turns[:min(len(turns), limit)]
 	thread := make([]turn, len(turns))
 	for i, t := range turns {
 		thread[i] = turnOf(t)
@@ -145,5 +148,5 @@ func (a *api) conversation(c echo.Context) error {
 			ThreadOffset  int    `json:"thread_offset"`
 			ThreadHasMore bool   `json:"thread_has_more"`
 			CanIndex      bool   `json:"can_index"`
-		}{a.summary(cs, ""), thread, limit, offset, len(turns) == limit, false}})
+		}{a.summary(cs, ""), thread, limit, offset, hasMore, false}})
 }

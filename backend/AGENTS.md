@@ -23,7 +23,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
-| `internal/memory/` | The service MCP and REST call: memories (through the engine), learnings (keep and promote), artifacts, conversations, conversation search, the sweep that embeds turns, and the call log (recording and pruning). |
+| `internal/memory/` | The service MCP and REST call: memories (through the engine), learnings (keep and promote), artifacts, conversations, conversation search, the sweep that embeds turns, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
 | `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), and the client token MCP and REST clients send (`client.token`, kept across restarts). |
 | `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |

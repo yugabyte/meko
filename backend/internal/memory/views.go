@@ -89,7 +89,11 @@ func (s *Service) ConversationThread(ctx context.Context, datapack, id string, l
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return store.ConversationSummary{}, nil, err
 	}
-	c, err := s.st.ConversationSummaryOf(ctx, datapack, normalizeID(id))
+	id = normalizeID(id)
+	if id == "" { // "-" or blank: the store reads an empty id as "the latest conversation"
+		return store.ConversationSummary{}, nil, ErrNoConversation
+	}
+	c, err := s.st.ConversationSummaryOf(ctx, datapack, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return c, nil, ErrNoConversation
 	}

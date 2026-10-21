@@ -26,17 +26,32 @@ type Options struct {
 	Port int
 	// ClientToken is what the Connect page shows clients to send.
 	ClientToken string
-	Log         *slog.Logger
+	// Credential is the credential a request got in with (admin, client or none), set by the
+	// server's auth check.
+	Credential func(echo.Context) string
+	Log        *slog.Logger
 }
 
 type api struct {
 	Options
 }
 
+// keyFor is the client token for a request that sent a credential, and "" for one let in by
+// auth = "none".
+func (a *api) keyFor(c echo.Context) string {
+	if cred := a.Credential(c); cred == "admin" || cred == "client" {
+		return a.ClientToken
+	}
+	return ""
+}
+
 // Register adds the routes to the /api/v1 group.
 func Register(g *echo.Group, o Options) {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
+	}
+	if o.Credential == nil {
+		o.Credential = func(echo.Context) string { return "" }
 	}
 	a := &api{o}
 	g.GET("/auth/config", a.authConfig)
@@ -89,9 +104,12 @@ func (a *api) datapack(c echo.Context, id string) (string, bool, error) {
 	if id == "" {
 		return "", false, badRequest(c, "datapack_id is required")
 	}
-	if _, err := uuid.Parse(id); err != nil {
+	u, err := uuid.Parse(id)
+	if err != nil {
 		return "", false, badRequest(c, "datapack_id must be a valid UUID")
 	}
+	id = u.String() // ids are stored lowercase with hyphens; Cloud's uuid column takes any form
+
 	if _, err := a.Service.Datapack(c.Request().Context(), id); err != nil {
 		if errors.Is(err, memory.ErrNoDatapack) {
 			return "", false, notFound(c, fmt.Sprintf("datapack %q not found", id))
