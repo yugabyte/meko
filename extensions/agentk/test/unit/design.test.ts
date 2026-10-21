@@ -208,6 +208,6 @@ describe('design frame', () => {
 
   it('loads the same Mermaid version that is bundled for markdown designs', () => {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), 'node_modules/mermaid/package.json'), 'utf8')) as { version: string };
-    expect(MERMAID_VERSION).toBe(pkg.version);
+    expect(mermaidLoader('<pre class="mermaid">graph TD</pre>')).toContain(`/npm/mermaid@${pkg.version}/dist/`);
   });
 });
