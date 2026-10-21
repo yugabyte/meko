@@ -4,7 +4,10 @@
 //	  config.toml      optional
 //	  meko.db          the only database (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
-//	  logs/            meko-local.log, start.log
+//	    children/      each child's pid and process group, for stop
+//	  logs/            meko-local.log, start.log, engine.log
+//	  models/          embedding model files, downloaded on first start
+//	  engine/          the engine's own state (mem0's config folder)
 package paths
 
 import (
@@ -19,17 +22,23 @@ import (
 
 // Layout is every path in one data folder.
 type Layout struct {
-	Root     string
-	Config   string
-	DB       string
-	RunDir   string
-	LogDir   string
-	Lock     string
-	Pid      string
-	Port     string
-	Token    string
-	Log      string
-	StartLog string
+	Root        string
+	Config      string
+	DB          string
+	RunDir      string
+	LogDir      string
+	Lock        string
+	Pid         string
+	Port        string
+	Token       string
+	Log         string
+	StartLog    string
+	StoreSock   string // the store API the engine calls
+	EngineSock  string // the engine's API
+	ChildrenDir string
+	ModelsDir   string
+	EngineDir   string
+	EngineLog   string
 }
 
 // New returns the layout of the data folder at root (an absolute path).
@@ -37,23 +46,38 @@ func New(root string) Layout {
 	run := filepath.Join(root, "run")
 	logs := filepath.Join(root, "logs")
 	return Layout{
-		Root:     root,
-		Config:   filepath.Join(root, "config.toml"),
-		DB:       filepath.Join(root, "meko.db"),
-		RunDir:   run,
-		LogDir:   logs,
-		Lock:     filepath.Join(run, "meko-local.lock"),
-		Pid:      filepath.Join(run, "meko-local.pid"),
-		Port:     filepath.Join(run, "meko-local.port"),
-		Token:    filepath.Join(run, "admin.token"),
-		Log:      filepath.Join(logs, "meko-local.log"),
-		StartLog: filepath.Join(logs, "start.log"),
+		Root:        root,
+		Config:      filepath.Join(root, "config.toml"),
+		DB:          filepath.Join(root, "meko.db"),
+		RunDir:      run,
+		LogDir:      logs,
+		Lock:        filepath.Join(run, "meko-local.lock"),
+		Pid:         filepath.Join(run, "meko-local.pid"),
+		Port:        filepath.Join(run, "meko-local.port"),
+		Token:       filepath.Join(run, "admin.token"),
+		Log:         filepath.Join(logs, "meko-local.log"),
+		StartLog:    filepath.Join(logs, "start.log"),
+		StoreSock:   filepath.Join(run, "store.sock"),
+		EngineSock:  filepath.Join(run, "engine.sock"),
+		ChildrenDir: filepath.Join(run, "children"),
+		ModelsDir:   filepath.Join(root, "models"),
+		EngineDir:   filepath.Join(root, "engine"),
+		EngineLog:   filepath.Join(logs, "engine.log"),
 	}
 }
 
-// Ensure creates the folders, readable only by this user.
+// MaxSocketPath is the longest unix socket path every supported OS takes (macOS allows 104 bytes,
+// Linux 108, both counting the final NUL).
+const MaxSocketPath = 103
+
+// Ensure creates the folders, readable only by this user. A data folder whose sockets would be too
+// long a path for the OS is refused.
 func (l Layout) Ensure() error {
-	for _, d := range []string{l.Root, l.RunDir, l.LogDir} {
+	if len(l.EngineSock) > MaxSocketPath {
+		return fmt.Errorf("the data folder %s is too deep: its sockets' paths would be longer than %d bytes. "+
+			"Choose a shorter path with --data-dir or %s", l.Root, MaxSocketPath, HomeEnv)
+	}
+	for _, d := range []string{l.Root, l.RunDir, l.ChildrenDir, l.LogDir, l.ModelsDir, l.EngineDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}

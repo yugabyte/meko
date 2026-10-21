@@ -25,7 +25,7 @@ engine/dist/main.js: engine/node_modules/.package-lock.json $(ENGINE_SRC)
 
 engine: engine/dist/main.js
 
-# The engine is built first, then both suites run.
+# The Go tests start the built engine, so it's built first.
 test: engine
 	go test -race -tags $(TAGS) ./...
 	cd engine && npm test

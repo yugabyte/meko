@@ -74,8 +74,20 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+// shortDir is a temp folder with a short path: t.TempDir() on macOS can be too deep for the data
+// folder's sockets.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "mk-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestEnsurePermissions(t *testing.T) {
-	l := New(filepath.Join(t.TempDir(), "data"))
+	l := New(filepath.Join(shortDir(t), "data"))
 	if err := l.Ensure(); err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +101,18 @@ func TestEnsurePermissions(t *testing.T) {
 	}
 	if fi, err := os.Stat(l.Pid); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("pid file: mode %v, err %v", fi.Mode().Perm(), err)
+	}
+}
+
+// A data folder whose sockets' paths would pass the OS's limit is refused before anything is made.
+func TestEnsureRefusesADeepFolder(t *testing.T) {
+	deep := filepath.Join(shortDir(t), strings.Repeat("d", MaxSocketPath))
+	err := New(deep).Ensure()
+	if err == nil || !strings.Contains(err.Error(), "too deep") {
+		t.Fatalf("a deep data folder: %v", err)
+	}
+	if _, err := os.Stat(deep); !os.IsNotExist(err) {
+		t.Errorf("the refused folder was made: %v", err)
 	}
 }
 

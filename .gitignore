@@ -14,5 +14,6 @@ state.db-*
 # Laid beside the mod by Claude Code when it loads it from here (claude --plugin-dir src/mod/agentk).
 extensions/agentk/src/mod/agentk/.claude-plugin/types/
 extensions/agentk/src/mod/agentk/tsconfig.json
-# Meko Local backend build output.
+# Meko Local backend build output, and the embedding model the Go tests keep between runs.
 backend/bin/
+backend/engine/.models/

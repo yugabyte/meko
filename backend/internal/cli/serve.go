@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"runtime"
@@ -14,10 +15,13 @@ import (
 
 	"github.com/yugabyte/meko-local/backend/internal/auth"
 	"github.com/yugabyte/meko-local/backend/internal/config"
+	"github.com/yugabyte/meko-local/backend/internal/engine"
 	"github.com/yugabyte/meko-local/backend/internal/logging"
+	"github.com/yugabyte/meko-local/backend/internal/memory"
 	"github.com/yugabyte/meko-local/backend/internal/paths"
 	"github.com/yugabyte/meko-local/backend/internal/server"
 	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko-local/backend/internal/storeapi"
 	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 	"github.com/yugabyte/meko-local/backend/internal/version"
 )
@@ -27,6 +31,11 @@ const (
 	drainTimeout     = 10 * time.Second
 	childStopTimeout = 15 * time.Second
 )
+
+// testEmbedder, if set, makes the engine use a deterministic hashing embedder instead of
+// downloading its model. Only this package's tests set it (cli_test.go's TestMain), so no
+// environment can switch the shipped binary's model.
+var testEmbedder string
 
 // ServeOptions configure Serve.
 type ServeOptions struct {
@@ -102,6 +111,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if _, err = st.EnsureDefaultDatapack(ctx); err != nil {
 		return err
 	}
+	userID, err := st.EnsureLocalUserID(ctx)
+	if err != nil {
+		return err
+	}
 	libs, err := store.LibVersions()
 	if err != nil {
 		return err
@@ -116,20 +129,52 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := auth.WriteToken(l.Token, token); err != nil {
+	if err = auth.WriteToken(l.Token, token); err != nil {
 		return err
 	}
-	if err := paths.WriteFile(l.Port, []byte(strconv.Itoa(cfg.Server.Port)+"\n")); err != nil {
+	if err = paths.WriteFile(l.Port, []byte(strconv.Itoa(cfg.Server.Port)+"\n")); err != nil {
 		return err
 	}
 
+	// The store API the engine calls, on its unix socket with a per-start token of its own.
+	internalToken, err := auth.NewToken()
+	if err != nil {
+		return err
+	}
+	sln, err := storeapi.Listen(l.StoreSock)
+	if err != nil {
+		return err
+	}
+	sapi := storeapi.New(st, internalToken, log, nil)
+	go func() {
+		if err := sapi.Serve(sln); err != nil {
+			log.Error("store API stopped", "error", err)
+		}
+	}()
+
+	// Children a killed server left behind (their pid files are in run/children).
+	if n, err := supervisor.KillRecorded(l.ChildrenDir); err != nil || n > 0 {
+		log.Warn("killed children a previous server left running", "count", n, "error", err)
+	}
 	sup := supervisor.New(log)
+	noEngine := startEngine(sup, l, cfg, internalToken, log)
+	svc := memory.New(st, engine.NewClient(l.EngineSock, internalToken), memory.Options{
+		UserID: userID, Log: log, NoEngine: noEngine, EngineChild: func() (supervisor.Status, bool) {
+			for _, c := range sup.Statuses() {
+				if c.Name == engine.Name {
+					return c, true
+				}
+			}
+			return supervisor.Status{}, false
+		},
+	})
+
 	srv := server.New(server.Options{
 		Info: server.Info{
 			Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
 			Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
 		},
-		Port: cfg.Server.Port, Token: token, Logger: log, Children: sup.Statuses,
+		Port: cfg.Server.Port, Token: token, Logger: log, Children: sup.Statuses, Engine: svc.EngineStatus,
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
@@ -152,6 +197,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err := sup.Stop(stop); err != nil {
 		log.Warn("children didn't stop in time", "error", err)
 	}
+	if err := sapi.Shutdown(stop); err != nil {
+		log.Warn("store API requests didn't finish in time", "error", err)
+	}
 	if err := st.Checkpoint(context.Background()); err != nil {
 		log.Warn("WAL checkpoint failed", "error", err)
 	}
@@ -159,8 +207,25 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	return serveErr
 }
 
+// startEngine starts the memory engine under sup, or says why it can't (no Node, or the engine
+// isn't built): the server then runs without it, and memory features say why.
+func startEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string, log *slog.Logger) string {
+	o := engine.Options{Node: cfg.Engine.Node, Dir: cfg.Engine.Dir, TestEmbedder: testEmbedder}
+	node, err := engine.FindNode(o)
+	if err == nil {
+		var dir string
+		if dir, err = engine.FindDir(o); err == nil {
+			sup.Start(engine.Spec(node, dir, l, token, o))
+			log.Info("memory engine starting", "node", node, "dir", dir)
+			return ""
+		}
+	}
+	log.Warn("the memory engine can't start; memory features are off", "reason", err)
+	return err.Error()
+}
+
 func removeRunFiles(l paths.Layout) {
-	for _, p := range []string{l.Pid, l.Port, l.Token} {
+	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.EngineSock} {
 		_ = paths.RemoveIfExists(p)
 	}
 }

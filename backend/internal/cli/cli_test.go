@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/yugabyte/meko-local/backend/internal/config"
 	"github.com/yugabyte/meko-local/backend/internal/paths"
+	"github.com/yugabyte/meko-local/backend/internal/supervisor"
 )
 
 // TestMain doubles as the meko-local binary: start re-runs os.Executable() (this test binary)
@@ -27,10 +30,14 @@ func TestMain(m *testing.M) {
 		if mode := os.Getenv("MEKO_TEST_SERVE"); mode != "" {
 			hungServe(mode)
 		}
+		testEmbedder = os.Getenv(testEmbedderEnv)
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
 }
+
+// testEmbedderEnv passes testEmbedder to the serve a test starts (as this test binary).
+const testEmbedderEnv = "MEKO_TEST_EMBEDDER"
 
 // hungServe stands in for a serve that takes the lock and writes its pid but never answers;
 // "hang-ignore-term" also ignores SIGTERM, so only SIGKILL stops it.
@@ -42,11 +49,25 @@ func hungServe(mode string) {
 		}
 	}
 	l := paths.New(dir)
-	if mode == "hang-ignore-term" {
+	if mode == "hang-ignore-term" || mode == "hang-with-child" {
 		signal.Ignore(syscall.SIGTERM)
 	}
 	if err := l.Ensure(); err != nil {
 		os.Exit(2)
+	}
+	if mode == "hang-with-child" { // a child in its own process group, recorded as serve records the engine
+		child := exec.Command("sleep", "3600")
+		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		rec, err := supervisor.Record(child.Process.Pid)
+		if err != nil {
+			os.Exit(2)
+		}
+		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "engine"), []byte(rec)); err != nil {
+			os.Exit(2)
+		}
 	}
 	lock, err := acquireLock(l.Lock)
 	if err != nil {
@@ -100,11 +121,23 @@ func want(t *testing.T, what string, code, wantCode int, text, wantText string) 
 	}
 }
 
+// shortDir is a temp folder with a short path: the data folder's unix sockets must fit the OS's
+// limit, which t.TempDir() can pass on macOS.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "mk-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // setup gives a test its own home and data folder, and a free port.
 func setup(t *testing.T) (dir, port string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	dir = t.TempDir()
+	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
 	t.Cleanup(func() { run("stop", "--data-dir", dir) })
 	return dir, port
@@ -252,5 +285,137 @@ func TestStopKillsAServerThatIgnoresSIGTERM(t *testing.T) {
 	want(t, "stop of a server ignoring SIGTERM", code, 0, out+errs, "didn't stop within 1s, so it was killed")
 	if _, err := os.Stat(l.Pid); !os.IsNotExist(err) {
 		t.Errorf("pid file left behind: %v", err)
+	}
+}
+
+// stop's SIGKILL path also kills the children a hung server recorded, in their own groups.
+// startHungServe starts a serve that hangs after recording a child in its own process group, as
+// serve records the engine, and returns it and the child's pid.
+func startHungServe(t *testing.T, dir string) (*exec.Cmd, int) {
+	t.Helper()
+	l := paths.New(dir)
+	t.Setenv("MEKO_TEST_SERVE", "hang-with-child")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "serve", "--data-dir", dir)
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = cmd.Wait() }()
+	var child int
+	for deadline := time.Now().Add(10 * time.Second); child == 0; time.Sleep(50 * time.Millisecond) {
+		if b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "engine")); err == nil {
+			_, _ = fmt.Sscanf(string(b), "%d", &child)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the hung serve never recorded its child")
+		}
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-child, syscall.SIGKILL) })
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if up, _ := running(l.Lock); up {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the hung serve never took the lock")
+		}
+	}
+	t.Setenv("MEKO_TEST_SERVE", "")
+	return cmd, child
+}
+
+// waitGone waits for the child's process to end, and checks its record is gone.
+func waitGone(t *testing.T, dir string, child int, after string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(child, 0) == nil; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the child outlived %s", after)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(paths.New(dir).ChildrenDir, "engine")); !os.IsNotExist(err) {
+		t.Errorf("the child's record outlived %s: %v", after, err)
+	}
+}
+
+func TestStopKillsAHungServersChildren(t *testing.T) {
+	dir, _ := setup(t)
+	shorten(t, &stopTimeout, time.Second)
+	_, child := startHungServe(t, dir)
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "so it was killed")
+	waitGone(t, dir, child, "stop")
+}
+
+// A serve killed from outside leaves its child: stop, finding no server, kills it.
+func TestStopKillsAKilledServersChildren(t *testing.T) {
+	dir, _ := setup(t)
+	serve, child := startHungServe(t, dir)
+	_ = serve.Process.Kill()
+	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
+		t.Fatal("the killed serve's lock wasn't released")
+	}
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "isn't running")
+	waitGone(t, dir, child, "stop")
+}
+
+// A serve killed from outside leaves its child: the next serve kills it before starting its own.
+func TestServeKillsAKilledServersChildren(t *testing.T) {
+	dir, port := setup(t)
+	serve, child := startHungServe(t, dir)
+	_ = serve.Process.Kill()
+	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
+		t.Fatal("the killed serve's lock wasn't released")
+	}
+	t.Setenv("MEKO_LOCAL_ENGINE_DIR", t.TempDir()) // no engine, so no new record
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko Local is running")
+	waitGone(t, dir, child, "the next serve's start")
+}
+
+// serve starts the engine (with the test embedder), status reports it ready, and stop stops it.
+func TestServeRunsTheEngine(t *testing.T) {
+	engineDir, err := filepath.Abs(filepath.Join("..", "..", "engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(engineDir, "dist", "main.js")); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skip("the engine isn't built (make test builds it)")
+	}
+	dir, port := setup(t)
+	t.Setenv("MEKO_LOCAL_ENGINE_DIR", engineDir)
+	t.Setenv(testEmbedderEnv, "hash")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko Local is running")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		_, out, _ = run("status", "--data-dir", dir)
+		if strings.Contains(out, "Engine:   ready, test hash (384 dims)") && strings.Contains(out, "engine running") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the engine never got ready:\n%s", out)
+		}
+	}
+	l := paths.New(dir)
+	b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enginePid int
+	_, _ = fmt.Sscanf(string(b), "%d", &enginePid)
+	code, out, _ = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out, "Meko Local stopped.")
+	if enginePid == 0 || syscall.Kill(enginePid, 0) == nil {
+		t.Errorf("the engine (pid %d) outlived stop", enginePid)
+	}
+	for _, p := range []string{l.StoreSock, l.EngineSock, filepath.Join(l.ChildrenDir, "engine")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left behind", p)
+		}
 	}
 }

@@ -141,7 +141,7 @@ func runStop(l paths.Layout, stdout, stderr io.Writer) int {
 	if !waitUnlocked(l.Lock, 5*time.Second) {
 		return fail(stderr, fmt.Errorf("pid %d didn't stop, even after SIGKILL", pid))
 	}
-	cleanRunFiles(l)
+	cleanRunFiles(l) // and its children, in process groups the SIGKILL didn't reach
 	fmt.Fprintf(stdout, "Meko Local didn't stop within %s, so it was killed.\n", stopTimeout)
 	return exitOK
 }
@@ -180,6 +180,14 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "  PID:      %d\n", st.PID)
 	fmt.Fprintf(stdout, "  Uptime:   %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
 	fmt.Fprintf(stdout, "  Data:     %s\n", st.DataDir)
+	engineLine := "  Engine:   " + st.Engine.State
+	if e := st.Engine.Embedder; e != nil && e.Model != "" {
+		engineLine += fmt.Sprintf(", %s %s (%d dims)", e.Provider, e.Model, e.Dims)
+	}
+	if st.Engine.Reason != "" {
+		engineLine += " (" + st.Engine.Reason + ")"
+	}
+	fmt.Fprintln(stdout, engineLine)
 	if len(st.Children) == 0 {
 		fmt.Fprintf(stdout, "  Children: none\n")
 	}
