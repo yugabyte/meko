@@ -1,6 +1,6 @@
 // Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and token checks, and
-// the foundation's routes (replies use internal/envelope). /mcp and the rest of /api/v1 come in
-// the later PRs of milestone 3 (docs/api.md), and the UI in a later milestone.
+// the foundation's routes (replies use internal/envelope). /mcp is mounted on it (Options.MCP);
+// the rest of /api/v1 comes in #204 (docs/api.md), and the UI in a later milestone.
 package server
 
 import (
@@ -54,7 +54,12 @@ type Options struct {
 	Logger   *slog.Logger
 	Children func() []supervisor.Status
 	Engine   func(ctx context.Context) memory.EngineStatus // nil reports no engine
+	// MCP, if set, serves /mcp (internal/mcp), with a body limit of MCPBodyLimit.
+	MCP http.Handler
 }
+
+// MCPBodyLimit caps request bodies on /mcp: room for a 5 MiB artifact in base64.
+const MCPBodyLimit = "8M"
 
 // Server is the HTTP server.
 type Server struct {
@@ -97,6 +102,15 @@ func New(opts Options) *Server {
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
 	v1.GET("/status", s.status)
 	v1.GET("/version", s.version)
+	if opts.MCP != nil {
+		// The handler reads the credential from the request's context, outside echo.
+		e.Any("/mcp", func(c echo.Context) error {
+			r := c.Request()
+			r = r.WithContext(context.WithValue(r.Context(), credentialCtxKey{}, Credential(c)))
+			opts.MCP.ServeHTTP(c.Response(), r)
+			return nil
+		}, middleware.BodyLimit(MCPBodyLimit))
+	}
 	s.srv = &http.Server{Handler: e, ReadHeaderTimeout: 10 * time.Second}
 	return s
 }
@@ -166,6 +180,14 @@ const (
 )
 
 const credentialKey = "meko.credential" //nolint:gosec // G101: a context key, not a secret
+
+type credentialCtxKey struct{}
+
+// CredentialOf is the credential a request to /mcp was let in with, for its handler.
+func CredentialOf(r *http.Request) string {
+	v, _ := r.Context().Value(credentialCtxKey{}).(string)
+	return v
+}
 
 // Credential is the credential a request was let in with.
 func Credential(c echo.Context) string {

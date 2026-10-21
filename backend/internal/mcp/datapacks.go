@@ -1,0 +1,322 @@
+package mcp
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/wire"
+)
+
+// Limits on datapack_search, as Cloud's.
+const (
+	maxQueryLen       = 200
+	defaultSearchPage = 20
+	maxSearchPage     = 100
+)
+
+func datapackTools() []*tool {
+	pTrace := param{name: "conversation_id", typ: "string", def: "",
+		desc: "The conversation this call belongs to: the id conversation_create returned."}
+	pTarget := param{name: "datapack_id", typ: "string", required: true, desc: "The datapack's UUID."}
+	return []*tool{
+		{
+			name: "datapack_list", title: "List Datapacks", kind: readOnly, failCode: "list_failed",
+			desc: "List every datapack: Meko's separate spaces of memories, conversations and files.",
+			params: []param{pTrace, pDatapack,
+				{name: "query", typ: "string", def: "", desc: "Only datapacks whose name contains this."},
+				{name: "limit", typ: "integer", def: 0, desc: "The most datapacks to return; 0 for all."}},
+			run: datapackList,
+		},
+		{
+			name: "datapack_search", title: "Search Datapacks", kind: readOnly, failCode: "search_failed",
+			desc: "Find datapacks by name, a page at a time.",
+			params: []param{pTrace,
+				{name: "query", typ: "string", def: "", desc: "Text the name contains (200 characters at most)."},
+				{name: "name", typ: "string", def: "", desc: "The exact name."},
+				{name: "limit", typ: "integer", def: defaultSearchPage, desc: "The most to return (1 to 100)."},
+				{name: "cursor", typ: "string", def: "", desc: "next_cursor from the page before."},
+				{name: "grant", typ: "string", def: "", desc: "owner, shared or blank for both."},
+				{name: "sort", typ: "string", def: "created", desc: "created (newest first) or name."},
+				{name: "include_total", typ: "boolean", def: false, desc: "Also count every match."},
+				pDatapack},
+			run: datapackSearch,
+		},
+		{
+			name: "datapack_create", title: "Create Datapack", kind: write, failCode: "create_failed",
+			desc: "Create a datapack: a separate space of memories, conversations and files.",
+			params: []param{
+				{name: "name", typ: "string", required: true, desc: "Its name: 3 to 60 characters, unique."},
+				pTrace, pDatapack},
+			run: datapackCreate,
+		},
+		{
+			name: "datapack_describe", title: "Describe Datapack", kind: readOnly, failCode: "describe_failed",
+			desc: "Describe a datapack and count what it holds: memories, learnings (memories waiting to be kept " +
+				"or promoted), collective memories and conversations.",
+			params: []param{
+				{name: "datapack_id", typ: "string", def: "", desc: "The datapack's UUID; blank for the default."},
+				{name: "include_status", typ: "boolean", def: false, desc: "Also report its status."},
+				pTrace},
+			run: datapackDescribe,
+		},
+		{
+			name: "datapack_update", title: "Update Datapack", kind: write, failCode: "update_failed",
+			desc: "Rename a datapack, change its description, or opt it out of conversation search (or back " +
+				"in). A blank value leaves that field as it is.",
+			params: []param{pTarget,
+				{name: "name", typ: "string", nullable: true, desc: "The new name."},
+				{name: "description", typ: "string", nullable: true, desc: "The new description."},
+				{name: "conversation_search_opt_out", typ: "boolean", nullable: true,
+					desc: "True stops new turns from being searchable; false makes them searchable again."},
+				pTrace},
+			run: datapackUpdate,
+		},
+		{
+			name: "datapack_delete", title: "Delete Datapack", kind: destructive, failCode: "delete_failed",
+			desc:   "Delete a datapack and everything in it, for good.",
+			params: []param{pTarget, pTrace},
+			run:    datapackDelete,
+		},
+	}
+}
+
+func datapackRows(ds []store.Datapack, userID string) []wire.Datapack {
+	out := make([]wire.Datapack, len(ds))
+	for i, d := range ds {
+		out[i] = wire.DatapackRow(d, userID)
+	}
+	return out
+}
+
+func datapackList(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	query, err := a.str("query")
+	if err != nil {
+		return nil, err
+	}
+	limit, err := a.integer("limit", 0)
+	if err != nil {
+		return nil, err
+	}
+	ds, err := c.svc.Datapacks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ds = matching(ds, query, "")
+	sortDatapacks(ds, "created")
+	if limit > 0 && len(ds) > limit {
+		ds = ds[:limit]
+	}
+	return datapackRows(ds, c.svc.UserID()), nil
+}
+
+// matching keeps the datapacks whose name contains query (any case) and, if name is set, is name.
+func matching(ds []store.Datapack, query, name string) []store.Datapack {
+	out := []store.Datapack{}
+	q := strings.ToLower(strings.TrimSpace(query))
+	for _, d := range ds {
+		if (q == "" || strings.Contains(strings.ToLower(d.Name), q)) && (name == "" || d.Name == name) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// sortDatapacks orders datapacks newest first, or by name.
+func sortDatapacks(ds []store.Datapack, by string) {
+	sort.SliceStable(ds, func(i, j int) bool {
+		if by == "name" {
+			return strings.ToLower(ds[i].Name) < strings.ToLower(ds[j].Name)
+		}
+		return ds[i].CreatedAt.After(ds[j].CreatedAt)
+	})
+}
+
+func datapackSearch(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	var query, name, cursor, grant, by string
+	var err error
+	for n, dst := range map[string]*string{"query": &query, "name": &name, "cursor": &cursor, "grant": &grant,
+		"sort": &by} {
+		if *dst, err = a.str(n); err != nil {
+			return nil, err
+		}
+	}
+	limit, err := a.integer("limit", defaultSearchPage)
+	if err != nil {
+		return nil, err
+	}
+	withTotal, err := a.boolean("include_total")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case utf8.RuneCountInString(query) > maxQueryLen:
+		return nil, fail("invalid_query", "query must be 200 characters or fewer.")
+	case grant != "" && grant != "owner" && grant != "shared":
+		return nil, fail("invalid_grant", "grant must be owner, shared or blank.")
+	case by != "" && by != "created" && by != "name":
+		return nil, fail("invalid_sort", "sort must be created or name.")
+	}
+	offset := 0
+	if cursor != "" {
+		if offset, err = strconv.Atoi(cursor); err != nil || offset < 0 {
+			return nil, fail("cursor_not_supported", "cursor must be a next_cursor this tool returned.")
+		}
+	}
+	ds, err := c.svc.Datapacks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ds = matching(ds, query, name)
+	if grant == "shared" { // the local user owns every datapack
+		ds = nil
+	}
+	sortDatapacks(ds, by)
+	limit = min(max(limit, 1), maxSearchPage)
+	total := len(ds)
+	start := min(offset, total) // before adding limit, so a huge cursor can't overflow
+	end := min(start+limit, total)
+	out := map[string]any{"datapacks": datapackRows(ds[start:end], c.svc.UserID()), "has_more": end < total,
+		"next_cursor": "", "total": nil}
+	if end < total {
+		out["next_cursor"] = strconv.Itoa(end)
+	}
+	if withTotal {
+		out["total"] = total
+	}
+	return out, nil
+}
+
+func datapackCreate(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	name, err := a.str("name")
+	if err != nil {
+		return nil, err
+	}
+	d, err := c.svc.CreateDatapack(ctx, name, "")
+	if err != nil {
+		return nil, datapackError(err)
+	}
+	c.rec.DatapackID = d.ID
+	return map[string]string{"datapack_id": d.ID, "agent_id": memory.DefaultAgentID, "name": d.Name}, nil
+}
+
+// datapackError is a datapack write's error with the codes Cloud's API gives them. Cloud's
+// datapack_update and datapack_delete pass on its API's error, so a missing datapack is NOT_FOUND
+// there rather than the datapack_access_denied other tools reply.
+func datapackError(err error) error {
+	switch {
+	case errors.Is(err, memory.ErrNoDatapack):
+		return fail("NOT_FOUND", "No such datapack.")
+	case errors.Is(err, memory.ErrDuplicateName):
+		return fail("CONFLICT", "A datapack with that name already exists.")
+	case errors.Is(err, memory.ErrBadRequest):
+		return fail("VALIDATION_ERROR", strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
+	}
+	return err
+}
+
+func datapackDescribe(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	withStatus, err := a.boolean("include_status")
+	if err != nil {
+		return nil, err
+	}
+	dp, err := c.datapack(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	d, err := c.svc.Datapack(ctx, dp)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := c.svc.CountDatapack(ctx, dp)
+	if err != nil {
+		return nil, err
+	}
+	desc := wire.Describe(d, c.svc.UserID(), counts)
+	if !withStatus {
+		return desc, nil
+	}
+	return struct {
+		wire.DatapackDescription
+		Status map[string]any `json:"status"`
+	}{desc, map[string]any{"agent_count": 0, "knowledge_base_count": 0, "status": "ready"}}, nil
+}
+
+func datapackUpdate(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	id, err := a.str("datapack_id")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, fail("datapack_id_required", "Pass datapack_id (UUID). Use datapack_search(query=...) to find it.")
+	}
+	c.rec.DatapackID = id
+	name, err := blankIsNil(a, "name")
+	if err != nil {
+		return nil, err
+	}
+	desc, err := blankIsNil(a, "description")
+	if err != nil {
+		return nil, err
+	}
+	optOut, err := a.optBool("conversation_search_opt_out")
+	if err != nil {
+		return nil, err
+	}
+	if name == nil && desc == nil && optOut == nil {
+		return map[string]string{"result": "nothing_to_update", "detail": "Pass at least one of `name`, " +
+			"`description`, or `conversation_search_opt_out` to update."}, nil
+	}
+	if _, err = c.svc.UpdateDatapack(ctx, id, name, desc, optOut); err != nil {
+		return nil, datapackError(err)
+	}
+	return map[string]string{"message": "datapack updated"}, nil
+}
+
+// blankIsNil is a string argument, nil when absent, null or blank: Cloud's datapack_update treats
+// a blank value as not given.
+func blankIsNil(a args, name string) (*string, error) {
+	s, err := a.optStr(name)
+	if err != nil || s == nil || strings.TrimSpace(*s) == "" {
+		return nil, err
+	}
+	return s, nil
+}
+
+func datapackDelete(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	id, err := a.str("datapack_id")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, fail("datapack_id_required", "Pass datapack_id (UUID). Use datapack_search(query=...) to find it.")
+	}
+	c.rec.DatapackID = id
+	if err = c.svc.DeleteDatapack(ctx, id); err != nil {
+		return nil, datapackError(err)
+	}
+	return map[string]string{"message": "datapack deleted"}, nil
+}

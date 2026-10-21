@@ -250,3 +250,48 @@ func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
 	}
 	return EngineStatus{State: h.State, Reason: h.Error, Embedder: &h.Embedder}
 }
+
+// DeleteAllMemories deletes the local user's memories in a datapack written by one agent,
+// optionally only those of one conversation, and says how many it deleted. Each goes through the
+// engine, which also unlinks it from mem0's entities.
+func (s *Service) DeleteAllMemories(ctx context.Context, datapack, agentID, conversationID string) (int, error) {
+	if err := s.needDatapack(ctx, datapack); err != nil {
+		return 0, err
+	}
+	ids, err := s.st.MemoryIDs(ctx, datapack, s.userID, agentOr(agentID), conversationID)
+	if err != nil {
+		return 0, err
+	}
+	for i, id := range ids {
+		if err := s.engineErr(s.eng.Delete(ctx, datapack, id)); err != nil && !errors.Is(err, ErrNotFound) {
+			return i, err
+		}
+	}
+	return len(ids), nil
+}
+
+// Page asks for a page of the local user's memories, newest first.
+type Page struct {
+	DatapackID string
+	AgentID    string // "" for every agent's
+	Query      string // a case-insensitive substring of the text
+	Page       int    // from 1
+	PageSize   int
+}
+
+// ListMemoryPage is a page of the local user's memories and how many match in all.
+func (s *Service) ListMemoryPage(ctx context.Context, p Page) ([]engine.Memory, int, error) {
+	if err := s.needDatapack(ctx, p.DatapackID); err != nil {
+		return nil, 0, err
+	}
+	recs, total, err := s.st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: p.DatapackID, UserID: s.userID,
+		AgentID: p.AgentID, Query: p.Query, Limit: p.PageSize, Offset: (max(p.Page, 1) - 1) * p.PageSize})
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]engine.Memory, len(recs))
+	for i, r := range recs {
+		out[i] = fromRecord(p.DatapackID, r)
+	}
+	return out, total, nil
+}

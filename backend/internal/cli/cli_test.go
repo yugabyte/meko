@@ -184,6 +184,12 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	if len(strings.TrimSpace(tok)) != 64 {
 		t.Fatalf("token %q", tok)
 	}
+	// A killed server's port file is left behind; with no server, --mcp names the configured port.
+	if err := paths.WriteFile(paths.New(dir).Port, []byte("1\n")); err != nil {
+		t.Fatal(err)
+	}
+	code, mcpOut, _ := run("token", "--data-dir", dir, "--mcp")
+	want(t, "token --mcp with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")
@@ -471,4 +477,49 @@ func TestServeRunsTheEngine(t *testing.T) {
 			t.Errorf("%s left behind", p)
 		}
 	}
+}
+
+func TestSearchAddAndDatapacks(t *testing.T) {
+	engineDir, err := filepath.Abs(filepath.Join("..", "..", "engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(engineDir, "dist", "main.js")); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skip("the engine isn't built (make test builds it)")
+	}
+	dir, port := setup(t)
+	code, _, errs := run("search", "--data-dir", dir, "anything")
+	want(t, "search with no server", code, exitNotRunning, errs, "isn't running")
+
+	t.Setenv("MEKO_ENGINE_DIR", engineDir)
+	t.Setenv(testEmbedderEnv, "hash")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko is running")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if _, out, _ = run("status", "--data-dir", dir); strings.Contains(out, "Engine:   ready") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the engine never got ready:\n%s", out)
+		}
+	}
+
+	code, out, errs = run("datapacks", "--data-dir", dir)
+	want(t, "datapacks", code, 0, out+errs, "  default  (Created by Meko on first start.)")
+	code, out, errs = run("add", "--data-dir", dir, "the build cache is in engine/.models", "--datapack", "default")
+	want(t, "add", code, 0, out+errs, "Added memory ")
+	code, out, errs = run("search", "--data-dir", dir, "the build cache is in engine/.models", "--limit", "3")
+	want(t, "search", code, 0, out+errs, "the build cache is in engine/.models  (meko_cli, ")
+	code, out, errs = run("search", "--data-dir", dir, "x", "--json", "--source", "memory")
+	want(t, "search --json", code, 0, out+errs, `"knowledge_base":null`)
+	code, _, errs = run("add", "--data-dir", dir, "x", "--datapack", "nope")
+	want(t, "add to a missing datapack", code, 1, errs, `no datapack is named "nope"`)
+
+	_, tok, _ := run("token", "--data-dir", dir)
+	code, out, _ = run("token", "--data-dir", dir, "--mcp")
+	want(t, "token --mcp", code, 0, out, "claude mcp add --transport http meko http://127.0.0.1:"+port+
+		"/mcp --header \"Authorization: Bearer "+strings.TrimSpace(tok)+"\"")
 }

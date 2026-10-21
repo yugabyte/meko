@@ -75,11 +75,12 @@ func (s *Store) DatapackExists(ctx context.Context, id string) (bool, error) {
 
 // Datapack is a row of datapacks.
 type Datapack struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                       string    `json:"id"`
+	Name                     string    `json:"name"`
+	Description              string    `json:"description"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
+	ConversationSearchOptOut bool      `json:"conversation_search_opt_out"`
 }
 
 // EnsureDefaultDatapack makes the default datapack on first start, once: if the user deletes it
@@ -114,23 +115,15 @@ func (s *Store) EnsureDefaultDatapack(ctx context.Context) (string, error) {
 
 // Datapacks lists every datapack, oldest first.
 func (s *Store) Datapacks(ctx context.Context) ([]Datapack, error) {
-	rows, err := s.r.QueryContext(ctx,
-		"SELECT id, name, description, created_at, updated_at FROM datapacks ORDER BY created_at, id")
+	rows, err := s.r.QueryContext(ctx, "SELECT "+datapackCols+" FROM datapacks ORDER BY created_at, id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Datapack
+	out := []Datapack{}
 	for rows.Next() {
-		var d Datapack
-		var created, updated string
-		if err = rows.Scan(&d.ID, &d.Name, &d.Description, &created, &updated); err != nil {
-			return nil, err
-		}
-		if d.CreatedAt, err = time.Parse(timeLayout, created); err != nil {
-			return nil, err
-		}
-		if d.UpdatedAt, err = time.Parse(timeLayout, updated); err != nil {
+		d, err := scanDatapack(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, d)
