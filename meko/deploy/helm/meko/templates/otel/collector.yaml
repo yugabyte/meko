@@ -169,6 +169,9 @@ spec:
   image: {{ . }}
   {{- end }}
   {{- if $statsd }}
+  # deltatocumulative keeps its running totals in this pod: a second replica would
+  # see part of each statsd stream and export conflicting totals for the same series.
+  replicas: 1
   # Declared rather than left to the operator's port inference, which is the
   # difference between Langfuse's datagrams arriving and vanishing.
   ports:
@@ -270,6 +273,12 @@ spec:
             {{- end }}
     processors:
       batch: {}
+      {{- if $statsd }}
+      # statsd counters are delta Sums, which neither exporter takes: the BYOC door
+      # fails the whole request with a 500, and remote write drops them. Prometheus
+      # series pass through unchanged. Before batch, which mixes streams.
+      deltatocumulative: {}
+      {{- end }}
       {{- if or $envID $acctID }}
       # Fleet identity, as datapoint attributes so the store's OTLP receiver
       # promotes them to labels without promote_resource_attributes.
@@ -315,7 +324,7 @@ spec:
       pipelines:
         metrics:
           receivers: [prometheus{{ if $statsd }}, statsd{{ end }}]
-          processors: [{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if $byocEnabled }}, transform/byoc{{ end }}]
+          processors: [{{ if $statsd }}deltatocumulative, {{ end }}{{ if or $envID $acctID }}transform/identity, {{ end }}batch{{ if $byocEnabled }}, transform/byoc{{ end }}]
           exporters: [{{ $exporters | join ", " }}]
 {{- if dig "collectors" "logs" "enabled" true $otel }}
 {{- $logsDefault := "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}

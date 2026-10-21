@@ -322,6 +322,34 @@ tests:
       - equal:
           path: spec.config.service.pipelines.metrics.receivers
           value: [prometheus, statsd]
+      # The BYOC door rejects a request carrying any delta Sum (MEKO-1011).
+      - equal:
+          path: spec.config.service.pipelines.metrics.processors
+          value: [deltatocumulative, batch]
+      - isNotNull:
+          path: spec.config.processors.deltatocumulative
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: converts statsd deltas ahead of the BYOC door
+    template: templates/otel/collector.yaml
+    capabilities:
+      apiVersions: [opentelemetry.io/v1beta1]
+    documentSelector: {path: metadata.name, value: meko-metrics}
+    set:
+      otel.enabled: true
+      otel.byoc.enabled: true
+      otel.remoteWriteEndpoint: ""
+      otel.environmentId: acme-prod
+      langfuse.enabled: true
+      langfuse.web.image.tag: t
+      langfuse.worker.image.tag: t
+    asserts:
+      # MEKO-1011: one delta Sum in a request fails the whole request at the door.
+      - equal:
+          path: spec.config.service.pipelines.metrics.processors
+          value: [deltatocumulative, transform/identity, batch, transform/byoc]
 
   - it: points Langfuse at the collector only when the collector exists
     template: templates/langfuse/deployment.yaml

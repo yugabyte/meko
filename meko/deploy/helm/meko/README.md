@@ -252,7 +252,8 @@ OpenTelemetry Operator with the contrib distro — modelled on amp's
   - the provisioner's controller-runtime `/metrics`, over HTTPS with the collector's
     token, through a ClusterRoleBinding to the provisioner's metrics-reader role;
   - Langfuse's DogStatsD metrics, on a `statsd` receiver at UDP 8125 that the web and
-    worker containers are pointed at;
+    worker containers are pointed at. Its counters are delta Sums, which neither
+    exporter accepts, so a `deltatocumulative` processor converts them in-pod;
   - with the bundled YugabyteDB (`yugabyte.enabled`), its master, tserver and YSQL
     endpoints, with table- and tablet-level series dropped;
   - with `otel.podMetrics`, cAdvisor for this release's namespaces.
