@@ -1,6 +1,7 @@
 #!/bin/sh
-# Release notes from commit subjects (<type>[(<component>)][!]: <summary>, see
-# scripts/check-title.sh) since the previous release tag.
+# Release notes from commit subjects (<type>(<component>[/<area>])[!]: <summary>,
+# see scripts/check-title.sh; older ones may have no component) since the previous
+# release tag.
 #
 #   scripts/release-notes.sh [<from-ref>]      # default: the latest v0.* tag
 #

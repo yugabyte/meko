@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks a commit subject or PR title against the repo's title rules:
 #
-#   <type>[(<component>)][!]: <summary>
+#   <type>(<component>[/<area>])[!]: <summary>
 #
 #   scripts/check-title.sh [--no-length] "<title>"
 #
@@ -16,6 +16,10 @@ set -eu
 # test/unit/check-title.test.ts). Only a releasing type can be marked breaking with `!`.
 TYPES='feat|fix|perf|deps|ci|test|docs|nit|chore'
 RELEASE='feat|fix|perf|deps'
+# The components a title names: agentk (extensions/agentk), meko (Meko, in backend/) and
+# repo (the shared root), with an optional area after a slash. Each but repo is a component of
+# scripts/ci-scope.sh too (test/unit/check-title.test.ts checks; meko is backend there).
+COMPONENTS='agentk|meko|repo'
 MAX=72
 
 length=true
@@ -29,12 +33,15 @@ if [ $# -ne 1 ]; then
 fi
 title=$1
 
+list() { printf '%s' "$1" | sed 's/|/, /g'; }
+
 fail() {
   {
     printf 'Bad title: %s\n  %s\n\n' "$title" "$1"
-    printf 'Format: <type>[(<component>)][!]: <summary>\n'
-    printf 'Types: %s (feat, fix, perf and deps release)\n' "$(printf '%s' "$TYPES" | sed 's/|/, /g')"
-    printf 'Component: optional, lowercase letters, digits and dashes, e.g. fix(web): ...\n'
+    printf 'Format: <type>(<component>[/<area>])[!]: <summary>\n'
+    printf 'Types: %s (feat, fix, perf and deps release)\n' "$(list "$TYPES")"
+    printf 'Components: %s\n' "$(list "$COMPONENTS")"
+    printf 'Area: optional, lowercase letters, digits and dashes, e.g. fix(agentk/web): ...\n'
   } >&2
   exit 1
 }
@@ -54,8 +61,21 @@ printf '%s\n' "$type" | grep -qE "^($TYPES)\$" ||
   fail "Unknown type \"$type\". Types are lowercase and one of the list below."
 
 rest=${head#"$type"}
-printf '%s\n' "$rest" | grep -qE '^(\([a-z0-9-]+\))?!?$' ||
-  fail "Bad component \"$rest\". Use lowercase letters, digits and dashes in parentheses, then an optional !."
+case $rest in
+  '' | '!') fail "Name the component in parentheses after the type: one of $(list "$COMPONENTS")." ;;
+esac
+printf '%s\n' "$rest" | grep -qE '^\([^()]*\)!?$' ||
+  fail "Bad component \"$rest\". Put it in parentheses right after the type, then an optional !."
+scope=${rest#(}
+scope=${scope%%)*}
+component=${scope%%/*}
+printf '%s\n' "$component" | grep -qE "^($COMPONENTS)\$" ||
+  fail "Unknown component \"$component\". Use one of the list below, with an optional area after a slash."
+case $scope in
+  */*) area=${scope#*/}
+    printf '%s\n' "$area" | grep -qE '^[a-z0-9-]+$' ||
+      fail "Bad area \"$area\". Use one level of lowercase letters, digits and dashes." ;;
+esac
 case $rest in
   *!) printf '%s\n' "$type" | grep -qE "^($RELEASE)\$" ||
     fail "\"$type\" doesn't release, so it can't be breaking (!). Breaking changes ship: use feat, fix, perf or deps." ;;

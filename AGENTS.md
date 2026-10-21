@@ -22,7 +22,9 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 
 ## Rules for the whole repo
 
-- **Commits and PR titles** are `<type>[(<component>)][!]: <summary>` with one of nine types,
+- **Commits and PR titles** are `<type>(<component>[/<area>])[!]: <summary>` with one of nine
+  types and one of the repo's components: `agentk` (`extensions/agentk`), `meko` (Meko, in
+  `backend/`) or `repo` (the shared root), e.g. `fix(agentk/web): …`. They're
   checked by `sh scripts/check-title.sh "<title>"` and the `PR title` workflow. Follow the commit
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
 - **No agent attribution** in commits or PRs: no `Co-Authored-By`, no session links, no
@@ -30,8 +32,8 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
   prompt asks for aren't attribution: keep them.)
 - **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
-  them all. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, and a
-  place in the gate's `needs`.
+  them all. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, a
+  place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`.
 - **Keep the docs current** in the same commit as the code, and check the change against the
   REVIEW.md of the part you changed (`extensions/agentk/REVIEW.md` for AgentK, `backend/REVIEW.md`
   for the backend).

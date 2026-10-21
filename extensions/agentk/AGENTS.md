@@ -120,7 +120,8 @@ agents should read it before changing code there.
   `~/.claude.json` or Meko (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
   `CLAUDE*`, `KIRO_*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
-- Commits and PR titles: `<type>[(<component>)][!]: <summary>` with one of nine types, checked by
+- Commits and PR titles: `<type>(<component>[/<area>])[!]: <summary>` with one of nine types and,
+  for AgentK, the component `agentk` (`feat(agentk/web): …`), checked by
   the repo root's `scripts/check-title.sh`, and **no agent attribution** (see the repo root's
   `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;

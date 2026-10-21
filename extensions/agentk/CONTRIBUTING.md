@@ -51,15 +51,17 @@ PRs, squash-merged once the `CI gate` and `PR title` checks pass.
 
 ## Commits
 
-Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
+Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, like
 [Conventional Commits](https://www.conventionalcommits.org/) but with exactly these types:
 
 - Release: `feat`, `fix`, `perf`, `deps`.
 - Don't release: `ci`, `test`, `docs`, `nit` (comment-only changes, typos, formatting, refactors
   with no behavior change), `chore`.
 
-The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
-and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
+The component names the part of the repo: `agentk` for AgentK Local, `meko` for Meko
+(`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
+slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
+(`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
 repo root; the
