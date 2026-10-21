@@ -411,6 +411,11 @@ type ChunkHit struct {
 // ("" excludes none), nearest first.
 func (s *Store) SearchChunks(ctx context.Context, datapack string, query []float32, k int, exclude string) (
 	[]ChunkHit, error) {
+	release, err := s.searchSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	dims, err := s.vectorDims(ctx)
 	if err != nil {
 		return nil, err

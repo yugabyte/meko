@@ -20,8 +20,13 @@ import (
 	"github.com/yugabyte/meko/backend/internal/sqlitevec"
 )
 
-// Readers is the size of the read pool.
-const Readers = 4
+// Readers is the size of the read pool. Searches (vector and keyword scans, which can take
+// hundreds of milliseconds in a large datapack) may hold at most SearchSlots of them at once, so
+// the rest always serve plain reads: a slow search never makes a list or a get wait.
+const (
+	Readers     = 8
+	SearchSlots = 4
+)
 
 // Store is an open database.
 type Store struct {
@@ -29,6 +34,8 @@ type Store struct {
 	w    *sql.DB
 	r    *sql.DB
 	dims atomic.Int64 // the vector tables' width once known (vectors.go)
+	// search holds a token per search running (searchSlot).
+	search chan struct{}
 }
 
 // Open opens (creating it if needed, readable only by this user) the database at path.
@@ -58,7 +65,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	r.SetMaxOpenConns(Readers)
-	return &Store{path: path, w: w, r: r}, nil
+	return &Store{path: path, w: w, r: r, search: make(chan struct{}, SearchSlots)}, nil
 }
 
 func dsn(path string, readOnly bool) string {
@@ -73,6 +80,17 @@ func dsn(path string, readOnly bool) string {
 		q.Set("_txlock", "immediate")
 	}
 	return (&url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}).String()
+}
+
+// searchSlot waits for one of the SearchSlots search slots, or for ctx to end, and returns the
+// function that frees it.
+func (s *Store) searchSlot(ctx context.Context) (func(), error) {
+	select {
+	case s.search <- struct{}{}:
+		return func() { <-s.search }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Path is the database file.

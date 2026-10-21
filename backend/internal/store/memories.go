@@ -505,6 +505,11 @@ func (s *Store) ListVectors(ctx context.Context, k Kind, datapack string, f Filt
 // scan's nearest candidates, overFetch per wanted result.
 func (s *Store) SearchVectors(ctx context.Context, k Kind, datapack string, query []float32, topK int,
 	f Filter) ([]Record, error) {
+	release, err := s.searchSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	dims, err := s.vectorDims(ctx)
 	if err != nil {
 		return nil, err
@@ -582,6 +587,11 @@ func splitPushdown(f Filter) (pushed map[string]string, rest Filter) {
 // lemmatized and space-separated) that match f, best first, scored by BM25 as mem0's keywordSearch
 // expects: positive, higher is better (FTS5's bm25() is negative, so it's negated).
 func (s *Store) KeywordSearch(ctx context.Context, datapack, query string, topK int, f Filter) ([]Record, error) {
+	release, err := s.searchSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	terms, err := s.weighableTerms(ctx, queryTerms(query))
 	if err != nil {
 		return nil, err
@@ -683,4 +693,79 @@ func ftsQuery(datapack string, terms []string) string {
 // isWordRune is what FTS5's unicode61 tokenizer keeps: a term of only punctuation matches nothing.
 func isWordRune(r rune) bool {
 	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r > 127
+}
+
+// MemoryPage asks for a page of a user's memories, newest first, as Meko Cloud's memory list
+// returns them.
+type MemoryPage struct {
+	DatapackID string
+	UserID     string
+	AgentID    string // "" for every agent's
+	Query      string // a case-insensitive substring of the text; "" for all
+	Limit      int
+	Offset     int
+}
+
+// ListMemoryPage is a page of memories and how many match in all.
+func (s *Store) ListMemoryPage(ctx context.Context, p MemoryPage) ([]Record, int, error) {
+	t := tables[Memories]
+	where := " FROM memories t WHERE t.datapack_id = ? AND t.user_id = ?"
+	args := []any{p.DatapackID, p.UserID}
+	if p.AgentID != "" {
+		where += " AND t.agent_id = ?"
+		args = append(args, p.AgentID)
+	}
+	if p.Query != "" {
+		where += ` AND instr(lower(t.text), lower(?)) > 0`
+		args = append(args, p.Query)
+	}
+	var total int
+	if err := s.r.QueryRowContext(ctx, "SELECT count(*)"+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	// G202: fixed names, and every value is bound.
+	q := "SELECT " + t.selectList() + where + " ORDER BY t.created_at DESC, t.rowid DESC LIMIT ? OFFSET ?" //nolint:gosec
+	rows, err := s.r.QueryContext(ctx, q, append(args, min(max(p.Limit, 1), maxListLimit), max(p.Offset, 0))...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []Record{}
+	for rows.Next() {
+		rec, err := t.scan(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, rec)
+	}
+	return out, total, rows.Err()
+}
+
+// MemoryIDs is the ids of a user's memories in a datapack, optionally only one agent's or one
+// conversation's.
+func (s *Store) MemoryIDs(ctx context.Context, datapack, userID, agentID, conversationID string) ([]string, error) {
+	q := "SELECT id FROM memories WHERE datapack_id = ? AND user_id = ?"
+	args := []any{datapack, userID}
+	if agentID != "" {
+		q += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	if conversationID != "" {
+		q += " AND conversation_id = ?"
+		args = append(args, conversationID)
+	}
+	rows, err := s.r.QueryContext(ctx, q+" ORDER BY rowid", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }

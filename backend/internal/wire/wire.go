@@ -1,0 +1,275 @@
+// Package wire is Meko Cloud's reply shapes, written here from scratch: what MCP tools and REST
+// routes send. MCP and REST build their replies here, so one shape never has two versions.
+package wire
+
+import (
+	"time"
+
+	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/store"
+)
+
+// Time is how replies write times: RFC 3339 in UTC.
+func Time(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+// OwnerGrant is every datapack's grant: the local user owns them all.
+const OwnerGrant = "owner"
+
+// Datapack is a datapack row, as datapack_list and GET /datapacks return them.
+type Datapack struct {
+	DatapackID   string `json:"datapack_id"`
+	DatapackName string `json:"datapack_name"`
+	Description  string `json:"description"`
+	Grant        string `json:"grant"`
+	UserID       string `json:"user_id"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+// DatapackRow is a datapack in Cloud's row shape.
+func DatapackRow(d store.Datapack, userID string) Datapack {
+	return Datapack{DatapackID: d.ID, DatapackName: d.Name, Description: d.Description, Grant: OwnerGrant,
+		UserID: userID, CreatedAt: Time(d.CreatedAt), UpdatedAt: Time(d.UpdatedAt)}
+}
+
+// DatapackDescription is a datapack with what it holds, as datapack_describe and GET
+// /datapacks/:id return it. Knowledge files come with milestone 4, so their counts are 0.
+type DatapackDescription struct {
+	Datapack
+	MemoryCount              int  `json:"memory_count"`
+	LearningsCount           int  `json:"learnings_count"`
+	CollectiveMemoryCount    int  `json:"collective_memory_count"`
+	KnowledgeCount           int  `json:"knowledge_count"` // Cloud's deprecated name for knowledge_chunk_count
+	KnowledgeChunkCount      int  `json:"knowledge_chunk_count"`
+	KnowledgeBaseFileCount   int  `json:"knowledge_base_file_count"`
+	SharedKnowledgeCount     int  `json:"shared_knowledge_count"`
+	ConversationCount        int  `json:"conversation_count"`
+	ConversationSearchOptOut bool `json:"conversation_search_opt_out"`
+}
+
+// Describe is a datapack and its counts.
+func Describe(d store.Datapack, userID string, c memory.DatapackCounts) DatapackDescription {
+	return DatapackDescription{Datapack: DatapackRow(d, userID), MemoryCount: c.Memories,
+		LearningsCount: c.Learnings, CollectiveMemoryCount: c.Promoted, SharedKnowledgeCount: c.Promoted,
+		ConversationCount: c.Conversations, ConversationSearchOptOut: d.ConversationSearchOptOut}
+}
+
+// Conversation is a conversation as conversation_create, _update and _get return it. AppID is
+// Cloud's Langfuse app, which Meko has none of.
+type Conversation struct {
+	ID           string         `json:"id"`
+	AgentID      string         `json:"agent_id"`
+	UserID       string         `json:"user_id"`
+	AppID        *string        `json:"app_id"`
+	RunID        *string        `json:"run_id"`
+	Title        string         `json:"title"`
+	Metadata     map[string]any `json:"metadata"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
+	MessageCount *int           `json:"message_count,omitempty"`
+	Messages     []Message      `json:"messages,omitempty"`
+}
+
+// ConversationOf is a stored conversation in Cloud's shape; withCount adds message_count.
+func ConversationOf(c store.Conversation, userID string, withCount bool) Conversation {
+	out := Conversation{ID: c.ID, AgentID: c.AgentID, UserID: userID, Title: c.Title, Metadata: c.Metadata,
+		CreatedAt: Time(c.CreatedAt), UpdatedAt: Time(c.UpdatedAt)}
+	if out.Metadata == nil {
+		out.Metadata = map[string]any{}
+	}
+	if c.RunID != "" {
+		out.RunID = &c.RunID
+	}
+	if withCount {
+		n := c.MessageCount
+		out.MessageCount = &n
+	}
+	return out
+}
+
+// Message is one turn, as conversation_get returns it.
+type Message struct {
+	MessageID      string         `json:"message_id"`
+	ConversationID string         `json:"conversation_id"`
+	Input          string         `json:"input"`
+	Output         string         `json:"output"`
+	Reasoning      string         `json:"reasoning"`
+	Plan           []string       `json:"plan"`
+	Metadata       map[string]any `json:"metadata"`
+	CreatedAt      string         `json:"created_at"`
+}
+
+// MessageOf is a stored turn in Cloud's shape.
+func MessageOf(m store.Message) Message {
+	out := Message{MessageID: m.ID, ConversationID: m.ConversationID, Input: m.Input, Output: m.Output,
+		Reasoning: m.Reasoning, Plan: m.Plan, Metadata: m.Metadata, CreatedAt: Time(m.CreatedAt)}
+	if out.Plan == nil {
+		out.Plan = []string{}
+	}
+	if out.Metadata == nil {
+		out.Metadata = map[string]any{}
+	}
+	return out
+}
+
+// ConversationList is a page of a datapack's conversations, as conversation_list returns it.
+type ConversationList struct {
+	DatapackID        string         `json:"datapack_id"`
+	DatapackName      string         `json:"datapack_name"`
+	LangfuseProjectID *string        `json:"langfuse_project_id"`
+	Limit             int            `json:"limit"`
+	Offset            int            `json:"offset"`
+	HasMore           bool           `json:"has_more"`
+	Conversations     []Conversation `json:"conversations"`
+}
+
+// MemoryItem is a memory in a memory list, as GET /memories and memory_get_all return them: the
+// text is in data, not memory.
+type MemoryItem struct {
+	ID             string  `json:"id"`
+	Data           string  `json:"data"`
+	AgentID        string  `json:"agent_id"`
+	ConversationID *string `json:"conversation_id,omitempty"`
+	UserID         string  `json:"user_id"`
+	CreatedAt      string  `json:"created_at,omitempty"`
+	IsMine         bool    `json:"is_mine"`
+}
+
+// MemoryList is a page of memories.
+type MemoryList struct {
+	Criteria   map[string]any `json:"criteria"`
+	Memories   []MemoryItem   `json:"memories"`
+	TopK       int            `json:"top_k"`
+	Total      int            `json:"total"`
+	Page       int            `json:"page"`
+	PageSize   int            `json:"page_size"`
+	TotalPages int            `json:"total_pages"`
+}
+
+// MemoryListOf is a page of memories in Cloud's list shape. Every memory listed is the local
+// user's own.
+func MemoryListOf(ms []engine.Memory, criteria map[string]any, total, page, pageSize int) MemoryList {
+	out := MemoryList{Criteria: criteria, Memories: make([]MemoryItem, len(ms)), TopK: pageSize, Total: total,
+		Page: max(page, 1), PageSize: pageSize, TotalPages: max(1, (total+pageSize-1)/max(pageSize, 1))}
+	for i, m := range ms {
+		it := MemoryItem{ID: m.ID, Data: m.Memory, AgentID: m.AgentID, UserID: m.UserID, CreatedAt: m.CreatedAt,
+			IsMine: true}
+		if m.RunID != "" {
+			it.ConversationID = &m.RunID
+		}
+		out.Memories[i] = it
+	}
+	return out
+}
+
+// Token estimates, as Meko Cloud makes them.
+const (
+	kbChunkTokens          = 1000
+	memoryTokens           = 200
+	conversationTokens     = 1000
+	defaultBaselineTokens  = 10 * kbChunkTokens
+	scoreHigh, scoreMedium = 0.75, 0.5
+)
+
+// SourceSavings is one source's share of a context_search's estimated savings.
+type SourceSavings struct {
+	TokensSent  int `json:"tokens_sent"`
+	TokensSaved int `json:"tokens_saved"`
+}
+
+// TokenSavings is context_search's estimate of the tokens it saved against sending the datapack's
+// whole knowledge base. Each source is there only when it returned something.
+type TokenSavings struct {
+	TotalTokens   int            `json:"total_tokens"`
+	KnowledgeBase *SourceSavings `json:"knowledge_base,omitempty"`
+	Memory        *SourceSavings `json:"memory,omitempty"`
+	Conversation  *SourceSavings `json:"conversation,omitempty"`
+	TokensSaved   *int           `json:"tokens_saved,omitempty"`
+}
+
+// Sent is the tokens the results sent in all.
+func (t TokenSavings) Sent() int {
+	n := 0
+	for _, s := range []*SourceSavings{t.KnowledgeBase, t.Memory, t.Conversation} {
+		if s != nil {
+			n += s.TokensSent
+		}
+	}
+	return n
+}
+
+// Saved is the tokens saved in all.
+func (t TokenSavings) Saved() int {
+	if t.TokensSaved == nil {
+		return 0
+	}
+	return *t.TokensSaved
+}
+
+// Savings estimates a context_search's savings. With no knowledge files (until milestone 4) the
+// baseline is Meko Cloud's default of 10 chunks.
+func Savings(r memory.ContextResults) TokenSavings {
+	out := TokenSavings{TotalTokens: defaultBaselineTokens}
+	source := func(sent int) *SourceSavings {
+		return &SourceSavings{TokensSent: sent, TokensSaved: max(0, out.TotalTokens-sent)}
+	}
+	if len(r.Memory) > 0 {
+		out.Memory = source(len(r.Memory) * memoryTokens)
+	}
+	if r.Conversation != nil && len(r.Conversation.Hits) > 0 {
+		out.Conversation = source(conversationTokens)
+	}
+	if sent := out.Sent(); sent > 0 {
+		saved := max(0, defaultBaselineTokens-sent)
+		out.TokensSaved = &saved
+	}
+	return out
+}
+
+// Bands counts results by match quality, as Meko Cloud's metrics band them: a memory by its
+// score, a conversation hit by 1 - distance.
+func Bands(r memory.ContextResults) (high, mid, low int) {
+	add := func(v float64) {
+		switch {
+		case v >= scoreHigh:
+			high++
+		case v >= scoreMedium:
+			mid++
+		default:
+			low++
+		}
+	}
+	for _, m := range r.Memory {
+		if m.Score != nil {
+			add(*m.Score)
+		}
+	}
+	if r.Conversation != nil {
+		for _, h := range r.Conversation.Hits {
+			add(1 - h.Distance)
+		}
+	}
+	return high, mid, low
+}
+
+// ContextSearch is context_search's reply.
+type ContextSearch struct {
+	Results      ContextSearchResults `json:"results"`
+	TokenSavings TokenSavings         `json:"token_savings"`
+}
+
+// ContextSearchResults is each source's results: null when it wasn't searched.
+type ContextSearchResults struct {
+	KnowledgeBase []any                       `json:"knowledge_base"`
+	Memory        []engine.Memory             `json:"memory"`
+	Conversation  *memory.ConversationResults `json:"conversation"`
+}
+
+// ContextSearchOf is context_search's reply for its results.
+func ContextSearchOf(r memory.ContextResults) ContextSearch {
+	return ContextSearch{
+		Results:      ContextSearchResults{KnowledgeBase: r.KnowledgeBase, Memory: r.Memory, Conversation: r.Conversation},
+		TokenSavings: Savings(r),
+	}
+}

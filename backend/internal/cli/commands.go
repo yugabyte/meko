@@ -212,8 +212,9 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 // runToken prints the client token, making it if no server has yet. It reads the data folder, so
 // it works whether or not the server runs. While one runs it only reads: the server keeps the token
 // it loaded at start, so a token made now (after the file was deleted to replace it) would be one
-// the server refuses.
-func runToken(l paths.Layout, stdout, stderr io.Writer) int {
+// the server refuses. With mcp it prints the command that registers Meko with Claude Code instead,
+// on the running server's port (or the configured one).
+func runToken(l paths.Layout, mcp bool, stdout, stderr io.Writer) int {
 	if err := l.Ensure(); err != nil {
 		return fail(stderr, err)
 	}
@@ -234,7 +235,21 @@ func runToken(l paths.Layout, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintln(stdout, tok)
+	if !mcp {
+		fmt.Fprintln(stdout, tok)
+		return exitOK
+	}
+	port, err := readInt(l.Port)
+	if err != nil {
+		cfg, cerr := config.Load(l.Config, os.Getenv, config.Overrides{})
+		if cerr != nil {
+			return fail(stderr, cerr)
+		}
+		port = cfg.Server.Port
+	}
+	// The name must be meko: AgentK recognizes Meko's tools by it (mcp__meko__*).
+	fmt.Fprintf(stdout, "claude mcp add --transport http meko http://127.0.0.1:%d/mcp "+
+		"--header \"Authorization: Bearer %s\"\n", port, tok)
 	return exitOK
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/logging"
+	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/server"
@@ -196,6 +197,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		},
 		Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
 		Children: sup.Statuses, Engine: svc.EngineStatus,
+		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
+			Credential: server.CredentialOf}),
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

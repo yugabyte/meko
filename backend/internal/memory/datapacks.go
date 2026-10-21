@@ -1,0 +1,136 @@
+package memory
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/yugabyte/meko/backend/internal/store"
+)
+
+// More errors the datapack calls return.
+var (
+	ErrDuplicateName = errors.New("a datapack with that name already exists")
+	ErrNoDefault     = errors.New("no default datapack")
+)
+
+// Datapack name limits, as Meko Cloud's.
+const (
+	minNameLen = 3
+	maxNameLen = 60
+)
+
+// DefaultDatapack is the datapack a call that names none uses: the default one, or ErrNoDefault
+// once the user has deleted it.
+func (s *Service) DefaultDatapack(ctx context.Context) (string, error) {
+	id, err := s.st.DefaultDatapackID(ctx)
+	if err == nil && id == "" {
+		err = ErrNoDefault
+	}
+	return id, err
+}
+
+// ResolveDatapack is the datapack a call works in: the one it names, which must exist, or the
+// default when it names none.
+func (s *Service) ResolveDatapack(ctx context.Context, id string) (string, error) {
+	if id == "" {
+		return s.DefaultDatapack(ctx)
+	}
+	return id, s.needDatapack(ctx, id)
+}
+
+// Datapacks is every datapack, oldest first.
+func (s *Service) Datapacks(ctx context.Context) ([]store.Datapack, error) {
+	return s.st.Datapacks(ctx)
+}
+
+// Datapack is one datapack, or ErrNoDatapack.
+func (s *Service) Datapack(ctx context.Context, id string) (store.Datapack, error) {
+	d, err := s.st.GetDatapack(ctx, id)
+	if errors.Is(err, store.ErrNoDatapack) {
+		return d, ErrNoDatapack
+	}
+	return d, err
+}
+
+func checkName(name string) error {
+	n := utf8.RuneCountInString(name)
+	switch {
+	case n < minNameLen || n > maxNameLen:
+		return fmt.Errorf("%w: a datapack name is %d to %d characters", ErrBadRequest, minNameLen, maxNameLen)
+	case strings.ContainsAny(name, "<>"):
+		return fmt.Errorf("%w: a datapack name can't contain HTML", ErrBadRequest)
+	}
+	return nil
+}
+
+// CreateDatapack makes a datapack, or returns ErrDuplicateName or ErrBadRequest.
+func (s *Service) CreateDatapack(ctx context.Context, name, description string) (store.Datapack, error) {
+	name = strings.TrimSpace(name)
+	if err := checkName(name); err != nil {
+		return store.Datapack{}, err
+	}
+	d, err := s.st.CreateDatapack(ctx, name, description)
+	if errors.Is(err, store.ErrDuplicateName) {
+		return d, ErrDuplicateName
+	}
+	return d, err
+}
+
+// UpdateDatapack changes what's given of a datapack's name, description and conversation-search
+// opt-out (nil leaves it).
+func (s *Service) UpdateDatapack(ctx context.Context, id string, name, description *string, optOut *bool) (
+	store.Datapack, error) {
+	if name != nil {
+		n := strings.TrimSpace(*name)
+		if err := checkName(n); err != nil {
+			return store.Datapack{}, err
+		}
+		name = &n
+	}
+	if optOut != nil {
+		if err := s.SetConversationSearchOptOut(ctx, id, *optOut); err != nil {
+			return store.Datapack{}, err
+		}
+	}
+	d, err := s.st.UpdateDatapack(ctx, id, name, description)
+	switch {
+	case errors.Is(err, store.ErrNoDatapack):
+		return d, ErrNoDatapack
+	case errors.Is(err, store.ErrDuplicateName):
+		return d, ErrDuplicateName
+	}
+	return d, err
+}
+
+// DeleteDatapack deletes a datapack and everything in it.
+func (s *Service) DeleteDatapack(ctx context.Context, id string) error {
+	err := s.st.DeleteDatapack(ctx, id)
+	if errors.Is(err, store.ErrNoDatapack) {
+		return ErrNoDatapack
+	}
+	return err
+}
+
+// DatapackCounts is what a datapack holds of the local user's, as datapack_describe reports it.
+type DatapackCounts struct {
+	Memories      int // learnings and kept memories
+	Learnings     int // memories waiting for a keep-or-promote decision
+	Promoted      int // collective memories
+	Conversations int
+}
+
+// CountDatapack counts a datapack's memories, learnings, promoted memories and conversations.
+func (s *Service) CountDatapack(ctx context.Context, id string) (DatapackCounts, error) {
+	if err := s.needDatapack(ctx, id); err != nil {
+		return DatapackCounts{}, err
+	}
+	c, err := s.st.CountDatapack(ctx, id, s.userID)
+	if err != nil {
+		return DatapackCounts{}, err
+	}
+	// Every memory is a learning until it's kept or promoted.
+	return DatapackCounts{Memories: c.Memories, Learnings: c.Memories, Conversations: c.Conversations}, nil
+}
