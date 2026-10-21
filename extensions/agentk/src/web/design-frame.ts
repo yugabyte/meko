@@ -5,6 +5,7 @@
 // can load to what Artifacts themselves may use (inline code, the two script CDNs, Google
 // Fonts, data: and blob: media), with no network requests of its own.
 
+import { version as mermaidVersion } from 'mermaid/package.json';
 import { MEKO_SOURCE_CLASS } from '../shared/decisions';
 import { DIAGRAM_FAILED, ERROR_CHARS, mermaidLook } from './mermaid';
 
@@ -18,11 +19,11 @@ export const DESIGN_FRAME_CSP = [
 ].join('; ');
 
 /**
- * The Mermaid version the frame loads from jsdelivr. It matches the one bundled for markdown
- * designs (a test checks), and the frame uses the same look (`mermaidLook`), so a diagram looks
- * the same in both.
+ * The Mermaid version the frame loads from jsdelivr: the installed one, which is also bundled for
+ * markdown designs, so a Dependabot bump moves both. The frame uses the same look
+ * (`mermaidLook`), so a diagram looks the same in both.
  */
-export const MERMAID_VERSION = '12.1.0';
+export const MERMAID_VERSION: string = mermaidVersion;
 
 /**
  * A <pre> or <div> with the mermaid class (a whole class token, as `.mermaid` matches it: not
