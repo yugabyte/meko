@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yugabyte/meko-local/backend/internal/envelope"
@@ -127,10 +129,12 @@ func TestVectorStoreRoutes(t *testing.T) {
 	a.hello()
 	col := "/v1/collections/" + a.dp
 	code, e := a.do(http.MethodPost, col+"/insert", map[string]any{
-		"ids": []string{"m1", "m2"}, "vectors": [][]float32{{1, 0}, {0, 1}},
+		"ids": []string{"m1", "m2", "m3"}, "vectors": [][]float32{{1, 0}, {0, 1}, {0, 1}},
 		"payloads": []map[string]any{
 			{"data": "rate limit is 500", "textLemmatized": "rate limit 500", "user_id": "u"},
 			{"data": "bananas", "user_id": "u"},
+			// Another user's, so "limit" is in under half the rows (keyword search drops the rest).
+			{"data": "mangoes", "user_id": "v"},
 		},
 	}, nil)
 	if code != http.StatusOK {
@@ -179,22 +183,30 @@ func TestVectorStoreRoutes(t *testing.T) {
 		t.Errorf("deleteCol: %d %v", code, e)
 	}
 
-	// Refusals carry the store's reason.
+	// Refusals: the API's own checks, and the store's, whose reason the reply carries.
 	for _, c := range []struct {
-		path string
-		body any
-		want int
+		path   string
+		body   any
+		want   int
+		reason string // in the reply's message when the store refused it
 	}{
-		{col + "/search", map[string]any{"vector": []float32{1, 0, 0}, "top_k": 1}, http.StatusBadRequest},
-		{col + "/list", map[string]any{"filters": map[string]any{"OR": "x"}}, http.StatusBadRequest},
+		{col + "/search", map[string]any{"vector": []float32{1, 0, 0}, "top_k": 1}, http.StatusBadRequest,
+			"bad vector: it has 3 dimensions"},
+		{col + "/list", map[string]any{"filters": map[string]any{"OR": "x"}}, http.StatusBadRequest,
+			"bad filter: OR needs a list"},
 		{"/v1/collections/nope/insert", map[string]any{"ids": []string{"x"}, "vectors": [][]float32{{1, 0}},
-			"payloads": []map[string]any{{"data": "x"}}}, http.StatusNotFound},
+			"payloads": []map[string]any{{"data": "x"}}}, http.StatusNotFound, ""},
 		{col + "/insert", map[string]any{"ids": []string{"x"}, "vectors": [][]float32{},
-			"payloads": []map[string]any{}}, http.StatusBadRequest},
-		{"/v1/collections/_entities/list", map[string]any{}, http.StatusBadRequest},
+			"payloads": []map[string]any{}}, http.StatusBadRequest, ""},
+		{"/v1/collections/_entities/list", map[string]any{}, http.StatusBadRequest, ""},
 	} {
-		if code, e := a.do(http.MethodPost, c.path, c.body, nil); code != c.want {
+		code, e := a.do(http.MethodPost, c.path, c.body, nil)
+		if code != c.want || e == nil {
 			t.Errorf("%s: %d %v, want %d", c.path, code, e, c.want)
+			continue
+		}
+		if c.reason != "" && (e.Code != "BAD_REQUEST" || !strings.Contains(e.Message, c.reason)) {
+			t.Errorf("%s: %s %q, want BAD_REQUEST with %q", c.path, e.Code, e.Message, c.reason)
 		}
 	}
 }
@@ -235,5 +247,30 @@ func TestHistoryRoutes(t *testing.T) {
 	a.do(http.MethodGet, "/v1/history/"+a.dp+"/m1", nil, &h)
 	if len(h) != 1 || h[0].Action != "ADD" {
 		t.Errorf("history: %+v", h)
+	}
+}
+
+func TestListen(t *testing.T) {
+	// A short folder: t.TempDir's paths can pass the 104-byte socket path limit on macOS.
+	dir, err := os.MkdirTemp("/tmp", "meko-sa-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "store.sock")
+	if err = os.WriteFile(path, []byte("left by a killed server"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := Listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Type() != os.ModeSocket || fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want a socket with 0600", fi.Mode())
 	}
 }

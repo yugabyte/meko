@@ -37,7 +37,9 @@ backend/
     cli/                      start, stop, status, serve, version
     config/                   defaults, config.toml, flags, env
     paths/                    data folder layout and permissions
-    server/                   echo server, middleware, envelope, health
+    server/                   echo server, middleware, health
+    envelope/                 the {data, error} reply envelope (moved here from server/ in milestone 2)
+    storeapi/                 the store API the memory engine calls (milestone 2, memory-engine.md)
     auth/                     the admin token; API keys join in milestone 3
     store/                    open, connections, migrations, typed queries
       migrations/             0001_init.sql, ... (embedded, append-only)
@@ -296,7 +298,7 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 | `backend/internal/cli/` | `start`, `stop`, `status`, `serve`, `version`; detaching `serve` (setsid), pid file, waiting until `/api/v1/status` reports the new server |
 | `backend/internal/config/` | Defaults, `config.toml`, `MEKO_LOCAL_*` env, flags; precedence |
 | `backend/internal/paths/` | Data folder layout, 0700/0600 permissions, the network-filesystem check (statfs on macOS, `/proc/self/mountinfo` on Linux) |
-| `backend/internal/server/` | echo setup, middleware (request id, recover, access log, Host and Origin checks, auth, body limit), the envelope, `/healthz`, `/api/v1/status`, `/api/v1/version`, graceful shutdown |
+| `backend/internal/server/` | echo setup, middleware (request id, recover, access log, Host and Origin checks, auth, body limit), `/healthz`, `/api/v1/status`, `/api/v1/version`, graceful shutdown. The envelope it replies with is in `backend/internal/envelope/` since milestone 2 |
 | `backend/internal/auth/` | Admin token: generate, write, read (CLI side), constant-time check |
 | `backend/internal/store/` + `migrations/0001_init.sql` | Open (writer + reader pools, pragmas), migrations with a pre-migration backup, `settings` and `datapacks` queries, default datapack |
 | `backend/internal/sqlitevec/` | cgo glue registering sqlite-vec with `sqlite3_auto_extension` |

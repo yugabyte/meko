@@ -1,5 +1,5 @@
-// Package server is Meko Local's HTTP server on 127.0.0.1: the {data, error} envelope,
-// the Host, Origin and admin-token checks, and the foundation's routes. /mcp, the rest of
+// Package server is Meko Local's HTTP server on 127.0.0.1: the Host, Origin and admin-token
+// checks, and the foundation's routes (replies use internal/envelope). /mcp, the rest of
 // /api/v1 and the UI are mounted in later milestones.
 package server
 
