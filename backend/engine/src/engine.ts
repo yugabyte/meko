@@ -4,7 +4,7 @@
 import { Memory } from "mem0ai/oss";
 
 import type { LocalEmbedder } from "./embedder.js";
-import { MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
+import { ACTOR_KEY, MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
 import { mekoScore, type ScoreDetails } from "./scoring.js";
 
 /** A failure with an HTTP status and a code, for the engine API to reply with. */
@@ -118,6 +118,7 @@ export class Engine {
    * the speaker's name as actor_id, and the conversation it came from. No entities are linked
    * (mem0 links them only for extracted memories). System messages and blank ones are left out,
    * as mem0 leaves them out; a message that isn't {role, content} strings refuses the request.
+   * The speaker travels under ACTOR_KEY, set from the message alone so metadata can't claim one.
    */
   async add(req: AddRequest): Promise<{ results: Array<Record<string, unknown>> }> {
     requireIds(req);
@@ -139,7 +140,7 @@ export class Engine {
       const metadata: Record<string, unknown> = {
         ...(req.metadata ?? {}),
         role: m.role,
-        ...(m.name && { actor_id: m.name }),
+        [ACTOR_KEY]: m.name || undefined,
         ...(req.conversation_id && { meko_conversation_id: req.conversation_id }),
       };
       const r = await mem.add(m.content, {

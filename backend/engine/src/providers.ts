@@ -23,13 +23,20 @@ export const PROVIDERS = { store: "meko_store", history: "meko_history", embedde
 const enc = encodeURIComponent;
 
 /**
- * mem0's Memory.search (3.1.2) asks the store for max(topK × 4, 60) semantic and keyword candidates,
+ * mem0's Memory.search (3.3.1) asks the store for max(topK × 4, 60) semantic and keyword candidates,
  * ranks them by its own score and keeps topK. The engine rescores mem0's results, so a datapack's
  * collection returns only topK / 4 of what it's asked for: then mem0's candidates are exactly the
  * topK it returns, it cuts none, and Meko's score picks from all of them. The entity collection is
  * searched as asked. (Only Memory.search searches a datapack's collection while extraction is off.)
  */
 export const MEM0_OVERFETCH = 4;
+
+/**
+ * mem0's Memory.add (3.3) drops actor_id from the metadata it's given, as it drops the user, agent
+ * and run ids, and never sets it itself. So the engine passes a message's speaker under this key and
+ * MekoStore.insert stores it as actor_id, where the store, mem0's search and the Go server read it.
+ */
+export const ACTOR_KEY = "meko_actor_id";
 
 /** A mem0 vector store whose collection is a datapack ("<id>") or its entities ("<id>_entities"). */
 export class MekoStore implements VectorStore {
@@ -50,7 +57,7 @@ export class MekoStore implements VectorStore {
   }
 
   async insert(vectors: number[][], ids: string[], payloads: Record<string, any>[]): Promise<void> {
-    await this.store.request("POST", `${this.base}/insert`, { ids, vectors, payloads });
+    await this.store.request("POST", `${this.base}/insert`, { ids, vectors, payloads: payloads.map(withActor) });
   }
 
   async search(query: number[], topK = 10, filters?: SearchFilters): Promise<VectorStoreResult[]> {
@@ -103,6 +110,13 @@ export class MekoStore implements VectorStore {
   async setUserId(): Promise<void> {}
 
   async initialize(): Promise<void> {}
+}
+
+/** A payload with the speaker the engine passed under ACTOR_KEY as actor_id: see ACTOR_KEY. */
+function withActor(payload: Record<string, any>): Record<string, any> {
+  if (!(ACTOR_KEY in payload)) return payload;
+  const { [ACTOR_KEY]: actor, ...rest } = payload;
+  return typeof actor === "string" && actor !== "" ? { ...rest, actor_id: actor } : rest;
 }
 
 interface HistoryRecord {

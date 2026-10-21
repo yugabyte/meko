@@ -115,7 +115,8 @@ describe("with a store", () => {
         { role: "user", content: "AgentK sessions survive server restarts." },
         { role: "assistant", content: "Noted.", name: "helper" },
       ],
-      metadata: { source_note: "test" },
+      // Only a message's name sets the actor.
+      metadata: { source_note: "test", actor_id: "claimed", meko_actor_id: "claimed" },
     });
     assert.deepEqual(
       r.results.map((x) => [x.memory, x.event, x.role, x.actor_id]),
@@ -130,7 +131,9 @@ describe("with a store", () => {
     assert.equal(rows[0].user_id, "u");
     assert.equal(rows[0].agent_id, "claude_code:x");
     assert.equal(rows[0].source_note, "test");
+    assert.equal(rows[0].actor_id, undefined);
     assert.equal(rows[1].actor_id, "helper");
+    assert.ok(rows.every((p) => !("meko_actor_id" in p)));
     assert.equal(fake.rows.get("dp1_entities")?.size ?? 0, 0);
     assert.equal(fake.history.filter((h) => h.action === "ADD").length, 2);
   });
