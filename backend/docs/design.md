@@ -114,11 +114,13 @@ A client that needs Meko running, such as AgentK, runs `meko start`. It must not
   models/                    model files, when downloaded (milestone 2)
 ```
 
-The database must sit on a local disk, not a network filesystem: SQLite's WAL locking doesn't
-work there, and neither does `flock` across hosts. When the default folder is on a network
-filesystem (NFS, SMB, sshfs and the others in AgentK's `install.ts` list), the default moves to
-local disk instead, as AgentK's installer does for `state.db` (`extensions/agentk/src/server/install.ts`). An explicit `--data-dir` on a
-network filesystem is refused with a message saying why.
+The database must sit on a local disk, not a network filesystem: SQLite's WAL locking doesn't work
+there, and neither does `flock` across hosts. When the default folder is on a network filesystem
+(NFS, SMB, sshfs and the others in AgentK's `install.ts` list), the default moves to local disk
+instead, as AgentK's installer does for `state.db` (`extensions/agentk/src/server/install.ts`):
+`$XDG_STATE_HOME/meko` if that's local, else `/var/tmp/<user>/meko`, named by the user lookup; a
+failed lookup is an error. An explicit `--data-dir` on a network filesystem is refused with a
+message saying why.
 
 Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. The foundation has
 few keys:
