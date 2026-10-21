@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +9,9 @@ import (
 	"testing"
 
 	"meko/api_server/docs"
+	privatespec "meko/api_server/docs/private"
 	"meko/api_server/internal/api"
+	"meko/api_server/internal/auth"
 )
 
 // registeredPaths collapses the router's route table into a set, which is what
@@ -49,6 +52,7 @@ func TestRouter_BasePath_MountsWholeSurface(t *testing.T) {
 		"/ycp/api/v1/admin/metrics",
 		"/ycp/success",
 		"/ycp/swagger/*",
+		"/ycp/api/v1/admin/swagger/*",
 		"/ycp/", // the console
 		"/ycp",  // …and the same page without the trailing slash
 		// Probes hit the pod directly, bypassing the proxy that supplies the
@@ -67,6 +71,8 @@ func TestRouter_BasePath_MountsWholeSurface(t *testing.T) {
 		"/success",
 		"/api/v1/environments",
 		"/api/v1/agent/enroll",
+		"/api/v1/admin/swagger/*",
+		"/swagger/private/*",
 	} {
 		if paths[unwanted] {
 			t.Errorf("route %q is still registered at the domain root", unwanted)
@@ -86,6 +92,7 @@ func TestRouter_NoBasePath_UnchangedMount(t *testing.T) {
 		"/api/v1/health",
 		"/api/v1/environments",
 		"/swagger/*",
+		"/api/v1/admin/swagger/*",
 	} {
 		if !paths[want] {
 			t.Errorf("route %q missing with no base path configured", want)
@@ -126,14 +133,20 @@ func TestRouter_BasePath_SwaggerSpecFollowsMount(t *testing.T) {
 		t.Fatalf("NewRouter: %v", err)
 	}
 	if got := docs.SwaggerInfo.BasePath; got != "/ycp/api/v1" {
-		t.Errorf("SwaggerInfo.BasePath = %q, want %q", got, "/ycp/api/v1")
+		t.Errorf("public BasePath = %q, want %q", got, "/ycp/api/v1")
+	}
+	if got := privatespec.SwaggerInfoprivate.BasePath; got != "/ycp/api/v1" {
+		t.Errorf("private BasePath = %q, want %q", got, "/ycp/api/v1")
 	}
 	// And back to the plain mount, so the default deployment is unaffected.
 	if _, _, err := api.NewRouter(api.ServerConfig{}); err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
 	if got := docs.SwaggerInfo.BasePath; got != "/api/v1" {
-		t.Errorf("SwaggerInfo.BasePath = %q, want %q", got, "/api/v1")
+		t.Errorf("public BasePath = %q, want %q", got, "/api/v1")
+	}
+	if got := privatespec.SwaggerInfoprivate.BasePath; got != "/api/v1" {
+		t.Errorf("private BasePath = %q, want %q", got, "/api/v1")
 	}
 }
 
@@ -213,4 +226,142 @@ func TestRouter_BasePath_ServesConsoleAndAPI(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET / = %d, want 404 under a base path", rec.Code)
 	}
+}
+
+// TestSwaggerSpecUsesTheRequestHost locks Try it out to the host that served
+// the page. A baked-in localhost sent production calls to the viewer's machine.
+func TestSwaggerSpecUsesTheRequestHost(t *testing.T) {
+	docs.SwaggerInfo.Host = "localhost:25433"
+	router, _, err := api.NewRouter(api.ServerConfig{ControlPlaneMode: true})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/swagger/doc.json", nil)
+	req.Host = "api.mekodata.ai"
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /swagger/doc.json = %d, body %s", rec.Code, rec.Body.String())
+	}
+	host, basePath := swaggerSpecHost(t, rec.Body.Bytes())
+	if host != "api.mekodata.ai" {
+		t.Errorf("host = %q, want api.mekodata.ai", host)
+	}
+	if basePath != "/api/v1" {
+		t.Errorf("basePath = %q, want /api/v1", basePath)
+	}
+	if strings.Contains(rec.Body.String(), "localhost:25433") {
+		t.Error("spec still names localhost:25433")
+	}
+	assertPublicSpec(t, rec.Body.Bytes())
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/swagger/doc.json", nil)
+	req.Host = "meko-api-server.internal"
+	req.Header.Set("X-Forwarded-Host", "api.mekodata.ai, proxy.internal")
+	router.ServeHTTP(rec, req)
+	host, _ = swaggerSpecHost(t, rec.Body.Bytes())
+	if host != "api.mekodata.ai" {
+		t.Errorf("forwarded host = %q, want api.mekodata.ai", host)
+	}
+}
+
+// TestPublicSwaggerOmitsAdminAndInternal is the guard on the page that is
+// already on the internet. The full spec, including those routes, is a
+// different document.
+func TestPublicSwaggerOmitsAdminAndInternal(t *testing.T) {
+	router, _, err := api.NewRouter(api.ServerConfig{})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/swagger/doc.json", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /swagger/doc.json = %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertPublicSpec(t, rec.Body.Bytes())
+}
+
+func assertPublicSpec(t *testing.T, body []byte) {
+	t.Helper()
+	var spec struct {
+		Paths map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(body, &spec); err != nil {
+		t.Fatalf("decode spec: %v", err)
+	}
+	if len(spec.Paths) == 0 {
+		t.Fatal("public spec has no paths")
+	}
+	for path := range spec.Paths {
+		if strings.Contains(path, "/admin/") || strings.Contains(path, "/internal/") {
+			t.Errorf("public spec includes %s", path)
+		}
+	}
+}
+
+// TestPrivateSwaggerRequiresAdminSecret: the full spec is on the admin
+// group. No secret configured is 503, a missing header is 401, and the
+// matching header returns the routes the public spec left out.
+func TestPrivateSwaggerRequiresAdminSecret(t *testing.T) {
+	disabled, _, err := api.NewRouter(api.ServerConfig{})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	disabled.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/swagger/doc.json", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("unset secret = %d, want 503", rec.Code)
+	}
+
+	router, _, err := api.NewRouter(api.ServerConfig{AdminAPIKey: testAdminSecret})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/swagger/doc.json", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("missing secret = %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/swagger/doc.json", nil)
+	req.Host = "api.mekodata.ai"
+	req.Header.Set(auth.AdminSecretHeader, testAdminSecret)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET private doc.json = %d, body %s", rec.Code, rec.Body.String())
+	}
+	host, basePath := swaggerSpecHost(t, rec.Body.Bytes())
+	if host != "api.mekodata.ai" {
+		t.Errorf("private host = %q, want api.mekodata.ai", host)
+	}
+	if basePath != "/api/v1" {
+		t.Errorf("private basePath = %q, want /api/v1", basePath)
+	}
+	var spec struct {
+		Paths map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("decode spec: %v", err)
+	}
+	if _, ok := spec.Paths["/admin/metrics"]; !ok {
+		t.Error("private spec is missing /admin/metrics")
+	}
+	if _, ok := spec.Paths["/internal/meko-tokens/validate"]; !ok {
+		t.Error("private spec is missing /internal/meko-tokens/validate")
+	}
+}
+
+func swaggerSpecHost(t *testing.T, body []byte) (string, string) {
+	t.Helper()
+	var spec struct {
+		Host     string `json:"host"`
+		BasePath string `json:"basePath"`
+	}
+	if err := json.Unmarshal(body, &spec); err != nil {
+		t.Fatalf("decode spec: %v", err)
+	}
+	return spec.Host, spec.BasePath
 }

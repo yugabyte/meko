@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 	echoSwagger "github.com/swaggo/echo-swagger"
+	"github.com/swaggo/swag"
 
-	"meko/api_server/docs" // registers the swagger spec with swag
+	"meko/api_server/docs"                     // public spec; registers with swag
+	privatespec "meko/api_server/docs/private" // full spec, including admin and internal
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/email"
 	"meko/api_server/internal/handlers"
@@ -420,6 +424,32 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	}
 }
 
+// swaggerSpecMu guards SwaggerInfo.Host on both specs. Each spec is one
+// global, and the host has to be the host of the request being served.
+var swaggerSpecMu sync.Mutex
+
+// swaggerRequestHost is the host Swagger UI should call. Behind the ingress,
+// Host is the in-cluster service name and X-Forwarded-Host is the public name.
+func swaggerRequestHost(r *http.Request) string {
+	if fwd := strings.TrimSpace(strings.SplitN(r.Header.Get("X-Forwarded-Host"), ",", 2)[0]); fwd != "" {
+		return fwd
+	}
+	return r.Host
+}
+
+// serveSwagger sets the spec host to the request host, then serves the UI.
+// Swagger UI prints "[ Base URL: host basePath ]" from that field, so an
+// empty host leaves the label as "/api/v1" and a baked-in localhost sends
+// Try it out to the viewer's machine.
+func serveSwagger(spec *swag.Spec, ui echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		swaggerSpecMu.Lock()
+		defer swaggerSpecMu.Unlock()
+		spec.Host = swaggerRequestHost(c.Request())
+		return ui(c)
+	}
+}
+
 // NewRouter builds an Echo instance with all API routes registered.
 // When Cognito config is provided, auth routes are registered and
 // datapack routes require a valid JWT. When Cognito config is empty
@@ -456,10 +486,20 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	}
 	root := e.Group(basePath)
 
-	// The swagger spec is generated with basePath /api/v1 baked in; move it with
+	// Both specs are generated with basePath /api/v1 baked in; move them with
 	// the routes so "Try it out" targets paths that actually exist.
-	docs.SwaggerInfo.BasePath = basePath + "/api/v1"
-	root.GET("/swagger/*", echoSwagger.WrapHandler)
+	// /swagger is the public spec (gen-swagger.sh excludes the admin and
+	// internal tags). The full spec is registered on the admin group below.
+	apiBase := basePath + "/api/v1"
+	docs.SwaggerInfo.Host = ""
+	docs.SwaggerInfo.BasePath = apiBase
+	privatespec.SwaggerInfoprivate.Host = ""
+	privatespec.SwaggerInfoprivate.BasePath = apiBase
+	root.GET("/swagger/*", serveSwagger(docs.SwaggerInfo, echoSwagger.WrapHandler))
+	privateSwagger := serveSwagger(
+		privatespec.SwaggerInfoprivate,
+		echoSwagger.EchoWrapHandler(echoSwagger.InstanceName(privatespec.SwaggerInfoprivate.InstanceName())),
+	)
 
 	reg := buildServiceRegistry(cfg)
 
@@ -494,6 +534,9 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	// Admin metrics routes consumed by meko_admin. Gated by the admin
 	// shared secret (X-Meko-Admin-Secret); 503 when the secret is unset.
 	adminGroup := v1.Group("/admin", auth.RequireAdminSecret(cfg.AdminAPIKey))
+	// Full spec, same secret as the rest of /admin. A browser will not send
+	// X-Meko-Admin-Secret, so this page is for a caller that already has it.
+	adminGroup.GET("/swagger/*", privateSwagger)
 	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc, reg.adminDataPlaneSvc, reg.adminFeedbackSvc)
 	adminGroup.GET("/users", adminH.Users)
 	adminGroup.GET("/metrics", adminH.Metrics)

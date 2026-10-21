@@ -3,7 +3,6 @@
 //	@title			Meko Datapack API
 //	@version		1.0
 //	@description	REST API for managing datapacks, agents, and knowledge bases in the meko platform.
-//	@host			localhost:25433
 //	@BasePath		/api/v1
 //
 //	@securityDefinitions.apikey	BearerAuth

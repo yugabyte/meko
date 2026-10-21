@@ -30,7 +30,7 @@ deployment, so the framework sees them as one stack.
 
 | Component | Source | Image (`quay.io/yugabyte/`) | What a test drives |
 |---|---|---|---|
-| api-server | `yugabyte/meko` `meko/api_server` | `meko-api-server` | REST `/api/v1`: datapacks, agents, knowledge bases, memories, collections, sharing, `meko-tokens`, deployments, health. Spec committed at `meko/api_server/docs/swagger.yaml` |
+| api-server | `yugabyte/meko` `meko/api_server` | `meko-api-server` | REST `/api/v1`: datapacks, agents, knowledge bases, memories, collections, sharing, `meko-tokens`, deployments, health. Public spec at `meko/api_server/docs/swagger.yaml`; full spec, including admin and internal, at `meko/api_server/docs/private/private_swagger.yaml` |
 | mcp-server | `yugabyte/meko-mcp-server` | `meko-mcp-server` | MCP over streamable HTTP. 25 tools in `TOOLS_MANIFEST.json`: `memory_*`, `conversation_*`, `knowledgebase_*`, `context_search`, `datapack_*`, `artifact_*`, `track_token_usage` |
 | inference-gateway | `yugabyte/meko` `meko/inference_gateway` | `meko-inference-gateway` | `/chat`, `/chat/confirm-action`, `/memory/add`, `/index-conversation` |
 | rag-agent (text, pdf, conversations workers) | `yugabyte/yugabyte-db` `python/ai/rag_agent` | `meko-rag-agent` | nothing directly. It drains the `pg_dist_rag` queue, so a test sees it as "the uploaded document becomes searchable" |

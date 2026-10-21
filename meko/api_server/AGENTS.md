@@ -142,7 +142,9 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
 - Structured logging via `slog` with key/value pairs.
 - Naming: exported `PascalCase`; constructors `New<Type>`; `…Repo` / `…Service` /
   `…Handler` suffixes; swagger doc comments on handlers are the source for
-  generated docs.
+  generated docs. `bash gen-swagger.sh` writes two specs: `docs/` is the public
+  one (`admin` and `internal` tags excluded) and `docs/private/` is the full
+  spec, served at `/api/v1/admin/swagger` behind `X-Meko-Admin-Secret`.
 
 ## Checks
 
