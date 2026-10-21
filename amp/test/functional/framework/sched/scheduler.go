@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -113,13 +114,6 @@ func Run(ctx context.Context, tests []core.Test, opts Options) (core.RunSummary,
 	}
 
 	var wg sync.WaitGroup
-	for _, idx := range exclusive {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			s.results[i] = s.runExclusive(ctx, i)
-		}(idx)
-	}
 	if len(shared) > 0 {
 		wg.Add(1)
 		go func() {
@@ -127,6 +121,7 @@ func Run(ctx context.Context, tests []core.Test, opts Options) (core.RunSummary,
 			s.runShared(ctx, shared)
 		}()
 	}
+	s.runExclusiveAll(ctx, exclusive)
 	wg.Wait()
 
 	summary := core.RunSummary{
@@ -249,16 +244,89 @@ func (s *scheduler) acquireSlot(ctx context.Context) bool {
 
 func (s *scheduler) releaseSlot() { <-s.slots }
 
+// runExclusiveAll runs the exclusive tests in an order that keeps the run short.
+// Waiters on the lease are served FIFO, so the order they queue in is the order
+// they start. The longest work queues first, and tests sharing a lock queue as
+// one chain, since they cannot overlap and finish late if they start late. Tests
+// that fault the shared stack run after everything else: one waiting on the
+// infra gate stops every new test from starting until the running ones drain.
+func (s *scheduler) runExclusiveAll(ctx context.Context, idxs []int) {
+	var faulting []int
+	var jobs [][]int
+	chain := map[string]int{}
+	for _, i := range idxs {
+		env := s.tests[i].Env
+		key := env.Locks()
+		switch {
+		case s.infraGateArmed && env.FaultsShared():
+			faulting = append(faulting, i)
+		case key == "":
+			jobs = append(jobs, []int{i})
+		default:
+			j, ok := chain[key]
+			if !ok {
+				j = len(jobs)
+				chain[key] = j
+				jobs = append(jobs, nil)
+			}
+			jobs[j] = append(jobs[j], i)
+		}
+	}
+	for _, c := range jobs {
+		s.sortLongestFirst(c)
+	}
+	sort.SliceStable(jobs, func(a, b int) bool { return s.estimate(jobs[a]) > s.estimate(jobs[b]) })
+
+	var wg sync.WaitGroup
+	for _, job := range jobs {
+		queued := make(chan struct{})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n, i := range job {
+				signal := func() {}
+				if n == 0 {
+					signal = sync.OnceFunc(func() { close(queued) })
+				}
+				s.results[i] = s.runExclusive(ctx, i, signal)
+				signal()
+			}
+		}()
+		<-queued
+	}
+	wg.Wait()
+
+	s.sortLongestFirst(faulting)
+	for _, i := range faulting {
+		s.results[i] = s.runExclusive(ctx, i, func() {})
+	}
+}
+
+func (s *scheduler) estimate(job []int) time.Duration {
+	var d time.Duration
+	for _, i := range job {
+		d += core.TestTimeout(s.tests[i], s.opts.Config)
+	}
+	return d
+}
+
+func (s *scheduler) sortLongestFirst(idxs []int) {
+	sort.SliceStable(idxs, func(a, b int) bool {
+		return core.TestTimeout(s.tests[idxs[a]], s.opts.Config) > core.TestTimeout(s.tests[idxs[b]], s.opts.Config)
+	})
+}
+
 // runExclusive acquires a lease, provisions its own environment (inside
-// core.RunOne), and runs the test alone.
-func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
+// core.RunOne), and runs the test alone. queued is called once the test holds
+// its place in the lease queue, or would have had it when it returns early.
+func (s *scheduler) runExclusive(ctx context.Context, i int, queued func()) *core.Result {
 	test := s.tests[i]
 	defer s.enterInfraGate(test)()
 	defer s.enterSharedLock(test)()
 	if res := s.failIfInfraPoisoned(test); res != nil {
 		return res
 	}
-	lease, err := s.mgr.Acquire(ctx, s.leaseWeight(test.Env))
+	lease, err := s.mgr.acquire(ctx, s.leaseWeight(test.Env), queued)
 	if err == nil {
 		defer lease.Release()
 	}

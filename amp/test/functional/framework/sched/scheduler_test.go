@@ -501,3 +501,51 @@ func TestSchedulerLeavesUnlockedTestsConcurrent(t *testing.T) {
 		t.Errorf("peak concurrency without a lock key = %d, want 2", peak)
 	}
 }
+
+// With one lease slot, start order is queue order: longest job first, a lock
+// chain as one job, fault tests last.
+func TestSchedulerQueuesLongestFirstAndFaultsLast(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	body := func(name string) func(*core.T) error {
+		return func(*core.T) error {
+			mu.Lock()
+			order = append(order, name)
+			mu.Unlock()
+			return nil
+		}
+	}
+	timed := func(tc core.Test, d time.Duration) core.Test {
+		tc.Timeout = d
+		return tc
+	}
+	tests := []core.Test{
+		timed(exclusiveTest("a", body("a")), 10*time.Minute),
+		timed(lockedTest("b", "k", core.Exclusive, body("b")), 30*time.Minute),
+		timed(lockedTest("c", "k", core.Exclusive, body("c")), 20*time.Minute),
+		timed(exclusiveTest("d", body("d")), 40*time.Minute),
+		timed(faultTest("f", body("f")), 60*time.Minute),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sched.Run(context.Background(), tests, sched.Options{
+			RunOptions: core.RunOptions{Parallel: 1, Seed: core.NewRunSeed(3, true), Provider: &sharedInfraProvider{}},
+			Capacity:   1,
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("scheduler hung")
+	}
+	pos := map[string]int{}
+	for i, n := range order {
+		pos[n] = i
+	}
+	// c follows b in its chain, so where it lands against d and a depends on
+	// how fast b returns.
+	if len(order) != 5 || order[0] != "b" || pos["d"] > pos["a"] || pos["b"] > pos["c"] || order[4] != "f" {
+		t.Errorf("start order = %v, want b first, d before a, c after b, f last", order)
+	}
+}

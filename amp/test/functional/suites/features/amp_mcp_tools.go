@@ -30,8 +30,9 @@ const (
 	mcpReadyTimeout    = 4 * time.Minute
 	// mcpPodSelector is the chart's own label for the MCP deployment's pods
 	// (mcpSelectorLabels in _helpers.tpl).
-	mcpPodSelector = "app=amp-controller-mcp"
-	mcpCallTimeout = 60 * time.Second
+	mcpPodSelector  = "app=amp-controller-mcp"
+	mcpCallTimeout  = 60 * time.Second
+	mcpPostAttempts = 4
 )
 
 // mcpExpectedTools must all be in the catalog; mcpAbsentTools must not.
@@ -96,29 +97,58 @@ func (m *mcpClient) rpc(ctx context.Context, method string, params any, out any)
 	if err != nil {
 		return err
 	}
-	return m.post(ctx, body, out)
+	return m.post(ctx, body, out, mcpResendable(method, params))
+}
+
+// mcpResendable reports whether a call can be sent again after a dropped
+// connection: a create or delete the server already ran would run twice.
+func mcpResendable(method string, params any) bool {
+	if method != "tools/call" {
+		return true
+	}
+	p, _ := params.(map[string]any)
+	name, _ := p["name"].(string)
+	for _, prefix := range []string{"get_", "list_", "resize_", "update_"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mcpClient) notify(ctx context.Context, method string) error {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
-	return m.post(ctx, body, nil)
+	return m.post(ctx, body, nil, true)
 }
 
-func (m *mcpClient) post(ctx context.Context, body []byte, out any) error {
+func (m *mcpClient) post(ctx context.Context, body []byte, out any, resendable bool) error {
 	cctx, cancel := context.WithTimeout(ctx, mcpCallTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodPost, m.url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	if m.session != "" {
-		req.Header.Set("Mcp-Session-Id", m.session)
-	}
-	resp, err := m.hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("POST %s: %w", m.url, err)
+	var resp *http.Response
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(cctx, http.MethodPost, m.url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if m.session != "" {
+			req.Header.Set("Mcp-Session-Id", m.session)
+		}
+		resp, err = m.hc.Do(req)
+		if err == nil {
+			break
+		}
+		// The port-forward relaunches itself when kubectl dies, so a call that
+		// lands in the gap reads EOF and the next one gets through.
+		if attempt == mcpPostAttempts || !resendable || !controller.IsTransientConnErr(err) {
+			return fmt.Errorf("POST %s: %w", m.url, err)
+		}
+		select {
+		case <-cctx.Done():
+			return fmt.Errorf("POST %s: %w", m.url, err)
+		case <-time.After(2 * time.Second):
+		}
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))

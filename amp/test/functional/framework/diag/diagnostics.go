@@ -14,6 +14,7 @@ package diag
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -279,41 +280,71 @@ func collect(ctx context.Context, kube Kube, namespace string, sink apps.Artifac
 	if err != nil {
 		logf("diagnostics: list pods in %s (best-effort): %v", namespace, err)
 	}
-	for _, pod := range pods {
-		dir := sc.logDir(pod)
-		if out, err := kube.LogsAll(ctx, pod, logTailLines); err != nil {
-			logf("diagnostics: logs %s/%s (best-effort): %v", namespace, pod, err)
-		} else {
-			for container, blob := range splitByContainer(out) {
-				add(sink, logf, dir+"/"+container+".log", "log", blob)
-			}
-		}
-		// --previous errors when no container of the pod ever restarted (no
-		// prior instance); that is the common case, so treat it as a quiet skip.
-		if out, err := kube.LogsAllPrevious(ctx, pod, logTailLines); err != nil {
-			logf("diagnostics: previous logs %s/%s (best-effort, likely no prior instance): %v", namespace, pod, err)
-		} else {
-			for container, blob := range splitByContainer(out) {
-				add(sink, logf, dir+"/"+container+".previous.log", "log", blob)
-			}
-		}
-	}
-
 	states, err := kube.PodStates(ctx)
 	if err != nil {
 		logf("diagnostics: pod states in %s (best-effort): %v", namespace, err)
 	}
+	describe := map[string]bool{}
 	for _, st := range states {
 		if !sc.describeAll && st.Phase == "Running" && st.Ready &&
 			!strings.HasPrefix(st.Name, endpointPodPrefix) && !isUniversePod(st.Name) {
 			continue
 		}
-		if out, err := kube.Describe(ctx, "pod", st.Name); err != nil {
-			logf("diagnostics: describe %s/%s (best-effort): %v", namespace, st.Name, err)
-		} else {
-			add(sink, logf, sc.describeName(st.Name), "txt", out)
-		}
+		describe[st.Name] = true
 	}
+
+	// Each call is a round trip from the agent to the API server, and a shared
+	// namespace holds tens of pods, so one at a time this took minutes per test.
+	var jobs []func()
+	for _, pod := range pods {
+		dir := sc.logDir(pod)
+		jobs = append(jobs, func() {
+			if out, err := kube.LogsAll(ctx, pod, logTailLines); err != nil {
+				logf("diagnostics: logs %s/%s (best-effort): %v", namespace, pod, err)
+			} else {
+				for container, blob := range splitByContainer(out) {
+					add(sink, logf, dir+"/"+container+".log", "log", blob)
+				}
+			}
+		}, func() {
+			// --previous errors when no container of the pod ever restarted, the
+			// common case, so it is a quiet skip.
+			if out, err := kube.LogsAllPrevious(ctx, pod, logTailLines); err != nil {
+				logf("diagnostics: previous logs %s/%s (best-effort, likely no prior instance): %v", namespace, pod, err)
+			} else {
+				for container, blob := range splitByContainer(out) {
+					add(sink, logf, dir+"/"+container+".previous.log", "log", blob)
+				}
+			}
+		})
+	}
+	for name := range describe {
+		jobs = append(jobs, func() {
+			if out, err := kube.Describe(ctx, "pod", name); err != nil {
+				logf("diagnostics: describe %s/%s (best-effort): %v", namespace, name, err)
+			} else {
+				add(sink, logf, sc.describeName(name), "txt", out)
+			}
+		})
+	}
+	runBounded(jobs, collectParallelism)
+}
+
+// collectParallelism bounds the concurrent kubectl calls of one collection.
+const collectParallelism = 8
+
+func runBounded(jobs []func(), n int) {
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	for _, job := range jobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			job()
+		}()
+	}
+	wg.Wait()
 }
 
 // splitByContainer splits a `kubectl logs --all-containers --prefix` blob
@@ -350,12 +381,16 @@ func splitByContainer(out string) map[string]string {
 	return blobs
 }
 
+var addMu sync.Mutex
+
 // add records one non-empty blob, logging (never propagating) a sink error so a
 // single failed Add can't abort the collection.
 func add(sink apps.ArtifactSink, logf func(string, ...any), name, kind, content string) {
 	if content == "" {
 		return
 	}
+	addMu.Lock()
+	defer addMu.Unlock()
 	if err := sink.Add(name, kind, []byte(content)); err != nil {
 		logf("diagnostics: record %s (best-effort): %v", name, err)
 	}

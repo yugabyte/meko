@@ -933,7 +933,7 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	for attempt := 0; ; attempt++ {
 		out = Task{}
 		_, _, err = c.doJSON(ctx, http.MethodGet, c.apiURL+"/tasks/"+taskID, nil, &out)
-		if err == nil || attempt >= getTaskRetries || !isTransientConnErr(err) {
+		if err == nil || attempt >= getTaskRetries || !IsTransientConnErr(err) {
 			return out, err
 		}
 		select {
@@ -944,10 +944,10 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	}
 }
 
-// isTransientConnErr reports whether err looks like a dropped, reset, refused
+// IsTransientConnErr reports whether err looks like a dropped, reset, refused
 // or timed-out connection rather than a real API-level failure — the class of
 // error a brief port-forward blip or an apiserver-to-kubelet hiccup produces.
-func isTransientConnErr(err error) bool {
+func IsTransientConnErr(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -1058,7 +1058,7 @@ func (c *Client) WaitTask(ctx context.Context, taskID string) (Task, error) {
 		// APIError first: doJSON joins ctx.Err() onto it (#931) so a served 503
 		// survives cancellation, and losing it turns "backing is down" into
 		// "controller hung".
-		case errors.As(err, new(*APIError)), !isTransientConnErr(err):
+		case errors.As(err, new(*APIError)), !IsTransientConnErr(err):
 			return Task{}, err
 		default:
 			if unreachableSince.IsZero() {

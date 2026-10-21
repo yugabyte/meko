@@ -897,8 +897,8 @@ func TestIsTransientConnErrClassifiesTimeouts(t *testing.T) {
 		{"nil", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isTransientConnErr(tc.err); got != tc.want {
-				t.Errorf("isTransientConnErr(%v) = %v, want %v", tc.err, got, tc.want)
+			if got := IsTransientConnErr(tc.err); got != tc.want {
+				t.Errorf("IsTransientConnErr(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}

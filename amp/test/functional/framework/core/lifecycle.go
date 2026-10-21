@@ -419,9 +419,11 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 		}
 	}
 
-	cctx, ccancel := context.WithTimeout(context.Background(), ResolveCollectTimeout(opts.Config))
-	_ = env.Collect(cctx, collectSink(t, wd, opts))
-	ccancel()
+	if sink := collectSink(t, wd, opts); sink != nil {
+		cctx, ccancel := context.WithTimeout(context.Background(), ResolveCollectTimeout(opts.Config))
+		_ = env.Collect(cctx, sink)
+		ccancel()
+	}
 
 	// Reap what Setup created, after collect. Reading setupTeardown is only safe
 	// once the body goroutine finished (the watchdog contract) — skip on timeout;
@@ -478,10 +480,6 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 	}
 }
 
-type discardArtifactSink struct{}
-
-func (discardArtifactSink) Add(string, string, []byte) error { return nil }
-
 // testArtifactSink persists what an env collects onto the test's result, so the
 // bytes reach the run's artifacts dir and the report portal.
 type testArtifactSink struct{ t *T }
@@ -491,7 +489,8 @@ func (s testArtifactSink) Add(name, kind string, content []byte) error {
 	return nil
 }
 
-// collectSink decides whether this run keeps the env's diagnostics. The gate is
+// collectSink decides whether this run keeps the env's diagnostics, nil when it
+// does not, so nothing is pulled from the cluster only to be dropped. The gate is
 // the same report.collect_diagnostics knob the suites use, judged against the
 // same notion of failure the result will carry — a timeout and a panic count,
 // because those are exactly the runs whose evidence is hardest to reconstruct
@@ -504,7 +503,7 @@ func collectSink(t *T, wd watchdogResult, opts RunOptions) ArtifactSink {
 		mode = opts.Config.GetString("report.collect_diagnostics", DefaultCollectDiagnostics)
 	}
 	if !shouldCollect(mode, failed) {
-		return discardArtifactSink{}
+		return nil
 	}
 	return testArtifactSink{t: t}
 }

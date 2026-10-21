@@ -792,7 +792,7 @@ apps:
       # launched (see env/universe: TestProvisionYBACreateTaskFailureReapsNodes).
       # The amp-compute workload needs no YBC. Set true only for a VM universe
       # a backup test will drive; the kubernetes universe has its own
-      # apps.yba.k8s.enable_ybc, which is on.
+      # apps.yba.k8s.enable_ybc.
       enable_ybc: false
       # master_gflags/tserver_gflags go onto every universe built from a
       # UniverseSpec, whatever the provider. tserver_gflags defaults to the
@@ -842,9 +842,10 @@ apps:
       # RF1 skips backing_maintenance and is not the product customers run.
       num_nodes: 3
       replication_factor: 3
-      # enable_ybc: on here, unlike the VM default above — the chart brings
-      # yb-controller, and stress/backing_backup_restore skips without YBC.
-      enable_ybc: true
+      # enable_ybc: off, because YBA's kubectl cp of the YBC tarball was the
+      # most common universe-create failure. stress/backing_backup_restore
+      # turns it on for its own universe.
+      enable_ybc: false
       volume_count: 1
       # 200G, not the old 50. Measured on the depth ladder: 25 TPC-C warehouses
       # (~2.5G logical) put 36G on EACH tserver before YugabyteDB started
@@ -2351,7 +2352,7 @@ stress:
   # (the distributed snapshot under live write traffic is the point) but never
   # restored over. The backup store is a MinIO the test deploys beside the
   # universe, so no cloud credentials are needed. Backups require YBC on the
-  # universe (apps.yba.k8s.enable_ybc, on for kubernetes universes) and
+  # universe (apps.yba.k8s.enable_ybc, which this test turns on for its own) and
   # env.yb_deploy=yba_provisioned (kubernetes); the test skips without either.
   backing_backup_restore:
     # enabled gates the whole scenario.

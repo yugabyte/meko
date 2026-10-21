@@ -446,13 +446,16 @@ func (r *combinedRun) holdDDLGate(ctx context.Context) (func(), error) {
 const sampleLoadMarker = "ops/sec"
 
 func (r *combinedRun) sampleWorkloadFromSpec(name string, spec sampleapp.RunSpec) *managedWorkload {
+	// No --run_time: the jar runs until report_kill, so it still has load on
+	// when the last workload's setup ends and the chaos window starts.
+	spec.RunTime = 0
 	app := sampleapp.New(r.podExec, spec,
 		sampleapp.WithLogf(r.logf),
 		sampleapp.WithLoadMarker(sampleLoadMarker),
 		sampleapp.WithReadyTimeout(r.cfg.ReadyTimeout))
 	return &managedWorkload{
 		name: name,
-		run: func(ctx context.Context) error {
+		run: func(ctx context.Context, ready func()) error {
 			release := func() {}
 			var err error
 			if !spec.SkipDDL {
@@ -469,6 +472,7 @@ func (r *combinedRun) sampleWorkloadFromSpec(name string, spec sampleapp.RunSpec
 			if err != nil {
 				return fmt.Errorf("%s not generating load: %w", name, err)
 			}
+			ready()
 			return sleepCtx(ctx, r.cfg.RunTime)
 		},
 		reportKill: func(ctx context.Context, sink apps.ArtifactSink) error {
@@ -512,7 +516,7 @@ func (r *combinedRun) benchWorkload() *managedWorkload {
 	return &managedWorkload{
 		name:        "benchbase_tpcc",
 		tolerateErr: true, // TPC-C has no connection-death retry; a chaos node-kill aborts it (expected).
-		run: func(ctx context.Context) error {
+		run: func(ctx context.Context, ready func()) error {
 			// --create is DDL against the same database as the sample apps, so it
 			// takes the gate. Splitting it off also keeps the execute phase, which
 			// is what chaos is meant to hit, out of the serialised window.
@@ -527,7 +531,17 @@ func (r *combinedRun) benchWorkload() *managedWorkload {
 			if cerr != nil {
 				return fmt.Errorf("benchbase tpcc create: %w", cerr)
 			}
-			spec.Create = benchbase.Ptr(false)
+			load := spec
+			load.Create, load.Load, load.Execute = benchbase.Ptr(false), benchbase.Ptr(true), benchbase.Ptr(false)
+			lres, lerr := benchbase.Run(ctx, r.podExec, load)
+			if lerr != nil {
+				mu.Lock()
+				raw = lres.Raw
+				mu.Unlock()
+				return fmt.Errorf("benchbase tpcc load: %w", lerr)
+			}
+			ready()
+			spec.Create, spec.Load = benchbase.Ptr(false), benchbase.Ptr(false)
 			res, err := benchbase.Run(ctx, r.podExec, spec)
 			mu.Lock()
 			raw = res.Raw
@@ -721,8 +735,10 @@ type chaosController interface {
 // run blocks until the workload's own duration ends; reportKill collects its logs
 // THEN stops it (the report_kill rule), and is idempotent via killed.
 type managedWorkload struct {
-	name       string
-	run        func(context.Context) error
+	name string
+	// run calls ready once its DDL is done and it is generating load. ready
+	// returns when every workload got there, which is when chaos starts.
+	run        func(ctx context.Context, ready func()) error
 	reportKill func(context.Context, apps.ArtifactSink) error
 	killed     atomic.Bool
 	// tolerateErr marks a workload whose run error is EXPECTED under chaos (a
@@ -752,12 +768,12 @@ type combinedPlan struct {
 // recovered, quiescent cluster. Returns the first workload/health/verify error.
 func (p *combinedPlan) run(ctx context.Context, sink apps.ArtifactSink) (err error) {
 	defer p.reportKillAll(sink)
-	if e := p.chaos.Start(); e != nil {
-		return fmt.Errorf("start chaos: %w", e)
-	}
 	defer p.chaos.Stop()
 
-	fatal, tolerated := p.launchAndWait(ctx)
+	fatal, tolerated, chaosErr := p.launchAndWait(ctx)
+	if chaosErr != nil {
+		return fmt.Errorf("start chaos: %w", chaosErr)
+	}
 
 	// Quiesce before the oracle: recover chaos + collect/kill workloads now — even
 	// when a tolerated workload aborted, so the oracle observes a recovered cluster.
@@ -786,20 +802,41 @@ func (p *combinedPlan) run(ctx context.Context, sink apps.ArtifactSink) (err err
 	return nil
 }
 
-// launchAndWait runs every workload concurrently. It returns the first
-// non-tolerated (fatal) error and the collected errors from tolerate-marked
-// workloads separately, so a driver aborting on a chaos-induced connection reset
-// does not skip the health + consistency oracle.
-func (p *combinedPlan) launchAndWait(ctx context.Context) (fatal error, tolerated []error) {
-	var wg sync.WaitGroup
+// launchAndWait runs every workload concurrently and starts chaos once each one
+// is generating load or has ended. Chaos during the setup DDL kills a sample
+// app's DROP/CREATE, which it does not retry, so the run would measure the
+// harness. It returns the first non-tolerated (fatal) error and the collected
+// errors from tolerate-marked workloads separately, so a driver aborting on a
+// chaos-induced connection reset does not skip the health + consistency oracle.
+func (p *combinedPlan) launchAndWait(ctx context.Context) (fatal error, tolerated []error, chaosErr error) {
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg, ready sync.WaitGroup
+	allReady := make(chan struct{})
 	errs := make([]error, len(p.workloads))
 	for i, w := range p.workloads {
 		wg.Add(1)
+		ready.Add(1)
 		go func(i int, w *managedWorkload) {
 			defer wg.Done()
-			errs[i] = w.run(ctx)
+			done := sync.OnceFunc(ready.Done)
+			defer done()
+			errs[i] = w.run(wctx, func() {
+				done()
+				select {
+				case <-allReady:
+				case <-wctx.Done():
+				}
+			})
 		}(i, w)
 	}
+	ready.Wait()
+	if ctx.Err() == nil {
+		if chaosErr = p.chaos.Start(); chaosErr != nil {
+			cancel()
+		}
+	}
+	close(allReady)
 	wg.Wait()
 	for i, e := range errs {
 		if e == nil {
@@ -811,7 +848,7 @@ func (p *combinedPlan) launchAndWait(ctx context.Context) (fatal error, tolerate
 			fatal = e
 		}
 	}
-	return fatal, tolerated
+	return fatal, tolerated, chaosErr
 }
 
 // reportKillAll collect-then-kills every workload exactly once, on a fresh

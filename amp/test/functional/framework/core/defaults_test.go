@@ -676,11 +676,10 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if k8sUni.K8sStorageClass != yba.DefaultK8sStorageClass {
 		t.Errorf("k8s universe StorageClass = %q, want %q", k8sUni.K8sStorageClass, yba.DefaultK8sStorageClass)
 	}
-	// stress/backing_backup_restore skips without YBC, and the universe is
-	// created once per run, so the kubernetes default has to carry it — the
-	// chart brings yb-controller, so WaitForYbcServer has something to ping.
-	if !k8sUni.EnableYbc {
-		t.Errorf("k8s universe EnableYbc = false, want true")
+	// YBC is off for the run's universe: YBA's kubectl cp of the YBC tarball
+	// failed more creates than anything else. backing_backup_restore asks for it.
+	if k8sUni.EnableYbc {
+		t.Errorf("k8s universe EnableYbc = true, want false")
 	}
 	if k8sUni.VolumeSizeGB != yba.DefaultK8sVolumeSizeGB {
 		t.Errorf("k8s universe VolumeSizeGB = %d, want %d", k8sUni.VolumeSizeGB, yba.DefaultK8sVolumeSizeGB)

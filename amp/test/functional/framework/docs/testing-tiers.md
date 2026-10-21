@@ -255,7 +255,10 @@ them:
   The default universe is RF1 (`apps.yba.k8s.num_nodes`), so it skips there; the
   scheduled stress lane passes `num_nodes=3` / `replication_factor=3`.
 - `backing_backup_restore` needs YBC on the universe. `apps.yba.k8s.enable_ybc`
-  is on, so a kubernetes universe has it; a VM universe needs
+  is off by default, because the YBC copy into every tserver was the most common
+  reason a universe create failed. The test turns it on for its own dedicated
+  stack, so it skips only under `env.stack=shared`, where the run's universe
+  needs `apps.yba.k8s.enable_ybc=bool:true`. A VM universe needs
   `apps.yba.universe.enable_ybc=bool:true`, which is off by default because
   `WaitForYbcServer` there pings a yb-controller nothing installs.
 - Either one skips when the private sample-app jar secret is unresolvable.

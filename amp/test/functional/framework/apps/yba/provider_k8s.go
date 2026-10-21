@@ -62,10 +62,11 @@ const (
 	// writable while one is out) and measures a different product.
 	DefaultK8sNumNodes    = 3
 	DefaultK8sReplication = 3
-	// DefaultK8sEnableYbc is on: the chart installs yb-controller, so YBA's
-	// backup tasks (and stress/backing_backup_restore) have what they need.
-	// The VM path keeps apps.yba.universe.enable_ybc=false.
-	DefaultK8sEnableYbc = true
+	// DefaultK8sEnableYbc is off: with it on, YBA kubectl-cps the YBC tarball
+	// into every tserver at create, and that copy was the most common reason a
+	// universe create failed. stress/backing_backup_restore, the only test that
+	// needs YBC, turns it on for its own universe.
+	DefaultK8sEnableYbc = false
 	// DefaultK8sVolumeSizeGB is the per-node PVC size. 200, not the old 50:
 	// measured on the depth ladder, 25 TPC-C warehouses (~2.5G logical) put 36G
 	// on EACH tserver before YugabyteDB rejected writes under its 5% free

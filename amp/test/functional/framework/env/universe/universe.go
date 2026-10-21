@@ -803,7 +803,7 @@ func (p *Provider) deployYBA(ctx context.Context, runTag string, specs ybaSpecs)
 	// WaitForYbcServer subtask that otherwise times out pinging a yb-controller
 	// nothing installed there, and a create task that fails after launching the
 	// nodes strands them. A kubernetes universe gets yb-controller from the
-	// chart, so apps.yba.k8s.enable_ybc is on and the backup suites can run.
+	// chart when apps.yba.k8s.enable_ybc is on.
 	if err := cl.SetYbcEnabledForProvider(ctx, cp.providerUUID, uni.EnableYbc); err != nil {
 		return failure(fmt.Errorf("provision_yba: set ybc.provider.enabled: %w", err))
 	}

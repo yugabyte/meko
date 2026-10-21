@@ -48,22 +48,31 @@ func NewManager(capacity int) *Manager {
 // waiters) or ctx is done. A weight above total capacity is an error — it could
 // never be satisfied.
 func (m *Manager) Acquire(ctx context.Context, weight int) (*Lease, error) {
+	return m.acquire(ctx, weight, func() {})
+}
+
+// acquire is Acquire with queued called once the request holds its FIFO place:
+// granted, queued behind earlier waiters, or refused.
+func (m *Manager) acquire(ctx context.Context, weight int, queued func()) (*Lease, error) {
 	if weight < 1 {
 		weight = 1
 	}
 	m.mu.Lock()
 	if weight > m.capacity {
 		m.mu.Unlock()
+		queued()
 		return nil, fmt.Errorf("lease weight %d exceeds capacity %d", weight, m.capacity)
 	}
 	if len(m.waiters) == 0 && m.used+weight <= m.capacity {
 		m.grantLocked(weight)
 		m.mu.Unlock()
+		queued()
 		return &Lease{mgr: m, weight: weight}, nil
 	}
 	w := &waiter{weight: weight, ready: make(chan struct{})}
 	m.waiters = append(m.waiters, w)
 	m.mu.Unlock()
+	queued()
 
 	select {
 	case <-w.ready:
