@@ -8,8 +8,10 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Every database call goes through `internal/store`. The only other package that imports the
       SQLite driver is `internal/sqlitevec`, which links SQLite's C code; only its test runs a query.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
-- [ ] Every route but `/healthz` needs a credential (the admin token in this phase), checked on the
-      matched route (`c.Path()`), never the raw URL. The store API and the engine's API listen only
+- [ ] Every route but `/healthz` needs a credential, checked on the matched route (`c.Path()`),
+      never the raw URL: the admin token on `/api/v1/status` and `/api/v1/version`, the admin or
+      client token everywhere else, and nothing there only with `[server] auth = "none"`
+      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store API and the engine's API listen only
       on their unix sockets (0600) and need the internal token on every route, the engine's
       `/healthz` too (its reply can say why the engine failed). The server binds 127.0.0.1 only, checks `Host`,
       and refuses requests with an `Origin` until a browser client exists.

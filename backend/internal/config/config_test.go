@@ -63,6 +63,8 @@ func TestLoadErrors(t *testing.T) {
 		},
 		{name: "port out of range", file: "[server]\nport = 70000\n", want: []string{"port 70000 is out of range"}},
 		{name: "bad level", file: "[log]\nlevel = \"loud\"\n", want: []string{`"loud"`}},
+		{name: "unknown auth mode", file: "[server]\nauth = \"nnone\"\n", want: []string{`server.auth "nnone"`}},
+		{name: "unknown auth mode in env", env: map[string]string{"MEKO_AUTH": "off"}, want: []string{`"off"`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,5 +122,24 @@ func TestConversationSearchDistance(t *testing.T) {
 		if c.ok != (err == nil) || c.ok && got.ConversationSearch.MaxDistance != c.want {
 			t.Errorf("%q: %v %v", c.file, got.ConversationSearch, err)
 		}
+	}
+}
+
+func TestAuthMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Server.Auth != AuthToken {
+		t.Fatalf("default %q, %v", c.Server.Auth, err)
+	}
+	if err = os.WriteFile(path, []byte("[server]\nauth = \"none\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Server.Auth != AuthNone {
+		t.Fatalf("file %q, %v", c.Server.Auth, err)
+	}
+	c, err = Load(path, func(k string) string { return map[string]string{"MEKO_AUTH": "token"}[k] }, Overrides{})
+	if err != nil || c.Server.Auth != AuthToken {
+		t.Fatalf("env over file %q, %v", c.Server.Auth, err)
 	}
 }

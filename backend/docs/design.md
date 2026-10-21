@@ -229,8 +229,9 @@ This phase has one client, the CLI, so there is one credential: the admin token.
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
   rebinding. Any request with an `Origin` header is refused, since no browser client exists yet.
   That keeps web pages open in the user's browser from reaching the server.
-- Later clients bring their own credentials: API keys (stored hashed) with MCP in milestone 3,
-  and browser access with the UI in milestone 4.
+- Milestone 3 added the client token, kept across restarts, for MCP and REST clients, and an
+  opt-in `[server] auth = "none"`; the admin-only routes stay admin-only
+  ([api.md](api.md)). Per-client API keys are #195, and browser access comes with the UI.
 
 ## Supervisor
 
@@ -374,11 +375,11 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
 | 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
-| 3 | MCP | `/mcp` (Streamable HTTP, stateless) with prod's tool names, arguments and reply shapes; API keys (`keys create/list/revoke`, stored hashed) |
-| 4 | REST API and UI | The `/api/v1` subset meko_ui calls, serving the pinned meko_ui package at `/`, browser access |
-| 5 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash |
-| 6 | Move to Meko Cloud | The export bundle, and prod's import API |
-| 7 | Install and release | launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest |
+| 3 | MCP and REST | Being built: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
+| 4 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash (#170) |
+| 5 | Install and release | Native builds with Meko's own Node, launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest (#171) |
+| 6 | Web UI | The pinned meko_ui package served at `/`, local mode in meko_ui, browser access (#172) |
+| 7 | Move to Meko Cloud | The export bundle, and prod's import API (#173) |
 
 ## Questions and decisions
 

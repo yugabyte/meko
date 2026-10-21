@@ -135,6 +135,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err = paths.WriteFile(l.Port, []byte(strconv.Itoa(cfg.Server.Port)+"\n")); err != nil {
 		return err
 	}
+	// The clients' token: made on first start, then kept, since clients store it once.
+	clientToken, err := auth.EnsureClientToken(l.ClientToken)
+	if err != nil {
+		return err
+	}
 
 	// The store API the engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
@@ -169,12 +174,19 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			return supervisor.Status{}, false
 		},
 	})
-	// Embeds turns for conversation search as they arrive, and any the engine missed while down.
+	// Embeds turns for conversation search as they arrive, and any the engine missed while down;
+	// and keeps the call log to its retention.
 	embedCtx, stopEmbedder := context.WithCancel(context.Background())
 	embedderDone := make(chan struct{})
 	go func() {
 		defer close(embedderDone)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			svc.RunCallPruner(embedCtx)
+		}()
 		svc.RunEmbedder(embedCtx)
+		<-done
 	}()
 
 	srv := server.New(server.Options{
@@ -182,12 +194,17 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
 			Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
 		},
-		Port: cfg.Server.Port, Token: token, Logger: log, Children: sup.Statuses, Engine: svc.EngineStatus,
+		Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
+		Children: sup.Statuses, Engine: svc.EngineStatus,
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
-		"pid", pid, "data_dir", l.Root, "version", version.Version)
+		"pid", pid, "data_dir", l.Root, "version", version.Version, "auth", cfg.Server.Auth)
+	if cfg.Server.Auth == config.AuthNone {
+		log.Warn("auth is off ([server] auth = \"none\"): every user and program on this machine can read and " +
+			"write your memories through /mcp and /api/v1")
+	}
 
 	var serveErr error
 	select {

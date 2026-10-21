@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/store"
@@ -188,6 +189,11 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		engineLine += " (" + st.Engine.Reason + ")"
 	}
 	fmt.Fprintln(stdout, engineLine)
+	if st.Auth == config.AuthNone {
+		fmt.Fprintln(stdout, "  Auth:     none (every user and program on this machine can read and write your memories)")
+	} else {
+		fmt.Fprintln(stdout, "  Auth:     token (meko token prints it)")
+	}
 	if len(st.Children) == 0 {
 		fmt.Fprintf(stdout, "  Children: none\n")
 	}
@@ -198,6 +204,20 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, line)
 	}
+	return exitOK
+}
+
+// runToken prints the client token, making it if no server has yet. It reads the data folder, so
+// it works whether or not the server runs.
+func runToken(l paths.Layout, stdout, stderr io.Writer) int {
+	if err := l.Ensure(); err != nil {
+		return fail(stderr, err)
+	}
+	tok, err := auth.EnsureClientToken(l.ClientToken)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	fmt.Fprintln(stdout, tok)
 	return exitOK
 }
 
