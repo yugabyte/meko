@@ -172,23 +172,31 @@ export function hooksSettingsPath(paths: Paths): string {
 }
 
 /**
+ * Replaces an executable script with a new file renamed over it. Sessions run the hook scripts at
+ * any time, and on Linux writing a file in place while it runs fails with ETXTBSY (which stopped
+ * the server's start); a rename leaves the running copy alone.
+ */
+function writeScript(path: string, text: string): void {
+  const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
+  writeFileSync(tmp, text);
+  chmodSync(tmp, 0o755);
+  renameSync(tmp, path);
+}
+
+/**
  * Writes the hook script and the --settings file every session is launched with. `disabledPlugins`
  * (plugin keys) are turned off in sessions whatever the user's own settings say.
  */
 export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] } = {}): void {
   mkdirSync(paths.run, { recursive: true });
   const script = hookScriptPath(paths);
-  writeFileSync(script, HOOK_SCRIPT);
-  chmodSync(script, 0o755);
+  writeScript(script, HOOK_SCRIPT);
   const guard = guardScriptPath(paths);
-  writeFileSync(guard, GUARD_SCRIPT);
-  chmodSync(guard, 0o755);
+  writeScript(guard, GUARD_SCRIPT);
   const context = contextScriptPath(paths);
-  writeFileSync(context, CONTEXT_SCRIPT);
-  chmodSync(context, 0o755);
+  writeScript(context, CONTEXT_SCRIPT);
   const statusLine = statusLineScriptPath(paths);
-  writeFileSync(statusLine, STATUSLINE_SCRIPT);
-  chmodSync(statusLine, 0o755);
+  writeScript(statusLine, STATUSLINE_SCRIPT);
   // Keep the user's layout options; their command is run by our script (AK_USER_STATUSLINE, or
   // this file for sessions launched before the variable existed).
   const mine = userStatusLine(null, statusLine);
