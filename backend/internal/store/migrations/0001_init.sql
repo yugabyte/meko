@@ -1,4 +1,4 @@
--- Meko Local's first schema. Migrations are append-only: never edit one that has shipped.
+-- Meko's first schema. Migrations are append-only: never edit one that has shipped.
 
 CREATE TABLE settings (
   key   TEXT PRIMARY KEY,

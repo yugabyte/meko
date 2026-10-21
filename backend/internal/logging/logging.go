@@ -12,7 +12,7 @@ import (
 	"sync"
 )
 
-// Rotation defaults for logs/meko-local.log.
+// Rotation defaults for logs/meko.log.
 const (
 	MaxBytes = 10 << 20
 	Keep     = 5

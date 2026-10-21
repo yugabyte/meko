@@ -83,7 +83,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	latest := ms[len(ms)-1].version
 	if cur > latest {
-		return fmt.Errorf("%s has schema version %d, newer than this meko-local knows (%d). Use a newer meko-local",
+		return fmt.Errorf("%s has schema version %d, newer than this meko knows (%d). Use a newer meko",
 			s.path, cur, latest)
 	}
 	if cur == latest {

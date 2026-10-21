@@ -1,4 +1,4 @@
-// Package engine runs and calls Meko Local's memory engine: mem0 in a Node child process
+// Package engine runs and calls Meko's memory engine: mem0 in a Node child process
 // (backend/engine) that serve supervises. It finds the Node binary and the built engine, builds the
 // child's spec, and is the Go client of the engine's API on run/engine.sock.
 package engine
@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/envelope"
-	"github.com/yugabyte/meko-local/backend/internal/paths"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 // Name is the engine's child name in status and its log file's.
@@ -58,9 +58,9 @@ type APIError struct {
 func (e *APIError) Error() string { return e.Message }
 
 // FindNode picks the Node binary: o.Node alone if it's set (configured explicitly, it replaces the
-// search); otherwise the one shipped next to meko-local (<bin>/../node/bin/node), then node on PATH.
+// search); otherwise the one shipped next to meko (<bin>/../node/bin/node), then node on PATH.
 // It must be MinNode or newer. It doesn't check whose Node it found: AgentK's own is used only if
-// meko-local is installed inside AgentK's app folder or AgentK's node leads PATH, which packaging
+// meko is installed inside AgentK's app folder or AgentK's node leads PATH, which packaging
 // avoids.
 func FindNode(o Options) (string, error) {
 	var candidates []string
@@ -75,7 +75,7 @@ func FindNode(o Options) (string, error) {
 		}
 	}
 	lastErr := errors.New("no node binary found. Install Node " + versionString(MinNode) +
-		" or newer, or set [engine] node in config.toml or MEKO_LOCAL_NODE")
+		" or newer, or set [engine] node in config.toml or MEKO_NODE")
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err != nil {
 			continue
@@ -123,7 +123,7 @@ func older(v, minimum [3]int) bool {
 func versionString(v [3]int) string { return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]) }
 
 // FindDir picks the built engine: o.Dir if set, else <bin>/../engine (the source tree's layout,
-// where make build puts bin/meko-local next to engine/). It must hold dist/main.js.
+// where make build puts bin/meko next to engine/). It must hold dist/main.js.
 func FindDir(o Options) (string, error) {
 	dir := o.Dir
 	if dir == "" {
@@ -139,7 +139,7 @@ func FindDir(o Options) (string, error) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "dist", "main.js")); err != nil {
 		return "", fmt.Errorf("the memory engine isn't built in %s (run make engine), or set [engine] dir in "+
-			"config.toml or MEKO_LOCAL_ENGINE_DIR", dir)
+			"config.toml or MEKO_ENGINE_DIR", dir)
 	}
 	return dir, nil
 }

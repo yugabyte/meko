@@ -1,4 +1,4 @@
-# Meko Local backend: memory engine and conversations
+# Meko backend: memory engine and conversations
 
 Status: approved. Built in five stacked PRs; each section below names the PR that adds it, so the
 doc matches the code at every step:
@@ -27,7 +27,7 @@ and the REST API come in milestone 3, so this milestone ends at a Go service lay
 (`internal/memory`) that the tests drive.
 
 Prod Meko's code is private and this repo will be public, so nothing here copies it or cites its
-paths: where Meko Local follows prod, this doc states the behavior and the code is written from
+paths: where Meko follows prod, this doc states the behavior and the code is written from
 scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0).
 
 ## Left for later milestones
@@ -43,8 +43,8 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 
 | Decision | Why |
 |---|---|
-| **Public `mem0ai` 3.1.2, pinned exactly**, with Meko Local's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | Meko's mem0 2.0 branch carries an unmodified upstream 3.1.2 TypeScript port (its Meko changes are Python-only), so the public package loses nothing. mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `engine/test` checks the seam. |
-| **Meko's scoring in Meko Local's own code** | Upstream divides every memory by the most any memory in the results could reach; Meko divides each by what it earned, and returns the cosine as `raw_similarity_score`. The engine asks mem0's search for its score parts (`explain: true`) and rescores. |
+| **Public `mem0ai` 3.1.2, pinned exactly**, with Meko's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | Meko Cloud's mem0 2.0 branch carries an unmodified upstream 3.1.2 TypeScript port (its Meko Cloud changes are Python-only), so the public package loses nothing. mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `engine/test` checks the seam. |
+| **Meko Cloud's scoring, in our own code** | Upstream divides every memory by the most any memory in the results could reach; Meko Cloud divides each by what it earned, and returns the cosine as `raw_similarity_score`. The engine asks mem0's search for its score parts (`explain: true`) and rescores. |
 | **Keyword scores are true BM25** (FTS5's `bm25()`, negated) | The scale mem0's BM25 sigmoid was tuned for. Prod's Postgres keyword search returns a `ts_rank_cd`-scale number the sigmoid maps close to 0. |
 | **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded, and the runtime milestone 4's cross-encoder needs. mem0-ts has no local transformers.js embedder, so the engine adds one. Changing the model needs re-embedding, which is deferred, so an engine reporting another model is refused. |
 | **No LLM:** mem0 always builds one, so the engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction is deferred. |
@@ -52,14 +52,14 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 | **Conversation and message ids are prod's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback; prod's ids keep the Cloud move lossless. Ids are unique per datapack, and the first agent owns the conversation: another agent creating one with the same session id is refused (`ErrAgentMismatch`) rather than handed a conversation it can't add to. |
 | **Conversation search keeps prod's shape with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, and a thread of the top 3 conversations' most recent searchable turns (50 in all, oldest first) | Prod's 0.35 suits its embedding models. With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. No reranker until milestone 4 (`rerank_score` is null). |
 | **The engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
-| **Meko Local finds its own Node**: `[engine] node` (or `MEKO_LOCAL_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko-local isn't installed in AgentK's app folder). Release packaging of Node is milestone 5. |
+| **Meko finds its own Node**: `[engine] node` (or `MEKO_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko isn't installed in AgentK's app folder). Release packaging of Node is milestone 5. |
 | **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new engine. The engine also exits on its own when its parent changes or `store.sock` goes away. |
 
 ## Layout (#179–#181)
 
 ```mermaid
 flowchart LR
-  subgraph serve["meko-local serve (Go)"]
+  subgraph serve["meko serve (Go)"]
     svc["internal/memory"]
     storeapi["internal/storeapi on run/store.sock"]
     store[("internal/store: meko.db")]
@@ -89,7 +89,7 @@ flowchart LR
 - `/api/v1/status` reports the engine: `state` (starting, loading, ready, error, restarting,
   failed, unavailable), `reason`, and the embedder. When the engine doesn't answer, the
   supervisor's state of its child says whether it's starting, restarting after a crash, or failed.
-  `meko-local status` prints it.
+  `meko status` prints it.
 - Get, update and delete reach only the local user's memories, as search and list do.
 
 ### Data folder additions

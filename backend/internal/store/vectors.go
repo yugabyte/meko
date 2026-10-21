@@ -32,7 +32,7 @@ type ModelChangedError struct{ Have, Got Embedder }
 
 func (e *ModelChangedError) Error() string {
 	return fmt.Sprintf("the stored vectors were made with %s %s (%d dims), but the engine runs %s %s (%d dims). "+
-		"Changing the embedding model needs re-embedding, which Meko Local can't do yet",
+		"Changing the embedding model needs re-embedding, which Meko can't do yet",
 		e.Have.Provider, e.Have.Model, e.Have.Dims, e.Got.Provider, e.Got.Model, e.Got.Dims)
 }
 

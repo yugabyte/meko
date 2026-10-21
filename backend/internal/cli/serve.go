@@ -13,17 +13,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/auth"
-	"github.com/yugabyte/meko-local/backend/internal/config"
-	"github.com/yugabyte/meko-local/backend/internal/engine"
-	"github.com/yugabyte/meko-local/backend/internal/logging"
-	"github.com/yugabyte/meko-local/backend/internal/memory"
-	"github.com/yugabyte/meko-local/backend/internal/paths"
-	"github.com/yugabyte/meko-local/backend/internal/server"
-	"github.com/yugabyte/meko-local/backend/internal/store"
-	"github.com/yugabyte/meko-local/backend/internal/storeapi"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
-	"github.com/yugabyte/meko-local/backend/internal/version"
+	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/logging"
+	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/server"
+	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/storeapi"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/version"
 )
 
 // Shutdown limits.
@@ -186,7 +186,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
-	log.Info("Meko Local started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
+	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		"pid", pid, "data_dir", l.Root, "version", version.Version)
 
 	var serveErr error
@@ -213,7 +213,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err := st.Checkpoint(context.Background()); err != nil {
 		log.Warn("WAL checkpoint failed", "error", err)
 	}
-	log.Info("Meko Local stopped")
+	log.Info("Meko stopped")
 	return serveErr
 }
 

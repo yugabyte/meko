@@ -1,4 +1,4 @@
-// The engine's memory operations: one mem0 Memory per datapack, with Meko Local's providers, and
+// The engine's memory operations: one mem0 Memory per datapack, with Meko's providers, and
 // the reply shapes prod Meko gives (snake_case keys, the event at the top level, ids lifted out of
 // metadata, the score Meko computes and the cosine as raw_similarity_score).
 import { Memory } from "mem0ai/oss";
@@ -101,7 +101,7 @@ export class Engine {
   async add(req: AddRequest): Promise<{ results: Array<Record<string, unknown>> }> {
     requireIds(req);
     if (req.infer) {
-      throw new HttpError(400, "INFER_UNAVAILABLE", "extracting memories isn't available in Meko Local yet");
+      throw new HttpError(400, "INFER_UNAVAILABLE", "extracting memories isn't available in Meko yet");
     }
     if (!Array.isArray(req.messages) || req.messages.length === 0) {
       throw new HttpError(400, "BAD_REQUEST", "messages must be a non-empty list");

@@ -1,4 +1,4 @@
-// Package supervisor runs Meko Local's child processes (the Node engine from milestone 2,
+// Package supervisor runs Meko's child processes (the Node engine from milestone 2,
 // connectors later): it starts each one in its own process group, waits for it to be healthy,
 // restarts it with backoff when it exits, gives up after repeated crashes, and stops the whole
 // group on shutdown.

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/store"
 )
 
-// The search budget at Meko Local's 200 MB target, in one datapack: make bench. Memories and turns
+// The search budget at Meko's 200 MB target, in one datapack: make bench. Memories and turns
 // are loaded straight into the store with random vectors (loading 200 MB through the model would
 // take an hour and time the same searches); the searches then run through the real engine, model
 // included. Each conversation search's query has a chunk planted near it in threadConversations

@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/paths"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 // lockedError means another server holds the data folder's lock.
@@ -21,9 +21,9 @@ type lockedError struct {
 
 func (e *lockedError) Error() string {
 	if e.pid > 0 {
-		return fmt.Sprintf("Meko Local is already running for %s (pid %d)", e.root, e.pid)
+		return fmt.Sprintf("Meko is already running for %s (pid %d)", e.root, e.pid)
 	}
-	return fmt.Sprintf("Meko Local is already running for %s", e.root)
+	return fmt.Sprintf("Meko is already running for %s", e.root)
 }
 
 // acquireLock takes the exclusive lock serve holds until it exits. The lock, not the pid file,

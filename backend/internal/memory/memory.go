@@ -1,4 +1,4 @@
-// Package memory is Meko Local's memories and conversations as Go calls: what milestone 3's MCP
+// Package memory is Meko's memories and conversations as Go calls: what milestone 3's MCP
 // tools and REST routes will serve. Model work (embedding, and mem0's add and search) goes to the
 // Node engine; reads that need no model come straight from the store.
 package memory
@@ -10,9 +10,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/engine"
-	"github.com/yugabyte/meko-local/backend/internal/store"
-	"github.com/yugabyte/meko-local/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
 // Errors the service returns, besides the engine's (engine.ErrUnavailable, *engine.NotReadyError).

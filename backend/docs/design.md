@@ -1,10 +1,20 @@
-# Meko Local backend: foundation
+# Meko backend: foundation
 
 Status: approved. Built in three stacked PRs: #164 (layout), #165 (vendored sqlite-vec), #166 (the foundation).
-Milestone 2, the memory engine and conversations, is in [memory-engine.md](memory-engine.md). Part of Meko Local (product design: the "Meko Local Design" doc;
-requirements: the "Meko Local PRD").
+Milestone 2, the memory engine and conversations, is in [memory-engine.md](memory-engine.md). Part of Meko (product design: the Meko design doc;
+requirements: the Meko PRD).
 
-The foundation is the Go program everything else plugs into: one binary, `meko-local`, that is
+The product was called Meko Local until milestone 3 (#169), when the PRD named it Meko: the binary
+went from `meko-local` to `meko`, the environment variables from `MEKO_LOCAL_*` to `MEKO_*`, the
+data folder from `~/.meko-local` to `~/.meko`, and the Go module path to
+`github.com/yugabyte/meko/backend`. Nothing had been released, so nothing was migrated.
+Developers switching binaries: stop any `meko-local serve` first (`meko-local stop`), then move
+`~/.meko-local` to `~/.meko` by hand if you want its data. The new binary checks only
+`run/meko.lock`, so in a folder where an old server still runs it thinks no server is running.
+`meko stop` would then kill the old server's engine, recorded in `run/children/`. `meko start` would
+delete the `run/admin.token` that server's CLI still needs.
+
+The foundation is the Go program everything else plugs into: one binary, `meko`, that is
 both the CLI and the server, like yugabyted. This first milestone gives it a process model, a data
 folder, a SQLite store with vector and full-text search, an HTTP server with auth, and a supervisor
 for child processes. MCP tools, the REST API for meko_ui, the Node memory engine and knowledge-file
@@ -14,7 +24,7 @@ ingestion build on it in later milestones.
 
 In the foundation (milestone 1):
 
-- `meko-local` CLI: `start`, `stop`, `status`, `serve`, `version`. Access in this phase is
+- `meko` CLI: `start`, `stop`, `status`, `serve`, `version`. Access in this phase is
   through the CLI only: no browser and no API keys yet.
 - One data folder, one SQLite file, schema migrations.
 - SQLite with sqlite-vec and FTS5 compiled in, and a store layer every database call goes through.
@@ -31,8 +41,8 @@ installers and releases.
 
 ```
 backend/
-  go.mod                      module github.com/yugabyte/meko-local/backend
-  cmd/meko-local/main.go      entry point: parses the CLI, nothing else
+  go.mod                      module github.com/yugabyte/meko/backend
+  cmd/meko/main.go      entry point: parses the CLI, nothing else
   internal/
     cli/                      start, stop, status, serve, version
     config/                   defaults, config.toml, flags, env
@@ -59,30 +69,30 @@ in `extensions/agentk` (moved there in #158).
 
 ```mermaid
 flowchart LR
-  cli["meko-local start"] -->|spawns detached| serve["meko-local serve (parent)"]
+  cli["meko start"] -->|spawns detached| serve["meko serve (parent)"]
   serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1 (later /mcp, UI)"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
   serve -->|"starts, watches, restarts"| engine["Node engine (milestone 2)"]
   engine -->|"store API, unix socket"| serve
-  status["meko-local status / stop"] -->|"/api/v1/status, pid file"| serve
+  status["meko status / stop"] -->|"/api/v1/status, pid file"| serve
 ```
 
 | Command | What it does |
 |---|---|
 | `serve` | Runs the server in the foreground. What `start`, launchd and systemd run. |
 | `start` | Starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. |
-| `stop` | Sends SIGTERM to the pid in `run/meko-local.pid`, waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children), then SIGKILL. Not running: says so and exits 0. |
+| `stop` | Sends SIGTERM to the pid in `run/meko.pid`, waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children), then SIGKILL. Not running: says so and exits 0. |
 | `status` | Prints running or not, version, port, uptime, data folder and each child's state, from `/api/v1/status`. Exits 3 when not running. |
 | `version` | Version, commit, Go version, SQLite and sqlite-vec versions. |
 
-Every command takes `--data-dir` (default `~/.meko-local`, or `MEKO_LOCAL_HOME`).
+Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`).
 
-Only one server per data folder: `serve` takes an exclusive `flock` on `run/meko-local.lock`
+Only one server per data folder: `serve` takes an exclusive `flock` on `run/meko.lock`
 and holds it until exit, so a stale pid file never blocks a start. Right after taking the lock it
 clears the run files a killed server may have left and writes its own pid, so the lock and the pid
 file always describe the same process. The lock is also how `status`
-and `stop` tell whether a server is running. `serve` writes `run/meko-local.pid` and
-`run/meko-local.port` so they can find it, and removes both at exit. `start` sends the detached
+and `stop` tell whether a server is running. `serve` writes `run/meko.pid` and
+`run/meko.port` so they can find it, and removes both at exit. `start` sends the detached
 server's own stderr to `logs/start.log` and prints it if the server never answers, so errors from
 before logging starts (a bad config file, a taken port) aren't lost.
 
@@ -90,17 +100,17 @@ Shutdown on SIGTERM or SIGINT: stop accepting connections, drain requests (10 s)
 children (each gets SIGTERM, then SIGKILL after its 10 s stop timeout; serve waits at most 15 s for
 all of them), checkpoint the WAL, close the database, remove the pid file.
 
-A client that needs Meko Local running, such as AgentK, runs `meko-local start`. It must not keep
-`serve` as its own child, because then restarting the client would stop Meko Local.
+A client that needs Meko running, such as AgentK, runs `meko start`. It must not keep
+`serve` as its own child, because then restarting the client would stop Meko.
 
 ## Data folder and config
 
 ```
-~/.meko-local/               0700
+~/.meko/               0700
   config.toml                optional; written only when the user changes a default
   meko.db, meko.db-wal       0600; the only database
   run/                       pid, port, lock, admin token, unix sockets (0600)
-  logs/                      meko-local.log, engine.log (rotated)
+  logs/                      meko.log, engine.log (rotated)
   models/                    model files, when downloaded (milestone 2)
 ```
 
@@ -110,12 +120,12 @@ filesystem (NFS, SMB, sshfs and the others in AgentK's `install.ts` list), the d
 local disk instead, as AgentK's installer does for `state.db` (`extensions/agentk/src/server/install.ts`). An explicit `--data-dir` on a
 network filesystem is refused with a message saying why.
 
-Config precedence: flags > `MEKO_LOCAL_*` env > `config.toml` > defaults. The foundation has
+Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. The foundation has
 few keys:
 
 ```toml
 [server]
-port = 7778       # next to AgentK's 7777; also --port and MEKO_LOCAL_PORT
+port = 7778       # next to AgentK's 7777; also --port and MEKO_PORT
 [log]
 level = "info"
 ```
@@ -213,7 +223,7 @@ echo v4, the same framework as prod's `api_server`, so handlers ported from it k
 This phase has one client, the CLI, so there is one credential: the admin token.
 
 - `serve` generates 32 random bytes at each start and writes them to `run/admin.token` (0600, in
-  a 0700 folder). So only the OS user who runs Meko Local can read it. The CLI sends it as
+  a 0700 folder). So only the OS user who runs Meko can read it. The CLI sends it as
   `Authorization: Bearer <token>`. It's compared in constant time and never logged.
 - Every route except `/healthz` needs it.
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
@@ -254,7 +264,7 @@ routes, the engine's API and the engine itself are in [memory-engine.md](memory-
 
 ## Logging
 
-`log/slog` with JSON lines in `logs/meko-local.log`, rotated at 10 MB with 5 files kept, and
+`log/slog` with JSON lines in `logs/meko.log`, rotated at 10 MB with 5 files kept, and
 text on stderr under `serve`. Logs never contain keys, tokens or memory text, only ids and
 counts.
 
@@ -274,16 +284,16 @@ counts.
   databases). The Close of anything that writes (a file, the store, the log file) is checked,
   since it can be the only sign a write failed. gosec's few hits (running our own binary, a
   localhost client, paths from the data folder) carry `nolint` comments with the reason.
-- Tests use a temporary data folder and never touch `~/.meko-local`. The server's tests start it
+- Tests use a temporary data folder and never touch `~/.meko`. The server's tests start it
   in-process on port 0. The supervisor's tests re-run the test binary as the stub child.
 - Commits are `chore(backend): ...`: nothing in `backend/` ships in AgentK Local's release, and a
   `feat` would make `main` cut an AgentK release with no AgentK change in it.
 
 ## Its own stack, no api_server code
 
-Meko Local builds what it needs as its own stack and copies no code from prod's `api_server`
+Meko builds what it needs as its own stack and copies no code from prod's `api_server`
 (decided; see below). Prod's code couldn't be imported anyway: its module path `meko/api_server`
-isn't fetchable and every package is under `internal/`. What Meko Local keeps from prod are the
+isn't fetchable and every package is under `internal/`. What Meko keeps from prod are the
 wire shapes clients depend on, written here from scratch: the `{data, error}` envelope now, and
 the MCP and REST shapes in later milestones.
 
@@ -293,10 +303,10 @@ All new except the root `AGENTS.md` and `.gitignore`. Nothing under `extensions/
 
 | Path | What |
 |---|---|
-| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko-local/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid, golang.org/x/sys (macOS statfs) |
-| `backend/cmd/meko-local/main.go` | Entry point |
+| `backend/go.mod`, `backend/go.sum` | Module `github.com/yugabyte/meko/backend`, Go 1.25; echo v4, mattn/go-sqlite3, BurntSushi/toml (config), google/uuid, golang.org/x/sys (macOS statfs) |
+| `backend/cmd/meko/main.go` | Entry point |
 | `backend/internal/cli/` | `start`, `stop`, `status`, `serve`, `version`; detaching `serve` (setsid), pid file, waiting until `/api/v1/status` reports the new server |
-| `backend/internal/config/` | Defaults, `config.toml`, `MEKO_LOCAL_*` env, flags; precedence |
+| `backend/internal/config/` | Defaults, `config.toml`, `MEKO_*` env, flags; precedence |
 | `backend/internal/paths/` | Data folder layout, 0700/0600 permissions, the network-filesystem check (statfs on macOS, `/proc/self/mountinfo` on Linux) |
 | `backend/internal/server/` | echo setup, middleware (request id, recover, access log, Host and Origin checks, auth, body limit), `/healthz`, `/api/v1/status`, `/api/v1/version`, graceful shutdown. The envelope it replies with is in `backend/internal/envelope/` since milestone 2 |
 | `backend/internal/auth/` | Admin token: generate, write, read (CLI side), constant-time check |
@@ -344,7 +354,7 @@ Automated, in `go test -race ./...` (Linux and macOS in CI):
 
 Manual, on a Mac (Apple Silicon, macOS 14+) and on Linux:
 
-- `make build`; `meko-local start`, `status`, `stop`; `meko-local version` shows SQLite and sqlite-vec versions.
+- `make build`; `meko start`, `status`, `stop`; `meko version` shows SQLite and sqlite-vec versions.
 - `curl` to `127.0.0.1:7778/api/v1/status` without the token gets 401, with `run/admin.token` gets the status.
 
 ## Delivery: three stacked PRs
@@ -362,20 +372,20 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
-| 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko Local's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
+| 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
 | 3 | MCP | `/mcp` (Streamable HTTP, stateless) with prod's tool names, arguments and reply shapes; API keys (`keys create/list/revoke`, stored hashed) |
 | 4 | REST API and UI | The `/api/v1` subset meko_ui calls, serving the pinned meko_ui package at `/`, browser access |
 | 5 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash |
 | 6 | Move to Meko Cloud | The export bundle, and prod's import API |
-| 7 | Install and release | launchd and systemd units, installers, prefixed release tags (`meko-local-v...`), not marked latest |
+| 7 | Install and release | launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest |
 
 ## Questions and decisions
 
 | Question | Answer | Decided |
 |---|---|---|
 | How should the Go server and the Node engine talk to each other? (`go-node-link`) | HTTP/JSON over unix sockets, one each way | As proposed: Go serves the store API on `run/store.sock`, the engine its API on `run/engine.sock`, with a per-start token. Built in milestone 2; the foundation's supervisor and `run/` layout already assume it. |
-| How do we reuse prod's api_server code? (`api-server-reuse`) | No copy for now; build what Meko Local needs as its own stack | No code is copied from `api_server` and nothing waits on prod. Meko Local writes its own handlers, store and envelope, keeping only prod's wire shapes (the `{data, error}` envelope now; MCP and REST shapes later). |
-| Which default port? (`default-port`) | 7778 | 7778, configurable with `--port`, `MEKO_LOCAL_PORT` or `config.toml`; `serve` exits with a clear error if it's taken, with no random fallback. |
+| How do we reuse prod's api_server code? (`api-server-reuse`) | No copy for now; build what Meko needs as its own stack | No code is copied from `api_server` and nothing waits on prod. Meko writes its own handlers, store and envelope, keeping only prod's wire shapes (the `{data, error}` envelope now; MCP and REST shapes later). |
+| Which default port? (`default-port`) | 7778 | 7778, configurable with `--port`, `MEKO_PORT` or `config.toml`; `serve` exits with a clear error if it's taken, with no random fallback. |
 | How does the browser authenticate in this phase? (`browser-auth`) | No browser login; CLI only | CLI-only access with the local admin token; no API keys yet. API keys come with MCP (milestone 3), browser access with the UI (milestone 4). |
 | How should the change be reviewed, given 25.6k lines of vendored SQLite and sqlite-vec code? (asked while coding) | Break the third-party code into its own PR; stacked PRs: base layout, third party, functionality | Three stacked PRs, one `chore(backend)` commit each (see Delivery). The header-version test moved into `internal/sqlitevec` so PR 2 stands alone. |
 | Which commit type? (came up while coding) | (no question asked; follows the repo's rules) | `chore(backend)`: nothing in `backend/` ships in AgentK Local's release, so a releasing type would cut an empty AgentK release. |

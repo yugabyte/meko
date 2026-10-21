@@ -1,7 +1,7 @@
 // Package version holds the build's version and commit, set at build time:
 //
-//	go build -ldflags "-X github.com/yugabyte/meko-local/backend/internal/version.Version=0.1.0 \
-//	  -X github.com/yugabyte/meko-local/backend/internal/version.Commit=abc1234"
+//	go build -ldflags "-X github.com/yugabyte/meko/backend/internal/version.Version=0.1.0 \
+//	  -X github.com/yugabyte/meko/backend/internal/version.Commit=abc1234"
 package version
 
 // Version is the release version, or "dev" for a local build.

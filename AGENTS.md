@@ -2,17 +2,17 @@
 
 Guide for coding agents (Claude Code, Kiro, Codex, Cursor, and others) working in this repo.
 
-This repo is becoming **meko-local**: Meko Local, with extensions that plug into it. Today it holds
+This repo is becoming **meko**: Meko, with extensions that plug into it. Today it holds
 one extension, **AgentK Local**, in `extensions/agentk`. Before changing anything there, read
 [extensions/agentk/AGENTS.md](extensions/agentk/AGENTS.md): it has the map, the invariants, the
-commands (run from `extensions/agentk`) and which docs to keep current. Meko Local's own Go
+commands (run from `extensions/agentk`) and which docs to keep current. Meko's own Go
 backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before changing it.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `backend/` | Meko Local's Go backend: the `meko-local` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`), and its Node memory engine in `backend/engine`. |
+| `backend/` | Meko's Go backend: the `meko` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`), and its Node memory engine in `backend/engine`. |
 | `extensions/agentk/` | AgentK Local: its code, tests, scripts, packaging and docs, with its own `package.json`. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |

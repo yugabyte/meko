@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yugabyte/meko-local/backend/internal/auth"
-	"github.com/yugabyte/meko-local/backend/internal/envelope"
-	"github.com/yugabyte/meko-local/backend/internal/paths"
-	"github.com/yugabyte/meko-local/backend/internal/server"
+	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/server"
 )
 
 // client talks to a running server, finding it through the data folder's port and token files.

@@ -95,7 +95,7 @@ jobs:
         env:
           TERM: xterm-256color
 
-  # Meko Local's Go backend (backend/). cgo builds natively on each platform, so both run here.
+  # Meko's Go backend (backend/). cgo builds natively on each platform, so both run here.
   backend:
     name: Backend (${{ matrix.os }})
     needs: changes
@@ -135,7 +135,7 @@ jobs:
           key: embedding-model-all-MiniLM-L6-v2-751bff3-q8
 
       - run: make build engine
-      - run: ./bin/meko-local version
+      - run: ./bin/meko version
 
       - name: Lint
         uses: golangci/golangci-lint-action@v9
