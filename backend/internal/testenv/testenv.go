@@ -15,11 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
+
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/rest"
 	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/storeapi"
@@ -145,6 +148,10 @@ func Start(t *testing.T, o Options) *Env {
 		Engine: svc.EngineStatus,
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: "test", Log: log,
 			Credential: server.CredentialOf}),
+		REST: func(g *echo.Group) {
+			rest.Register(g, rest.Options{Service: svc, Port: port, ClientToken: ClientToken,
+				Credential: server.Credential, Log: log})
+		},
 	})
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })

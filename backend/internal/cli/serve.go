@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/labstack/echo/v4"
+
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/engine"
@@ -20,6 +22,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/rest"
 	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/storeapi"
@@ -199,6 +202,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		Children: sup.Statuses, Engine: svc.EngineStatus,
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
 			Credential: server.CredentialOf}),
+		REST: func(g *echo.Group) {
+			rest.Register(g, rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken,
+				Credential: server.Credential, Log: log})
+		},
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

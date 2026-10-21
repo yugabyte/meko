@@ -193,7 +193,9 @@ CREATE TABLE memories (
 
 ### Schema in the foundation (0001_init.sql)
 
-- `settings(key, value)`: install id, the embedding model and dimension once known.
+- `settings(key, value)`: install id, the embedding model and dimension once known, and since
+  milestone 3 the local user's profile (`profile_first_name`, `profile_last_name`,
+  `profile_email`, `profile_onboarding_done`).
 - `datapacks(id, name UNIQUE, description, created_at, updated_at)`: a local default datapack
   is created on first start. It must not be named `meko_default_datapack*`, because meko_ui
   sets up Langfuse keys for datapacks with that name.
@@ -379,7 +381,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
 | 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
-| 3 | MCP and REST | Being built: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
+| 3 | MCP and REST | Built in #197 (the rename) and the stack #201 to #204: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
 | 4 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the engine, dedupe by content hash (#170) |
 | 5 | Install and release | Native builds with Meko's own Node, launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest (#171) |
 | 6 | Web UI | The pinned meko_ui package served at `/`, local mode in meko_ui, browser access (#172) |

@@ -18,6 +18,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
       never reach logs or error replies (internal errors get the generic message), in Go or in the
       engine (`logs/engine.log`).
+- [ ] REST routes keep Meko Cloud's paths and `{data, error}` shapes ([docs/api.md](docs/api.md)): a
+      `datapack_id` that isn't a UUID is 400 `VALIDATION_ERROR`, one that doesn't exist is 404
+      with code `NOT_FOUND`.
 - [ ] MCP tools keep Meko Cloud's names, arguments and reply shapes ([docs/api.md](docs/api.md)),
       built in `internal/wire` when REST shares them; errors a caller can act on are replies
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
