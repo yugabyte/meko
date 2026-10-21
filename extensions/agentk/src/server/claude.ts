@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LauncherSpec } from './launcher.js';
 import { claudePath, type Paths } from './paths.js';
+import { writeScript } from './scriptfile.js';
 
 /**
  * Markers a running Claude Code session puts in its children's environment.
@@ -169,18 +170,6 @@ export function userStatusLine(worktree: string | null, ours: string): StatusLin
 
 export function hooksSettingsPath(paths: Paths): string {
   return join(paths.run, 'hooks.json');
-}
-
-/**
- * Replaces an executable script with a new file renamed over it. Sessions run the hook scripts at
- * any time, and on Linux writing a file in place while it runs fails with ETXTBSY (which stopped
- * the server's start); a rename leaves the running copy alone.
- */
-function writeScript(path: string, text: string): void {
-  const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
-  writeFileSync(tmp, text);
-  chmodSync(tmp, 0o755);
-  renameSync(tmp, path);
 }
 
 /**

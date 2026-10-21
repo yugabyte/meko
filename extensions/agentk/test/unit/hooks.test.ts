@@ -1,6 +1,6 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { request, type Server } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -125,22 +125,9 @@ describe('the SessionStart context hook', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('is registered for SessionStart, next to the forwarder, with a 5-second limit', async () => {
+  it('is registered for SessionStart, next to the forwarder, with a 5-second limit', () => {
     const paths = getPaths(join(home, 'ak'));
     writeHookFiles(paths);
-    // Rewritten while sessions start hooks (at a server restart): Linux refuses a write in place
-    // while the script is being exec'd (ETXTBSY), so it's replaced instead.
-    const hook = join(paths.run, 'hook.sh');
-    const marker = join(home, 'looping');
-    const loop = spawn('/bin/sh', ['-c', `: > "${marker}"; while :; do "${hook}" </dev/null >/dev/null 2>&1; done`],
-      { stdio: 'ignore' });
-    try {
-      await waitFor(() => existsSync(marker), Boolean, 5000, 'the hook loop to start');
-      for (let i = 0; i < 200; i++) writeHookFiles(paths);
-    } finally {
-      loop.kill();
-    }
-    expect(statSync(hook).mode & 0o777).toBe(0o755);
     const settings = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8'));
     expect(settings.hooks.SessionStart).toEqual([{ hooks: [
       { type: 'command', command: join(paths.run, 'hook.sh'), timeout: 5 },

@@ -43,11 +43,12 @@ The no-agent banner's **Settings** opens this tab. The Meko tab keeps each agent
 **No agent is required.** AgentK installs and runs with Claude Code, Kiro, or both; nothing assumes
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
 `--settings` file and the scripts Kiro's `agentk` agent runs too), then prepares every harness in the
-background, so no CLI holds up the start. Each script is written to a temp file and renamed over the
-old one: sessions keep running the scripts through a restart, and Linux refuses to write a script in
-place while it's being started (`ETXTBSY`), which would stop the server's start. `HarnessStatus.checked` says an agent's version has been
-read for the command it's run with since it was last turned on (turning it off forgets the read), so
-the UI tells "not installed" from "not asked yet". Once every
+background (Kiro's writes its guard script), so no CLI holds up the start. Every script is written to
+a temp file and renamed over the old one (`writeScript` in `scriptfile.ts`): sessions keep starting
+the scripts through a restart, and Linux refuses to write a script in place while it's being exec'd
+(`ETXTBSY`), which stopped the server's start, or Kiro's preparation. `HarnessStatus.checked` says an
+agent's version has been read for the command it's run with since it was last turned on (turning it
+off forgets the read), so the UI tells "not installed" from "not asked yet". Once every
 agent that's turned on has answered and none is available, a create (and Ask AgentK) is a 409 that
 says to install Claude Code or Kiro CLI, a banner says the same with a **Settings** button, the New
 session dialog shows it in place of starting, and the palette leaves Ask AgentK out
