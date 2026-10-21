@@ -132,6 +132,8 @@ type MemoryItem struct {
 	AgentID        string  `json:"agent_id"`
 	ConversationID *string `json:"conversation_id,omitempty"`
 	UserID         string  `json:"user_id"`
+	UserName       string  `json:"user_name,omitempty"`
+	UserEmail      string  `json:"user_email,omitempty"`
 	CreatedAt      string  `json:"created_at,omitempty"`
 	IsMine         bool    `json:"is_mine"`
 }

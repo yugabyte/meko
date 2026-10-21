@@ -17,6 +17,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | `internal/sqlitevec/` | cgo glue that compiles `third_party/sqlite-vec` in and registers it. |
 | `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`), `/healthz` and `/api/v1` (status includes the engine's and the auth mode). |
 | `internal/mcp/` | MCP at `/mcp`: Meko Cloud's tools on the official MCP Go SDK (stateless, JSON replies, raw arguments read loosely), recording each call. |
+| `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads. |
 | `internal/wire/` | Meko Cloud's reply shapes, which MCP and REST both build their replies with. |
 | `internal/testenv/` | A whole server for tests: store, store API, the engine with the hashing embedder, the service and the HTTP server. |
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |

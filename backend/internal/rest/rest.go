@@ -1,0 +1,152 @@
+// Package rest is the /api/v1 subset meko_ui calls, with Meko Cloud's routes and reply shapes in
+// the {data, error} envelope: the local user, datapacks and their metrics, artifacts, memories and
+// learnings, and conversations. Shapes MCP shares come from internal/wire; the rest are here.
+package rest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
+
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/memory"
+)
+
+// Options configure the routes.
+type Options struct {
+	Service *memory.Service
+	// Port is the server's, for the MCP URL the Connect page shows.
+	Port int
+	// ClientToken is what the Connect page shows clients to send.
+	ClientToken string
+	Log         *slog.Logger
+}
+
+type api struct {
+	Options
+}
+
+// Register adds the routes to the /api/v1 group.
+func Register(g *echo.Group, o Options) {
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
+	a := &api{o}
+	g.GET("/auth/config", a.authConfig)
+	g.GET("/auth/me", a.me)
+	g.PATCH("/auth/me", a.setOnboarding)
+	g.PATCH("/auth/me/profile", a.setProfile)
+	g.GET("/auth/me/usage", a.usage)
+
+	g.GET("/datapacks", a.listDatapacks)
+	g.POST("/datapacks", a.createDatapack)
+	g.GET("/datapacks/:id", a.describeDatapack)
+	g.PATCH("/datapacks/:id", a.updateDatapack)
+	g.DELETE("/datapacks/:id", a.deleteDatapack)
+	g.GET("/datapacks/:id/provision-status", a.provisionStatus)
+	g.GET("/datapacks/:id/agents", a.agents)
+	g.GET("/datapacks/:id/metrics", a.metrics)
+	g.GET("/datapacks/:id/token-savings", a.tokenSavings)
+
+	g.GET("/datapacks/:id/artifacts", a.listArtifacts)
+	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.artifactDownloadURL)
+	g.GET("/datapacks/:id/artifacts/:hash", a.getArtifact)
+
+	g.GET("/memories", a.listMemories)
+	g.DELETE("/memories/:memory", a.deleteMemory)
+	g.POST("/promote-memories", a.promoteMemories)
+	g.POST("/keep-as-memory", a.keepMemories)
+	g.GET("/promoted-memories", a.listPromoted)
+	g.DELETE("/promoted-memories/:memory", a.deletePromoted)
+
+	g.GET("/datapacks/:id/conversations", a.listConversations)
+	g.GET("/datapacks/:id/conversations/count", a.countConversations)
+	g.GET("/datapacks/:id/conversations/:conversation", a.conversation)
+	g.PATCH("/datapacks/:id/conversation-search-opt-out", a.setOptOut)
+}
+
+// Errors as Meko Cloud's API replies them.
+func badRequest(c echo.Context, msg string) error {
+	return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", msg)
+}
+
+func notFound(c echo.Context, msg string) error {
+	return envelope.Fail(c, http.StatusNotFound, "NOT_FOUND", msg)
+}
+
+// datapack is the datapack a request names (in the path as :id, or the query or body as
+// datapack_id): it must be a UUID (else 400) and exist (else 404). ok is false when the reply has
+// been written.
+func (a *api) datapack(c echo.Context, id string) (string, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", false, badRequest(c, "datapack_id is required")
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		return "", false, badRequest(c, "datapack_id must be a valid UUID")
+	}
+	if _, err := a.Service.Datapack(c.Request().Context(), id); err != nil {
+		if errors.Is(err, memory.ErrNoDatapack) {
+			return "", false, notFound(c, fmt.Sprintf("datapack %q not found", id))
+		}
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// pathDatapack is the datapack in the path.
+func (a *api) pathDatapack(c echo.Context) (string, bool, error) { return a.datapack(c, c.Param("id")) }
+
+// queryInt is an integer query parameter, def when absent; ok is false when it isn't a number and
+// the reply has been written.
+func queryInt(c echo.Context, name string, def int) (int, bool, error) {
+	v := c.QueryParam(name)
+	if v == "" {
+		return def, true, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false, badRequest(c, name+" must be a number")
+	}
+	return n, true, nil
+}
+
+// bind reads a JSON body; ok is false when it isn't valid JSON and the reply has been written.
+func bind(c echo.Context, v any) (bool, error) {
+	if err := (&echo.DefaultBinder{}).BindBody(c, v); err != nil {
+		return false, envelope.Fail(c, http.StatusBadRequest, "INVALID_JSON", "The request body isn't valid JSON.")
+	}
+	return true, nil
+}
+
+// created replies 201 with data.
+func created(c echo.Context, data any) error {
+	return c.JSON(http.StatusCreated, envelope.Response{Data: data})
+}
+
+// serviceError replies for the service's errors a caller can act on; any other is returned for
+// the server's handler, which logs it and replies with a generic 500.
+func serviceError(c echo.Context, err error) error {
+	switch {
+	case errors.Is(err, memory.ErrNoDatapack):
+		return notFound(c, "datapack not found")
+	case errors.Is(err, memory.ErrNotFound):
+		return notFound(c, "not found")
+	case errors.Is(err, memory.ErrNoConversation):
+		return notFound(c, "conversation not found")
+	case errors.Is(err, memory.ErrDuplicateName):
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT", "A datapack with that name already exists.")
+	case errors.Is(err, memory.ErrBadRequest):
+		return badRequest(c, strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
+	}
+	return err
+}
+
+func ctx(c echo.Context) context.Context { return c.Request().Context() }

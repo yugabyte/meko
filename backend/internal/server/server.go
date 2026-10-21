@@ -56,6 +56,8 @@ type Options struct {
 	Engine   func(ctx context.Context) memory.EngineStatus // nil reports no engine
 	// MCP, if set, serves /mcp (internal/mcp), with a body limit of MCPBodyLimit.
 	MCP http.Handler
+	// REST, if set, adds the /api/v1 routes meko_ui calls (internal/rest) to the group.
+	REST func(*echo.Group)
 }
 
 // MCPBodyLimit caps request bodies on /mcp: room for a 5 MiB artifact in base64.
@@ -102,6 +104,9 @@ func New(opts Options) *Server {
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
 	v1.GET("/status", s.status)
 	v1.GET("/version", s.version)
+	if opts.REST != nil {
+		opts.REST(v1)
+	}
 	if opts.MCP != nil {
 		// The handler reads the credential from the request's context, outside echo.
 		e.Any("/mcp", func(c echo.Context) error {

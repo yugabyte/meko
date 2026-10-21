@@ -55,6 +55,11 @@ func scanConversation(row interface{ Scan(...any) error }) (Conversation, error)
 		&updated, &c.MessageCount); err != nil {
 		return Conversation{}, err
 	}
+	return parseConversation(c, md, created, updated)
+}
+
+// parseConversation fills in a scanned conversation's metadata and times from their stored text.
+func parseConversation(c Conversation, md, created, updated string) (Conversation, error) {
 	if err := json.Unmarshal([]byte(md), &c.Metadata); err != nil {
 		return Conversation{}, err
 	}
