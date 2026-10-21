@@ -46,7 +46,7 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 | **Public `mem0ai` 3.1.2, pinned exactly**, with Meko Local's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | Meko's mem0 2.0 branch carries an unmodified upstream 3.1.2 TypeScript port (its Meko changes are Python-only), so the public package loses nothing. mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `engine/test` checks the seam. |
 | **Meko's scoring in Meko Local's own code** | Upstream divides every memory by the most any memory in the results could reach; Meko divides each by what it earned, and returns the cosine as `raw_similarity_score`. The engine asks mem0's search for its score parts (`explain: true`) and rescores. |
 | **Keyword scores are true BM25** (FTS5's `bm25()`, negated) | The scale mem0's BM25 sigmoid was tuned for. Prod's Postgres keyword search returns a `ts_rank_cd`-scale number the sigmoid maps close to 0. |
-| **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded, and the runtime milestone 4's cross-encoder needs. mem0-ts has no local transformers.js embedder, so the engine adds one. Changing the model needs re-embedding, which is deferred, so an engine reporting another model is refused. |
+| **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded, and the runtime milestone 4's cross-encoder needs. mem0-ts has no local transformers.js embedder, so the engine adds one. Changing the model needs re-embedding, which is deferred, so an engine reporting another model is refused. |
 | **No LLM:** mem0 always builds one, so the engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction is deferred. |
 | **Verbatim adds link no entities** | As in prod and upstream mem0: entities are linked for extracted memories (and on a text update). Search still queries the entity store and scores the boost. |
 | **Conversation and message ids are prod's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback; prod's ids keep the Cloud move lossless. Ids are unique per datapack, and the first agent owns the conversation. |
@@ -148,15 +148,18 @@ TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` 
 | File | What |
 |---|---|
 | `src/main.ts` | Sets `MEM0_TELEMETRY=false` and `MEM0_DIR` before mem0 loads, then runs `app.ts`. |
-| `src/app.ts` | The embedder, the providers, the API, then the hello; exits when the Go server goes. A failed hello (another model) leaves it up in the `error` state, saying why. |
+| `src/app.ts` | The embedder, the providers, the API, then the hello; exits when the Go server goes. It retries a failed model load or hello with backoff (1 s up to 60 s, staying `loading` and saying why); only another model already in the store (`MODEL_CHANGED`) leaves it in `error`. It sets umask 077, so the model cache and mem0's config are the user's only. |
 | `src/providers.ts` | `MekoStore`, `MekoHistory`, `NoLLM` and `register()`, which wraps mem0's factories. |
 | `src/embedder.ts`, `src/embedworker.ts` | The worker-thread embedder (mean-pooled, normalized, batches of 32), and a hashing embedder for tests (`MEKO_LOCAL_TEST_EMBEDDER=hash` on `serve`). |
 | `src/engine.ts` | One mem0 `Memory` per datapack; verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, prod's reply shape), update, delete, embed. |
 | `src/scoring.ts` | Meko's score: `min((semantic + bm25 + boost) / (1 + [bm25 > 0] + 0.5·[boost > 0]), 1)`. |
 | `src/server.ts` | The API on `engine.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`. It logs routes, statuses and timings only, never an error's message. |
 
-Search asks mem0 for `max(limit × 4, 60)` results with their score parts, so mem0 scans 4× that
-many vector candidates; the engine rescores them and returns the top `limit`.
+Search asks mem0 for `max(limit × 16, 240)` results with their score parts. mem0 asks the store
+for 4× that many candidates and keeps its own top results, so the store provider returns only a
+quarter of what mem0 asks for on a datapack's collection: mem0's candidates are then exactly the
+results it returns, and Meko's score, not upstream's ranking, picks the top `limit` from all of
+them (240 nearest memories and 240 keyword hits for the default limit of 10).
 
 ## Conversations (`internal/memory`, #182)
 
@@ -193,7 +196,10 @@ In `make test` on Linux and macOS (CI caches the model):
   conversation, the opt-out.
 - **storeapi** (#179): the token, each route's shapes and refusals, the hello.
 - **engine** (#180; `tsx --test`, with a fake store): the factory override, Meko scoring, prod's reply
-  shape, verbatim adds with role and actor and no entities, refusing extraction, update, delete.
+  shape, verbatim adds with role and actor and no entities, refusing extraction, update, delete;
+  search rescoring all of mem0's candidates; the start-up retrying a failed load or hello and
+  stopping at another model; the API refusing a body that isn't a JSON object, a malformed message
+  and a non-numeric limit, and answering an oversized body with its 413.
 - **end to end** (#181, and #182 for conversations; the real engine): add, get, list, search, update, delete; the engine down and
   back; an engine with another model refused; with MiniLM, a paraphrase found with a 0–1 score and
   its cosine, an identifier above 0.75, and conversation search's cutoff; turns waiting for the
