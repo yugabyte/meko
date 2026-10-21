@@ -7,7 +7,7 @@ OBJS = \
 	yb_amptest.o
 
 EXTENSION = yb_amp_test_utils
-DATA = yb_amp_test_utils--1.3.sql
+DATA = yb_amp_test_utils--1.3.sql yb_amp_test_utils--1.3--1.4.sql
 PGFILEDESC = "yb_amp_test_utils - helpers for yb_amp testing and debugging"
 
 PG_CONFIG = pg_config

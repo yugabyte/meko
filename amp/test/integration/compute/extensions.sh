@@ -1307,6 +1307,47 @@ SQL
       echo "$out" >&2
       exit 1
     fi
+    #
+    # Enough inserts under secondary indexes to split RUM pages below the root.
+    # Such a split logs its new right page as a Generic delta against the page's
+    # all-zero extension image, which the pageserver once replayed as an all-zero
+    # page; a cold compute then hung in rumFindLeafPage. Read every index page
+    # back through the pageserver (get_raw_page_at_lsn) and compare it with the
+    # compute's copy. Hint-only changes are not WAL-logged, so only the LSN and
+    # zero-ness are compared.
+    out=$(
+      psql_in documentdb <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS pageinspect;
+CREATE EXTENSION IF NOT EXISTS yb_amp_test_utils;
+SELECT documentdb_api_internal.create_indexes_non_concurrently('amp_smoke', '{ "createIndexes": "rum_split", "indexes": [ { "key": { "a": 1 }, "name": "a_1" }, { "key": { "t": 1 }, "name": "t_1" }, { "key": { "tag": 1 }, "name": "tag_1" } ] }', true) IS NOT NULL AS created;
+SELECT count(documentdb_api.insert_one('amp_smoke', 'rum_split',
+         format('{ "_id": %s, "a": %s, "t": "%s", "tag": "tag%s" }', i, i, md5(i::text) || md5((-i)::text), i % 5)::documentdb_core.bson))
+  FROM generate_series(1, 4000) i;
+CREATE TEMP TABLE rum_pages AS
+  SELECT c.oid::regclass AS idx, b AS blk,
+         get_raw_page(c.oid::regclass::text, 'main', b) AS compute_page,
+         get_raw_page_at_lsn(c.oid::regclass::text, 'main', b, NULL, NULL) AS ps_page
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   CROSS JOIN LATERAL generate_series(0, pg_relation_size(c.oid) / 8192 - 1) b
+   WHERE n.nspname = 'documentdb_data' AND c.relkind = 'i' AND c.relname LIKE 'documents_rum_index_%';
+SELECT 'PAGES:'||count(*) FROM rum_pages;
+SELECT 'MAXBLOCKS:'||max(n) FROM (SELECT count(*) AS n FROM rum_pages GROUP BY idx) s;
+SELECT 'ZEROED:'||count(*) FROM rum_pages
+ WHERE ps_page = decode(repeat('00', 8192), 'hex') AND compute_page <> decode(repeat('00', 8192), 'hex');
+SELECT 'LSNDIFF:'||count(*) FROM rum_pages
+ WHERE (page_header(ps_page)).lsn <> (page_header(compute_page)).lsn;
+SQL
+    )
+    maxblocks=$(echo "$out" | sed -n 's/^MAXBLOCKS://p')
+    if echo "$out" | grep -q '^ZEROED:0$' && echo "$out" | grep -q '^LSNDIFF:0$' &&
+      [[ -n "$maxblocks" && "$maxblocks" -gt 4 ]]; then
+      echo ">>> PASS documentdb: $(echo "$out" | sed -n 's/^PAGES://p') RUM index pages read back from the pageserver match the compute"
+    else
+      echo ">>> FAIL documentdb RUM pages differ between the pageserver and the compute; output:" >&2
+      echo "$out" >&2
+      exit 1
+    fi
   else
     # Generic smoke: create the extension and confirm it registered.
     out=$(

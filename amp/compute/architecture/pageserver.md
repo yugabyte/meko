@@ -1186,6 +1186,21 @@ requests pipeline across slots and within a slot's IPC. Requests are
 bounded by `wal_redo_timeout` (default 60 s). Bespoke non-FPI record
 types (e.g. visibility-map bit clears, clog membership updates) are
 applied in Rust by `walredo/apply_neon.rs` without the subprocess.
+
+An all-zero base is a real page state here, not stock recovery's "page
+dropped later". Every newly extended block is anchored on the all-zero FPI
+`yb_amp_zeroextend` logs, and with `full_page_writes = off` nothing else
+anchors it, so walredo applies a Generic WAL delta (`RM_GENERIC_ID`) for the
+target block onto that zero page. RUM, DocumentDB's index AM, logs a split's
+new right page that way. Stock `generic_redo` would skip the delta and return
+zeros. It is applied only when it was computed against a zero page, i.e. its
+first fragment rewrites the whole `[0, pd_lower)` and the result has a valid
+header. Otherwise the zero base is an image an older walredo materialised while
+the compute kept writing to its real copy, and walredo leaves the page all-zero
+with a `WARNING`: applying it would store a partial page, and failing would
+abort the materialiser on every retry. Any other record that leaves the target block of an all-zero base still
+all-zero, without initialising it or restoring an image, is an `ERROR`, and so
+is a record whose rmgr walredo has not loaded (it loads only `yb_amp_rmgr`).
 `RedoAttemptType` labels the caller (`ReadPage` for the read path,
 `LegacyCompaction` for the materialiser) in metrics and error handling:
 read-path walredo failures surface as `PageReconstructError::WalRedo`

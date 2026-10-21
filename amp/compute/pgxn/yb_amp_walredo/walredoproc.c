@@ -136,6 +136,9 @@ static void PushPage(StringInfo input_message);
 static void ApplyRecord(StringInfo input_message);
 static void apply_error_callback(void *arg);
 static bool redo_block_filter(XLogReaderState *record, uint8 block_id);
+static int	TargetBlockId(XLogReaderState *record);
+static bool TargetPageIsNew(void);
+static void GenericRedoOntoNewPage(XLogReaderState *record, uint8 block_id);
 static void GetPage(StringInfo input_message);
 static void Ping(StringInfo input_message);
 static ssize_t buffered_read(void *buf, size_t count);
@@ -935,6 +938,8 @@ ApplyRecord(StringInfo input_message)
 	XLogRecPtr	lsn;
 	XLogRecord *record;
 	int			nleft;
+	int			target_block_id;
+	bool		base_was_new;
 	ErrorContextCallback errcallback;
 #if PG_VERSION_NUM >= 150000
 	DecodedXLogRecord *decoded;
@@ -1025,10 +1030,40 @@ ApplyRecord(StringInfo input_message)
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
 #endif
 
+	if (!RmgrIdExists(record->xl_rmid))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("WAL record for resource manager %u, which is not loaded in walredo",
+						record->xl_rmid)));
+
+	target_block_id = TargetBlockId(reader_state);
+	base_was_new = false;
+	if (target_block_id >= 0 &&
+		!(XLogRecGetBlock(reader_state, target_block_id)->flags & BKPBLOCK_WILL_INIT) &&
+		!XLogRecBlockImageApply(reader_state, target_block_id))
+		base_was_new = TargetPageIsNew();
+
 	/* Ignore any other blocks than the ones the caller is interested in */
 	redo_read_buffer_filter = redo_block_filter;
 
-	RmgrTable[record->xl_rmid].rm_redo(reader_state);
+	if (base_was_new && record->xl_rmid == RM_GENERIC_ID)
+		GenericRedoOntoNewPage(reader_state, target_block_id);
+	else
+		GetRmgr(record->xl_rmid).rm_redo(reader_state);
+
+	/*
+	 * Stock redo reads the target with RBM_NORMAL, which treats an all-zero
+	 * page as missing and skips the record, expecting the relation to be
+	 * truncated later in recovery. Here the page is what the chain says it is,
+	 * so a skip means the chain cannot produce it.
+	 */
+	if (base_was_new && record->xl_rmid != RM_GENERIC_ID && TargetPageIsNew())
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("WAL record does not initialize block %u of %u/%u/%u.%u, whose base page is all-zero",
+						target_redo_tag.blockNum,
+						RelFileInfoFmt(BufTagGetNRelFileInfo(target_redo_tag)),
+						target_redo_tag.forkNum)));
 
 	/*
 	 * If no base image of the page was provided by PushPage, initialize
@@ -1069,8 +1104,9 @@ apply_error_callback(void *arg)
 	StringInfoData buf;
 
 	initStringInfo(&buf);
+	/* xlog_outdesc() raises its own ERROR for an unregistered rmgr */
 #if PG_VERSION_NUM >= 150000
-	if (record->record)
+	if (record->record && RmgrIdExists(XLogRecGetRmid(record)))
 #else
 	if (record->decoded_record)
 #endif
@@ -1119,6 +1155,132 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 	 * so that this gets ignored
 	 */
 	return !BufferTagsEqual(&target_tag, &target_redo_tag);
+}
+
+/* The record's block_id for the page being reconstructed, or -1 */
+static int
+TargetBlockId(XLogReaderState *record)
+{
+	for (int block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
+	{
+		BufferTag	tag;
+		NRelFileInfo rinfo;
+
+		if (!XLogRecHasBlockRef(record, block_id))
+			continue;
+		XLogRecGetBlockTag(record, block_id, &rinfo, &tag.forkNum, &tag.blockNum);
+		CopyNRelFileInfoToBufTag(tag, rinfo);
+		if (BufferTagsEqual(&tag, &target_redo_tag))
+			return block_id;
+	}
+	return -1;
+}
+
+static bool
+TargetPageIsNew(void)
+{
+	Buffer		buf;
+	bool		is_new;
+
+	buf = YbAmpRedoReadBuffer(BufTagGetNRelFileInfo(target_redo_tag),
+							  target_redo_tag.forkNum,
+							  target_redo_tag.blockNum,
+							  RBM_NORMAL);
+	is_new = PageIsNew(BufferGetPage(buf));
+	ReleaseBuffer(buf);
+	return is_new;
+}
+
+/*
+ * generic_redo() for the target block when its base page is all-zero.
+ *
+ * A generic delta was computed against the page the compute held, and for a
+ * freshly extended page that was the same all-zero page: the base is the
+ * relation-extension FPI and, with full_page_writes off, nothing else anchors
+ * the block. So apply the delta instead of letting XLogReadBufferForRedo()
+ * skip it.
+ *
+ * Only a delta computed against an all-zero page is applied. Against such a
+ * page computeDelta() rewrites the whole lower region, so its first fragment
+ * is exactly [0, pd_lower) and leaves a complete header. A delta computed
+ * against a real page lands here when an older walredo already turned that
+ * page into a zero image: applying it would store a partial page, and an ERROR
+ * would abort the materialiser on every retry. Such a page is left all-zero,
+ * as before.
+ */
+static void
+GenericRedoOntoNewPage(XLogReaderState *record, uint8 block_id)
+{
+	XLogRecPtr	lsn = record->EndRecPtr;
+	PGAlignedBlock result;
+	Buffer		buf;
+	Page		page;
+	PageHeader	hdr;
+	char	   *ptr;
+	char	   *end;
+	Size		len;
+	bool		whole_lower = false;
+
+	ptr = XLogRecGetBlockData(record, block_id, &len);
+	if (ptr == NULL || len == 0)
+		return;
+	end = ptr + len;
+
+	memset(result.data, 0, BLCKSZ);
+	page = (Page) result.data;
+
+	/* Fragments as generic_xlog.c's writeFragment() lays them out */
+	for (bool first = true; ptr < end; first = false)
+	{
+		OffsetNumber offset;
+		OffsetNumber length;
+
+		if (end - ptr < 2 * sizeof(OffsetNumber))
+			elog(ERROR, "truncated generic WAL delta");
+		memcpy(&offset, ptr, sizeof(offset));
+		ptr += sizeof(offset);
+		memcpy(&length, ptr, sizeof(length));
+		ptr += sizeof(length);
+		if ((Size) offset + length > BLCKSZ || end - ptr < length)
+			elog(ERROR, "generic WAL delta fragment out of bounds");
+		memcpy(page + offset, ptr, length);
+		ptr += length;
+		if (first)
+			whole_lower = offset == 0 && length == ((PageHeader) page)->pd_lower;
+	}
+
+	hdr = (PageHeader) page;
+	if (!whole_lower ||
+		(hdr->pd_flags & ~PD_VALID_FLAG_BITS) != 0 ||
+		hdr->pd_lower < SizeOfPageHeaderData ||
+		hdr->pd_lower > hdr->pd_upper ||
+		hdr->pd_upper > hdr->pd_special ||
+		hdr->pd_special > BLCKSZ ||
+		hdr->pd_special != MAXALIGN(hdr->pd_special) ||
+		PageGetPageSize(page) != BLCKSZ ||
+		PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("generic WAL delta for block %u of %u/%u/%u.%u was not computed against an all-zero page; leaving the page all-zero",
+						target_redo_tag.blockNum,
+						RelFileInfoFmt(BufTagGetNRelFileInfo(target_redo_tag)),
+						target_redo_tag.forkNum)));
+		return;
+	}
+
+	/* As generic_redo(): the delta says nothing about the hole */
+	memset(page + hdr->pd_lower, 0, hdr->pd_upper - hdr->pd_lower);
+
+	buf = YbAmpRedoReadBuffer(BufTagGetNRelFileInfo(target_redo_tag),
+							  target_redo_tag.forkNum,
+							  target_redo_tag.blockNum,
+							  RBM_NORMAL);
+	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+	memcpy(BufferGetPage(buf), page, BLCKSZ);
+	PageSetLSN(BufferGetPage(buf), lsn);
+	MarkBufferDirty(buf);
+	UnlockReleaseBuffer(buf);
 }
 
 /*

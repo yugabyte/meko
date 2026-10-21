@@ -12,6 +12,7 @@
 
 #include "../yb_amp/yb_amp_pgversioncompat.h"
 
+#include "access/generic_xlog.h"
 #include "access/relation.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -45,6 +46,7 @@ PG_FUNCTION_INFO_V1(get_raw_page_at_lsn_ex);
 PG_FUNCTION_INFO_V1(yb_amp_xlogflush);
 PG_FUNCTION_INFO_V1(trigger_panic);
 PG_FUNCTION_INFO_V1(trigger_segfault);
+PG_FUNCTION_INFO_V1(test_generic_xlog_new_page);
 
 /*
  * Linkage to functions in yb_amp module.
@@ -522,4 +524,53 @@ trigger_segfault(PG_FUNCTION_ARGS)
     int *ptr = NULL;
     *ptr = 42;
     PG_RETURN_VOID();
+}
+
+/*
+ * Extend a relation by one block and fill it through Generic WAL registered
+ * without GENERIC_XLOG_FULL_IMAGE, as RUM's non-root page split does: the
+ * block's first WAL after its relation-extension image is a delta against an
+ * all-zero page. The page carries one item of `fill` bytes and is not a valid
+ * heap page, so the relation must not be scanned or vacuumed afterwards.
+ * Returns the new block number.
+ */
+Datum
+test_generic_xlog_new_page(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int32		fill = PG_GETARG_INT32(1);
+	char		item[64];
+	Relation	rel;
+	Buffer		buf;
+	BlockNumber blkno;
+	GenericXLogState *state;
+	Page		page;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser to write generic WAL")));
+
+	rel = relation_open(relid, RowExclusiveLock);
+	if (!RelationNeedsWAL(rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not WAL-logged", RelationGetRelationName(rel))));
+
+	buf = ExtendBufferedRel(BMR_REL(rel), MAIN_FORKNUM, NULL, EB_LOCK_FIRST);
+	blkno = BufferGetBlockNumber(buf);
+
+	state = GenericXLogStart(rel);
+	page = GenericXLogRegisterBuffer(state, buf, 0);
+	PageInit(page, BufferGetPageSize(buf), 0);
+	memset(item, fill, sizeof(item));
+	if (PageAddItem(page, (Item) item, sizeof(item), InvalidOffsetNumber,
+					false, false) == InvalidOffsetNumber)
+		elog(ERROR, "could not add item to new page");
+	GenericXLogFinish(state);
+
+	UnlockReleaseBuffer(buf);
+	relation_close(rel, RowExclusiveLock);
+
+	PG_RETURN_INT64(blkno);
 }

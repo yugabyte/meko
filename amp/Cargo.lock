@@ -3169,6 +3169,8 @@ dependencies = [
  "tonic-reflection",
  "tower 0.5.2",
  "tracing",
+ "tracing-error",
+ "tracing-subscriber",
  "tracing-utils",
  "twox-hash",
  "url",

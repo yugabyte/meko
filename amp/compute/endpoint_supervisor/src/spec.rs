@@ -106,7 +106,9 @@ pub fn render_compute_spec(
     // Durability lives in the YB rows the safekeeper writes, not in fsync'd
     // Postgres pages, so full-page images are pure WAL overhead: every
     // checkpoint re-arms them for the whole working set, and the safekeeper's
-    // WAL compression is tuned for a WAL that carries none.
+    // WAL compression is tuned for a WAL that carries none. It also means a
+    // Generic WAL delta on a freshly extended page has only that page's
+    // all-zero extension image as its base, which walredo applies it onto.
     push("full_page_writes", "off".into(), "bool");
     push("wal_level", "logical".into(), "enum");
     // Hint-bit FPIs are the other full-page images in the WAL, and
