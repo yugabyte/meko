@@ -36,7 +36,7 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 |---|---|
 | LLM extraction of memories from turns, and its LLM | Runs asynchronously from a durable queue in SQLite, which that milestone adds in its own migration. As in prod, only a turn's input is extracted, with earlier turns as context. The engine's `getLastMessages` will read Go's messages table. |
 | Links from turns to the memories they produced | A `message_memories` table written in the same transaction that marks a turn extracted (prod infers the link from timestamps). |
-| Learnings (keep, promote, counts) | Prod's rules: every new memory starts unreviewed (promotion action NULL); keep sets `keep_as_memory`, one-way; promote moves the memory into the datapack's collective memory and deletes it; counts are `memory_count`, `learnings_count` and `collective_memory_count`. |
+| Learnings (keep, promote, counts) | Built in milestone 3: [api.md](api.md). |
 | Re-embedding, and embedders other than the local one | Until then the model is locked at first start (below). |
 
 ## Key decisions
@@ -104,13 +104,17 @@ engine/                           mem0's own config folder (MEM0_DIR)
 
 ## Storage
 
-Two migrations: `0002_memory.sql` (memories, entities, history; #178) and
-`0003_conversations.sql` (#182).
+The migrations this engine's data lives in: `0002_memory.sql` (memories, entities, history; #178),
+`0003_conversations.sql` (#182), and milestone 3's `0005_learnings_artifacts.sql` (learnings,
+promoted memories, provenance and artifacts; [api.md](api.md)).
 
 - `memories`: id (mem0's UUID), datapack, `user_id` (the install's local user, as an account id
   is in prod), `agent_id`, `conversation_id`, `role`, `actor_id`, `text`, `text_lemmatized`,
   `hash`, `source` (`add`), times, and the rest of mem0's payload as JSON. Absent ids are `''`
-  (vec0 metadata columns take no NULL).
+  (vec0 metadata columns take no NULL). Since milestone 3, `promotion_action` (`''` for a learning,
+  `keep_as_memory` once kept) and `connector_id` (provenance, `''` for none).
+- `promoted_memories` (milestone 3): memories promoted out of `memories`, with every column but the
+  lemmas, the promotion time and the agent that promoted them. Text only until milestone 4.
 - `memories_fts`: contentless FTS5 (`contentless_delete=1`) over the lemmas (the text when mem0
   gave none), with the datapack as a column so the filter runs inside MATCH:
   `datapack_id:"<id>" AND text_lemmatized:("a" OR "b")`, every term quoted, at most 64 terms. The

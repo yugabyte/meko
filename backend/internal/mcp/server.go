@@ -131,6 +131,8 @@ func (o Options) handler(t *tool, cred string) sdk.ToolHandler {
 func (o Options) result(t *tool, c *call, reply any, err error) *sdk.CallToolResult {
 	var te *toolError
 	var ae *argError
+	var done *partial
+	errors.As(err, &done)
 	err = serviceError(err)
 	switch {
 	case err == nil:
@@ -138,7 +140,7 @@ func (o Options) result(t *tool, c *call, reply any, err error) *sdk.CallToolRes
 		c.rec.OK = c.rec.ErrorCode == ""
 	case errors.As(err, &te):
 		c.rec.ErrorCode = te.Code
-		reply = te
+		reply = withDone(te, done)
 	case errors.As(err, &ae) || isParseError(err):
 		c.rec.ErrorCode = "invalid_arguments"
 		return &sdk.CallToolResult{IsError: true,
@@ -146,7 +148,7 @@ func (o Options) result(t *tool, c *call, reply any, err error) *sdk.CallToolRes
 	default:
 		o.Log.Error("tool failed", "tool", t.name, "error", err)
 		c.rec.ErrorCode = t.failCode
-		reply = fail(t.failCode, genericDetail)
+		reply = withDone(fail(t.failCode, genericDetail), done)
 	}
 	switch r := reply.(type) {
 	case plainText:
@@ -164,6 +166,21 @@ func (o Options) result(t *tool, c *call, reply any, err error) *sdk.CallToolRes
 	}
 	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(b)}},
 		StructuredContent: map[string]any{"result": string(b)}}
+}
+
+// withDone is te with what a partly done call did beside its error and detail.
+func withDone(te *toolError, done *partial) *toolError {
+	if done == nil {
+		return te
+	}
+	out := &toolError{Code: te.Code, Detail: te.Detail, Extra: map[string]any{}}
+	for k, v := range te.Extra {
+		out.Extra[k] = v
+	}
+	for k, v := range done.done {
+		out.Extra[k] = v
+	}
+	return out
 }
 
 // errArgsNotObject is arguments that aren't a JSON object.

@@ -701,6 +701,7 @@ type MemoryPage struct {
 	DatapackID string
 	UserID     string
 	AgentID    string // "" for every agent's
+	Scope      string // ScopeLearnings for learnings only; "" or ScopeMemories for all
 	Query      string // a case-insensitive substring of the text; "" for all
 	Limit      int
 	Offset     int
@@ -714,6 +715,9 @@ func (s *Store) ListMemoryPage(ctx context.Context, p MemoryPage) ([]Record, int
 	if p.AgentID != "" {
 		where += " AND t.agent_id = ?"
 		args = append(args, p.AgentID)
+	}
+	if p.Scope == ScopeLearnings {
+		where += " AND t.promotion_action = ''"
 	}
 	if p.Query != "" {
 		where += ` AND instr(lower(t.text), lower(?)) > 0`

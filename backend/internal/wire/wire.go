@@ -273,3 +273,63 @@ func ContextSearchOf(r memory.ContextResults) ContextSearch {
 		TokenSavings: Savings(r),
 	}
 }
+
+// PromotedItem is a promoted memory, as GET /promoted-memories and memory_get_all with promoted
+// list them.
+type PromotedItem struct {
+	ID             string  `json:"id"`
+	ConversationID *string `json:"conversation_id,omitempty"`
+	AgentID        string  `json:"agent_id,omitempty"`
+	Data           string  `json:"data"`
+	CreatedAt      string  `json:"created_at"`
+	PromotedToKBAt *string `json:"promoted_to_kb_at"` // null until milestone 4 embeds it into the knowledge base
+}
+
+// PromotedList is a page of promoted memories.
+type PromotedList struct {
+	Criteria         map[string]any `json:"criteria"`
+	PromotedMemories []PromotedItem `json:"promoted_memories"`
+	Total            int            `json:"total"`
+	Page             int            `json:"page"`
+	PageSize         int            `json:"page_size"`
+	TotalPages       int            `json:"total_pages"`
+}
+
+// PromotedListOf is a page of promoted memories in Cloud's shape.
+func PromotedListOf(ps []store.Promoted, criteria map[string]any, total, page, pageSize int) PromotedList {
+	out := PromotedList{Criteria: criteria, PromotedMemories: make([]PromotedItem, len(ps)), Total: total,
+		Page: max(page, 1), PageSize: pageSize, TotalPages: max(1, (total+pageSize-1)/max(pageSize, 1))}
+	for i, p := range ps {
+		it := PromotedItem{ID: p.ID, AgentID: p.AgentID, Data: p.Text, CreatedAt: Time(p.CreatedAt)}
+		if p.ConversationID != "" {
+			it.ConversationID = &p.ConversationID
+		}
+		out.PromotedMemories[i] = it
+	}
+	return out
+}
+
+// Artifact is a kept file's description, as artifact_put and the artifact routes return it. The
+// bytes are always in the database ("db"), and artifact_get always returns them inline.
+type Artifact struct {
+	ArtifactID     string  `json:"artifact_id"`
+	ContentHash    string  `json:"content_hash"`
+	Filename       string  `json:"filename"`
+	ContentType    string  `json:"content_type"`
+	SizeBytes      int     `json:"size_bytes"`
+	StoredIn       string  `json:"stored_in"`
+	CreatedAt      string  `json:"created_at"`
+	LastAccessedAt *string `json:"last_accessed_at,omitempty"`
+	ContentBase64  string  `json:"content_base64,omitempty"`
+}
+
+// ArtifactOf is a kept file's description, without its bytes.
+func ArtifactOf(a store.Artifact) Artifact {
+	out := Artifact{ArtifactID: a.ID, ContentHash: a.ContentHash, Filename: a.Filename, ContentType: a.ContentType,
+		SizeBytes: a.SizeBytes, StoredIn: "db", CreatedAt: Time(a.CreatedAt)}
+	if a.LastAccessedAt != nil {
+		t := Time(*a.LastAccessedAt)
+		out.LastAccessedAt = &t
+	}
+	return out
+}

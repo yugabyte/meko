@@ -22,7 +22,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       built in `internal/wire` when REST shares them; errors a caller can act on are replies
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
       arguments or text. A search takes a search slot; nothing holds the writer while it waits on
-      the engine.
+      the engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
+      `internal/mcp/agentk_contract_test.go`.
 - [ ] The engine stores only through the store API, its dependencies stay pinned, and nothing copies
       or cites prod Meko's private code.
 - [ ] `third_party/` is vendored and unchanged; an upgrade replaces the files and updates `VERSION`.

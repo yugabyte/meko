@@ -2,6 +2,9 @@ package mcp_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -292,4 +295,71 @@ func TestTrackTokenUsage(t *testing.T) {
 	if len(calls) == 0 || calls[0].InputTokens != 120 || calls[0].OutputTokens != 30 {
 		t.Errorf("recorded tokens: %+v", calls)
 	}
+}
+
+func TestPromoteAndArtifacts(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	add := func(text string) string {
+		r := ok(t, e, "memory_add", map[string]any{"text": text, "agent_id": "a", "conversation_id": "c"})
+		return str(obj(arr(r.JSON["results"])[0])["id"])
+	}
+	keep, promote := add("keep me as a memory"), add("the team uses trunk-based development")
+	if _, err := e.Service.KeepMemories(context.Background(), e.DatapackID, []string{keep}); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, e, "memory_promote", map[string]any{"conversation_id": "c", "memory_ids": []string{}},
+		"memory_ids_required")
+	wantError(t, e, "memory_promote", map[string]any{"conversation_id": "c", "memory_ids": []string{"x"}},
+		"invalid_memory_id")
+	missing := "00000000-0000-0000-0000-000000000000"
+	r := ok(t, e, "memory_promote", map[string]any{"conversation_id": "c", "agent_id": "a",
+		"memory_ids": []string{promote, keep, missing}})
+	if len(arr(r.JSON["inserted_ids"])) != 1 || str(arr(r.JSON["inserted_ids"])[0]) != promote ||
+		len(arr(r.JSON["not_found_ids"])) != 2 || r.JSON["updated_ids"] == nil {
+		t.Fatalf("promote: %s", r.Text)
+	}
+	// It left the memories: search doesn't find it, and it can't be changed by its old id.
+	r = ok(t, e, "memory_search", map[string]any{"query": "trunk-based development", "conversation_id": "c"})
+	for _, it := range arr(r.JSON["results"]) {
+		if obj(it)["id"] == promote {
+			t.Errorf("a promoted memory is still searchable: %s", r.Text)
+		}
+	}
+	wantError(t, e, "memory_update", map[string]any{"memory_id": promote, "text": "x", "conversation_id": "c",
+		"agent_id": "a"}, "memory_is_promoted")
+	r = ok(t, e, "memory_get_all", map[string]any{"conversation_id": "c", "promoted": true})
+	pm := arr(r.JSON["promoted_memories"])
+	if len(pm) != 1 || obj(pm[0])["data"] != "the team uses trunk-based development" ||
+		obj(pm[0])["promoted_to_kb_at"] != nil {
+		t.Errorf("promoted list: %s", r.Text)
+	}
+	r = ok(t, e, "datapack_describe", map[string]any{"conversation_id": "c"})
+	if num(r.JSON["memory_count"]) != 1 || num(r.JSON["learnings_count"]) != 0 ||
+		num(r.JSON["collective_memory_count"]) != 1 || num(r.JSON["shared_knowledge_count"]) != 1 {
+		t.Errorf("describe counts: %s", r.Text)
+	}
+
+	body := base64.StdEncoding.EncodeToString([]byte("<h1>design</h1>"))
+	r = ok(t, e, "artifact_put", map[string]any{"filename": "design.html", "content_base64": body,
+		"content_type": "text/html", "conversation_id": "c"})
+	hash := str(r.JSON["content_hash"])
+	sum := sha256.Sum256([]byte("<h1>design</h1>"))
+	if hash != hex.EncodeToString(sum[:]) || r.JSON["stored_in"] != "db" || num(r.JSON["size_bytes"]) != 15 {
+		t.Fatalf("put: %s", r.Text)
+	}
+	if again := ok(t, e, "artifact_put", map[string]any{"filename": "x.html", "content_base64": body,
+		"content_type": "text/html", "conversation_id": "c"}); again.JSON["artifact_id"] != r.JSON["artifact_id"] {
+		t.Errorf("same bytes, new artifact: %s", again.Text)
+	}
+	r = ok(t, e, "artifact_get", map[string]any{"content_hash": strings.ToUpper(hash), "conversation_id": "c"})
+	if r.JSON["content_base64"] != body || r.JSON["filename"] != "design.html" {
+		t.Errorf("get: %s", r.Text)
+	}
+	wantError(t, e, "artifact_get", map[string]any{"content_hash": strings.Repeat("0", 64), "conversation_id": "c"},
+		"ARTIFACT_NOT_FOUND")
+	wantError(t, e, "artifact_put", map[string]any{"filename": "x", "content_base64": "not base64!",
+		"content_type": "text/plain", "conversation_id": "c"}, "invalid_base64")
+	big := base64.StdEncoding.EncodeToString(make([]byte, 5<<20+1))
+	wantError(t, e, "artifact_put", map[string]any{"filename": "big.bin", "content_base64": big,
+		"content_type": "application/octet-stream", "conversation_id": "c"}, "artifact_too_large")
 }

@@ -78,6 +78,17 @@ func memoryTools() []*tool {
 			run:    memoryDeleteByID,
 		},
 		{
+			name: "memory_promote", title: "Promote Memories", kind: destructive, failCode: "promote_failed",
+			desc: "Promote memories into the datapack's collective memory, shared knowledge every agent of the " +
+				"datapack relies on. Each moves out of the memories: memory search no longer finds it, and " +
+				"memory_get_all with promoted lists it. It can't be undone. Kept memories can't be promoted.",
+			params: []param{pConversation,
+				{name: "memory_ids", typ: "array", required: true,
+					desc: "The memories' UUIDs, from the id field of memory_search or memory_get_all."},
+				pAgent, pDatapack},
+			run: memoryPromote,
+		},
+		{
 			name: "memory_delete_all", title: "Delete Memories", kind: destructive, failCode: "delete_failed",
 			desc: "Delete every memory one agent saved in the datapack, for good; with run_id, only those " +
 				"saved in that conversation.",
@@ -189,8 +200,11 @@ func memoryGetAll(ctx context.Context, c *call, a args) (any, error) {
 	}
 	criteria := map[string]any{"datapack_id": dp, "user_id": c.svc.UserID()}
 	if promoted {
-		return map[string]any{"criteria": criteria, "promoted_memories": []any{}, "total": 0, "page": 1,
-			"page_size": defaultPageSize, "total_pages": 1}, nil
+		ps, total, perr := c.svc.PromotedMemories(ctx, dp, 1, defaultPageSize)
+		if perr != nil {
+			return nil, perr
+		}
+		return wire.PromotedListOf(ps, criteria, total, 1, defaultPageSize), nil
 	}
 	ms, total, err := c.svc.ListMemoryPage(ctx, memory.Page{DatapackID: dp, Page: 1, PageSize: defaultPageSize})
 	if err != nil {
@@ -200,8 +214,17 @@ func memoryGetAll(ctx context.Context, c *call, a args) (any, error) {
 }
 
 // ownMemory is a memory of the datapack the call may change: one the local user wrote as agent.
-// Anything else is not_found, as in Cloud, so an id says nothing about memories that aren't yours.
-func ownMemory(ctx context.Context, c *call, dp, id, agent string) error {
+// A promoted one is memory_is_promoted; anything else is not_found, as in Cloud, so an id says
+// nothing about memories that aren't yours.
+func ownMemory(ctx context.Context, c *call, dp, id, agent, operation string) error {
+	if p, err := c.svc.IsPromoted(ctx, dp, id); err != nil || p {
+		if err != nil {
+			return err
+		}
+		return &toolError{Code: "memory_is_promoted", Detail: "This memory was promoted to the datapack's " +
+			"collective memory, so it can't be changed here. Manage it with the collective memories in the web UI.",
+			Extra: map[string]any{"memory_id": id, "promoted_row_id": id, "operation": operation}}
+	}
 	m, err := c.svc.GetMemory(ctx, dp, id)
 	if errors.Is(err, memory.ErrNotFound) || err == nil && m.AgentID != agent {
 		return fail("not_found", fmt.Sprintf("No memory found with id %s.", id))
@@ -246,7 +269,7 @@ func memoryUpdate(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = ownMemory(ctx, c, dp, id, agent); err != nil {
+	if err = ownMemory(ctx, c, dp, id, agent, "update"); err != nil {
 		return nil, err
 	}
 	if err = c.svc.UpdateMemory(ctx, dp, id, text); err != nil {
@@ -260,7 +283,7 @@ func memoryDeleteByID(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = ownMemory(ctx, c, dp, id, agent); err != nil {
+	if err = ownMemory(ctx, c, dp, id, agent, "deletion"); err != nil {
 		return nil, err
 	}
 	if err = c.svc.DeleteMemory(ctx, dp, id); err != nil {
@@ -308,4 +331,38 @@ func isHex32(s string) bool {
 		}
 	}
 	return true
+}
+
+func memoryPromote(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	ids, err := a.strings("memory_ids")
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, fail("memory_ids_required", "Pass at least one memory id to promote.")
+	}
+	for _, id := range ids {
+		if _, ierr := memoryID(args{"memory_id": jsonString(id)}); ierr != nil {
+			return nil, ierr
+		}
+	}
+	agent, err := c.agent(a)
+	if err != nil {
+		return nil, err
+	}
+	dp, err := c.datapack(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.svc.PromoteMemories(ctx, dp, agent, ids)
+	if err != nil && len(p.Inserted)+len(p.NotFound) > 0 {
+		return nil, &partial{err: err, done: map[string]any{"inserted_ids": p.Inserted, "not_found_ids": p.NotFound}}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }

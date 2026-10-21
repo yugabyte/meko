@@ -72,6 +72,16 @@ func (e *toolError) MarshalJSON() ([]byte, error) {
 
 func fail(code, detail string) *toolError { return &toolError{Code: code, Detail: detail} }
 
+// partial is an error that stopped a call after part of its work was done; done says what was,
+// and goes in the error reply beside error and detail.
+type partial struct {
+	err  error
+	done map[string]any
+}
+
+func (p *partial) Error() string { return p.err.Error() }
+func (p *partial) Unwrap() error { return p.err }
+
 // plainText is a reply Cloud sends as plain text rather than JSON, kept for its few legacy paths.
 type plainText string
 
@@ -220,6 +230,7 @@ func allTools() []*tool {
 	out = append(out, memoryTools()...)
 	out = append(out, conversationTools()...)
 	out = append(out, datapackTools()...)
+	out = append(out, artifactTools()...)
 	out = append(out, usageTools()...)
 	return out
 }
