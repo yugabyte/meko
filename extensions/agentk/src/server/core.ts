@@ -445,8 +445,8 @@ export class Core extends EventEmitter {
     // no one CLI has to be installed for AgentK to start.
     for (const h of this.harnesses.list()) {
       const ready = h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
-      // Kiro's plan is read once its version is known (whether it's available).
-      if (h.id === 'kiro' && this.timersOn) void ready.then(() => this.kiroPlan.refresh());
+      // Kiro's plan is read once its version is known (whether it's available), unless stopping began meanwhile.
+      if (h.id === 'kiro' && this.timersOn) void ready.then(() => (this.stopped ? undefined : this.kiroPlan.refresh()));
     }
     mkdirSync(this.paths.worktrees, { recursive: true });
     // So new worktrees skip a CLI's folder-trust prompt (Claude Code's).
@@ -503,8 +503,8 @@ export class Core extends EventEmitter {
     this.knowledge.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
-    // one-shot runs still going (the plan read, deleting a run's session) get as long to end, rather
-    // than outliving the server.
+    // one-shot runs already going (the plan read, deleting a run's session) get as long to end; one
+    // slower than that is left to finish on its own, as nothing kills it.
     await Promise.all([
       this.capture.settled(STOP_CAPTURE_MS),
       within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
