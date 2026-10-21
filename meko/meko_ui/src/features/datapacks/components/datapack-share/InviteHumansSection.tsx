@@ -63,8 +63,17 @@ type Props = {
   sharedByRole?: DatapackShareGrant | null;
   /** Existing shares before this invite (members excl. owner + pending), for is_first_share / total_shares. */
   priorShareCount?: number;
-  /** Refresh members + pending invites after a batch that changed anything. */
-  onInvitesSent: () => void | Promise<void>;
+  /** Refresh members + pending invites after a batch that changed anything.
+   *  Called with `allClean=true` only when every address resulted in a new
+   *  invite — i.e. nothing failed, nothing was already a member. Callers can
+   *  use this to close a dialog on a successful batch and stay open on a
+   *  partial failure so the user can read the per-row results panel. */
+  onInvitesSent: (allClean: boolean) => void | Promise<void>;
+  /** Where the "Go to Members" toast action should take the user when a row
+   *  was already a member. When this card is rendered outside the Share page
+   *  (e.g. inside InvitePeopleDialog on datapack-detail) the default scroll
+   *  no-ops because the members anchor only lives on the Share page. */
+  onGoToMembers?: () => void;
 };
 
 export function InviteHumansSection({
@@ -73,7 +82,9 @@ export function InviteHumansSection({
   sharedByRole,
   priorShareCount = 0,
   onInvitesSent,
+  onGoToMembers,
 }: Props) {
+  const goToMembers = onGoToMembers ?? scrollToShareMembers;
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [grant, setGrant] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
@@ -120,7 +131,11 @@ export function InviteHumansSection({
     setFileName(null);
   };
 
-  const submitBulk = async (list: string[]) => {
+  /** Returns `allClean` — true when every address resulted in a NEW invite.
+   *  Caller uses this to decide whether to close an enclosing dialog or keep
+   *  it open so the user can read the per-row results panel for mixed /
+   *  all-unchanged / failed batches. */
+  const submitBulk = async (list: string[]): Promise<boolean> => {
     const res = await bulkShareDatapack(datapackId, { emails: list, grant }, {});
     const rows = res.results ?? [];
     setResults(rows);
@@ -159,12 +174,13 @@ export function InviteHumansSection({
         (rolled.unchanged > 0 ? " To change a member's role, use Members on this page." : ""),
       action:
         rolled.unchanged > 0 ? (
-          <ToastAction altText="Go to Members" onClick={scrollToShareMembers}>
+          <ToastAction altText="Go to Members" onClick={goToMembers}>
             Go to Members
           </ToastAction>
         ) : undefined,
       variant: rolled.invited === 0 && rolled.failed > 0 ? "destructive" : undefined,
     });
+    return rolled.failed === 0 && rolled.unchanged === 0;
   };
 
   const handleSubmit = async () => {
@@ -188,12 +204,13 @@ export function InviteHumansSection({
     setSubmitting(true);
     setResults(null);
     try {
+      let allClean = true;
       if (emails.length === 1) {
         await submitSingle(emails[0]);
       } else {
-        await submitBulk(emails);
+        allClean = await submitBulk(emails);
       }
-      await onInvitesSent();
+      await onInvitesSent(allClean);
     } catch (err) {
       if (emails.length >= 2 && isApiEndpointMissingError(err)) {
         // /bulk-share not deployed. /share was fine; only the batch
@@ -206,7 +223,7 @@ export function InviteHumansSection({
           title: "Already a member",
           description: `${emails[0]} already has access. To change their role, use Members on this page.`,
           action: (
-            <ToastAction altText="Go to Members" onClick={scrollToShareMembers}>
+            <ToastAction altText="Go to Members" onClick={goToMembers}>
               Go to Members
             </ToastAction>
           ),

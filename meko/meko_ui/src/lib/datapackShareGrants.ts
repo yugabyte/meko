@@ -52,6 +52,26 @@ export function isDatapackGrantEligibleToShare(dp: { grant?: DatapackShareGrant 
   return userGrant === DATAPACK_SHARE_GRANT_OWNER || userGrant === DATAPACK_SHARE_GRANT_MAINTAINER;
 }
 
+/**
+ * Owner-only — the UI gate. Link sharing is stricter than inviting named
+ * members: a share link can be forwarded to anyone, and resetting a leaked
+ * one changes the URL for every joiner. Maintainers can still invite people
+ * explicitly (that stays on isDatapackGrantEligibleToShare).
+ *
+ * NOTE: this is a FE-only gate for now. GET/PUT /datapacks/:id/share-link is
+ * still registered behind RequireDatapackOwnerOrMaintainerGrant in
+ * api_server/internal/api/router.go, so a maintainer can still create /
+ * re-enable / reset the link through curl or the API. A maintainer who
+ * already created a link before this change also loses the UI to toggle it
+ * off until the backend tightens. Follow-up: switch the share-link routes
+ * to RequireDatapackOwnership so the API matches this UI.
+ */
+export function isDatapackGrantEligibleToManageLinkSharing(dp: {
+  grant?: DatapackShareGrant | null;
+}): boolean {
+  return dp.grant === DATAPACK_SHARE_GRANT_OWNER;
+}
+
 export function isDatapackGrantEligibleToEdit(dp: { grant?: DatapackShareGrant | null }): boolean {
   const userGrant = dp.grant;
   return userGrant === DATAPACK_SHARE_GRANT_OWNER;

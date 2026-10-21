@@ -18,8 +18,15 @@
 //      points to Members on the page, where roles are changed.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 import { InviteHumansSection } from "./InviteHumansSection";
+
+// InviteHumansSection reads useSearchParams (for ?highlight=invite arrival
+// flash, MEKO-1009), so every render needs a Router at mount.
+function renderInvite(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 vi.mock("@/lib/api/mekoApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/mekoApi")>();
@@ -72,7 +79,7 @@ describe("InviteHumansSection", () => {
   it("routes exactly-one address to the single-invite endpoint and fires DATAPACK_SHARED", async () => {
     inviteMock.mockResolvedValue({} as never);
 
-    render(
+    renderInvite(
       <InviteHumansSection
         datapackId="dp-1"
         currentUserEmail="me@x.com"
@@ -113,7 +120,7 @@ describe("InviteHumansSection", () => {
       summary: { invited: 1, error: 1 },
     });
 
-    render(
+    renderInvite(
       <InviteHumansSection
         datapackId="dp-1"
         currentUserEmail="me@x.com"
@@ -156,7 +163,7 @@ describe("InviteHumansSection", () => {
     // RequireDatapackAccess NOT_FOUND (which does carry code).
     bulkMock.mockRejectedValue(new MekoApiRequestError("Not Found", { httpStatus: 404 }));
 
-    render(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
+    renderInvite(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
 
     // Trigger the bulk path with 2 addresses.
     typeAndSubmit(["a@x.com", "b@x.com"]);
@@ -187,7 +194,7 @@ describe("InviteHumansSection", () => {
       }),
     );
 
-    render(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
+    renderInvite(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
 
     typeAndSubmit(["a@x.com", "b@x.com"]);
 
@@ -208,7 +215,7 @@ describe("InviteHumansSection", () => {
       summary: { invited: 1 },
     });
 
-    render(
+    renderInvite(
       <InviteHumansSection
         datapackId="dp-1"
         currentUserEmail="me@x.com"
@@ -232,7 +239,7 @@ describe("InviteHumansSection", () => {
   });
 
   it("keeps the submit button disabled while there are no valid addresses", () => {
-    render(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
+    renderInvite(<InviteHumansSection datapackId="dp-1" onInvitesSent={() => Promise.resolve()} />);
 
     const submit = screen.getByRole("button", { name: /send|invite/i });
     // Empty textarea → button disabled.
@@ -256,7 +263,7 @@ describe("InviteHumansSection", () => {
     );
     vi.mocked(toast).mockClear();
 
-    render(
+    renderInvite(
       <InviteHumansSection
         datapackId="dp-1"
         currentUserEmail="me@x.com"

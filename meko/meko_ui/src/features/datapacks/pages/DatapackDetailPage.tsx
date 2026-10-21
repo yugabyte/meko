@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { isWorkbenchLmEnabled } from "@/lib/byoc";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderInput, Pencil, PlayCircle, Settings, Share2, Trash2, Upload } from "lucide-react";
+import { FolderInput, Pencil, PlayCircle, Settings, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -28,7 +28,6 @@ import {
   datapackKnowledgePath,
   datapackLearningsPath,
   datapackMemorySummaryPath,
-  datapackSharePath,
   workbenchLmUrlForDatapack,
 } from "@/app/routes/paths";
 import {
@@ -37,12 +36,12 @@ import {
   isDatapackGrantEligibleToCreateCluster,
   isDatapackGrantEligibleToDelete,
   isDatapackGrantEligibleToEdit,
+  isDatapackGrantEligibleToManageLinkSharing,
   isDatapackGrantEligibleToShare,
   isDatapackGrantViewer,
 } from "@/lib/datapackShareGrants";
 import { isLinkSharingEnabled } from "@/lib/linkSharingFeature";
-import { CopyShareLinkButton } from "@/features/datapacks/components/datapack-detail/CopyShareLinkButton";
-import { CopyShareLinkMenuItem } from "@/features/datapacks/components/datapack-detail/CopyShareLinkMenuItem";
+import { DatapackShareDropdown } from "@/features/datapacks/components/datapack-detail/DatapackShareDropdown";
 import {
   DatapackOutgoingMember,
   DatapackShareGrant,
@@ -311,8 +310,12 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   // `datapack` holds the previous one until the new route's load lands, so its
   // grant is only trusted once the ids match.
   const routeDatapackLoaded = datapack?.datapack_id === routeDatapackId;
+  // Link sharing is owner-only (a link can be forwarded to anyone, and
+  // resetting a leaked one changes the URL for every joiner). Maintainers
+  // still invite people explicitly via the Share dropdown's "Invite People"
+  // item, which keeps the owner+maintainer gate.
   const canCopyShareLink =
-    isLinkSharingEnabled() && isDatapackGrantEligibleToShare({ grant: datapackGrant });
+    isLinkSharingEnabled() && isDatapackGrantEligibleToManageLinkSharing({ grant: datapackGrant });
 
   useEffect(() => {
     // The grant comes with the datapack; until it's known we can't tell a
@@ -470,17 +473,13 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           actions={
             <>
               {isDatapackGrantEligibleToShare({ grant: datapackGrant }) && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="gap-2 border-border bg-background/80"
-                  onClick={() => navigate(datapackSharePath(routeDatapackId))}
-                >
-                  <Share2 className="h-4 w-4 shrink-0" aria-hidden />
-                  Share
-                </Button>
+                <DatapackShareDropdown
+                  datapackId={routeDatapackId}
+                  canManageLinkSharing={canCopyShareLink}
+                  currentUserEmail={currentUser?.email}
+                  sharedByRole={datapackGrant}
+                />
               )}
-              {canCopyShareLink && <CopyShareLinkButton datapackId={routeDatapackId} />}
               <DatapackKnowledgeUploadDialog
                 datapackName={displayDatapackName}
                 datapackId={routeDatapackId}
@@ -592,7 +591,6 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         ) : null}
                       </DropdownMenuItem>
                     )}
-                    {canCopyShareLink && <CopyShareLinkMenuItem datapackId={routeDatapackId} />}
                     {showActionsDropdownDangerSeparator ? (
                       <DropdownMenuSeparator className="bg-border" />
                     ) : null}

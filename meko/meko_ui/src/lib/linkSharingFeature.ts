@@ -16,7 +16,10 @@ export function shareLinkUrl(path: string): string {
   return `${window.location.origin}${path}`;
 }
 
-/** Query param that makes the share page scroll to and flash its Link sharing
- *  card, e.g. `?highlight=link`. */
+/** Query param that makes the share page scroll to and flash a specific card.
+ *  Only `?highlight=link` has a caller today — the datapack-detail header's
+ *  "Create share link" item routes here when the link query is still loading
+ *  or errored, or when a row exists but is off (so the Share page's Switch
+ *  can turn it on without clobbering the saved grant). */
 export const SHARE_PAGE_HIGHLIGHT_PARAM = "highlight";
 export const SHARE_PAGE_HIGHLIGHT_LINK = "link";

@@ -19,7 +19,10 @@ import { TransferOwnershipSection } from "@/features/datapacks/components/datapa
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
 import { useDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import { DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
+import {
+  DATAPACK_SHARE_GRANT_OWNER,
+  isDatapackGrantEligibleToManageLinkSharing,
+} from "@/lib/datapackShareGrants";
 import type { CurrentUser } from "@/lib/api/mekoApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -187,9 +190,15 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
               loading={loading}
               onChanged={refreshShares}
             />
-            {isLinkSharingEnabled() ? (
+            {/* Link sharing is UI-gated to the owner. The API (GET/PUT
+                /datapacks/:id/share-link) still accepts a maintainer today;
+                see isDatapackGrantEligibleToManageLinkSharing. A maintainer
+                never sees this card — they still invite people explicitly
+                through the Invite humans card above. */}
+            {isLinkSharingEnabled() &&
+            isDatapackGrantEligibleToManageLinkSharing({ grant: sharedByRole }) ? (
               <ShareLinkSection datapackId={datapackId} onMembersMoved={refreshShares} />
-            ) : (
+            ) : isLinkSharingEnabled() ? null : (
               <LinkSharingSection />
             )}
             <TransferOwnershipSection />

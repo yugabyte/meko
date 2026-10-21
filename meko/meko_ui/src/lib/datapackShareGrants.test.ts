@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   isDatapackGrantEligibleToAddKnowledgeBase,
   isDatapackGrantEligibleToCreateCluster,
+  isDatapackGrantEligibleToManageLinkSharing,
   isDatapackGrantViewer,
 } from "@/lib/datapackShareGrants";
 
@@ -44,6 +45,18 @@ describe("isDatapackGrantEligibleToAddKnowledgeBase", () => {
   it("is false for contributor and viewer (the MEKO-959 gate)", () => {
     for (const grant of ["contributor", "viewer", null, undefined] as const) {
       expect(isDatapackGrantEligibleToAddKnowledgeBase({ grant })).toBe(false);
+    }
+  });
+});
+
+describe("isDatapackGrantEligibleToManageLinkSharing", () => {
+  it("is true for owner only — a share link can reach anyone and resetting it changes the URL for every joiner", () => {
+    expect(isDatapackGrantEligibleToManageLinkSharing({ grant: "owner" })).toBe(true);
+  });
+
+  it("is false for maintainer, contributor, viewer, and unknown — maintainers still invite explicitly via isDatapackGrantEligibleToShare", () => {
+    for (const grant of ["maintainer", "contributor", "viewer", null, undefined] as const) {
+      expect(isDatapackGrantEligibleToManageLinkSharing({ grant })).toBe(false);
     }
   });
 });

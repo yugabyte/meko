@@ -1,7 +1,6 @@
 // Share page card for the datapack's one share link: turn it on or off, pick the
 // role it gives, copy the URL, and see how many people joined through it.
-import { useCallback, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState } from "react";
 import { Copy, Link2, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,8 +14,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/hooks/use-toast";
-import { useArrivalFlash } from "@/hooks/useArrivalFlash";
-import { cn } from "@/lib/utils";
 import { shareLinkPath } from "@/app/routes/paths";
 import { getApiErrorMessage, isMekoApiRequestError } from "@/lib/api/mekoApi";
 import {
@@ -26,13 +23,13 @@ import {
   type ShareLinkGrant,
 } from "@/lib/api/shareLinksApi";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
-import {
-  SHARE_PAGE_HIGHLIGHT_LINK,
-  SHARE_PAGE_HIGHLIGHT_PARAM,
-  shareLinkUrl,
-} from "@/lib/linkSharingFeature";
+import { SHARE_PAGE_HIGHLIGHT_LINK, shareLinkUrl } from "@/lib/linkSharingFeature";
 import { DatapackShareSectionCard } from "@/features/datapacks/components/datapack-share/DatapackShareSectionCard";
 import { ResetShareLinkDialog } from "@/features/datapacks/components/datapack-share/ResetShareLinkDialog";
+import {
+  sharePageFlashClass,
+  useSharePageHighlight,
+} from "@/features/datapacks/components/datapack-share/useSharePageHighlight";
 import {
   copyShareLinkUrl,
   useDatapackShareLink,
@@ -49,26 +46,11 @@ export function ShareLinkSection({ datapackId, onMembersMoved }: Props) {
   const link = useDatapackShareLink(datapackId);
   const update = useUpdateDatapackShareLink(datapackId);
 
-  // ?highlight=link (from the details page's link button): scroll here and
-  // flash once the card has loaded, then drop the param so a reload doesn't.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const highlight = searchParams.get(SHARE_PAGE_HIGHLIGHT_PARAM) === SHARE_PAGE_HIGHLIGHT_LINK;
-  const clearHighlight = useCallback(
-    () =>
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete(SHARE_PAGE_HIGHLIGHT_PARAM);
-          return next;
-        },
-        { replace: true },
-      ),
-    [setSearchParams],
-  );
-  const { ref, flashing } = useArrivalFlash<HTMLDivElement>({
-    flashKey: highlight ? SHARE_PAGE_HIGHLIGHT_LINK : undefined,
-    active: highlight && link.isSuccess,
-    onDone: clearHighlight,
+  // ?highlight=link (from the details page's share dropdown): scroll here and
+  // flash once the card has loaded.
+  const { ref, flashing } = useSharePageHighlight({
+    key: SHARE_PAGE_HIGHLIGHT_LINK,
+    active: link.isSuccess,
     debugLabel: "ShareLinkSection",
   });
 
@@ -102,13 +84,7 @@ export function ShareLinkSection({ datapackId, onMembersMoved }: Props) {
     });
 
   return (
-    <div
-      ref={ref}
-      className={cn(
-        "scroll-mt-6 rounded-xl transition-shadow",
-        flashing && "ring-4 ring-brand/70 shadow-lg animate-pulse",
-      )}
-    >
+    <div ref={ref} className={`scroll-mt-6 ${sharePageFlashClass(flashing)}`}>
       <DatapackShareSectionCard
         title="Link sharing"
         icon={<Link2 aria-hidden />}
