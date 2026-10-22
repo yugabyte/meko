@@ -1,9 +1,10 @@
 // The datapack's memories: add one, filter, page, delete one, and select several to delete, or
 // (learnings) to keep or promote into the collective memory.
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Brain, Check, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
+import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
@@ -19,13 +20,30 @@ const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "promoted", label: "Collective" },
 ];
 
-export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onChanged: () => void }) {
+// routeScope is the scope in the address (/datapacks/<id>/memories/<scope>), so a link can open
+// Learnings or Collective directly.
+export function MemoriesPage({
+  datapack,
+  routeScope,
+  onChanged,
+}: {
+  datapack: Datapack;
+  routeScope?: string;
+  onChanged: () => void;
+}) {
   const id = datapack.datapack_id;
-  const [scope, setScope] = useState<Scope>("memories");
+  const scope: Scope = SCOPES.some((s) => s.id === routeScope) ? (routeScope as Scope) : "memories";
+  const setScope = (v: Scope) =>
+    navigate({ datapackId: id, tab: "memories", itemId: v === "memories" ? undefined : v });
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [actionError, setActionError] = useState<Error>();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // A new scope, from the tabs or a link, starts on its first page with nothing selected.
+  useEffect(() => {
+    setPage(1);
+    setSelected(new Set());
+  }, [scope]);
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -54,7 +72,7 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
       <AddMemory onAdd={(text) => act(() => api.addMemory(id, text))} />
 
       <div className="flex flex-wrap items-center gap-3">
-        <Segmented options={SCOPES} value={scope} onChange={(v) => (setScope(v), setPage(1), setSelected(new Set()))} />
+        <Segmented options={SCOPES} value={scope} onChange={setScope} />
         {scope !== "promoted" && (
           <Input
             className="max-w-xs"
@@ -139,11 +157,7 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
                   variant="danger"
                   title="Delete this memory"
                   className="shrink-0 opacity-60 group-hover:opacity-100"
-                  onClick={(e) => {
-                    // The row is a label: a click on it would also tick the box.
-                    e.preventDefault();
-                    if (confirm("Delete this memory?")) void act(() => api.deleteMemory(id, m.id));
-                  }}
+                  onClick={() => confirm("Delete this memory?") && void act(() => api.deleteMemory(id, m.id))}
                 >
                   <Trash2 className="size-3.5" />
                 </Button>

@@ -1,7 +1,7 @@
 // The knowledge base's timeline, newest first: files uploaded (with how many chunks they indexed)
 // and memories promoted into it. Loads 20 at a time.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { bytes, timeAgo } from "../lib/format";
@@ -11,23 +11,27 @@ import { Button, Card, ErrorNote, Spinner } from "./ui";
 // A file's activity names it by its key, which ends in the file's own name.
 const fileName = (key = "") => key.slice(key.lastIndexOf("/") + 1) || key;
 
-export function KnowledgeActivityLog({ datapackId, refresh }: { datapackId: string; refresh: string }) {
+export function KnowledgeActivityLog({ datapackId, refresh }: { datapackId: string; refresh: number }) {
   const [items, setItems] = useState<KnowledgeActivity[]>([]);
   const [cursor, setCursor] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
+  // Each load's number: a reply to an older one (another datapack, or before a reload) is dropped.
+  const latest = useRef(0);
 
   const load = async (from: string) => {
+    const mine = ++latest.current;
     setBusy(true);
     try {
       const page = await api.activity(datapackId, from);
+      if (mine !== latest.current) return;
       setItems((prev) => (from ? [...prev, ...page.items] : page.items));
       setCursor(page.has_more ? page.next_cursor : "");
       setError(undefined);
     } catch (e) {
-      setError(e as Error);
+      if (mine === latest.current) setError(e as Error);
     } finally {
-      setBusy(false);
+      if (mine === latest.current) setBusy(false);
     }
   };
 

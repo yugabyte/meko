@@ -10,11 +10,28 @@ import type { Datapack } from "../lib/types";
 import { Card } from "./ui";
 
 export function LearningPipeline({ datapack }: { datapack: Datapack }) {
-  const stages: { icon: ReactNode; label: string; n?: number; tab: Tab }[] = [
-    { icon: <MessagesSquare className="size-4" />, label: "Conversations", n: datapack.conversation_count, tab: "conversations" },
+  const stages: { icon: ReactNode; label: string; n?: number; tab: Tab; itemId?: string }[] = [
+    {
+      icon: <MessagesSquare className="size-4" />,
+      label: "Conversations",
+      n: datapack.conversation_count,
+      tab: "conversations",
+    },
     { icon: <Brain className="size-4" />, label: "Memories", n: datapack.memory_count, tab: "memories" },
-    { icon: <Sparkles className="size-4" />, label: "Learnings", n: datapack.learnings_count, tab: "memories" },
-    { icon: <Users className="size-4" />, label: "Collective memory", n: datapack.collective_memory_count, tab: "memories" },
+    {
+      icon: <Sparkles className="size-4" />,
+      label: "Learnings",
+      n: datapack.learnings_count,
+      tab: "memories",
+      itemId: "learnings",
+    },
+    {
+      icon: <Users className="size-4" />,
+      label: "Collective memory",
+      n: datapack.collective_memory_count,
+      tab: "memories",
+      itemId: "promoted",
+    },
   ];
   return (
     <Card className="flex flex-wrap items-center gap-2 p-3">
@@ -23,7 +40,7 @@ export function LearningPipeline({ datapack }: { datapack: Datapack }) {
           {i > 0 && <ArrowRight className="size-4 text-muted-foreground" />}
           <button
             type="button"
-            onClick={() => navigate({ datapackId: datapack.datapack_id, tab: s.tab })}
+            onClick={() => navigate({ datapackId: datapack.datapack_id, tab: s.tab, itemId: s.itemId })}
             className="flex items-center gap-2 rounded-lg px-3 py-2 hover:bg-accent"
           >
             <span className="text-primary">{s.icon}</span>

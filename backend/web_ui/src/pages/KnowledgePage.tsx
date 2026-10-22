@@ -46,8 +46,14 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
   }, [busy, docs.reload]);
   // The datapack's counts change when indexing finishes.
   const wasBusy = useRef(false);
+  // Bumped when a file is uploaded, deleted or done indexing: what the activity log reloads on
+  // (not the name filter, which doesn't filter the log).
+  const [changes, setChanges] = useState(0);
   useEffect(() => {
-    if (wasBusy.current && !busy) onChanged();
+    if (wasBusy.current && !busy) {
+      onChanged();
+      setChanges((n) => n + 1);
+    }
     wasBusy.current = !!busy;
   }, [busy, onChanged]);
 
@@ -71,6 +77,7 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
         setUpload(f.name, { state: "error", message: (e as Error).message });
       }
       docs.reload();
+      setChanges((n) => n + 1);
     }
   };
 
@@ -94,6 +101,7 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
     try {
       await api.deleteDocument(id, d.id);
       docs.reload();
+      setChanges((n) => n + 1);
       onChanged();
     } catch (e) {
       setActionError(e as Error);
@@ -200,7 +208,7 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
 
       <KnowledgeActivityLog
         datapackId={id}
-        refresh={(docs.data?.items ?? []).map((d) => d.id + d.status).join()}
+        refresh={changes}
       />
     </div>
   );
