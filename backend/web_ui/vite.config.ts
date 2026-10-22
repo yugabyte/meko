@@ -11,12 +11,12 @@ export default defineConfig({
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     port: 5178,
-    // Meko accepts only its own origin from a browser, so the proxy sends that instead of the dev
-    // server's.
+    // Meko takes only requests addressed to it (Host) and, from a browser, only its own origin, so
+    // the proxy sends both as Meko's instead of the dev server's.
     proxy: {
-      "/api": { target, headers: { origin: target } },
-      "/mcp": { target, headers: { origin: target } },
-      "/healthz": { target },
+      "/api": { target, changeOrigin: true, headers: { origin: target } },
+      "/mcp": { target, changeOrigin: true, headers: { origin: target } },
+      "/healthz": { target, changeOrigin: true },
     },
   },
 });

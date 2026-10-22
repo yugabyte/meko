@@ -171,3 +171,19 @@ func TestUpdateAndSecretsSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestWebUISettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[web_ui]\ndir = \"/file/web_ui\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.WebUI.Dir != "/file/web_ui" {
+		t.Fatalf("from the file: %+v %v", c.WebUI, err)
+	}
+	env := map[string]string{"MEKO_WEB_UI_DIR": "/env/web_ui"}
+	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
+	if err != nil || c.WebUI.Dir != "/env/web_ui" {
+		t.Fatalf("env over the file: %+v %v", c.WebUI, err)
+	}
+}

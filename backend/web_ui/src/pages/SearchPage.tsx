@@ -8,15 +8,22 @@ import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack } from "../lib/types";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
 
-function Section({ icon, title, n, children }: { icon: ReactNode; title: string; n: number; children: ReactNode }) {
+// n is null when the source wasn't searched.
+function Section({ icon, title, n, children }: { icon: ReactNode; title: string; n: number | null; children: ReactNode }) {
   return (
     <section className="space-y-2">
       <h3 className="flex items-center gap-2 text-sm font-medium">
         {icon}
         {title}
-        <Badge>{n}</Badge>
+        {n !== null && <Badge>{n}</Badge>}
       </h3>
-      {n === 0 ? <p className="text-sm text-muted-foreground">Nothing close enough.</p> : children}
+      {n === null ? (
+        <p className="text-sm text-muted-foreground">Not searched: Meko's memory engine isn't ready yet.</p>
+      ) : n === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing close enough.</p>
+      ) : (
+        children
+      )}
     </section>
   );
 }
@@ -63,22 +70,22 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
       )}
       {r && (
         <div className="space-y-6">
-          <Section icon={<Brain className="size-4 text-primary" />} title="Memories" n={r.memory.length}>
+          <Section icon={<Brain className="size-4 text-primary" />} title="Memories" n={r.memory?.length ?? null}>
             <div className="space-y-2">
-              {r.memory.map((m) => (
+              {r.memory?.map((m) => (
                 <Card key={m.id} className="flex items-start justify-between gap-4 p-3">
                   <p className="text-sm">{m.memory}</p>
                   <div className="shrink-0 text-right text-xs text-muted-foreground">
-                    <Badge tone="primary">{m.score.toFixed(2)}</Badge>
+                    {m.score !== undefined && <Badge tone="primary">{m.score.toFixed(2)}</Badge>}
                     <div className="mt-1">{timeAgo(m.created_at)}</div>
                   </div>
                 </Card>
               ))}
             </div>
           </Section>
-          <Section icon={<FileText className="size-4 text-primary" />} title="Knowledge base" n={r.knowledge_base.length}>
+          <Section icon={<FileText className="size-4 text-primary" />} title="Knowledge base" n={r.knowledge_base?.length ?? null}>
             <div className="space-y-2">
-              {r.knowledge_base.map((k) => (
+              {r.knowledge_base?.map((k) => (
                 <Card key={k.id} className="p-3">
                   <div className="mb-1.5 flex gap-1.5">
                     {k.metadata_filters?.source === "memory" && <Badge tone="success">promoted memory</Badge>}
@@ -93,10 +100,10 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
           <Section
             icon={<MessagesSquare className="size-4 text-primary" />}
             title="Conversations"
-            n={r.conversation.hits.length}
+            n={r.conversation?.hits.length ?? null}
           >
             <div className="space-y-2">
-              {r.conversation.hits.map((h) => (
+              {r.conversation?.hits.map((h) => (
                 <Card key={h.message_id + h.distance} className="p-3">
                   <p className="line-clamp-4 whitespace-pre-wrap text-sm">{h.content}</p>
                 </Card>

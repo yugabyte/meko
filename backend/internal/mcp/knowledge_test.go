@@ -288,3 +288,23 @@ func TestUploadLocalFile(t *testing.T) {
 	delete(a, "conversation_id")
 	wantError(t, e, "knowledgebase_upload_file", a, "conversation_id_required")
 }
+
+// With auth = "none" a caller with no token could be any local user, so it can't have Meko read a
+// path as the owner; the token still can.
+func TestUploadLocalFileNeedsAToken(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{Auth: "none"})
+	path := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(path, []byte("the owner's file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"path": path, "conversation_id": "c"}
+	status, reply := rpc(t, e, "", map[string]any{"id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "knowledgebase_upload_file", "arguments": args}})
+	content := arr(obj(reply["result"])["content"])
+	if status != 200 || len(content) == 0 || !strings.Contains(str(obj(content[0])["text"]), `"token_required"`) {
+		t.Errorf("no token: %d %v", status, reply)
+	}
+	if r := ok(t, e, "knowledgebase_upload_file", args); r.JSON["already_uploaded"] != false {
+		t.Errorf("with the token: %s", r.Text)
+	}
+}

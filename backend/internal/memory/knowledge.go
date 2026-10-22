@@ -305,7 +305,7 @@ func (s *Service) ReceiveUpload(ctx context.Context, token string, r io.Reader) 
 
 // UploadLocalFile uploads a file from this machine's disk in one step, the server reading it
 // itself: the same checks, storing and queueing as an upload link's, with no bytes on the wire.
-// The server runs as its user, so it reads nothing that user's own agents couldn't.
+// It reads as the server's user, so callers must hold that user's token (the MCP tool checks).
 func (s *Service) UploadLocalFile(ctx context.Context, datapack, agent, path string) (UploadOffer, error) {
 	if !filepath.IsAbs(path) {
 		return UploadOffer{}, fmt.Errorf("%w: path must be absolute", knowledge.ErrInvalid)
@@ -314,16 +314,23 @@ func (s *Service) UploadLocalFile(ctx context.Context, datapack, agent, path str
 	if _, err := knowledge.TypeOf(name); err != nil {
 		return UploadOffer{}, err
 	}
+	// Stat first: opening a FIFO or a device would block before the check could run.
+	fi, err := os.Stat(path)
+	if err != nil {
+		return UploadOffer{}, fmt.Errorf("%w: can't read %s: %v", knowledge.ErrInvalid, path, errors.Unwrap(err))
+	}
+	if !fi.Mode().IsRegular() {
+		return UploadOffer{}, fmt.Errorf("%w: %s isn't a regular file", knowledge.ErrInvalid, path)
+	}
 	f, err := os.Open(path) //nolint:gosec // G304: reading the caller's own file is the point
 	if err != nil {
 		return UploadOffer{}, fmt.Errorf("%w: can't open %s: %v", knowledge.ErrInvalid, path, errors.Unwrap(err))
 	}
 	defer func() { _ = f.Close() }()
-	fi, err := f.Stat()
-	if err != nil {
+	if fi, err = f.Stat(); err != nil {
 		return UploadOffer{}, err
 	}
-	if !fi.Mode().IsRegular() {
+	if !fi.Mode().IsRegular() { // replaced since the first check
 		return UploadOffer{}, fmt.Errorf("%w: %s isn't a regular file", knowledge.ErrInvalid, path)
 	}
 	if err = knowledge.CheckSize(fi.Size()); err != nil {

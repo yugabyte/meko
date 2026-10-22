@@ -116,7 +116,7 @@ export interface ProvisionStatus {
 export interface MemoryHit {
   id: string;
   memory: string;
-  score: number;
+  score?: number;
   agent_id: string;
   created_at: string;
 }
@@ -138,11 +138,12 @@ export interface ConversationHit {
   distance: number;
 }
 
+// A source is null when it wasn't searched, as while the memory engine is starting.
 export interface ContextSearch {
   results: {
-    memory: MemoryHit[];
-    knowledge_base: KnowledgeHit[];
-    conversation: { hits: ConversationHit[]; thread: unknown[] };
+    memory: MemoryHit[] | null;
+    knowledge_base: KnowledgeHit[] | null;
+    conversation: { hits: ConversationHit[]; thread: unknown[] } | null;
   };
   token_savings?: { tokens_saved: number; total_tokens: number };
 }

@@ -30,15 +30,18 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
   );
   const promoted = useLoad(() => (scope === "promoted" ? api.promoted(id) : Promise.resolve(undefined)), [id, scope]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  // Reports whether it worked; a failure is shown above the list.
+  const act = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setActionError(undefined);
     try {
       await fn();
       list.reload();
       promoted.reload();
       onChanged();
+      return true;
     } catch (e) {
       setActionError(e as Error);
+      return false;
     }
   };
 
@@ -149,14 +152,13 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
   );
 }
 
-function AddMemory({ onAdd }: { onAdd: (text: string) => Promise<void> }) {
+function AddMemory({ onAdd }: { onAdd: (text: string) => Promise<boolean> }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    await onAdd(text.trim());
-    setText("");
+    if (await onAdd(text.trim())) setText("");
     setBusy(false);
   };
   return (

@@ -266,6 +266,8 @@ the client token for MCP and REST clients (last bullet).
   `Authorization: Bearer <token>`. It's compared in constant time and never logged.
 - Every route except `/healthz` needs it, or since milestone 3 the client token (or nothing, with
   `[server] auth = "none"`), except `/api/v1/status` and `/api/v1/version`, which take only it.
+  Later milestones add routes that take none: the knowledge-file links (a ticket) and the web UI's
+  files and code redeem ([api.md](api.md)).
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
   rebinding. A request with an `Origin` header is refused unless it's this server's own
   (`http://127.0.0.1:<port>` or `http://localhost:<port>`), so only the web UI Meko serves can call

@@ -83,9 +83,10 @@ const MCPBodyLimit = "8M"
 
 // Server is the HTTP server.
 type Server struct {
-	e    *echo.Echo
-	opts Options
-	srv  *http.Server
+	e     *echo.Echo
+	opts  Options
+	srv   *http.Server
+	codes *uiCodes
 }
 
 // New builds the server and its routes.
@@ -105,7 +106,7 @@ func New(opts Options) *Server {
 	e.HideBanner, e.HidePort = true, true
 	e.Logger.SetOutput(io.Discard)
 	e.HTTPErrorHandler = envelope.ErrorHandler(opts.Logger)
-	s := &Server{e: e, opts: opts}
+	s := &Server{e: e, opts: opts, codes: &uiCodes{codes: map[string]time.Time{}}}
 
 	e.Use(middleware.RequestID())
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
@@ -122,6 +123,8 @@ func New(opts Options) *Server {
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
 	v1.GET("/status", s.status)
 	v1.GET("/version", s.version)
+	v1.POST("/ui-code", s.issueUICode)
+	v1.POST("/ui-code/redeem", s.redeemUICode)
 	if opts.REST != nil {
 		opts.REST(v1)
 	}
@@ -141,6 +144,12 @@ func New(opts Options) *Server {
 		}, middleware.BodyLimit(MCPBodyLimit))
 	}
 	if opts.UI != nil {
+		// The UI takes every GET no other route does. These keep the API's unknown paths behind
+		// the token and answering 404 in the envelope, so uiRoute matches only the UI's.
+		notFound := func(echo.Context) error { return echo.ErrNotFound }
+		for _, p := range []string{"/api", "/api/*", "/mcp/*"} {
+			e.Any(p, notFound)
+		}
 		e.GET(uiRoute, s.ui)
 	}
 	s.srv = &http.Server{Handler: e, ReadHeaderTimeout: 10 * time.Second}
@@ -208,16 +217,8 @@ func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-func isUIPath(p string) bool {
-	return p != "/api" && !strings.HasPrefix(p, "/api/") && p != "/mcp" && !strings.HasPrefix(p, "/mcp/")
-}
-
-// ui serves the web UI for any GET no other route takes, but not under /api or /mcp: an unknown
-// API route stays a 404 in the envelope.
+// ui serves the web UI for any GET no other route takes.
 func (s *Server) ui(c echo.Context) error {
-	if !isUIPath(c.Request().URL.Path) {
-		return echo.ErrNotFound
-	}
 	s.opts.UI.ServeHTTP(c.Response(), c.Request())
 	return nil
 }
@@ -248,12 +249,12 @@ func Credential(c echo.Context) string {
 
 // adminOnly are the routes only the CLI's admin token opens, whatever the auth setting: they
 // describe the server itself.
-var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true}
+var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, uiCodeRoute: true}
 
 // requireToken lets a request in by its credential: /healthz needs none, nor do the knowledge-file
-// links, whose ticket is their credential; the admin-only routes need the admin token; every other
-// route takes the admin or the client token, or nothing when auth is "none". It keys on the
-// matched route, never the raw URL.
+// links (their ticket is the credential), the web UI's files, or the UI code's redeem (its code
+// is); the admin-only routes need the admin token; every other route takes the admin or the client
+// token, or nothing when auth is "none". It keys on the matched route, never the raw URL.
 func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		switch c.Path() {
@@ -262,10 +263,8 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 		case uploadRoute, downloadRoute:
 			c.Set(credentialKey, CredentialTicket)
 			return next(c)
-		case uiRoute:
-			if isUIPath(c.Request().URL.Path) {
-				return next(c)
-			}
+		case uiRoute, uiRedeemRoute: // static files, and the one-time code that is its own credential
+			return next(c)
 		}
 		h := c.Request().Header.Get(echo.HeaderAuthorization)
 		isClient := s.opts.ClientToken != "" && auth.CheckBearer(h, s.opts.ClientToken)

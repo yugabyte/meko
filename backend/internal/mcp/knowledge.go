@@ -213,6 +213,12 @@ func knowledgeUploadFile(ctx context.Context, c *call, a args) (any, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fail("VALIDATION_ERROR", "path is required")
 	}
+	// Meko reads the path as its own user, so only a caller holding that user's token may name
+	// one: with auth = "none" any local user could otherwise read the owner's files back.
+	if c.rec.Credential != "admin" && c.rec.Credential != "client" {
+		return nil, fail("token_required", "knowledgebase_upload_file needs the client token "+
+			"(meko token prints it). Use knowledgebase_upload_document instead.")
+	}
 	offer, err := c.svc.UploadLocalFile(ctx, dp, agent, strings.TrimSpace(path))
 	if err != nil {
 		return nil, knowledgeError(err)

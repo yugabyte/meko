@@ -350,3 +350,67 @@ func TestUI(t *testing.T) {
 		t.Errorf("/mcp/x: %d, want 404", code)
 	}
 }
+
+func post(t *testing.T, url string, header map[string]string, body string) (int, envelope.Response) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var env envelope.Response
+	_ = json.NewDecoder(resp.Body).Decode(&env)
+	return resp.StatusCode, env
+}
+
+// Only the admin token (the CLI) gets a UI code; the code then gets the client token once, with no
+// other credential, and not after it expires.
+func TestUICode(t *testing.T) {
+	s, base, _ := start(t)
+	if code, _ := post(t, base+uiCodeRoute, nil, ""); code != 401 {
+		t.Errorf("a code without a token: %d, want 401", code)
+	}
+	client := map[string]string{"Authorization": "Bearer " + clientToken}
+	if code, _ := post(t, base+uiCodeRoute, client, ""); code != 403 {
+		t.Errorf("a code with the client token: %d, want 403", code)
+	}
+	issue := func() string {
+		t.Helper()
+		code, env := post(t, base+uiCodeRoute, map[string]string{"Authorization": "Bearer " + token}, "")
+		m, _ := env.Data.(map[string]any)
+		c, _ := m["code"].(string)
+		if code != 200 || len(c) != 64 {
+			t.Fatalf("issue: %d %+v", code, env)
+		}
+		return c
+	}
+	redeem := func(c string) (int, string) {
+		t.Helper()
+		code, env := post(t, base+uiRedeemRoute, map[string]string{"Origin": base}, `{"code":"`+c+`"}`)
+		m, _ := env.Data.(map[string]any)
+		tok, _ := m["token"].(string)
+		return code, tok
+	}
+	c := issue()
+	if code, tok := redeem(c); code != 200 || tok != clientToken {
+		t.Errorf("redeem: %d %q, want the client token", code, tok)
+	}
+	if code, _ := redeem(c); code != 401 {
+		t.Errorf("a spent code: %d, want 401", code)
+	}
+	if code, _ := redeem("nope"); code != 401 {
+		t.Errorf("an unknown code: %d, want 401", code)
+	}
+	c = issue()
+	s.codes.mu.Lock()
+	s.codes.codes[c] = time.Now().Add(-time.Second)
+	s.codes.mu.Unlock()
+	if code, _ := redeem(c); code != 401 {
+		t.Errorf("an expired code: %d, want 401", code)
+	}
+}
