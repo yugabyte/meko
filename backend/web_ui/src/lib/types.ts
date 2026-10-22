@@ -55,6 +55,8 @@ export interface Usage {
   steps: { step: string; calls: number; p50_ms: number; p95_ms: number }[];
   agents: { agent_id: string; calls: number; searches: number; last_at: string }[];
   recent: {
+    id: number;
+    steps: { step: string; ms: number; n: number }[];
     at: string;
     tool: string;
     agent_id: string;
@@ -203,6 +205,24 @@ export interface ContextSearch {
     conversation: { hits: ConversationHit[]; thread: unknown[] } | null;
   };
   token_savings?: { tokens_saved: number; total_tokens: number };
+}
+
+// GET /api/v1/server: the server and its memory engine.
+export interface ServerStatus {
+  version: string;
+  pid: number;
+  port: number;
+  data_dir: string;
+  started_at: string;
+  uptime_seconds: number;
+  auth: string;
+  memory_engine: {
+    state: string;
+    reason?: string;
+    embedder?: { provider: string; model: string; dims: number };
+    reranker?: { provider: string; model: string; state: string; error?: string };
+  };
+  children: { name: string; state: string; restarts: number; last_error?: string; since: string }[];
 }
 
 export interface Health {

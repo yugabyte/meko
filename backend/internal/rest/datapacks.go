@@ -71,7 +71,7 @@ func (a *api) usage(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	st, err := a.Service.CallStats(ctx(c), "")
+	st, err := a.Service.CallStats(ctx(c), "", 0)
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,11 @@ func (a *api) callUsage(c echo.Context) error {
 	if !ok {
 		return err
 	}
-	u, err := a.Service.CallUsage(ctx(c), id)
+	days, ok, err := queryInt(c, "days", 0)
+	if !ok {
+		return err
+	}
+	u, err := a.Service.CallUsage(ctx(c), id, days)
 	if err != nil {
 		return serviceError(c, err)
 	}
@@ -247,9 +251,9 @@ func (a *api) callUsage(c echo.Context) error {
 	}
 	recent := make([]map[string]any, len(u.Recent))
 	for i, r := range u.Recent {
-		recent[i] = map[string]any{"at": wire.Time(r.At), "tool": r.Tool, "agent_id": r.AgentID, "ok": r.OK,
-			"error_code": r.ErrorCode, "ms": r.Ms, "memory_n": r.MemoryN, "kb_n": r.KBN,
-			"conversation_n": r.ConversationN}
+		recent[i] = map[string]any{"id": r.ID, "steps": r.Steps, "at": wire.Time(r.At), "tool": r.Tool,
+			"agent_id": r.AgentID, "ok": r.OK, "error_code": r.ErrorCode, "ms": r.Ms, "memory_n": r.MemoryN,
+			"kb_n": r.KBN, "conversation_n": r.ConversationN}
 	}
 	return envelope.OK(c, map[string]any{"datapack_id": id, "calls": u.Calls, "errors": u.Errors, "tools": tools,
 		"steps": steps, "agents": agents, "recent": recent, "input_tokens": u.InputTokens,
@@ -262,7 +266,11 @@ func (a *api) metrics(c echo.Context) error {
 	if !ok {
 		return err
 	}
-	st, err := a.Service.CallStats(ctx(c), id)
+	lastDays, ok, err := queryInt(c, "days", 0)
+	if !ok {
+		return err
+	}
+	st, err := a.Service.CallStats(ctx(c), id, lastDays)
 	if err != nil {
 		return err
 	}
@@ -301,7 +309,7 @@ func (a *api) tokenSavings(c echo.Context) error {
 	if !ok {
 		return err
 	}
-	st, err := a.Service.CallStats(ctx(c), id)
+	st, err := a.Service.CallStats(ctx(c), id, 0)
 	if err != nil {
 		return err
 	}

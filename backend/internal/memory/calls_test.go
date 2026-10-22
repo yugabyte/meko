@@ -80,7 +80,7 @@ func TestCallUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	u, err := svc.CallUsage(ctx, "dp")
+	u, err := svc.CallUsage(ctx, "dp", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +100,11 @@ func TestCallUsage(t *testing.T) {
 		u.Agents[2].Searches != 2 {
 		t.Errorf("agents: %+v", u.Agents)
 	}
+	if u.Recent[0].ID == 0 || len(u.Recent[3].Steps) != 2 {
+		t.Errorf("recent calls carry their id and steps: %+v", u.Recent)
+	}
 	// The UI is the user, not an agent: its searches count, it doesn't.
-	cs, err := svc.CallStats(ctx, "dp")
+	cs, err := svc.CallStats(ctx, "dp", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,5 +129,45 @@ func TestPercentile(t *testing.T) {
 		if got := percentile(tc.ms, tc.p); got != tc.want {
 			t.Errorf("percentile(%v, %d) = %d, want %d", tc.ms, tc.p, got, tc.want)
 		}
+	}
+}
+
+// days narrows the stats and usage to a window; 0 is the whole retention.
+func TestCallWindow(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err = st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(st, nil, Options{})
+	for _, ago := range []int{1, 10, 60} {
+		c := store.Call{At: time.Now().AddDate(0, 0, -ago), Tool: "context_search", DatapackID: "dp", OK: true}
+		if err = st.AddCall(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for days, want := range map[int]int{0: 3, 7: 1, 30: 2, 90: 3, 365: 3} {
+		cs, err := svc.CallStats(ctx, "dp", days)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := svc.CallUsage(ctx, "dp", days)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cs.Requests != want || u.Calls != want {
+			t.Errorf("days %d: %d searches, %d calls; want %d", days, cs.Requests, u.Calls, want)
+		}
+	}
+	// The default keeps 30 days of activity, Cloud's chart; a window keeps its own.
+	if cs, _ := svc.CallStats(ctx, "dp", 0); len(cs.Daily) != 2 {
+		t.Errorf("default activity: %+v", cs.Daily)
+	}
+	if cs, _ := svc.CallStats(ctx, "dp", 90); len(cs.Daily) != 3 {
+		t.Errorf("90-day activity: %+v", cs.Daily)
 	}
 }

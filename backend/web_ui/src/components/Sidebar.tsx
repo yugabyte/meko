@@ -1,7 +1,7 @@
 // The left rail: the Meko mark, the datapacks, and the server's version and theme toggle.
 
 import { useState } from "react";
-import { Database, Moon, Plus, Sun } from "lucide-react";
+import { Activity, Database, Moon, Plus, Sun } from "lucide-react";
 import { href, navigate } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import type { Datapack } from "../lib/types";
@@ -60,7 +60,14 @@ export function Sidebar({
       </nav>
 
       <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">
-        <span>Meko {version ?? ""}</span>
+        <a
+          href={href({ tab: "overview", view: "status" })}
+          onClick={(e) => (e.preventDefault(), navigate({ tab: "overview", view: "status" }))}
+          className="flex items-center gap-1.5 hover:text-foreground"
+          title="Status"
+        >
+          <Activity className="size-3.5" /> Meko {version ?? ""}
+        </a>
         <Button size="sm" variant="ghost" onClick={onToggleTheme} title="Toggle theme">
           {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
         </Button>

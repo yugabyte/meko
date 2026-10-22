@@ -414,3 +414,16 @@ func TestUICode(t *testing.T) {
 		t.Errorf("an expired code: %d, want 401", code)
 	}
 }
+
+// /api/v1/server is /api/v1/status for the web UI: the client token gets it, nothing doesn't.
+func TestServerStatusForClients(t *testing.T) {
+	_, base, _ := start(t)
+	if code, _ := get(t, base+"/api/v1/server", nil, ""); code != 401 {
+		t.Errorf("no token: %d, want 401", code)
+	}
+	code, env := get(t, base+"/api/v1/server", map[string]string{"Authorization": "Bearer " + clientToken}, "")
+	m, _ := env.Data.(map[string]any)
+	if code != 200 || m["version"] != "test" || m["memory_engine"] == nil {
+		t.Errorf("client token: %d %+v", code, env)
+	}
+}

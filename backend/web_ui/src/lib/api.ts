@@ -15,6 +15,7 @@ import type {
   Metrics,
   PromotedMemory,
   ProvisionStatus,
+  ServerStatus,
   UploadOffer,
   Usage,
 } from "./types";
@@ -91,11 +92,12 @@ export const api = {
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
-  metrics: (id: string) => request<Metrics>("GET", `/datapacks/${id}/metrics`),
+  metrics: (id: string, days: number) => request<Metrics>("GET", `/datapacks/${id}/metrics?days=${days}`),
   artifacts: (id: string, q: string, page: number) =>
     request<ArtifactList>("GET", `/datapacks/${id}/artifacts?q=${enc(q)}&page=${page}`),
   artifact: (id: string, hash: string) => request<Artifact>("GET", `/datapacks/${id}/artifacts/${hash}`),
-  usage: (id: string) => request<Usage>("GET", `/datapacks/${id}/usage`),
+  usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
+  server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>
