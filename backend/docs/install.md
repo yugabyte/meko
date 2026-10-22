@@ -99,7 +99,7 @@ flag, and Go signs darwin/arm64 binaries ad hoc.
 `scripts/release/**` or itself, and by hand (force, or rebuild a `meko-v` tag). It uses the repo's
 release scripts with `--product meko`:
 
-| | AgentK Local (`release.yml`) | Meko (`meko-release.yml`) |
+| | AgentK Local (`agentk-release.yml`) | Meko (`meko-release.yml`) |
 |---|---|---|
 | Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
 | Releases on | feat/fix/perf/deps subjects other than `meko` | feat/fix/perf/deps subjects with component `meko` |
@@ -157,10 +157,9 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
   keeps AgentK's other settings. Otherwise it downloads the newest AgentK release's `install.sh`
   (tags `agentk-v*`, and `v*` from before) and runs it with the same two flags. An
   AgentK from before `--meko-url` is refused with a message, rather than failing on the flag: an
-  installed one by its `install.js`, a release by its `install.sh`. So `install_extension` works
-  once an AgentK release built after #229 is out; run `release.yml` by hand (force) right after
-  #229 merges, since #229 itself is a `meko` commit and cuts no AgentK release. Nothing else is passed, apart
-  from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
+  installed one by its `install.js`, a release by its `install.sh`. So `install_extension` needs
+  an AgentK release from after #229, which itself is a `meko` commit and cut no AgentK release.
+  Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agent-k-local stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An

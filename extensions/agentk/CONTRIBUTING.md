@@ -83,7 +83,7 @@ titles) follow the title and release rules: every npm bump is `deps(agentk): …
 (the web UI's libraries are devDependencies bundled into the release, so dev-tool bumps release
 too), while `ci(repo): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
 breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
-`release.yml`) is bumped by hand.
+`agentk-release.yml`) is bumped by hand.
 
 ## Releases
 
@@ -92,7 +92,7 @@ release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, s
 sorts higher.
 
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
-   AgentK release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
+   AgentK release workflow (`.github/workflows/agentk-release.yml`) runs the tests, picks the next version with
    the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
    `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
    (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only

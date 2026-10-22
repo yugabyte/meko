@@ -105,10 +105,10 @@ describe('prune-releases.sh', () => {
   });
 });
 
-describe('release.yml’s hand-run rebuild', () => {
+describe('agentk-release.yml’s hand-run rebuild', () => {
   // The plan step's own shell, cut out of the workflow: its run block, dedented.
   const plan = (() => {
-    const lines = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/release.yml', import.meta.url)), 'utf8').split('\n');
+    const lines = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/agentk-release.yml', import.meta.url)), 'utf8').split('\n');
     const start = lines.findIndex((l) => /^\s+- id: p$/.test(l));
     const run = lines.findIndex((l, i) => i > start && /^\s+run: \|$/.test(l));
     const indent = /^\s*/.exec(lines[run + 1]!)![0];
