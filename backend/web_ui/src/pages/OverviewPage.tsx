@@ -26,7 +26,7 @@ function Stat({ icon, label, value, hint }: { icon: ReactNode; label: string; va
 
 export function OverviewPage({ datapack }: { datapack: Datapack }) {
   const id = datapack.datapack_id;
-  const { data: m, error, loading } = useLoad(() => api.metrics(id, 30), [id]);
+  const { data: m, error, loading } = useLoad(() => api.metrics(id, 0), [id]);
   if (loading && !m) return <Loading />;
   if (error) return <ErrorNote error={error} />;
   if (!m) return null;

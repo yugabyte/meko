@@ -93,6 +93,7 @@ export const api = {
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
+  // days 0 is the server's default window: 90 days of totals, 30 of activity.
   metrics: (id: string, days: number) => request<Metrics>("GET", `/datapacks/${id}/metrics?days=${days}`),
   artifacts: (id: string, q: string, page: number) =>
     request<ArtifactList>("GET", `/datapacks/${id}/artifacts?q=${enc(q)}&page=${page}`),

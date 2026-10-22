@@ -34,7 +34,7 @@ export default function App() {
   const activeId = route.datapackId ?? list.data?.[0]?.datapack_id;
   const current = useLoad(() => (activeId ? api.datapack(activeId) : Promise.resolve(undefined)), [activeId]);
 
-  useShortcuts(route.view ? undefined : activeId);
+  useShortcuts(activeId);
 
   const reloadCurrent = current.reload;
   const onChanged = useCallback(() => reloadCurrent(), [reloadCurrent]);
