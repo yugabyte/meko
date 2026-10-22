@@ -69,6 +69,7 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/agents", a.agents)
 	g.GET("/datapacks/:id/metrics", a.metrics)
 	g.GET("/datapacks/:id/token-savings", a.tokenSavings)
+	g.GET("/datapacks/:id/usage", a.callUsage)
 
 	g.GET("/datapacks/:id/artifacts", a.listArtifacts)
 	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.artifactDownloadURL)

@@ -186,7 +186,7 @@ func (s *Service) CallStats(ctx context.Context, datapack string) (CallStats, er
 	days := map[string]*DayActivity{}
 	since := time.Now().UTC().AddDate(0, 0, -statsDays+1).Format(time.DateOnly)
 	for _, c := range calls {
-		if c.AgentID != "" {
+		if c.AgentID != "" && c.AgentID != WebUIAgent {
 			agents[c.AgentID] = true
 		}
 		at := c.At
@@ -235,6 +235,126 @@ func (s *Service) CallStats(ctx context.Context, datapack string) (CallStats, er
 	}
 	sort.Slice(out.Daily, func(i, j int) bool { return out.Daily[i].Date < out.Daily[j].Date })
 	return out, nil
+}
+
+// WebUIAgent is the agent the web UI's own calls are recorded as. It's the user, not an agent, so
+// the agent counts leave it out; its searches still count as searches.
+const WebUIAgent = "meko_web_ui"
+
+// recentCalls is how many of the latest calls CallUsage lists.
+const recentCalls = 25
+
+// ToolUsage is one tool's calls in CallUsage: how many, how many failed, and how long they took.
+type ToolUsage struct {
+	Tool         string
+	Calls        int
+	Errors       int
+	P50Ms, P95Ms int64
+}
+
+// StepUsage is one timed part of the searches, such as searching one source.
+type StepUsage struct {
+	Step         string
+	Calls        int
+	P50Ms, P95Ms int64
+}
+
+// AgentUsage is one agent's calls in CallUsage.
+type AgentUsage struct {
+	AgentID  string
+	Calls    int
+	Searches int
+	LastAt   time.Time
+}
+
+// CallUsage is how a datapack's calls went over the call log's retention: per tool, per search
+// step and per agent, and the latest calls. Meko's own: Cloud's dashboard has no such view.
+type CallUsage struct {
+	Calls        int
+	Errors       int
+	Tools        []ToolUsage  // most called first
+	Steps        []StepUsage  // by name
+	Agents       []AgentUsage // most recently seen first
+	Recent       []store.Call // newest first
+	InputTokens  int          // what track_token_usage reported
+	OutputTokens int
+}
+
+// CallUsage summarizes a datapack's calls ("" for every datapack's).
+func (s *Service) CallUsage(ctx context.Context, datapack string) (CallUsage, error) {
+	calls, err := s.st.Calls(ctx, datapack, time.Now().Add(-CallRetention))
+	if err != nil {
+		return CallUsage{}, err
+	}
+	out := CallUsage{Calls: len(calls), Tools: []ToolUsage{}, Steps: []StepUsage{}, Agents: []AgentUsage{},
+		Recent: []store.Call{}}
+	toolMs, stepMs := map[string][]int64{}, map[string][]int64{}
+	tools, agents := map[string]*ToolUsage{}, map[string]*AgentUsage{}
+	for _, c := range calls {
+		t := tools[c.Tool]
+		if t == nil {
+			t = &ToolUsage{Tool: c.Tool}
+			tools[c.Tool] = t
+		}
+		t.Calls++
+		if !c.OK {
+			t.Errors++
+			out.Errors++
+		}
+		toolMs[c.Tool] = append(toolMs[c.Tool], c.Ms)
+		for _, st := range c.Steps {
+			stepMs[st.Step] = append(stepMs[st.Step], st.Ms)
+		}
+		out.InputTokens += c.InputTokens
+		out.OutputTokens += c.OutputTokens
+		if c.AgentID != "" {
+			a := agents[c.AgentID]
+			if a == nil {
+				a = &AgentUsage{AgentID: c.AgentID}
+				agents[c.AgentID] = a
+			}
+			a.Calls++
+			if _, ok := searchTools[c.Tool]; ok {
+				a.Searches++
+			}
+			if c.At.After(a.LastAt) {
+				a.LastAt = c.At
+			}
+		}
+	}
+	for name, t := range tools {
+		t.P50Ms, t.P95Ms = percentile(toolMs[name], 50), percentile(toolMs[name], 95)
+		out.Tools = append(out.Tools, *t)
+	}
+	sort.Slice(out.Tools, func(i, j int) bool {
+		if out.Tools[i].Calls != out.Tools[j].Calls {
+			return out.Tools[i].Calls > out.Tools[j].Calls
+		}
+		return out.Tools[i].Tool < out.Tools[j].Tool
+	})
+	for name, ms := range stepMs {
+		out.Steps = append(out.Steps, StepUsage{Step: name, Calls: len(ms), P50Ms: percentile(ms, 50),
+			P95Ms: percentile(ms, 95)})
+	}
+	sort.Slice(out.Steps, func(i, j int) bool { return out.Steps[i].Step < out.Steps[j].Step })
+	for _, a := range agents {
+		out.Agents = append(out.Agents, *a)
+	}
+	sort.Slice(out.Agents, func(i, j int) bool { return out.Agents[i].LastAt.After(out.Agents[j].LastAt) })
+	for i := len(calls) - 1; i >= 0 && len(out.Recent) < recentCalls; i-- {
+		out.Recent = append(out.Recent, calls[i])
+	}
+	return out, nil
+}
+
+// percentile is the nearest-rank p-th percentile of ms, 0 for none. It sorts ms.
+func percentile(ms []int64, p int) int64 {
+	if len(ms) == 0 {
+		return 0
+	}
+	sort.Slice(ms, func(i, j int) bool { return ms[i] < ms[j] })
+	i := (p*len(ms)+99)/100 - 1
+	return ms[max(0, min(i, len(ms)-1))]
 }
 
 // CountAll counts the install's datapacks and conversations.

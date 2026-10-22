@@ -1,21 +1,27 @@
 // A datapack's name, description and tabs, with delete.
 
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, UserPlus } from "lucide-react";
 import { api } from "../lib/api";
 import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { Dialog } from "./Dialog";
+import { Tooltip } from "./Tooltip";
 import { Button, cx, ErrorNote, Input } from "./ui";
 
 const LABELS: Record<Tab, string> = {
   overview: "Overview",
+  analytics: "Analytics",
   search: "Search",
   memories: "Memories",
   knowledge: "Knowledge",
   conversations: "Conversations",
   connect: "Connect",
 };
+
+// Everything Meko local holds stays on this machine, so there's no one to share it with yet.
+const SHARE_NEEDS_CLOUD =
+  "Sharing comes once this datapack can sync to Meko Cloud. Until then its memories and files stay on this machine.";
 
 export function DatapackHeader({
   datapack,
@@ -34,9 +40,16 @@ export function DatapackHeader({
           <h1 className="truncate text-xl font-semibold">{datapack.datapack_name}</h1>
           {datapack.description && <p className="mt-0.5 text-sm text-muted-foreground">{datapack.description}</p>}
         </div>
-        <Button variant="danger" size="sm" onClick={() => setDeleting(true)}>
-          <Trash2 className="size-3.5" /> Delete
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Tooltip text={SHARE_NEEDS_CLOUD}>
+            <Button size="sm" disabled aria-disabled>
+              <UserPlus className="size-3.5" /> Invite
+            </Button>
+          </Tooltip>
+          <Button variant="danger" size="sm" onClick={() => setDeleting(true)}>
+            <Trash2 className="size-3.5" /> Delete
+          </Button>
+        </div>
       </div>
       <nav className="mt-5 flex gap-5 text-sm">
         {(Object.keys(LABELS) as Tab[]).map((t) => (

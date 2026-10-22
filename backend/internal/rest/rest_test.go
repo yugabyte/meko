@@ -297,6 +297,13 @@ func TestMetricsAndArtifacts(t *testing.T) {
 		num(obj(days[0])["hybrid"]) != 1 || num(m["memory_chunk_count"]) != 1 || num(m["tokens_saved_total"]) == 0 {
 		t.Errorf("metrics %v", m)
 	}
+	u := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/usage", nil, 200))
+	tools, agents := arr(u["tools"]), arr(u["agents"])
+	if num(u["calls"]) != 1 || len(tools) != 1 || obj(tools[0])["tool"] != "context_search" ||
+		len(agents) != 1 || obj(agents[0])["agent_id"] != "claude_code:x" || len(arr(u["recent"])) != 1 ||
+		len(arr(u["steps"])) == 0 {
+		t.Errorf("usage %v", u)
+	}
 	ts := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/token-savings", nil, 200))
 	if num(ts["total_requests"]) != 1 || len(arr(ts["by_datapack"])) != 1 {
 		t.Errorf("token-savings %v", ts)

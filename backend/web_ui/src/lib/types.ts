@@ -16,9 +16,21 @@ export interface Datapack {
   conversation_search_opt_out?: boolean;
 }
 
+export interface DayActivity {
+  date: string;
+  hybrid: number;
+  kb: number;
+  memory: number;
+}
+
+// GET /datapacks/:id/metrics, the same payload Meko Cloud's Analytics tab reads.
 export interface Metrics {
   agent_count: number;
+  human_count: number;
   conversation_count: number;
+  conversation_chunk_count: number;
+  conversation_bytes: number;
+  memory_extraction_count: number;
   kb_file_count: number;
   kb_chunk_count: number;
   kb_bytes: number;
@@ -26,9 +38,35 @@ export interface Metrics {
   memory_bytes: number;
   total_requests: number;
   tokens_saved_total: number;
+  tokens_if_raw_total: number;
   savings_pct: number;
+  score_high_total: number;
+  score_mid_total: number;
+  score_low_total: number;
   last_accessed_at: string | null;
-  daily_activity: { date: string; hybrid: number; kb: number; memory: number }[];
+  daily_activity: DayActivity[];
+}
+
+// GET /datapacks/:id/usage: Meko local's own view of the call log.
+export interface Usage {
+  calls: number;
+  errors: number;
+  tools: { tool: string; calls: number; errors: number; p50_ms: number; p95_ms: number }[];
+  steps: { step: string; calls: number; p50_ms: number; p95_ms: number }[];
+  agents: { agent_id: string; calls: number; searches: number; last_at: string }[];
+  recent: {
+    at: string;
+    tool: string;
+    agent_id: string;
+    ok: boolean;
+    error_code: string;
+    ms: number;
+    memory_n: number;
+    kb_n: number;
+    conversation_n: number;
+  }[];
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export interface Memory {
@@ -117,6 +155,8 @@ export interface MemoryHit {
   id: string;
   memory: string;
   score?: number;
+  // Cosine similarity, the number Cloud bands and floors memories by.
+  raw_similarity_score?: number;
   agent_id: string;
   created_at: string;
 }

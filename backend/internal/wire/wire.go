@@ -261,8 +261,13 @@ func Bands(r memory.ContextResults) (high, mid, low int) {
 			low++
 		}
 	}
+	// A memory's band is its raw cosine, as Cloud bands it: the fused score reads lower wherever
+	// a keyword or entity signal fires, so it isn't comparable to the cosine the others use.
 	for _, m := range r.Memory {
-		if m.Score != nil {
+		switch {
+		case m.RawSimilarityScore != nil:
+			add(*m.RawSimilarityScore)
+		case m.Score != nil:
 			add(*m.Score)
 		}
 	}
