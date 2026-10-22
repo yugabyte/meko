@@ -71,18 +71,20 @@ var Clients = []string{"claude_code", "claude_desktop", "cursor", "codex", "kiro
 
 // Install is what the report says about the install.
 type Install struct {
-	Version      string          `json:"version"`
-	Commit       string          `json:"commit"`
-	Platform     string          `json:"platform"`
-	Arch         string          `json:"arch"`
-	Go           string          `json:"go"`
-	Service      string          `json:"service"` // launchd, systemd or none
-	Auth         string          `json:"auth"`    // token or none
-	Secrets      string          `json:"secrets"` // keychain or file
-	Update       Update          `json:"update"`
-	MemoryEngine string          `json:"memoryEngine"` // ready, starting, restarting, failed or unavailable
-	Extensions   map[string]bool `json:"extensions"`   // the known extensions, installed or not
-	FirstDay     string          `json:"firstDay"`     // the UTC day of the first report
+	Version  string `json:"version"`
+	Commit   string `json:"commit"`
+	Platform string `json:"platform"`
+	Arch     string `json:"arch"`
+	Go       string `json:"go"`
+	Service  string `json:"service"` // launchd, systemd or none
+	Auth     string `json:"auth"`    // token or none
+	Secrets  string `json:"secrets"` // keychain or file
+	Update   Update `json:"update"`
+	// MemoryEngine is the memory engine's own state when it answers (loading, ready or error), else
+	// the server's view of it (starting, restarting, failed, or unavailable when it can't start).
+	MemoryEngine string          `json:"memoryEngine"`
+	Extensions   map[string]bool `json:"extensions"` // the known extensions, installed or not
+	FirstDay     string          `json:"firstDay"`   // the UTC day of the first report
 }
 
 // Update is the install's update settings.
@@ -228,6 +230,8 @@ type State struct {
 	By string `json:"by,omitempty"`
 	// Sends is false when they're on but there's nowhere to send them (a build from source).
 	Sends bool `json:"sends"`
+	// URL is where they go while Sends: DefaultURL, or the one config names.
+	URL string `json:"url,omitempty"`
 }
 
 // State reads whether usage stats are on.
@@ -242,7 +246,8 @@ func (s *Sender) State(ctx context.Context) (State, error) {
 	if v == "false" {
 		return State{By: OffByWebUI}, nil
 	}
-	return State{Enabled: true, Sends: s.Endpoint() != ""}, nil
+	url := s.Endpoint()
+	return State{Enabled: true, Sends: url != "", URL: url}, nil
 }
 
 // SetEnabled is the web UI's setting. It takes effect at the next check, with no restart.
@@ -395,6 +400,22 @@ func (s *Sender) send(ctx context.Context, url string, now time.Time, first bool
 	if err != nil {
 		return err
 	}
+	if err = s.post(ctx, url, e); err != nil {
+		return err
+	}
+	// A report the service took is recorded even when serve is stopping, or the next start would
+	// send it again (as a first report, if it was one).
+	rec := context.WithoutCancel(ctx)
+	if first {
+		if err = s.setTime(rec, keyFirstSent, now); err != nil {
+			return err
+		}
+	}
+	return s.setTime(rec, keyLastSent, now)
+}
+
+// post sends the envelope, giving up after sendTimeout.
+func (s *Sender) post(ctx context.Context, url string, e Envelope) error {
 	body, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -415,12 +436,7 @@ func (s *Sender) send(ctx context.Context, url string, now time.Time, first bool
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		return fmt.Errorf("the call home service answered %d", res.StatusCode)
 	}
-	if first {
-		if err := s.setTime(ctx, keyFirstSent, now); err != nil {
-			return err
-		}
-	}
-	return s.setTime(ctx, keyLastSent, now)
+	return nil
 }
 
 // FirstDelay is how long Run waits before its first check: a new install's is short, and no

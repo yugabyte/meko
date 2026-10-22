@@ -107,9 +107,10 @@ curl -s localhost:7778/api/v1/datapacks -H "Authorization: Bearer $(./bin/meko t
 ## Usage stats
 
 Meko sends usage stats (counts, versions and settings, never names or contents) to YugabyteDB
-once a day. Turn them off in the web UI's Settings, with `[call_home] enabled = false` in
-`config.toml`, or with `MEKO_CALL_HOME=false` or `YB_DISABLE_CALLHOME=true` in Meko's environment.
-[`backend/docs/callhome.md`](backend/docs/callhome.md) says what's sent.
+once a day, every hour on an install's first day. Turn them off in the web UI's Settings, or with
+`[call_home] enabled = false` in `config.toml`. `MEKO_CALL_HOME=false` and `YB_DISABLE_CALLHOME=true`
+work too, but only in the server's own environment: Meko's login service doesn't pass on your
+shell's. [`backend/docs/callhome.md`](backend/docs/callhome.md) says what's sent.
 
 ## Extensions
 

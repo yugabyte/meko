@@ -267,7 +267,7 @@ func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, _ = run("status", "--data-dir", dir)
-	want(t, "status", code, 0, out, "Usage stats:   on (sent to YugabyteDB once a day)")
+	want(t, "status", code, 0, out, "Usage stats:   on (sent to "+srv.URL+"/)")
 	select {
 	case b := <-got:
 		var e struct {

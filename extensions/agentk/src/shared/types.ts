@@ -1555,6 +1555,11 @@ export interface Settings {
   idleWorktreeDays: number;
   /** `[call_home] enabled`: send anonymous usage stats (the Account tab's checkbox). */
   callHomeEnabled: boolean;
+  /**
+   * Set while YB_DISABLE_CALLHOME in AgentK's environment turns usage stats off whatever `callHomeEnabled`
+   * says: the checkbox is then off and disabled. Read-only.
+   */
+  callHomeOffBy?: 'YB_DISABLE_CALLHOME';
   /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
   resolveConflicts: boolean;
   /** `[agents] default`: the harness new sessions start on unless the New session dialog picks another. */

@@ -239,4 +239,6 @@ export interface UsageStats {
   by?: string;
   // On, but a build from source has nowhere to send them.
   sends: boolean;
+  // Where they go while sends.
+  url?: string;
 }

@@ -4,7 +4,9 @@ Part of the [AgentK design](../design.md).
 
 Each install sends a small report of counts once a day (every hour in its first day) to a
 collector run by the AgentK team, so we know how many installs are active and how much work
-goes through them. The collector is a
+goes through them. Release installs also send it to YugabyteDB's call home service
+(diagnostics.yugabyte.com, described below), which is to replace the
+AgentK team's collector. That collector is a
 separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
 `CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](../call-home-report.schema.json)
 is the same contract as a JSON Schema. The collector keeps an identical copy
@@ -114,8 +116,11 @@ installs (with `AK_APP_DIR`) send there, unless `[call_home] diagnostics_url` na
 **Turning it off.** It's on by default. The **Send anonymous usage stats to YugabyteDB** checkbox
 in Settings → Account (under the password forms, or the local-access note) writes
 `[call_home] enabled = false`; from then on no report is built or sent to either service, without a restart.
-`YB_DISABLE_CALLHOME` set to a true word (`true`, `t`, `yes`, `y`, `1`) in the server's environment,
-yugabyted's switch, turns off both too.
+`YB_DISABLE_CALLHOME` set to a true word (`true`, `t`, `yes`, `y`, `1`) in the server's own environment,
+yugabyted's switch, turns off both too, and the checkbox then shows off and disabled, naming it
+(`Settings.callHomeOffBy`). Under the systemd or launchd service the server's environment is the
+unit's or the plist's, not the shell's that ran `agentk start`, so a shell `export` doesn't reach it:
+use the checkbox or `[call_home] enabled` there.
 
 **Downloads** aren't sent from here: the collector reads every release asset's download count
 from the GitHub API each hour, so a pruned release loses at most an hour of downloads.

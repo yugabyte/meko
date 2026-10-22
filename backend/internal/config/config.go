@@ -35,6 +35,8 @@ type Config struct {
 type CallHome struct {
 	// Enabled is true by default. false here, MEKO_CALL_HOME=false or YB_DISABLE_CALLHOME (yugabyted's
 	// switch) turn usage stats off whatever the web UI's setting says; true only leaves it to the web UI.
+	// The variables are read from serve's own environment, which under the login service is the unit's
+	// or plist's, not the shell's.
 	Enabled bool `toml:"enabled"`
 	// URL is where they go. Empty is https://diagnostics.yugabyte.com, from release installs only. Also
 	// MEKO_CALL_HOME_URL.

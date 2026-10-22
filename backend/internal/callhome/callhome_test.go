@@ -252,7 +252,7 @@ func TestSwitches(t *testing.T) {
 	if s.Tick(ctx) || len(r.coll.bodies) != 0 {
 		t.Error("sent while turned off")
 	}
-	if st, err := s.SetEnabled(ctx, true); err != nil || st != (State{Enabled: true, Sends: true}) {
+	if st, err := s.SetEnabled(ctx, true); err != nil || st != (State{Enabled: true, Sends: true, URL: r.cfg.URL}) {
 		t.Fatalf("turned on: %+v %v", st, err)
 	}
 	if !s.Tick(ctx) {
@@ -294,6 +294,35 @@ func TestRetriesAfterAFailure(t *testing.T) {
 	// Still the first report: nothing had been received.
 	if got := r.coll.last(t); len(got.Payload.Days) != FirstReportDays {
 		t.Errorf("%d days", len(got.Payload.Days))
+	}
+}
+
+// cancelAfter cancels a context once a round trip has its reply.
+type cancelAfter struct{ cancel context.CancelFunc }
+
+func (c cancelAfter) RoundTrip(req *http.Request) (*http.Response, error) {
+	res, err := http.DefaultTransport.RoundTrip(req)
+	c.cancel()
+	return res, err
+}
+
+func TestRecordsAReportTheServiceTookWhileStopping(t *testing.T) {
+	r := newRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := r.sender(false)
+	// serve stops right after the service took the report.
+	s.o.Client = &http.Client{Transport: cancelAfter{cancel}}
+	s.Tick(ctx)
+	bg := context.Background()
+	for _, k := range []string{keyLastSent, keyFirstSent} {
+		if _, ok, err := r.st.Setting(bg, k); err != nil || !ok {
+			t.Errorf("%s not recorded: %v", k, err)
+		}
+	}
+	// So the next start doesn't send it again.
+	if s.Tick(bg) || len(r.coll.bodies) != 1 {
+		t.Errorf("sent again: %d reports", len(r.coll.bodies))
 	}
 }
 

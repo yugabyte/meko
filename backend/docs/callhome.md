@@ -38,8 +38,9 @@ platforms, and how much work goes through them, by client. AgentK sends its own 
   `agentk`, `meko_cli`, `meko_web_ui`). AgentK's `agent-k-local` counts as `agentk`, no `agent_id`
   (`meko_agent`) as `none`, and anything else as `other`. So `claude_code:my-repo` is
   `claude_code`, and no repo name is sent.
-- `memoryEngine` is the memory engine's state (`ready`, `starting`, `restarting`, `failed`,
-  `unavailable`). `extensions` lists every extension `meko install_extension` knows, installed or not.
+- `memoryEngine` is the memory engine's own state when it answers (`loading` while it loads its
+  models, as it usually is at a new install's first report, `ready` or `error`), else the server's view
+  of it (`starting`, `restarting`, `failed`, or `unavailable` when it can't start). `extensions` lists every extension `meko install_extension` knows, installed or not.
 
 Never sent: datapack, memory, conversation, artifact or file names and contents, queries, paths,
 host names, user names and tokens. The service records the address the report came from, as it
@@ -74,20 +75,26 @@ Usage stats are on by default. Each of these turns them off:
   sidebar's footer). It's the `call_home_enabled` setting in the store, through `GET` and
   `PATCH /api/v1/settings/usage-stats`, and the next check reads it, with no restart.
 - `[call_home] enabled = false` in `config.toml`, or `MEKO_CALL_HOME=false`.
-- `YB_DISABLE_CALLHOME` set to one of yugabyted's true words (`true`, `t`, `yes`, `y`, `1`), in the
-  server's environment.
+- `YB_DISABLE_CALLHOME` set to one of yugabyted's true words (`true`, `t`, `yes`, `y`, `1`).
+
+The two variables count only in the environment of the process that runs `serve`. Under the login
+service that's the systemd unit's or the launchd plist's (`MEKO_SERVICE` alone), not the shell's that
+ran `meko start`, so an `export` there doesn't reach it. Use the web UI or `config.toml` for a
+release install; the variables suit a server run by hand, or CI.
 
 Config and the environment can only turn usage stats off. When they do, the web UI's checkbox is off
 and disabled, and says what turned it off (`config.toml`, `MEKO_CALL_HOME` or
-`YB_DISABLE_CALLHOME`). `meko status` says whether they're on, and what turned them off.
-`MEKO_CALL_HOME=true` lifts `config.toml`'s `false`, but not `YB_DISABLE_CALLHOME`. Meko never
-writes `config.toml`, so the web UI's setting lives in the store. Meko's switches don't turn off
+`YB_DISABLE_CALLHOME`). `meko status` says whether they're on, where they go (YugabyteDB, or
+the URL config gives) and what turned them off. `MEKO_CALL_HOME=true` lifts `config.toml`'s
+`false`, but not `YB_DISABLE_CALLHOME`. Meko never writes `config.toml`, so the web UI's setting
+lives in the store. Meko's switches don't turn off
 AgentK's usage stats, and AgentK's don't turn off Meko's.
 
 ## Tests
 
 - `internal/callhome`: the envelope and report from a real store, checked to hold no seeded name;
-  the client and tool reduction; the timestamp form; the schedule (hourly the first day, then daily,
+  the client and tool reduction; the timestamp form; a report the service took is recorded even when
+  serve stops right then; the schedule (hourly the first day, then daily,
   across restarts); the first delay; the switches; a failure retried and logged once.
 - `internal/store`: `UsageTotals` and `CallDays`.
 - `internal/config`: `[call_home]`, `MEKO_CALL_HOME`, `MEKO_CALL_HOME_URL` and `YB_DISABLE_CALLHOME`.

@@ -237,11 +237,13 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// usageStatsLine says whether usage stats go to YugabyteDB, and what turned them off.
+// usageStatsLine says whether usage stats are sent, where, and what turned them off.
 func usageStatsLine(u callhome.State) string {
 	switch {
+	case u.Enabled && u.Sends && u.URL == callhome.DefaultURL:
+		return "on (sent to YugabyteDB daily, hourly in an install's first day)"
 	case u.Enabled && u.Sends:
-		return "on (sent to YugabyteDB once a day)"
+		return "on (sent to " + u.URL + ")"
 	case u.Enabled:
 		return "on, but a build from source sends none"
 	case u.By == callhome.OffByWebUI:
