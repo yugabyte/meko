@@ -237,6 +237,46 @@ func WriteFile(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// LooksLikeDataDir reports whether dir is a Meko data folder, so it's safe to remove whole: it
+// holds meko.db, and it isn't / or the home folder. Only a server makes meko.db. Other files aren't
+// proof: the CLI's own commands make run/meko.lock (status, stop) and Ensure's folders and
+// client.token (token) in whatever folder --data-dir names.
+func LooksLikeDataDir(dir string) bool {
+	dir = filepath.Clean(dir)
+	if dir == "/" {
+		return false
+	}
+	if home, err := os.UserHomeDir(); err == nil && sameDir(dir, home) {
+		return false
+	}
+	fi, err := os.Lstat(New(dir).DB)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// sameDir reports whether a and b are the same folder, following symlinks.
+func sameDir(a, b string) bool {
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	rb, err := filepath.EvalSymlinks(b)
+	return err == nil && ra == rb
+}
+
+// DirSize is the total size of the regular files under dir. Files it can't read are skipped.
+func DirSize(dir string) int64 {
+	var n int64
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if fi, ierr := d.Info(); ierr == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
+}
+
 // RemoveIfExists removes path, ignoring a file that's already gone.
 func RemoveIfExists(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {

@@ -10,7 +10,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
+| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, `destroy` (stops the server and removes the data folder), and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
 | `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |

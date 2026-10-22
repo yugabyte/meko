@@ -518,16 +518,23 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	code, _, errs = run("add_memory", "--data-dir", dir, "x", "--datapack", "nope")
 	want(t, "add_memory to a missing datapack", code, 1, errs, `no datapack is named "nope"`)
 
-	// A datapack made, used by name, and deleted only with --yes.
+	// A datapack made, used by name, and deleted only when the answer is yes.
 	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "create_datapack", code, 0, out+errs, "Created datapack scratch-notes (")
 	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "create_datapack twice", code, 1, out+errs, "CONFLICT")
 	code, out, errs = run("add_memory", "--data-dir", dir, "kept in scratch", "--datapack", "scratch-notes")
 	want(t, "add_memory by name", code, 0, out+errs, "Added memory ")
-	code, _, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
-	want(t, "delete_datapack without --yes", code, 1, errs, "Run it again with --yes")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes", "--yes")
+	withStdin(t, "n\n")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
+	want(t, "delete_datapack answered n", code, 1, errs, "Nothing was deleted.")
+	want(t, "delete_datapack's question", code, 1, out, "This deletes datapack scratch-notes and everything "+
+		"in it (memories, conversations, artifacts) for good.\nDelete it? [y/N] ")
+	if _, out, _ = run("datapacks", "--data-dir", dir); !strings.Contains(out, "scratch-notes") {
+		t.Errorf("a declined delete_datapack deleted it:\n%s", out)
+	}
+	withStdin(t, "y\n")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes.")
 	if _, out, _ = run("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
@@ -540,10 +547,226 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 
 	// The default datapack isn't made again, so deleting it says so, and calls that name none then
 	// ask for --datapack.
-	code, _, errs = run("delete_datapack", "--data-dir", dir, "default")
-	want(t, "delete_datapack default without --yes", code, 1, errs, "It's the default datapack")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--yes")
-	want(t, "delete_datapack default", code, 0, out+errs, "Deleted datapack default.")
+	withStdin(t, "")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "default")
+	want(t, "delete_datapack default with no answer", code, 1, out+errs, "It's the default datapack")
+	want(t, "delete_datapack default with no answer", code, 1, errs, "Nothing was deleted.")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--force")
+	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default.")
+	if strings.Contains(out, "Delete it?") {
+		t.Errorf("delete_datapack --force asked:\n%s", out)
+	}
 	code, _, errs = run("add_memory", "--data-dir", dir, "x")
 	want(t, "add_memory with no default", code, 1, errs, "there's no default datapack (it was deleted): pass --datapack")
+}
+
+// withStdin makes text what the commands read as stdin, for one test.
+func withStdin(t *testing.T, text string) {
+	t.Helper()
+	old := stdin
+	stdin = strings.NewReader(text)
+	t.Cleanup(func() { stdin = old })
+}
+
+// gone checks that a destroyed data folder and its renamed copy are both gone.
+func gone(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s is still there: %v", dir, err)
+	}
+	if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+// destroy asks first and removes nothing unless told yes; told yes, it stops the server and
+// removes the folder, and a start afterwards makes a new one.
+func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
+	dir, port := setup(t)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko is running")
+
+	for _, answer := range []string{"n\n", "", "whatever\n"} {
+		withStdin(t, answer)
+		code, out, errs = run("destroy", "--data-dir", dir)
+		want(t, "destroy answered "+strconv.Quote(answer), code, 1, errs, "Nothing was removed.")
+		want(t, "destroy's question", code, 1, out, "Meko is running, so it's stopped first.\nDestroy it? [y/N] ")
+		want(t, "destroy's summary", code, 1, out, "This removes Meko's data in "+dir+" (")
+		code, out, _ = run("status", "--data-dir", dir)
+		want(t, "status after a declined destroy", code, 0, out, "Meko is running.")
+	}
+
+	withStdin(t, "Yes\n")
+	code, out, errs = run("destroy", "--data-dir", dir)
+	// A piped answer isn't echoed, so destroy ends the prompt's line itself.
+	want(t, "destroy", code, 0, out+errs, "Destroy it? [y/N] \nMeko stopped.\nRemoved "+dir+".\n")
+	want(t, "destroy's note", code, 0, out, "its token no longer works: remove it (claude mcp remove meko)")
+	gone(t, dir)
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status after destroy", code, exitNotRunning, out, "isn't running")
+
+	code, out, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start after destroy", code, 0, out+errs, "Meko is running")
+}
+
+func TestDestroyForce(t *testing.T) {
+	dir, _ := setup(t)
+	if err := os.WriteFile(paths.New(dir).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withStdin(t, "")
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy --force", code, 0, out+errs, "Removed "+dir+".")
+	if strings.Contains(out, "Destroy it?") || strings.Contains(out, "Meko stopped") {
+		t.Errorf("destroy --force asked, or stopped a server that wasn't running:\n%s", out)
+	}
+	gone(t, dir)
+}
+
+func TestDestroyNothingThere(t *testing.T) {
+	dir := filepath.Join(shortDir(t), "none")
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of no folder", code, 0, out+errs, "Nothing to remove: there's no data folder at "+dir)
+	empty := shortDir(t)
+	code, out, errs = run("destroy", "--data-dir", empty, "--force")
+	want(t, "destroy of an empty folder", code, 0, out+errs, "Nothing to remove: the data folder "+empty+" is empty.")
+	// A link to an empty folder is left too: there's nothing to remove.
+	link := filepath.Join(shortDir(t), "link")
+	if err := os.Symlink(empty, link); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = run("destroy", "--data-dir", link, "--force")
+	want(t, "destroy of a link to an empty folder", code, 0, out+errs, "is empty.")
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("the link to an empty folder was removed: %v", err)
+	}
+}
+
+// destroy removes only a folder that looks like Meko's, and never the home folder.
+func TestDestroyRefusesAForeignFolder(t *testing.T) {
+	dir := shortDir(t)
+	notes := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(notes, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of a foreign folder", code, 1, errs, "doesn't look like Meko's data folder")
+
+	// A mistyped --data-dir on token (and then status) gives the folder Meko's run/meko.lock,
+	// client.token and empty folders, which still don't make it Meko's.
+	if code, _, errs = run("token", "--data-dir", dir); code != 0 {
+		t.Fatalf("token: %s", errs)
+	}
+	run("status", "--data-dir", dir)
+	if _, err := os.Stat(paths.New(dir).Lock); err != nil {
+		t.Fatalf("status didn't make the lock file, so this doesn't test it: %v", err)
+	}
+	code, _, errs = run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of a folder token and status wrote in", code, 1, errs, "doesn't look like Meko's data folder")
+
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "meko.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs = run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of the home folder", code, 1, errs, "doesn't look like Meko's data folder")
+	if _, err := os.Stat(notes); err != nil {
+		t.Errorf("destroy removed a file it refused to: %v", err)
+	}
+}
+
+// destroy kills a server that ignores SIGTERM, and its recorded child, before removing the folder.
+func TestDestroyKillsAHungServer(t *testing.T) {
+	dir, _ := setup(t)
+	shorten(t, &stopTimeout, time.Second)
+	if err := os.WriteFile(paths.New(dir).DB, nil, 0o600); err != nil { // as a real serve makes
+		t.Fatal(err)
+	}
+	_, child := startHungServe(t, dir)
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of a hung server", code, 0, out+errs, "so it was killed.\nRemoved "+dir+".")
+	waitGone(t, dir, child, "destroy")
+	gone(t, dir)
+}
+
+// A symlinked data folder loses the folder it points to, and then the link.
+func TestDestroyFollowsASymlink(t *testing.T) {
+	target := shortDir(t)
+	if err := os.WriteFile(paths.New(target).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(shortDir(t), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	// destroy names the folder with every symlink resolved, and on macOS /tmp is one (to /private/tmp).
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("destroy", "--data-dir", link, "--force")
+	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+resolved+".")
+	gone(t, target)
+	gone(t, link)
+}
+
+// A folder that can't be moved aside (its parent isn't writable) is left whole, not half removed.
+func TestDestroyLeavesAFolderItCantMove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes in any folder")
+	}
+	parent := shortDir(t)
+	dir := filepath.Join(parent, "meko")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.New(dir).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	code, _, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy in a read-only parent", code, 1, errs, "Nothing was removed")
+	if _, err := os.Stat(paths.New(dir).DB); err != nil {
+		t.Errorf("meko.db is gone: %v", err)
+	}
+}
+
+// When removing the moved folder fails partway, the symlink to it goes anyway: it points at nothing.
+func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes files in any folder")
+	}
+	target := shortDir(t)
+	if err := os.WriteFile(paths.New(target).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stuck := filepath.Join(target, "logs")
+	if err := os.Mkdir(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "meko.log"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		moved, _ := filepath.Glob(target + ".destroying-*")
+		for _, m := range moved {
+			_ = os.Chmod(filepath.Join(m, "logs"), 0o700)
+			_ = os.RemoveAll(m)
+		}
+	})
+	link := filepath.Join(shortDir(t), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("destroy", "--data-dir", link, "--force")
+	want(t, "destroy that fails partway", code, 1, errs, "removing it failed partway")
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("the link to the moved folder is still there: %v", err)
+	}
 }

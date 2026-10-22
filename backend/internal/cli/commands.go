@@ -116,37 +116,43 @@ func startLogTail(l paths.Layout) string {
 	return "  " + strings.Join(lines, "\n  ") + "\n"
 }
 
-// runStop sends SIGTERM to the server, waits for it to release the lock, and kills it if it
-// takes longer than stopTimeout.
 func runStop(l paths.Layout, stdout, stderr io.Writer) int {
-	up, err := running(l.Lock)
+	msg, err := stopServer(l)
 	if err != nil {
 		return fail(stderr, err)
 	}
+	fmt.Fprintln(stdout, msg)
+	return exitOK
+}
+
+// stopServer sends SIGTERM to the server, waits for it to release the lock, and kills it if it
+// takes longer than stopTimeout. It returns what happened, for the user.
+func stopServer(l paths.Layout) (string, error) {
+	up, err := running(l.Lock)
+	if err != nil {
+		return "", err
+	}
 	if !up {
 		cleanRunFiles(l) // left behind if the server was killed
-		fmt.Fprintln(stdout, "Meko isn't running.")
-		return exitOK
+		return "Meko isn't running.", nil
 	}
 	pid, err := readInt(l.Pid)
 	if err != nil {
-		return fail(stderr, fmt.Errorf(
-			"the server is running, but its pid is unknown (%v). Stop the meko serve process yourself", err))
+		return "", fmt.Errorf(
+			"the server is running, but its pid is unknown (%v). Stop the meko serve process yourself", err)
 	}
 	if err = syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		return fail(stderr, fmt.Errorf("can't stop pid %d: %w", pid, err))
+		return "", fmt.Errorf("can't stop pid %d: %w", pid, err)
 	}
 	if waitUnlocked(l.Lock, stopTimeout) {
-		fmt.Fprintln(stdout, "Meko stopped.")
-		return exitOK
+		return "Meko stopped.", nil
 	}
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	if !waitUnlocked(l.Lock, 5*time.Second) {
-		return fail(stderr, fmt.Errorf("pid %d didn't stop, even after SIGKILL", pid))
+		return "", fmt.Errorf("pid %d didn't stop, even after SIGKILL", pid)
 	}
 	cleanRunFiles(l) // and its children, in process groups the SIGKILL didn't reach
-	fmt.Fprintf(stdout, "Meko didn't stop within %s, so it was killed.\n", stopTimeout)
-	return exitOK
+	return fmt.Sprintf("Meko didn't stop within %s, so it was killed.", stopTimeout), nil
 }
 
 func waitUnlocked(lock string, d time.Duration) bool {
