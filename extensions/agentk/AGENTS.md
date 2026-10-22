@@ -5,7 +5,7 @@ should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and
 
 AgentK Local lives in `extensions/agentk` of the meko-local repo; the repo's own
 [AGENTS.md](../../AGENTS.md) covers the rest of it. Paths here are relative to `extensions/agentk`,
-except `.github/`, `.claude/`, `scripts/check-title.sh`, `scripts/ci-scope.sh`, `README.md` and `LICENSE`,
+except `.github/`, `.claude/`, `scripts/check-title.sh`, `scripts/ci-scope.sh` and `LICENSE`,
 which are at the repo root. Run the commands below from `extensions/agentk`.
 
 AgentK Local is a self-hosted web workbench for Claude Code and Kiro CLI (either one is enough). A project is an effort on a feature
@@ -136,7 +136,7 @@ Docs are part of the change. Update them **in the same commit** as the code:
 | When you change… | Update |
 |---|---|
 | Behavior, architecture, lifecycle, security or data model | The part of `docs/design/` that covers it (a new part gets a row in the contents table of `docs/design.md`) |
-| Features, requirements, install steps | The repo root's `README.md` |
+| Features, requirements, install steps | `README.md` (the repo root's README is Meko's, and points here) |
 | Dev setup, checks, release process | `CONTRIBUTING.md` |
 | Module layout, invariants, commands, conventions | `AGENTS.md`: this one, or `src/server/AGENTS.md` or `src/web/AGENTS.md` for a module there (the repo root's for the repo layout and repo-wide rules) |
 | What reviewers should check | `REVIEW.md` |

@@ -18,7 +18,7 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
 | `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, AgentK's releases (in `extensions/agentk`), and Dependabot. |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
-| `README.md`, `LICENSE` | The repo's README (AgentK Local's, for now) and the license for everything in it. |
+| `README.md`, `LICENSE` | The repo's README (Meko: what it is, building it, its commands, and its extensions) and the license for everything in it. AgentK Local's README is `extensions/agentk/README.md`. |
 
 ## Rules for the whole repo
 
