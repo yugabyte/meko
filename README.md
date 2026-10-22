@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="backend/assets/meko-logo-white.svg">
+    <img src="backend/assets/meko-logo.svg" width="220" alt="Meko">
+  </picture>
+</p>
+
 # Meko
 
 Meko is the memory your AI agents share: facts, conversations and files that last across
@@ -84,3 +91,5 @@ Its README covers installing and using it.
 ## License
 
 [Apache-2.0](LICENSE)
+
+The Meko logo in `backend/assets/` is Meko's mark, from Meko Cloud's web app.
