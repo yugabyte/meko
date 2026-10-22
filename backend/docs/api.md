@@ -200,7 +200,8 @@ datapack: Meko makes the default only on first start, and once it's gone `search
 `add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. Milestone 4 adds `meko upload <file>...`, which calls `knowledgebase_upload_document`, posts each
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
-<key>`. `meko ui` opens the web UI ([web-ui.md](web-ui.md)) with the client token in the link's
+<key>`. `meko list mcp-tools` prints each tool with its description's first sentence (`--json` adds titles),
+from the same definitions `/mcp` serves, so it needs no server. `meko ui` opens the web UI ([web-ui.md](web-ui.md)) with the client token in the link's
 fragment (a one-time code, not the token: the link passes through the browser's command line), and `--no-open`
 only prints the link. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
