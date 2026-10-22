@@ -614,6 +614,9 @@ func TestDestroyNothingThere(t *testing.T) {
 	dir := filepath.Join(shortDir(t), "none")
 	code, out, errs := run("destroy", "--data-dir", dir, "--force")
 	want(t, "destroy of no folder", code, 0, out+errs, "Nothing to remove: there's no data folder at "+dir)
+	empty := shortDir(t)
+	code, out, errs = run("destroy", "--data-dir", empty, "--force")
+	want(t, "destroy of an empty folder", code, 0, out+errs, "Nothing to remove: the data folder "+empty+" is empty.")
 }
 
 // destroy removes only a folder that looks like Meko's, and never the home folder.

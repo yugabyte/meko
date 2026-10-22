@@ -33,6 +33,12 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 		}
 		link, l = l.Root, paths.New(target)
 	}
+	// Resolving the default folder on an NFS home makes /var/tmp/<user>/meko, so an empty one is
+	// nothing to remove rather than a folder that isn't Meko's.
+	if entries, rerr := os.ReadDir(l.Root); rerr == nil && len(entries) == 0 {
+		fmt.Fprintf(stdout, "Nothing to remove: the data folder %s is empty.\n", l.Root)
+		return exitOK
+	}
 	if !paths.LooksLikeDataDir(l.Root) {
 		return fail(stderr, fmt.Errorf("%s doesn't look like Meko's data folder (it has no meko.db or "+
 			"run/meko.lock), so it wasn't removed", l.Root))
