@@ -4,6 +4,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
 import { api, type SearchSource } from "../lib/api";
+import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
 import { Segmented } from "../components/Segmented";
@@ -126,10 +127,11 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
     <div className="space-y-6">
       <form onSubmit={submit} className="flex gap-2">
         <Input
+          id={SEARCH_INPUT_ID}
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Ask what this datapack knows, e.g. “what do I like?”"
+          placeholder="Ask what this datapack knows, e.g. “what do I like?” (press / from anywhere)"
         />
         <Button variant="primary" disabled={busy || !query.trim()}>
           {busy ? <Spinner className="text-primary-foreground" /> : <Search className="size-4" />} Search
