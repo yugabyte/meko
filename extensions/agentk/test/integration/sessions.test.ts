@@ -291,6 +291,39 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(order()).toEqual(['Two', 'One']);
   });
 
+  it('keeps a session set aside to revisit through its turns until the time comes or the user clears it', async () => {
+    const p = await newProject();
+    env.core.projects.update(p.id, { settings: { notify: true } });
+    const notes: { title: string }[] = [];
+    env.core.on('notify', (n) => notes.push(n));
+    const s = await env.core.sessions.create(p.id, { name: 'Waiting on CI', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+
+    const before = Date.now();
+    const at = (await env.core.sessions.edit(s.id, { revisitMinutes: 30 })).revisitAt!;
+    expect(at - before).toBeGreaterThanOrEqual(30 * 60_000);
+    expect(at - Date.now()).toBeLessThanOrEqual(30 * 60_000);
+    await env.core.sessions.submit(s.id, 'more');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
+    expect(env.core.sessions.get(s.id).revisitAt).toBe(at);
+
+    for (const bad of [0, 1.5, 7 * 24 * 60 + 1, '30']) {
+      await expect(env.core.sessions.edit(s.id, { revisitMinutes: bad as number })).rejects.toMatchObject({ status: 400 });
+    }
+    env.core.sessions.expireRevisits(at - 1);
+    expect(env.core.sessions.get(s.id).revisitAt).toBe(at);
+    env.core.sessions.expireRevisits(at);
+    expect(env.core.sessions.get(s.id).revisitAt).toBeNull();
+    expect(notes.map((n) => n.title)).toEqual(['Waiting on CI: Time to revisit']);
+
+    await env.core.sessions.edit(s.id, { revisitMinutes: 60 });
+    expect((await env.core.sessions.edit(s.id, { revisitMinutes: null })).revisitAt).toBeNull();
+    await env.core.sessions.edit(s.id, { revisitMinutes: 60 });
+    await env.core.sessions.action(s.id, 'archive');
+    expect(env.core.sessions.row(s.id).revisit_at).toBeNull();
+    await expect(env.core.sessions.edit(s.id, { revisitMinutes: 5 })).rejects.toMatchObject({ status: 409 });
+  });
+
   it("changes a session's base to a branch it can be compared with, and refuses one it can't have", async () => {
     const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'ignore' });
     // A release branch one file past main, and a branch with no history in common.

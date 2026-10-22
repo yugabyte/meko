@@ -19,10 +19,10 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, revisitWhen, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RevisitChip, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -84,6 +84,7 @@ export function ProjectView({
   onOpenPr,
   onRename,
   onToTop,
+  onRevisit,
   onMenu,
   showTabs,
   harnessLogos,
@@ -103,6 +104,8 @@ export function ProjectView({
   onRename: (sessionId: string) => void;
   /** Moves a session to the top of the project's list (the ⋯ sheet; the rail has its own button). */
   onToTop: (sessionId: string) => void;
+  /** Opens Revisit later for a session. */
+  onRevisit: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   /** Show the session tabs, above the terminal or in a phone's app bar: the rail doesn't list the sessions, or (the wide layout only) is hidden. */
@@ -309,6 +312,7 @@ export function ProjectView({
           <StatusDot status={dotState(s)} phase={s.id} />
           {harnessLogos && <HarnessLogo harness={s.harness} />}
           <span className="tab-name">{s.name}</span>
+          {s.revisitAt !== null && <RevisitChip until={s.revisitAt} />}
           <span className="stchip">{STAGE_LABELS[s.stage]}</span>
         </button>
       ))}
@@ -470,6 +474,11 @@ export function ProjectView({
           {!mobile && contextText(false)}
           {!mobile && mekoText}
           {stageText}
+          {session.revisitAt !== null && (
+            <button className="foot-btn" onClick={() => onRevisit(session.id)} title="Change or clear when to revisit this session">
+              Revisit at {revisitWhen(session.revisitAt)}
+            </button>
+          )}
         </footer>
       )}
 
@@ -530,6 +539,7 @@ export function ProjectView({
           onMove={() => onMove()}
           onRename={() => onRename(session.id)}
           onToTop={sessions[0]?.id !== session.id ? () => onToTop(session.id) : undefined}
+          onRevisit={() => onRevisit(session.id)}
           onAct={act}
           onClose={() => setSheet(false)}
         />

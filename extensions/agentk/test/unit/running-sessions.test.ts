@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProjectWithSessions, QueuedGate, Session, SessionStatus } from '../../src/shared/types.js';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkOffsetMs, totalUnits } from '../../src/web/blink.js';
 import { StatusDot } from '../../src/web/components/common.js';
-import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, harnessLogos, offersLearn, runningSessions, type DotState } from '../../src/web/util.js';
+import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, harnessLogos, offersLearn, revisitLeft, runningSessions, type DotState } from '../../src/web/util.js';
 
 const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false, queued: QueuedGate | null = null) =>
   ({ id: status, status, desired, learning, mekoCall, queued, mergeBlockers: [] as string[] }) as Session;
@@ -50,6 +50,28 @@ describe('dotState', () => {
     expect(dotState({ status, learning, mekoCall, queued })).toBe(dot);
   });
 
+  it.each([
+    [10_000, '1m'],
+    [42 * 60_000, '42m'],
+    [60 * 60_000, '1h'],
+    [65 * 60_000, '1h 5m'],
+    [24 * 60 * 60_000, '1d'],
+    [51 * 60 * 60_000, '2d 3h'],
+  ])('says %i ms to a revisit as %s', (ms, text) => {
+    expect(revisitLeft(ms, 0)).toBe(text);
+  });
+
+  // Revisit later shows over everything but a Claude that isn't there.
+  it.each<[SessionStatus, boolean, DotState]>([
+    ['idle', false, 'revisit'],
+    ['working', false, 'revisit'],
+    ['needs_input', false, 'revisit'],
+    ['idle', true, 'revisit'],
+    ['exited', false, 'exited'],
+  ])('%s, learning %s, set aside to revisit → %s', (status, learning, dot) => {
+    expect(dotState({ status, learning, mekoCall: false, queued: null, revisitAt: 1 })).toBe(dot);
+  });
+
   it('ranks learning in the rail like working (over idle, under needs you), a Meko call over both, and a queued gate over idle, under working', () => {
     const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
     expect(aggregateDot(project(session('idle'), session('idle', 'running', true)))).toBe('learning');
@@ -58,6 +80,8 @@ describe('dotState', () => {
     expect(aggregateDot(project(session('working', 'running', false, true), session('exited')))).toBe('exited');
     expect(aggregateDot(project(session('idle'), session('recovered'), session('idle', 'running', false, false, 'merge')))).toBe('queued');
     expect(aggregateDot(project(session('idle', 'running', false, false, 'merge'), session('working')))).toBe('working');
+    // A session set aside to revisit ranks under idle, so it never draws the eye to its project.
+    expect(aggregateDot(project(session('idle'), { ...session('needs_input'), revisitAt: 1 }))).toBe('idle');
   });
 
   it.each<[QueuedGate, string]>([

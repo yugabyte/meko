@@ -55,6 +55,8 @@ export function CommandPalette({
   onOpenPr,
   onRenameSession,
   onSessionToTop,
+  onRevisitSession,
+  onRevisitNow,
   onSettings,
   onStarted,
   askAgentk,
@@ -77,6 +79,10 @@ export function CommandPalette({
   onRenameSession: () => void;
   /** Moves the session on screen to the top of its project's list; left out when it's already there. */
   onSessionToTop?: () => void;
+  /** Opens Revisit later for the session on screen. */
+  onRevisitSession: () => void;
+  /** Clears the session on screen's revisit time; left out when it isn't set aside. */
+  onRevisitNow?: () => void;
   onSettings: () => void;
   /** A session started from a pasted link (in a project it may just have opened), or one AgentK proposed. */
   onStarted: (r: StartFromLinkResult) => void;
@@ -375,6 +381,24 @@ export function CommandPalette({
     }
     if (currentSession) {
       out.push({
+        id: 'revisit-session',
+        label: ['Revisit ', { session: currentSession.name }, ' later'],
+        hint: 'Action',
+        keywords: 'revisit later timer snooze remind wait aside clock',
+        run: onRevisitSession,
+      });
+    }
+    if (currentSession && onRevisitNow) {
+      out.push({
+        id: 'revisit-now',
+        label: ['Revisit ', { session: currentSession.name }, ' now'],
+        hint: 'Action',
+        keywords: 'revisit now clear timer snooze unsnooze',
+        run: onRevisitNow,
+      });
+    }
+    if (currentSession) {
+      out.push({
         id: 'attach-files',
         label: ['Attach files to ', { session: currentSession.name }],
         hint: 'Action',
@@ -426,7 +450,7 @@ export function CommandPalette({
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onRevisitSession, onRevisitNow, onSettings]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];

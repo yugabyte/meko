@@ -84,6 +84,8 @@ const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 /** How often images staged in the New session dialog that no session started with are looked for. */
 const STAGED_SWEEP_MS = 60 * 60 * 1000;
+/** How often revisit times that have come are cleared: a session comes back at most this late. */
+const REVISIT_SWEEP_MS = 15_000;
 /** How long a read of Kiro's Meko setup is reused (the state is pushed often). */
 const KIRO_MEKO_TTL_MS = 10_000;
 
@@ -477,6 +479,7 @@ export class Core extends EventEmitter {
       this.every(5000, () => this.sessions.reconcile());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
+      this.every(REVISIT_SWEEP_MS, () => this.sessions.expireRevisits(Date.now()));
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
       this.every(KIRO_PLAN_EVERY_MS, () => this.kiroPlan.refresh());
       this.every(INVITE_SYNC_MS, () => this.invites.sync());

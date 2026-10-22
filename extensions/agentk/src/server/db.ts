@@ -614,6 +614,10 @@ const MIGRATIONS: string[] = [
   UPDATE sessions SET position = (SELECT COUNT(*) FROM sessions o WHERE o.project_id = sessions.project_id
     AND (o.created_at < sessions.created_at OR (o.created_at = sessions.created_at AND o.id < sessions.id)));
   `,
+  // 40: revisit_at: when the user wants to revisit a session (ms), NULL when not set aside; cleared when it comes.
+  `
+  ALTER TABLE sessions ADD COLUMN revisit_at INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {

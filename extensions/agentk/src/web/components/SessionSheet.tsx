@@ -4,7 +4,7 @@ import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { setTerminalFontSize, terminalFontSize } from '../terminals';
-import { agentName, discardingText } from '../util';
+import { agentName, discardingText, revisitWhen } from '../util';
 import { Busy, Elapsed, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -264,6 +264,7 @@ export function SessionSheet({
   onMove,
   onRename,
   onToTop,
+  onRevisit,
   onAct,
   onClose,
 }: {
@@ -295,6 +296,8 @@ export function SessionSheet({
   onRename: () => void;
   /** Moves the session to the top of its project's list; left out when it's already there. */
   onToTop?: () => void;
+  /** Opens Revisit later. */
+  onRevisit: () => void;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   onClose: () => void;
 }) {
@@ -341,6 +344,9 @@ export function SessionSheet({
           Rename session
         </SheetItem>
         {onToTop && <SheetItem onClick={then(onToTop)}>Move to top</SheetItem>}
+        <SheetItem hint="›" onClick={then(onRevisit)}>
+          {session.revisitAt !== null ? `Revisit later: ${revisitWhen(session.revisitAt)}` : 'Revisit later'}
+        </SheetItem>
         {onMekoCalls && (
           <SheetItem hint="›" onClick={then(onMekoCalls)}>
             Meko calls

@@ -647,6 +647,50 @@ textarea.input {
 .dot.queued {
   border-top-color: transparent;
 }
+/* Set aside to revisit later: a muted clock face, still, in the idle ring's 10px box. */
+.dot.revisit {
+  position: relative;
+  border: 1.5px solid var(--muted);
+  opacity: 0.8;
+}
+.dot.revisit::before,
+.dot.revisit::after {
+  content: '';
+  position: absolute;
+  left: calc(50% - 0.75px);
+  bottom: 50%;
+  width: 1.5px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--muted);
+  transform-origin: 50% 100%;
+}
+.dot.revisit::after {
+  height: 2.5px;
+  transform: rotate(90deg);
+}
+.revisit-chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.revisit-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.revisit-custom-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.revisit-custom-row .input:first-child {
+  width: 6em;
+}
+.revisit-custom-row select.input {
+  width: auto;
+}
 /* The selected tab is the terminal's near-black in both themes: the light theme's accent is lost on it. */
 .tab.sel .dot.learning {
   --accent: #86a4ff;
@@ -871,11 +915,16 @@ textarea.input {
   position: relative;
   display: grid;
 }
-.rail-sess-top {
+/* The hover tray (revisit later, move to top) covers the chips at the row's right end while it shows. */
+.rail-sess-acts {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
+  display: flex;
+  visibility: hidden;
+}
+.rail-sess-act {
   width: 28px;
   display: grid;
   place-items: center;
@@ -884,17 +933,16 @@ textarea.input {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  visibility: hidden;
 }
-.rail-sess-row:hover .rail-sess-top,
-.rail-sess-row:focus-within .rail-sess-top {
+.rail-sess-row:hover .rail-sess-acts,
+.rail-sess-row:focus-within .rail-sess-acts {
   visibility: visible;
 }
-.rail-sess-row:hover:has(.rail-sess-top) .stchip,
-.rail-sess-row:focus-within:has(.rail-sess-top) .stchip {
+.rail-sess-row:hover:has(.rail-sess-acts) :is(.stchip, .revisit-chip),
+.rail-sess-row:focus-within:has(.rail-sess-acts) :is(.stchip, .revisit-chip) {
   visibility: hidden;
 }
-.rail-sess-top:hover {
+.rail-sess-act:hover {
   color: var(--accent);
 }
 .rail-sess-new {

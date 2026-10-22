@@ -221,6 +221,10 @@ your phone can connect.
   session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
   button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab, or its row in the rail): its branch and worktree keep their names.
+- **Revisit later:** waiting on CI or on someone? Set a session aside for 15 minutes to 4 hours, or any
+  time up to a week. Its dot turns into a quiet clock that the project's dot ignores, so scanning for
+  what needs you skips it, even while you keep talking to it. When the time comes, it shows its
+  status again (with a notification, if the project sends them).
 - **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each

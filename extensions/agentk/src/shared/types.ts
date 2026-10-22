@@ -827,6 +827,11 @@ export interface Session {
   lastEventAt: number | null;
   /** Its place in the project's list, lowest first: a new session, or one moved to the top, goes first. */
   position: number;
+  /**
+   * Revisit later: when the user wants to look at the session again (ms); null when it isn't set aside.
+   * Until then its dot shows the revisit mark instead of its status; the server clears it when the time comes.
+   */
+  revisitAt: number | null;
   createdAt: number;
   archivedAt: number | null;
   recoveredAt: number | null;
@@ -2030,7 +2035,12 @@ export interface UpdateSessionRequest {
   baseBranch?: string;
   /** Moves the session to the top of its project's list. */
   toTop?: boolean;
+  /** Sets the session aside to revisit this many minutes from now (1 to REVISIT_MAX_MINUTES); null clears it. */
+  revisitMinutes?: number | null;
 }
+
+/** The furthest off a session can be set aside to revisit: a week. */
+export const REVISIT_MAX_MINUTES = 7 * 24 * 60;
 
 export interface AttachDatapackRequest {
   id: string;
@@ -2335,7 +2345,9 @@ export type TermServerMessage =
 //        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
 //        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
 //        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
-//        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session)
+//        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session.
+//        revisitMinutes sets it aside to revisit that many minutes from now, replacing any earlier time, or null clears it; 400
+//        for anything but a whole number from 1 to REVISIT_MAX_MINUTES or null, 409 for an archived session)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
 //        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)

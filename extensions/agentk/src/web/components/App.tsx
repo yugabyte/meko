@@ -33,6 +33,7 @@ import { NewProjectDialog } from './NewProjectDialog';
 import { MoveSessionDialog, type MovePreset } from './MoveSessionDialog';
 import { OpenPrDialog } from './OpenPrDialog';
 import { RenameSessionDialog } from './RenameSessionDialog';
+import { RevisitDialog } from './RevisitDialog';
 import { NewSessionDialog } from './NewSessionDialog';
 import { DesignPanel } from './DesignPanel';
 import { ProjectHomeView } from './ProjectHome';
@@ -63,6 +64,8 @@ type Modal =
   /** Open PR with instructions for AgentK. */
   | { kind: 'open-pr'; sessionId: string }
   | { kind: 'rename'; sessionId: string }
+  /** Revisit later: set a session aside until a time, or change or clear it. */
+  | { kind: 'revisit'; sessionId: string }
   /** What's new from one version to another (the update banners, Settings). */
   | { kind: 'whats-new'; from: string; to: string };
 
@@ -405,6 +408,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }
   };
 
+  const revisitNow = async (id: string) => {
+    try {
+      await api.updateSession(id, { revisitMinutes: null });
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+  };
+
   // A New session dialog whose project was closed meanwhile closes. One for a project just opened
   // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
@@ -425,6 +436,11 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
   useEffect(() => {
     if (state && modalKind === 'rename' && !renameSession) setModal({ kind: 'none' });
   }, [state, modalKind, renameSession]);
+  const revisitSession =
+    modal.kind === 'revisit' ? projects.flatMap((p) => p.sessions).find((s) => s.id === modal.sessionId && s.desired === 'running') : undefined;
+  useEffect(() => {
+    if (state && modalKind === 'revisit' && !revisitSession) setModal({ kind: 'none' });
+  }, [state, modalKind, revisitSession]);
   useEffect(() => {
     if (state && modalKind === 'new-session' && !newSessionProject) setModal({ kind: 'none' });
   }, [state, modalKind, newSessionProject]);
@@ -519,6 +535,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         }}
         onRenameSession={(sessionId) => setModal({ kind: 'rename', sessionId })}
         onSessionToTop={(sessionId) => void sessionToTop(sessionId)}
+        onSessionRevisit={(sessionId) => setModal({ kind: 'revisit', sessionId })}
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
@@ -578,6 +595,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
             onToTop={(sessionId) => void sessionToTop(sessionId)}
+            onRevisit={(sessionId) => setModal({ kind: 'revisit', sessionId })}
             onMenu={openDrawer}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
@@ -652,6 +670,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         />
       )}
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
+      {revisitSession && <RevisitDialog key={revisitSession.id} session={revisitSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
         <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
@@ -669,6 +688,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSessionToTop={currentSession && live[0]?.id !== currentSession.id ? () => void sessionToTop(currentSession.id) : undefined}
+          onRevisitSession={() => currentSession && setModal({ kind: 'revisit', sessionId: currentSession.id })}
+          onRevisitNow={currentSession?.revisitAt != null ? () => void revisitNow(currentSession.id) : undefined}
           onSettings={() => setModal({ kind: 'settings' })}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}

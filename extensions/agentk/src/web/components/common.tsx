@@ -5,7 +5,7 @@ import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, revisitWhen, revisitLeft, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
 const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', kiro: '/harness-kiro.svg' };
 
@@ -70,7 +70,8 @@ export function AgentPicker({
 
 /**
  * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
- * ring with a gap, turning, and `meko` the working dot with Meko's m in it (`dotState()`). Working
+ * ring with a gap, turning, `meko` the working dot with Meko's m in it, and `revisit` a still, muted
+ * clock face (`dotState()`). Working
  * (`meko` too) and needs-you dots blink their halo (`blink.ts`), each `phase` (the session's or
  * project's id) at its own point in the signal.
  */
@@ -356,6 +357,16 @@ export function Busy({ label }: { label: string }) {
 }
 
 /** How long something has been running, since `since` (ms), ticking every second; hidden from screen readers. */
+/** How long until a session set aside is to be revisited (42m, 1h 5m), kept current. */
+export function RevisitChip({ until }: { until: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="revisit-chip" title={`Revisit at ${revisitWhen(until, now)}`}>{revisitLeft(until, now)}</span>;
+}
+
 export function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

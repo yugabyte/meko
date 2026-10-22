@@ -6,10 +6,10 @@ import type { ClaudeCodeStatus, HarnessStatus, LearnProgress, MekoFirstTurn, Mek
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
- * Meko, `queued` while a gate waits to go between turns, or `meko` while Claude runs a Meko tool
- * call in a working turn.
+ * Meko, `queued` while a gate waits to go between turns, `meko` while Claude runs a Meko tool
+ * call in a working turn, or `revisit` while the user has set it aside to revisit later.
  */
-export type DotState = SessionStatus | 'learning' | 'queued' | 'meko';
+export type DotState = SessionStatus | 'learning' | 'queued' | 'meko' | 'revisit';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<DotState, number> = {
@@ -24,6 +24,8 @@ const URGENCY: Record<DotState, number> = {
   queued: 4,
   recovered: 3,
   idle: 2,
+  // Below idle, so a session set aside to revisit never draws the eye to its project.
+  revisit: 1,
   archived: 0,
 };
 
@@ -164,10 +166,17 @@ const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered',
 const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
 
 /**
- * What a session's dot shows: `Session.learning` over idle, recovered and working, then
- * `Session.queued` over idle and recovered, then `Session.mekoCall` over working.
+ * What a session's dot shows: revisit later over everything but exited, then `Session.learning` over
+ * idle, recovered and working, then `Session.queued` over idle and recovered, then
+ * `Session.mekoCall` over working.
  */
-export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall'>): DotState {
+export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall'> & Partial<Pick<Session, 'revisitAt'>>): DotState {
+  if (s.revisitAt != null && s.status !== 'exited') return 'revisit';
+  return statusDot(s);
+}
+
+/** What the dot shows under revisit later. */
+function statusDot(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall'>): DotState {
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
   if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
   return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
@@ -194,7 +203,33 @@ export const STATUS_TEXT: Record<DotState, string> = {
   learning: 'learning',
   queued: 'queued',
   meko: 'calling Meko',
+  revisit: 'revisit later',
 };
+
+/** Revisit later's choices; Custom takes any number of minutes or hours up to REVISIT_MAX_MINUTES. */
+export const REVISIT_PRESETS: { label: string; minutes: number }[] = [
+  { label: '15 min', minutes: 15 },
+  { label: '30 min', minutes: 30 },
+  { label: '1 hour', minutes: 60 },
+  { label: '2 hours', minutes: 120 },
+  { label: '4 hours', minutes: 240 },
+];
+
+/** How long until a revisit, short: 42m, 1h 5m, 2d 3h. Never below 1m while it's set. */
+export function revisitLeft(until: number, now = Date.now()): string {
+  const m = Math.max(1, Math.ceil((until - now) / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`;
+}
+
+/** When a revisit is due, in words: "3:15 PM", or with its day when that isn't today. */
+export function revisitWhen(until: number, now = Date.now()): string {
+  const d = new Date(until);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date(now).toDateString() ? time : `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${time}`;
+}
 
 /** A learning dot's tooltip. */
 export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
@@ -657,8 +692,11 @@ export function sessionTabTitle(s: Session): string {
  * waits on. The queued dot shows between turns, when a queued Open PR is already going (the pill's
  * "goes when the turn ends" is for mid-turn).
  */
-export function dotTitle(s: Session): string {
+export function dotTitle(s: Session, now = Date.now()): string {
   const dot = dotState(s);
+  if (dot === 'revisit' && s.revisitAt !== null) {
+    return `revisit at ${revisitWhen(s.revisitAt, now)}, in ${revisitLeft(s.revisitAt, now)} (${STATUS_TEXT[statusDot(s)]})`;
+  }
   if (dot === 'learning') return LEARNING_TITLE;
   if (dot === 'queued') return s.queued === 'open-pr' ? 'Open PR queued: going now' : (queuedText(s)?.replace(/^✓ /, '') ?? STATUS_TEXT.queued);
   return STATUS_TEXT[dot];

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
-import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
+import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS, REVISIT_MAX_MINUTES } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffBase, diffStat, suggestBase } from './changes.js';
@@ -1863,13 +1863,34 @@ export class SessionManager {
     return this.get(id);
   }
 
-  /** `PATCH /api/sessions/:id`: a new base (setBase), Move to top (toTop), then a new name (rename); a bad name changes none. */
+  /** `PATCH /api/sessions/:id`: a new base (setBase), Move to top (toTop), revisit later (setRevisit), then a new name (rename); a bad name changes none. */
   async edit(id: string, req: UpdateSessionRequest): Promise<Session> {
     if (req.name !== undefined) sessionName(req.name);
     if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
+    if (req.revisitMinutes !== undefined && req.revisitMinutes !== null
+      && !(Number.isInteger(req.revisitMinutes) && req.revisitMinutes >= 1 && req.revisitMinutes <= REVISIT_MAX_MINUTES)) {
+      throw new HttpError(400, `Revisit later takes a whole number of minutes from 1 to ${REVISIT_MAX_MINUTES} (a week).`);
+    }
     if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
     if (req.toTop) this.toTop(id);
+    if (req.revisitMinutes !== undefined) this.setRevisit(id, req.revisitMinutes);
     return this.rename(id, { name: req.name });
+  }
+
+  /** Sets a session aside to revisit `minutes` from now, replacing any earlier time; null clears it. */
+  setRevisit(id: string, minutes: number | null): void {
+    const r = this.row(id);
+    if (r.desired === 'archived') throw new HttpError(409, 'This session is archived, so it can\'t be set aside to revisit.');
+    this.update(id, { revisit_at: minutes === null ? null : Date.now() + minutes * 60_000 });
+  }
+
+  /** Clears the revisit times that have come by `now`, and tells the user about each session. */
+  expireRevisits(now: number): void {
+    const ended = all<{ id: string }>(this.db, 'SELECT id FROM sessions WHERE revisit_at IS NOT NULL AND revisit_at <= ?', now);
+    for (const { id } of ended) {
+      this.update(id, { revisit_at: null });
+      this.notifyUser(id, 'Time to revisit', 'You set this session aside to revisit now.');
+    }
   }
 
   /** Puts a session first in its project's list: one below the lowest position, so no other row moves. */
@@ -2106,7 +2127,7 @@ export class SessionManager {
     this.stopping.add(row.id);
     try {
       this.ingestUsage(row.id);
-      run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', discarding = 0, archived_at = COALESCE(?, archived_at) WHERE id = ?`,
+      run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', discarding = 0, revisit_at = NULL, archived_at = COALESCE(?, archived_at) WHERE id = ?`,
         wasArchived ? null : Date.now(), row.id);
       await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
       await this.core.host.kill(row.tmux_name);

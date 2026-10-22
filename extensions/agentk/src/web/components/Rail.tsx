@@ -4,7 +4,7 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { HarnessLogo, Ring, StatusDot } from './common';
+import { HarnessLogo, Ring, StatusDot, RevisitChip } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
@@ -28,6 +28,7 @@ export function Rail({
   onNewSession,
   onRenameSession,
   onSessionToTop,
+  onSessionRevisit,
   onNewProject,
   onSettings,
   onLogout,
@@ -67,6 +68,8 @@ export function Rail({
   onRenameSession: (sessionId: string) => void;
   /** A session's ↑ button, shown on hover; touch screens use Move to top in the ⋯ sheet or the palette. */
   onSessionToTop: (sessionId: string) => void;
+  /** A session's clock button, shown on hover, opens Revisit later; touch screens use the ⋯ sheet or the palette. */
+  onSessionRevisit: (sessionId: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
   /** Signs out; left out when there's no login (local access). */
@@ -205,19 +208,35 @@ export function Rail({
                         <StatusDot status={dotState(s)} phase={s.id} />
                         {harnessLogos && <HarnessLogo harness={s.harness} />}
                         <span className="rail-sess-name">{s.name}</span>
+                        {s.revisitAt !== null && <RevisitChip until={s.revisitAt} />}
                         <span className="stchip">{STAGE_LABELS[s.stage]}</span>
                       </button>
-                      {j > 0 && !touch && (
-                        <button
-                          className="rail-sess-top"
-                          onClick={() => onSessionToTop(s.id)}
-                          aria-label={`Move ${s.name} to top`}
-                          title="Move to top"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M5 4h14 M12 20V9 M7 13l5-5 5 5" />
-                          </svg>
-                        </button>
+                      {!touch && (
+                        <span className="rail-sess-acts">
+                          <button
+                            className="rail-sess-act"
+                            onClick={() => onSessionRevisit(s.id)}
+                            aria-label={`Revisit ${s.name} later`}
+                            title="Revisit later"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <circle cx="12" cy="13" r="8" />
+                              <path d="M12 9v4l2.5 2.5 M10 2h4" />
+                            </svg>
+                          </button>
+                          {j > 0 && (
+                            <button
+                              className="rail-sess-act"
+                              onClick={() => onSessionToTop(s.id)}
+                              aria-label={`Move ${s.name} to top`}
+                              title="Move to top"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M5 4h14 M12 20V9 M7 13l5-5 5 5" />
+                              </svg>
+                            </button>
+                          )}
+                        </span>
                       )}
                     </div>
                   ))}

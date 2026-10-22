@@ -84,6 +84,8 @@ export interface SessionRow {
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
   position: number;
+  /** When the user wants to revisit the session (ms); NULL when it isn't set aside. */
+  revisit_at: number | null;
   /** Prompts waiting for Claude: JSON map of prompt name to { state, vars }. */
   pending_prompts: string;
   /** The PR head that last got a CI-fix prompt (or was handed to the user after the cap). */
@@ -319,6 +321,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
     position: r.position,
+    revisitAt: r.revisit_at,
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,
