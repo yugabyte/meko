@@ -176,6 +176,18 @@ export interface ArtifactList {
   has_more: boolean;
 }
 
+// GET .../knowledge-bases/activity-log: files uploaded and memories promoted, newest first.
+export interface KnowledgeActivity {
+  type: "file_upload" | "memory_promotion" | string;
+  timestamp: string;
+  document_name?: string; // a file's key, ending in its name
+  chunks_processed?: number;
+  size_bytes?: number;
+  memory_id?: string;
+  content?: string; // a promoted memory's text
+  agent_id?: string;
+}
+
 export interface ProvisionStatus {
   mcp_server_url: string;
   mcp_api_key: string;

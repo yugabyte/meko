@@ -95,7 +95,7 @@ export default function App() {
                 {route.tab === "overview" && <OverviewPage datapack={current.data} />}
                 {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}
-                {route.tab === "memories" && <MemoriesPage datapack={current.data} onChanged={onChanged} />}
+                {route.tab === "memories" && <MemoriesPage datapack={current.data} routeScope={route.itemId} onChanged={onChanged} />}
                 {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "conversations" && (
                   <ConversationsPage datapack={current.data} conversationId={route.itemId} />

@@ -1,9 +1,10 @@
-// The datapack's memories: add one, filter, page, and select several to delete, or (learnings) to
-// keep or promote into the collective memory.
+// The datapack's memories: add one, filter, page, delete one, and select several to delete, or
+// (learnings) to keep or promote into the collective memory.
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Brain, Check, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
+import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
@@ -19,13 +20,30 @@ const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "promoted", label: "Collective" },
 ];
 
-export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onChanged: () => void }) {
+// routeScope is the scope in the address (/datapacks/<id>/memories/<scope>), so a link can open
+// Learnings or Collective directly.
+export function MemoriesPage({
+  datapack,
+  routeScope,
+  onChanged,
+}: {
+  datapack: Datapack;
+  routeScope?: string;
+  onChanged: () => void;
+}) {
   const id = datapack.datapack_id;
-  const [scope, setScope] = useState<Scope>("memories");
+  const scope: Scope = SCOPES.some((s) => s.id === routeScope) ? (routeScope as Scope) : "memories";
+  const setScope = (v: Scope) =>
+    navigate({ datapackId: id, tab: "memories", itemId: v === "memories" ? undefined : v });
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [actionError, setActionError] = useState<Error>();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // A new scope, from the tabs or a link, starts on its first page with nothing selected.
+  useEffect(() => {
+    setPage(1);
+    setSelected(new Set());
+  }, [scope]);
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -54,7 +72,7 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
       <AddMemory onAdd={(text) => act(() => api.addMemory(id, text))} />
 
       <div className="flex flex-wrap items-center gap-3">
-        <Segmented options={SCOPES} value={scope} onChange={(v) => (setScope(v), setPage(1), setSelected(new Set()))} />
+        <Segmented options={SCOPES} value={scope} onChange={setScope} />
         {scope !== "promoted" && (
           <Input
             className="max-w-xs"
@@ -79,9 +97,23 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
         ) : (
           <Card className="divide-y">
             {promoted.data.promoted_memories.map((m) => (
-              <div key={m.id} className="flex items-start justify-between gap-4 p-3">
+              <div key={m.id} className="group flex items-start justify-between gap-4 p-3">
                 <p className="text-sm">{m.data}</p>
-                <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    title="Delete from the collective memory"
+                    className="opacity-60 group-hover:opacity-100"
+                    onClick={() =>
+                      confirm("Delete this collective memory? Every agent stops finding it.") &&
+                      act(() => api.deletePromoted(id, m.id))
+                    }
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
               </div>
             ))}
           </Card>
@@ -106,20 +138,29 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
           />
           <Card className="divide-y">
             {list.data.memories.map((m) => (
-              <label key={m.id} className="flex cursor-pointer items-start gap-3 p-3 hover:bg-accent/50">
+              <label key={m.id} className="group flex cursor-pointer items-start gap-3 p-3 hover:bg-accent/50">
                 <input
                   type="checkbox"
                   className="mt-1 accent-primary"
                   checked={selected.has(m.id)}
                   onChange={() => setSelected(toggle(selected, m.id))}
                 />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm">{m.data}</p>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                     <Badge>{m.agent_id}</Badge>
                     {timeAgo(m.created_at)}
                   </div>
                 </div>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  title="Delete this memory"
+                  className="shrink-0 opacity-60 group-hover:opacity-100"
+                  onClick={() => confirm("Delete this memory?") && void act(() => api.deleteMemory(id, m.id))}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
               </label>
             ))}
           </Card>

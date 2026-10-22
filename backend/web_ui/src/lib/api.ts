@@ -11,6 +11,7 @@ import type {
   Datapack,
   DocumentList,
   Health,
+  KnowledgeActivity,
   MemoryPage,
   Metrics,
   PromotedMemory,
@@ -111,6 +112,8 @@ export const api = {
     request<unknown>("POST", "/promote-memories", { datapack_id: id, memory_ids: memoryIds }),
   keep: (id: string, memoryIds: string[]) =>
     request<unknown>("POST", "/keep-as-memory", { datapack_id: id, memory_ids: memoryIds }),
+  deletePromoted: (id: string, memoryId: string) =>
+    request<unknown>("DELETE", `/promoted-memories/${memoryId}?datapack_id=${id}`),
   promoted: (id: string) =>
     request<{ promoted_memories: PromotedMemory[]; total: number }>("GET", `/promoted-memories?datapack_id=${id}`),
   addMemory: (id: string, text: string) =>
@@ -133,6 +136,11 @@ export const api = {
     request<DocumentList>("GET", `/datapacks/${id}/knowledge-bases/documents?q=${enc(q)}&page_size=200`),
   deleteDocument: (id: string, docId: string) =>
     request<unknown>("DELETE", `/datapacks/${id}/knowledge-bases/documents/${docId}`),
+  activity: (id: string, cursor: string) =>
+    request<{ items: KnowledgeActivity[]; has_more: boolean; next_cursor: string }>(
+      "GET",
+      `/datapacks/${id}/knowledge-bases/activity-log?limit=20&cursor=${enc(cursor)}`,
+    ),
   downloadURL: (id: string, uri: string) =>
     request<{ url: string }>("POST", `/datapacks/${id}/knowledge-bases/download-url`, { document_uri: uri }),
 
