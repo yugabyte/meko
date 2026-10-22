@@ -1,5 +1,6 @@
 /* Theme tokens: Meko's navy surfaces and orange primary, light and dark (the .dark class on
-   <html>). Components use the Tailwind colors mapped below, never raw values. */
+   <html>). Components use the Tailwind colors mapped below, never raw values. The font is set
+   once, on body, and inherited everywhere; only code to copy (Code, CopyBlock) uses font-mono. */
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));

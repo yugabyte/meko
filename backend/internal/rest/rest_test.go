@@ -304,6 +304,13 @@ func TestMetricsAndArtifacts(t *testing.T) {
 		len(arr(u["steps"])) == 0 {
 		t.Errorf("usage %v", u)
 	}
+	if r := obj(arr(u["recent"])[0]); r["id"] == nil || len(arr(r["steps"])) == 0 {
+		t.Errorf("recent call %v", r)
+	}
+	if w := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/usage?days=7", nil, 200)); num(w["calls"]) != 1 {
+		t.Errorf("usage?days=7 %v", w)
+	}
+	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/metrics?days=week", nil, 400, "VALIDATION_ERROR")
 	ts := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/token-savings", nil, 200))
 	if num(ts["total_requests"]) != 1 || len(arr(ts["by_datapack"])) != 1 {
 		t.Errorf("token-savings %v", ts)

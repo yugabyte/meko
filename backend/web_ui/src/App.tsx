@@ -20,6 +20,7 @@ import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
+import { StatusPage } from "./pages/StatusPage";
 
 export default function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -46,7 +47,7 @@ export default function App() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         datapacks={list.data ?? []}
-        activeId={activeId}
+        activeId={route.view ? undefined : activeId}
         version={health.data?.version}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -56,7 +57,11 @@ export default function App() {
         }}
       />
       <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        {list.loading && !list.data ? (
+        {route.view === "status" ? (
+          <div className="p-8">
+            <StatusPage />
+          </div>
+        ) : list.loading && !list.data ? (
           <Loading />
         ) : list.error ? (
           <div className="p-8">

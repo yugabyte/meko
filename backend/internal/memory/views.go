@@ -172,19 +172,31 @@ type CallStats struct {
 	OutputTokens        int
 }
 
-// statsDays is how many days of activity CallStats reports.
+// statsDays is how many days of activity CallStats reports by default.
 const statsDays = 30
 
-// CallStats sums a datapack's calls ("" for every datapack's) over the call log's retention.
-func (s *Service) CallStats(ctx context.Context, datapack string) (CallStats, error) {
-	calls, err := s.st.Calls(ctx, datapack, time.Now().Add(-CallRetention))
+// window is the calls a days argument covers: 0 is the call log's whole retention, with the last
+// statsDays days of activity (Cloud's dashboard); anything else is that many days for both, at
+// most the retention.
+func window(days int) (since time.Time, activityDays int) {
+	if days <= 0 {
+		return time.Now().Add(-CallRetention), statsDays
+	}
+	days = min(days, int(CallRetention.Hours()/24))
+	return time.Now().AddDate(0, 0, -days), days
+}
+
+// CallStats sums a datapack's calls ("" for every datapack's) over the last lastDays (see window).
+func (s *Service) CallStats(ctx context.Context, datapack string, lastDays int) (CallStats, error) {
+	from, activityDays := window(lastDays)
+	calls, err := s.st.Calls(ctx, datapack, from)
 	if err != nil {
 		return CallStats{}, err
 	}
 	out := CallStats{SavedBySource: map[string]int{"hybrid": 0, "memory": 0, "kb": 0}}
 	agents := map[string]bool{}
 	days := map[string]*DayActivity{}
-	since := time.Now().UTC().AddDate(0, 0, -statsDays+1).Format(time.DateOnly)
+	since := time.Now().UTC().AddDate(0, 0, -activityDays+1).Format(time.DateOnly)
 	for _, c := range calls {
 		if c.AgentID != "" && c.AgentID != WebUIAgent {
 			agents[c.AgentID] = true
@@ -280,9 +292,10 @@ type CallUsage struct {
 	OutputTokens int
 }
 
-// CallUsage summarizes a datapack's calls ("" for every datapack's).
-func (s *Service) CallUsage(ctx context.Context, datapack string) (CallUsage, error) {
-	calls, err := s.st.Calls(ctx, datapack, time.Now().Add(-CallRetention))
+// CallUsage summarizes a datapack's calls ("" for every datapack's) over the last days (see window).
+func (s *Service) CallUsage(ctx context.Context, datapack string, days int) (CallUsage, error) {
+	from, _ := window(days)
+	calls, err := s.st.Calls(ctx, datapack, from)
 	if err != nil {
 		return CallUsage{}, err
 	}

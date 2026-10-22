@@ -1,13 +1,15 @@
 // The Analytics tab: Meko Cloud's datapack dashboard (what the datapack holds, what retrieval
 // costs against it) from the same /metrics payload, then Meko local's own Usage section from the
-// call log.
+// call log. Searches and usage cover the range picked; what's stored is always the whole datapack.
 
+import { useState } from "react";
 import { api } from "../lib/api";
 import { bytes, count } from "../lib/format";
 import { derive, formatTokens } from "../lib/metrics";
 import { navigate } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { Segmented } from "../components/Segmented";
 import { ErrorNote, Loading } from "../components/ui";
 import { ActivityCard } from "../components/metrics/ActivityCard";
 import { MemoryBreakdownCard } from "../components/metrics/MemoryBreakdownCard";
@@ -17,11 +19,19 @@ import { SplitCard } from "../components/metrics/SplitCard";
 import { StatPairCard } from "../components/metrics/StatPairCard";
 import { AgentsCard, RecentCallsCard, ToolsCard } from "../components/metrics/UsageCards";
 
+const RANGES = [
+  { id: "7", label: "7 days" },
+  { id: "30", label: "30 days" },
+  { id: "90", label: "90 days" },
+] as const;
+
 // onChanged reloads the datapack, whose counts the memory breakdown reads.
 export function AnalyticsPage({ datapack, onChanged }: { datapack: Datapack; onChanged: () => void }) {
   const id = datapack.datapack_id;
-  const metrics = useLoad(() => api.metrics(id), [id]);
-  const usage = useLoad(() => api.usage(id), [id]);
+  const [range, setRange] = useState<(typeof RANGES)[number]["id"]>("30");
+  const days = Number(range);
+  const metrics = useLoad(() => api.metrics(id, days), [id, days]);
+  const usage = useLoad(() => api.usage(id, days), [id, days]);
 
   if (metrics.loading && !metrics.data) return <Loading />;
   if (metrics.error) return <ErrorNote error={metrics.error} />;
@@ -36,6 +46,9 @@ export function AnalyticsPage({ datapack, onChanged }: { datapack: Datapack; onC
 
   return (
     <div>
+      <div className="mb-2 flex justify-end">
+        <Segmented size="sm" options={RANGES} value={range} onChange={setRange} />
+      </div>
       <SectionHeader label="Meko context" onRefresh={refresh} refreshing={metrics.loading} />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <SplitCard
@@ -84,7 +97,7 @@ export function AnalyticsPage({ datapack, onChanged }: { datapack: Datapack; onC
       </div>
 
       <SectionHeader label="Retrieval & efficiency" onRefresh={refresh} refreshing={metrics.loading} />
-      <ActivityCard activity={m.daily_activity} total={d.queries} />
+      <ActivityCard activity={m.daily_activity} total={d.queries} n={days} />
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <EfficiencyCard d={d} requests={m.total_requests} />
         <MatchQualityCard d={d} />

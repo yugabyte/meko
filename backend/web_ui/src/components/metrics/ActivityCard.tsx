@@ -1,4 +1,4 @@
-// Searches a day over the last 30, as bars stacked by kind or as a line of the total.
+// Searches a day over the last days, as bars stacked by kind or as a line of the total.
 
 import { useState } from "react";
 import { count } from "../../lib/format";
@@ -11,28 +11,26 @@ const MODES = [
   { id: "bar", label: "Bar" },
 ] as const;
 
-const DAYS = 30;
-
 const KINDS = [
   { key: "hybrid", label: "context_search", color: "bg-primary" },
   { key: "kb", label: "knowledgebase_search", color: "bg-success" },
   { key: "memory", label: "memory_search", color: "bg-info" },
 ] as const;
 
-// The last 30 days, oldest first, with days that had no searches as zeros.
-function lastDays(activity: DayActivity[]): DayActivity[] {
+// The last n days, oldest first, with days that had no searches as zeros.
+function lastDays(activity: DayActivity[], n: number): DayActivity[] {
   const byDate = new Map(activity.map((d) => [d.date, d]));
   const out: DayActivity[] = [];
-  for (let i = DAYS - 1; i >= 0; i--) {
+  for (let i = n - 1; i >= 0; i--) {
     const date = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
     out.push(byDate.get(date) ?? { date, hybrid: 0, kb: 0, memory: 0 });
   }
   return out;
 }
 
-export function ActivityCard({ activity, total }: { activity: DayActivity[]; total: number }) {
+export function ActivityCard({ activity, total, n }: { activity: DayActivity[]; total: number; n: number }) {
   const [mode, setMode] = useState<"bar" | "line">("bar");
-  const days = lastDays(activity);
+  const days = lastDays(activity, n);
   const sum = (d: DayActivity) => d.hybrid + d.kb + d.memory;
   const peak = Math.max(1, ...days.map(sum));
 
@@ -42,7 +40,7 @@ export function ActivityCard({ activity, total }: { activity: DayActivity[]; tot
         <div>
           <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Context queries</div>
           <div className="mt-1 text-2xl font-semibold tabular-nums">
-            {count(total)} <span className="text-base font-normal text-muted-foreground">queries, last 30 days</span>
+            {count(total)} <span className="text-base font-normal text-muted-foreground">queries, last {n} days</span>
           </div>
         </div>
         <Segmented size="sm" options={MODES} value={mode} onChange={setMode} />
@@ -67,7 +65,7 @@ export function ActivityCard({ activity, total }: { activity: DayActivity[]; tot
               ))}
             </div>
           ) : (
-            <svg viewBox={`0 0 ${DAYS - 1} 100`} preserveAspectRatio="none" className="mt-5 h-36 w-full overflow-visible">
+            <svg viewBox={`0 0 ${n - 1} 100`} preserveAspectRatio="none" className="mt-5 h-36 w-full overflow-visible">
               <polyline
                 fill="none"
                 vectorEffect="non-scaling-stroke"

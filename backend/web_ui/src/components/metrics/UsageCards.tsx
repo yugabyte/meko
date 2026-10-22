@@ -1,15 +1,15 @@
 // Meko local's own Usage section, from the call log: each tool's calls, errors and latency, the
 // agents using this datapack, and the latest calls. Meko Cloud's dashboard has no such view.
 
+import { useState } from "react";
 import { CheckCircle2, XCircle } from "lucide-react";
-import { count, timeAgo } from "../../lib/format";
+import { count, duration, timeAgo } from "../../lib/format";
 import { UI_AGENT_ID } from "../../lib/api";
 import type { Usage } from "../../lib/types";
 import { Table } from "../Table";
+import { CallTraceDialog } from "./CallTraceDialog";
 import { Badge } from "../ui";
 import { MetricCard } from "./MetricCard";
-
-const ms = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${n} ms`);
 
 function results(c: Usage["recent"][number]): string {
   if (!c.ok) return c.error_code;
@@ -19,7 +19,7 @@ function results(c: Usage["recent"][number]): string {
 
 export function ToolsCard({ usage }: { usage: Usage }) {
   const title = "Tools";
-  const subtitle = `${count(usage.calls)} calls, ${count(usage.errors)} failed · latency over 90 days`;
+  const subtitle = `${count(usage.calls)} calls, ${count(usage.errors)} failed`;
   if (usage.tools.length === 0) {
     return <MetricCard title={title} subtitle={subtitle} empty={["No calls yet", "Calls from agents, the CLI and this UI show here."]} />;
   }
@@ -30,15 +30,15 @@ export function ToolsCard({ usage }: { usage: Usage }) {
           rows={usage.tools}
           rowKey={(t) => t.tool}
           columns={[
-            { label: "Tool", cell: (t) => t.tool, className: "font-mono text-xs" },
+            { label: "Tool", cell: (t) => t.tool, className: "text-xs" },
             { label: "Calls", right: true, cell: (t) => count(t.calls) },
             {
               label: "Errors",
               right: true,
               cell: (t) => <span className={t.errors > 0 ? "text-destructive" : "text-muted-foreground"}>{count(t.errors)}</span>,
             },
-            { label: "p50", right: true, cell: (t) => ms(t.p50_ms) },
-            { label: "p95", right: true, cell: (t) => ms(t.p95_ms) },
+            { label: "p50", right: true, cell: (t) => duration(t.p50_ms) },
+            { label: "p95", right: true, cell: (t) => duration(t.p95_ms) },
           ]}
         />
       </div>
@@ -48,7 +48,7 @@ export function ToolsCard({ usage }: { usage: Usage }) {
           <div className="flex flex-wrap gap-2 text-xs">
             {usage.steps.map((s) => (
               <span key={s.step} className="rounded-md bg-muted px-2 py-1">
-                <span className="font-mono">{s.step}</span> {ms(s.p50_ms)} / {ms(s.p95_ms)}
+                <span>{s.step}</span> {duration(s.p50_ms)} / {duration(s.p95_ms)}
               </span>
             ))}
           </div>
@@ -69,7 +69,7 @@ export function AgentsCard({ usage }: { usage: Usage }) {
       <div className="divide-y text-sm">
         {usage.agents.map((a) => (
           <div key={a.agent_id} className="flex items-center gap-2 py-2">
-            <span className="truncate font-mono text-xs">{a.agent_id}</span>
+            <span className="truncate text-xs">{a.agent_id}</span>
             {a.agent_id === UI_AGENT_ID && <Badge>this UI</Badge>}
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
               {count(a.calls)} calls · {count(a.searches)} searches · {timeAgo(a.last_at)}
@@ -82,15 +82,17 @@ export function AgentsCard({ usage }: { usage: Usage }) {
 }
 
 export function RecentCallsCard({ usage }: { usage: Usage }) {
+  const [open, setOpen] = useState<Usage["recent"][number]>();
   const title = "Recent calls";
-  const subtitle = "The latest 25, newest first";
+  const subtitle = "The latest 25, newest first · click one for its steps";
   if (usage.recent.length === 0) return <MetricCard title={title} subtitle={subtitle} empty={["No calls yet", "They show here as they happen."]} />;
   return (
     <MetricCard title={title} subtitle={subtitle}>
       <div className="-mx-5">
         <Table
           rows={usage.recent}
-          rowKey={(c, i) => c.at + i}
+          rowKey={(c) => String(c.id)}
+          onRow={setOpen}
           columns={[
             {
               label: "",
@@ -103,14 +105,15 @@ export function RecentCallsCard({ usage }: { usage: Usage }) {
                   </span>
                 ),
             },
-            { label: "Tool", cell: (c) => c.tool, className: "font-mono text-xs" },
-            { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[12rem] truncate font-mono text-xs text-muted-foreground" },
+            { label: "Tool", cell: (c) => c.tool, className: "text-xs" },
+            { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[12rem] truncate text-xs text-muted-foreground" },
             { label: "Results", cell: results, className: "text-xs text-muted-foreground" },
-            { label: "Time", right: true, cell: (c) => ms(c.ms) },
+            { label: "Time", right: true, cell: (c) => duration(c.ms) },
             { label: "When", right: true, cell: (c) => timeAgo(c.at), className: "text-xs text-muted-foreground" },
           ]}
         />
       </div>
+      {open && <CallTraceDialog call={open} onClose={() => setOpen(undefined)} />}
     </MetricCard>
   );
 }
