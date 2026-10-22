@@ -117,7 +117,10 @@ answers** (the header leaves its button out while the questions are on screen, o
 because the design couldn't be read, and does the same, reading **Answer & approve**, while a change
 to one of AgentK's decisions waits: `headerApproves(session, questions, changing)`). On a panel too
 short for the questions and their footer (a phone with the keyboard up), the view scrolls, so the
-footer stays reachable. The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
+footer stays reachable. `Ctrl+Enter` (`⌘Enter`) in an answer, a note or the feedback presses
+**Approve with answers** (**Approve design** with nothing answered), as a click would: nothing while
+it's disabled or while an approval waits for the turn's end; in **AgentK is asking** it presses that
+form's **Answer** instead (`questionsSubmitButton()` in `DesignQuestions.tsx`). The answers go in the approval request (`DesignAnswersRequest`), sent ahead of the Code
 prompt as `approved-answers`, every open question listed: answered, or left to AgentK's
 recommendation (its own judgment when it has none). **Send for revision** sends them as the `design-answers` prompt instead, and AgentK
 revises the design. Without AgentK's mod it only works

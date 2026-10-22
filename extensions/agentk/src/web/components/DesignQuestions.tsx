@@ -6,7 +6,7 @@ import {
   approvalSent, changeDraft, decidedOption, draftFor, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts,
   type Draft,
 } from '../design-answers';
-import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd } from '../util';
+import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey } from '../util';
 import { AskForm } from './AskSheet';
 import { Busy } from './common';
 import { MekoBadge, MekoRefs } from './MekoRefs';
@@ -169,6 +169,16 @@ function DecidedCard({ q, n, datapacks, onChange }: { q: DesignQuestion; n: stri
 }
 
 /**
+ * The button Ctrl+Enter (⌘+Enter) presses in the questions: Answer while typing in AgentK is asking
+ * (it goes on its own), else Approve. None while the approval waits for the turn's end, when Cancel
+ * approval stands in its place.
+ */
+export function questionsSubmitButton(focused: Element, approve: HTMLButtonElement | null): HTMLButtonElement | null {
+  const ask = focused.closest('.ask-form');
+  return ask ? ask.querySelector<HTMLButtonElement>('button[data-submit]') : approve;
+}
+
+/**
  * The design's questions for the user: open ones to answer (an option, with an optional note, or
  * a custom answer), the key design decisions (answered questions and AgentK's own, which the user can
  * change), and other feedback. The answers stay in this browser until they go to AgentK: with the
@@ -193,6 +203,7 @@ export function DesignQuestions({
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
+  const approve = useRef<HTMLButtonElement>(null);
 
   const editable = session.stage === 'design' && session.desired === 'running';
   // While an approval waits for the turn's end, the answers it took stay as they were.
@@ -264,7 +275,18 @@ export function DesignQuestions({
 
   return (
     <>
-      <div className="dq-scroll">
+      <div
+        className="dq-scroll"
+        onKeyDown={(e) => {
+          // Ctrl+Enter in an answer or the feedback presses Approve, as a click would (nothing while
+          // it's disabled), as in a dialog.
+          if (!isSubmitKey(e.nativeEvent) || !(e.target instanceof Element)) return;
+          const button = questionsSubmitButton(e.target, approve.current);
+          if (!button) return;
+          e.preventDefault();
+          button.click();
+        }}
+      >
         {session.asking && (
           <section className="dq-section" aria-label="AgentK is asking">
             <h4>AgentK is asking</h4>
@@ -383,11 +405,13 @@ export function DesignQuestions({
             </button>
           ) : (
             <button
+              ref={approve}
               className="btn small primary"
               disabled={!!blocker || !!sending || !!busy}
-              title={busy ?? blocker ?? (held
+              aria-keyshortcuts={isMac() ? 'Meta+Enter' : 'Control+Enter'}
+              title={busy ?? blocker ?? `${held
                 ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same'
-                : 'Approve the design with your answers, and move to Code')}
+                : 'Approve the design with your answers, and move to Code'} (${isMac() ? '⌘' : 'Ctrl+'}Enter)`}
               onClick={() => void go('approve')}
             >
               {sending === 'approve' ? <Busy label="Approving" /> : open.length || request.answers.length ? 'Approve with answers' : 'Approve design'}
