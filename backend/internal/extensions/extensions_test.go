@@ -77,7 +77,8 @@ func TestCatalogFindsTheCommandByAnOldName(t *testing.T) {
 		t.Fatal(err)
 	}
 	put := func(name string) {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: test
+		script := []byte("#!/bin/sh\n")
+		if err := os.WriteFile(filepath.Join(bin, name), script, 0o700); err != nil { //nolint:gosec // G306: test
 			t.Fatal(err)
 		}
 	}
