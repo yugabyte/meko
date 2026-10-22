@@ -33,7 +33,7 @@ test: memory_engine
 
 # The search budget at 200 MB of content (a few minutes; not in CI).
 bench: memory_engine
-	go test -tags $(TAGS),bench -run TestSearchBudget -v -timeout 60m ./internal/memory/
+	go test -tags $(TAGS),bench -run 'TestSearchBudget|TestKnowledgeBudget' -v -timeout 90m ./internal/memory/
 
 # golangci-lint v2 (https://golangci-lint.run) must be installed; CI pins its version.
 lint: memory_engine/node_modules/.package-lock.json

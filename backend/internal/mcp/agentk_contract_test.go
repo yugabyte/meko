@@ -109,13 +109,27 @@ func TestAgentKContract(t *testing.T) {
 	wantError(t, e, "memory_update", map[string]any{"memory_id": id, "text": "x", "datapack_id": dp,
 		"agent_id": nil, "conversation_id": sess}, "not_found")
 
+	// A promoted memory puts a knowledge-base item in the search below.
+	r = ok(t, e, "memory_add", map[string]any{"text": "Migrations run in order.", "datapack_id": dp, "agent_id": agent,
+		"conversation_id": sess})
+	promote := str(obj(arr(r.JSON["results"])[0])["id"])
+	ok(t, e, "memory_promote", map[string]any{"memory_ids": []string{promote}, "datapack_id": dp, "agent_id": agent,
+		"conversation_id": sess})
+
 	// search(query, datapack, agentId, conversationId): context_search, limit 8: reads results.memory,
-	// results.knowledge_base and results.conversation.hits, each item's text and score.
+	// results.knowledge_base and results.conversation.hits, each item's id, text and score (pickText:
+	// memory, text, content, chunk, chunk_text, ...; pickScore: score, similarity, rerank_score,
+	// distance).
 	r = ok(t, e, "context_search", map[string]any{"query": "migrations", "conversation_id": conv, "datapack_id": dp,
 		"agent_id": agent, "limit": 8})
 	res := obj(r.JSON["results"])
 	if len(arr(res["memory"])) == 0 || obj(arr(res["memory"])[0])["score"] == nil {
 		t.Errorf("search's memories: %s", r.Text)
+	}
+	kb := arr(res["knowledge_base"])
+	if len(kb) == 0 || str(obj(kb[0])["chunk_text"]) != "Migrations run in order." || obj(kb[0])["id"] == nil ||
+		obj(kb[0])["rerank_score"] == nil {
+		t.Errorf("search's knowledge base: %s", r.Text)
 	}
 	if conv, isObj := res["conversation"].(map[string]any); !isObj || conv["hits"] == nil {
 		t.Errorf("search's conversation bucket: %s", r.Text)

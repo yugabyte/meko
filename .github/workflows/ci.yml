@@ -132,7 +132,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: backend/memory_engine/.models
-          key: embedding-model-all-MiniLM-L6-v2-751bff3-q8
+          key: models-all-MiniLM-L6-v2-751bff3-q8-ms-marco-MiniLM-L-6-v2-a091443-q8
 
       - run: make build memory_engine
       - run: ./bin/meko version

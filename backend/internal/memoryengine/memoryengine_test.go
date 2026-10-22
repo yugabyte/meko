@@ -126,4 +126,17 @@ func TestClientErrors(t *testing.T) {
 	if _, err := c.Health(ctx); err == nil {
 		t.Error("a reply that isn't JSON was accepted")
 	}
+	c = NewClient(serveFake(t, 503, `{"data":null,"error":{"code":"RERANKER_NOT_READY","message":"downloading"}}`), "tok")
+	if _, err := c.Rerank(ctx, "q", []string{"a"}); !errors.Is(err, ErrRerankerNotReady) {
+		t.Errorf("reranker not ready: %v", err)
+	}
+	c = NewClient(serveFake(t, 200, `{"data":{"scores":[1.5,-2]}}`), "tok")
+	if s, err := c.Rerank(ctx, "q", []string{"a", "b"}); err != nil || len(s) != 2 || s[0] != 1.5 {
+		t.Errorf("rerank: %v %v", s, err)
+	}
+	c = NewClient(serveFake(t, 200, `{"data":{"state":"ready","embedder":{"provider":"p","model":"m","dims":3},`+
+		`"reranker":{"provider":"p","model":"r","state":"loading"}}}`), "tok")
+	if h, err := c.Health(ctx); err != nil || h.Reranker == nil || h.Reranker.State != "loading" {
+		t.Errorf("health with a reranker: %+v %v", h, err)
+	}
 }

@@ -41,6 +41,8 @@ type Layout struct {
 	ModelsDir        string
 	MemoryEngineDir  string
 	MemoryEngineLog  string
+	// KnowledgeFiles holds knowledge files' bytes, beside the database (milestone 4).
+	KnowledgeFiles string
 }
 
 // New returns the layout of the data folder at root (an absolute path).
@@ -66,6 +68,8 @@ func New(root string) Layout {
 		ModelsDir:        filepath.Join(root, "models"),
 		MemoryEngineDir:  filepath.Join(root, "memory_engine"),
 		MemoryEngineLog:  filepath.Join(logs, "memory_engine.log"),
+
+		KnowledgeFiles: filepath.Join(root, "knowledgebase-files"),
 	}
 }
 
@@ -80,7 +84,8 @@ func (l Layout) Ensure() error {
 		return fmt.Errorf("the data folder %s is too deep: its sockets' paths would be longer than %d bytes. "+
 			"Choose a shorter path with --data-dir or %s", l.Root, MaxSocketPath, HomeEnv)
 	}
-	for _, d := range []string{l.Root, l.RunDir, l.ChildrenDir, l.LogDir, l.ModelsDir, l.MemoryEngineDir} {
+	for _, d := range []string{l.Root, l.RunDir, l.ChildrenDir, l.LogDir, l.ModelsDir, l.MemoryEngineDir,
+		l.KnowledgeFiles} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}

@@ -416,8 +416,9 @@ func (s *Service) kickEmbedder() {
 	}
 }
 
-// RunEmbedder embeds turns' chunks for conversation search until ctx ends: whenever a turn is added,
-// and every sweepEvery for any left behind. serve runs it.
+// RunEmbedder embeds turns' chunks for conversation search, and knowledge-base chunks, until ctx
+// ends: whenever a turn or a file's chunks arrive, and every sweepEvery for any left behind. serve
+// runs it.
 func (s *Service) RunEmbedder(ctx context.Context) {
 	tick := time.NewTicker(sweepEvery)
 	defer tick.Stop()
@@ -427,7 +428,7 @@ func (s *Service) RunEmbedder(ctx context.Context) {
 			if errors.Is(err, memoryengine.ErrUnavailable) || errors.As(err, &notReady) {
 				s.log.Debug("chunks wait for the memory engine", "error", err)
 			} else {
-				s.log.Warn("can't embed turns for conversation search; retrying", "error", err)
+				s.log.Warn("can't embed chunks for search; retrying", "error", err)
 			}
 		}
 		select {
@@ -439,27 +440,42 @@ func (s *Service) RunEmbedder(ctx context.Context) {
 	}
 }
 
-// EmbedPending embeds every chunk still without a vector, a batch at a time.
+// EmbedPending embeds every chunk still without a vector, a batch at a time, behind any search's
+// queries: turns' first, so a large file never holds up conversation search, then knowledge-base
+// chunks, looking at turns again after each batch.
 func (s *Service) EmbedPending(ctx context.Context) error {
 	for {
-		pending, err := s.st.PendingChunks(ctx, embedBatch)
-		if err != nil || len(pending) == 0 {
-			return err
-		}
-		texts := make([]string, len(pending))
-		ids := make([]int64, len(pending))
-		for i, c := range pending {
-			texts[i], ids[i] = c.Text, c.Rowid
-		}
-		vecs, err := s.eng.Embed(ctx, texts)
+		turns, err := s.embedTurnBatch(ctx)
 		if err != nil {
-			return s.memoryEngineErr(err)
-		}
-		if err := s.st.PutChunkVectors(ctx, ids, vecs); err != nil {
 			return err
 		}
-		if len(pending) < embedBatch {
+		if turns == embedBatch {
+			continue
+		}
+		kb, err := s.embedKnowledgeBatch(ctx)
+		if err != nil {
+			return err
+		}
+		if kb < embedBatch {
 			return nil
 		}
 	}
+}
+
+// embedTurnBatch embeds up to embedBatch turns' chunks and says how many.
+func (s *Service) embedTurnBatch(ctx context.Context) (int, error) {
+	pending, err := s.st.PendingChunks(ctx, embedBatch)
+	if err != nil || len(pending) == 0 {
+		return 0, err
+	}
+	texts := make([]string, len(pending))
+	ids := make([]int64, len(pending))
+	for i, c := range pending {
+		texts[i], ids[i] = c.Text, c.Rowid
+	}
+	vecs, err := s.eng.EmbedBackground(ctx, texts)
+	if err != nil {
+		return 0, s.memoryEngineErr(err)
+	}
+	return len(pending), s.st.PutChunkVectors(ctx, ids, vecs)
 }

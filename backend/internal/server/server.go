@@ -58,7 +58,20 @@ type Options struct {
 	MCP http.Handler
 	// REST, if set, adds the /api/v1 routes meko_ui calls (internal/rest) to the group.
 	REST func(*echo.Group)
+	// Upload and Download, if set, serve the knowledge-file links (memory.UploadTicketPath and
+	// DownloadTicketPath, then the ticket). They take no token: the ticket is the credential, as a
+	// presigned URL's signature is. Uploads have UploadBodyLimit.
+	Upload, Download echo.HandlerFunc
 }
+
+// UploadBodyLimit caps an upload link's body: a 50 MiB file and its multipart framing.
+const UploadBodyLimit = "51MiB"
+
+// Ticket routes, which requireToken lets in without a credential.
+var (
+	uploadRoute   = memory.UploadTicketPath + ":ticket"
+	downloadRoute = memory.DownloadTicketPath + ":ticket"
+)
 
 // MCPBodyLimit caps request bodies on /mcp: room for a 5 MiB artifact in base64.
 const MCPBodyLimit = "8M"
@@ -106,6 +119,12 @@ func New(opts Options) *Server {
 	v1.GET("/version", s.version)
 	if opts.REST != nil {
 		opts.REST(v1)
+	}
+	if opts.Upload != nil {
+		e.POST(uploadRoute, opts.Upload, middleware.BodyLimit(UploadBodyLimit))
+	}
+	if opts.Download != nil {
+		e.GET(downloadRoute, opts.Download)
 	}
 	if opts.MCP != nil {
 		// The handler reads the credential from the request's context, outside echo.
@@ -182,6 +201,7 @@ const (
 	CredentialAdmin  = "admin"  // the admin token: the CLI
 	CredentialClient = "client" // the client token: MCP and REST clients
 	CredentialNone   = "none"   // nothing, with [server] auth = "none"
+	CredentialTicket = "ticket" // a knowledge-file link's ticket, on its route only
 )
 
 const credentialKey = "meko.credential" //nolint:gosec // G101: a context key, not a secret
@@ -204,12 +224,17 @@ func Credential(c echo.Context) string {
 // describe the server itself.
 var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true}
 
-// requireToken lets a request in by its credential: /healthz needs none; the admin-only routes
-// need the admin token; every other route takes the admin or the client token, or nothing when
-// auth is "none". It keys on the matched route, never the raw URL.
+// requireToken lets a request in by its credential: /healthz needs none, nor do the knowledge-file
+// links, whose ticket is their credential; the admin-only routes need the admin token; every other
+// route takes the admin or the client token, or nothing when auth is "none". It keys on the
+// matched route, never the raw URL.
 func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		if c.Path() == "/healthz" {
+		switch c.Path() {
+		case "/healthz":
+			return next(c)
+		case uploadRoute, downloadRoute:
+			c.Set(credentialKey, CredentialTicket)
 			return next(c)
 		}
 		h := c.Request().Header.Get(echo.HeaderAuthorization)

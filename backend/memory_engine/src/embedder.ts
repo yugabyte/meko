@@ -15,6 +15,11 @@ export interface EmbedderInfo {
 
 export interface LocalEmbedder extends Embedder {
   readonly info: EmbedderInfo;
+  /**
+   * Embeds texts behind any search's: background batches (knowledge files, turns for conversation
+   * search) wait while a query is queued, so a query waits for at most the one batch being embedded.
+   */
+  embedBackground(texts: string[]): Promise<number[][]>;
   /** Resolves once the model is loaded; rejects if it can't be. */
   ready(): Promise<void>;
   close(): Promise<void>;
@@ -36,13 +41,38 @@ export const DEFAULT_MODEL = {
 const BATCH = 32;
 
 type Pending = { resolve: (v: number[][]) => void; reject: (e: Error) => void };
+type Job = Pending & { texts: string[] };
 
-/** The local model, in a worker thread. A worker that failed is replaced on the next ready(). */
+/** Two queues: shift takes from the interactive one first, so a query overtakes background work. */
+export class Lanes<T> {
+  private readonly interactive: T[] = [];
+  private readonly background: T[] = [];
+
+  push(item: T, background: boolean): void {
+    (background ? this.background : this.interactive).push(item);
+  }
+
+  shift(): T | undefined {
+    return this.interactive.shift() ?? this.background.shift();
+  }
+
+  /** Empties both queues, returning what was in them. */
+  drain(): T[] {
+    return [...this.interactive.splice(0), ...this.background.splice(0)];
+  }
+}
+
+/**
+ * The local model, in a worker thread. A worker that failed is replaced on the next ready(). The
+ * worker gets one batch at a time, interactive ones first.
+ */
 export class WorkerEmbedder implements LocalEmbedder {
   readonly info: EmbedderInfo;
   private worker!: Worker;
   private loaded!: Promise<void>;
   private readonly pending = new Map<number, Pending>();
+  private readonly queue = new Lanes<Job>();
+  private busy = false;
   private nextId = 1;
   private failure?: Error;
 
@@ -85,8 +115,9 @@ export class WorkerEmbedder implements LocalEmbedder {
     reject(e);
     if (worker !== this.worker) return; // a replaced worker's exit
     this.failure ??= e;
-    for (const p of this.pending.values()) p.reject(this.failure);
+    for (const p of [...this.pending.values(), ...this.queue.drain()]) p.reject(this.failure);
     this.pending.clear();
+    this.busy = false;
   }
 
   /** Waits for the model, first replacing a worker that failed (a download that failed offline). */
@@ -102,22 +133,53 @@ export class WorkerEmbedder implements LocalEmbedder {
     return (await this.embedBatch([text]))[0];
   }
 
-  async embedBatch(texts: string[]): Promise<number[][]> {
+  embedBatch(texts: string[]): Promise<number[][]> {
+    return this.embedMany(texts, false);
+  }
+
+  embedBackground(texts: string[]): Promise<number[][]> {
+    return this.embedMany(texts, true);
+  }
+
+  private async embedMany(texts: string[], background: boolean): Promise<number[][]> {
     await this.ready();
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i += BATCH) {
-      out.push(...(await this.call(texts.slice(i, i + BATCH))));
+      out.push(...(await this.call(texts.slice(i, i + BATCH), background)));
     }
     return out;
   }
 
-  private call(texts: string[]): Promise<number[][]> {
+  private call(texts: string[], background: boolean): Promise<number[][]> {
     if (this.failure) return Promise.reject(this.failure);
-    const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ id, texts });
+      this.queue.push({ texts, resolve, reject }, background);
+      this.pump();
     });
+  }
+
+  /** Sends the worker the next batch, interactive first, when it has none. */
+  private pump(): void {
+    if (this.busy) return;
+    const job = this.queue.shift();
+    if (!job) return;
+    this.busy = true;
+    const id = this.nextId++;
+    const done = () => {
+      this.busy = false;
+      this.pump();
+    };
+    this.pending.set(id, {
+      resolve: (v) => {
+        job.resolve(v);
+        done();
+      },
+      reject: (e) => {
+        job.reject(e);
+        done();
+      },
+    });
+    this.worker.postMessage({ id, texts: job.texts });
   }
 
   async close(): Promise<void> {
@@ -146,6 +208,10 @@ export class HashEmbedder implements LocalEmbedder {
 
   async embedBatch(texts: string[]): Promise<number[][]> {
     return Promise.all(texts.map((t) => this.embed(t)));
+  }
+
+  embedBackground(texts: string[]): Promise<number[][]> {
+    return this.embedBatch(texts);
   }
 
   async close(): Promise<void> {}

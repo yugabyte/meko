@@ -5,6 +5,7 @@ import { Memory } from "mem0ai/oss";
 
 import type { LocalEmbedder } from "./embedder.js";
 import { ACTOR_KEY, MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
+import type { LocalReranker } from "./reranker.js";
 import { mekoScore, type ScoreDetails } from "./scoring.js";
 
 /** A failure with an HTTP status and a code, for the memory engine API to reply with. */
@@ -67,6 +68,8 @@ export const MAX_LIMIT = 100;
 export const MIN_CANDIDATES = 240;
 /** Most texts one embed call takes. */
 export const MAX_EMBED = 256;
+/** Most texts one rerank call takes: a knowledge-base search reranks at most max(20, limit) candidates. */
+export const MAX_RERANK = 200;
 /**
  * Most datapacks whose mem0 Memory is kept. The least recently used is dropped past it, so a
  * deleted datapack's (which no call reaches again) doesn't stay until the memory engine restarts. A
@@ -80,6 +83,7 @@ export class MemoryEngine {
   constructor(
     private readonly embedder: LocalEmbedder,
     private readonly maxDatapacks = MAX_DATAPACKS,
+    private readonly reranker?: LocalReranker,
   ) {}
 
   /** How many datapacks' Memory objects are kept. */
@@ -208,14 +212,41 @@ export class MemoryEngine {
     return { id: req.memory_id };
   }
 
-  async embed(req: { texts: string[] }): Promise<{ vectors: number[][] }> {
+  /** Embeds texts; background ones (the Go server's sweeps) wait behind searches' queries. */
+  async embed(req: { texts: string[]; background?: boolean }): Promise<{ vectors: number[][] }> {
     if (!Array.isArray(req.texts) || req.texts.some((t) => typeof t !== "string")) {
       throw new HttpError(400, "BAD_REQUEST", "texts must be a list of strings");
     }
     if (req.texts.length > MAX_EMBED) {
       throw new HttpError(400, "BAD_REQUEST", `at most ${MAX_EMBED} texts per call`);
     }
-    return { vectors: req.texts.length ? await this.embedder.embedBatch(req.texts) : [] };
+    if (req.background !== undefined && typeof req.background !== "boolean") {
+      throw new HttpError(400, "BAD_REQUEST", "background must be a boolean");
+    }
+    if (!req.texts.length) return { vectors: [] };
+    const vectors = req.background
+      ? await this.embedder.embedBackground(req.texts)
+      : await this.embedder.embedBatch(req.texts);
+    return { vectors };
+  }
+
+  /** The reranker's raw score (a logit) for each text against the query. */
+  async rerank(req: { query: string; texts: string[] }): Promise<{ scores: number[] }> {
+    if (typeof req.query !== "string" || req.query.trim() === "") {
+      throw new HttpError(400, "BAD_REQUEST", "query must be a non-empty string");
+    }
+    if (!Array.isArray(req.texts) || req.texts.some((t) => typeof t !== "string")) {
+      throw new HttpError(400, "BAD_REQUEST", "texts must be a list of strings");
+    }
+    if (req.texts.length > MAX_RERANK) {
+      throw new HttpError(400, "BAD_REQUEST", `at most ${MAX_RERANK} texts per call`);
+    }
+    const r = this.reranker;
+    if (r?.state === "error") r.revive(); // a worker that died after loading comes back for a later call
+    if (!r || r.state !== "ready") {
+      throw new HttpError(503, "RERANKER_NOT_READY", r?.error ?? "the reranking model is still loading");
+    }
+    return { scores: req.texts.length ? await r.rerank(req.query, req.texts) : [] };
   }
 }
 

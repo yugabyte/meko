@@ -230,3 +230,76 @@ func TestListenTakenPort(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// The knowledge-file links take no token (the ticket is their credential), keep the Host and Origin
+// checks, and take bodies past /api/v1's 1 MB limit; every other route still needs a token.
+func TestTicketRoutes(t *testing.T) {
+	ln, err := Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := tcpPort(t, ln)
+	var got []string
+	s := New(Options{
+		Info: Info{Version: "test"}, Port: port, Token: token, ClientToken: clientToken,
+		Logger: slog.New(slog.DiscardHandler),
+		Upload: func(c echo.Context) error {
+			n, _ := io.Copy(io.Discard, c.Request().Body)
+			got = append(got, fmt.Sprintf("upload %s %s %d", c.Param("ticket"), Credential(c), n))
+			return c.NoContent(http.StatusNoContent)
+		},
+		Download: func(c echo.Context) error {
+			got = append(got, "download "+c.Param("ticket"))
+			return c.String(http.StatusOK, "bytes")
+		},
+		REST: func(g *echo.Group) { g.POST("/echo", func(c echo.Context) error { return c.NoContent(204) }) },
+	})
+	go func() { _ = s.Serve(ln) }()
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	big := bytes.Repeat([]byte("x"), 3<<20)
+	resp, err := http.Post(base+"/api/v1/knowledge-uploads/t1", "application/octet-stream", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("upload answered %d", resp.StatusCode)
+	}
+	if resp, err = http.Get(base + "/api/v1/knowledge-downloads/t2"); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("download answered %d", resp.StatusCode)
+	}
+	if len(got) != 2 || got[0] != fmt.Sprintf("upload t1 ticket %d", len(big)) || got[1] != "download t2" {
+		t.Errorf("handlers saw %q", got)
+	}
+	if code, _ := get(t, base+"/api/v1/knowledge-downloads/t2", map[string]string{"Origin": "https://evil.example"},
+		""); code != http.StatusForbidden {
+		t.Errorf("a browser page's request answered %d", code)
+	}
+	if code, _ := get(t, base+"/api/v1/knowledge-downloads/t2", nil, "evil.example"); code != http.StatusForbidden {
+		t.Errorf("a foreign Host answered %d", code)
+	}
+	// The rest of /api/v1 still needs a token, and keeps its 1 MB limit.
+	resp, err = http.Post(base+"/api/v1/echo", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a token-less request elsewhere answered %d", resp.StatusCode)
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/echo", bytes.NewReader(big))
+	req.Header.Set("Authorization", "Bearer "+clientToken)
+	if resp, err = http.DefaultClient.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("a 3 MB body elsewhere answered %d", resp.StatusCode)
+	}
+}

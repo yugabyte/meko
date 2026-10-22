@@ -75,9 +75,14 @@ func (a *api) usage(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	return envelope.OK(c, map[string]int{"datapack_count": datapacks, "datapack_creations": datapacks,
-		"kb_storage_file_size": 0, "num_conversations": conversations, "token_burn": st.InputTokens + st.OutputTokens,
-		"num_memory_searches": st.Requests, "num_kb_searches": 0, "num_memory_adds": st.MemoryAdds})
+	kbBytes, err := a.Service.KnowledgeBytes(ctx(c))
+	if err != nil {
+		return err
+	}
+	return envelope.OK(c, map[string]int64{"datapack_count": int64(datapacks), "datapack_creations": int64(datapacks),
+		"kb_storage_file_size": kbBytes, "num_conversations": int64(conversations),
+		"token_burn": int64(st.InputTokens + st.OutputTokens), "num_memory_searches": int64(st.Requests - st.KBSearches),
+		"num_kb_searches": int64(st.KBSearches), "num_memory_adds": int64(st.MemoryAdds)})
 }
 
 // datapackRow is a datapack as GET /datapacks lists it: Cloud's row, its counts left at 0 (only
@@ -229,6 +234,10 @@ func (a *api) metrics(c echo.Context) error {
 	if err != nil {
 		return serviceError(c, err)
 	}
+	kb, err := a.Service.KnowledgeStats(ctx(c), id)
+	if err != nil {
+		return serviceError(c, err)
+	}
 	ifRaw := st.TokensSent + st.TokensSaved
 	pct := 0.0
 	if ifRaw > 0 {
@@ -242,8 +251,8 @@ func (a *api) metrics(c echo.Context) error {
 		"tokens_if_raw_total": ifRaw, "savings_pct": pct, "score_high_total": st.ScoreHigh, "score_mid_total": st.Mid,
 		"score_low_total": st.Low, "agent_count": st.Agents, "human_count": 1, "daily_activity": days,
 		"conversation_count": z.Conversations, "memory_extraction_count": 0, "extraction_rate": 0.0,
-		"kb_chunk_count": 0, "kb_file_count": 0, "memory_chunk_count": z.Memories,
-		"conversation_chunk_count": z.ConversationChunks, "kb_bytes": 0, "memory_bytes": z.MemoryBytes,
+		"kb_chunk_count": kb.Chunks, "kb_file_count": kb.Files, "memory_chunk_count": z.Memories,
+		"conversation_chunk_count": z.ConversationChunks, "kb_bytes": kb.Bytes, "memory_bytes": z.MemoryBytes,
 		"conversation_bytes": z.TurnBytes}
 	if st.LastAccessed != nil {
 		out["last_accessed_at"] = wire.Time(*st.LastAccessed)
