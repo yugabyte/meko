@@ -12,7 +12,7 @@ import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../compon
 // as Cloud's does, for an agent to weigh beside the other sources; a person reading the list needs
 // the noise out of the way. Measured with Meko's embedder, right answers scored 0.40 to 0.72 and
 // unrelated memories 0.11 to 0.29.
-const WEAK_MEMORY = 0.35;
+const WEAK_MEMORY = 0.4;
 
 // The cosine similarity every source is shown with: a memory's raw score, or 1 - distance.
 function Similarity({ value }: { value: number | undefined }) {
