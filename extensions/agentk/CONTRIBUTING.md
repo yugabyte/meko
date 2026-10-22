@@ -93,7 +93,9 @@ sorts higher.
 
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
-   `scripts/next-version.sh`, and writes notes with `scripts/release-notes.sh`. Pushes with only
+   the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
+   `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
+   (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,
    performance and dependency changes.
 2. It builds self-contained tarballs in an AlmaLinux 8 container (glibc 2.28, so they run on
@@ -103,7 +105,7 @@ sorts higher.
    spawns a real pty).
 3. It creates the tag and GitHub release `v<version>` with the tarballs, `SHA256SUMS` and
    `install.sh`, and attests build provenance where the plan allows.
-4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
+4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/release/prune-releases.sh --product agentk`, which leaves Meko's releases alone.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
    Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
    between two tags) are unaffected.

@@ -2,8 +2,8 @@ import type { ReleaseNoteItem, ReleaseNoteSection } from '../shared/types.js';
 
 /**
  * The commit types that release, in the order their sections show: the same list as `RELEASE` in
- * scripts/release-notes.sh and scripts/check-title.sh (test/unit/check-title.test.ts keeps them
- * in step).
+ * the repo root's scripts/release/release-notes.sh and scripts/check-title.sh
+ * (test/unit/check-title.test.ts keeps them in step).
  */
 export const RELEASE_TYPES = ['feat', 'fix', 'perf', 'deps'] as const;
 
@@ -23,11 +23,14 @@ export interface NoteCommit {
 
 const SUBJECT = new RegExp(`^(${RELEASE_TYPES.join('|')})(?:\\(([^)]*)\\))?(!?): (.+)$`);
 const PR = /\s*\(#(\d+)\)$/;
+/** Another product's component: its subjects release that product, not AgentK (`exclude` in scripts/release/product.sh). */
+const OTHER_PRODUCT = /^meko(\/|$)/;
 
 /**
- * Release notes for a range of commits, newest first, by the rules of scripts/release-notes.sh:
- * only feat, fix, perf and deps subjects count, a `!` or a `BREAKING CHANGE:` footer on one of
- * them also lists it under Breaking changes, and a section with nothing in it is left out.
+ * Release notes for a range of commits, newest first, by the rules of
+ * scripts/release/release-notes.sh --product agentk: only feat, fix, perf and deps subjects count,
+ * Meko's (component `meko`) don't, a `!` or a `BREAKING CHANGE:` footer on one of them also lists
+ * it under Breaking changes, and a section with nothing in it is left out.
  * `repo` (owner/name) links a subject's "(#123)" to its PR.
  */
 export function releaseNotes(commits: NoteCommit[], repo: string): ReleaseNoteSection[] {
@@ -38,6 +41,7 @@ export function releaseNotes(commits: NoteCommit[], repo: string): ReleaseNoteSe
     const m = SUBJECT.exec(subject.trim());
     if (!m) continue;
     const [, type, component, bang, rest] = m as unknown as [string, string, string | undefined, string, string];
+    if (component && OTHER_PRODUCT.test(component)) continue;
     const pr = PR.exec(rest);
     const item: ReleaseNoteItem = {
       component: component || null,

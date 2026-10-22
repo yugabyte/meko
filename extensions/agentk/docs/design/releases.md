@@ -16,9 +16,14 @@ Part of the [AgentK Local design](../design.md).
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
   with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
   `scripts/check-title.sh`), and PRs are squash-merged with the PR title
-  as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit since the last release
-  runs the tests and cuts the next version, and those subjects become the release notes; `ci`,
-  `test`, `docs`, `nit` and `chore` don't release.
+  as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for AgentK since its last
+  release runs the tests and cuts the next version, and those subjects become the release notes;
+  `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
+  (`backend/`) releases on its own, from its own tags (`meko-v…`), and its `meko` subjects never
+  release AgentK. Every other subject (`agentk`, `repo`, and older ones with no component or a
+  free-form one) counts for AgentK. The repo root's `scripts/release/` holds the scripts both
+  products use, with `--product agentk|meko`: `next-version.sh`, `release-notes.sh` and
+  `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
@@ -27,8 +32,8 @@ Part of the [AgentK Local design](../design.md).
   with a clear message if it has none. Releases since macOS support always include the macOS
   build: publishing waits for it. A hand-run rebuild takes only tags from after the move to
   `extensions/agentk`. Each release also includes `SHA256SUMS`, a build provenance attestation
-  and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, releases beyond the newest 5 in each lane (`stable`, or the
-  prerelease identifier such as `beta`) are deleted; their tags stay.
+  and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
+  prerelease identifier such as `beta`) are deleted; their tags stay, and Meko's are left alone.
 
 > **glibc.** RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run
 > in an AlmaLinux 8 container rather than on `ubuntu-latest`, so the binary loads on older hosts.
@@ -113,7 +118,7 @@ don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
 check: `repos/<repo>/compare/v<from>...v<to>`) and lists the `feat`, `fix`, `perf` and `deps`
-subjects by type, as `scripts/release-notes.sh` does (`src/server/releasenotes.ts`), with
+subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out Meko's `meko` subjects) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.

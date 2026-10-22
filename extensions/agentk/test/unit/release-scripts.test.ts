@@ -1,0 +1,97 @@
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { gitRepo, tempDir } from '../helpers.js';
+
+// The repo root's scripts/release/*.sh release AgentK and Meko from one history: each product has
+// its own tags, versions, notes and pruning (--product, scripts/release/product.sh). The rules
+// about which types release are tested in check-title.test.ts.
+const DIR = fileURLToPath(new URL('../../../../scripts/release/', import.meta.url));
+
+let root: string;
+let repo: string;
+beforeEach(() => {
+  root = tempDir('akl-release-');
+  repo = gitRepo(join(root, 'repo'));
+});
+afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+const commit = (msg: string) => git('commit', '-q', '--allow-empty', '-m', msg);
+const run = (script: string, args: string[], env: Record<string, string> = {}) =>
+  spawnSync('sh', [join(DIR, script), ...args], { cwd: repo, encoding: 'utf8', env: { ...process.env, ...env } });
+
+describe('next-version.sh', () => {
+  it.each([
+    [['--product', 'agentk'], '0.20260924.2'],
+    [[], '0.20260924.2'],
+    [['--product=meko'], '0.20260924.1'],
+  ])('counts only the product’s own tags that day (%j)', (args, want) => {
+    for (const t of ['v0.20260923.7', 'v0.20260924.0', 'v0.20260924.1', 'meko-v0.20260924.0']) git('tag', t);
+    const r = run('next-version.sh', args, { RELEASE_DATE: '20260924' });
+    expect(r.stderr).toBe('');
+    expect(r.stdout.trim()).toBe(want);
+  });
+
+  it('refuses an unknown product', () => {
+    const r = run('next-version.sh', ['--product', 'web']);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('unknown product: web');
+  });
+});
+
+describe('release-notes.sh', () => {
+  beforeEach(() => {
+    commit('feat(agentk): first');
+    git('tag', 'v0.20260101.0');
+    commit('feat(meko): first');
+    git('tag', 'meko-v0.20260101.0');
+  });
+
+  it('gives AgentK every releasing subject but Meko’s, since AgentK’s last tag', () => {
+    commit('fix(agentk/web): stop clipping the rail');
+    commit('fix(repo): a release script');
+    commit('feat(meko/cli)!: a Meko command');
+    const r = run('release-notes.sh', ['--product', 'agentk']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('- agentk/web: stop clipping the rail');
+    expect(r.stdout).toContain('- repo: a release script');
+    expect(r.stdout).not.toMatch(/meko|first|Breaking/);
+  });
+
+  it('gives Meko only its own subjects, since Meko’s last tag, and exits 3 with none', () => {
+    commit('feat(agentk): an AgentK feature');
+    expect(run('release-notes.sh', ['--product', 'meko']).status).toBe(3);
+    commit('fix(meko/engine)!: reload the model');
+    const r = run('release-notes.sh', ['--product', 'meko']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('### Breaking changes\n\n- fix(meko/engine)!: reload the model\n');
+    expect(r.stdout).toContain('### Fixes\n\n- meko/engine: reload the model');
+    expect(r.stdout).not.toMatch(/AgentK feature|first/);
+  });
+});
+
+describe('prune-releases.sh', () => {
+  const hasJq = spawnSync('jq', ['--version']).status === 0;
+
+  it.skipIf(!hasJq)('deletes only the product’s own releases beyond KEEP in each lane', () => {
+    // A stand-in gh that answers `release list` from canned JSON through its --jq filter.
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'gh'), '#!/bin/sh\n[ "$1 $2" = "release list" ] || exit 1\nwhile [ $# -gt 0 ]; do [ "$1" = --jq ] && q=$2; shift; done\nexec jq -r "$q" "$RELEASES"\n');
+    chmodSync(join(bin, 'gh'), 0o755);
+    const releases = join(root, 'releases.json');
+    const rel = (tagName: string, day: number, isPrerelease = false) => ({ tagName, isPrerelease, createdAt: `2026-01-0${day}T00:00:00Z` });
+    writeFileSync(releases, JSON.stringify([
+      rel('v0.20260101.0', 1), rel('meko-v0.20260101.0', 2), rel('v0.20260102.0', 3),
+      rel('meko-v0.20260102.0', 4), rel('v0.20260103.0-beta.1', 5, true), rel('v0.20260103.0', 6),
+    ]));
+    const prune = (product: string) => run('prune-releases.sh', ['--product', product, '--dry-run'], {
+      PATH: `${bin}:${process.env.PATH}`, RELEASES: releases, GITHUB_REPOSITORY: 'o/r', KEEP: '1',
+    }).stdout;
+    expect(prune('agentk')).toBe('would delete v0.20260102.0\nwould delete v0.20260101.0\n');
+    expect(prune('meko')).toBe('would delete meko-v0.20260101.0\n');
+  });
+});

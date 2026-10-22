@@ -1,7 +1,7 @@
 # Dependabot version updates, assigned to the maintainer.
 #
 # Commit prefixes follow the title rules (scripts/check-title.sh) and the release rules
-# (extensions/agentk/scripts/release-notes.sh), and name the component: Dependabot adds the `: `.
+# (scripts/release/release-notes.sh), and name the component: Dependabot adds the `: `.
 # Every AgentK npm bump is `deps(agentk): ...`, so it cuts a release once merged to main: the web
 # UI's libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
 # release. Action bumps are `ci(repo): ...` and ship with the next release. Meko's bumps are

@@ -7,9 +7,9 @@ import { gitRepo, tempDir } from '../helpers.js';
 import { RELEASE_TYPES } from '../../src/server/releasenotes.js';
 
 // The repo root's scripts/check-title.sh holds the commit subject and PR title rules the commit
-// skill follows; AgentK's scripts/release-notes.sh decides which of those types release.
+// skill follows; scripts/release/release-notes.sh decides which of those types release.
 const CHECK = fileURLToPath(new URL('../../../../scripts/check-title.sh', import.meta.url));
-const NOTES = fileURLToPath(new URL('../../scripts/release-notes.sh', import.meta.url));
+const NOTES = fileURLToPath(new URL('../../../../scripts/release/release-notes.sh', import.meta.url));
 const SCOPE = fileURLToPath(new URL('../../../../scripts/ci-scope.sh', import.meta.url));
 
 const check = (...args: string[]) => spawnSync('sh', [CHECK, ...args], { encoding: 'utf8' });

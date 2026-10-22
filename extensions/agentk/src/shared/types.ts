@@ -871,7 +871,7 @@ export interface UpdateStatus {
   releaseUrl: string | null;
 }
 
-/** One change in What's new: a commit subject with a releasing type (see scripts/release-notes.sh). */
+/** One change in What's new: a commit subject with a releasing type (see the repo root's scripts/release/release-notes.sh). */
 export interface ReleaseNoteItem {
   /** The component in the subject's parentheses, if any. */
   component: string | null;
