@@ -1,6 +1,6 @@
 // Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and token checks, and
-// the foundation's routes (replies use internal/envelope). /mcp (Options.MCP) and the rest of
-// /api/v1 (Options.REST) are mounted on it; the UI comes in a later milestone.
+// the foundation's routes (replies use internal/envelope). /mcp (Options.MCP), the rest of
+// /api/v1 (Options.REST) and the web UI at / (Options.UI) are mounted on it.
 package server
 
 import (
@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,13 +63,17 @@ type Options struct {
 	// DownloadTicketPath, then the ticket). They take no token: the ticket is the credential, as a
 	// presigned URL's signature is. Uploads have UploadBodyLimit.
 	Upload, Download echo.HandlerFunc
+	// UI, if set, serves the web UI (internal/webui) on every GET no other route takes. Its files
+	// need no token: the page sends the client token it was opened with on its API calls.
+	UI http.Handler
 }
 
 // UploadBodyLimit caps an upload link's body: a 50 MiB file and its multipart framing.
 const UploadBodyLimit = "51MiB"
 
-// Ticket routes, which requireToken lets in without a credential.
+// Ticket routes, which requireToken lets in without a credential, as it does the UI's.
 var (
+	uiRoute       = "/*"
 	uploadRoute   = memory.UploadTicketPath + ":ticket"
 	downloadRoute = memory.DownloadTicketPath + ":ticket"
 )
@@ -135,6 +140,9 @@ func New(opts Options) *Server {
 			return nil
 		}, middleware.BodyLimit(MCPBodyLimit))
 	}
+	if opts.UI != nil {
+		e.GET(uiRoute, s.ui)
+	}
 	s.srv = &http.Server{Handler: e, ReadHeaderTimeout: 10 * time.Second}
 	return s
 }
@@ -179,7 +187,9 @@ func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 // guard refuses requests that don't name this server in Host (DNS rebinding) and any request
-// from a browser page (an Origin header): there's no browser client in this phase.
+// from another site's page (an Origin header that isn't this server's own): only the web UI
+// Meko serves may call it from a browser. There are no CORS headers, so no other page can read a
+// reply either.
 func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	port := strconv.Itoa(s.opts.Port)
 	allowed := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true}
@@ -189,11 +199,27 @@ func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 				"Requests must be addressed to 127.0.0.1:"+port+" or localhost:"+port+".")
 		}
-		if r.Header.Get(echo.HeaderOrigin) != "" {
-			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Browser requests aren't accepted yet.")
+		if o := r.Header.Get(echo.HeaderOrigin); o != "" && (!strings.HasPrefix(o, "http://") ||
+			!allowed[strings.TrimPrefix(o, "http://")]) {
+			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
+				"Only Meko's own web UI may call it from a browser.")
 		}
 		return next(c)
 	}
+}
+
+func isUIPath(p string) bool {
+	return p != "/api" && !strings.HasPrefix(p, "/api/") && p != "/mcp" && !strings.HasPrefix(p, "/mcp/")
+}
+
+// ui serves the web UI for any GET no other route takes, but not under /api or /mcp: an unknown
+// API route stays a 404 in the envelope.
+func (s *Server) ui(c echo.Context) error {
+	if !isUIPath(c.Request().URL.Path) {
+		return echo.ErrNotFound
+	}
+	s.opts.UI.ServeHTTP(c.Response(), c.Request())
+	return nil
 }
 
 // Credentials a request can carry, as Credential reports them.
@@ -236,6 +262,10 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 		case uploadRoute, downloadRoute:
 			c.Set(credentialKey, CredentialTicket)
 			return next(c)
+		case uiRoute:
+			if isUIPath(c.Request().URL.Path) {
+				return next(c)
+			}
 		}
 		h := c.Request().Header.Get(echo.HeaderAuthorization)
 		isClient := s.opts.ClientToken != "" && auth.CheckBearer(h, s.opts.ClientToken)

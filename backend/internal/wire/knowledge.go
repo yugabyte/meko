@@ -54,6 +54,14 @@ type DocumentStatus struct {
 	*PipelineDetail
 }
 
+// UploadedFile is knowledgebase_upload_file's reply: the file's status, and whether the datapack
+// had its bytes already.
+type UploadedFile struct {
+	DatapackID      string `json:"datapack_id"`
+	AlreadyUploaded bool   `json:"already_uploaded"`
+	DocumentStatus
+}
+
 // UploadState is an upload link still waiting for its file.
 type UploadState struct {
 	ExpiresAt string `json:"expires_at"`

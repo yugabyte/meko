@@ -4,22 +4,23 @@ Meko's Go backend: one binary, `meko`, that is both the CLI and the server, the 
 yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/design.md](docs/design.md)
 (the foundation), [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
 conversations), [docs/api.md](docs/api.md) (MCP and REST), [docs/knowledge.md](docs/knowledge.md)
-(knowledge files) and [docs/install.md](docs/install.md) (release builds, releases, the installer,
-the service, extensions, updates and secrets). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
+(knowledge files), [docs/install.md](docs/install.md) (release builds, releases, the installer,
+the service, extensions, updates and secrets) and [docs/web-ui.md](docs/web-ui.md) (the web UI). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
 
 ## Map
 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start`, `stop` and `restart` (through the login service once installed, else a detached `serve`; `start` and `stop` also run the extensions'), `status`, `logs`, `serve` (which also checks for updates and rolls back a failing one), `version`, `token`, `destroy` (stops the server and removes the data folder), `install`, `uninstall`, `install_extension`, `uninstall_extension`, `update`, and `search`, `add_memory`, `datapacks`, `create_datapack`, `delete_datapack`, `upload` and `upload_status` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
+| `internal/cli/` | The commands: `start`, `stop` and `restart` (through the login service once installed, else a detached `serve`; `start` and `stop` also run the extensions'), `status`, `logs`, `serve` (which also checks for updates and rolls back a failing one), `version`, `token`, `ui` (opens the web UI with the client token), `destroy` (stops the server and removes the data folder), `install`, `uninstall`, `install_extension`, `uninstall_extension`, `update`, and `search`, `add_memory`, `datapacks`, `create_datapack`, `delete_datapack`, `upload` and `upload_status` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
 | `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
-| `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`; the knowledge-file links' ticket), `/healthz` and `/api/v1` (status includes the memory engine's and the auth mode). |
+| `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`; the knowledge-file links' ticket), the Origin check that lets in only the web UI's own pages, the web UI's route, `/healthz` and `/api/v1` (status includes the memory engine's and the auth mode). |
 | `internal/mcp/` | MCP at `/mcp`: Meko Cloud's tools on the official MCP Go SDK (stateless, JSON replies, raw arguments read loosely), recording each call. |
 | `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads, knowledge files, and the upload and download links. |
 | `internal/knowledge/` | Knowledge files before the database: the types Meko takes and the check of a file's first bytes, text extraction (PDF, HTML, Markdown, CSV, text), chunking, and the `knowledgebase-files/` folder their bytes live in. No queries, no memory engine. |
+| `internal/webui/` | Finding the built web UI and serving it: its files, `index.html` for the app's own routes, and the headers that keep other sites from framing it. |
 | `internal/wire/` | Meko Cloud's reply shapes, which MCP and REST both build their replies with. |
 | `internal/testenv/` | A whole server for tests: store, store API, the memory engine with the hashing embedder, the service and the HTTP server. |
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
@@ -28,6 +29,7 @@ the service, extensions, updates and secrets). The rules for the whole repo are 
 | `internal/memory/` | The service MCP and REST call: memories (through the memory engine), learnings (keep and promote), artifacts, conversations, conversation search, knowledge files (upload and download links, the indexer, hybrid search with the reranker), the sweep that embeds turns and knowledge chunks, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
 | `assets/` | The Meko logo, dark and white, as Meko Cloud's web app has it; the repo's README shows it. |
 | `memory_engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), the knowledge base's cross-encoder in a worker thread of its own, its API, its tests. |
+| `web_ui/` | The web UI: React, Vite and Tailwind, built into `web_ui/dist`, which `serve` serves at `/`. Its pages call only `/api/v1` and `/mcp`. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), and the client token MCP and REST clients send (`client.token`, kept across restarts). |
 | `internal/service/` | The login service: a launchd LaunchAgent or a systemd user unit from embedded templates, run with launchctl or systemctl. |
 | `internal/secrets/` | The secret store: the login Keychain through `/usr/bin/security` (macOS), or 0600 files in the data folder. |
@@ -47,8 +49,9 @@ Run them in `backend/`:
 export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc   # RHEL 8 only; on macOS the Xcode command line tools are enough
 make build                                          # bin/meko
 make memory_engine                                  # npm ci (when the lockfile changes) and build memory_engine/dist
+make web_ui                                         # the same for the web UI, into web_ui/dist
 make test                                           # builds the memory engine, then go test -race and the memory engine's tests
-make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the memory engine
+make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the memory engine and the web UI
 make bench                                          # the search budget at 200 MB (minutes; not in CI)
 go test ./scripts/                                  # the installer, against a fake gh
 ```
@@ -77,7 +80,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Every database call goes through `internal/store`, the only package that imports the SQLite
   driver. The memory engine has no database: it stores through the store API. Migrations are append-only: never
   edit one that has shipped.
-- Memory engine dependencies are pinned exactly in `memory_engine/package.json`; `memory_engine/.npmrc` keeps npm from
+- Memory engine and web UI dependencies are pinned exactly in their `package.json`; `memory_engine/.npmrc` keeps npm from
   installing mem0ai's peers. Prod Meko's code is private: copy none of it and cite none of its
   paths (state the behavior instead).
 - Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`deps(meko): ...`)

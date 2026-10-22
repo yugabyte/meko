@@ -22,8 +22,7 @@ cross-encoder, also run locally.
 The server listens only on `127.0.0.1`.
 
 Meko is under construction. It has its storage, memory engine, conversations, knowledge files,
-MCP and REST, and an installer that runs it as a login service and keeps it updated. Its web UI
-([#172](https://github.com/yugabyte/agent-k-local/issues/172)) comes next.
+MCP, REST and a web UI, and an installer that runs it as a login service and keeps it updated.
 
 ## Install
 
@@ -46,13 +45,14 @@ works: [`backend/docs/install.md`](backend/docs/install.md).
 ## Build and run from source
 
 You need Go 1.26 (an older `go` downloads it on first use), a C compiler, and Node 22.13 or newer
-for the memory engine.
+for the memory engine and the web UI.
 
 ```sh
 cd backend
-make build memory_engine  # bin/meko, and the memory engine
-./bin/meko start          # runs in the background on 127.0.0.1:7778
-./bin/meko status         # wait for "Memory engine: ready"
+make build memory_engine web_ui  # bin/meko, the memory engine and the web UI
+./bin/meko start                 # runs in the background on 127.0.0.1:7778
+./bin/meko status                # wait for "Memory engine: ready"
+./bin/meko ui                    # opens the web UI in your browser
 ```
 
 The first start downloads the embedding model (23 MB). On RHEL 8, set
@@ -67,6 +67,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
+| `meko ui [--no-open]` | Open the web UI in the browser, signed in with the client token; `--no-open` only prints its link |
 | `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL and token |
 | `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
 | `meko uninstall [--purge [--force]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data, asking first |

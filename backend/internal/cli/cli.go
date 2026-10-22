@@ -1,4 +1,4 @@
-// Package cli is the meko command: start, stop, restart, status, serve, version, token, logs,
+// Package cli is the meko command: start, stop, restart, status, serve, version, token, ui, logs,
 // destroy, install, uninstall, install_extension, uninstall_extension and update, and the MCP calls
 // search, add_memory, datapacks, create_datapack, delete_datapack, upload and upload_status.
 package cli
@@ -43,6 +43,8 @@ Usage:
   meko token     print the token MCP and REST clients send (Authorization: Bearer <token>);
                  --mcp prints the claude mcp add command that registers Meko with Claude Code,
                  --json the MCP URL, the token and whether a server runs
+  meko ui        open the web UI in the browser, signed in with the client token;
+                 --no-open only prints its link
   meko destroy   stop the server and remove the data folder, everything in it, for good;
                  it asks first, unless --force
 
@@ -84,9 +86,9 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, purge, check, follow, force bool
-	lines                                                  int
-	server, memoryEngine, service                          bool
+	keepExtensions, noService, purge, check, follow, force, noOpen bool
+	lines                                                          int
+	server, memoryEngine, service                                  bool
 }
 
 // Run runs the command in args (without the program name) and returns the exit code.
@@ -144,6 +146,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")
 		fs.IntVar(&t.limit, "limit", 8, "the most results per source")
 	}
+	if cmd == "ui" {
+		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
+	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
 		fs.IntVar(&o.Port, "port", 0, "the port on 127.0.0.1 (default 7778)")
 		fs.StringVar(&o.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
@@ -154,7 +159,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
 	switch cmd {
-	case "start", "stop", "restart", "status", "serve", "version", "token", "logs", "destroy", "install",
+	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "logs", "destroy", "install",
 		"uninstall", "install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
 		"create_datapack", "delete_datapack", "upload", "upload_status":
 	default:
@@ -208,6 +213,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "logs":
 		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
 			service: c.service, json: t.json}, stdout)
+	case "ui":
+		return runUI(l, !c.noOpen, stdout, stderr)
 	case "destroy":
 		return runDestroy(l, c.force, stdin, stdout, stderr)
 	case "install":

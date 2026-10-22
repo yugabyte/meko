@@ -48,5 +48,8 @@ printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'blue herons' || { echo "search didn't find the memory" >&2; exit 1; }
 # The model came from the tarball: nothing was downloaded into the data folder.
 [ -z "$(ls -A "$data/models" 2>/dev/null)" ] || { echo "the memory engine downloaded a model instead of using the bundled one" >&2; exit 1; }
+# The web UI came from the tarball too.
+port=$(cat "$data/run/meko.port")
+curl -fsS "http://127.0.0.1:$port/" | grep -q 'id="root"' || { echo "the server doesn't serve the web UI" >&2; exit 1; }
 "$meko" stop --data-dir "$data"
 echo "smoke test passed: meko $version"

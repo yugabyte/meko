@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -31,6 +32,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 	"github.com/yugabyte/meko/backend/internal/update"
 	"github.com/yugabyte/meko/backend/internal/version"
+	"github.com/yugabyte/meko/backend/internal/webui"
 )
 
 // Shutdown limits.
@@ -267,6 +269,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	restOpts := rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken,
 		Credential: server.Credential, Log: log}
 	upload, download := rest.Tickets(restOpts)
+	var ui http.Handler
+	if dir, err := webui.FindDir(cfg.WebUI.Dir); err == nil {
+		ui = webui.Handler(dir)
+		log.Info("web UI", "dir", dir)
+	} else {
+		ui = webui.Missing(err)
+		log.Info("no web UI", "reason", err.Error())
+	}
 	srv := server.New(server.Options{
 		Info: server.Info{
 			Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
@@ -279,7 +289,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		REST: func(g *echo.Group) {
 			rest.Register(g, restOpts)
 		},
-		Upload: upload, Download: download,
+		Upload: upload, Download: download, UI: ui,
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

@@ -816,3 +816,28 @@ func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
 		t.Errorf("the link to the moved folder is still there: %v", err)
 	}
 }
+
+func TestUI(t *testing.T) {
+	dir, port := setup(t)
+	code, _, errs := run("ui", "--data-dir", dir, "--no-open")
+	want(t, "ui when stopped", code, exitNotRunning, errs, "isn't running")
+
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	_, tok, _ := run("token", "--data-dir", dir)
+	link := "http://127.0.0.1:" + port + "/#token=" + strings.TrimSpace(tok)
+
+	var opened []string
+	open := openBrowser
+	openBrowser = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openBrowser = open })
+
+	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
+	if code != 0 || strings.TrimSpace(out) != link || len(opened) != 0 {
+		t.Errorf("ui --no-open: %d %q, opened %v; want %q", code, out, opened, link)
+	}
+	code, out, _ = run("ui", "--data-dir", dir)
+	if code != 0 || strings.TrimSpace(out) != link || len(opened) != 1 || opened[0] != link {
+		t.Errorf("ui: %d %q, opened %v; want %q", code, out, opened, link)
+	}
+}

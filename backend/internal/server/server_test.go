@@ -92,6 +92,10 @@ func get(t *testing.T, url string, header map[string]string, host string) (int, 
 
 func TestAccess(t *testing.T) {
 	_, base, _ := start(t)
+	origin := strings.Replace(base, "http://", "", 1)
+	own := map[string]string{"Origin": base, "Authorization": "Bearer " + token}
+	ownLocalhost := map[string]string{"Origin": "http://localhost:" + strings.Split(origin, ":")[1]}
+	ownHTTPS := map[string]string{"Origin": "https://" + origin}
 	auth := map[string]string{"Authorization": "Bearer " + token}
 	wrong := map[string]string{"Authorization": "Bearer nope"}
 	browser := map[string]string{"Origin": "http://example.com"}
@@ -110,8 +114,13 @@ func TestAccess(t *testing.T) {
 		{name: "status with token", path: "/api/v1/status", header: auth, want: 200},
 		{name: "version with token", path: "/api/v1/version", header: auth, want: 200},
 		{name: "unknown route is not found", path: "/api/v1/nope", header: auth, want: 404, wantCode: "NOT_FOUND"},
-		{name: "browser request", path: "/healthz", header: browser, want: 403, wantCode: "FORBIDDEN"},
-		{name: "browser request with token", path: "/api/v1/status", header: browserAuth, want: 403, wantCode: "FORBIDDEN"},
+		{name: "another site's page", path: "/healthz", header: browser, want: 403, wantCode: "FORBIDDEN"},
+		{name: "another site's page with token", path: "/api/v1/status", header: browserAuth, want: 403,
+			wantCode: "FORBIDDEN"},
+		{name: "this server's own page", path: "/api/v1/status", header: own, want: 200},
+		{name: "this server's own page as localhost", path: "/healthz", header: ownLocalhost, want: 200},
+		{name: "this host over https isn't this server", path: "/healthz", header: ownHTTPS, want: 403,
+			wantCode: "FORBIDDEN"},
 		{name: "foreign Host (DNS rebinding)", path: "/healthz", host: "evil.example.com", want: 403, wantCode: "FORBIDDEN"},
 	}
 	for _, tc := range cases {
@@ -301,5 +310,43 @@ func TestTicketRoutes(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Errorf("a 3 MB body elsewhere answered %d", resp.StatusCode)
+	}
+}
+
+// The UI's files and deep links need no token; API paths it doesn't own stay behind the token and
+// 404 in the envelope.
+func TestUI(t *testing.T) {
+	ln, err := Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Port: tcpPort(t, ln), Token: token, ClientToken: clientToken,
+		Logger: slog.New(slog.DiscardHandler),
+		UI:     http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") })})
+	go func() { _ = s.Serve(ln) }()
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	base := fmt.Sprintf("http://127.0.0.1:%d", tcpPort(t, ln))
+
+	for _, path := range []string{"/", "/datapacks/x/memories", "/assets/app.js"} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 || string(body) != "ui" {
+			t.Errorf("%s: %d %q, want the UI", path, resp.StatusCode, body)
+		}
+	}
+	if code, _ := get(t, base+"/api/v1/nope", nil, ""); code != 401 {
+		t.Errorf("unknown API route without a token: %d, want 401", code)
+	}
+	auth := map[string]string{"Authorization": "Bearer " + clientToken}
+	code, env := get(t, base+"/api/v1/nope", auth, "")
+	if code != 404 || env.Error == nil || env.Error.Code != "NOT_FOUND" {
+		t.Errorf("unknown API route: %d %+v, want 404 NOT_FOUND", code, env.Error)
+	}
+	if code, _ := get(t, base+"/mcp/x", auth, ""); code != 404 {
+		t.Errorf("/mcp/x: %d, want 404", code)
 	}
 }

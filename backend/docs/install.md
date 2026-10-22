@@ -51,7 +51,7 @@ are outside the data folder, so the service can still start Meko on a fresh one.
 ## Release builds
 
 `backend/scripts/package-release.sh <version> <arch> <node-dir> <out-dir>`, run on the platform
-the tarball is for after `make build VERSION=<version>`, `make memory_engine` and
+the tarball is for after `make build VERSION=<version>`, `make memory_engine`, `make web_ui` and
 `(cd memory_engine && npm prune --omit=dev)`:
 
 ```
@@ -59,6 +59,7 @@ meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   memory_engine/package.json, dist/, node_modules/, stubs/
+  web_ui/dist/                 the built web UI, served at / (web-ui.md)
   models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```

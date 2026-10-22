@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -227,4 +229,62 @@ func TestKnowledgeFileRefusals(t *testing.T) {
 	if r.JSON["already_uploaded"] != true {
 		t.Errorf("a failed file again: %s", r.Text)
 	}
+}
+
+// knowledgebase_upload_file reads a local file itself: one call, then the same indexing as an
+// upload link's.
+func TestUploadLocalFile(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	dir := t.TempDir()
+	doc := []byte("# Fleet\n\nThe depot keeps twelve trucks for towing.\n")
+	path := filepath.Join(dir, "fleet.md")
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := func(p string) map[string]any {
+		return map[string]any{"path": p, "conversation_id": "c", "agent_id": "claude_code:kb"}
+	}
+	r := ok(t, e, "knowledgebase_upload_file", args(path))
+	key := str(r.JSON["document_key"])
+	if r.JSON["already_uploaded"] != false || r.JSON["datapack_id"] != e.DatapackID ||
+		!strings.HasSuffix(key, "/"+sha(doc)+"/fleet.md") || r.JSON["filename"] != "fleet.md" ||
+		(r.JSON["state"] != "indexing" && r.JSON["state"] != "completed") {
+		t.Fatalf("upload: %s", r.Text)
+	}
+	if st := waitIndexed(t, e, key); st.JSON["state"] != "completed" {
+		t.Fatalf("status: %s", st.Text)
+	}
+	r = ok(t, e, "knowledgebase_search", map[string]any{"query": "how many trucks for towing", "conversation_id": "c",
+		"datapack_id": ""})
+	if res := arr(r.JSON["results"]); len(res) == 0 || !strings.Contains(str(obj(res[0])["chunk_text"]), "twelve trucks") {
+		t.Errorf("search: %s", r.Text)
+	}
+	if r = ok(t, e, "knowledgebase_upload_file", args(path)); r.JSON["already_uploaded"] != true ||
+		r.JSON["document_key"] != key {
+		t.Errorf("the same file again: %s", r.Text)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "slides.pptx"), doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{
+		"a relative path":          "fleet.md",
+		"a missing file":           filepath.Join(dir, "gone.md"),
+		"a folder":                 dir + "/sub.md",
+		"a type Meko doesn't take": filepath.Join(dir, "slides.pptx"),
+	} {
+		if name == "a folder" {
+			if err := os.Mkdir(p, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if r := call(t, e, "knowledgebase_upload_file", args(p)); r.JSON["error"] != "VALIDATION_ERROR" ||
+			r.JSON["detail"] == "" {
+			t.Errorf("%s: %s", name, r.Text)
+		}
+	}
+	wantError(t, e, "knowledgebase_upload_file", args(""), "VALIDATION_ERROR")
+	a := args(path)
+	delete(a, "conversation_id")
+	wantError(t, e, "knowledgebase_upload_file", a, "conversation_id_required")
 }
