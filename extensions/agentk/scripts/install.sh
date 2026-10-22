@@ -4,7 +4,7 @@
 #
 # Internal repo (needs an authenticated `gh`). The repo's latest release is Meko's (whose
 # `meko install_extension agentk` installs AgentK Local pointed at it), so AgentK Local alone comes
-# from the newest AgentK release, tagged v<version> (agentk-v<version> once #230 switches the tags):
+# from the newest AgentK release, tagged agentk-v<version> (v<version> before releases were tagged by product):
 #   gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
 #     --exclude-pre-releases --limit 50 --json tagName \
 #     --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
@@ -85,7 +85,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 case $agent in ''|claude|kiro) ;; *) die "--agent takes claude or kiro (got $agent)" ;; esac
-# A version, or its tag (v<version>, or agentk-v<version> once #230 switches the tags).
+# A version, or its tag (agentk-v<version>, or v<version> from before).
 version=${version#agentk-v}
 version=${version#v}
 
@@ -433,8 +433,8 @@ say "${b}Download${n}"
 ok "Prerequisites" "git, curl, gh, $agents"
 
 # ---- resolve version ----
-# The newest AgentK release, not the repo's latest (Meko's): tagged v<version>, or agentk-v<version>
-# once #230 switches the tags. Drafts and prereleases are skipped.
+# The newest AgentK release, not the repo's latest (Meko's): tagged agentk-v<version>, or v<version>
+# from before releases were tagged by product. Drafts and prereleases are skipped.
 if [ -z "$version" ]; then
   if $have_gh; then
     tags=$(gh api "repos/$repo/releases?per_page=100" \

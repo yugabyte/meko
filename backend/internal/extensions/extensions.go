@@ -29,7 +29,7 @@ var Known = map[string]Catalog{
 	"agentk": {
 		Title:   "AgentK Local",
 		Command: "agent-k-local",
-		// Its releases are tagged v<version>, and agentk-v<version> once #230 switches them.
+		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
 		TagPrefixes: []string{"agentk-v", "v"},
 		Installer:   "install.sh",
 	},

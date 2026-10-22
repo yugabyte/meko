@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -25,11 +25,12 @@ const run = (script: string, args: string[], env: Record<string, string> = {}) =
 
 describe('next-version.sh', () => {
   it.each([
-    [['--product', 'agentk'], '0.20260924.2'],
-    [[], '0.20260924.2'],
+    [['--product', 'agentk'], '0.20260924.3'],
+    [[], '0.20260924.3'],
     [['--product=meko'], '0.20260924.1'],
-  ])('counts only the product’s own tags that day (%j)', (args, want) => {
-    for (const t of ['v0.20260923.7', 'v0.20260924.0', 'v0.20260924.1', 'meko-v0.20260924.0']) git('tag', t);
+  ])('counts only the product’s own tags that day, AgentK’s of both prefixes (%j)', (args, want) => {
+    // The day AgentK switched from v… to agentk-v… tags: a version is never used twice.
+    for (const t of ['v0.20260923.7', 'v0.20260924.0', 'v0.20260924.1', 'agentk-v0.20260924.2', 'meko-v0.20260924.0']) git('tag', t);
     const r = run('next-version.sh', args, { RELEASE_DATE: '20260924' });
     expect(r.stderr).toBe('');
     expect(r.stdout.trim()).toBe(want);
@@ -50,7 +51,9 @@ describe('release-notes.sh', () => {
     git('tag', 'meko-v0.20260101.0');
   });
 
-  it('gives AgentK every releasing subject but Meko’s, since AgentK’s last tag', () => {
+  it('gives AgentK every releasing subject but Meko’s, since AgentK’s last tag of either prefix', () => {
+    commit('fix(agentk): before the switch');
+    git('tag', 'agentk-v0.20260102.0');
     commit('fix(agentk/web): stop clipping the rail');
     commit('fix(repo): a release script');
     commit('feat(meko/cli)!: a Meko command');
@@ -58,7 +61,7 @@ describe('release-notes.sh', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('- agentk/web: stop clipping the rail');
     expect(r.stdout).toContain('- repo: a release script');
-    expect(r.stdout).not.toMatch(/meko|first|Breaking/);
+    expect(r.stdout).not.toMatch(/meko|first|before the switch|Breaking/);
   });
 
   it('gives Meko only its own subjects, since Meko’s last tag, and exits 3 with none', () => {
@@ -86,12 +89,69 @@ describe('prune-releases.sh', () => {
     const rel = (tagName: string, day: number, isPrerelease = false) => ({ tagName, isPrerelease, createdAt: `2026-01-0${day}T00:00:00Z` });
     writeFileSync(releases, JSON.stringify([
       rel('v0.20260101.0', 1), rel('meko-v0.20260101.0', 2), rel('v0.20260102.0', 3),
-      rel('meko-v0.20260102.0', 4), rel('v0.20260103.0-beta.1', 5, true), rel('v0.20260103.0', 6),
+      rel('meko-v0.20260102.0', 4), rel('agentk-v0.20260103.0-beta.1', 5, true), rel('agentk-v0.20260103.0', 6),
+      rel('agentk-v0.20260104.0', 7),
     ]));
-    const prune = (product: string) => run('prune-releases.sh', ['--product', product, '--dry-run'], {
-      PATH: `${bin}:${process.env.PATH}`, RELEASES: releases, GITHUB_REPOSITORY: 'o/r', KEEP: '1',
+    const prune = (product: string, keep: string) => run('prune-releases.sh', ['--product', product, '--dry-run'], {
+      PATH: `${bin}:${process.env.PATH}`, RELEASES: releases, GITHUB_REPOSITORY: 'o/r', KEEP: keep,
     }).stdout;
-    expect(prune('agentk')).toBe('would delete v0.20260102.0\nwould delete v0.20260101.0\n');
-    expect(prune('meko')).toBe('would delete meko-v0.20260101.0\n');
+    // The v… releases (before the switch) are a lane of their own, which stops growing.
+    expect(prune('agentk', '1')).toBe('would delete agentk-v0.20260103.0\nwould delete v0.20260101.0\n');
+    expect(prune('meko', '1')).toBe('would delete meko-v0.20260101.0\n');
+    // The newest v… release, which older installs update through, is never deleted.
+    expect(prune('agentk', '0')).toBe([
+      'agentk-v0.20260104.0', 'agentk-v0.20260103.0', 'agentk-v0.20260103.0-beta.1', 'v0.20260101.0',
+    ].map((t) => `would delete ${t}\n`).join(''));
+  });
+});
+
+describe('agentk-release.yml’s hand-run rebuild', () => {
+  // The plan step's own shell, cut out of the workflow: its run block, dedented.
+  const plan = (() => {
+    const lines = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/agentk-release.yml', import.meta.url)), 'utf8').split('\n');
+    const start = lines.findIndex((l) => /^\s+- id: p$/.test(l));
+    const run = lines.findIndex((l, i) => i > start && /^\s+run: \|$/.test(l));
+    const indent = /^\s*/.exec(lines[run + 1]!)![0];
+    const body: string[] = [];
+    for (const l of lines.slice(run + 1)) {
+      if (l.trim() && !l.startsWith(indent)) break;
+      body.push(l.slice(indent.length));
+    }
+    return body.join('\n');
+  })();
+  const rebuild = (tag: string) => {
+    const out = join(root, 'out');
+    writeFileSync(out, '');
+    const r = spawnSync('sh', ['-c', plan], { cwd: repo, encoding: 'utf8', env: { ...process.env, DISPATCH_TAG: tag, GITHUB_OUTPUT: out } });
+    return { status: r.status, stdout: r.stdout, output: readFileSync(out, 'utf8') };
+  };
+
+  beforeEach(() => {
+    git('tag', 'v0.20261001.0'); // from before the move to extensions/agentk
+    mkdirSync(join(repo, 'extensions/agentk'), { recursive: true });
+    writeFileSync(join(repo, 'extensions/agentk/package.json'), '{}\n');
+    git('add', '.');
+    commit('chore(repo): move AgentK');
+    for (const t of ['v0.20261022.2', 'agentk-v0.20261023.0', 'meko-v0.20261023.0']) git('tag', t);
+  });
+
+  it.each([
+    ['agentk-v0.20261023.0', '0.20261023.0'],
+    ['v0.20261022.2', '0.20261022.2'],
+  ])('rebuilds an AgentK tag of either prefix (%s)', (tag, version) => {
+    const r = rebuild(tag);
+    expect(r.status).toBe(0);
+    expect(r.output).toBe(`release=true\nrebuild=true\ntag=${tag}\nversion=${version}\nref=${tag}\n`);
+  });
+
+  it.each([
+    ['meko-v0.20261023.0', "isn't an AgentK Local release tag"],
+    ['agentk-v0.20261099.0', 'no such tag'],
+    ['v0.20261001.0', 'from before AgentK Local moved'],
+  ])('refuses %s', (tag, why) => {
+    const r = rebuild(tag);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain(why);
+    expect(r.output).toBe('');
   });
 });

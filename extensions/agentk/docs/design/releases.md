@@ -33,7 +33,8 @@ Part of the [AgentK Local design](../design.md).
   build: publishing waits for it. A hand-run rebuild takes only tags from after the move to
   `extensions/agentk`. Each release also includes `SHA256SUMS`, a build provenance attestation
   and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
-  prerelease identifier such as `beta`) are deleted; their tags stay, and Meko's are left alone.
+  prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
+  their tags stay, and Meko's are left alone.
 
 > **glibc.** RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run
 > in an AlmaLinux 8 container rather than on `ubuntu-latest`, so the binary loads on older hosts.
@@ -79,8 +80,13 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #  7. prints the one-time setup link (remote access), or the address (local access)
 ```
 
-**Tags.** The repo releases two products. AgentK's releases are tagged `v<version>`, and
-`agentk-v<version>` once releases are tagged by product (#230); Meko's are `meko-v<version>`. Meko's
+**Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`
+(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`. Versions stay
+bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and `bad-versions` use them, and on the day of
+the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
+before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach
+the `agentk-v…` releases through it, and pruning never deletes the newest `v…` release (the old
+prefix is a lane of its own that stops growing). Meko's
 releases are the repo's "latest", since its installer is the one-line install, so AgentK's are
 published with `--latest=false`: the installer finds the newest AgentK release by its tag (the
 newest non-draft, non-prerelease `agentk-v…` or `v…`), and `--version` tries both tags. The updater

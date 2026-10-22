@@ -83,7 +83,7 @@ titles) follow the title and release rules: every npm bump is `deps(agentk): …
 (the web UI's libraries are devDependencies bundled into the release, so dev-tool bumps release
 too), while `ci(repo): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
 breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
-`release.yml`) is bumped by hand.
+`agentk-release.yml`) is bumped by hand.
 
 ## Releases
 
@@ -92,7 +92,7 @@ release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, s
 sorts higher.
 
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
-   Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
+   AgentK release workflow (`.github/workflows/agentk-release.yml`) runs the tests, picks the next version with
    the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
    `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
    (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only
@@ -103,11 +103,14 @@ sorts higher.
    (node-pty built from source with Xcode's clang). Each bundles Node 22, the compiled server and
    web UI, and production dependencies, and is smoke-tested (`version`, and `selftest`, which
    spawns a real pty).
-3. It creates the tag and GitHub release `v<version>` with the tarballs, `SHA256SUMS` and
+3. It creates the tag and GitHub release `agentk-v<version>` (`v<version>` before releases were
+   tagged by product; Meko's are `meko-v<version>`) with the tarballs, `SHA256SUMS` and
    `install.sh`, not marked "latest" (that's Meko's), and attests build provenance where the
    plan allows.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/release/prune-releases.sh --product agentk`, which leaves Meko's releases alone.
-   A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
+   A lane is the tag's prefix and the version's prerelease identifier (`-beta.2` → `beta`), or
+   `stable` without one. The newest `v<version>` release is never deleted: installs from before the
+   switch to `agentk-v` tags update through it.
    Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
    between two tags) are unaffected.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
@@ -123,8 +126,8 @@ collector of your own, set `[call_home] url` in the dev home's `config.toml`
 (`.dev-home/config.toml`). The collector (`services/ak-local-call-home` in yugabyte/agent-k) has
 an identical copy of `docs/call-home-report.schema.json`; change both together.
 
-Run the Release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
-a **tag** to rebuild the assets of an existing release. Only tags from after the move to
+Run the AgentK release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
+a **tag** (`agentk-v…` or `v…`) to rebuild the assets of an existing release. Only tags from after the move to
 `extensions/agentk` can be rebuilt; the workflow refuses older ones.
 
 Release tarball layout:
