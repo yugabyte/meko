@@ -2,15 +2,15 @@
 // conversations, each source's hits in its own section.
 
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Brain, ChevronDown, ChevronRight, FileText, MessagesSquare, Search } from "lucide-react";
+import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
 import { api } from "../lib/api";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
 
-// Memories below this cosine are folded away as weak. context_search returns every memory it ranks,
-// as Cloud's does, for an agent to weigh beside the other sources; a person reading the list needs
-// the noise out of the way. Measured with Meko's embedder, right answers scored 0.40 to 0.72 and
+// Memories below this cosine aren't shown. context_search returns every memory it ranks, as Cloud's
+// does, for an agent to weigh beside the other sources; a person reading the list needs only the
+// matches. Measured with Meko's embedder, right answers scored 0.40 to 0.72 and
 // unrelated memories 0.11 to 0.29.
 const WEAK_MEMORY = 0.4;
 
@@ -41,31 +41,13 @@ function MemoryCard({ m }: { m: MemoryHit }) {
 }
 
 function Memories({ hits }: { hits: MemoryHit[] }) {
-  const [showWeak, setShowWeak] = useState(false);
   const strong = hits.filter((m) => !isWeak(m));
-  const weak = hits.filter(isWeak);
+  if (strong.length === 0) return <p className="text-sm text-muted-foreground">Nothing close enough.</p>;
   return (
     <div className="space-y-2">
-      {strong.length === 0 && <p className="text-sm text-muted-foreground">No strong matches.</p>}
       {strong.map((m) => (
         <MemoryCard key={m.id} m={m} />
       ))}
-      {weak.length > 0 && (
-        <button
-          onClick={() => setShowWeak(!showWeak)}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          {showWeak ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-          {weak.length} weak {weak.length === 1 ? "match" : "matches"} (similarity below {WEAK_MEMORY})
-        </button>
-      )}
-      {showWeak && (
-        <div className="space-y-2 opacity-60">
-          {weak.map((m) => (
-            <MemoryCard key={m.id} m={m} />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
