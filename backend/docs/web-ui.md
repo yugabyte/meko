@@ -16,6 +16,7 @@ copy the commands that connect an agent. It calls the REST routes and MCP tools 
 | **The UI's files need no token**; catch-all `/api/*` and `/mcp/*` routes keep API paths off the UI's route | It's static and holds nothing secret. The credential check keys on the matched route alone, and an unknown API route stays a 401 without a token and a 404 with one. |
 | **Frames refused, `Content-Security-Policy` of `self`**, assets cached for good (their names are hashed) and `index.html` never | Another site can't frame the page that holds the token, and a rebuilt UI loads at once. |
 | **Search goes through `context_search` on `/mcp`** | There's no REST search route; the UI shows what an agent would get. Its calls are recorded as agent `meko_web_ui`. |
+| **Settings: one checkbox, Send usage stats to YugabyteDB**, in a dialog from the gear in the sidebar's footer, saved as soon as it's changed (`/settings/usage-stats`) | The web UI's switch for [usage stats](callhome.md). When `config.toml` or the environment turned them off, it's off and disabled and says which. |
 | **Uploads use Cloud's presigned flow** (`upload-url`, then the multipart POST), hashing the file in the browser | The same path AgentK and meko_ui take, so nothing new is trusted. |
 
 ## Develop

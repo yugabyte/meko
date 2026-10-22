@@ -25,8 +25,9 @@ v=$("$meko" version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 [ "$v" = "$version" ] || { echo "the tarball's meko says it's $v, not $version" >&2; exit 1; }
 "$meko" version
 
-# A private HOME and file secrets: nothing of the runner's own is touched.
-export HOME="$tmp/home" MEKO_SECRETS=file
+# A private HOME and file secrets: nothing of the runner's own is touched. No usage stats: a release
+# build would send them to YugabyteDB.
+export HOME="$tmp/home" MEKO_SECRETS=file MEKO_CALL_HOME=false
 mkdir -p "$HOME"
 "$meko" start --data-dir "$data" --port "$port"
 i=0

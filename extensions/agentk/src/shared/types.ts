@@ -524,6 +524,20 @@ export interface CallHomeReport {
   days: CallHomeDay[];
 }
 
+/**
+ * The same report as YugabyteDB's call home service (diagnostics.yugabyte.com) takes it: yugabyted's
+ * envelope, with the report as its payload. The service routes it by callhome_type to a table of its own.
+ */
+export interface YbCallHome {
+  callhome_type: 'agentk';
+  command: 'heartbeat';
+  /** UTC, with microseconds and no zone (`2026-11-09T17:05:32.123000`): the only form the service parses. */
+  timestamp: string;
+  install_id: string;
+  version: string;
+  payload: CallHomeReport;
+}
+
 export interface ProjectSettings {
   /** Send a continue prompt to sessions that were mid-turn when the host went down. */
   autoContinue: boolean;

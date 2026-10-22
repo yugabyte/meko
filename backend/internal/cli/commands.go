@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
@@ -219,6 +220,9 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintln(stdout, "  Auth:          token (meko token prints it)")
 	}
+	if u := st.UsageStats; u != nil {
+		fmt.Fprintln(stdout, "  Usage stats:   "+usageStatsLine(*u))
+	}
 	if len(st.Children) == 0 {
 		fmt.Fprintf(stdout, "  Children:      none\n")
 	}
@@ -231,6 +235,19 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	}
 	printSetup(l, stdout)
 	return exitOK
+}
+
+// usageStatsLine says whether usage stats go to YugabyteDB, and what turned them off.
+func usageStatsLine(u callhome.State) string {
+	switch {
+	case u.Enabled && u.Sends:
+		return "on (sent to YugabyteDB once a day)"
+	case u.Enabled:
+		return "on, but a build from source sends none"
+	case u.By == callhome.OffByWebUI:
+		return "off (turned off in the web UI)"
+	}
+	return "off (turned off by " + u.By + ")"
 }
 
 // printSetup prints how Meko is installed: its service, its updates and its extensions.

@@ -187,3 +187,50 @@ func TestWebUISettings(t *testing.T) {
 		t.Fatalf("env over the file: %+v %v", c.WebUI, err)
 	}
 }
+
+func TestCallHomeSettings(t *testing.T) {
+	cases := []struct {
+		name      string
+		file      string
+		env       map[string]string
+		wantOn    bool
+		wantOffBy string
+		wantURL   string
+	}{
+		{name: "on by default", wantOn: true},
+		{name: "off in the file", file: "[call_home]\nenabled = false\n", wantOffBy: OffByFile},
+		{name: "env off", env: map[string]string{"MEKO_CALL_HOME": "false"}, wantOffBy: OffByEnv},
+		{name: "env on over the file", file: "[call_home]\nenabled = false\n", env: map[string]string{"MEKO_CALL_HOME": "1"},
+			wantOn: true},
+		{name: "yugabyted's switch", env: map[string]string{"MEKO_CALL_HOME": "true", "YB_DISABLE_CALLHOME": "Yes"},
+			wantOffBy: OffByYugabyteDB},
+		{name: "yugabyted's switch set false", env: map[string]string{"YB_DISABLE_CALLHOME": "false"}, wantOn: true},
+		{name: "url from the file", file: "[call_home]\nurl = \"http://127.0.0.1:9/\"\n", wantOn: true,
+			wantURL: "http://127.0.0.1:9/"},
+		{name: "url from env", file: "[call_home]\nurl = \"http://127.0.0.1:9/\"\n",
+			env:    map[string]string{"MEKO_CALL_HOME_URL": "https://collector.test/"},
+			wantOn: true, wantURL: "https://collector.test/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path, func(k string) string { return tc.env[k] }, Overrides{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.CallHome.Enabled != tc.wantOn || c.CallHome.OffBy != tc.wantOffBy || c.CallHome.URL != tc.wantURL {
+				t.Fatalf("got %+v, want on %v, off by %q, url %q", c.CallHome, tc.wantOn, tc.wantOffBy, tc.wantURL)
+			}
+		})
+	}
+	for _, bad := range []map[string]string{{"MEKO_CALL_HOME": "maybe"}, {"MEKO_CALL_HOME_URL": "ftp://x"},
+		{"MEKO_CALL_HOME_URL": "not a url"}} {
+		none := filepath.Join(t.TempDir(), "none.toml")
+		if _, err := Load(none, func(k string) string { return bad[k] }, Overrides{}); err == nil {
+			t.Errorf("%v was taken", bad)
+		}
+	}
+}

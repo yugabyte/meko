@@ -223,6 +223,16 @@ var (
 		desc: "The memory's UUID, from the id field of memory_search or memory_get_all."}
 )
 
+// ToolNames are the names of every tool, in the order tools/list gives them.
+func ToolNames() []string {
+	tools := allTools()
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		out[i] = t.name
+	}
+	return out
+}
+
 // allTools is every tool, in the order tools/list gives them.
 func allTools() []*tool {
 	out := make([]*tool, 0, 32)

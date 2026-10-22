@@ -77,6 +77,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
 # url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
+# diagnostics_url = "http://127.0.0.1:8080/" # where the YugabyteDB copy goes; unset is https://diagnostics.yugabyte.com from release installs only
 
 [pr]
 # resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base (Settings → General); on by default

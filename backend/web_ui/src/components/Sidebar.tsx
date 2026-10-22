@@ -1,11 +1,12 @@
-// The left rail: the Meko mark, the datapacks, and the server's version and theme toggle.
+// The left rail: the Meko mark, the datapacks, and the server's version, settings and theme toggle.
 
 import { useState } from "react";
-import { Database, Moon, Plus, Sun } from "lucide-react";
+import { Database, Moon, Plus, Settings, Sun } from "lucide-react";
 import { href, navigate } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import type { Datapack } from "../lib/types";
 import { CreateDatapackDialog } from "./CreateDatapackDialog";
+import { SettingsDialog } from "./SettingsDialog";
 import { Button, cx } from "./ui";
 
 export function Sidebar({
@@ -24,6 +25,7 @@ export function Sidebar({
   onCreated: (d: Datapack) => void;
 }) {
   const [creating, setCreating] = useState(false);
+  const [settings, setSettings] = useState(false);
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r bg-sidebar">
       <div className="flex items-center gap-2 px-4 py-4">
@@ -61,10 +63,17 @@ export function Sidebar({
 
       <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">
         <span>Meko {version ?? ""}</span>
-        <Button size="sm" variant="ghost" onClick={onToggleTheme} title="Toggle theme">
-          {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
-        </Button>
+        <div className="flex items-center">
+          <Button size="sm" variant="ghost" onClick={() => setSettings(true)} title="Settings">
+            <Settings className="size-3.5" />
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onToggleTheme} title="Toggle theme">
+            {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+          </Button>
+        </div>
       </div>
+
+      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
 
       {creating && (
         <CreateDatapackDialog

@@ -46,9 +46,10 @@ export interface Config {
   /**
    * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day). url: where to POST it
    * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
-   * nothing is sent.
+   * nothing is sent. The same report also goes to YugabyteDB's call home service: diagnosticsUrl, or else
+   * https://diagnostics.yugabyte.com from release installs only. enabled (or YB_DISABLE_CALLHOME) turns off both.
    */
-  callHome: { enabled: boolean; url: string };
+  callHome: { enabled: boolean; url: string; diagnosticsUrl: string };
   /**
    * resolveConflicts: when a PR in PR & Review conflicts with its base, AgentK asks Claude to resolve the conflicts
    * (false leaves them to the user). Set in Settings → General; an edit to config.toml takes effect after a restart.
@@ -75,7 +76,7 @@ export const DEFAULT_CONFIG: Config = {
   agents: { default: DEFAULT_HARNESS },
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
-  callHome: { enabled: true, url: '' },
+  callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
 };

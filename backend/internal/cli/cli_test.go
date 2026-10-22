@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -34,15 +37,21 @@ func TestMain(m *testing.M) {
 			hungServe(mode)
 		}
 		testEmbedder = os.Getenv(testEmbedderEnv)
+		testCallHomeFirstCheck, _ = time.ParseDuration(os.Getenv(testCallHomeFirstCheckEnv))
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	// Only in the tests' own process: a test sets it for the serve it starts.
-	_ = os.Unsetenv("MEKO_AUTH")
+	// Only in the tests' own process: a test sets them for the serve it starts.
+	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME"} {
+		_ = os.Unsetenv(k)
+	}
 	os.Exit(m.Run())
 }
 
 // testEmbedderEnv passes testEmbedder to the serve a test starts (as this test binary).
 const testEmbedderEnv = "MEKO_TEST_EMBEDDER"
+
+// testCallHomeFirstCheckEnv passes testCallHomeFirstCheck to the serve a test starts.
+const testCallHomeFirstCheckEnv = "MEKO_TEST_CALL_HOME_FIRST_CHECK"
 
 // hungServe stands in for a serve that takes the lock and writes its pid but never answers;
 // "hang-ignore-term" also ignores SIGTERM, so only SIGKILL stops it.
@@ -161,6 +170,7 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "status's auth", code, 0, out, "Auth:          token")
 	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
 	want(t, "status's updates", code, 0, out, "Updates:       none (a build from source)")
+	want(t, "status's usage stats", code, 0, out, "Usage stats:   on, but a build from source sends none")
 
 	code, _, errs = run("serve", "--data-dir", dir, "--port", strconv.Itoa(freePort(t)))
 	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
@@ -242,6 +252,50 @@ func TestStatusWarnsWhenAuthIsOff(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "Auth:          none (every user and program on this machine")
+}
+
+func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
+	dir, port := setup(t)
+	got := make(chan []byte, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- b
+	}))
+	defer srv.Close()
+	t.Setenv("MEKO_CALL_HOME_URL", srv.URL+"/")
+	t.Setenv(testCallHomeFirstCheckEnv, "100ms")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "Usage stats:   on (sent to YugabyteDB once a day)")
+	select {
+	case b := <-got:
+		var e struct {
+			CallhomeType string `json:"callhome_type"`
+			InstallID    string `json:"install_id"`
+			Payload      struct {
+				Install struct {
+					Version string `json:"version"`
+				} `json:"install"`
+				Days []json.RawMessage `json:"days"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(b, &e); err != nil || e.CallhomeType != "meko" || e.InstallID == "" ||
+			e.Payload.Install.Version != "dev" || len(e.Payload.Days) != 30 {
+			t.Errorf("heartbeat %s: %+v %v", b, e, err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("no heartbeat")
+	}
+}
+
+func TestStatusSaysWhatTurnedUsageStatsOff(t *testing.T) {
+	dir, port := setup(t)
+	t.Setenv("YB_DISABLE_CALLHOME", "true")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "Usage stats:   off (turned off by YB_DISABLE_CALLHOME)")
 }
 
 func TestStalePidFileDoesntBlockStart(t *testing.T) {

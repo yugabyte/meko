@@ -134,6 +134,8 @@ export class Core extends EventEmitter {
   /** Whether Claude Code's sessions reach AgentK's Meko (MekoStatus.claude). */
   readonly claudeMeko: MekoClaudeWatch;
   readonly callHome: CallHomeService;
+  /** The same report to YugabyteDB's call home service, from release installs (to be the only one later). */
+  readonly ybCallHome: CallHomeService;
   /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
   /** Claude Code was available at its last version change (`claudeChanged`). */
@@ -245,6 +247,9 @@ export class Core extends EventEmitter {
     this.mekoStatus = this.mekoStatusFor(o.config);
     this.callHome = new CallHomeService({
       db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
+    });
+    this.ybCallHome = new CallHomeService({
+      target: 'yugabyte', db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
     const mekoApi = o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey }));
     this.invites = new InviteService(this, mekoApi);
@@ -483,6 +488,7 @@ export class Core extends EventEmitter {
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
       this.callHome.start((ms, fn) => this.every(ms, fn));
+      this.ybCallHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
       void this.syncInvites();
       this.lifecycle.start();
@@ -494,6 +500,7 @@ export class Core extends EventEmitter {
     for (const i of this.intervals) clearInterval(i);
     this.intervals = [];
     this.callHome.stop();
+    this.ybCallHome.stop();
     this.lifecycle.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
