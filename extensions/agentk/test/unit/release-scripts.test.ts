@@ -105,6 +105,15 @@ describe('prune-releases.sh', () => {
   });
 });
 
+// The tag already names the product (agentk-v…, meko-v…), so a title that adds it again reads
+// "Meko meko-v…".
+it.each(['agentk-release.yml', 'meko-release.yml'])('%s titles each release with its tag alone', (file) => {
+  const text = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${file}`, import.meta.url)), 'utf8');
+  const creates = text.split('\n').filter((l) => l.includes('gh release create'));
+  expect(creates).toHaveLength(1);
+  expect(creates[0]).toContain('--title "$TAG" ');
+});
+
 describe('agentk-release.yml’s hand-run rebuild', () => {
   // The plan step's own shell, cut out of the workflow: its run block, dedented.
   const plan = (() => {
