@@ -1,9 +1,7 @@
 # Sourced by the release scripts in this folder. The repo releases two products from one
 # history, each with its own tags, versions and notes:
 #
-#   agentk  AgentK Local (extensions/agentk): tags agentk-v<version>, and v<version> before
-#           releases were tagged by product (installed AgentKs from before read only those, so
-#           the newest v… release, which reads both, stays: prune-releases.sh never deletes it)
+#   agentk  AgentK Local (extensions/agentk): tags v<version>
 #   meko    Meko (backend/): tags meko-v<version>
 #
 # Takes `--product agentk|meko` (default agentk) out of the script's arguments and sets:
@@ -33,8 +31,8 @@ unset _args
 
 case $product in
   agentk)
-    tag_prefix=agentk-v
-    tag_prefixes='agentk-v v'
+    tag_prefix=v
+    tag_prefixes='v'
     scope='(\([^)]*\))?'
     exclude='\(meko(/[^)]*)?\)'
     ;;

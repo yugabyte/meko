@@ -99,7 +99,7 @@ release scripts with `--product meko`:
 
 | | AgentK Local (`release.yml`) | Meko (`meko-release.yml`) |
 |---|---|---|
-| Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
+| Tag | `v0.YYYYMMDD.N` (`agentk-v…` after #230, once the release that reads both prefixes is out) | `meko-v0.YYYYMMDD.N` |
 | Releases on | feat/fix/perf/deps subjects other than `meko` | feat/fix/perf/deps subjects with component `meko` |
 | Assets | AgentK tarballs, `SHA256SUMS`, its `install.sh` | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` |
 | Latest | `--latest=false` | `--latest` |
