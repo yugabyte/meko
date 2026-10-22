@@ -25,7 +25,12 @@ function uptime(s: number): string {
 }
 
 function State({ state }: { state: string }) {
-  const tone = state === "ready" || state === "running" ? "success" : state === "failed" ? "danger" : "warning";
+  const tone =
+    state === "ready" || state === "running"
+      ? "success"
+      : ["error", "failed", "unavailable"].includes(state)
+        ? "danger"
+        : "warning";
   return <Badge tone={tone}>{state}</Badge>;
 }
 

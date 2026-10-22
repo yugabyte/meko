@@ -10,7 +10,14 @@ import { cx } from "./ui";
 
 const POLL_MS = 30_000;
 
-const DOT: Record<string, string> = { ready: "bg-success", failed: "bg-destructive", unavailable: "bg-destructive" };
+// "error" is the engine's own state after a failure it stays in (a changed model); "failed" and
+// "unavailable" are the server's, for an engine that crashed or never ran.
+const DOT: Record<string, string> = {
+  ready: "bg-success",
+  error: "bg-destructive",
+  failed: "bg-destructive",
+  unavailable: "bg-destructive",
+};
 
 export function StatusLink({ active }: { active: boolean }) {
   const status = useLoad(() => api.server(), []);
@@ -19,7 +26,8 @@ export function StatusLink({ active }: { active: boolean }) {
     const t = setInterval(reload, POLL_MS);
     return () => clearInterval(t);
   }, [reload]);
-  const state = status.data?.memory_engine.state;
+  // A failed poll greys the dot rather than leaving the last good colour on it.
+  const state = status.error ? undefined : status.data?.memory_engine.state;
   const to = { tab: "overview" as const, view: "status" as const };
   return (
     <a
