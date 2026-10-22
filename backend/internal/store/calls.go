@@ -60,10 +60,22 @@ func (s *Store) AddCall(ctx context.Context, c Call) error {
 
 // Calls is the datapack's calls since a time, oldest first ("" datapack: every call).
 func (s *Store) Calls(ctx context.Context, datapack string, since time.Time) ([]Call, error) {
-	q := "SELECT id, at, tool, datapack_id, agent_id, conversation_id, credential, ok, error_code, ms, memory_n, " +
-		"kb_n, conversation_n, score_high, score_mid, score_low, tokens_sent, tokens_saved, input_tokens, " +
-		"output_tokens, steps FROM call_log WHERE at >= ? AND (? = '' OR datapack_id = ?) ORDER BY at, id"
-	rows, err := s.r.QueryContext(ctx, q, since.UTC().Format(timeLayout), datapack, datapack)
+	return s.calls(ctx, selectCalls+"WHERE at >= ? AND (? = '' OR datapack_id = ?) ORDER BY at, id",
+		since.UTC().Format(timeLayout), datapack, datapack)
+}
+
+// ConversationCalls is the calls made in one of a datapack's conversations, oldest first.
+func (s *Store) ConversationCalls(ctx context.Context, datapack, conversation string) ([]Call, error) {
+	return s.calls(ctx, selectCalls+"WHERE datapack_id = ? AND conversation_id = ? ORDER BY at, id",
+		datapack, conversation)
+}
+
+const selectCalls = "SELECT id, at, tool, datapack_id, agent_id, conversation_id, credential, ok, error_code, ms, " +
+	"memory_n, kb_n, conversation_n, score_high, score_mid, score_low, tokens_sent, tokens_saved, input_tokens, " +
+	"output_tokens, steps FROM call_log "
+
+func (s *Store) calls(ctx context.Context, q string, args ...any) ([]Call, error) {
+	rows, err := s.r.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

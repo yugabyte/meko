@@ -78,12 +78,18 @@ func (s *Service) CountConversations(ctx context.Context, datapack string) (int,
 type Turn struct {
 	store.Message
 	Memories []store.SavedMemory
+	// Calls is the turn's decision trace: the conversation's Meko calls (its searches and saves)
+	// in the same window as Memories, apart from the calls that store the conversation itself.
+	Calls []store.Call
 }
 
+// notInTrace are the calls that store a conversation rather than act within it.
+var notInTrace = map[string]bool{"conversation_create": true, "conversation_add_message": true}
+
 // ConversationThread is a conversation's summary and a page of its turns, oldest first, each with
-// the memories it produced. Until extraction records which turn made which memory (#190), a turn's
-// memories are those saved in its conversation after the turn before it and no later than it, as
-// Meko Cloud infers them.
+// the memories it produced and the calls it made. Until extraction records which turn made which
+// memory (#190), a turn's memories are those saved in its conversation after the turn before it and
+// no later than it, as Meko Cloud infers them; its calls are matched the same way.
 func (s *Service) ConversationThread(ctx context.Context, datapack, id string, limit, offset int) (
 	store.ConversationSummary, []Turn, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
@@ -118,12 +124,22 @@ func (s *Service) ConversationThread(ctx context.Context, datapack, id string, l
 	if err != nil {
 		return c, nil, err
 	}
+	calls, err := s.st.ConversationCalls(ctx, datapack, c.ID)
+	if err != nil {
+		return c, nil, err
+	}
 	turns := make([]Turn, len(msgs))
 	for i, m := range msgs {
-		turns[i] = Turn{Message: m, Memories: []store.SavedMemory{}}
+		turns[i] = Turn{Message: m, Memories: []store.SavedMemory{}, Calls: []store.Call{}}
+		in := func(t time.Time) bool { return t.After(after) && !t.After(m.CreatedAt) }
 		for _, sm := range saved {
-			if sm.CreatedAt.After(after) && !sm.CreatedAt.After(m.CreatedAt) {
+			if in(sm.CreatedAt) {
 				turns[i].Memories = append(turns[i].Memories, sm)
+			}
+		}
+		for _, cl := range calls {
+			if in(cl.At) && !notInTrace[cl.Tool] {
+				turns[i].Calls = append(turns[i].Calls, cl)
 			}
 		}
 		after = m.CreatedAt

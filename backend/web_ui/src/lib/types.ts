@@ -48,26 +48,29 @@ export interface Metrics {
 }
 
 // GET /datapacks/:id/usage: Meko local's own view of the call log.
+// One Meko call from the call log, as /usage's recent calls and a turn's decision trace give it.
+export interface MekoCall {
+  // Absent from an older server's reply.
+  id?: number;
+  steps?: { step: string; ms: number; n: number }[];
+  at: string;
+  tool: string;
+  agent_id: string;
+  ok: boolean;
+  error_code: string;
+  ms: number;
+  memory_n: number;
+  kb_n: number;
+  conversation_n: number;
+}
+
 export interface Usage {
   calls: number;
   errors: number;
   tools: { tool: string; calls: number; errors: number; p50_ms: number; p95_ms: number }[];
   steps: { step: string; calls: number; p50_ms: number; p95_ms: number }[];
   agents: { agent_id: string; calls: number; searches: number; last_at: string }[];
-  recent: {
-    // Absent from an older server's reply.
-    id?: number;
-    steps?: { step: string; ms: number; n: number }[];
-    at: string;
-    tool: string;
-    agent_id: string;
-    ok: boolean;
-    error_code: string;
-    ms: number;
-    memory_n: number;
-    kb_n: number;
-    conversation_n: number;
-  }[];
+  recent: MekoCall[];
   input_tokens: number;
   output_tokens: number;
 }
@@ -113,6 +116,11 @@ export interface Turn {
   input: string;
   output: string;
   memory_texts: string[];
+  // What the agent said about the turn: why it answered so, and the steps it took.
+  reasoning?: string;
+  plan?: string[];
+  // The Meko calls it made since the turn before; absent from an older server.
+  calls?: MekoCall[];
 }
 
 export interface ConversationDetail extends Conversation {

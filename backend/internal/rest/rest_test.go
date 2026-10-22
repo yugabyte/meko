@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
@@ -363,5 +364,70 @@ func TestProvisionStatusWithAuthOff(t *testing.T) {
 	}
 	if r.Data["mcp_api_key"] != "" || r.Data["mcp_server_url"] == "" {
 		t.Errorf("provision-status with no credential: %v", r.Data)
+	}
+}
+
+// A turn's decision trace is the conversation's calls since the turn before it: its searches and
+// saves, without the calls that store the conversation, next to the reasoning and plan it sent.
+func TestDecisionTrace(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	ctx := context.Background()
+	conv, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "a", DatapackID: e.DatapackID,
+		SessionID: "s1", Title: "trace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(tool string, ok bool) {
+		t.Helper()
+		time.Sleep(5 * time.Millisecond)
+		e.Service.RecordCall(ctx, store.Call{At: time.Now(), Tool: tool, DatapackID: e.DatapackID, AgentID: "a",
+			ConversationID: conv.ID, OK: ok, Ms: 12, MemoryN: 2,
+			Steps: []store.Step{{Step: "memory_search", Ms: 9, N: 2}}})
+	}
+	turn := func(input, reasoning string, plan []string) {
+		t.Helper()
+		time.Sleep(5 * time.Millisecond)
+		if _, err := e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "a",
+			DatapackID: e.DatapackID, Input: input, Output: "ok", Seed: input, Reasoning: reasoning,
+			Plan: plan}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call("context_search", true)
+	call("memory_add", false)
+	call("conversation_add_message", true) // stores the turn: not part of its trace
+	turn("when do we release?", "The calendar memory says Tuesdays.", []string{"Search memories", "Answer"})
+	call("knowledgebase_search", true)
+	turn("who signs off?", "", nil)
+
+	reply := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/conversations/"+conv.ID, nil, 200))
+	th := arr(obj(reply["conversation"])["thread"])
+	if len(th) != 2 {
+		t.Fatalf("thread %v", th)
+	}
+	first, second := obj(th[0]), obj(th[1])
+	tools := func(turn map[string]any) []string {
+		calls := arr(turn["calls"])
+		out := make([]string, 0, len(calls))
+		for _, c := range calls {
+			out = append(out, str(obj(c)["tool"]))
+		}
+		return out
+	}
+	if got := tools(first); len(got) != 2 || got[0] != "context_search" || got[1] != "memory_add" {
+		t.Errorf("first turn's calls %v", got)
+	}
+	if c := obj(arr(first["calls"])[0]); c["ok"] != true || num(c["ms"]) != 12 || num(c["memory_n"]) != 2 ||
+		len(arr(c["steps"])) != 1 || c["id"] == nil {
+		t.Errorf("a call %v", c)
+	}
+	if first["reasoning"] != "The calendar memory says Tuesdays." || len(arr(first["plan"])) != 2 {
+		t.Errorf("first turn's reasoning and plan %v %v", first["reasoning"], first["plan"])
+	}
+	if got := tools(second); len(got) != 1 || got[0] != "knowledgebase_search" {
+		t.Errorf("second turn's calls %v", got)
+	}
+	if second["reasoning"] != nil || arr(second["calls"]) == nil {
+		t.Errorf("second turn %v", second)
 	}
 }

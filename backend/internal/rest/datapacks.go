@@ -249,12 +249,7 @@ func (a *api) callUsage(c echo.Context) error {
 		agents[i] = map[string]any{"agent_id": ag.AgentID, "calls": ag.Calls, "searches": ag.Searches,
 			"last_at": wire.Time(ag.LastAt)}
 	}
-	recent := make([]map[string]any, len(u.Recent))
-	for i, r := range u.Recent {
-		recent[i] = map[string]any{"id": r.ID, "steps": r.Steps, "at": wire.Time(r.At), "tool": r.Tool,
-			"agent_id": r.AgentID, "ok": r.OK, "error_code": r.ErrorCode, "ms": r.Ms, "memory_n": r.MemoryN,
-			"kb_n": r.KBN, "conversation_n": r.ConversationN}
-	}
+	recent := callsOf(u.Recent)
 	return envelope.OK(c, map[string]any{"datapack_id": id, "calls": u.Calls, "errors": u.Errors, "tools": tools,
 		"steps": steps, "agents": agents, "recent": recent, "input_tokens": u.InputTokens,
 		"output_tokens": u.OutputTokens})
