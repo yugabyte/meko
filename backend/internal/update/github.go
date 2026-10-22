@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-// DefaultRepo is where Meko's and AgentK Local's releases are published.
+// DefaultRepo is where Meko's and AgentK's releases are published.
 const DefaultRepo = "yugabyte/agent-k-local"
 
 // Release is one GitHub release.

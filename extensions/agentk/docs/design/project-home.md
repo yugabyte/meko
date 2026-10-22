@@ -1,6 +1,6 @@
 # Project home
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 ![The project home page with datapacks, recent activity, token usage and settings](../screenshots/project-home.png)
 

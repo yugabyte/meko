@@ -207,7 +207,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	ak := filepath.Join(home, ".local", "bin", "agent-k-local")
 	log := fakeExtension(t, ak)
 	code, out, errs = run("install_extension", "agentk", "--data-dir", dir)
-	want(t, "install_extension", code, 0, out+errs, "AgentK Local uses this Meko")
+	want(t, "install_extension", code, 0, out+errs, "AgentK uses this Meko")
 	wantArgs := "install --meko-url http://127.0.0.1:" + port + "/mcp --meko-key " + strings.TrimSpace(tok) +
 		" --non-interactive\n"
 	if got := readLog(t, log); got != wantArgs {
@@ -262,7 +262,7 @@ func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
 	t.Cleanup(func() { newReleaseClient = old })
 	code, out, errs = run("install_extension", "agentk", "--data-dir", dir)
 	want(t, "install_extension", code, 0, out+errs,
-		"Installing AgentK Local 0.20261030.0 (agentk-v0.20261030.0)")
+		"Installing AgentK 0.20261030.0 (agentk-v0.20261030.0)")
 	if got := readLog(t, argsFile); !strings.HasPrefix(got, "--meko-url http://127.0.0.1:"+port+"/mcp --meko-key ") {
 		t.Errorf("installer got %q", got)
 	}

@@ -102,11 +102,11 @@ describe('Meko client', () => {
     meko.tools.conversation_create = () => ({ id: 'conv-1' });
     meko.tools.datapack_list = () => [{
       datapack_id: 'd1', datapack_name: 'adlc/proj/a/b', grant: 'contributor', user_id: 'u-alice', datapack_owner_name: 'Alice Ng',
-      datapack_owner_email_id: 'alice@example.com', description: 'AgentK Local project "b" · repo git@github.com:corp/a.git',
+      datapack_owner_email_id: 'alice@example.com', description: 'AgentK project "b" · repo git@github.com:corp/a.git',
     }];
     expect(await client.listDatapacks()).toEqual([{
       id: 'd1', name: 'adlc/proj/a/b', grant: 'contributor', createdAt: null, ownerName: 'Alice Ng', ownerEmail: 'alice@example.com',
-      description: 'AgentK Local project "b" · repo git@github.com:corp/a.git', ownerUserId: 'u-alice',
+      description: 'AgentK project "b" · repo git@github.com:corp/a.git', ownerUserId: 'u-alice',
     }]);
   });
 

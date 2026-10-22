@@ -344,7 +344,7 @@ describe('install.sh: installing missing tools', () => {
   });
 });
 
-describe('install.sh: when AgentK Local is already installed', () => {
+describe('install.sh: when AgentK is already installed', () => {
   const akHome = () => join(home, '.agent-k-local');
   const current = (h = akHome()) => readlinkSync(join(h, 'app', 'current'));
 
@@ -365,7 +365,7 @@ describe('install.sh: when AgentK Local is already installed', () => {
   }
 
   /**
-   * Release `version` of AgentK Local under `tag`, as `gh release download` (or curl) hands it out,
+   * Release `version` of AgentK under `tag`, as `gh release download` (or curl) hands it out,
    * listed after a newer Meko release, a prerelease and a draft (the repo's latest is Meko's).
    */
   function release(version: string, tag = `v${version}`) {
@@ -412,7 +412,7 @@ exit 0`);
     const r = runAll([]);
     expect(r.code).toBe(0);
     expect(r.err).toContain('1.2.3 in ~/.agent-k-local');
-    expect(r.err).toContain('AgentK Local is already installed, so nothing was changed');
+    expect(r.err).toContain('AgentK is already installed, so nothing was changed');
     expect(r.err).toContain('Update banner or button');
     // ~/.local/bin isn't on this PATH, so the commands are shown with it.
     expect(r.err).toContain('~/.local/bin/agent-k-local status');
@@ -429,7 +429,7 @@ exit 0`);
     rmSync(join(bin, 'git'));
     const r = runAll(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(0);
-    expect(r.err).toContain('AgentK Local is already installed');
+    expect(r.err).toContain('AgentK is already installed');
     expect(r.err).not.toContain('Missing');
     expect(r.calls).toEqual([]);
   });
@@ -446,7 +446,7 @@ exit 0`);
   it('installs another --version, and stops for the one installed', () => {
     const same = runAll(['--version', 'v1.2.3']);
     expect(same.code).toBe(0);
-    expect(same.err).toContain('AgentK Local is already installed');
+    expect(same.err).toContain('AgentK is already installed');
     expect(same.calls).toEqual([]);
 
     // Either tag scheme's: agentk-v first, then v.
@@ -498,7 +498,7 @@ exit 0`);
     const env = { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' };
     const set = runAll([], env);
     expect(set.code).toBe(0);
-    expect(set.err).toContain('AgentK Local is already installed');
+    expect(set.err).toContain('AgentK is already installed');
     expect(set.calls).toEqual([]);
 
     writeFileSync(join(root, 'no-services'), '');

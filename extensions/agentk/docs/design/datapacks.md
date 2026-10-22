@@ -1,6 +1,6 @@
 # Datapacks
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 - **Dedicated datapack (one per project).** It's created with the project, named
   `adlc/proj/<repo>/<project_name>` by default, or you can pick an existing one. It is the only

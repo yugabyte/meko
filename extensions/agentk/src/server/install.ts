@@ -426,7 +426,7 @@ export async function runInstall(args: string[]): Promise<void> {
     const cfg: Config = loadConfig(paths);
 
     // 1. Basics
-    if (!process.env.AK_INSTALLER) ui.title('AgentK Local setup');
+    if (!process.env.AK_INSTALLER) ui.title('AgentK setup');
     ui.section('Setup');
     if (interactive && process.stdin.isTTY) ui.note('Press Enter to keep the value in brackets.');
     const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
@@ -553,7 +553,7 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.blank();
       // Local access needs no login (see localAccess in auth.ts), so there's no setup link to open.
       if (local || getOwner(handle)) {
-        ui.text(style.bold(running ? 'Done. AgentK Local is running:' : 'Done. AgentK Local will be at:'));
+        ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
         ui.blank();
         ui.text(`    ${style.cyan(`${base}/`)}`);
       } else {
@@ -613,7 +613,7 @@ function hasUncommittedWork(dir: string): boolean {
 }
 
 /**
- * Deletes everything in the AgentK Local home, except the session worktrees and design files
+ * Deletes everything in the AgentK home, except the session worktrees and design files
  * unless `all`. Returns the folders it kept (empty ones are removed, and then the home too).
  */
 export function purgeHome(paths: Paths, all: boolean): string[] {
@@ -677,7 +677,7 @@ export async function runUninstall(args: string[]): Promise<void> {
   }
   const { ask, close } = makePrompter(!values['non-interactive']);
   try {
-    say('This stops AgentK Local and ends every running session it hosts (Claude Code or Kiro).');
+    say('This stops AgentK and ends every running session it hosts (Claude Code or Kiro).');
     if (purge) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
     const wt = tildify(paths.worktrees);
     if (deleteWork) {

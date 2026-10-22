@@ -68,7 +68,7 @@ exit 0
  * Status line: Claude Code runs it with a JSON description of the session, which includes
  * the plan usage limits (5-hour and weekly) on Pro and Max plans. It passes those to the
  * server in the background, then runs the user's own status line command with the same
- * input, so the terminal looks as it would without AgentK Local.
+ * input, so the terminal looks as it would without AgentK.
  */
 const STATUSLINE_SCRIPT = `#!/bin/sh
 # Written by agent-k-local. Reports plan usage limits, then prints the user's status line.

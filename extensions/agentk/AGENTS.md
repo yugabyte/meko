@@ -1,14 +1,14 @@
 # AGENTS.md
 
-Guide for coding agents (Claude Code, Codex, Cursor, and others) working on **AgentK Local**. Humans
+Guide for coding agents (Claude Code, Codex, Cursor, and others) working on **AgentK**. Humans
 should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and the rules.
 
-AgentK Local lives in `extensions/agentk` of the meko-local repo; the repo's own
+AgentK lives in `extensions/agentk` of the meko-local repo; the repo's own
 [AGENTS.md](../../AGENTS.md) covers the rest of it. Paths here are relative to `extensions/agentk`,
 except `.github/`, `.claude/`, `scripts/check-title.sh`, `scripts/ci-scope.sh` and `LICENSE`,
 which are at the repo root. Run the commands below from `extensions/agentk`.
 
-AgentK Local is a self-hosted web workbench for Claude Code and Kiro CLI (either one is enough). A project is an effort on a feature
+AgentK is a self-hosted web workbench for Claude Code and Kiro CLI (either one is enough). A project is an effort on a feature
 or product, worked on in a git repo. Each task is a session with its own git worktree and a
 Claude (or Kiro) process held by AgentK's session host; the agent a session runs on is its harness
 (`src/server/harness/`, [docs/design/harnesses.md](docs/design/harnesses.md)). A task runs on Explore → Design → Code → PR & Review → Merge & Close,
@@ -17,9 +17,12 @@ with AgentK assisting the reviewer) stays in one Reviewing PR stage. The user ca
 between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (Meko is optional). The design
 is in [docs/design.md](docs/design.md): an index, with one file per area under `docs/design/`.
 
-**Naming:** the product is **AgentK Local** in anything people read (UI, docs, messages). The
-identifier `agent-k-local` stays in the repo name, the CLI command, `~/.agent-k-local`, the systemd
-units and launchd labels, tarball names and the npm package.
+**Naming:** the product is **AgentK** (it was AgentK Local until October 2026) in anything people
+read (UI, docs, messages). The identifier `agent-k-local` stays in the repo name, the CLI command,
+`~/.agent-k-local`, the systemd units and launchd labels, tarball names, the npm package and the
+`client` AgentK names to Meko. Strings AgentK wrote under the old name and reads back still match
+it: project datapack descriptions (`AgentK Local project "…"`, `src/shared/datapacks.ts`) and the
+mark on the Kiro agents it writes (`src/server/kiro.ts`).
 
 ## Commands
 
@@ -53,8 +56,8 @@ agents should read it before changing code there.
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
 | `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out, and Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
-| `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK Local while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot, and with the call's content for the Meko call log while the project keeps one), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
-| `scripts/install.sh` | The installer: stops early where AgentK Local is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, and a coding agent when neither Claude Code nor Kiro CLI is there: it asks which, or `--agent`) after asking, checks each agent's sign-in, downloads and verifies the newest AgentK release (found by its tag, `agentk-v…` or `v…`: the repo's latest release is Meko's), then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
+| `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot, and with the call's content for the Meko call log while the project keeps one), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
+| `scripts/install.sh` | The installer: stops early where AgentK is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, and a coding agent when neither Claude Code nor Kiro CLI is there: it asks which, or `--agent`) after asking, checks each agent's sign-in, downloads and verifies the newest AgentK release (found by its tag, `agentk-v…` or `v…`: the repo's latest release is Meko's), then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
 | `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, and (at the repo root, running from `extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release/release-notes.sh` decides which types and components release each product (AgentK or Meko, `--product`; `scripts/release/product.sh` names each one's tags and components); their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`; `test/unit/release-scripts.test.ts` tests what each product counts (versions, notes, pruning). The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../…`) runs AgentK's job, and that the `CI gate` job needs every other job. |
 | `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 | `docs/` | The design: [docs/design.md](docs/design.md) is its index (the decisions so far, and which part covers what), with one file per area under `docs/design/`. Also the usage report's schema (`call-home-report.schema.json`) and the screenshots. |

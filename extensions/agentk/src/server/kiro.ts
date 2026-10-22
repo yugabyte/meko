@@ -25,7 +25,9 @@ export const ASK_AGENT = 'agentk-ask';
 /** The agent the plan usage read (`/usage`) runs as, likewise inert. */
 export const USAGE_AGENT = 'agentk-usage';
 /** In the description of every agent file AgentK writes, so it's never mistaken for the user's own. */
-const MARK = 'Written by AgentK Local, which rewrites it: edit your default agent instead.';
+const MARK = 'Written by AgentK, which rewrites it: edit your default agent instead.';
+/** The mark while the product was AgentK Local, on agent files written before the rename. */
+const OLD_MARK = 'Written by AgentK Local, which rewrites it';
 
 /** Kiro's home (`KIRO_HOME`, else `~/.kiro`), which every one of its global files is under. */
 export function kiroHome(): string {
@@ -82,7 +84,8 @@ export function kiroDefaultAgentName(home = kiroHome()): string | null {
  */
 export function readKiroAgent(name: string, home = kiroHome()): Json | null {
   const dir = join(home, 'agents');
-  const ours = (a: Json | null) => !!a && typeof a.description === 'string' && a.description.includes(MARK);
+  const ours = (a: Json | null) =>
+    !!a && typeof a.description === 'string' && (a.description.includes(MARK) || a.description.includes(OLD_MARK));
   const direct = readJson(join(dir, `${name}.json`));
   if (direct && !ours(direct)) return direct;
   let files: string[];

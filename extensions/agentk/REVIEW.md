@@ -1,6 +1,6 @@
 # REVIEW.md
 
-What to check when reviewing a change to **AgentK Local**, whether you're a person or an agent
+What to check when reviewing a change to **AgentK**, whether you're a person or an agent
 (AgentK). Background and invariants are in [AGENTS.md](AGENTS.md); the design is in
 [docs/design.md](docs/design.md).
 
@@ -298,8 +298,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The UI only calls routes in `src/shared/types.ts`, and types match on both sides.
 - [ ] Both light and dark themes work; state is shown with shape as well as color.
 - [ ] Copy is plain and specific; errors say how to fix the problem.
-- [ ] The product is called **AgentK Local** in visible text. Text about the work names **AgentK**;
-      **Claude** is only for the Claude Code process and its terminal.
+- [ ] The product is called **AgentK** in visible text (never AgentK Local, its old name), and so
+      is the agent doing the work. Where one sentence needs both, name the part of the product
+      (the AgentK UI, the AgentK server). **Claude** is only for the Claude Code process and its
+      terminal.
 - [ ] The change works on a phone: see [src/web/REVIEW.md](src/web/REVIEW.md) for the phone and touch checks.
 
 ## 6. Tests, docs, release

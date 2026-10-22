@@ -8,7 +8,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
-// TestAgentKContract replays the calls AgentK Local's Meko client makes
+// TestAgentKContract replays the calls AgentK's Meko client makes
 // (extensions/agentk/src/server/meko.ts, MekoClient), with the same tool names and arguments, and
 // checks every reply has what MekoClient reads from it. Keep it in step with meko.ts: when a method
 // there changes a call or reads a new field, change its step here. #189 replaces this with AgentK's
@@ -29,7 +29,7 @@ func TestAgentKContract(t *testing.T) {
 
 	// serviceConv() -> ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, ...): reads id.
 	svc := ok(t, e, "conversation_create", map[string]any{"agent_id": "agent-k-local", "datapack_id": nil,
-		"session_id": "agent-k-local-service", "title": "AgentK Local service"})
+		"session_id": "agent-k-local-service", "title": "AgentK service"})
 	conv := str(svc.JSON["id"])
 	if !hex32.MatchString(conv) {
 		t.Fatalf("ensureConversation: id %q", conv)
@@ -56,7 +56,7 @@ func TestAgentKContract(t *testing.T) {
 	}
 
 	// setDatapackDescription(id, d): datapack_update {datapack_id, description, conversation_id}.
-	ok(t, e, "datapack_update", map[string]any{"datapack_id": dp, "description": "AgentK Local project \"app\"",
+	ok(t, e, "datapack_update", map[string]any{"datapack_id": dp, "description": "AgentK project \"app\"",
 		"conversation_id": conv})
 
 	// describeDatapack(id): datapack_describe {datapack_id, conversation_id}: reads memory_count and

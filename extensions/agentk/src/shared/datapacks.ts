@@ -4,7 +4,9 @@
 /** Datapacks named with this prefix are project datapacks: offered as invites and filled in automatically. */
 export const PROJECT_DATAPACK_PREFIX = 'adlc/proj/';
 
-const DESCRIPTION_PREFIX = 'AgentK Local project';
+const DESCRIPTION_PREFIX = 'AgentK project';
+/** What descriptions started with while the product was AgentK Local; Meko still holds them. */
+const OLD_DESCRIPTION_PREFIX = 'AgentK Local project';
 
 export function isProjectDatapack(name: string): boolean {
   return name.startsWith(PROJECT_DATAPACK_PREFIX);
@@ -106,7 +108,7 @@ export function projectDatapackDescription(projectName: string, remote: string |
 
 /** The repo remote from a description AgentK wrote, or null. Credentials and local paths never come through. */
 export function remoteFromDescription(description: string | null | undefined): string | null {
-  if (!description?.startsWith(DESCRIPTION_PREFIX)) return null;
+  if (!description?.startsWith(DESCRIPTION_PREFIX) && !description?.startsWith(OLD_DESCRIPTION_PREFIX)) return null;
   // The remote ends the description; one earlier on could be inside the quoted project name.
   return shareableRemote(/ · repo (\S+)$/.exec(description.trimEnd())?.[1]);
 }

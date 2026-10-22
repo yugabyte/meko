@@ -187,7 +187,7 @@ export class SystemdServices implements ServiceManager {
       ok: false,
       label,
       detail: `no: couldn't enable lingering (${en.err || 'permission denied'}).`,
-      note: `Without it, AgentK Local only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`,
+      note: `Without it, AgentK only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`,
     };
   }
 

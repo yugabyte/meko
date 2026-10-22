@@ -46,8 +46,8 @@ describe('remotes', () => {
     expect(normaliseRemote('../billing')).toBeNull();
     expect(normaliseRemote('src/billing.git')).toBeNull();
     expect(normaliseRemote('/home/alice/src/billing.git')).toBeNull();
-    expect(projectDatapackDescription('p', '../billing')).toBe('AgentK Local project "p"');
-    expect(remoteFromDescription('AgentK Local project "p" · repo /home/alice/x.git')).toBeNull();
+    expect(projectDatapackDescription('p', '../billing')).toBe('AgentK project "p"');
+    expect(remoteFromDescription('AgentK project "p" · repo /home/alice/x.git')).toBeNull();
   });
 
   it('takes the repo name from the end', () => {
@@ -61,8 +61,8 @@ describe('remotes', () => {
     expect(withoutCredentials('ssh://me:pw@host/corp/a.git')).toBe('ssh://host/corp/a.git');
     expect(withoutCredentials('ssh://git@host/corp/a.git')).toBe('ssh://git@host/corp/a.git');
     expect(withoutCredentials('git@github.com:corp/a.git')).toBe('git@github.com:corp/a.git');
-    expect(projectDatapackDescription('p', 'https://u:tok@github.com/corp/a.git')).toBe('AgentK Local project "p" · repo https://github.com/corp/a.git');
-    expect(remoteFromDescription('AgentK Local project "p" · repo https://u:tok@github.com/corp/a.git')).toBe('https://github.com/corp/a.git');
+    expect(projectDatapackDescription('p', 'https://u:tok@github.com/corp/a.git')).toBe('AgentK project "p" · repo https://github.com/corp/a.git');
+    expect(remoteFromDescription('AgentK project "p" · repo https://u:tok@github.com/corp/a.git')).toBe('https://github.com/corp/a.git');
   });
 
   it('shortens remotes the way the repo list shows them, keeping case', () => {
@@ -73,9 +73,11 @@ describe('remotes', () => {
 
   it('round-trips the remote through the description', () => {
     const d = projectDatapackDescription('retry-backoff', 'git@github.com:corp/billing-api.git');
-    expect(d).toBe('AgentK Local project "retry-backoff" · repo git@github.com:corp/billing-api.git');
+    expect(d).toBe('AgentK project "retry-backoff" · repo git@github.com:corp/billing-api.git');
     expect(remoteFromDescription(d)).toBe('git@github.com:corp/billing-api.git');
     expect(remoteFromDescription(projectDatapackDescription('x', null))).toBeNull();
+    // Datapacks made while the product was AgentK Local keep that description.
+    expect(remoteFromDescription('AgentK Local project "old" · repo git@github.com:corp/a.git')).toBe('git@github.com:corp/a.git');
     expect(remoteFromDescription('Some other text · repo git@x:y/z')).toBeNull();
     expect(remoteFromDescription(null)).toBeNull();
     // A project name that itself contains " · repo …" doesn't fool it: the remote ends the description.

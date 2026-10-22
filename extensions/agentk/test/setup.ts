@@ -1,8 +1,7 @@
 // Runs before every test file (vitest `setupFiles`). Tests must never touch the developer's
 // real state: their ~/.claude.json and ~/.claude, ~/.kiro, Meko, GitHub, git config or an installed
-// AgentK Local. Scrub the environment a developer's shell (often an AgentK Local session
-// itself) carries, and point HOME at an empty folder so login shells, git, gh and Claude
-// settings all start blank.
+// AgentK. Scrub the environment a developer's shell (often an AgentK session itself) carries,
+// and point HOME at an empty folder so login shells, git, gh and Claude settings all start blank.
 import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

@@ -343,7 +343,7 @@ describe('agent-k-local host, attach, stop and start (the commands)', () => {
     } catch (e) {
       refused = String((e as { stderr: Buffer }).stderr);
     }
-    expect(refused).toContain('The AgentK Local server for this home is running');
+    expect(refused).toContain('The AgentK server for this home is running');
     expect((await host.panes()).size).toBe(1);
 
     // `stop` can't signal a server on another host sharing this home.
@@ -359,10 +359,10 @@ describe('agent-k-local host, attach, stop and start (the commands)', () => {
 
     // A lease whose live pid isn't a server (left by a crash, the pid since reused: here, this test) isn't signalled.
     writeFileSync(lock, JSON.stringify({ host: hostname(), pid: process.pid, version: 'x', port: 7777, startedAt: Date.now(), beatAt: Date.now() }));
-    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped AgentK Local and the 1 session(s) in it. They resume at: agent-k-local serve');
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped AgentK and the 1 session(s) in it. They resume at: agent-k-local serve');
     await waitFor(() => host.serverRunning(), (up) => !up, 10000, 'host down');
     rmSync(lock);
-    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK Local is not running.');
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK is not running.');
 
     // Without services there is nothing for `start` to start.
     refused = '';

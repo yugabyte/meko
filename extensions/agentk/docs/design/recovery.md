@@ -1,6 +1,6 @@
 # Surviving crashes, restarts and updates
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 Two systemd user units run with lingering enabled, so they start at boot without anyone logging
 in:

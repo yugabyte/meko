@@ -1,6 +1,6 @@
 # Design panel
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 During Design the panel opens as soon as the design exists and again whenever it's revised, at
 about 60% of the work area. An Artifact design is shown in a sandboxed frame (scripts allowed, no
@@ -145,7 +145,7 @@ the questions kept in memory. The file is written the same way as the tool's (te
 rename), the kept questions are replaced, and the design's time moves on so every browser shows
 them; this isn't a change AgentK made in its turn, so it neither drops a queued approval nor marks
 the design ready. The `design-answers` prompt still asks Claude to mark each answered question
-resolved, saying AgentK Local may have done so already, and to follow the user's change to a
+resolved, saying AgentK may have done so already, and to follow the user's change to a
 decision (listed as `### D<n>` with *You decided* and *The user wants*), keeping it a decision
 decided by the user. After the approval, the design's **Key Design Decisions** section, near its top right after the
 goal, is brought up to date, or added if it's missing (`designQaLine()`): every question and decision, who decided it, what and why,

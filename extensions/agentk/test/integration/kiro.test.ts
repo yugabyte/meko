@@ -42,7 +42,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(first.env.MEKO_AGENT_ID).toBe(sessionAgentId(row));
     expect(row.meko_agent_id).toMatch(/^kiro:kiro-task-[0-9a-f]{8}$/);
     // Kiro has no system-prompt flag: the session's lines come from its context hook at spawn.
-    expect(lines(env, 'spawn.jsonl')[0].context).toMatch(/^This Kiro session is managed by AgentK Local\. Project: Demo\. Task: Kiro task\./);
+    expect(lines(env, 'spawn.jsonl')[0].context).toMatch(/^This Kiro session is managed by AgentK\. Project: Demo\. Task: Kiro task\./);
     // In Design, the guard denies Kiro's write into the worktree, by exit code with the reason.
     expect(lines(env, 'writes.jsonl')).toEqual([{ path: 'src.ts', denied: expect.stringMatching(/^This session is in the Design stage: .* Write the design to /) }]);
     expect(existsSync(join(row.worktree_path, 'src.ts'))).toBe(false);

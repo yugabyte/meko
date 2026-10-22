@@ -429,7 +429,7 @@ export class Core extends EventEmitter {
     if (svc?.legacyTmuxInstalled()) {
       const inTmux = svc.installed('host') ? await this.legacyTmuxPanes() : null;
       if (!inTmux || sessionRows(this.db).some((r) => r.status !== 'archived' && inTmux.has(r.tmux_name))) {
-        throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+        throw new Error("An AgentK version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
       }
       this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: agent-k-local install");
     }

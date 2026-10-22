@@ -79,7 +79,7 @@ async function serve(): Promise<void> {
     // In server.log, not only on stderr, which may reach no one (a journal that isn't kept): a
     // start that keeps failing after an update (a migration, the guard in Core.start) is rolled
     // back by the launcher, and this says why. The lease goes too, so the next start needn't wait.
-    log.error(`AgentK Local ${v} couldn't start: ${errMsg(e)}`);
+    log.error(`AgentK ${v} couldn't start: ${errMsg(e)}`);
     lock.release();
     process.exit(1);
   }
@@ -116,7 +116,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   };
   const beat = setInterval(() => {
     if (shuttingDown || lock.beat()) return;
-    log.error(`another AgentK Local server took over ${paths.home} (this one stalled for too long); stopping`);
+    log.error(`another AgentK server took over ${paths.home} (this one stalled for too long); stopping`);
     void shutdown(1);
   }, BEAT_MS);
   beat.unref();
@@ -142,7 +142,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   await app.listen({ host: cfg.server.bind, port: cfg.server.port });
 
   const url = baseUrl(cfg, !!tls);
-  log.info(`AgentK Local ${v} listening on ${url}`);
+  log.info(`AgentK ${v} listening on ${url}`);
   if (tls) log.info(`TLS certificate SHA-256 fingerprint: ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
   if (isLoopback(cfg.server.bind)) {
     const owner = getOwner(db);
@@ -175,7 +175,7 @@ async function setupLink(): Promise<void> {
   console.log(reset
     ? 'This one-time link resets the username, password and authenticator for this install. It expires in 7 days.'
     : 'Open this one-time link to create your login. It expires in 7 days.');
-  if (isLoopback(cfg.server.bind)) console.log('No login is needed while AgentK Local only listens on this computer; the login applies once it listens on the network.');
+  if (isLoopback(cfg.server.bind)) console.log('No login is needed while AgentK only listens on this computer; the login applies once it listens on the network.');
   db.close();
 }
 
@@ -229,7 +229,7 @@ async function selftest(): Promise<void> {
     });
   });
   if (!findWebDir(here)) throw new Error('web assets are missing');
-  console.log(`AgentK Local ${version()} selftest ok`);
+  console.log(`AgentK ${version()} selftest ok`);
 }
 
 async function status(): Promise<void> {
@@ -237,7 +237,7 @@ async function status(): Promise<void> {
   const cfg = loadConfig(paths);
   const tls = await loadTls(paths, cfg).catch(() => null);
   const url = baseUrl(cfg, !!tls);
-  console.log(`AgentK Local ${version()}`);
+  console.log(`AgentK ${version()}`);
   console.log(`home:     ${paths.home}`);
   console.log(`database: ${dbPath(paths, cfg)}`);
   console.log(`url:      ${url}`);
@@ -280,7 +280,7 @@ async function host(args: string[]): Promise<void> {
       const server = heldLease(paths.lock);
       if (server) {
         throw new Error(
-          `The AgentK Local server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
+          `The AgentK server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
             `session host again and resume every session. Stop both with: agent-k-local stop, or use: agent-k-local host restart`,
         );
       }
@@ -325,7 +325,7 @@ async function host(args: string[]): Promise<void> {
   process.on('SIGINT', exit);
 }
 
-/** Whether a pid is an AgentK Local server: after a crash its lease can name a pid another process has now. */
+/** Whether a pid is an AgentK server: after a crash its lease can name a pid another process has now. */
 function isServer(pid: number): boolean {
   try {
     return /(agent-k-local|cli\.[jt]s) serve\b/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' }));
@@ -351,7 +351,7 @@ async function stop(): Promise<void> {
   // A server outside the service (`serve` by hand, or on another host sharing this home) holds the lease too.
   const server = heldLease(paths.lock);
   if (server) {
-    if (server.host !== hostname()) throw new Error(`The AgentK Local server for this home runs on ${server.host} (pid ${server.pid}): stop it there.`);
+    if (server.host !== hostname()) throw new Error(`The AgentK server for this home runs on ${server.host} (pid ${server.pid}): stop it there.`);
     if (isServer(server.pid)) {
       // Its SIGTERM handler shuts down cleanly and releases the lease.
       process.kill(server.pid, 'SIGTERM');
@@ -372,8 +372,8 @@ async function stop(): Promise<void> {
     if (!(e instanceof NoHostError)) throw e;
   }
   const resume = svc?.installed('server') ? 'agent-k-local start' : 'agent-k-local serve';
-  if (!stopped) console.log('AgentK Local is not running.');
-  else console.log(`Stopped AgentK Local${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
+  if (!stopped) console.log('AgentK is not running.');
+  else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
 }
 
 /** Starts the services `stop` stopped. */
@@ -386,11 +386,11 @@ async function start(): Promise<void> {
     for (let i = 0; i < 50 && !svc.state(s).running; i++) await sleep(100);
     if (!svc.state(s).running) throw new Error(`${svc.id(s)} didn't start. Check: ${svc.statusHint(s)}`);
   }
-  console.log('Started AgentK Local; the server resumes the sessions in a few seconds. Check: agent-k-local status');
+  console.log('Started AgentK; the server resumes the sessions in a few seconds. Check: agent-k-local status');
 }
 
 function help(): void {
-  console.log(`AgentK Local ${version()}
+  console.log(`AgentK ${version()}
 
 Usage: agent-k-local <command>
 

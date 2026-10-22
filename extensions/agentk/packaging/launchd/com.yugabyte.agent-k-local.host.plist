@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- AgentK Local session host (holds every Claude session). Written by `agent-k-local install`. -->
+<!-- AgentK session host (holds every Claude session). Written by `agent-k-local install`. -->
 <!-- It runs the version that was current when it started and keeps running across updates:
      restarting it ends every Claude session (the server resumes them). -->
 <plist version="1.0">

@@ -56,7 +56,7 @@ Usage:
   meko update    install the newest release now (it updates itself under the service);
                  --check only looks
   meko install_extension agentk
-                 install AgentK Local, pointed at this Meko, and start and stop it with Meko
+                 install AgentK, pointed at this Meko, and start and stop it with Meko
   meko uninstall_extension agentk
                  stop starting and stopping it with Meko (it stays installed)
 

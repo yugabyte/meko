@@ -64,7 +64,7 @@ export function DesignPanel({
   }, [session.id, session.designUpdatedAt]);
 
   useEffect(() => {
-    if (page) document.title = `${session.name} · Design · AgentK Local`;
+    if (page) document.title = `${session.name} · Design · AgentK`;
   }, [page, session.name]);
 
   const frame = useMemo(() => (doc?.html ? designFrameDoc(doc.html, theme) : null), [doc?.html, theme]);
@@ -103,7 +103,7 @@ export function DesignPanel({
   const docView = (
     <>
       {frame && !error ? (
-        // No allow-same-origin: the page can't reach AgentK Local's cookies or API.
+        // No allow-same-origin: the page can't reach AgentK's cookies or API.
         <iframe
           hidden={!showDoc}
           className="design-frame"

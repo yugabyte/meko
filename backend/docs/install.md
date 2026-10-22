@@ -6,7 +6,7 @@ foundation is [design.md](design.md).
 
 People install Meko with one command on macOS 14+ (Apple Silicon) and Linux (x64, arm64). It runs
 as a login service, restarts on failure, updates itself and rolls back an update that keeps failing.
-`meko install_extension agentk` then installs AgentK Local pointed at this Meko, so a fresh machine
+`meko install_extension agentk` then installs AgentK pointed at this Meko, so a fresh machine
 gets a working datapack with no account. `meko stop` stops AgentK too. If Meko fails, AgentK keeps
 working, its Meko features skipping or retrying.
 
@@ -14,7 +14,7 @@ working, its Meko features skipping or retrying.
 
 ```sh
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
-meko install_extension agentk      # then, for AgentK Local
+meko install_extension agentk      # then, for AgentK
 ```
 
 Meko's releases are the repo's "latest" (AgentK's are published `--latest=false`), so that is Meko's
@@ -100,7 +100,7 @@ flag, and Go signs darwin/arm64 binaries ad hoc.
 `scripts/release/**` or itself, and by hand (force, or rebuild a `meko-v` tag). It uses the repo's
 release scripts with `--product meko`:
 
-| | AgentK Local (`agentk-release.yml`) | Meko (`meko-release.yml`) |
+| | AgentK (`agentk-release.yml`) | Meko (`meko-release.yml`) |
 |---|---|---|
 | Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
 | Releases on | feat/fix/perf/deps subjects other than `meko` | feat/fix/perf/deps subjects with component `meko` |

@@ -647,7 +647,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
     expect(system).toContain("It's in Explore now");
     // The name heads the task, so the first prompt needn't repeat it.
-    expect(args.at(-1)).toMatch(/Explore stage of an AgentK Local task[\s\S]*Task: Look around\n\nwhy is it slow/);
+    expect(args.at(-1)).toMatch(/Explore stage of an AgentK task[\s\S]*Task: Look around\n\nwhy is it slow/);
 
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409 });
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409 });

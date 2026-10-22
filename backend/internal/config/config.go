@@ -13,7 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// DefaultPort is next to AgentK Local's 7777.
+// DefaultPort is next to AgentK's 7777.
 const DefaultPort = 7778
 
 // Config is every setting.

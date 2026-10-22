@@ -319,7 +319,7 @@ export class MekoClient {
     const gen = this.gen;
     let id: string;
     try {
-      id = await this.ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, 'AgentK Local service', timeoutMs);
+      id = await this.ensureConversation(AGENTK_AGENT_ID, null, SERVICE_KEY, 'AgentK service', timeoutMs);
     } catch (e) {
       if (!(e instanceof MekoError)) throw e; // Meko unreachable: try again next time
       id = createHash('sha256').update(SERVICE_KEY).digest('hex').slice(0, 32);

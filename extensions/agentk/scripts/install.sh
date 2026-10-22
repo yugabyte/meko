@@ -1,9 +1,9 @@
 #!/bin/sh
-# Install or upgrade AgentK Local for the current user. AgentK Local itself needs no root; missing
+# Install or upgrade AgentK for the current user. AgentK itself needs no root; missing
 # system tools are installed with sudo on Linux, only after showing the commands and asking.
 #
 # Internal repo (needs an authenticated `gh`). The repo's latest release is Meko's (whose
-# `meko install_extension agentk` installs AgentK Local pointed at it), so AgentK Local alone comes
+# `meko install_extension agentk` installs AgentK pointed at it), so AgentK alone comes
 # from the newest AgentK release, tagged agentk-v<version> (v<version> before releases were tagged by product):
 #   gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
 #     --exclude-pre-releases --limit 50 --json tagName \
@@ -20,7 +20,7 @@
 #                       one to ask)
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
-#   --reinstall         download and set up again even though AgentK Local is already installed
+#   --reinstall         download and set up again even though AgentK is already installed
 #   anything else       forwarded to `agent-k-local install`
 #                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
 #                       --port, --no-service); Meko is optional: without a key the install goes on
@@ -35,7 +35,7 @@
 # is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
 # it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
 #
-# Run again where AgentK Local is already installed and set up (services included), it says so
+# Run again where AgentK is already installed and set up (services included), it says so
 # and stops without changing anything, unless given --reinstall, --deps-only, another --version
 # or options for `agent-k-local install` (--non-interactive aside), which go on as before.
 #
@@ -160,14 +160,14 @@ if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/
     case ":$user_path:" in *":$HOME/.local/bin:"*) cmd=agent-k-local ;; *) cmd="~/.local/bin/agent-k-local" ;; esac
     row() { printf '    %s%-13s%s %s\n' "$d" "$1" "$n" "$2" >&2; }
     say ""
-    say "${b}AgentK Local installer${n}"
+    say "${b}AgentK installer${n}"
     say ""
     ok "Installed" "${installed:-unknown version} in $short_home"
     say ""
-    say "  AgentK Local is already installed, so nothing was changed."
+    say "  AgentK is already installed, so nothing was changed."
     row "Status" "$cmd status"
     row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
-    row "Update" "the Update banner or button in AgentK Local, when there's a newer release"
+    row "Update" "the Update banner or button in AgentK, when there's a newer release"
     row "Reinstall" "$(alone_cmd) -s -- --reinstall"
     exit 0
   fi
@@ -189,7 +189,7 @@ git_ok() {
 }
 
 say ""
-say "${b}AgentK Local installer${n}"
+say "${b}AgentK installer${n}"
 say ""
 
 # What's missing, and the plan to install it: `plan` is shown to the user, `pkgs` goes to the
@@ -201,7 +201,7 @@ command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
 gh_skipped=false
 if ! command -v gh >/dev/null 2>&1; then
   # With GITHUB_TOKEN, downloads work through curl, so an unattended install can go on without
-  # gh (AgentK Local then can't open PRs, follow reviews or update itself until it's installed).
+  # gh (AgentK then can't open PRs, follow reviews or update itself until it's installed).
   if [ -n "${GITHUB_TOKEN:-}" ] && [ "$install_deps" != yes ]; then gh_skipped=true
   else
     add_missing "gh (GitHub CLI)"
@@ -213,7 +213,7 @@ fi
 if ! command -v claude >/dev/null 2>&1 && ! command -v kiro-cli >/dev/null 2>&1; then
   if [ -z "$agent" ] && $interactive && [ "$install_deps" = ask ]; then
     say "${b}Coding agent${n}"
-    warn "Missing" "AgentK Local runs sessions on Claude Code or Kiro CLI, and neither is installed"
+    warn "Missing" "AgentK runs sessions on Claude Code or Kiro CLI, and neither is installed"
     printf '    Install Claude Code (1) or Kiro CLI (2)? %s[1]%s ' "$d" "$n" >&2
     read -r answer </dev/tty || answer=""
     case $answer in ''|1|[Cc]*) agent=claude ;; 2|[Kk]*) agent=kiro ;; *) die "pick 1 (Claude Code) or 2 (Kiro CLI), or pass --agent claude or --agent kiro." ;; esac
@@ -387,7 +387,7 @@ if [ -n "$plan" ]; then
   ok "Installed" "$missing"
 fi
 
-# Each agent there has to be signed in before AgentK Local can run sessions on it.
+# Each agent there has to be signed in before AgentK can run sessions on it.
 agents=""
 if command -v claude >/dev/null 2>&1; then
   agents="Claude Code"
@@ -414,7 +414,7 @@ fi
 if $gh_skipped; then
   warn "GitHub" "gh isn't installed: downloading with GITHUB_TOKEN; install gh for PRs, reviews and updates"
 elif ! gh auth status >/dev/null 2>&1; then
-  if $interactive && ask "  gh isn't signed in to GitHub. AgentK Local needs it to download releases and for PRs, reviews and updates. Sign in now (gh auth login)?"; then
+  if $interactive && ask "  gh isn't signed in to GitHub. AgentK needs it to download releases and for PRs, reviews and updates. Sign in now (gh auth login)?"; then
     gh auth login </dev/tty || warn "GitHub" "sign-in didn't finish; run 'gh auth login' later"
   else
     warn "GitHub" "gh isn't signed in: run 'gh auth login' (needed for PRs, reviews and updates)"
@@ -448,7 +448,7 @@ if [ -z "$version" ]; then
       /^ *"draft": / { d = $2 }
       /^ *"prerelease": / { if (t ~ /^(agentk-v|v)[0-9]/ && d ~ /^false/ && $2 ~ /^false/) { print t; exit } }') || tags=""
   fi
-  [ -n "$tags" ] || die "could not find the newest AgentK Local release of $repo. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
+  [ -n "$tags" ] || die "could not find the newest AgentK release of $repo. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
   version=${tags#agentk-v}
   version=${version#v}
 else

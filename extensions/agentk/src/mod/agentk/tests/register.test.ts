@@ -214,7 +214,7 @@ function dialog(on: On) {
 
 const held = () => new Promise<{ value: HttpResponse }>(() => undefined)
 
-test("answers Claude's question with the user's answer from AgentK Local, closing the terminal's dialog", async ($, on) => {
+test("answers Claude's question with the user's answer from AgentK, closing the terminal's dialog", async ($, on) => {
   mock.env(on, ENV)
   const calls = routes(on, (path) => (path === '/mod/ask' ? answer(200, { answers: { 0: 'Blue' } }) : answer(204)))
   const d = dialog(on)
@@ -248,7 +248,7 @@ test("asks again after each hold, and takes the terminal's answer when it comes 
   expect(calls.some((c) => c.path === '/mod/ask/done' && c.body.id === 'tu2')).toBe(true)
 })
 
-test("leaves the question to the terminal when AgentK Local can't take it", async ($, on) => {
+test("leaves the question to the terminal when AgentK can't take it", async ($, on) => {
   mock.env(on, ENV)
   const calls = routes(on, (path) => (path === '/mod/ask' ? answer(400, { error: "question 1 isn't a choice" }) : answer(204)))
   const d = dialog(on)
@@ -290,7 +290,7 @@ test("leaves Claude's questions to the terminal outside an AgentK session", asyn
 
 const DESIGN_QUESTIONS = [{ id: 'store', question: 'Where do designs live?', options: [{ label: 'Datapack' }, { label: 'Repo' }], recommended: 0, status: 'open' }]
 
-test('gives Claude the design_questions tool, and passes its questions to AgentK Local', async ($, on) => {
+test('gives Claude the design_questions tool, and passes its questions to AgentK', async ($, on) => {
   mock.env(on, ENV)
   mock.clock(on)
   const registered: string[] = []

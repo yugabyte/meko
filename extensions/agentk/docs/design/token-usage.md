@@ -1,6 +1,6 @@
 # Token usage
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 Claude Code writes every model response to the session transcript with its token counts. The
 server reads new lines from each session's transcript, and from any subagent transcripts under
@@ -139,7 +139,7 @@ startup, one session per tick.
 
 **Plan limits.** On Pro and Max plans, Claude Code passes the account's 5-hour and weekly usage
 (`rate_limits.five_hour` / `seven_day`: percent used and reset time) to its status line command.
-Sessions are launched with AgentK Local's own status line (`run/statusline.sh`, set in the
+Sessions are launched with AgentK's own status line (`run/statusline.sh`, set in the
 `--settings` file). It sends inputs that carry limits to the server over the hook socket, in the
 background, and then runs the user's own status line command with the same input, so the terminal
 looks unchanged. That command is found at launch (local project settings, then project, then user

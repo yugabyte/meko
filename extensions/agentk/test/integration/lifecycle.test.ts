@@ -943,7 +943,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.sessions.action(s.id, 'open-pr');
     const text = String(submit.mock.calls.find((c) => String(c[1]).startsWith('Open a pull request'))?.[1]);
     expect(text.endsWith(`\n\ncloud.mekodata.ai://${dp};team/demo\nmeko_design:design-designed.md;${sha('# One')}\nmeko_conversation_id:conv-1`)).toBe(true);
-    expect(text).toContain('AgentK Local moves its hash to each new version of the design itself');
+    expect(text).toContain('AgentK moves its hash to each new version of the design itself');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review', 10000, 'review stage');
     await idle(s.id, 'PR turn');
 

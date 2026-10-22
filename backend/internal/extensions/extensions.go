@@ -4,7 +4,7 @@
 // it with meko stop, and never restarts it when Meko itself restarts or updates.
 //
 // The contract is the extension's CLI: `<command> start`, `<command> stop` and `<command> status`.
-// AgentK Local's agent-k-local is the first.
+// AgentK's agent-k-local is the first.
 package extensions
 
 import (
@@ -27,7 +27,7 @@ import (
 // Known are the extensions meko install_extension can install, by name.
 var Known = map[string]Catalog{
 	"agentk": {
-		Title:   "AgentK Local",
+		Title:   "AgentK",
 		Command: "agent-k-local",
 		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
 		TagPrefixes: []string{"agentk-v", "v"},

@@ -1,4 +1,4 @@
-// AgentK Local's mod: a Claude Code plugin of function hooks that links a session AgentK runs back
+// AgentK's mod: a Claude Code plugin of function hooks that links a session AgentK runs back
 // to the AgentK server. The server copies this folder to <AgentK home>/run/mod/agentk and launches
 // each session with --plugin-dir pointing there. The mod talks to the server over the hook socket
 // (AK_HOOK_SOCK) with the session's hook token (AK_HOOK_TOKEN), like the hook scripts do:
@@ -11,7 +11,7 @@
 //                 refused by another plugin (dropped)
 //   /mod/measure  the context window's fill and the plan limits, after each turn
 //   /mod/ask      Claude's AskUserQuestion questions, held by the server up to 20 s and asked again
-//                 until the user answers them in AgentK Local; the terminal's dialog stays open
+//                 until the user answers them in AgentK; the terminal's dialog stays open
 //                 meanwhile, and whichever answers first wins
 //   /mod/ask/done the call has its answer (or ended): the server stops offering the questions
 //   /mod/questions the design's questions from the design_questions tool the mod gives Claude
@@ -44,7 +44,7 @@ const PROTOCOL = 2
 const RETRY_MS = 3000
 /** The tool the mod gives Claude for the design's questions; Claude calls it `mcp__agentk__design_questions` (`mcp__<plugin>__<name>`). */
 const QUESTIONS_TOOL = 'design_questions'
-const QUESTIONS_FAILED = "AgentK Local didn't take the questions. Write them to the questions file your Design prompt names instead."
+const QUESTIONS_FAILED = "AgentK didn't take the questions. Write them to the questions file your Design prompt names instead."
 /** The slash command that saves what the session learned to Meko. */
 const LEARN_COMMAND = 'agentk_learn'
 /** Meko's tools, under its own MCP server's name or a plugin's (`mcp__plugin_x_meko__…`), as mekousage.ts reads them. */
@@ -181,7 +181,7 @@ function json(text: string | undefined): Record<string, unknown> {
 }
 
 /**
- * The user's answers in AgentK Local to Claude's questions, by question index: asks the server
+ * The user's answers in AgentK to Claude's questions, by question index: asks the server
  * (each ask held up to 20 s) until it has them. Never resolves when the server has none to give
  * (it said so, or the call settled meanwhile): the terminal's dialog answers then.
  */
@@ -210,7 +210,7 @@ async function registerQuestionsTool($: EngineInterface): Promise<void> {
   await $.tool.register({
     name: QUESTIONS_TOOL,
     description:
-      "Gives the user the open questions and key design decisions of the design you're writing in AgentK Local's Design stage. AgentK Local " +
+      "Gives the user the open questions and key design decisions of the design you're writing in AgentK's Design stage. AgentK " +
       'checks them, shows them beside the design at once, and saves them to the questions file. Pass all of them each time (the list ' +
       'replaces the last one): open and resolved questions, and the decisions you made yourself (kind "decision"), keeping each id. ' +
       'Returns what was saved, or what to fix in the input before calling again.',
@@ -312,7 +312,7 @@ async function registerLearnCommand($: EngineInterface): Promise<void> {
   try {
     await $.command.register({ name: LEARN_COMMAND, description: "Save what this session learned to the project's Meko datapack (AgentK)" })
   } catch {
-    // Save learnings in AgentK Local does the same
+    // Save learnings in AgentK does the same
   }
 }
 
@@ -368,7 +368,7 @@ export const register: Register = (on) => {
   }).catch(($, e, next) => next(e))
 
   // Claude's questions: the terminal's dialog opens as always (next), and the questions go to
-  // AgentK Local too. The first answer wins; returning AgentK Local's while the dialog is open
+  // AgentK too. The first answer wins; returning AgentK's while the dialog is open
   // closes it.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const l = await linkOf($).catch(() => null)
@@ -425,11 +425,11 @@ export const register: Register = (on) => {
   // /agentk_learn: AgentK starts a learn step (the next poll brings it), or says why it can't.
   on('command.run', { command: LEARN_COMMAND }, async ($) => {
     const l = await linkOf($).catch(() => null)
-    if (!l) return { text: 'This session is not run by AgentK Local.' }
+    if (!l) return { text: 'This session is not run by AgentK.' }
     const r = await post($, l, '/mod/learn/start', {}).catch(() => null)
     const text = json(r?.text).text
-    return { text: typeof text === 'string' ? text : "AgentK Local didn't answer. Use Save learnings in the session's header in AgentK Local (⋯ on a phone) instead." }
-  }).catch(() => ({ text: "AgentK Local didn't answer. Use Save learnings in the session's header in AgentK Local (⋯ on a phone) instead." }))
+    return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings in the session's header in AgentK (⋯ on a phone) instead." }
+  }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings in the session's header in AgentK (⋯ on a phone) instead." }))
 
   on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

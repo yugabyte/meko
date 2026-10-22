@@ -1,4 +1,4 @@
-# Contributing to AgentK Local
+# Contributing to AgentK
 
 ## Development setup
 
@@ -6,7 +6,7 @@ Requirements: Linux or macOS, Node 22, git, and Claude
 Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is required to create
 projects.
 
-AgentK Local lives in `extensions/agentk` of the meko-local repo: run everything below from there.
+AgentK lives in `extensions/agentk` of the meko-local repo: run everything below from there.
 Paths are relative to it, except `.github/`, `.claude/`, `scripts/check-title.sh` and
 `scripts/ci-scope.sh`, which are at the repo root.
 
@@ -26,7 +26,7 @@ npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0
 
 Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
 access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
-use another folder), so it never opens an installed AgentK Local's database, hook socket or session
+use another folder), so it never opens an installed AgentK's database, hook socket or session
 host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
 restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
 an installed server is running there.
@@ -58,7 +58,7 @@ Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, 
 - Don't release: `ci`, `test`, `docs`, `nit` (comment-only changes, typos, formatting, refactors
   with no behavior change), `chore`.
 
-The component names the part of the repo: `agentk` for AgentK Local, `meko` for Meko
+The component names the part of the repo: `agentk` for AgentK, `meko` for Meko
 (`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
 slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
 (`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
@@ -146,7 +146,7 @@ agent-k-local-<version>/
 The repo is internal for now, so downloads go through an authenticated GitHub CLI. The repo's
 latest release is Meko's: its one-line install (`gh release download --repo
 yugabyte/agent-k-local --pattern install.sh --output - | sh`) installs Meko, and then
-`meko install_extension agentk` installs AgentK Local pointed at that Meko. AgentK Local alone comes
+`meko install_extension agentk` installs AgentK pointed at that Meko. AgentK alone comes
 from its own installer in the newest AgentK release:
 
 ```sh
@@ -165,7 +165,7 @@ without asking; Kiro CLI comes from its own installer at cli.kiro.dev), and it s
 ends up installed. `agent-k-local install` then offers Meko's own setup for each agent it finds
 (Claude Code, Kiro), asking first. `--install-deps` skips the questions (and installs Claude Code
 when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and
-`--deps-only` stops after that step. Where AgentK Local
+`--deps-only` stops after that step. Where AgentK
 is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agent-k-local`,
 and both services enabled or loaded), it says so and stops before any of that, unless given
 `--reinstall`, `--deps-only`, a `--version` other than the installed one, or options for

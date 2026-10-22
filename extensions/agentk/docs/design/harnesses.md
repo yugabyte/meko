@@ -1,6 +1,6 @@
 # Agents: Claude Code and Kiro
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 A session runs on one coding agent, its **harness**, picked when it starts and kept for its life (a
 conversation can't move between CLIs): Claude Code, or [Kiro CLI](https://kiro.dev/cli/). The

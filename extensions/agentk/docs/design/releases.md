@@ -1,6 +1,6 @@
 # Releases and auto-update
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 - **CI (on PRs that change AgentK, and every push to `main`).** Typecheck, lint and unit tests, on
   Linux and macOS, run in `extensions/agentk` (the workflows, `scripts/check-title.sh`,
@@ -41,7 +41,7 @@ Part of the [AgentK Local design](../design.md).
 
 ```sh
 # The repo's one-line install (gh release download --pattern install.sh, from its latest release)
-# installs Meko, whose `meko install_extension agentk` installs AgentK Local pointed at it. AgentK
+# installs Meko, whose `meko install_extension agentk` installs AgentK pointed at it. AgentK
 # Local alone: its own install.sh from the newest AgentK release (no root; the repo is internal for
 # now, so this uses gh).
 gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
@@ -50,7 +50,7 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
   --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  0. stops, saying so, if AgentK Local is already installed in AK_HOME and set up: app/current,
+#  0. stops, saying so, if AgentK is already installed in AK_HOME and set up: app/current,
 #     config.toml, ~/.local/bin/agent-k-local, and both services enabled (systemd) or loaded
 #     (launchd). Updates are offered in the app, and `agent-k-local install` redoes the setup.
 #     --reinstall, --deps-only, a --version other than the installed one, or options for

@@ -242,7 +242,7 @@ install and run Meko came in #171 ([install.md](install.md)).
 
 ## AgentK's calls (#203)
 
-`internal/mcp/agentk_contract_test.go` replays every call AgentK Local's Meko client makes
+`internal/mcp/agentk_contract_test.go` replays every call AgentK's Meko client makes
 (`extensions/agentk/src/server/meko.ts`), with the same tool names and arguments:
 
 - `check` (a ping);

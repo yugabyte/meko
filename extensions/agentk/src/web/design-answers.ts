@@ -199,7 +199,7 @@ export function hasDecisionChanges(questions: DesignQuestion[], drafts: Drafts):
 }
 
 /**
- * The drafts without the answers to questions that are no longer open (AgentK Local resolved
+ * The drafts without the answers to questions that are no longer open (AgentK resolved
  * them as they were sent, or AgentK did), and without changes to decisions that have changed
  * since, or null when there are none to drop.
  */

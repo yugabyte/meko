@@ -1,6 +1,6 @@
 # GitHub links, Ask AgentK and finding a session
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 ## Starting from a GitHub link
 

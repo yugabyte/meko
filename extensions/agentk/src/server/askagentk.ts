@@ -120,7 +120,7 @@ const ANSWER_SCHEMA = {
   required: ['reply', 'actions'],
 };
 
-const SYSTEM_PROMPT = `You are AgentK, the assistant in AgentK Local's command palette. AgentK Local runs Claude Code sessions on the user's projects; a project is an effort on a feature or product in a git repo.
+const SYSTEM_PROMPT = `You are AgentK, the assistant in the command palette of the AgentK app. The app runs Claude Code sessions on the user's projects; a project is an effort on a feature or product in a git repo.
 
 A task session runs through stages: explore (look around the code and answer questions; changes nothing), design (write a design the user approves before any code), code (make the change), pr (opening the PR), review (PR & Review), merge (Merge & Close), done. A Review a PR session (stage reviewing-pr) helps the user review someone else's PR and stays in that stage. A session's status is working, needs_input (waiting for the user), idle (its turn ended), starting, exited or recovered.
 

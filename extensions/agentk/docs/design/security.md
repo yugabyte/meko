@@ -1,6 +1,6 @@
 # Login and security
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 The terminal is a shell running as your Unix user, so the web login protects the same thing as
 your SSH key. Each install serves exactly one owner. Sharing the app means other people install

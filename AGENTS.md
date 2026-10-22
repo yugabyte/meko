@@ -3,7 +3,7 @@
 Guide for coding agents (Claude Code, Kiro, Codex, Cursor, and others) working in this repo.
 
 This repo is becoming **meko**: Meko, with extensions that plug into it. Today it holds
-one extension, **AgentK Local**, in `extensions/agentk`. Before changing anything there, read
+one extension, **AgentK**, in `extensions/agentk`. Before changing anything there, read
 [extensions/agentk/AGENTS.md](extensions/agentk/AGENTS.md): it has the map, the invariants, the
 commands (run from `extensions/agentk`) and which docs to keep current. Meko's own Go
 backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before changing it.
@@ -13,13 +13,13 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 | Path | What it is |
 |---|---|
 | `backend/` | Meko's Go backend: the `meko` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`), and its Node memory engine in `backend/memory_engine`. |
-| `extensions/agentk/` | AgentK Local: its code, tests, scripts, packaging and docs, with its own `package.json`. |
+| `extensions/agentk/` | AgentK: its code, tests, scripts, packaging and docs, with its own `package.json`. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
 | `scripts/release/` | The release scripts both products share, with `--product agentk\|meko`: the next version, the release notes (and whether to release), and pruning old releases. |
 | `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the two release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release), and Dependabot. |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
-| `README.md`, `LICENSE` | The repo's README (Meko: what it is, building it, its commands, and its extensions) and the license for everything in it. AgentK Local's README is `extensions/agentk/README.md`. |
+| `README.md`, `LICENSE` | The repo's README (Meko: what it is, building it, its commands, and its extensions) and the license for everything in it. AgentK's README is `extensions/agentk/README.md`. |
 
 ## Rules for the whole repo
 

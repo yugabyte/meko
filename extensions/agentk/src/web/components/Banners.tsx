@@ -310,7 +310,7 @@ export function Banners({
       )}
       {stale && (
         <div className="banner info">
-          <span className="banner-text">AgentK Local was updated to v{stale}. Reload to use it.</span>
+          <span className="banner-text">AgentK was updated to v{stale}. Reload to use it.</span>
           <button className="btn primary small" onClick={() => location.reload()}>
             Reload
           </button>

@@ -13,7 +13,7 @@ function AuthFrame({ title, sub, children }: { title: string; sub: string; child
         <div className="auth-brand">
           <img src="/logo.png" alt="" width={56} height={56} />
           <div>
-            <div className="brand-name">AgentK Local</div>
+            <div className="brand-name">AgentK</div>
             <div className="muted small">Agentic coder</div>
           </div>
         </div>
@@ -202,7 +202,7 @@ function ForgotPassword() {
     <div className="auth-forgot" id="login-forgot">
       <strong>Reset your login from the host</strong>
       <p className="muted small">
-        On the computer AgentK Local runs on, sign in as the user it runs as and run:
+        On the computer AgentK runs on, sign in as the user it runs as and run:
       </p>
       <code className="auth-cmd">agent-k-local setup-link</code>
       <p className="muted small">

@@ -105,7 +105,7 @@ func (l Layout) Ensure() error {
 const HomeEnv = "MEKO_HOME"
 
 // networkFS are filesystems SQLite's locking and flock can't be trusted on. The names are the
-// ones AgentK Local's installer checks (extensions/agentk/src/server/install.ts): Linux mount types and macOS
+// ones AgentK's installer checks (extensions/agentk/src/server/install.ts): Linux mount types and macOS
 // statfs names.
 var networkFS = map[string]bool{
 	"nfs": true, "nfs4": true, "cifs": true, "smb2": true, "smbfs": true, "fuse.sshfs": true,

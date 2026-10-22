@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- AgentK Local web server. Written by `agent-k-local install`; changes are overwritten. -->
+<!-- AgentK web server. Written by `agent-k-local install`; changes are overwritten. -->
 <!-- The session host runs in its own job (com.yugabyte.agent-k-local.host) so restarting or
      updating this one never ends a session. -->
 <plist version="1.0">

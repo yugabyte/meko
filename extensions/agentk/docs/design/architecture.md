@@ -1,6 +1,6 @@
 # Architecture
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 There are three long-lived pieces on the host: the web server, the session host that owns every
 Claude process, and the state directory at `~/.agent-k-local`. The server is stateless enough to
@@ -12,7 +12,7 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver (headless) or your Mac"]
-    S["AgentK Local server<br/>HTTPS :7777"]
+    S["AgentK server<br/>HTTPS :7777"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]

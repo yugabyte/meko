@@ -33,7 +33,7 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     all<{ text: string }>(env.core.db, 'SELECT text FROM session_events WHERE session_id = ? AND kind = ?', id, kind).map((e) => e.text);
   const slow = (ms: number) => writeFileSync(join(env.fakeDir, 'turn-ms'), String(ms));
 
-  it("shows Claude's question, and its answer from AgentK Local resumes the turn", async () => {
+  it("shows Claude's question, and its answer from AgentK resumes the turn", async () => {
     const id = await start({}, { kind: 'quick' });
     await env.core.sessions.submit(id, 'ASK_USER now');
     const s = await waitFor(() => get(id), (x) => !!x.asking, 10000, 'the question');
@@ -52,7 +52,7 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await waitFor(() => jsonl(env, 'mod-asks.jsonl'), (a) => a.length === 1, 10000, 'the answer in Claude');
     expect(jsonl(env, 'mod-asks.jsonl')).toEqual([{ by: 'agentk', answers: { 0: 'Blue' } }]);
     await waitFor(() => get(id).status, (st) => st === 'idle', 10000, 'the turn to end');
-    expect(events(id, 'ask')).toEqual(["Answered AgentK's question in AgentK Local"]);
+    expect(events(id, 'ask')).toEqual(["Answered AgentK's question in the AgentK UI"]);
   });
 
   it("shows Claude's Meko call while it runs, and forgets one whose end never came when the turn ends", async () => {
