@@ -220,6 +220,42 @@ func (a *api) agents(c echo.Context) error {
 	return envelope.OK(c, out)
 }
 
+// callUsage is Meko's own view of a datapack's calls (Cloud has none): per tool, per search step
+// and per agent, and the latest calls, from the call log.
+func (a *api) callUsage(c echo.Context) error {
+	id, ok, err := a.pathDatapack(c)
+	if !ok {
+		return err
+	}
+	u, err := a.Service.CallUsage(ctx(c), id)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	tools := make([]map[string]any, len(u.Tools))
+	for i, t := range u.Tools {
+		tools[i] = map[string]any{"tool": t.Tool, "calls": t.Calls, "errors": t.Errors, "p50_ms": t.P50Ms,
+			"p95_ms": t.P95Ms}
+	}
+	steps := make([]map[string]any, len(u.Steps))
+	for i, st := range u.Steps {
+		steps[i] = map[string]any{"step": st.Step, "calls": st.Calls, "p50_ms": st.P50Ms, "p95_ms": st.P95Ms}
+	}
+	agents := make([]map[string]any, len(u.Agents))
+	for i, ag := range u.Agents {
+		agents[i] = map[string]any{"agent_id": ag.AgentID, "calls": ag.Calls, "searches": ag.Searches,
+			"last_at": wire.Time(ag.LastAt)}
+	}
+	recent := make([]map[string]any, len(u.Recent))
+	for i, r := range u.Recent {
+		recent[i] = map[string]any{"at": wire.Time(r.At), "tool": r.Tool, "agent_id": r.AgentID, "ok": r.OK,
+			"error_code": r.ErrorCode, "ms": r.Ms, "memory_n": r.MemoryN, "kb_n": r.KBN,
+			"conversation_n": r.ConversationN}
+	}
+	return envelope.OK(c, map[string]any{"datapack_id": id, "calls": u.Calls, "errors": u.Errors, "tools": tools,
+		"steps": steps, "agents": agents, "recent": recent, "input_tokens": u.InputTokens,
+		"output_tokens": u.OutputTokens})
+}
+
 // metrics is the datapack detail page's dashboard: its searches from the call log, and its sizes.
 func (a *api) metrics(c echo.Context) error {
 	id, ok, err := a.pathDatapack(c)

@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 
-export const TABS = ["overview", "search", "memories", "knowledge", "conversations", "connect"] as const;
+export const TABS = ["overview", "analytics", "search", "memories", "knowledge", "conversations", "connect"] as const;
 export type Tab = (typeof TABS)[number];
 
 export interface Route {

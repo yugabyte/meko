@@ -14,6 +14,7 @@ import type {
   PromotedMemory,
   ProvisionStatus,
   UploadOffer,
+  Usage,
 } from "./types";
 
 // The agent the UI's own MCP calls are recorded as in the call log.
@@ -87,6 +88,7 @@ export const api = {
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
   metrics: (id: string) => request<Metrics>("GET", `/datapacks/${id}/metrics`),
+  usage: (id: string) => request<Usage>("GET", `/datapacks/${id}/usage`),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>

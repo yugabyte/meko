@@ -5,17 +5,73 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
 import { api } from "../lib/api";
 import { timeAgo } from "../lib/format";
-import type { ContextSearch, Datapack } from "../lib/types";
+import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
 
-// n is null when the source wasn't searched.
-function Section({ icon, title, n, children }: { icon: ReactNode; title: string; n: number | null; children: ReactNode }) {
+// Memories below this cosine aren't shown. context_search returns every memory it ranks, as Cloud's
+// does, for an agent to weigh beside the other sources; a person reading the list needs only the
+// matches. Measured with Meko's embedder, right answers scored 0.40 to 0.72 and
+// unrelated memories 0.11 to 0.29.
+const WEAK_MEMORY = 0.4;
+
+// The cosine similarity every source is shown with: a memory's raw score, or 1 - distance.
+function Similarity({ value }: { value: number | undefined }) {
+  if (value === undefined) return null;
+  return <Badge tone={value >= 0.5 ? "success" : value >= WEAK_MEMORY ? "primary" : "neutral"}>{value.toFixed(2)}</Badge>;
+}
+
+// Rounded to the two places the badge shows, so a memory shown as 0.40 counts as 0.40.
+const round2 = (v: number) => Math.round(v * 100) / 100;
+const memorySimilarity = (m: MemoryHit) => {
+  const v = m.raw_similarity_score ?? m.score;
+  return v === undefined ? undefined : round2(v);
+};
+const isWeak = (m: MemoryHit) => (memorySimilarity(m) ?? 1) < WEAK_MEMORY;
+
+function MemoryCard({ m }: { m: MemoryHit }) {
+  return (
+    <Card className="flex items-start justify-between gap-4 p-3">
+      <p className="text-sm">{m.memory}</p>
+      <div className="shrink-0 text-right text-xs text-muted-foreground">
+        <Similarity value={memorySimilarity(m)} />
+        <div className="mt-1">{timeAgo(m.created_at)}</div>
+      </div>
+    </Card>
+  );
+}
+
+function Memories({ hits }: { hits: MemoryHit[] }) {
+  const strong = hits.filter((m) => !isWeak(m));
+  if (strong.length === 0) return <p className="text-sm text-muted-foreground">Nothing close enough.</p>;
+  return (
+    <div className="space-y-2">
+      {strong.map((m) => (
+        <MemoryCard key={m.id} m={m} />
+      ))}
+    </div>
+  );
+}
+
+// n is null when the source wasn't searched; badge, if set, is the count shown instead of n.
+function Section({
+  icon,
+  title,
+  n,
+  badge,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  n: number | null;
+  badge?: number;
+  children: ReactNode;
+}) {
   return (
     <section className="space-y-2">
       <h3 className="flex items-center gap-2 text-sm font-medium">
         {icon}
         {title}
-        {n !== null && <Badge>{n}</Badge>}
+        {n !== null && <Badge>{badge ?? n}</Badge>}
       </h3>
       {n === null ? (
         <p className="text-sm text-muted-foreground">Not searched: Meko's memory engine isn't ready yet.</p>
@@ -70,18 +126,11 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
       )}
       {r && (
         <div className="space-y-6">
-          <Section icon={<Brain className="size-4 text-primary" />} title="Memories" n={r.memory?.length ?? null}>
-            <div className="space-y-2">
-              {r.memory?.map((m) => (
-                <Card key={m.id} className="flex items-start justify-between gap-4 p-3">
-                  <p className="text-sm">{m.memory}</p>
-                  <div className="shrink-0 text-right text-xs text-muted-foreground">
-                    {m.score !== undefined && <Badge tone="primary">{m.score.toFixed(2)}</Badge>}
-                    <div className="mt-1">{timeAgo(m.created_at)}</div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+          <Section icon={<Brain className="size-4 text-primary" />} title="Memories"
+            n={r.memory?.length ?? null}
+            badge={r.memory?.filter((m) => !isWeak(m)).length}
+          >
+            <Memories hits={r.memory ?? []} />
           </Section>
           <Section icon={<FileText className="size-4 text-primary" />} title="Knowledge base" n={r.knowledge_base?.length ?? null}>
             <div className="space-y-2">
@@ -90,7 +139,8 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
                   <div className="mb-1.5 flex gap-1.5">
                     {k.metadata_filters?.source === "memory" && <Badge tone="success">promoted memory</Badge>}
                     <Badge>{k.match_type}</Badge>
-                    {k.rerank_score !== undefined && <Badge tone="primary">{k.rerank_score.toFixed(2)}</Badge>}
+                    <Similarity value={1 - k.distance} />
+                    {k.rerank_score !== undefined && <Badge>rerank {k.rerank_score.toFixed(2)}</Badge>}
                   </div>
                   <p className="line-clamp-6 whitespace-pre-wrap text-sm">{k.chunk_text}</p>
                 </Card>
@@ -104,8 +154,9 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
           >
             <div className="space-y-2">
               {r.conversation?.hits.map((h) => (
-                <Card key={h.message_id + h.distance} className="p-3">
+                <Card key={h.message_id + h.distance} className="flex items-start justify-between gap-4 p-3">
                   <p className="line-clamp-4 whitespace-pre-wrap text-sm">{h.content}</p>
+                  <Similarity value={1 - h.distance} />
                 </Card>
               ))}
             </div>

@@ -18,6 +18,8 @@
   --sidebar: 0 0% 100%;
   --success: 152 60% 36%;
   --warning: 38 92% 45%;
+  --info: 199 89% 48%;
+  --info-strong: 221 83% 53%;
 }
 
 .dark {
@@ -34,6 +36,8 @@
   --sidebar: 240 7% 6%;
   --success: 152 55% 50%;
   --warning: 38 92% 55%;
+  --info: 199 89% 60%;
+  --info-strong: 221 83% 62%;
 }
 
 @theme inline {
@@ -50,6 +54,8 @@
   --color-sidebar: hsl(var(--sidebar));
   --color-success: hsl(var(--success));
   --color-warning: hsl(var(--warning));
+  --color-info: hsl(var(--info));
+  --color-info-strong: hsl(var(--info-strong));
   --radius-lg: 0.5rem;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
