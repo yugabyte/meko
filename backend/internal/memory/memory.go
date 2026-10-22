@@ -1,6 +1,6 @@
-// Package memory is Meko's memories and conversations as Go calls: what milestone 3's MCP
-// tools and REST routes will serve. Model work (embedding, and mem0's add and search) goes to the
-// Node engine; reads that need no model come straight from the store.
+// Package memory is Meko's memories, conversations and knowledge base as Go calls: what the MCP
+// tools and REST routes serve. Model work (embedding, reranking, and mem0's add and search) goes
+// to the Node engine; reads that need no model come straight from the store.
 package memory
 
 import (
@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/knowledge"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
@@ -22,16 +25,22 @@ var (
 	ErrBadRequest = errors.New("bad request")
 )
 
-// Service is the memory and conversation operations of one install.
+// Service is the memory, conversation and knowledge-base operations of one install.
 type Service struct {
-	st          *store.Store
-	eng         *engine.Client
-	userID      string
-	log         *slog.Logger
-	noEngine    string
-	child       func() (supervisor.Status, bool)
-	maxDistance float64
-	kick        chan struct{}
+	st            *store.Store
+	eng           *engine.Client
+	userID        string
+	log           *slog.Logger
+	noEngine      string
+	child         func() (supervisor.Status, bool)
+	maxDistance   float64
+	kbMaxDistance float64
+	kick          chan struct{}
+	indexKick     chan struct{}
+	files         *knowledge.Files
+	fileMu        sync.Mutex // a file's bytes and its row change together: storing one, deleting one
+	tickets       *tickets
+	baseURL       string
 }
 
 // Options configure a Service.
@@ -44,6 +53,13 @@ type Options struct {
 	EngineChild func() (supervisor.Status, bool)
 	// MaxDistance is conversation search's cutoff; 0 means DefaultMaxDistance.
 	MaxDistance float64
+	// KBMaxDistance is context_search's cutoff for knowledge-base results; 0 means
+	// DefaultKBMaxDistance.
+	KBMaxDistance float64
+	// FilesDir is where knowledge files' bytes live (paths.Layout.KnowledgeFiles).
+	FilesDir string
+	// BaseURL is this server's, http://127.0.0.1:<port>, for the upload and download links it gives.
+	BaseURL string
 }
 
 // New is the service over st and the engine eng.
@@ -51,8 +67,13 @@ func New(st *store.Store, eng *engine.Client, o Options) *Service {
 	if o.MaxDistance <= 0 {
 		o.MaxDistance = DefaultMaxDistance
 	}
+	if o.KBMaxDistance <= 0 {
+		o.KBMaxDistance = DefaultKBMaxDistance
+	}
 	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noEngine: o.NoEngine, child: o.EngineChild,
-		maxDistance: o.MaxDistance, kick: make(chan struct{}, 1)}
+		maxDistance: o.MaxDistance, kbMaxDistance: o.KBMaxDistance, kick: make(chan struct{}, 1),
+		indexKick: make(chan struct{}, 1), files: knowledge.NewFiles(o.FilesDir),
+		tickets: &tickets{m: map[string]*ticket{}}, baseURL: strings.TrimSuffix(o.BaseURL, "/")}
 }
 
 // UserID is the install's local user, the user_id on every memory.
@@ -234,6 +255,7 @@ type EngineStatus struct {
 	State    string           `json:"state"`
 	Reason   string           `json:"reason,omitempty"` // why it isn't ready
 	Embedder *engine.Embedder `json:"embedder,omitempty"`
+	Reranker *engine.Reranker `json:"reranker,omitempty"` // the knowledge base's; the engine is ready without it
 }
 
 // EngineStatus asks the engine how it is.
@@ -254,7 +276,7 @@ func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
 		}
 		return EngineStatus{State: "starting", Reason: "not answering yet"}
 	}
-	return EngineStatus{State: h.State, Reason: h.Error, Embedder: &h.Embedder}
+	return EngineStatus{State: h.State, Reason: h.Error, Embedder: &h.Embedder, Reranker: h.Reranker}
 }
 
 // DeleteAllMemories deletes the local user's memories in a datapack written by one agent,

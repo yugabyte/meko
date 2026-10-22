@@ -256,7 +256,7 @@ func datapackDescribe(ctx context.Context, c *call, a args) (any, error) {
 	return struct {
 		wire.DatapackDescription
 		Status map[string]any `json:"status"`
-	}{desc, map[string]any{"agent_count": 0, "knowledge_base_count": 0, "status": "ready"}}, nil
+	}{desc, map[string]any{"agent_count": 0, "knowledge_base_count": desc.KnowledgeBaseFileCount, "status": "ready"}}, nil
 }
 
 func datapackUpdate(ctx context.Context, c *call, a args) (any, error) {

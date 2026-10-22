@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -169,6 +170,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	noEngine := startEngine(sup, l, cfg, internalToken, log)
 	svc := memory.New(st, engine.NewClient(l.EngineSock, internalToken), memory.Options{
 		UserID: userID, Log: log, NoEngine: noEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
+		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
+		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		EngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
 				if c.Name == engine.Name {
@@ -178,21 +181,41 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			return supervisor.Status{}, false
 		},
 	})
-	// Embeds turns for conversation search as they arrive, and any the engine missed while down;
-	// and keeps the call log to its retention.
+	// Knowledge files a stopped server was indexing go back in the queue, and files no document
+	// names (a crash between storing a file and its row) are removed. Both are quick, and finish
+	// even when a stop arrives during start.
+	boot := context.WithoutCancel(ctx)
+	if n, err := svc.RequeueInterrupted(boot); err != nil {
+		return err
+	} else if n > 0 {
+		log.Info("queued knowledge files again that the last server didn't finish", "count", n)
+	}
+	if n, err := svc.SweepFiles(boot); err != nil {
+		log.Warn("couldn't sweep the knowledge files folder", "error", err)
+	} else if n > 0 {
+		log.Info("removed knowledge files no document names", "count", n)
+	}
+	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
+	// engine missed while down; indexes knowledge files; and keeps the call log to its retention.
 	embedCtx, stopEmbedder := context.WithCancel(context.Background())
 	embedderDone := make(chan struct{})
 	go func() {
 		defer close(embedderDone)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			svc.RunCallPruner(embedCtx)
-		}()
+		var wg sync.WaitGroup
+		for _, run := range []func(context.Context){svc.RunCallPruner, svc.RunIndexer} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				run(embedCtx)
+			}()
+		}
 		svc.RunEmbedder(embedCtx)
-		<-done
+		wg.Wait()
 	}()
 
+	restOpts := rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken,
+		Credential: server.Credential, Log: log}
+	upload, download := rest.Tickets(restOpts)
 	srv := server.New(server.Options{
 		Info: server.Info{
 			Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
@@ -203,9 +226,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
 			Credential: server.CredentialOf}),
 		REST: func(g *echo.Group) {
-			rest.Register(g, rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken,
-				Credential: server.Credential, Log: log})
+			rest.Register(g, restOpts)
 		},
+		Upload: upload, Download: download,
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

@@ -6,15 +6,18 @@ import http from "node:http";
 
 import { HttpError, type Engine } from "./engine.js";
 import type { EmbedderInfo } from "./embedder.js";
+import type { RerankerInfo } from "./reranker.js";
 import { StoreError } from "./storeclient.js";
 
-/** Largest request body: an add or embed call with long texts. */
+/** Largest request body: an add, embed or rerank call with long texts. */
 const MAX_BODY = 8 << 20;
 
 export interface Health {
   state: "loading" | "ready" | "error";
   error?: string;
   embedder: EmbedderInfo;
+  /** The knowledge base's reranker, which loads on its own: search works without it. */
+  reranker?: RerankerInfo & { state: "loading" | "ready" | "error"; error?: string };
 }
 
 type Handler = (engine: Engine, body: any) => Promise<unknown>;
@@ -25,6 +28,7 @@ const routes: Record<string, Handler> = {
   "/v1/update": (e, b) => e.update(b),
   "/v1/delete": (e, b) => e.delete(b),
   "/v1/embed": (e, b) => e.embed(b),
+  "/v1/rerank": (e, b) => e.rerank(b),
 };
 
 export function startServer(

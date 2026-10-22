@@ -167,6 +167,7 @@ type CallStats struct {
 	LastAccessed        *time.Time
 	Daily               []DayActivity // the last 30 days with any, oldest first
 	MemoryAdds          int
+	KBSearches          int // knowledgebase_search calls
 	InputTokens         int
 	OutputTokens        int
 }
@@ -200,6 +201,9 @@ func (s *Service) CallStats(ctx context.Context, datapack string) (CallStats, er
 			continue
 		}
 		out.Requests++
+		if kind == "kb" {
+			out.KBSearches++
+		}
 		out.TokensSent += c.TokensSent
 		out.TokensSaved += c.TokensSaved
 		out.SavedBySource[kind] += c.TokensSaved
@@ -237,3 +241,6 @@ func (s *Service) CallStats(ctx context.Context, datapack string) (CallStats, er
 func (s *Service) CountAll(ctx context.Context) (datapacks, conversations int, err error) {
 	return s.st.CountAll(ctx)
 }
+
+// KnowledgeBytes is the size of every datapack's knowledge files.
+func (s *Service) KnowledgeBytes(ctx context.Context) (int64, error) { return s.st.KnowledgeBytes(ctx) }

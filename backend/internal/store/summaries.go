@@ -189,3 +189,10 @@ func (s *Store) CountAll(ctx context.Context) (datapacks, conversations int, err
 		Scan(&datapacks, &conversations)
 	return datapacks, conversations, err
 }
+
+// KnowledgeBytes is the size of every datapack's knowledge files.
+func (s *Store) KnowledgeBytes(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.r.QueryRowContext(ctx, "SELECT COALESCE(sum(size_bytes), 0) FROM kb_documents").Scan(&n)
+	return n, err
+}

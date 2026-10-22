@@ -40,7 +40,9 @@ type Options struct {
 const instructions = `Meko is your memory: facts, conversations and files that last across sessions and are
 shared by every agent that uses the same datapack. This server is Meko running on this machine.
 
-Start with context_search: it searches memories and past conversations at once. Save a fact
+Start with context_search: it searches memories, the knowledge base and past conversations at
+once. knowledgebase_search searches only the knowledge base: files uploaded with
+knowledgebase_upload_document, and promoted memories. Save a fact
 with memory_add. Store a chat with conversation_create, then conversation_add_message for each
 turn. Pass the same conversation_id to every call of a session.
 

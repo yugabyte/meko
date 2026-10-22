@@ -9,10 +9,11 @@ import { after, before, describe, test } from "node:test";
 
 import { EmbedderFactory, HistoryManagerFactory, LLMFactory, VectorStoreFactory } from "mem0ai/oss";
 
-import { startUp } from "../src/app.js";
-import { HashEmbedder } from "../src/embedder.js";
+import { loadReranker, startUp } from "../src/app.js";
+import { HashEmbedder, Lanes } from "../src/embedder.js";
 import { Engine, HttpError, toResult } from "../src/engine.js";
 import { MekoHistory, MekoStore, NoLLM, PROVIDERS, register } from "../src/providers.js";
+import { OverlapReranker, type LocalReranker } from "../src/reranker.js";
 import { mekoScore } from "../src/scoring.js";
 import { startServer, type Health } from "../src/server.js";
 import { StoreClient, StoreError } from "../src/storeclient.js";
@@ -217,6 +218,40 @@ describe("with a store", () => {
     await assert.rejects(engine.embed({ texts: new Array(257).fill("x") }), (e: HttpError) => e.status === 400);
   });
 
+  test("embeds in the background on request, and refuses a background that isn't a boolean", async () => {
+    const { vectors } = await engine.embed({ texts: ["a"], background: true });
+    assert.deepEqual(vectors, await embedder.embedBatch(["a"]));
+    await assert.rejects(
+      engine.embed({ texts: ["a"], background: "yes" as unknown as boolean }),
+      (e: HttpError) => e.status === 400,
+    );
+  });
+
+  test("reranks with its reranker, and says when it has none ready", async () => {
+    const ranked = new Engine(embedder, 2, new OverlapReranker());
+    const { scores } = await ranked.rerank({ query: "deploy the server", texts: ["how to deploy the server", "lunch"] });
+    assert.equal(scores.length, 2);
+    assert.ok(scores[0] > scores[1]);
+    assert.deepEqual(await ranked.rerank({ query: "x", texts: [] }), { scores: [] });
+    for (const bad of [
+      { query: "", texts: ["a"] },
+      { query: "q", texts: [3] },
+      { query: "q", texts: new Array(201).fill("x") },
+    ]) {
+      await assert.rejects(ranked.rerank(bad as any), (e: HttpError) => e.status === 400, JSON.stringify(bad).slice(0, 40));
+    }
+    const loading: LocalReranker = {
+      info: { provider: "test", model: "m" },
+      state: "loading",
+      ready: async () => {},
+      rerank: async () => [],
+      close: async () => {},
+    };
+    for (const e of [new Engine(embedder), new Engine(embedder, 2, loading)]) {
+      await assert.rejects(e.rerank({ query: "q", texts: ["a"] }), (err: HttpError) => err.code === "RERANKER_NOT_READY");
+    }
+  });
+
   test("keeps the most recently used datapacks' Memory, and rebuilds a dropped one", async () => {
     const small = new Engine(embedder, 2);
     const add = (dp: string) =>
@@ -272,6 +307,34 @@ describe("startUp", () => {
   });
 });
 
+describe("the embedder's queues", () => {
+  test("an interactive batch overtakes background ones", () => {
+    const q = new Lanes<string>();
+    q.push("bg1", true);
+    q.push("bg2", true);
+    q.push("query", false);
+    assert.deepEqual([q.shift(), q.shift()], ["query", "bg1"]);
+    q.push("query2", false);
+    assert.deepEqual(q.drain(), ["query2", "bg2"]);
+    assert.equal(q.shift(), undefined);
+  });
+});
+
+describe("loadReranker", () => {
+  test("retries a failed load until it passes", async () => {
+    let loads = 0;
+    await loadReranker(
+      {
+        ready: async () => {
+          if (++loads < 3) throw new Error("offline");
+        },
+      },
+      1,
+    );
+    assert.equal(loads, 3);
+  });
+});
+
 describe("the API", () => {
   let fake: FakeStore;
   let server: http.Server;
@@ -310,6 +373,12 @@ describe("the API", () => {
       assert.equal(r.status, 400, body);
       assert.equal(r.body.error.code, "BAD_REQUEST");
     }
+  });
+
+  test("reranks on /v1/rerank", async () => {
+    const r = await post("/v1/rerank", JSON.stringify({ query: "q", texts: ["a"] }));
+    assert.equal(r.status, 503);
+    assert.equal(r.body.error.code, "RERANKER_NOT_READY");
   });
 
   test("a body over the limit gets its 413", async () => {

@@ -197,6 +197,13 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		engineLine += " (" + st.Engine.Reason + ")"
 	}
 	fmt.Fprintln(stdout, engineLine)
+	if r := st.Engine.Reranker; r != nil && r.Model != "" {
+		line := fmt.Sprintf("  Reranker: %s, %s %s", r.State, r.Provider, r.Model)
+		if r.Error != "" {
+			line += " (" + r.Error + ")"
+		}
+		fmt.Fprintln(stdout, line)
+	}
 	if st.Auth == config.AuthNone {
 		fmt.Fprintln(stdout, "  Auth:     none (every user and program on this machine can read and write your memories)")
 	} else {

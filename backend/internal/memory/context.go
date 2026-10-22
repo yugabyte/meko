@@ -33,8 +33,10 @@ type ContextSearch struct {
 type ContextResults struct {
 	Memory        []engine.Memory
 	Conversation  *ConversationResults
-	KnowledgeBase []any // knowledge files come with milestone 4: always nil until then
-	Steps         []store.Step
+	KnowledgeBase []KBResult
+	// KnowledgeChunks is the datapack's knowledge-base chunks, the savings estimate's baseline.
+	KnowledgeChunks int
+	Steps           []store.Step
 }
 
 // ContextSearch searches the sources asked for at the same time, so it takes as long as the
@@ -66,7 +68,33 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 				res = aboveRaw(res, r.MinRawSimilarity)
 			}
 			step("memory_search", start, len(res))
+			mu.Lock()
 			out.Memory = res
+			mu.Unlock()
+		}()
+	}
+	if r.KnowledgeBase {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			res, err := s.SearchKnowledge(ctx, r.DatapackID, r.Query, r.Limit)
+			if err != nil {
+				if s.sourceUnavailable("knowledge_base", err) {
+					return
+				}
+				res = []KBResult{}
+			}
+			kept := []KBResult{}
+			for _, k := range res {
+				if k.Distance <= s.kbMaxDistance {
+					kept = append(kept, k)
+				}
+			}
+			step("knowledge_base_search", start, len(kept))
+			mu.Lock()
+			out.KnowledgeBase = kept
+			mu.Unlock()
 		}()
 	}
 	if r.Conversation {
@@ -82,24 +110,37 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 				res = ConversationResults{Hits: []ConversationHit{}, Thread: []ThreadTurn{}}
 			}
 			step("conversation_search", start, len(res.Hits))
+			mu.Lock()
 			out.Conversation = &res
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+	chunks, _, err := s.st.KnowledgeCounts(ctx, r.DatapackID)
+	if err != nil {
+		return ContextResults{}, err
+	}
+	out.KnowledgeChunks = chunks
 	return out, nil
 }
 
 // failedSource logs a source that failed and returns what it reports: nil (not searched) when the
 // engine couldn't take the query, else empty.
 func (s *Service) failedSource(source string, err error) []engine.Memory {
+	if s.sourceUnavailable(source, err) {
+		return nil
+	}
+	return []engine.Memory{}
+}
+
+// sourceUnavailable logs a source that failed and says whether it couldn't be searched at all (the
+// engine couldn't take the query), which context_search reports as null rather than empty.
+func (s *Service) sourceUnavailable(source string, err error) bool {
 	if s.log != nil {
 		s.log.Warn("a context_search source failed", "source", source, "error", err)
 	}
 	var notReady *engine.NotReadyError
-	if errors.Is(err, engine.ErrUnavailable) || errors.As(err, &notReady) {
-		return nil
-	}
-	return []engine.Memory{}
+	return errors.Is(err, engine.ErrUnavailable) || errors.As(err, &notReady)
 }
 
 // aboveRaw keeps the memories whose cosine (or, without one, score) reaches min.

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -539,6 +540,36 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	if _, out, _ = run("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
 	}
+
+	// upload adds files to the knowledge base and waits until they're indexed.
+	notes := filepath.Join(t.TempDir(), "notes.md")
+	note := []byte("# Builds\n\nThe nightly build runs at two in the morning.\n")
+	if err = os.WriteFile(notes, note, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.pdf")
+	if err = os.WriteFile(bad, []byte("not a pdf at all"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = run("upload", "--data-dir", dir, notes, "--datapack", "default")
+	want(t, "upload", code, 0, out+errs, notes+": indexed, 1 chunk (key ")
+	code, out, errs = run("upload", "--data-dir", dir, notes)
+	want(t, "upload again", code, 0, out+errs, "already in the knowledge base as notes.md")
+	code, out, errs = run("upload", "--data-dir", dir, bad, notes)
+	want(t, "upload a bad file", code, 1, out+errs, "doesn't look like a PDF")
+	want(t, "upload a bad file", code, 1, errs, "1 of 2 files weren't added")
+	code, out, errs = run("search", "--data-dir", dir, "when does the nightly build run", "--source", "knowledge_base")
+	want(t, "search the knowledge base", code, 0, out+errs, "Knowledge base (relevance):")
+	code, out, errs = run("upload", "--data-dir", dir, notes, "--json")
+	want(t, "upload --json", code, 0, out+errs, `"already_uploaded":true`)
+	var offer struct{ Key string }
+	if err = json.Unmarshal([]byte(strings.TrimSpace(out)), &offer); err != nil {
+		t.Fatalf("upload --json: %v: %s", err, out)
+	}
+	code, out, errs = run("upload_status", "--data-dir", dir, offer.Key)
+	want(t, "upload_status", code, 0, out+errs, offer.Key+": completed. The file is indexed and searchable.")
+	code, _, errs = run("upload_status", "--data-dir", dir, "no-such-key")
+	want(t, "upload_status of an unknown key", code, 1, errs, "NOT_FOUND")
 
 	_, tok, _ := run("token", "--data-dir", dir)
 	code, out, _ = run("token", "--data-dir", dir, "--mcp")

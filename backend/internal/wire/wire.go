@@ -34,7 +34,7 @@ func DatapackRow(d store.Datapack, userID string) Datapack {
 }
 
 // DatapackDescription is a datapack with what it holds, as datapack_describe and GET
-// /datapacks/:id return it. Knowledge files come with milestone 4, so their counts are 0.
+// /datapacks/:id return it.
 type DatapackDescription struct {
 	Datapack
 	MemoryCount              int  `json:"memory_count"`
@@ -48,10 +48,18 @@ type DatapackDescription struct {
 	ConversationSearchOptOut bool `json:"conversation_search_opt_out"`
 }
 
-// Describe is a datapack and its counts.
+// Describe is a datapack and its counts, as Cloud counts them: knowledge_chunk_count is every
+// chunk of the knowledge base, promoted memories' too; knowledge_base_file_count is how many
+// knowledge bases the datapack has (one or none), not its files; shared_knowledge_count is the
+// promoted memories plus that.
 func Describe(d store.Datapack, userID string, c memory.DatapackCounts) DatapackDescription {
+	bases := 0
+	if c.KnowledgeBase {
+		bases = 1
+	}
 	return DatapackDescription{Datapack: DatapackRow(d, userID), MemoryCount: c.Memories,
-		LearningsCount: c.Learnings, CollectiveMemoryCount: c.Promoted, SharedKnowledgeCount: c.Promoted,
+		LearningsCount: c.Learnings, CollectiveMemoryCount: c.Promoted, KnowledgeCount: c.KnowledgeChunks,
+		KnowledgeChunkCount: c.KnowledgeChunks, KnowledgeBaseFileCount: bases, SharedKnowledgeCount: c.Promoted + bases,
 		ConversationCount: c.Conversations, ConversationSearchOptOut: d.ConversationSearchOptOut}
 }
 
@@ -209,12 +217,23 @@ func (t TokenSavings) Saved() int {
 	return *t.TokensSaved
 }
 
-// Savings estimates a context_search's savings. With no knowledge files (until milestone 4) the
-// baseline is Meko Cloud's default of 10 chunks.
+// Savings estimates a context_search's savings as Meko Cloud does. The baseline is the knowledge
+// results' tokens when the knowledge base returned some; else the whole knowledge base's (1000 a
+// chunk); else Cloud's default of 10 chunks.
 func Savings(r memory.ContextResults) TokenSavings {
-	out := TokenSavings{TotalTokens: defaultBaselineTokens}
+	total := defaultBaselineTokens
+	switch {
+	case len(r.KnowledgeBase) > 0:
+		total = len(r.KnowledgeBase) * kbChunkTokens
+	case r.KnowledgeChunks > 0:
+		total = r.KnowledgeChunks * kbChunkTokens
+	}
+	out := TokenSavings{TotalTokens: total}
 	source := func(sent int) *SourceSavings {
-		return &SourceSavings{TokensSent: sent, TokensSaved: max(0, out.TotalTokens-sent)}
+		return &SourceSavings{TokensSent: sent, TokensSaved: max(0, total-sent)}
+	}
+	if len(r.KnowledgeBase) > 0 {
+		out.KnowledgeBase = source(len(r.KnowledgeBase) * kbChunkTokens)
 	}
 	if len(r.Memory) > 0 {
 		out.Memory = source(len(r.Memory) * memoryTokens)
@@ -223,14 +242,14 @@ func Savings(r memory.ContextResults) TokenSavings {
 		out.Conversation = source(conversationTokens)
 	}
 	if sent := out.Sent(); sent > 0 {
-		saved := max(0, defaultBaselineTokens-sent)
+		saved := max(0, total-sent)
 		out.TokensSaved = &saved
 	}
 	return out
 }
 
 // Bands counts results by match quality, as Meko Cloud's metrics band them: a memory by its
-// score, a conversation hit by 1 - distance.
+// score, a knowledge-base result and a conversation hit by 1 - distance.
 func Bands(r memory.ContextResults) (high, mid, low int) {
 	add := func(v float64) {
 		switch {
@@ -246,6 +265,9 @@ func Bands(r memory.ContextResults) (high, mid, low int) {
 		if m.Score != nil {
 			add(*m.Score)
 		}
+	}
+	for _, k := range r.KnowledgeBase {
+		add(1 - k.Distance)
 	}
 	if r.Conversation != nil {
 		for _, h := range r.Conversation.Hits {
@@ -263,7 +285,7 @@ type ContextSearch struct {
 
 // ContextSearchResults is each source's results: null when it wasn't searched.
 type ContextSearchResults struct {
-	KnowledgeBase []any                       `json:"knowledge_base"`
+	KnowledgeBase []memory.KBResult           `json:"knowledge_base"`
 	Memory        []engine.Memory             `json:"memory"`
 	Conversation  *memory.ConversationResults `json:"conversation"`
 }
@@ -284,7 +306,7 @@ type PromotedItem struct {
 	AgentID        string  `json:"agent_id,omitempty"`
 	Data           string  `json:"data"`
 	CreatedAt      string  `json:"created_at"`
-	PromotedToKBAt *string `json:"promoted_to_kb_at"` // null until milestone 4 embeds it into the knowledge base
+	PromotedToKBAt *string `json:"promoted_to_kb_at"` // null while it waits for its vector
 }
 
 // PromotedList is a page of promoted memories.
@@ -305,6 +327,10 @@ func PromotedListOf(ps []store.Promoted, criteria map[string]any, total, page, p
 		it := PromotedItem{ID: p.ID, AgentID: p.AgentID, Data: p.Text, CreatedAt: Time(p.CreatedAt)}
 		if p.ConversationID != "" {
 			it.ConversationID = &p.ConversationID
+		}
+		if p.PromotedToKBAt != nil {
+			t := Time(*p.PromotedToKBAt)
+			it.PromotedToKBAt = &t
 		}
 		out.PromotedMemories[i] = it
 	}

@@ -10,10 +10,10 @@ import (
 func searchTools() []*tool {
 	return []*tool{{
 		name: "context_search", title: "Context Search", kind: readOnly, failCode: "search_failed",
-		desc: "Find what Meko knows about something: searches memories and past conversations at once and " +
-			"returns each source's results in its own bucket. Start here for any \"what do we know about...\" " +
-			"question. A bucket is null when it wasn't searched, empty when nothing matched. Knowledge files " +
-			"aren't searchable in this version, so knowledge_base is always null.",
+		desc: "Find what Meko knows about something: searches memories, the knowledge base (uploaded files and " +
+			"promoted memories) and past conversations at once, and returns each source's results in its own " +
+			"bucket. Start here for any \"what do we know about...\" question. A bucket is null when it wasn't " +
+			"searched, empty when nothing matched.",
 		params: []param{
 			{name: "query", typ: "string", required: true, desc: "What to find, in plain language."},
 			pConversation, pAgent, pDatapack,
@@ -70,6 +70,7 @@ func contextSearch(ctx context.Context, c *call, a args) (any, error) {
 	}
 	reply := wire.ContextSearchOf(res)
 	c.rec.MemoryN = len(res.Memory)
+	c.rec.KBN = len(res.KnowledgeBase)
 	if res.Conversation != nil {
 		c.rec.ConversationN = len(res.Conversation.Hits)
 	}

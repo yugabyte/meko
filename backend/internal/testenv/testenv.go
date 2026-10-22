@@ -120,19 +120,6 @@ func Start(t *testing.T, o Options) *Env {
 	sp.MinBackoff, sp.MaxBackoff = 50*time.Millisecond, 100*time.Millisecond
 	sup.Start(sp)
 	t.Cleanup(func() { _ = sup.Stop(context.Background()) })
-	svc := memory.New(st, engine.NewClient(l.EngineSock, internal), memory.Options{UserID: userID, Log: log})
-	// The sweep that embeds turns for conversation search, as serve runs it.
-	sweep, stopSweep := context.WithCancel(context.Background())
-	swept := make(chan struct{})
-	go func() {
-		defer close(swept)
-		svc.RunEmbedder(sweep)
-	}()
-	t.Cleanup(func() {
-		stopSweep()
-		<-swept
-	})
-
 	ln, err := server.Listen(0)
 	if err != nil {
 		t.Fatal(err)
@@ -142,22 +129,42 @@ func Start(t *testing.T, o Options) *Env {
 		t.Fatalf("not a TCP address: %v", ln.Addr())
 	}
 	port := addr.Port
+	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+	svc := memory.New(st, engine.NewClient(l.EngineSock, internal), memory.Options{UserID: userID, Log: log,
+		FilesDir: l.KnowledgeFiles, BaseURL: url})
+	// The sweep that embeds turns and knowledge-base chunks, and the indexer, as serve runs them.
+	sweep, stopSweep := context.WithCancel(context.Background())
+	swept := make(chan struct{}, 2)
+	go func() {
+		defer func() { swept <- struct{}{} }()
+		svc.RunEmbedder(sweep)
+	}()
+	go func() {
+		defer func() { swept <- struct{}{} }()
+		svc.RunIndexer(sweep)
+	}()
+	t.Cleanup(func() {
+		stopSweep()
+		<-swept
+		<-swept
+	})
+
+	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: server.Credential,
+		Log: log}
+	upload, download := rest.Tickets(restOpts)
 	srv := server.New(server.Options{
 		Info: server.Info{Version: "test", DataDir: root, PID: os.Getpid(), StartedAt: time.Now()},
 		Port: port, Token: AdminToken, ClientToken: ClientToken, Auth: o.Auth, Logger: log,
 		Engine: svc.EngineStatus,
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: "test", Log: log,
 			Credential: server.CredentialOf}),
-		REST: func(g *echo.Group) {
-			rest.Register(g, rest.Options{Service: svc, Port: port, ClientToken: ClientToken,
-				Credential: server.Credential, Log: log})
-		},
+		REST:   func(g *echo.Group) { rest.Register(g, restOpts) },
+		Upload: upload, Download: download,
 	})
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
-	e := &Env{T: t, Layout: l, Store: st, Service: svc, Server: srv, URL: fmt.Sprintf("http://127.0.0.1:%d", port),
-		DatapackID: dp, UserID: userID}
+	e := &Env{T: t, Layout: l, Store: st, Service: svc, Server: srv, URL: url, DatapackID: dp, UserID: userID}
 	e.waitEngine()
 	return e
 }

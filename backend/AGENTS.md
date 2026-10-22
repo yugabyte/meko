@@ -3,28 +3,30 @@
 Meko's Go backend: one binary, `meko`, that is both the CLI and the server, the way
 yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/design.md](docs/design.md)
 (the foundation), [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
-conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
+conversations), [docs/api.md](docs/api.md) (MCP and REST) and [docs/knowledge.md](docs/knowledge.md)
+(knowledge files). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
 
 ## Map
 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, `destroy` (stops the server and removes the data folder), and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
+| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, `destroy` (stops the server and removes the data folder), and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack`, `upload` and `upload_status` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
 | `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
-| `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`), `/healthz` and `/api/v1` (status includes the engine's and the auth mode). |
+| `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`; the knowledge-file links' ticket), `/healthz` and `/api/v1` (status includes the engine's and the auth mode). |
 | `internal/mcp/` | MCP at `/mcp`: Meko Cloud's tools on the official MCP Go SDK (stateless, JSON replies, raw arguments read loosely), recording each call. |
-| `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads. |
+| `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads, knowledge files, and the upload and download links. |
+| `internal/knowledge/` | Knowledge files before the database: the types Meko takes and the check of a file's first bytes, text extraction (PDF, HTML, Markdown, CSV, text), chunking, and the `knowledgebase-files/` folder their bytes live in. No queries, no engine. |
 | `internal/wire/` | Meko Cloud's reply shapes, which MCP and REST both build their replies with. |
 | `internal/testenv/` | A whole server for tests: store, store API, the engine with the hashing embedder, the service and the HTTP server. |
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
-| `internal/memory/` | The service MCP and REST call: memories (through the engine), learnings (keep and promote), artifacts, conversations, conversation search, the sweep that embeds turns, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
+| `internal/memory/` | The service MCP and REST call: memories (through the engine), learnings (keep and promote), artifacts, conversations, conversation search, knowledge files (upload and download links, the indexer, hybrid search with the reranker), the sweep that embeds turns and knowledge chunks, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
 | `assets/` | The Meko logo, dark and white, as Meko Cloud's web app has it; the repo's README shows it. |
-| `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
+| `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), the knowledge base's cross-encoder in a worker thread of its own, its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), and the client token MCP and REST clients send (`client.token`, kept across restarts). |
 | `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
@@ -46,7 +48,8 @@ make bench                                          # the search budget at 200 M
 It needs Go 1.26 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum,
 and a dependency bump can raise it, as golang.org/x/sys 0.49 did in #212)
 and a C compiler, because cgo is on; the Makefile sets it and the build tags. The engine needs
-Node 22.13+ and npm. The first engine test run downloads the embedding model (23 MB) into
+Node 22.13+ and npm. The first engine test run downloads the embedding and reranking models (23 MB
+each) into
 `engine/.models` (git-ignored; `MEKO_TEST_MODELS` moves it). SQLite and sqlite-vec
 are compiled into the binary from the `yugabyte/go-sqlite3` fork (`go.mod`'s `replace`), with the
 `sqlite_fts5` and `sqlite_vec` tags the Makefile and `.golangci.yml` set; the first build compiles
@@ -72,8 +75,10 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   and the engine's npm packages (`chore(meko/engine): ...`) every Monday, with minor and patch
   bumps grouped and `mem0ai` in a PR of its own. `mattn/go-sqlite3` is left out: it's replaced by the
   fork, so upgrade the fork's tag by hand.
-- Neither log ever holds memory or turn text: only ids, counts and timings. The engine never logs
-  an error's message.
+- Neither log ever holds memory, turn or knowledge-file text: only ids, counts and timings. The
+  engine never logs an error's message.
+- Knowledge files' bytes live in `knowledgebase-files/`, only through `internal/knowledge`'s
+  `Files`; a file and its `kb_documents` row change together under the service's `fileMu`.
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
   ports, never `~/.meko` or port 7778. Tests that need no model start the engine with the
   hashing embedder (`engine.Options.TestEmbedder`; the CLI's tests set it through their own

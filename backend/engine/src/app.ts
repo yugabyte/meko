@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { HashEmbedder, WorkerEmbedder, type LocalEmbedder } from "./embedder.js";
 import { Engine } from "./engine.js";
 import { register } from "./providers.js";
+import { OverlapReranker, WorkerReranker, type LocalReranker } from "./reranker.js";
 import { startServer, type Health } from "./server.js";
 import { StoreClient, StoreError } from "./storeclient.js";
 
@@ -33,13 +34,18 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
   const storeSocket = need(env, "MEKO_STORE_SOCKET");
   const token = need(env, "MEKO_INTERNAL_TOKEN");
   const store = new StoreClient(storeSocket, token);
-  const embedder: LocalEmbedder =
-    env.MEKO_ENGINE_TEST_EMBEDDER === "hash" ? new HashEmbedder() : new WorkerEmbedder(need(env, "MEKO_MODELS_DIR"));
+  const testing = env.MEKO_ENGINE_TEST_EMBEDDER === "hash";
+  const embedder: LocalEmbedder = testing ? new HashEmbedder() : new WorkerEmbedder(need(env, "MEKO_MODELS_DIR"));
+  const reranker: LocalReranker = testing ? new OverlapReranker() : new WorkerReranker(need(env, "MEKO_MODELS_DIR"));
   register(store, embedder);
-  const engine = new Engine(embedder);
+  const engine = new Engine(embedder, undefined, reranker);
 
   const health: Health = { state: "loading", embedder: embedder.info };
-  const server = await startServer(engineSocket, token, engine, () => health, log);
+  const report = (): Health => ({
+    ...health,
+    reranker: { ...reranker.info, state: reranker.state, ...(reranker.error && { error: reranker.error }) },
+  });
+  const server = await startServer(engineSocket, token, engine, report, log);
   const ours = fs.statSync(engineSocket).ino;
   log("engine listening", { embedder: embedder.info });
 
@@ -48,7 +54,7 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
     server.close();
     // Only our own socket: a stale engine stopping late mustn't unlink its successor's.
     if (fs.statSync(engineSocket, { throwIfNoEntry: false })?.ino === ours) fs.rmSync(engineSocket, { force: true });
-    await embedder.close();
+    await Promise.all([embedder.close(), reranker.close()]);
     process.exit(0);
   };
   process.on("SIGTERM", () => void stop("SIGTERM"));
@@ -63,6 +69,25 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
   }, PARENT_CHECK_MS).unref();
 
   await startUp(embedder, () => store.request("POST", "/v1/engine/hello", embedder.info), health);
+  void loadReranker(reranker);
+}
+
+/**
+ * Loads the reranker after the embedder, retrying a failed load (a download that failed offline)
+ * with the same backoff. The engine is ready without it: knowledge-base search then keeps its
+ * candidates' fused order.
+ */
+export async function loadReranker(reranker: Pick<LocalReranker, "ready">, firstWait = RETRY_MIN_MS): Promise<void> {
+  for (let wait = firstWait; ; wait = Math.min(wait * 2, RETRY_MAX_MS)) {
+    try {
+      await reranker.ready();
+      log("reranker ready");
+      return;
+    } catch (e) {
+      log("reranker not ready; retrying", { error: (e as Error).name, retry_ms: wait });
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 /**

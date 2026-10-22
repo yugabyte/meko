@@ -37,6 +37,7 @@ type Promoted struct {
 	UpdatedAt      time.Time
 	PromotedAt     time.Time
 	PromotedBy     string
+	PromotedToKBAt *time.Time // when it became searchable in the knowledge base; nil while it waits
 }
 
 func placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?, ", n), ", ") }
@@ -62,10 +63,10 @@ func (s *Store) KeepMemories(ctx context.Context, datapack, userID string, ids [
 }
 
 // CopyToPromoted copies one of the user's learnings into promoted_memories, keeping every column
-// but the lemmatized text, or returns ErrNotFound (no such learning: missing, someone else's, or
-// already kept). The memory itself stays until the caller deletes it through the engine. A learning
-// already copied by a promotion that didn't get to delete it returns that copy, so promoting it
-// again finishes the job.
+// but the lemmatized text, and into the knowledge base as a chunk with the memory's own vector, or
+// returns ErrNotFound (no such learning: missing, someone else's, or already kept). The memory
+// itself stays until the caller deletes it through the engine. A learning already copied by a
+// promotion that didn't get to delete it returns that copy, so promoting it again finishes the job.
 func (s *Store) CopyToPromoted(ctx context.Context, datapack, userID, id, promotedBy string) (Promoted, error) {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -102,17 +103,32 @@ func (s *Store) CopyToPromoted(ctx context.Context, datapack, userID, id, promot
 	if err != nil {
 		return Promoted{}, err
 	}
+	if n == 1 {
+		rowid, err := res.LastInsertId()
+		if err != nil {
+			return Promoted{}, err
+		}
+		if err = s.addPromotedChunk(ctx, tx, p, rowid); err != nil {
+			return Promoted{}, err
+		}
+		if p, err = scanPromoted(tx.QueryRowContext(ctx, "SELECT "+promotedCols+
+			" FROM promoted_memories WHERE rowid = ?", rowid)); err != nil {
+			return Promoted{}, err
+		}
+	}
 	return p, tx.Commit()
 }
 
 const promotedCols = "id, datapack_id, user_id, agent_id, conversation_id, connector_id, source, role, actor_id, " +
-	"text, hash, payload, created_at, updated_at, promoted_at, promoted_by"
+	"text, hash, payload, created_at, updated_at, promoted_at, promoted_by, promoted_to_kb_at"
 
 func scanPromoted(row interface{ Scan(...any) error }) (Promoted, error) {
 	var p Promoted
 	var payload, created, updated, promoted string
+	var inKB sql.NullString
 	if err := row.Scan(&p.ID, &p.DatapackID, &p.UserID, &p.AgentID, &p.ConversationID, &p.ConnectorID, &p.Source,
-		&p.Role, &p.ActorID, &p.Text, &p.Hash, &payload, &created, &updated, &promoted, &p.PromotedBy); err != nil {
+		&p.Role, &p.ActorID, &p.Text, &p.Hash, &payload, &created, &updated, &promoted, &p.PromotedBy,
+		&inKB); err != nil {
 		return Promoted{}, err
 	}
 	if err := json.Unmarshal([]byte(payload), &p.Payload); err != nil {
@@ -127,6 +143,13 @@ func scanPromoted(row interface{ Scan(...any) error }) (Promoted, error) {
 	}
 	if p.PromotedAt, err = time.Parse(timeLayout, promoted); err != nil {
 		return Promoted{}, err
+	}
+	if inKB.Valid {
+		t, err := time.Parse(timeLayout, inKB.String)
+		if err != nil {
+			return Promoted{}, err
+		}
+		p.PromotedToKBAt = &t
 	}
 	return p, nil
 }
