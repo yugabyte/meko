@@ -32,3 +32,7 @@ export function bytes(n: number): string {
 export function count(n: number | undefined): string {
   return (n ?? 0).toLocaleString();
 }
+
+export function duration(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+}

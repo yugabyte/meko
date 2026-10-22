@@ -1,5 +1,5 @@
-// The datapack's memories: add one, filter, page, and for learnings keep or promote them into the
-// collective memory. Delete is per memory.
+// The datapack's memories: add one, filter, page, and select several to delete, or (learnings) to
+// keep or promote into the collective memory.
 
 import { useState, type FormEvent } from "react";
 import { Brain, Check, Plus, Sparkles, Trash2 } from "lucide-react";
@@ -7,11 +7,13 @@ import { api } from "../lib/api";
 import { timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { Badge, Button, Card, cx, Empty, ErrorNote, Input, Loading } from "../components/ui";
+import { Pager } from "../components/Pager";
+import { Segmented } from "../components/Segmented";
+import { Badge, Button, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
 
 type Scope = "memories" | "learnings" | "promoted";
 
-const SCOPES: { id: Scope; label: string }[] = [
+const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "memories", label: "All memories" },
   { id: "learnings", label: "Learnings" },
   { id: "promoted", label: "Collective" },
@@ -23,6 +25,7 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [actionError, setActionError] = useState<Error>();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -35,6 +38,7 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
     setActionError(undefined);
     try {
       await fn();
+      setSelected(new Set());
       list.reload();
       promoted.reload();
       onChanged();
@@ -50,23 +54,13 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
       <AddMemory onAdd={(text) => act(() => api.addMemory(id, text))} />
 
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex rounded-lg border bg-card p-0.5 text-sm">
-          {SCOPES.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => (setScope(s.id), setPage(1))}
-              className={cx("rounded-md px-3 py-1", scope === s.id ? "bg-accent font-medium" : "text-muted-foreground")}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
+        <Segmented options={SCOPES} value={scope} onChange={(v) => (setScope(v), setPage(1), setSelected(new Set()))} />
         {scope !== "promoted" && (
           <Input
             className="max-w-xs"
             placeholder="Filter by text"
             value={q}
-            onChange={(e) => (setQ(e.target.value), setPage(1))}
+            onChange={(e) => (setQ(e.target.value), setPage(1), setSelected(new Set()))}
           />
         )}
       </div>
@@ -102,9 +96,23 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
         </Empty>
       ) : (
         <>
+          <SelectionBar
+            count={selected.size}
+            learnings={scope === "learnings"}
+            onKeep={() => act(() => api.keep(id, [...selected]))}
+            onPromote={() => act(() => api.promote(id, [...selected]))}
+            onDelete={() => act(() => Promise.all([...selected].map((m) => api.deleteMemory(id, m))))}
+            onClear={() => setSelected(new Set())}
+          />
           <Card className="divide-y">
             {list.data.memories.map((m) => (
-              <div key={m.id} className="group flex items-start justify-between gap-4 p-3">
+              <label key={m.id} className="flex cursor-pointer items-start gap-3 p-3 hover:bg-accent/50">
+                <input
+                  type="checkbox"
+                  className="mt-1 accent-primary"
+                  checked={selected.has(m.id)}
+                  onChange={() => setSelected(toggle(selected, m.id))}
+                />
                 <div className="min-w-0">
                   <p className="text-sm">{m.data}</p>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
@@ -112,42 +120,74 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
                     {timeAgo(m.created_at)}
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1 opacity-60 group-hover:opacity-100">
-                  {scope === "learnings" && (
-                    <>
-                      <Button size="sm" variant="ghost" title="Keep as memory" onClick={() => act(() => api.keep(id, [m.id]))}>
-                        <Check className="size-3.5" /> Keep
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title="Promote to collective memory"
-                        onClick={() => act(() => api.promote(id, [m.id]))}
-                      >
-                        <Sparkles className="size-3.5" /> Promote
-                      </Button>
-                    </>
-                  )}
-                  <Button size="sm" variant="danger" title="Delete" onClick={() => act(() => api.deleteMemory(id, m.id))}>
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </div>
-              </div>
+              </label>
             ))}
           </Card>
-          {list.data.total_pages > 1 && (
-            <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground">
-              Page {list.data.page} of {list.data.total_pages}
-              <Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                Previous
-              </Button>
-              <Button size="sm" disabled={page >= list.data.total_pages} onClick={() => setPage(page + 1)}>
-                Next
-              </Button>
-            </div>
-          )}
+          <Pager
+            label={`Page ${list.data.page} of ${list.data.total_pages}`}
+            canPrev={page > 1}
+            canNext={page < list.data.total_pages}
+            onPrev={() => (setPage(page - 1), setSelected(new Set()))}
+            onNext={() => (setPage(page + 1), setSelected(new Set()))}
+          />
         </>
       )}
+    </div>
+  );
+}
+
+function toggle(set: Set<string>, id: string): Set<string> {
+  const next = new Set(set);
+  if (!next.delete(id)) next.add(id);
+  return next;
+}
+
+// What can be done to the selected memories: keep and promote apply only to learnings.
+function SelectionBar({
+  count,
+  learnings,
+  onKeep,
+  onPromote,
+  onDelete,
+  onClear,
+}: {
+  count: number;
+  learnings: boolean;
+  onKeep: () => void;
+  onPromote: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}) {
+  if (count === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Select memories to {learnings ? "keep, promote or " : ""}delete them.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+      <span className="font-medium">{count} selected</span>
+      {learnings && (
+        <>
+          <Button size="sm" variant="ghost" onClick={onKeep} title="Keep as private memories">
+            <Check className="size-3.5" /> Keep
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onPromote} title="Promote to the collective memory">
+            <Sparkles className="size-3.5" /> Promote
+          </Button>
+        </>
+      )}
+      <Button
+        size="sm"
+        variant="danger"
+        onClick={() => confirm(`Delete ${count} ${count === 1 ? "memory" : "memories"}?`) && onDelete()}
+      >
+        <Trash2 className="size-3.5" /> Delete
+      </Button>
+      <Button size="sm" variant="ghost" className="ml-auto" onClick={onClear}>
+        Clear
+      </Button>
     </div>
   );
 }

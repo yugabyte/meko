@@ -1,9 +1,9 @@
-// The UI's routes, on the History API: /datapacks/<id>/<tab>. meko serve answers every such path
+// The UI's routes, on the History API: /datapacks/<id>/<tab>, and /status. meko serve answers every such path
 // with index.html.
 
 import { useEffect, useState } from "react";
 
-export const TABS = ["overview", "search", "memories", "knowledge", "conversations", "connect"] as const;
+export const TABS = ["overview", "analytics", "search", "memories", "knowledge", "conversations", "artifacts", "connect"] as const;
 export type Tab = (typeof TABS)[number];
 
 export interface Route {
@@ -11,10 +11,13 @@ export interface Route {
   tab: Tab;
   // A conversation open in the conversations tab.
   itemId?: string;
+  // A page of the whole install rather than of a datapack.
+  view?: "status";
 }
 
 function parse(path: string): Route {
   const [, root, id, tab, item] = path.split("/");
+  if (root === "status") return { tab: "overview", view: "status" };
   if (root !== "datapacks" || !id) return { tab: "overview" };
   return {
     datapackId: id,
@@ -24,6 +27,7 @@ function parse(path: string): Route {
 }
 
 export function href(r: Route): string {
+  if (r.view) return `/${r.view}`;
   if (!r.datapackId) return "/";
   return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}`;
 }

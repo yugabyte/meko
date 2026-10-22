@@ -8,7 +8,8 @@ import { dateTime, timeAgo } from "../lib/format";
 import { href, navigate } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { Badge, Button, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
+import { Pager } from "../components/Pager";
+import { Badge, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
 
 const PAGE = 20;
 
@@ -67,14 +68,12 @@ function List({ datapack }: { datapack: Datapack }) {
               );
             })}
           </Card>
-          <div className="flex justify-end gap-2">
-            <Button size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
-              Previous
-            </Button>
-            <Button size="sm" disabled={!list.data.has_more} onClick={() => setOffset(offset + PAGE)}>
-              Next
-            </Button>
-          </div>
+          <Pager
+            canPrev={offset > 0}
+            canNext={list.data.has_more}
+            onPrev={() => setOffset(Math.max(0, offset - PAGE))}
+            onNext={() => setOffset(offset + PAGE)}
+          />
         </>
       )}
     </div>

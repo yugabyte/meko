@@ -1,32 +1,38 @@
 // A datapack's name, description and tabs, with delete.
 
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
+import { DatapackDialog } from "./DatapackDialog";
 import { Dialog } from "./Dialog";
 import { Button, cx, ErrorNote, Input } from "./ui";
 
 const LABELS: Record<Tab, string> = {
   overview: "Overview",
+  analytics: "Analytics",
   search: "Search",
   memories: "Memories",
   knowledge: "Knowledge",
   conversations: "Conversations",
+  artifacts: "Artifacts",
   connect: "Connect",
 };
 
 export function DatapackHeader({
   datapack,
   tab,
+  onEdited,
   onDeleted,
 }: {
   datapack: Datapack;
   tab: Tab;
+  onEdited: () => void;
   onDeleted: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const [editing, setEditing] = useState(false);
   return (
     <header className="border-b bg-card px-8 pt-6">
       <div className="flex items-start justify-between gap-4">
@@ -34,9 +40,14 @@ export function DatapackHeader({
           <h1 className="truncate text-xl font-semibold">{datapack.datapack_name}</h1>
           {datapack.description && <p className="mt-0.5 text-sm text-muted-foreground">{datapack.description}</p>}
         </div>
-        <Button variant="danger" size="sm" onClick={() => setDeleting(true)}>
-          <Trash2 className="size-3.5" /> Delete
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setEditing(true)} title="Edit name and description">
+            <Pencil className="size-3.5" /> Edit
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => setDeleting(true)}>
+            <Trash2 className="size-3.5" /> Delete
+          </Button>
+        </div>
       </div>
       <nav className="mt-5 flex gap-5 text-sm">
         {(Object.keys(LABELS) as Tab[]).map((t) => (
@@ -56,6 +67,16 @@ export function DatapackHeader({
           </a>
         ))}
       </nav>
+      {editing && (
+        <DatapackDialog
+          datapack={datapack}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            onEdited();
+          }}
+        />
+      )}
       {deleting && <DeleteDialog datapack={datapack} onClose={() => setDeleting(false)} onDeleted={onDeleted} />}
     </header>
   );

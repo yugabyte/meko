@@ -8,6 +8,7 @@ import (
 
 // Call is one row of the call log: what a tool call did, never what it carried.
 type Call struct {
+	ID             int64 // set when read back
 	At             time.Time
 	Tool           string
 	DatapackID     string
@@ -59,7 +60,7 @@ func (s *Store) AddCall(ctx context.Context, c Call) error {
 
 // Calls is the datapack's calls since a time, oldest first ("" datapack: every call).
 func (s *Store) Calls(ctx context.Context, datapack string, since time.Time) ([]Call, error) {
-	q := "SELECT at, tool, datapack_id, agent_id, conversation_id, credential, ok, error_code, ms, memory_n, " +
+	q := "SELECT id, at, tool, datapack_id, agent_id, conversation_id, credential, ok, error_code, ms, memory_n, " +
 		"kb_n, conversation_n, score_high, score_mid, score_low, tokens_sent, tokens_saved, input_tokens, " +
 		"output_tokens, steps FROM call_log WHERE at >= ? AND (? = '' OR datapack_id = ?) ORDER BY at, id"
 	rows, err := s.r.QueryContext(ctx, q, since.UTC().Format(timeLayout), datapack, datapack)
@@ -71,7 +72,7 @@ func (s *Store) Calls(ctx context.Context, datapack string, since time.Time) ([]
 	for rows.Next() {
 		var c Call
 		var at, steps string
-		if err = rows.Scan(&at, &c.Tool, &c.DatapackID, &c.AgentID, &c.ConversationID, &c.Credential, &c.OK,
+		if err = rows.Scan(&c.ID, &at, &c.Tool, &c.DatapackID, &c.AgentID, &c.ConversationID, &c.Credential, &c.OK,
 			&c.ErrorCode, &c.Ms, &c.MemoryN, &c.KBN, &c.ConversationN, &c.ScoreHigh, &c.ScoreMid, &c.ScoreLow,
 			&c.TokensSent, &c.TokensSaved, &c.InputTokens, &c.OutputTokens, &steps); err != nil {
 			return nil, err

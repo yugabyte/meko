@@ -16,9 +16,21 @@ export interface Datapack {
   conversation_search_opt_out?: boolean;
 }
 
+export interface DayActivity {
+  date: string;
+  hybrid: number;
+  kb: number;
+  memory: number;
+}
+
+// GET /datapacks/:id/metrics, the same payload Meko Cloud's Analytics tab reads.
 export interface Metrics {
   agent_count: number;
+  human_count: number;
   conversation_count: number;
+  conversation_chunk_count: number;
+  conversation_bytes: number;
+  memory_extraction_count: number;
   kb_file_count: number;
   kb_chunk_count: number;
   kb_bytes: number;
@@ -26,9 +38,37 @@ export interface Metrics {
   memory_bytes: number;
   total_requests: number;
   tokens_saved_total: number;
+  tokens_if_raw_total: number;
   savings_pct: number;
+  score_high_total: number;
+  score_mid_total: number;
+  score_low_total: number;
   last_accessed_at: string | null;
-  daily_activity: { date: string; hybrid: number; kb: number; memory: number }[];
+  daily_activity: DayActivity[];
+}
+
+// GET /datapacks/:id/usage: Meko local's own view of the call log.
+export interface Usage {
+  calls: number;
+  errors: number;
+  tools: { tool: string; calls: number; errors: number; p50_ms: number; p95_ms: number }[];
+  steps: { step: string; calls: number; p50_ms: number; p95_ms: number }[];
+  agents: { agent_id: string; calls: number; searches: number; last_at: string }[];
+  recent: {
+    id: number;
+    steps: { step: string; ms: number; n: number }[];
+    at: string;
+    tool: string;
+    agent_id: string;
+    ok: boolean;
+    error_code: string;
+    ms: number;
+    memory_n: number;
+    kb_n: number;
+    conversation_n: number;
+  }[];
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export interface Memory {
@@ -108,6 +148,23 @@ export interface UploadOffer {
   existing_filename?: string;
 }
 
+export interface Artifact {
+  artifact_id: string;
+  content_hash: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  last_accessed_at?: string;
+  content_base64?: string;
+}
+
+export interface ArtifactList {
+  items: Artifact[];
+  total: number;
+  has_more: boolean;
+}
+
 export interface ProvisionStatus {
   mcp_server_url: string;
   mcp_api_key: string;
@@ -117,6 +174,8 @@ export interface MemoryHit {
   id: string;
   memory: string;
   score?: number;
+  // Cosine similarity, the number Cloud bands and floors memories by.
+  raw_similarity_score?: number;
   agent_id: string;
   created_at: string;
 }
@@ -146,6 +205,24 @@ export interface ContextSearch {
     conversation: { hits: ConversationHit[]; thread: unknown[] } | null;
   };
   token_savings?: { tokens_saved: number; total_tokens: number };
+}
+
+// GET /api/v1/server: the server and its memory engine.
+export interface ServerStatus {
+  version: string;
+  pid: number;
+  port: number;
+  data_dir: string;
+  started_at: string;
+  uptime_seconds: number;
+  auth: string;
+  memory_engine: {
+    state: string;
+    reason?: string;
+    embedder?: { provider: string; model: string; dims: number };
+    reranker?: { provider: string; model: string; state: string; error?: string };
+  };
+  children: { name: string; state: string; restarts: number; last_error?: string; since: string }[];
 }
 
 export interface Health {

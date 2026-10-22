@@ -16,8 +16,11 @@ import { ConversationsPage } from "./pages/ConversationsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { NoAccessPage } from "./pages/NoAccessPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
+import { StatusPage } from "./pages/StatusPage";
 
 export default function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -44,17 +47,21 @@ export default function App() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         datapacks={list.data ?? []}
-        activeId={activeId}
+        activeId={route.view ? undefined : activeId}
         version={health.data?.version}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
-        onCreated={(d) => {
+        onCreated={(id) => {
           list.reload();
-          navigate({ datapackId: d.datapack_id, tab: "overview" });
+          navigate({ datapackId: id, tab: "overview" });
         }}
       />
       <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        {list.loading && !list.data ? (
+        {route.view === "status" ? (
+          <div className="p-8">
+            <StatusPage />
+          </div>
+        ) : list.loading && !list.data ? (
           <Loading />
         ) : list.error ? (
           <div className="p-8">
@@ -75,6 +82,10 @@ export default function App() {
             <DatapackHeader
               datapack={current.data}
               tab={route.tab}
+              onEdited={() => {
+                list.reload();
+                current.reload();
+              }}
               onDeleted={() => {
                 list.reload();
                 navigate({ tab: "overview" });
@@ -82,12 +93,14 @@ export default function App() {
             />
             <div className="p-8">
               {route.tab === "overview" && <OverviewPage datapack={current.data} />}
+              {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
               {route.tab === "search" && <SearchPage datapack={current.data} />}
               {route.tab === "memories" && <MemoriesPage datapack={current.data} onChanged={onChanged} />}
               {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}
               {route.tab === "conversations" && (
                 <ConversationsPage datapack={current.data} conversationId={route.itemId} />
               )}
+              {route.tab === "artifacts" && <ArtifactsPage datapack={current.data} />}
               {route.tab === "connect" && <ConnectPage datapack={current.data} />}
             </div>
           </>

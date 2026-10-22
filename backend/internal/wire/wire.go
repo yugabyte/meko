@@ -248,8 +248,9 @@ func Savings(r memory.ContextResults) TokenSavings {
 	return out
 }
 
-// Bands counts results by match quality, as Meko Cloud's metrics band them: a memory by its
-// score, a knowledge-base result and a conversation hit by 1 - distance.
+// Bands counts results by match quality by cosine similarity, as Meko Cloud's metrics band them: a
+// memory by its raw cosine (its score when it has none), a knowledge-base result and a conversation
+// hit by 1 - distance.
 func Bands(r memory.ContextResults) (high, mid, low int) {
 	add := func(v float64) {
 		switch {
@@ -261,8 +262,13 @@ func Bands(r memory.ContextResults) (high, mid, low int) {
 			low++
 		}
 	}
+	// The fused score averages the cosine with keyword and entity terms, so it reads higher or lower
+	// than the cosine the other sources are banded by: not comparable in either direction.
 	for _, m := range r.Memory {
-		if m.Score != nil {
+		switch {
+		case m.RawSimilarityScore != nil:
+			add(*m.RawSimilarityScore)
+		case m.Score != nil:
 			add(*m.Score)
 		}
 	}

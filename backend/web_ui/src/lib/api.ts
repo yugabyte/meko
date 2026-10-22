@@ -3,6 +3,8 @@
 
 import { getToken } from "./token";
 import type {
+  Artifact,
+  ArtifactList,
   ContextSearch,
   ConversationDetail,
   Conversation,
@@ -13,7 +15,9 @@ import type {
   Metrics,
   PromotedMemory,
   ProvisionStatus,
+  ServerStatus,
   UploadOffer,
+  Usage,
   UsageStats,
 } from "./types";
 
@@ -74,6 +78,8 @@ async function callTool<T>(name: string, args: Record<string, unknown>): Promise
 
 const enc = encodeURIComponent;
 
+export type SearchSource = "auto" | "memory" | "knowledge_base" | "conversation";
+
 export const api = {
   health: async (): Promise<Health> => {
     const res = await fetch("/healthz");
@@ -87,7 +93,12 @@ export const api = {
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
-  metrics: (id: string) => request<Metrics>("GET", `/datapacks/${id}/metrics`),
+  metrics: (id: string, days: number) => request<Metrics>("GET", `/datapacks/${id}/metrics?days=${days}`),
+  artifacts: (id: string, q: string, page: number) =>
+    request<ArtifactList>("GET", `/datapacks/${id}/artifacts?q=${enc(q)}&page=${page}`),
+  artifact: (id: string, hash: string) => request<Artifact>("GET", `/datapacks/${id}/artifacts/${hash}`),
+  usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
+  server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
 
   usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
@@ -152,9 +163,11 @@ export const api = {
     return offer;
   },
 
-  search: (id: string, query: string) =>
+  // source narrows it to one of memory, knowledge_base or conversation; auto searches all three.
+  search: (id: string, query: string, source: SearchSource = "auto") =>
     callTool<ContextSearch>("context_search", {
       query,
+      force_source: source,
       datapack_id: id,
       agent_id: UI_AGENT_ID,
       conversation_id: UI_CONVERSATION_ID,

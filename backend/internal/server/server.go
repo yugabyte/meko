@@ -125,6 +125,9 @@ func New(opts Options) *Server {
 	e.GET("/healthz", s.healthz)
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
 	v1.GET("/status", s.status)
+	// The same reply for the web UI's status page, with the client token: what it says (versions,
+	// the memory engine's state, the data folder) is the local user's own.
+	v1.GET("/server", s.status)
 	v1.GET("/version", s.version)
 	v1.POST("/ui-code", s.issueUICode)
 	v1.POST("/ui-code/redeem", s.redeemUICode)
