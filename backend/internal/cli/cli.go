@@ -37,8 +37,9 @@ Usage:
   meko add_memory "<text>"       save a memory, word for word (memory_add); - or no text reads stdin
   meko datapacks                 list the datapacks
   meko create_datapack <name>    create a datapack (datapack_create)
-  meko delete_datapack <name|id> --yes
-                                 delete a datapack and everything in it, for good (datapack_delete)
+  meko delete_datapack <name|id>
+                                 delete a datapack and everything in it, for good (datapack_delete);
+                                 it asks first, unless --force
                  search and add_memory take --datapack NAME|ID (default: the default datapack,
                  which Meko makes on first start and doesn't make again once deleted);
                  search takes --source auto|memory|conversation and --limit N;
@@ -74,7 +75,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id")
 	}
 	if cmd == "delete_datapack" {
-		fs.BoolVar(&t.yes, "yes", false, "confirm the delete")
+		fs.BoolVar(&t.force, "force", false, "delete without asking")
 	}
 	if cmd == "search" {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory or conversation")

@@ -54,7 +54,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
 | `meko datapacks` | List the datapacks |
 | `meko create_datapack <name>` | Create a datapack |
-| `meko delete_datapack <name\|id> --yes` | Delete a datapack and everything in it, for good |
+| `meko delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
 
 Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since

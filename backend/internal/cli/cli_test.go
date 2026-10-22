@@ -518,16 +518,23 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	code, _, errs = run("add_memory", "--data-dir", dir, "x", "--datapack", "nope")
 	want(t, "add_memory to a missing datapack", code, 1, errs, `no datapack is named "nope"`)
 
-	// A datapack made, used by name, and deleted only with --yes.
+	// A datapack made, used by name, and deleted only when the answer is yes.
 	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "create_datapack", code, 0, out+errs, "Created datapack scratch-notes (")
 	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "create_datapack twice", code, 1, out+errs, "CONFLICT")
 	code, out, errs = run("add_memory", "--data-dir", dir, "kept in scratch", "--datapack", "scratch-notes")
 	want(t, "add_memory by name", code, 0, out+errs, "Added memory ")
-	code, _, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
-	want(t, "delete_datapack without --yes", code, 1, errs, "Run it again with --yes")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes", "--yes")
+	withStdin(t, "n\n")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
+	want(t, "delete_datapack answered n", code, 1, errs, "Nothing was deleted.")
+	want(t, "delete_datapack's question", code, 1, out, "This deletes datapack scratch-notes and everything "+
+		"in it (memories, conversations, artifacts) for good.\nDelete it? [y/N] ")
+	if _, out, _ = run("datapacks", "--data-dir", dir); !strings.Contains(out, "scratch-notes") {
+		t.Errorf("a declined delete_datapack deleted it:\n%s", out)
+	}
+	withStdin(t, "y\n")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes.")
 	if _, out, _ = run("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
@@ -540,10 +547,15 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 
 	// The default datapack isn't made again, so deleting it says so, and calls that name none then
 	// ask for --datapack.
-	code, _, errs = run("delete_datapack", "--data-dir", dir, "default")
-	want(t, "delete_datapack default without --yes", code, 1, errs, "It's the default datapack")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--yes")
-	want(t, "delete_datapack default", code, 0, out+errs, "Deleted datapack default.")
+	withStdin(t, "")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "default")
+	want(t, "delete_datapack default with no answer", code, 1, out+errs, "It's the default datapack")
+	want(t, "delete_datapack default with no answer", code, 1, errs, "Nothing was deleted.")
+	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--force")
+	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default.")
+	if strings.Contains(out, "Delete it?") {
+		t.Errorf("delete_datapack --force asked:\n%s", out)
+	}
 	code, _, errs = run("add_memory", "--data-dir", dir, "x")
 	want(t, "add_memory with no default", code, 1, errs, "there's no default datapack (it was deleted): pass --datapack")
 }

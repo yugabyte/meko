@@ -37,7 +37,7 @@ const toolTimeout = time.Minute
 type toolFlags struct {
 	text, datapack, source string
 	limit                  int
-	json, mcp, yes         bool
+	json, mcp, force       bool
 }
 
 // toolError is a tool's in-band error reply.
@@ -182,7 +182,11 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 	case "create_datapack":
 		err = toolCreateDatapack(ctx, t, f, stdout)
 	case "delete_datapack":
-		err = toolDeleteDatapack(ctx, t, f, stdout)
+		err = toolDeleteDatapack(ctx, t, f, stdin, stdout)
+	}
+	if errors.Is(err, errDeclined) {
+		fmt.Fprintln(stderr, "Nothing was deleted.")
+		return exitError
 	}
 	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
 		err = errors.New("there's no default datapack (it was deleted): pass --datapack NAME|ID " +
@@ -239,25 +243,34 @@ func toolCreateDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout
 	return nil
 }
 
-// toolDeleteDatapack deletes a datapack, named or by id, only with --yes: everything in it goes
-// for good.
-func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
+// errDeclined means the user answered no to a command's question.
+var errDeclined = errors.New("declined")
+
+// toolDeleteDatapack deletes a datapack, named or by id, after asking (unless --force):
+// everything in it goes for good.
+func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdin io.Reader, stdout io.Writer) error {
 	named := strings.TrimSpace(f.text)
 	if named == "" {
-		return errors.New("name the datapack to delete: meko delete_datapack <name|id> --yes")
+		return errors.New("name the datapack to delete: meko delete_datapack <name|id>")
 	}
 	id, err := t.datapackID(ctx, named)
 	if err != nil {
 		return err
 	}
-	if !f.yes {
-		also := ""
+	if !f.force {
+		fmt.Fprintf(stdout, "This deletes datapack %s and everything in it (memories, conversations, "+
+			"artifacts) for good.\n", named)
 		if def, derr := t.defaultDatapackID(ctx); derr == nil && def == id {
-			also = " It's the default datapack: Meko doesn't make another, so search and add_memory " +
-				"will need --datapack afterwards."
+			fmt.Fprintln(stdout, "It's the default datapack: Meko doesn't make another, so search and "+
+				"add_memory will need --datapack afterwards.")
 		}
-		return fmt.Errorf("this deletes datapack %s and everything in it (memories, conversations, "+
-			"artifacts) for good.%s Run it again with --yes", named, also)
+		if !confirm(stdin, stdout, "Delete it? [y/N] ") {
+			return errDeclined
+		}
+		// The answer may have taken a while: the delete gets a whole timeout of its own.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), toolTimeout)
+		defer cancel()
 	}
 	reply, err := t.call(ctx, "datapack_delete", map[string]any{"datapack_id": id})
 	if err != nil || f.json {
