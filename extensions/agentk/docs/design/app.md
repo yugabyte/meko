@@ -59,14 +59,15 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   The rail ranks it under idle, so the project's dot and the phone's drawer mark ignore the
   session. *Revisit later* (`RevisitDialog.tsx`: 15 min, 30 min, 1, 2 or 4 hours, or any number
   of minutes or hours up to a week) is the clock on a rail row's hover tray, a row in the ⋯ sheet
-  and an action in the palette, which also has *Revisit … now*; the footer says when it's due and
-  opens it. The time is kept on the server (`sessions.revisit_at`, set with `PATCH
+  and an action in the palette, which also has *Revisit … now*; on a desktop the footer says when
+  it's due and opens it (not on a phone, whose one-line footer has no room: the ⋯ sheet's row says it). The time is kept on the server (`sessions.revisit_at`, set with `PATCH
   /api/sessions/:id {revisitMinutes}`, the end worked out by the server), so every browser agrees,
   and it outlasts restarts. Talking to the session, its turns and its status changes leave it alone;
   only the user (a new time, or *Revisit now*) or the time coming ends it: a 15 s sweep
   (`expireRevisits()` in `sessions.ts`) clears it, and the dot shows the status again, sending a
   *Time to revisit* notification when the project's notifications are on. Needs-you notifications
-  still go while a session is set aside; archiving clears it.
+  still go while a session is set aside; archiving it, or closing its project, clears it, and the
+  sweep only looks at open sessions.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
 dot with the Web Animations API, pinned to the page's timeline. Each dot starts at its own point

@@ -322,6 +322,13 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await env.core.sessions.action(s.id, 'archive');
     expect(env.core.sessions.row(s.id).revisit_at).toBeNull();
     await expect(env.core.sessions.edit(s.id, { revisitMinutes: 5 })).rejects.toMatchObject({ status: 409 });
+
+    // Closing the project archives its sessions, which clears their revisit times too.
+    const other = await env.core.sessions.create(p.id, { name: 'Waiting on a person', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(other.id).status, (st) => st === 'idle', 10000, 'first turn');
+    await env.core.sessions.edit(other.id, { revisitMinutes: 5 });
+    await env.core.projects.delete(p.id);
+    expect(env.core.sessions.row(other.id).revisit_at).toBeNull();
   });
 
   it("changes a session's base to a branch it can be compared with, and refuses one it can't have", async () => {

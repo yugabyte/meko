@@ -356,7 +356,6 @@ export function Busy({ label }: { label: string }) {
   );
 }
 
-/** How long something has been running, since `since` (ms), ticking every second; hidden from screen readers. */
 /** How long until a session set aside is to be revisited (42m, 1h 5m), kept current. */
 export function RevisitChip({ until }: { until: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -367,6 +366,7 @@ export function RevisitChip({ until }: { until: number }) {
   return <span className="revisit-chip" title={`Revisit at ${revisitWhen(until, now)}`}>{revisitLeft(until, now)}</span>;
 }
 
+/** How long something has been running, since `since` (ms), ticking every second; hidden from screen readers. */
 export function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

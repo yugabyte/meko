@@ -473,12 +473,12 @@ export function ProjectView({
           {!mobile && tokensText}
           {!mobile && contextText(false)}
           {!mobile && mekoText}
-          {stageText}
-          {session.revisitAt !== null && (
+          {!mobile && session.revisitAt !== null && (
             <button className="foot-btn" onClick={() => onRevisit(session.id)} title="Change or clear when to revisit this session">
               Revisit at {revisitWhen(session.revisitAt)}
             </button>
           )}
+          {stageText}
         </footer>
       )}
 

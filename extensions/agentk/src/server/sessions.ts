@@ -1886,7 +1886,7 @@ export class SessionManager {
 
   /** Clears the revisit times that have come by `now`, and tells the user about each session. */
   expireRevisits(now: number): void {
-    const ended = all<{ id: string }>(this.db, 'SELECT id FROM sessions WHERE revisit_at IS NOT NULL AND revisit_at <= ?', now);
+    const ended = all<{ id: string }>(this.db, 'SELECT id FROM sessions WHERE revisit_at IS NOT NULL AND revisit_at <= ? AND desired = \'running\'', now);
     for (const { id } of ended) {
       this.update(id, { revisit_at: null });
       this.notifyUser(id, 'Time to revisit', 'You set this session aside to revisit now.');
@@ -2234,7 +2234,7 @@ export class SessionManager {
     for (const row of sessionRows(this.db, projectId)) {
       if (row.desired === 'running') {
         this.stopping.add(row.id);
-        run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', archived_at = ? WHERE id = ?`, Date.now(), row.id);
+        run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', revisit_at = NULL, archived_at = ? WHERE id = ?`, Date.now(), row.id);
         await within(this.captureTranscript(row.id), FINAL_CAPTURE_MS);
         await this.core.host.kill(row.tmux_name);
         this.stopping.delete(row.id);

@@ -206,7 +206,7 @@ export const STATUS_TEXT: Record<DotState, string> = {
   revisit: 'revisit later',
 };
 
-/** Revisit later's choices; Custom takes any number of minutes or hours up to REVISIT_MAX_MINUTES. */
+/** Revisit later's preset choices; RevisitDialog also takes a typed number of minutes or hours, up to REVISIT_MAX_MINUTES. */
 export const REVISIT_PRESETS: { label: string; minutes: number }[] = [
   { label: '15 min', minutes: 15 },
   { label: '30 min', minutes: 30 },
