@@ -26,9 +26,10 @@ from scratch.
 | Route | Admin token | Client token | No credential |
 |---|---|---|---|
 | `/healthz` | yes | yes | yes |
-| `/api/v1/status`, `/api/v1/version` | yes | 403 | 401 |
+| `/api/v1/status`, `/api/v1/version`, `/api/v1/ui-code` | yes | 403 | 401 |
 | Every other route (`/mcp`, the data routes) | yes | yes | 401, or yes with `auth = "none"` |
 | The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` (milestone 4) | yes | yes | yes: the ticket is the credential |
+| The web UI's files, `/` and every GET no other route takes, and `/api/v1/ui-code/redeem` (milestone 6, [web-ui.md](web-ui.md)) | yes | yes | yes: the files are static, and the one-time code is the redeem's credential |
 
 - **The admin token** is the CLI's, as in the foundation: new at each start, in `run/admin.token`.
 - **The client token** is what MCP and REST clients send as `Authorization: Bearer <token>`:
@@ -148,6 +149,7 @@ The knowledge-file tools (milestone 4, [knowledge.md](knowledge.md)):
 |---|---|---|
 | `knowledgebase_search` | `{results: [{id, chunk_text, document_id, metadata_filters, distance, match_type, rerank_score, rank?}], count}` | `query`, `conversation_id`, `datapack_id` (blank is the default), `limit` (widens the candidates; it doesn't cap the reply, as in Cloud), `skip_conversation` (ignored). A promoted memory's `metadata_filters` is `{source: "memory", agent_id, memory_id}` and its `document_id` its conversation. No filename, as in Cloud. `rerank_score` is absent when the reranker can't run. |
 | `knowledgebase_upload_document` | `{datapack_id, url, fields, key, already_uploaded}`, or `{datapack_id, url: "", key, already_uploaded: true, existing_filename}` | `filename`, `size`, `content_hash` (SHA-256 hex), `content_head_base64` (the first 3072 bytes). POST the file to `url` as multipart, `fields` first, the file as `file`. `VALIDATION_ERROR` (type, size, hash, a head that doesn't fit the type), `content_head_base64_required`. |
+| `knowledgebase_upload_file` | `{datapack_id, already_uploaded, ...}` with `knowledgebase_document_status`'s reply | Not in Cloud: `path`, a file on this machine, which Meko reads itself, so an agent uploads in one call without encoding it. An absolute path to a regular file of a type Meko takes; anything else is `VALIDATION_ERROR`. It reads as the server's user, so it needs the admin or client token even with `auth = "none"` (`token_required`): a caller with none could be another local user. |
 | `knowledgebase_document_status` | `document-status`'s reply (below) | `document_key`. `NOT_FOUND`. |
 | `knowledgebase_delete_document` | `{document_id, chunks_deleted, s3_deleted: true}` | `document_id` (UUID: `invalid_document_id`). `{error: "NOT_FOUND", detail, status: 404}`, and `DOCUMENT_PROCESSING` (409) while the file is queued or indexing. |
 
@@ -194,7 +196,9 @@ datapack: Meko makes the default only on first start, and once it's gone `search
 `add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. Milestone 4 adds `meko upload <file>...`, which calls `knowledgebase_upload_document`, posts each
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
-<key>`. `meko token
+<key>`. `meko ui` opens the web UI ([web-ui.md](web-ui.md)) with the client token in the link's
+fragment (a one-time code, not the token: the link passes through the browser's command line), and `--no-open`
+only prints the link. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
 Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the token
 and whether a server runs, for installers (AgentK's reads it). `meko logs` and the commands that
@@ -258,8 +262,8 @@ retires this replay.
 `internal/rest` serves the routes meko_ui calls, with Meko Cloud's paths and shapes in the
 `{data, error}` envelope, mounted on the server's `/api/v1` group (1 MB body limit), behind the
 same credential check as `/mcp`. Shapes MCP shares come from `internal/wire`; REST-only ones are in
-the package. The browser can't reach it until the web UI (#172) allows its origin, so its clients
-today are tests and scripts. (The CLI's one `/api/v1` call is `/api/v1/status`, which
+the package. Its browser client is the web UI ([web-ui.md](web-ui.md)), the only page whose origin
+the server takes. (The CLI's one `/api/v1` call is `/api/v1/status`, which
 `internal/server` serves.)
 
 - A `datapack_id` that isn't a UUID gets 400 `VALIDATION_ERROR`, and one that doesn't exist

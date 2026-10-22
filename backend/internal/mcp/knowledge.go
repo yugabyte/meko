@@ -54,6 +54,20 @@ func knowledgeTools() []*tool {
 			run: knowledgeUpload,
 		},
 		{
+			name: "knowledgebase_upload_file", title: "Upload Local Knowledge File", kind: write,
+			failCode: "knowledgebase_upload_file_failed",
+			desc: "Upload a file on this machine (" + knowledge.Extensions + "; up to 50 MiB) to the datapack's " +
+				"knowledge base in one call: Meko reads it from path itself, so nothing is encoded or posted. " +
+				"Prefer it to knowledgebase_upload_document for a file on disk. The reply is the file's status " +
+				"(usually indexing); follow it with knowledgebase_document_status and document_key until " +
+				"completed. already_uploaded is true when the datapack already has these bytes.",
+			params: []param{
+				{name: "path", typ: "string", required: true, desc: "The file's absolute path."},
+				pConversation, pDatapack, pAgent,
+			},
+			run: knowledgeUploadFile,
+		},
+		{
 			name: "knowledgebase_document_status", title: "Knowledge File Status", kind: readOnly,
 			failCode: "knowledgebase_document_status_failed",
 			desc: "How an uploaded file is doing: state is awaiting_upload, indexing, completed (searchable) or " +
@@ -178,6 +192,43 @@ func knowledgeUpload(ctx context.Context, c *call, a args) (any, error) {
 		return nil, knowledgeError(err)
 	}
 	return wire.UploadOfferOf(offer, true), nil
+}
+
+func knowledgeUploadFile(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	path, err := a.str("path")
+	if err != nil {
+		return nil, err
+	}
+	agent, err := c.agent(a)
+	if err != nil {
+		return nil, err
+	}
+	dp, err := c.datapack(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, fail("VALIDATION_ERROR", "path is required")
+	}
+	// Meko reads the path as its own user, so only a caller holding that user's token may name
+	// one: with auth = "none" any local user could otherwise read the owner's files back.
+	if c.rec.Credential != "admin" && c.rec.Credential != "client" {
+		return nil, fail("token_required", "knowledgebase_upload_file needs the client token "+
+			"(meko token prints it). Use knowledgebase_upload_document instead.")
+	}
+	offer, err := c.svc.UploadLocalFile(ctx, dp, agent, strings.TrimSpace(path))
+	if err != nil {
+		return nil, knowledgeError(err)
+	}
+	st, err := c.svc.DocumentStatus(ctx, dp, offer.Key)
+	if err != nil {
+		return nil, err
+	}
+	return wire.UploadedFile{DatapackID: dp, AlreadyUploaded: offer.AlreadyUploaded,
+		DocumentStatus: wire.DocumentStatusOf(st, c.svc.SourceURI(dp))}, nil
 }
 
 func knowledgeStatus(ctx context.Context, c *call, a args) (any, error) {

@@ -43,7 +43,8 @@ case $(uname -s) in
 esac
 
 backend=$(cd "$(dirname "$0")/.." && pwd)
-for p in "$backend/bin/meko" "$backend/memory_engine/dist/main.js" "$backend/memory_engine/node_modules" "$node_dir/bin/node"; do
+for p in "$backend/bin/meko" "$backend/memory_engine/dist/main.js" "$backend/memory_engine/node_modules" \
+  "$backend/web_ui/dist/index.html" "$node_dir/bin/node"; do
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
 [ -d "$backend/memory_engine/node_modules/typescript" ] && { echo "memory_engine/node_modules has dev dependencies: run npm prune --omit=dev" >&2; exit 1; }
@@ -54,7 +55,7 @@ name="meko-$version"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
-mkdir -p "$root/bin" "$root/node/bin" "$root/memory_engine"
+mkdir -p "$root/bin" "$root/node/bin" "$root/memory_engine" "$root/web_ui"
 
 cp "$backend/bin/meko" "$root/bin/meko"
 chmod 755 "$root/bin/meko"
@@ -65,6 +66,7 @@ cp -R "$backend/memory_engine/dist" "$root/memory_engine/dist"
 cp -R "$backend/memory_engine/node_modules" "$root/memory_engine/node_modules"
 # npm links file: dependencies (the stubs mem0ai imports but Meko never uses) into node_modules.
 cp -R "$backend/memory_engine/stubs" "$root/memory_engine/stubs"
+cp -R "$backend/web_ui/dist" "$root/web_ui/dist"
 cp "$backend/../LICENSE" "$root/LICENSE"
 printf '%s\n' "$version" > "$root/VERSION"
 

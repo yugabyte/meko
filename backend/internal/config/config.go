@@ -25,6 +25,13 @@ type Config struct {
 	Secrets            Secrets            `toml:"secrets"`
 	Update             Update             `toml:"update"`
 	KnowledgeBase      KnowledgeBase      `toml:"knowledge_base"`
+	WebUI              WebUI              `toml:"web_ui"`
+}
+
+// WebUI is the [web_ui] table: where the built web UI is. Empty means the usual place
+// (internal/webui).
+type WebUI struct {
+	Dir string `toml:"dir"` // also MEKO_WEB_UI_DIR
 }
 
 // KnowledgeBase is the [knowledge_base] table.
@@ -156,6 +163,9 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	}
 	if v := env("MEKO_MEMORY_ENGINE_DIR"); v != "" {
 		c.MemoryEngine.Dir = v
+	}
+	if v := env("MEKO_WEB_UI_DIR"); v != "" {
+		c.WebUI.Dir = v
 	}
 	if o.Port != 0 {
 		c.Server.Port = o.Port

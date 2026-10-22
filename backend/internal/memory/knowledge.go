@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -299,6 +301,62 @@ func (s *Service) ReceiveUpload(ctx context.Context, token string, r io.Reader) 
 	}
 	s.kickIndexer()
 	return nil
+}
+
+// UploadLocalFile uploads a file from this machine's disk in one step, the server reading it
+// itself: the same checks, storing and queueing as an upload link's, with no bytes on the wire.
+// It reads as the server's user, so callers must hold that user's token (the MCP tool checks).
+func (s *Service) UploadLocalFile(ctx context.Context, datapack, agent, path string) (UploadOffer, error) {
+	if !filepath.IsAbs(path) {
+		return UploadOffer{}, fmt.Errorf("%w: path must be absolute", knowledge.ErrInvalid)
+	}
+	name := filepath.Base(path)
+	if _, err := knowledge.TypeOf(name); err != nil {
+		return UploadOffer{}, err
+	}
+	// Stat first: opening a FIFO or a device would block before the check could run.
+	fi, err := os.Stat(path)
+	if err != nil {
+		return UploadOffer{}, fmt.Errorf("%w: can't read %s: %v", knowledge.ErrInvalid, path, errors.Unwrap(err))
+	}
+	if !fi.Mode().IsRegular() {
+		return UploadOffer{}, fmt.Errorf("%w: %s isn't a regular file", knowledge.ErrInvalid, path)
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: reading the caller's own file is the point
+	if err != nil {
+		return UploadOffer{}, fmt.Errorf("%w: can't open %s: %v", knowledge.ErrInvalid, path, errors.Unwrap(err))
+	}
+	defer func() { _ = f.Close() }()
+	if fi, err = f.Stat(); err != nil {
+		return UploadOffer{}, err
+	}
+	if !fi.Mode().IsRegular() { // replaced since the first check
+		return UploadOffer{}, fmt.Errorf("%w: %s isn't a regular file", knowledge.ErrInvalid, path)
+	}
+	if err = knowledge.CheckSize(fi.Size()); err != nil {
+		return UploadOffer{}, err
+	}
+	head := make([]byte, min(fi.Size(), knowledge.SniffBytes))
+	if _, err = io.ReadFull(f, head); err != nil {
+		return UploadOffer{}, err
+	}
+	h := sha256.New()
+	h.Write(head)
+	if _, err = io.Copy(h, f); err != nil {
+		return UploadOffer{}, err
+	}
+	offer, err := s.UploadURL(ctx, UploadRequest{DatapackID: datapack, Filename: name, Size: fi.Size(),
+		ContentHash: hex.EncodeToString(h.Sum(nil)), AgentID: agent, Head: head})
+	if err != nil || offer.AlreadyUploaded {
+		return offer, err
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return UploadOffer{}, err
+	}
+	if err = s.ReceiveUpload(ctx, strings.TrimPrefix(offer.URL, s.URL(UploadTicketPath)), f); err != nil {
+		return UploadOffer{}, err
+	}
+	return offer, nil
 }
 
 // DocumentStatus is a file's indexing state, by its key: its document once its bytes are stored,

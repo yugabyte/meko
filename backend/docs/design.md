@@ -68,7 +68,7 @@ in `extensions/agentk` (moved there in #158).
 ```mermaid
 flowchart LR
   cli["meko start"] -->|spawns detached| serve["meko serve (parent)"]
-  serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1, /mcp (later the UI)"]
+  serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1, /mcp, / (the UI)"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
   serve -->|"starts, watches, restarts"| memory_engine["Node memory engine (milestone 2)"]
   memory_engine -->|"store API, unix socket"| serve
@@ -266,12 +266,15 @@ the client token for MCP and REST clients (last bullet).
   `Authorization: Bearer <token>`. It's compared in constant time and never logged.
 - Every route except `/healthz` needs it, or since milestone 3 the client token (or nothing, with
   `[server] auth = "none"`), except `/api/v1/status` and `/api/v1/version`, which take only it.
+  Later milestones add routes that take none: the knowledge-file links (a ticket) and the web UI's
+  files and code redeem ([api.md](api.md)).
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
-  rebinding. Any request with an `Origin` header is refused, since no browser client exists yet.
-  That keeps web pages open in the user's browser from reaching the server.
+  rebinding. A request with an `Origin` header is refused unless it's this server's own
+  (`http://127.0.0.1:<port>` or `http://localhost:<port>`), so only the web UI Meko serves can call
+  it from a browser ([web-ui.md](web-ui.md)); no CORS headers are sent.
 - Milestone 3 added the client token, kept across restarts, for MCP and REST clients, and an
   opt-in `[server] auth = "none"`; the admin-only routes stay admin-only
-  ([api.md](api.md)). Per-client API keys are #195, and browser access comes with the UI.
+  ([api.md](api.md)). Per-client API keys are #195.
 
 ## Supervisor
 
@@ -388,7 +391,7 @@ Automated, in `go test -race ./...` (Linux and macOS in CI):
 - **config**: precedence of flags, env, file and defaults; a bad `config.toml` gives an error naming the file and line.
 - **paths**: folder and file permissions; the network-filesystem check refuses an explicit network path (faked filesystem type); a parent writable by others (or by a group that isn't the user's) is refused; the folder ends 0700; the `/var/tmp` fallback.
 - **store**: `TestLibVersions` checks the fork's SQLite (3.53.4) and sqlite-vec (`vec_version()` is v0.1.9); `TestVecErr` checks that a missing `vec_version` (a build without `sqlite_vec`) becomes the error naming the tag, and that SQLite still words it "no such function"; migrations apply on a fresh file and are a no-op on a current one; `user_version` matches; the backup file is written before a migration; a newer database or a gap in the migrations is refused; a `vec0` table with a partition key answers KNN within a datapack; FTS5 is compiled in; the default datapack is created once with a UUID and a name that isn't `meko_default_datapack*`.
-- **server** (in-process on port 0): `/healthz` answers without auth; `/api/v1/*` needs the admin token (401 without it or with a wrong one); a foreign Host gets 403; any `Origin` header is refused; replies use the envelope with `error` omitted on success; an internal error returns the generic message and logs the cause.
+- **server** (in-process on port 0): `/healthz` answers without auth; `/api/v1/*` needs the admin token (401 without it or with a wrong one); a foreign Host gets 403; an `Origin` header other than the server's own is refused; replies use the envelope with `error` omitted on success; an internal error returns the generic message and logs the cause.
 - **supervisor** (the test binary re-run as a stub child): starts and reports healthy; restarts with backoff after a crash; marks the child failed after 5 crashes in 10 minutes; stop sends SIGTERM, then SIGKILL to the whole process group, including a grandchild that outlives the child; restarts count only the restarts made; `UnixHTTPCheck` passes on 2xx and fails on other answers or a missing socket.
 - **cli**: `start` then `status` then `stop` against a temp data folder; a second `serve` on the same folder fails on the lock; a stale pid file doesn't block `start` and is replaced by the new server's pid; a taken port gives the clear error.
 - **shutdown**: SIGTERM drains, stops children, checkpoints the WAL and removes the pid file.
@@ -417,7 +420,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 | 3 | MCP and REST | Built in #197 (the rename) and the stack #201 to #204: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
 | 4 | Knowledge files | Built in #170: [knowledge.md](knowledge.md). Uploads through Cloud's presigned flow onto a sink on Meko, files in `knowledgebase-files/`, extraction and chunking in Go, embedding and Cloud's cross-encoder in the memory engine, dedupe by content hash, promoted memories in the knowledge base |
 | 5 | Install and release | Built in #171: [install.md](install.md). Native builds with Meko's own Node and the model bundled, `meko-v` releases marked latest, the installer, launchd and systemd services, extensions (AgentK), updates with rollback, the secret store |
-| 6 | Web UI | The pinned meko_ui package served at `/`, local mode in meko_ui, browser access (#172) |
+| 6 | Web UI | A light UI of its own (`backend/web_ui`) served at `/`, and browser access ([web-ui.md](web-ui.md), #172) |
 | 7 | Move to Meko Cloud | The export bundle, and prod's import API (#173) |
 
 ## Questions and decisions

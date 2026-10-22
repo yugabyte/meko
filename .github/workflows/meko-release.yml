@@ -171,6 +171,7 @@ jobs:
           make build VERSION="$VERSION"
           # npm's registry fetches can time out on a runner: try twice.
           make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
+          make web_ui || { rm -rf web_ui/node_modules; make web_ui; }
           (cd memory_engine && npm prune --omit=dev)
 
       - name: Package
@@ -228,6 +229,7 @@ jobs:
           set -eu
           make build VERSION="$VERSION"
           make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
+          make web_ui || { rm -rf web_ui/node_modules; make web_ui; }
           (cd memory_engine && npm prune --omit=dev)
 
       - name: Package

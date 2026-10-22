@@ -43,8 +43,19 @@ func (c *client) status(ctx context.Context) (server.StatusReply, error) {
 }
 
 func (c *client) get(ctx context.Context, path string, data any) error {
+	return c.do(ctx, http.MethodGet, path, data)
+}
+
+// uiCode is a one-time code for opening the web UI.
+func (c *client) uiCode(ctx context.Context) (server.UICodeReply, error) {
+	var out server.UICodeReply
+	err := c.do(ctx, http.MethodPost, "/api/v1/ui-code", &out)
+	return out, err
+}
+
+func (c *client) do(ctx context.Context, method, path string, data any) error {
 	// G704: the URL is always 127.0.0.1 on the port serve wrote to the data folder.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil) //nolint:gosec
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil) //nolint:gosec
 	if err != nil {
 		return err
 	}

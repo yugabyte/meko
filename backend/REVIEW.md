@@ -8,16 +8,21 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
-- [ ] Every route but `/healthz` and the knowledge-file links needs a credential, checked on the
-      matched route (`c.Path()`), never the raw URL. The links (`/api/v1/knowledge-uploads/:ticket`,
+- [ ] Every route but `/healthz`, the knowledge-file links, the web UI's files (`/*`) and the UI
+      code's redeem (`/api/v1/ui-code/redeem`) needs a credential, checked on the matched route
+      (`c.Path()`), never the raw URL; catch-all `/api/*` and `/mcp/*` routes keep unknown API
+      paths off the UI's ([docs/web-ui.md](docs/web-ui.md)). The links (`/api/v1/knowledge-uploads/:ticket`,
       `/api/v1/knowledge-downloads/:ticket`) take a one-time ticket instead: 256 random bits, 5 minutes,
       an upload's bound to its datapack, key, size and SHA-256 ([docs/knowledge.md](docs/knowledge.md)).
-      Otherwise it's the admin token on `/api/v1/status` and `/api/v1/version`, the admin or client
+      Otherwise it's the admin token on `/api/v1/status`, `/api/v1/version` and `/api/v1/ui-code`, the admin or client
       token everywhere else, and nothing there only with `[server] auth = "none"`
       ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store API and the memory engine's API listen only
       on their unix sockets (0600) and need the internal token on every route, the memory engine's
       `/healthz` too (its reply can say why the memory engine failed). The server binds 127.0.0.1 only, checks `Host`,
-      and refuses requests with an `Origin` until a browser client exists.
+      and refuses requests whose `Origin` isn't its own (`http://127.0.0.1:<port>` or
+      `http://localhost:<port>`), so only the web UI it serves can call it from a browser.
+      `knowledgebase_upload_file` reads a path as the server's user, so it refuses a call that came
+      in with no token.
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
       never reach logs or error replies (internal errors get the generic message), in Go or in the
       memory engine (`logs/memory_engine.log`).

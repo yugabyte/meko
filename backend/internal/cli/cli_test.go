@@ -816,3 +816,34 @@ func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
 		t.Errorf("the link to the moved folder is still there: %v", err)
 	}
 }
+
+func TestUI(t *testing.T) {
+	dir, port := setup(t)
+	code, _, errs := run("ui", "--data-dir", dir, "--no-open")
+	want(t, "ui when stopped", code, exitNotRunning, errs, "isn't running")
+
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	prefix := "http://127.0.0.1:" + port + "/#code="
+
+	var opened []string
+	open := openBrowser
+	openBrowser = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openBrowser = open })
+
+	code, out, errs = run("ui", "--data-dir", dir, "--no-open")
+	first := strings.TrimSpace(out)
+	if code != 0 || !strings.HasPrefix(first, prefix) || len(first) != len(prefix)+64 || len(opened) != 0 {
+		t.Errorf("ui --no-open: %d %q, opened %v", code, out, opened)
+	}
+	want(t, "ui --no-open says the link is short-lived", code, 0, errs, "works once")
+	_, tok, _ := run("token", "--data-dir", dir)
+	if strings.Contains(out, strings.TrimSpace(tok)) {
+		t.Errorf("the link carries the client token: %q", out)
+	}
+	code, out, _ = run("ui", "--data-dir", dir)
+	if link := strings.TrimSpace(out); code != 0 || !strings.HasPrefix(link, prefix) || link == first ||
+		len(opened) != 1 || opened[0] != link {
+		t.Errorf("ui: %d %q, opened %v", code, out, opened)
+	}
+}

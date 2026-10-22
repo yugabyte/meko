@@ -41,8 +41,9 @@ const instructions = `Meko is your memory: facts, conversations and files that l
 shared by every agent that uses the same datapack. This server is Meko running on this machine.
 
 Start with context_search: it searches memories, the knowledge base and past conversations at
-once. knowledgebase_search searches only the knowledge base: files uploaded with
-knowledgebase_upload_document, and promoted memories. Save a fact
+once. knowledgebase_search searches only the knowledge base: uploaded files and promoted
+memories. To add a file on this machine, pass its path to knowledgebase_upload_file; for one
+that isn't, use knowledgebase_upload_document. Save a fact
 with memory_add. Store a chat with conversation_create, then conversation_add_message for each
 turn. Pass the same conversation_id to every call of a session.
 
