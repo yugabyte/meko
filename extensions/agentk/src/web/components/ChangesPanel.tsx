@@ -458,7 +458,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                       onMore={() => showMore(f.path, parsed.get(f.path)?.length ?? 0)}
                       renderAfter={(i) => {
                         const cs = placed.at.get(f.path)?.get(i);
-                        const here = editor && !editor.id && editor.path === f.path && editorAt === i;
+                        // A comment being written waits on All changes while a commit is shown.
+                        const here = !data.commit && editor && !editor.id && editor.path === f.path && editorAt === i;
                         if (!cs && !here) return null;
                         return (
                           <>
@@ -467,7 +468,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                           </>
                         );
                       }}
-                      picked={editor && !editor.id && editor.path === f.path ? editor : null}
+                      picked={!data.commit && editor && !editor.id && editor.path === f.path ? editor : null}
                       onComment={data.commit ? undefined : (i, shift) => startComment(f.path, i, shift)}
                     />
                   </>
