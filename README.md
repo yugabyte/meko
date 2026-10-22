@@ -32,9 +32,9 @@ for the memory engine.
 
 ```sh
 cd backend
-make build engine       # bin/meko, and the memory engine
-./bin/meko start        # runs in the background on 127.0.0.1:7778
-./bin/meko status       # wait for "Engine: ready"
+make build memory_engine  # bin/meko, and the memory engine
+./bin/meko start          # runs in the background on 127.0.0.1:7778
+./bin/meko status         # wait for "Memory engine: ready"
 ```
 
 The first start downloads the embedding model (23 MB). On RHEL 8, set
@@ -45,7 +45,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | Command | What it does |
 |---|---|
 | `meko start` / `stop` | Start the server in the background, and stop it |
-| `meko status` | Whether it's running, its URL, version, data folder, engine and auth mode |
+| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode |
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
 | `meko token [--mcp]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code |

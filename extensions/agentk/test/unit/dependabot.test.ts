@@ -97,9 +97,9 @@ const notes = () => spawnSync('sh', [NOTES], { cwd: repo, encoding: 'utf8' });
 const checkTitle = (title: string) => spawnSync('sh', [CHECK, '--no-length', title], { encoding: 'utf8' });
 
 describe('dependabot config', () => {
-  it("covers AgentK's npm, Meko's Go modules and engine, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
+  it("covers AgentK's npm, Meko's Go modules and memory engine, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
     expect(updates().map((u) => `${u.ecosystem} ${u.directory}`).sort()).toEqual(
-      ['github-actions /', 'gomod /backend', 'npm /backend/engine', `npm ${AGENTK}`]);
+      ['github-actions /', 'gomod /backend', 'npm /backend/memory_engine', `npm ${AGENTK}`]);
     for (const u of updates()) {
       expect(u.assignees, u.directory).not.toEqual([]);
       // Without an explicit prefix Dependabot guesses one from the repo's history.
@@ -162,8 +162,8 @@ describe('dependabot config', () => {
   it.each([
     ['/', false, 'bump actions/checkout from 4 to 5'],
     ['/backend', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0'],
-    ['/backend/engine', false, 'bump mem0ai from 3.1.2 to 3.1.3'],
-    ['/backend/engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
+    ['/backend/memory_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3'],
+    ['/backend/memory_engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
   ])('does not release a bump in %s (dev %s) on its own', (dir, dev, what) => {
     commit(subject(byDirectory(dir), dev, what));
     expect(notes().status).toBe(3);

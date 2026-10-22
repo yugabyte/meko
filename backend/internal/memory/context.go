@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -29,16 +29,16 @@ type ContextSearch struct {
 }
 
 // ContextResults is each source's results. A nil source wasn't searched: it wasn't asked for, or
-// it couldn't be (the engine isn't ready). An empty one was, and found nothing.
+// it couldn't be (the memory engine isn't ready). An empty one was, and found nothing.
 type ContextResults struct {
-	Memory        []engine.Memory
+	Memory        []memoryengine.Memory
 	Conversation  *ConversationResults
 	KnowledgeBase []any // knowledge files come with milestone 4: always nil until then
 	Steps         []store.Step
 }
 
 // ContextSearch searches the sources asked for at the same time, so it takes as long as the
-// slowest. A source that fails is logged and left empty (or nil when the engine can't embed), as
+// slowest. A source that fails is logged and left empty (or nil when the memory engine can't embed), as
 // Meko Cloud does: the caller still gets the others.
 func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextResults, error) {
 	if err := s.needDatapack(ctx, r.DatapackID); err != nil {
@@ -90,21 +90,21 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 }
 
 // failedSource logs a source that failed and returns what it reports: nil (not searched) when the
-// engine couldn't take the query, else empty.
-func (s *Service) failedSource(source string, err error) []engine.Memory {
+// memory engine couldn't take the query, else empty.
+func (s *Service) failedSource(source string, err error) []memoryengine.Memory {
 	if s.log != nil {
 		s.log.Warn("a context_search source failed", "source", source, "error", err)
 	}
-	var notReady *engine.NotReadyError
-	if errors.Is(err, engine.ErrUnavailable) || errors.As(err, &notReady) {
+	var notReady *memoryengine.NotReadyError
+	if errors.Is(err, memoryengine.ErrUnavailable) || errors.As(err, &notReady) {
 		return nil
 	}
-	return []engine.Memory{}
+	return []memoryengine.Memory{}
 }
 
 // aboveRaw keeps the memories whose cosine (or, without one, score) reaches min.
-func aboveRaw(ms []engine.Memory, minimum float64) []engine.Memory {
-	out := []engine.Memory{}
+func aboveRaw(ms []memoryengine.Memory, minimum float64) []memoryengine.Memory {
+	out := []memoryengine.Memory{}
 	for _, m := range ms {
 		v := m.RawSimilarityScore
 		if v == nil {
@@ -118,4 +118,4 @@ func aboveRaw(ms []engine.Memory, minimum float64) []engine.Memory {
 }
 
 // FilterRaw keeps the memories whose cosine reaches MinRawSimilarity, as memory_search does.
-func FilterRaw(ms []engine.Memory) []engine.Memory { return aboveRaw(ms, MinRawSimilarity) }
+func FilterRaw(ms []memoryengine.Memory) []memoryengine.Memory { return aboveRaw(ms, MinRawSimilarity) }

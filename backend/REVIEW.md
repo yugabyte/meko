@@ -11,13 +11,13 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Every route but `/healthz` needs a credential, checked on the matched route (`c.Path()`),
       never the raw URL: the admin token on `/api/v1/status` and `/api/v1/version`, the admin or
       client token everywhere else, and nothing there only with `[server] auth = "none"`
-      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store API and the engine's API listen only
-      on their unix sockets (0600) and need the internal token on every route, the engine's
-      `/healthz` too (its reply can say why the engine failed). The server binds 127.0.0.1 only, checks `Host`,
+      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store API and the memory engine's API listen only
+      on their unix sockets (0600) and need the internal token on every route, the memory engine's
+      `/healthz` too (its reply can say why the memory engine failed). The server binds 127.0.0.1 only, checks `Host`,
       and refuses requests with an `Origin` until a browser client exists.
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
       never reach logs or error replies (internal errors get the generic message), in Go or in the
-      engine (`logs/engine.log`).
+      memory engine (`logs/memory_engine.log`).
 - [ ] REST routes keep Meko Cloud's paths and `{data, error}` shapes ([docs/api.md](docs/api.md)): a
       `datapack_id` that isn't a UUID is 400 `VALIDATION_ERROR`, one that doesn't exist is 404
       with code `NOT_FOUND`.
@@ -25,9 +25,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       built in `internal/wire` when REST shares them; errors a caller can act on are replies
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
       arguments or text. A search takes a search slot; nothing holds the writer while it waits on
-      the engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
+      the memory engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
       `internal/mcp/agentk_contract_test.go`.
-- [ ] The engine stores only through the store API, its dependencies stay pinned, and nothing copies
+- [ ] The memory engine stores only through the store API, its dependencies stay pinned, and nothing copies
       or cites prod Meko's private code.
 - [ ] No third-party C code is copied into `backend/`. SQLite and sqlite-vec come from the
       `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates

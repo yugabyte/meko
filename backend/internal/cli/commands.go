@@ -184,29 +184,30 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("the server is running, but isn't answering: %w", err))
 	}
 	fmt.Fprintf(stdout, "Meko is running.\n")
-	fmt.Fprintf(stdout, "  URL:      http://127.0.0.1:%d\n", st.Port)
-	fmt.Fprintf(stdout, "  Version:  %s\n", st.Version)
-	fmt.Fprintf(stdout, "  PID:      %d\n", st.PID)
-	fmt.Fprintf(stdout, "  Uptime:   %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
-	fmt.Fprintf(stdout, "  Data:     %s\n", st.DataDir)
-	engineLine := "  Engine:   " + st.Engine.State
-	if e := st.Engine.Embedder; e != nil && e.Model != "" {
-		engineLine += fmt.Sprintf(", %s %s (%d dims)", e.Provider, e.Model, e.Dims)
+	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d\n", st.Port)
+	fmt.Fprintf(stdout, "  Version:       %s\n", st.Version)
+	fmt.Fprintf(stdout, "  PID:           %d\n", st.PID)
+	fmt.Fprintf(stdout, "  Uptime:        %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
+	fmt.Fprintf(stdout, "  Data:          %s\n", st.DataDir)
+	memoryEngineLine := "  Memory engine: " + st.MemoryEngine.State
+	if e := st.MemoryEngine.Embedder; e != nil && e.Model != "" {
+		memoryEngineLine += fmt.Sprintf(", %s %s (%d dims)", e.Provider, e.Model, e.Dims)
 	}
-	if st.Engine.Reason != "" {
-		engineLine += " (" + st.Engine.Reason + ")"
+	if st.MemoryEngine.Reason != "" {
+		memoryEngineLine += " (" + st.MemoryEngine.Reason + ")"
 	}
-	fmt.Fprintln(stdout, engineLine)
+	fmt.Fprintln(stdout, memoryEngineLine)
 	if st.Auth == config.AuthNone {
-		fmt.Fprintln(stdout, "  Auth:     none (every user and program on this machine can read and write your memories)")
+		fmt.Fprintln(stdout,
+			"  Auth:          none (every user and program on this machine can read and write your memories)")
 	} else {
-		fmt.Fprintln(stdout, "  Auth:     token (meko token prints it)")
+		fmt.Fprintln(stdout, "  Auth:          token (meko token prints it)")
 	}
 	if len(st.Children) == 0 {
-		fmt.Fprintf(stdout, "  Children: none\n")
+		fmt.Fprintf(stdout, "  Children:      none\n")
 	}
 	for _, ch := range st.Children {
-		line := fmt.Sprintf("  Child:    %s %s, %d restarts", ch.Name, ch.State, ch.Restarts)
+		line := fmt.Sprintf("  Child:         %s %s, %d restarts", ch.Name, ch.State, ch.Restarts)
 		if ch.LastError != "" {
 			line += " (" + ch.LastError + ")"
 		}

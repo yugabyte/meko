@@ -1,4 +1,4 @@
-package engine
+package memoryengine
 
 import (
 	"context"
@@ -45,8 +45,8 @@ func TestFindNode(t *testing.T) {
 
 func TestFindDir(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := FindDir(Options{Dir: dir}); err == nil || !strings.Contains(err.Error(), "make engine") {
-		t.Errorf("an unbuilt engine: %v", err)
+	if _, err := FindDir(Options{Dir: dir}); err == nil || !strings.Contains(err.Error(), "make memory_engine") {
+		t.Errorf("an unbuilt memory engine: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o700); err != nil {
 		t.Fatal(err)
@@ -55,22 +55,23 @@ func TestFindDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, err := FindDir(Options{Dir: dir}); err != nil || got != dir {
-		t.Errorf("a built engine: %q, %v", got, err)
+		t.Errorf("a built memory engine: %q, %v", got, err)
 	}
 }
 
 func TestSpec(t *testing.T) {
 	l := paths.New("/data")
-	sp := Spec("/bin/node", "/engine", l, "tok", Options{TestEmbedder: "hash"})
+	sp := Spec("/bin/node", "/memory_engine", l, "tok", Options{TestEmbedder: "hash"})
 	env := strings.Join(sp.Env, "\n")
-	for _, want := range []string{"MEKO_ENGINE_SOCKET=/data/run/engine.sock", "MEKO_STORE_SOCKET=/data/run/store.sock",
-		"MEKO_INTERNAL_TOKEN=tok", "MEKO_MODELS_DIR=/data/models", "MEM0_TELEMETRY=false",
-		"MEKO_ENGINE_TEST_EMBEDDER=hash"} {
+	for _, want := range []string{"MEKO_MEMORY_ENGINE_SOCKET=/data/run/mem_eng.sock",
+		"MEKO_STORE_SOCKET=/data/run/store.sock", "MEKO_INTERNAL_TOKEN=tok", "MEKO_MODELS_DIR=/data/models",
+		"MEM0_TELEMETRY=false", "MEKO_MEMORY_ENGINE_TEST_EMBEDDER=hash"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("env lacks %s", want)
 		}
 	}
-	if sp.Args[0] != "/engine/dist/main.js" || sp.PidFile != "/data/run/children/engine" || sp.LogFile != l.EngineLog {
+	if sp.Args[0] != "/memory_engine/dist/main.js" || sp.PidFile != "/data/run/children/memory_engine" ||
+		sp.LogFile != l.MemoryEngineLog {
 		t.Errorf("spec %+v", sp)
 	}
 }
@@ -105,9 +106,9 @@ func TestClientErrors(t *testing.T) {
 	ctx := context.Background()
 	c := NewClient(filepath.Join(t.TempDir(), "none.sock"), "tok")
 	if _, err := c.Health(ctx); !errors.Is(err, ErrUnavailable) {
-		t.Errorf("no engine: %v", err)
+		t.Errorf("no memory engine: %v", err)
 	}
-	c = NewClient(serveFake(t, 503, `{"data":null,"error":{"code":"ENGINE_NOT_READY","message":"loading"}}`), "tok")
+	c = NewClient(serveFake(t, 503, `{"data":null,"error":{"code":"MEMORY_ENGINE_NOT_READY","message":"loading"}}`), "tok")
 	var notReady *NotReadyError
 	if _, err := c.Search(ctx, SearchRequest{}); !errors.As(err, &notReady) || notReady.Message != "loading" {
 		t.Errorf("not ready: %v", err)
