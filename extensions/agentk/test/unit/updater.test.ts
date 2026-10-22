@@ -22,6 +22,7 @@ import {
   compareSemver,
   parseSha256Sums,
   pickLatest,
+  tagVersion,
   tarballName,
   uncountStart,
   Updater,
@@ -117,6 +118,36 @@ describe('pickLatest', () => {
     expect(pickLatest([linuxOnly, both], { ...opts, platform: 'linux' })?.version).toBe('0.5.0');
     expect(pickLatest([linuxOnly, both], { ...opts, platform: 'darwin' })?.version).toBe('0.4.0');
     expect(pickLatest([linuxOnly], { ...opts, platform: 'darwin' })).toBeNull();
+  });
+});
+
+describe('AgentK release tags', () => {
+  it.each([
+    ['agentk-v0.20261022.0', '0.20261022.0'],
+    ['v0.20261021.3', '0.20261021.3'],
+    ['meko-v0.20261023.0', 'meko-v0.20261023.0'],
+    ['vnext', 'vnext'],
+  ])('reads the version of %s', (tag, version) => {
+    expect(tagVersion(tag)).toBe(version);
+  });
+
+  it("picks the newest of either prefix, and never Meko's", () => {
+    const fromTag = (tag: string) => rel(tagVersion(tag), { tag, assets: [tarballName(tagVersion(tag), 'x64'), 'SHA256SUMS'] });
+    const releases = ['v0.20261021.0', 'agentk-v0.20261022.0', 'meko-v0.20261023.0'].map(fromTag);
+    expect(pickLatest(releases, { includePrerelease: false, bad: new Set(), arch: 'x64' })?.tag).toBe('agentk-v0.20261022.0');
+  });
+
+  it('compares What\'s new by the listed tags once a check has seen them', async () => {
+    const fx = setup();
+    try {
+      const compare = vi.fn(async () => ({ totalCommits: 0, url: 'u', commits: [] }));
+      const u = fx.makeUpdater({ ...fakeSource(fx.releaseDir, [rel('0.0.9'), rel('0.1.0', { tag: 'agentk-v0.1.0' })]), compare });
+      await u.check();
+      await u.notes('0.0.9', '0.1.0');
+      expect(compare.mock.calls).toEqual([[fx.cfg.update.repo, 'v0.0.9', 'agentk-v0.1.0']]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -324,20 +355,25 @@ describe('Updater', () => {
   });
 
   it.each([
-    { name: 'a verified release and schedules a restart', remembered: null, listed: ['0.2.0'], to: '0.2.0' },
+    // Downloaded by the release's own tag, of either prefix.
+    { name: 'a verified release and schedules a restart', remembered: null, listed: ['0.2.0'], to: '0.2.0', tag: 'agentk-v0.2.0' },
     // A release cut since the last check is installed now, not offered after the restart.
-    { name: 'the newest release, not the one found before', remembered: '0.2.0', listed: ['0.2.0', '0.3.0'], to: '0.3.0' },
-    { name: 'the version found before when the check fails', remembered: '0.2.0', listed: null, to: '0.2.0' },
-  ])('applies $name', async ({ remembered, listed, to }) => {
+    { name: 'the newest release, not the one found before', remembered: '0.2.0', listed: ['0.2.0', '0.3.0'], to: '0.3.0', tag: 'v0.3.0' },
+    // Its tag unknown, each prefix's is tried.
+    { name: 'the version found before when the check fails', remembered: '0.2.0', listed: null, to: '0.2.0', tag: 'v0.2.0' },
+  ])('applies $name', async ({ remembered, listed, to, tag }) => {
     if (remembered) fx.kv.set('update.latest', remembered);
     buildRelease(fx.releaseDir, to);
-    const source = fakeSource(fx.releaseDir, (listed ?? []).map((v) => rel(v)));
+    const source = fakeSource(fx.releaseDir, (listed ?? []).map((v) => rel(v, v === to ? { tag } : {})));
     const u = fx.makeUpdater({
       listReleases: async (repo) => {
         if (!listed) throw new Error('rate limited');
         return source.listReleases(repo);
       },
-      download: source.download,
+      download: async (repo, t, asset, dir) => {
+        if (t !== tag) throw new Error(`release not found: ${t}`);
+        return source.download(repo, t, asset, dir);
+      },
     });
     // Two clicks, one install; it shows as installing while the releases are checked.
     const first = u.apply();
@@ -403,24 +439,29 @@ describe('Updater', () => {
   });
 
   it('reads What\'s new from the commits between two tags, newest first, asking GitHub once per range', async () => {
-    const compare = vi.fn(async () => ({
-      totalCommits: 300,
-      url: 'https://github.com/o/r/compare/v0.0.9...v0.1.0',
-      commits: [
-        { sha: '1111111aaa', message: 'fix: the older fix', url: 'c1' },
-        { sha: '2222222bbb', message: 'docs: not a change', url: 'c2' },
-        { sha: '3333333ccc', message: 'fix: the newer fix', url: 'c3' },
-      ],
-    }));
-    compare.mockRejectedValueOnce(Object.assign(new Error('Command failed: gh api'), { stderr: 'gh: Not Found (HTTP 404)\n' }));
+    // Across the switch from v… to agentk-v… tags: GitHub knows only v0.0.9 and agentk-v0.1.0.
+    let down = true;
+    const notFound = () => Object.assign(new Error('Command failed: gh api'), { stderr: 'gh: Not Found (HTTP 404)\n' });
+    const compare = vi.fn(async (_repo: string, base: string, head: string) => {
+      if (down || base !== 'v0.0.9' || head !== 'agentk-v0.1.0') throw notFound();
+      return {
+        totalCommits: 300,
+        url: 'https://github.com/o/r/compare/v0.0.9...agentk-v0.1.0',
+        commits: [
+          { sha: '1111111aaa', message: 'fix: the older fix', url: 'c1' },
+          { sha: '2222222bbb', message: 'docs: not a change', url: 'c2' },
+          { sha: '3333333ccc', message: 'fix: the newer fix', url: 'c3' },
+        ],
+      };
+    });
     const u = fx.makeUpdater({ ...fakeSource(fx.releaseDir, []), compare });
-    await expect(u.notes('0.0.9', '0.1.0')).rejects.toThrow("GitHub couldn't compare v0.0.9 and v0.1.0: gh: Not Found (HTTP 404)");
+    await expect(u.notes('0.0.9', '0.1.0')).rejects.toThrow("GitHub couldn't compare 0.0.9 and 0.1.0: gh: Not Found (HTTP 404)");
     // A failed ask isn't kept: the next one asks again, and its answer is kept.
+    down = false;
     const n = await u.notes('0.0.9', '0.1.0');
     expect(await u.notes('0.0.9', '0.1.0')).toBe(n);
-    expect(compare).toHaveBeenCalledTimes(2);
-    expect(compare).toHaveBeenCalledWith(fx.cfg.update.repo, 'v0.0.9', 'v0.1.0');
-    expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/v0.0.9...v0.1.0' });
+    expect(compare).toHaveBeenLastCalledWith(fx.cfg.update.repo, 'v0.0.9', 'agentk-v0.1.0');
+    expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/v0.0.9...agentk-v0.1.0' });
     expect(n.sections).toEqual([{ title: 'Fixes', items: [expect.objectContaining({ summary: 'the newer fix' }), expect.objectContaining({ summary: 'the older fix' })] }]);
   });
 

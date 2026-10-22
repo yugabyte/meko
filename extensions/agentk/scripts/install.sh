@@ -2,11 +2,17 @@
 # Install or upgrade AgentK Local for the current user. AgentK Local itself needs no root; missing
 # system tools are installed with sudo on Linux, only after showing the commands and asking.
 #
-# Internal repo (needs an authenticated `gh`):
-#   gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+# Internal repo (needs an authenticated `gh`). The repo's latest release is Meko's (whose
+# `meko install_extension agentk` installs AgentK Local pointed at it), so AgentK Local alone comes
+# from the newest AgentK release, tagged agentk-v<version> (v<version> before releases were scoped
+# by product):
+#   gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
+#     --exclude-pre-releases --limit 50 --json tagName \
+#     --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
+#     --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 #
 # Options (pass through `sh -s -- ...` when piping):
-#   --version <X.Y.Z>   install a specific version instead of the latest
+#   --version <X.Y.Z>   install a specific version instead of the newest
 #   --install-deps      install missing tools (git, curl, gh, a coding agent, and Meko's
 #                       setup for the agents) without asking
 #   --agent <claude|kiro>
@@ -17,8 +23,9 @@
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK Local is already installed
 #   anything else       forwarded to `agent-k-local install`
-#                       (--non-interactive, --repos-root, --meko-key, --no-meko, --bind, --port,
-#                       --no-service); Meko is optional: without a key the install goes on without it
+#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
+#                       --port, --no-service); Meko is optional: without a key the install goes on
+#                       without it, and a Meko running on this computer is offered first
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
 # (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and a
@@ -66,8 +73,8 @@ die() { printf '\n  %s%s%s %s\n' "$r" "$fail_mark" "$n" "$*" >&2; exit 1; }
 forward=""
 while [ $# -gt 0 ]; do
   case $1 in
-    --version) [ $# -ge 2 ] || die "--version needs a value"; version=${2#v}; shift 2 ;;
-    --version=*) version=${1#--version=}; version=${version#v}; shift ;;
+    --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift 2 ;;
+    --version=*) version=${1#--version=}; shift ;;
     --agent) [ $# -ge 2 ] || die "--agent needs a value: claude or kiro"; agent=$2; shift 2 ;;
     --agent=*) agent=${1#--agent=}; shift ;;
     --install-deps) install_deps=yes; shift ;;
@@ -79,6 +86,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 case $agent in ''|claude|kiro) ;; *) die "--agent takes claude or kiro (got $agent)" ;; esac
+# A version, or its tag (agentk-v<version>, or v<version> from before).
+version=${version#agentk-v}
+version=${version#v}
 
 # ---- platform ----
 case $(uname -s) in
@@ -121,6 +131,12 @@ user_path=$PATH
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac
 short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
 
+# The AgentK-alone install, as a command to show: this script from the newest AgentK release
+# (the repo's latest release is Meko's).
+alone_cmd() {
+  printf '%s' "gh release download \"\$(gh release list --repo $repo --exclude-drafts --exclude-pre-releases --limit 50 --json tagName --jq '[.[].tagName | select(test(\"^(agentk-v|v)[0-9]\"))][0]')\" --repo $repo --pattern install.sh --output - | sh"
+}
+
 # ---- already installed ----
 # Set up all the way: a release linked as app/current and as ~/.local/bin/agent-k-local, a
 # config.toml, and both background services, the last step of `agent-k-local install` (which
@@ -153,7 +169,7 @@ if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/
     row "Status" "$cmd status"
     row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
     row "Update" "the Update banner or button in AgentK Local, when there's a newer release"
-    row "Reinstall" "gh release download --repo $repo --pattern install.sh --output - | sh -s -- --reinstall"
+    row "Reinstall" "$(alone_cmd) -s -- --reinstall"
     exit 0
   fi
 fi
@@ -418,37 +434,54 @@ say "${b}Download${n}"
 ok "Prerequisites" "git, curl, gh, $agents"
 
 # ---- resolve version ----
+# The newest AgentK release, not the repo's latest (Meko's): tagged agentk-v<version>, or
+# v<version> before releases were scoped by product. Drafts and prereleases are skipped.
 if [ -z "$version" ]; then
   if $have_gh; then
-    tag=$(gh release view --repo "$repo" --json tagName --jq .tagName 2>/dev/null) || tag=""
+    tags=$(gh api "repos/$repo/releases?per_page=100" \
+      --jq '[.[] | select((.draft or .prerelease) | not) | .tag_name | select(test("^(agentk-v|v)[0-9]"))][0] // empty' 2>/dev/null) || tags=""
   else
     auth=""
     [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
-    tag=$(curl -fsSL ${auth:+-H "$auth"} "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null |
-      sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1) || tag=""
+    # GitHub's JSON comes one key per line, each release's tag_name before its draft and prerelease.
+    tags=$(curl -fsSL ${auth:+-H "$auth"} "https://api.github.com/repos/$repo/releases?per_page=100" 2>/dev/null | awk '
+      /^ *"tag_name": / { t = $0; sub(/^ *"tag_name": *"/, "", t); sub(/".*/, "", t); d = "" }
+      /^ *"draft": / { d = $2 }
+      /^ *"prerelease": / { if (t ~ /^(agentk-v|v)[0-9]/ && d ~ /^false/ && $2 ~ /^false/) { print t; exit } }') || tags=""
   fi
-  [ -n "$tag" ] || die "could not find the latest release of $repo. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
-  version=${tag#v}
+  [ -n "$tags" ] || die "could not find the newest AgentK Local release of $repo. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
+  version=${tags#agentk-v}
+  version=${version#v}
+else
+  # The tag of a version asked for: either scheme's.
+  tags="agentk-v$version v$version"
 fi
-tag="v$version"
 tarball="agent-k-local-$version-$platform-$arch.tar.gz"
 
 # ---- download + verify ----
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-if $have_gh; then
-  gh release download "$tag" --repo "$repo" --pattern "$tarball" --pattern SHA256SUMS --dir "$tmp" ||
-    die "download of $tarball from $repo failed.$missing_hint"
-else
-  base="https://github.com/$repo/releases/download/$tag"
-  auth=""
-  [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
-  for f in "$tarball" SHA256SUMS; do
-    curl -fsSL ${auth:+-H "$auth"} -o "$tmp/$f" "$base/$f" ||
-      die "download of $f failed. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
-  done
+got=false
+for tag in $tags; do
+  if $have_gh; then
+    gh release download "$tag" --repo "$repo" --pattern "$tarball" --pattern SHA256SUMS --dir "$tmp" 2>"$tmp/.err" &&
+      { got=true; break; }
+  else
+    base="https://github.com/$repo/releases/download/$tag"
+    auth=""
+    [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
+    curl -fsSL ${auth:+-H "$auth"} -o "$tmp/$tarball" "$base/$tarball" 2>"$tmp/.err" &&
+      curl -fsSL ${auth:+-H "$auth"} -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" 2>"$tmp/.err" &&
+      { got=true; break; }
+  fi
+done
+if ! $got; then
+  cat "$tmp/.err" >&2
+  if $have_gh; then die "download of $tarball from $repo failed.$missing_hint"; fi
+  die "download of $tarball failed. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
 fi
+rm -f "$tmp/.err"
 
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) ||
   die "checksum verification failed for $tarball"

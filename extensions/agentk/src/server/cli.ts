@@ -396,7 +396,8 @@ Usage: agent-k-local <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
-                to skip asking; Meko is optional, --no-meko skips it), install the background services
+                to skip asking; Meko is optional, --no-meko skips it; a Meko running on this computer is
+                offered first; --meko-url and --meko-key name one), install the background services
                 (systemd or launchd), print the setup link
   uninstall     Stop and remove the background services (--purge also deletes ~/.agent-k-local except its
                 session worktrees and designs; add --delete-worktrees to delete those too)

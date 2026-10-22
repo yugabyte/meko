@@ -10,7 +10,7 @@ import { tempDir } from '../helpers.js';
 // Runs the real scripts/install.sh (mostly up to --deps-only) against stand-in tools: a PATH with only
 // the basic utilities it needs, plus stubs for uname, package managers, sudo, curl, gh and friends.
 const SCRIPT = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
-const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink'];
+const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk'];
 const GH_VERSION = '2.60.0';
 
 let root: string;
@@ -59,7 +59,14 @@ while [ $# -gt 0 ]; do
 done
 echo "curl $url" >> "${log}"
 if $effective; then echo "https://github.com/cli/cli/releases/tag/v${GH_VERSION}"; exit 0; fi
-cp "${repo}/release/\${url##*/}" "$out"`);
+case $url in
+  # AgentK's releases (see release() below): the listing, and the assets of its one tag.
+  https://api.github.com/repos/*/releases?per_page=100) cat "${repo}/releases.json" ;;
+  https://github.com/yugabyte/agent-k-local/releases/download/*)
+    t=\${url%/*}; [ "\${t##*/}" = "$(cat "${repo}/release-ak.tag")" ] || exit 22
+    cp "${repo}/release-ak/\${url##*/}" "$out" ;;
+  *) cp "${repo}/release/\${url##*/}" "$out" ;;
+esac`);
 
   // gh's release: a tarball with bin/gh inside, and its checksums file.
   const name = `gh_${GH_VERSION}_linux_amd64`;
@@ -73,6 +80,9 @@ cp "${repo}/release/\${url##*/}" "$out"`);
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 /** What the stubs were asked to do, leaving out the sign-in checks. */
+/** jq for the gh stub's --jq, when this machine has it. */
+const JQ = spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).stdout.trim();
+
 const calls = () =>
   (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []).filter((c) => c && c !== 'claude auth status --json');
 
@@ -354,8 +364,11 @@ describe('install.sh: when AgentK Local is already installed', () => {
     stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.host) ;; *) exit 1 ;; esac; ${services}; exit 0`);
   }
 
-  /** Release `version` of AgentK Local, as `gh release download` hands it out. */
-  function release(version: string) {
+  /**
+   * Release `version` of AgentK Local under `tag`, as `gh release download` (or curl) hands it out,
+   * listed after a newer Meko release, a prerelease and a draft (the repo's latest is Meko's).
+   */
+  function release(version: string, tag = `v${version}`) {
     const dir = join(repo, 'ak', `agent-k-local-${version}`);
     mkdirSync(join(dir, 'bin'), { recursive: true });
     mkdirSync(join(dir, 'node', 'bin'), { recursive: true });
@@ -367,15 +380,27 @@ describe('install.sh: when AgentK Local is already installed', () => {
     execFileSync('tar', ['-czf', join(repo, 'release-ak', tarball), `agent-k-local-${version}`], { cwd: join(repo, 'ak') });
     const digest = createHash('sha256').update(readFileSync(join(repo, 'release-ak', tarball))).digest('hex');
     writeFileSync(join(repo, 'release-ak', 'SHA256SUMS'), `${digest}  ${tarball}\n`);
+    writeFileSync(join(repo, 'release-ak.tag'), tag);
+    const listed = [
+      { tag_name: 'meko-v9.9.9', draft: false, prerelease: false },
+      { tag_name: 'agentk-v9.9.8', draft: true, prerelease: false },
+      { tag_name: 'agentk-v9.9.7-beta.1', draft: false, prerelease: true },
+      { tag_name: tag, draft: false, prerelease: false },
+    ];
+    // Pretty, one key per line, as GitHub's API answers curl.
+    writeFileSync(join(repo, 'releases.json'), JSON.stringify(listed, null, 2));
+    // gh's --jq is built in: here it's the real jq when there is one.
+    const api = JQ ? `while [ $# -gt 0 ]; do [ "$1" = --jq ] && q=$2; shift; done; "${JQ}" -r "$q" "${repo}/releases.json"` : `echo "${tag}"`;
     stub(bin, 'gh', `echo "gh $*" >> "${log}"
 case "$1 $2" in
-  "release view") echo "v${version}" ;;
-  "release download") while [ $# -gt 0 ]; do [ "$1" = --dir ] && cp "${repo}/release-ak/"* "$2/"; shift; done ;;
+  "api repos/yugabyte/agent-k-local/releases?per_page=100") ${api} ;;
+  "release download") [ "$3" = "${tag}" ] || { echo "release not found" >&2; exit 1; }
+    while [ $# -gt 0 ]; do [ "$1" = --dir ] && cp "${repo}/release-ak/"* "$2/"; shift; done ;;
 esac
 exit 0`);
   }
 
-  const downloads = (calls: string[]) => calls.filter((c) => c.startsWith('gh release'));
+  const downloads = (calls: string[]) => calls.filter((c) => /^gh (release|api) /.test(c));
 
   beforeEach(() => {
     have('git', 'curl');
@@ -424,10 +449,26 @@ exit 0`);
     expect(same.err).toContain('AgentK Local is already installed');
     expect(same.calls).toEqual([]);
 
+    // Either tag scheme's: agentk-v first, then v.
     const other = runAll(['--version', '1.2.4']);
     expect(other.code).toBe(0);
-    expect(downloads(other.calls)).toEqual([expect.stringMatching(/^gh release download v1\.2\.4 /)]);
+    expect(downloads(other.calls)).toEqual([
+      expect.stringMatching(/^gh release download agentk-v1\.2\.4 /),
+      expect.stringMatching(/^gh release download v1\.2\.4 /),
+    ]);
     expect(current()).toBe('1.2.4');
+  });
+
+  it.each([
+    ['gh', {}],
+    ['curl and GITHUB_TOKEN', { GITHUB_TOKEN: 't' }],
+  ])('installs the newest AgentK release, not the repo\'s latest (Meko\'s), with %s', (_name, env) => {
+    release('1.3.0', 'agentk-v1.3.0');
+    if ('GITHUB_TOKEN' in env) rmSync(join(bin, 'gh'));
+    const r = runAll(['--reinstall', '--non-interactive'], env);
+    expect(r.code, r.err).toBe(0);
+    expect(current()).toBe('1.3.0');
+    if (!('GITHUB_TOKEN' in env)) expect(downloads(r.calls)[1]).toMatch(/^gh release download agentk-v1\.3\.0 /);
   });
 
   it.each([

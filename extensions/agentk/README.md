@@ -38,10 +38,21 @@ both. A
 (shared memory) and let you share projects. Without one, press Enter at the key prompt (or pass
 `--no-meko`) and add a key later on the Meko tab in Settings, which links to Meko's sign-up and
 login pages to make one. The repo is internal for now, so the
-installer is fetched with `gh`:
+installer is fetched with `gh`. To run it on a Meko on this computer, install Meko (the repo's
+latest release) and then AgentK through it:
 
 ```sh
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+meko install_extension agentk
+```
+
+Or AgentK Local alone, from its newest release:
+
+```sh
+gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
+  --exclude-pre-releases --limit 50 --json tagName \
+  --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
+  --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
 It offers to install anything that's missing (git, gh, and Claude Code or Kiro CLI when neither is

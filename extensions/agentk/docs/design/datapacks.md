@@ -112,7 +112,12 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > is the user's and is changed only when they ask (see *Claude Code on AgentK's Meko* below).
 >
 > - **At install:** the installer reuses `MEKO_API_KEY` from `~/.claude/settings.json` if one is
->   there, and otherwise asks for one, with **Enter to skip** (pointing to the Meko web app to
+>   there. Without one it looks for a Meko running on this computer (`meko token --json`, with
+>   `meko` on PATH or in `~/.local/bin`): it offers it first ("Use Meko on this computer?"), and takes
+>   it when no one is there to ask, with its local MCP URL and its client token as the key
+>   (`findLocalMeko` in `mekolocal.ts`). `--meko-url` and `--meko-key` name a Meko outright; Meko's
+>   `meko install_extension agentk` passes both. A local Meko serves no web app yet, so datapack
+>   links and sharing stay off, and the server log says why. Otherwise it asks for a key, with **Enter to skip** (pointing to the Meko web app to
 >   create an account or key). With no key, or `--no-meko` (which also turns Meko off), it goes on
 >   with a warning, non-interactively too. A key it's given must work: without anyone to ask it
 >   stops, and interactively it asks whether to go on without Meko (and turns it off, so a bad key

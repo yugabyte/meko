@@ -300,7 +300,9 @@ jobs:
         run: |
           set -eu
           sh scripts/release/release-notes.sh --product agentk > notes.md || echo "Maintenance release." > notes.md
-          gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY" \
+          # Not "latest": the repo's latest release is Meko's (meko-release.yml), whose installer
+          # is the one-line install. AgentK's install.sh finds the newest AgentK release by tag.
+          gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
 
       - name: Replace assets on an existing release

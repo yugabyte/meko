@@ -15,6 +15,7 @@ import {
 import { openDb } from './db.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
+import { findLocalMeko, type LocalMeko } from './mekolocal.js';
 import { claudeConfigPath } from './trust.js';
 import {
   MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
@@ -246,17 +247,21 @@ export interface InstallMekoDeps {
   ensureInClaude?: (url: string, apiKey: string, keyFromEnv: boolean) => Promise<void>;
   /** Sets up Meko for Kiro, the same way; left out when Kiro isn't installed. */
   ensureInKiro?: (url: string, apiKey: string) => Promise<void>;
+  /** The Meko running on this computer (`findLocalMeko`), offered when there's no key. */
+  localMeko?: () => Promise<LocalMeko | null>;
   ui: Pick<typeof ui, 'ok' | 'warn' | 'note' | 'section'>;
 }
 
 /**
  * The installer's Meko step. Meko is optional: without a key (skipped at the prompt, none given
  * non-interactively, or --no-meko) AgentK works without datapacks, and a key can be added later
- * on the Meko tab in Settings. A key that's given must work, unless someone is there to choose to
- * go on without Meko. Declining Meko's setup for Claude Code or Kiro (each offered only where it's
+ * on the Meko tab in Settings. With no key configured or given, a Meko running on this computer
+ * (`meko token --json`) is offered first, and taken without asking when no one is there;
+ * `--meko-url` and `--meko-key` name one (Meko's `meko install_extension agentk` passes both). A
+ * key that's given must work, unless someone is there to choose to go on without Meko. Declining Meko's setup for Claude Code or Kiro (each offered only where it's
  * installed) is a warning, not a stop. Updates `cfg.meko`; returns whether Meko is on.
  */
-export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
+export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: string; noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
   const later = 'Projects work without datapacks; add a Meko key any time on the Meko tab in Settings.';
   if (o.noMeko) {
     cfg.meko.enabled = false;
@@ -265,7 +270,22 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boo
     return false;
   }
   let meko = resolveMeko(cfg);
+  if (o.urlArg) meko = { ...meko, url: o.urlArg };
   let storeKey = false;
+  // A Meko on this computer, when there's one and it's wanted: its URL and client token.
+  const useLocalMeko = async (): Promise<boolean> => {
+    const local = d.localMeko && !o.urlArg ? await d.localMeko() : null;
+    if (!local) return false;
+    let host = local.url;
+    try {
+      host = new URL(local.url).host;
+    } catch {
+      /* shown as it is */
+    }
+    if (d.canAsk && !/^y/i.test(await d.ask(`Use Meko on this computer (${host})? (Y/n)`, 'y'))) return false;
+    meko = { url: local.url, apiKey: local.token };
+    return true;
+  };
   if (!cfg.meko.enabled && !o.keyArg) {
     // Turned off (on the Meko tab in Settings): it stays off unless a key is given now.
     const k = d.canAsk ? (await d.ask('Meko is turned off. API key to turn it on (Enter to keep it off)', '')).trim() : '';
@@ -280,6 +300,8 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; noMeko: boo
   cfg.meko.enabled = true;
   if (o.keyArg) {
     meko = { ...meko, apiKey: o.keyArg };
+    storeKey = true;
+  } else if (!meko.apiKey && (await useLocalMeko())) {
     storeKey = true;
   } else if (!meko.apiKey) {
     const web = resolveMekoWebUrl(cfg);
@@ -375,6 +397,7 @@ export async function runInstall(args: string[]): Promise<void> {
       'non-interactive': { type: 'boolean', default: false },
       'repos-root': { type: 'string' },
       'meko-key': { type: 'string' },
+      'meko-url': { type: 'string' },
       'no-meko': { type: 'boolean', default: false },
       bind: { type: 'string' },
       port: { type: 'string' },
@@ -443,10 +466,13 @@ export async function runInstall(args: string[]): Promise<void> {
     // 3. Meko (optional) and 4. Meko in each agent
     const canAsk = interactive && !!process.stdin.isTTY;
     const setup = { canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] };
-    await installMeko(cfg, { keyArg: values['meko-key'], noMeko: values['no-meko'] }, {
+    const urlArg = values['meko-url'];
+    if (urlArg !== undefined && !/^https?:\/\/[^\s]+$/.test(urlArg)) throw new InstallError(`--meko-url takes Meko's MCP URL, like http://127.0.0.1:7778/mcp (got "${urlArg}").`);
+    await installMeko(cfg, { keyArg: values['meko-key'], urlArg, noMeko: values['no-meko'] }, {
       ask,
       canAsk,
       check: checkMeko,
+      localMeko: () => findLocalMeko(),
       ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey) => {
         const gaps = async () => kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
         await ensureMekoSetup(
