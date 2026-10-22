@@ -1,17 +1,19 @@
-// The left rail: the Meko mark, the datapacks, and the server's version (a link to Status), settings and theme toggle.
+// The left rail: the Meko mark, the Status link, the datapacks, and the version, settings and theme toggle.
 
 import { useState } from "react";
-import { Activity, Database, Moon, Plus, Settings, Sun } from "lucide-react";
+import { Database, Moon, Plus, Settings, Sun } from "lucide-react";
 import { href, navigate } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import type { Datapack } from "../lib/types";
 import { DatapackDialog } from "./DatapackDialog";
 import { SettingsDialog } from "./SettingsDialog";
+import { StatusLink } from "./StatusLink";
 import { Button, cx } from "./ui";
 
 export function Sidebar({
   datapacks,
   activeId,
+  statusOpen,
   version,
   theme,
   onToggleTheme,
@@ -19,6 +21,7 @@ export function Sidebar({
 }: {
   datapacks: Datapack[];
   activeId?: string;
+  statusOpen: boolean;
   version?: string;
   theme: Theme;
   onToggleTheme: () => void;
@@ -33,6 +36,9 @@ export function Sidebar({
         <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
           Local
         </span>
+      </div>
+      <div className="px-2 pb-2">
+        <StatusLink active={statusOpen} />
       </div>
 
       <div className="flex items-center justify-between px-4 pb-1 pt-2">
@@ -62,14 +68,7 @@ export function Sidebar({
       </nav>
 
       <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">
-        <a
-          href={href({ tab: "overview", view: "status" })}
-          onClick={(e) => (e.preventDefault(), navigate({ tab: "overview", view: "status" }))}
-          className="flex items-center gap-1.5 hover:text-foreground"
-          title="Status"
-        >
-          <Activity className="size-3.5" /> Meko {version ?? ""}
-        </a>
+        <span>Meko {version ?? ""}</span>
         <div className="flex items-center">
           <Button size="sm" variant="ghost" onClick={() => setSettings(true)} title="Settings">
             <Settings className="size-3.5" />

@@ -2,7 +2,7 @@
 // agents using this datapack, and the latest calls. Meko Cloud's dashboard has no such view.
 
 import { useState } from "react";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronRight, XCircle } from "lucide-react";
 import { count, duration, timeAgo } from "../../lib/format";
 import { UI_AGENT_ID } from "../../lib/api";
 import type { Usage } from "../../lib/types";
@@ -84,14 +84,14 @@ export function AgentsCard({ usage }: { usage: Usage }) {
 export function RecentCallsCard({ usage }: { usage: Usage }) {
   const [open, setOpen] = useState<Usage["recent"][number]>();
   const title = "Recent calls";
-  const subtitle = "The latest 25, newest first · click one for its steps";
+  const subtitle = "The latest 25, newest first. Open one to see how long each step took.";
   if (usage.recent.length === 0) return <MetricCard title={title} subtitle={subtitle} empty={["No calls yet", "They show here as they happen."]} />;
   return (
     <MetricCard title={title} subtitle={subtitle}>
       <div className="-mx-5">
         <Table
           rows={usage.recent}
-          rowKey={(c) => String(c.id)}
+          rowKey={(c, i) => String(c.id ?? `${c.at}-${i}`)}
           onRow={setOpen}
           columns={[
             {
@@ -110,6 +110,15 @@ export function RecentCallsCard({ usage }: { usage: Usage }) {
             { label: "Results", cell: results, className: "text-xs text-muted-foreground" },
             { label: "Time", right: true, cell: (c) => duration(c.ms) },
             { label: "When", right: true, cell: (c) => timeAgo(c.at), className: "text-xs text-muted-foreground" },
+            {
+              label: "",
+              right: true,
+              cell: () => (
+                <span className="inline-flex items-center gap-0.5 text-xs font-medium text-primary group-hover:underline">
+                  Trace <ChevronRight className="size-3.5" />
+                </span>
+              ),
+            },
           ]}
         />
       </div>

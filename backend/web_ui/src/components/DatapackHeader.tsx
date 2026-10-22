@@ -1,10 +1,11 @@
 // A datapack's name, description and tabs, with delete.
 
 import { useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, UserPlus } from "lucide-react";
 import { api } from "../lib/api";
 import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
+import { CloudBanner } from "./CloudBanner";
 import { DatapackDialog } from "./DatapackDialog";
 import { Dialog } from "./Dialog";
 import { Button, cx, ErrorNote, Input } from "./ui";
@@ -33,6 +34,7 @@ export function DatapackHeader({
 }) {
   const [deleting, setDeleting] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [inviting, setInviting] = useState(false);
   return (
     <header className="border-b bg-card px-8 pt-6">
       <div className="flex items-start justify-between gap-4">
@@ -44,11 +46,15 @@ export function DatapackHeader({
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)} title="Edit name and description">
             <Pencil className="size-3.5" /> Edit
           </Button>
+          <Button size="sm" onClick={() => setInviting(true)} title="Invite teammates">
+            <UserPlus className="size-3.5" /> Invite
+          </Button>
           <Button variant="danger" size="sm" onClick={() => setDeleting(true)}>
             <Trash2 className="size-3.5" /> Delete
           </Button>
         </div>
       </div>
+      {inviting && <CloudBanner onClose={() => setInviting(false)} />}
       <nav className="mt-5 flex gap-5 text-sm">
         {(Object.keys(LABELS) as Tab[]).map((t) => (
           <a

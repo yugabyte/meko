@@ -55,8 +55,9 @@ export interface Usage {
   steps: { step: string; calls: number; p50_ms: number; p95_ms: number }[];
   agents: { agent_id: string; calls: number; searches: number; last_at: string }[];
   recent: {
-    id: number;
-    steps: { step: string; ms: number; n: number }[];
+    // Absent from an older server's reply.
+    id?: number;
+    steps?: { step: string; ms: number; n: number }[];
     at: string;
     tool: string;
     agent_id: string;
