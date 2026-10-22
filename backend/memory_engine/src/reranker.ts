@@ -11,11 +11,16 @@ export interface RerankerInfo {
 
 export interface LocalReranker {
   readonly info: RerankerInfo;
-  /** loading until the model is in; error (with why) when a load failed, until the next try. */
+  /** loading until the model is in; error (with why) when a load failed or the worker died. */
   readonly state: "loading" | "ready" | "error";
   readonly error?: string;
-  /** Resolves once the model is loaded; rejects if it can't be. A failed load is tried again. */
+  /** Resolves once the model is loaded; rejects if it can't be. A failed worker is replaced. */
   ready(): Promise<void>;
+  /**
+   * Starts replacing a failed worker, at most once every REVIVE_MS, without waiting for it: called
+   * when a rerank finds the reranker in error, so a worker that died after loading comes back.
+   */
+  revive(): void;
   /** The model's raw score (a logit: higher is more relevant) for each text against the query. */
   rerank(query: string, texts: string[]): Promise<number[]>;
   close(): Promise<void>;
@@ -35,12 +40,19 @@ export const DEFAULT_RERANKER = {
 /** Pairs per call to the model. */
 const BATCH = 16;
 
+/** The least time between two tries at replacing a failed worker, so a model that can't load isn't reloaded by every search. */
+export const REVIVE_MS = 30_000;
+
 type Pending = { resolve: (v: number[]) => void; reject: (e: Error) => void };
 
-/** The cross-encoder, in a worker thread. A worker that failed is replaced on the next ready(). */
+/**
+ * The cross-encoder, in a worker thread. A worker that failed (to load, or later) is replaced on the
+ * next ready(), which revive() calls.
+ */
 export class WorkerReranker implements LocalReranker {
   readonly info: RerankerInfo;
   private worker!: Worker;
+  private started = 0;
   private loaded!: Promise<void>;
   private isLoaded = false;
   private readonly pending = new Map<number, Pending>();
@@ -67,6 +79,7 @@ export class WorkerReranker implements LocalReranker {
   private start(): void {
     this.failure = undefined;
     this.isLoaded = false;
+    this.started = Date.now();
     const { cacheDir, model } = this;
     const worker = new Worker(new URL("./rerankworker.js", import.meta.url), {
       workerData: { cacheDir, model: model.id, revision: model.revision, dtype: model.dtype },
@@ -108,6 +121,10 @@ export class WorkerReranker implements LocalReranker {
     return this.loaded;
   }
 
+  revive(): void {
+    if (this.failure && Date.now() - this.started >= REVIVE_MS) this.ready().catch(() => undefined);
+  }
+
   async rerank(query: string, texts: string[]): Promise<number[]> {
     const out: number[] = [];
     for (let i = 0; i < texts.length; i += BATCH) {
@@ -139,6 +156,8 @@ export class OverlapReranker implements LocalReranker {
   readonly state = "ready" as const;
 
   async ready(): Promise<void> {}
+
+  revive(): void {}
 
   async rerank(query: string, texts: string[]): Promise<number[]> {
     const q = new Set(words(query));

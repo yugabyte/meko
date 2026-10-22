@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/knowledge"
@@ -55,7 +56,7 @@ func uploadOne(ctx context.Context, t *toolSession, dp, path string, f toolFlags
 		return err
 	}
 	if err = knowledge.CheckSize(info.Size()); err != nil {
-		return errors.Unwrap(err)
+		return errors.New(strings.TrimPrefix(err.Error(), knowledge.ErrInvalid.Error()+": "))
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // G304: a file the user named
 	if err != nil {
@@ -82,18 +83,18 @@ func uploadOne(ctx context.Context, t *toolSession, dp, path string, f toolFlags
 	if err = json.Unmarshal([]byte(reply), &offer); err != nil {
 		return err
 	}
+	// Bytes the datapack already has may still be queued, indexing, or failed and queued again: they
+	// are waited for like a new upload.
 	if offer.AlreadyUploaded {
 		if !f.json {
 			fmt.Fprintf(stdout, "%s: already in the knowledge base as %s (key %s)\n", path, offer.ExistingFilename,
 				offer.Key)
 		}
-		return nil
-	}
-	if err = postUpload(ctx, offer.URL, offer.Fields, name, data); err != nil {
+	} else if err = postUpload(ctx, offer.URL, offer.Fields, name, data); err != nil {
 		return err
 	}
 	if f.noWait {
-		if !f.json {
+		if !f.json && !offer.AlreadyUploaded {
 			fmt.Fprintf(stdout, "%s: uploaded; meko upload_status %s says when it's indexed\n", path, offer.Key)
 		}
 		return nil

@@ -68,7 +68,7 @@ export const MAX_LIMIT = 100;
 export const MIN_CANDIDATES = 240;
 /** Most texts one embed call takes. */
 export const MAX_EMBED = 256;
-/** Most texts one rerank call takes: a knowledge-base search reranks up to twice its pool. */
+/** Most texts one rerank call takes: a knowledge-base search reranks at most max(20, limit) candidates. */
 export const MAX_RERANK = 200;
 /**
  * Most datapacks whose mem0 Memory is kept. The least recently used is dropped past it, so a
@@ -242,6 +242,7 @@ export class MemoryEngine {
       throw new HttpError(400, "BAD_REQUEST", `at most ${MAX_RERANK} texts per call`);
     }
     const r = this.reranker;
+    if (r?.state === "error") r.revive(); // a worker that died after loading comes back for a later call
     if (!r || r.state !== "ready") {
       throw new HttpError(503, "RERANKER_NOT_READY", r?.error ?? "the reranking model is still loading");
     }

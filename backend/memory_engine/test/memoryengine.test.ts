@@ -240,16 +240,24 @@ describe("with a store", () => {
     ]) {
       await assert.rejects(ranked.rerank(bad as any), (e: HttpError) => e.status === 400, JSON.stringify(bad).slice(0, 40));
     }
+    let revived = 0;
     const loading: LocalReranker = {
       info: { provider: "test", model: "m" },
       state: "loading",
       ready: async () => {},
+      revive: () => void revived++,
       rerank: async () => [],
       close: async () => {},
     };
+    const failed: LocalReranker = { ...loading, state: "error", error: "the worker exited (1)" };
     for (const e of [new MemoryEngine(embedder), new MemoryEngine(embedder, 2, loading)]) {
       await assert.rejects(e.rerank({ query: "q", texts: ["a"] }), (err: HttpError) => err.code === "RERANKER_NOT_READY");
     }
+    assert.equal(revived, 0, "a reranker still loading isn't revived");
+    // A reranker whose worker died is revived, and this call says why it's not ready.
+    await assert.rejects(new MemoryEngine(embedder, 2, failed).rerank({ query: "q", texts: ["a"] }),
+      (err: HttpError) => err.code === "RERANKER_NOT_READY" && /exited/.test(err.message));
+    assert.equal(revived, 1);
   });
 
   test("keeps the most recently used datapacks' Memory, and rebuilds a dropped one", async () => {

@@ -54,10 +54,12 @@ flowchart LR
 
 A file is `QUEUED` when its bytes arrive, `PROCESSING` once the indexer takes it, and `COMPLETED`
 in the transaction that stores its last chunk's vector, or `FAILED` with a reason (no text, a file
-it can't read, a deadline of 2 minutes plus 1 a 10 MB). Meko never sets Cloud's `NOT_STARTED` or
-`RETRY`. A file stays `PROCESSING` while the memory engine is down, since only embedding needs it. At
-start, `serve` puts `PROCESSING` files back in the queue without their chunks. A `FAILED` file
-uploaded again (or asked an upload link for again) is queued again.
+it can't read, a deadline of 2 minutes plus 1 a 10 MB, its bytes gone, or an error of Meko's own,
+which is logged). Meko never sets Cloud's `NOT_STARTED` or `RETRY`. A file stays `PROCESSING` while
+the memory engine is down, since only embedding needs it. At start, `serve` puts `PROCESSING` files
+back in the queue without their chunks. A `FAILED` file asked an upload link for again is queued
+again; if its bytes are gone, the reply is a link to send them to (not `already_uploaded`), and
+they're queued once they arrive. `meko upload` waits for a file already uploaded as for a new one.
 
 ## Storage (`0006_knowledge.sql`)
 
@@ -86,8 +88,10 @@ uploaded again (or asked an upload link for again) is queued again.
 
 Every type is checked against its first 3 KB before it's stored, as Cloud checks it: a PDF
 signature, UTF-8 with no NUL bytes for the rest, and a fitting first character for JSON, XML and
-HTML. Extracted text is capped at 4 times the file's size, so a hostile PDF can't fill the
-database. A parser that panics fails the file.
+HTML. A file's chunks hold at most 4 times its size in text (or 1 MiB, for a small file whose
+section prefixes outweigh its text), and a title or heading in a prefix is cut to 200 characters,
+so a hostile file (a PDF that expands, Markdown with a huge heading over many tiny sections) can't
+fill the indexer's memory or the database. A parser that panics fails the file.
 
 ## Search
 
@@ -96,7 +100,9 @@ database. A parser that panics fails the file.
    less stop words, OR'd, Porter-stemmed by FTS5; once the knowledge base holds 1000 chunks, words
    in half or more of them are dropped, as BM25 weighs them at nothing. Each keyword hit gets its
    distance too.
-3. Merge: `semantic`, `keyword`, or `hybrid` (found both ways), ordered by reciprocal-rank fusion.
+3. Merge: `semantic`, `keyword`, or `hybrid` (found both ways), ordered by reciprocal-rank fusion,
+   which adds a hybrid's two ranks' shares, so it usually comes first (with a pool past about 60, a
+   hybrid ranked low in both lists can fall below one list's best).
 4. The cross-encoder scores the best `max(20, limit)`; `rerank_score` is the sigmoid of its logit.
 5. Keep results while each scores at least 0.3 of the one before and of the best, and at least one.
 
@@ -109,7 +115,9 @@ results within cosine distance 0.6. Each search scan takes one of the store's se
   pinned to commit `a09144355adeed5f58c8ed011d209bf8ee5a1fec`, in a worker thread of its own
   (`rerankworker.ts`). It loads after the embedder, retrying with the same backoff, and the memory engine
   is ready without it: `/v1/rerank` answers 503 `RERANKER_NOT_READY` until it's in, and `/healthz`
-  and `meko status` say how it is.
+  and `meko status` say how it is. A worker that dies after loading is replaced by the next rerank
+  that finds it (`revive`, at most once every 30 s); meanwhile results are unranked, and Go logs it
+  at debug level.
 - **Tests** get a word-overlap reranker with the hashing embedder.
 - **The embedder's two queues**: `WorkerEmbedder` sends the worker one batch at a time, interactive
   ones first (`Lanes`).

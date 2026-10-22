@@ -557,6 +557,7 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "upload", code, 0, out+errs, notes+": indexed, 1 chunk (key ")
 	code, out, errs = run("upload", "--data-dir", dir, notes)
 	want(t, "upload again", code, 0, out+errs, "already in the knowledge base as notes.md")
+	want(t, "upload again waits for it", code, 0, out, notes+": indexed, 1 chunk (key ")
 	code, out, errs = run("upload", "--data-dir", dir, bad, notes)
 	want(t, "upload a bad file", code, 1, out+errs, "doesn't look like a PDF")
 	want(t, "upload a bad file", code, 1, errs, "1 of 2 files weren't added")
@@ -565,7 +566,8 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	code, out, errs = run("upload", "--data-dir", dir, notes, "--json")
 	want(t, "upload --json", code, 0, out+errs, `"already_uploaded":true`)
 	var offer struct{ Key string }
-	if err = json.Unmarshal([]byte(strings.TrimSpace(out)), &offer); err != nil {
+	// --json prints the tool's reply, then the file's final status.
+	if err = json.Unmarshal([]byte(strings.SplitN(strings.TrimSpace(out), "\n", 2)[0]), &offer); err != nil {
 		t.Fatalf("upload --json: %v: %s", err, out)
 	}
 	code, out, errs = run("upload_status", "--data-dir", dir, offer.Key)

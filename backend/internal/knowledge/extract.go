@@ -13,9 +13,17 @@ import (
 // ErrNoText is a file with no text to index: empty after extraction, or a PDF of images only.
 var ErrNoText = errors.New("the file has no text to index")
 
-// maxTextFactor caps the text extracted from a file at this many times its size, so a small file
-// that expands enormously (a hostile PDF) can't fill the database.
-const maxTextFactor = 4
+// The text a file's chunks may hold in all: maxTextFactor times its size, or minTextCap for a small
+// file (whose section prefixes can outweigh its text). Past it the rest is dropped, so a file that
+// expands enormously (a hostile PDF, or Markdown with a huge heading over many tiny sections) can't
+// fill the indexer's memory or the database.
+const (
+	maxTextFactor = 4
+	minTextCap    = 1 << 20
+)
+
+// textCap is how much chunk text a file of size bytes may give.
+func textCap(size int) int { return max(maxTextFactor*size, minTextCap) }
 
 // Deadline is how long extracting and chunking a file may take: 2 minutes, plus 1 minute per
 // 10 MB.
@@ -56,16 +64,28 @@ func Chunks(ctx context.Context, filename string, data []byte) (chunks []string,
 	if err != nil {
 		return nil, err
 	}
+	chunks = capChunks(chunks, textCap(len(data)))
 	if len(chunks) == 0 {
 		return nil, ErrNoText
 	}
 	return chunks, nil
 }
 
+// capChunks keeps the chunks while their text adds up to at most limit bytes.
+func capChunks(chunks []string, limit int) []string {
+	total := 0
+	for i, c := range chunks {
+		if total += len(c); total > limit {
+			return chunks[:i]
+		}
+	}
+	return chunks
+}
+
 func extract(ctx context.Context, filename string, data []byte) ([]string, error) {
 	ext := Ext(filename)
 	if ext == ".pdf" {
-		text, err := pdfText(ctx, data, maxTextFactor*len(data))
+		text, err := pdfText(ctx, data, textCap(len(data)))
 		if err != nil {
 			return nil, err
 		}

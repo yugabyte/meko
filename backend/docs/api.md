@@ -53,8 +53,8 @@ from scratch.
 - **The knowledge-file links** (milestone 4) take no token, as S3's presigned URLs need none: a
   browser form post, a new download tab and an agent posting to an upload link can't send one.
   Their ticket is 256 random bits, kept in memory for 5 minutes and good once; an upload's is
-  bound to its datapack, key, exact size and SHA-256. The Host and Origin checks still apply, and
-  calls to them are recorded with the credential `ticket`.
+  bound to its datapack, key, exact size and SHA-256. The Host and Origin checks still apply. The access log
+  records them like any request; the call log holds MCP calls only.
 
 ## The call log (#201)
 
@@ -192,8 +192,8 @@ datapack and everything in it, so it asks `Delete it? [y/N]` first (as `meko des
 reads stdin, end of input means no, and a no exits 1), unless `--force`. It says so when that's the default
 datapack: Meko makes the default only on first start, and once it's gone `search` and
 `add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. Milestone 4 adds `meko upload <file>...`, which calls `knowledgebase_upload_document`, posts each
-file to its link and follows `knowledgebase_document_status` until it's indexed (`--no-wait`
-returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
+file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
+(`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
 <key>`. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
 Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.

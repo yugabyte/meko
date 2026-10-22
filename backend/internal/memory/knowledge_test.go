@@ -225,6 +225,38 @@ func TestKnowledgeFilesWaitForTheEngine(t *testing.T) {
 	if d, _ = h.st.GetDocument(ctx, h.dp, d.ID); d.Status != store.DocFailed || !strings.Contains(d.Error, "missing") {
 		t.Errorf("vanished bytes %+v", d)
 	}
+	// Uploading it again, as the reason says, asks for its bytes (a link, not already_uploaded), and
+	// they're indexed this time.
+	if again := h.upload("gone.txt", []byte("bytes that will vanish")); again.AlreadyUploaded || again.Key != d.Key {
+		t.Errorf("an upload of vanished bytes %+v", again)
+	}
+	h.index()
+	if d, _ = h.st.GetDocument(ctx, h.dp, d.ID); d.Status != store.DocCompleted {
+		t.Errorf("after uploading vanished bytes again %+v", d)
+	}
+}
+
+// A file whose indexing fails for a reason of Meko's own (here, its bytes can't be read) is FAILED,
+// not left PROCESSING until a restart.
+func TestIndexingErrorsFailTheFile(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, hashEmbedder)
+	h.upload("dir.txt", []byte("bytes that become a folder"))
+	d, _ := h.st.DocumentByHash(ctx, h.dp, shaHex("bytes that become a folder"))
+	p := filepath.Join(h.l.KnowledgeFiles, h.dp, d.ContentHash)
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p, 0o700); err != nil { // reading it now fails, and not as a missing file
+		t.Fatal(err)
+	}
+	if err := h.svc.IndexQueued(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = h.st.GetDocument(ctx, h.dp, d.ID)
+	if d.Status != store.DocFailed || !strings.Contains(d.Error, "upload it again") {
+		t.Errorf("a file that can't be read %+v", d)
+	}
 }
 
 func shaHex(s string) string {

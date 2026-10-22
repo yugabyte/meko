@@ -13,7 +13,21 @@ const (
 	ChunkOverlap = 100
 	// minBody is the least room a section's prefix leaves for its text.
 	minBody = 200
+	// maxHeading caps a title or a heading in a chunk's prefix, in characters, so a huge one can't
+	// make every chunk of the file huge.
+	maxHeading = 200
 )
+
+// shorten cuts s to at most n characters, marking the cut.
+func shorten(s string, n int) string {
+	if len(s) <= n { // n bytes are at most n characters
+		return s
+	}
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
+}
 
 // separators are where the recursive splitter cuts, coarsest first; "" cuts between characters.
 var separators = []string{"\n\n", "\n", " ", ""}
@@ -129,6 +143,7 @@ type section struct {
 // section that's cut.
 func sectionChunks(title string, sections []section) []string {
 	var out []string
+	title = shorten(title, maxHeading)
 	for _, s := range sections {
 		body := strings.TrimSpace(s.text)
 		if body == "" {
@@ -138,8 +153,8 @@ func sectionChunks(title string, sections []section) []string {
 		if title != "" {
 			prefix = "Document: " + title + "\n"
 		}
-		if len(s.path) > 0 {
-			prefix += "Section: " + strings.Join(s.path, " > ") + "\n"
+		if len(s.path) > 0 { // each heading was cut as it was read (headings.enter)
+			prefix += "Section: " + shorten(strings.Join(s.path, " > "), 2*maxHeading) + "\n"
 		}
 		if prefix != "" {
 			prefix += "\n"
@@ -158,7 +173,7 @@ type headings struct{ levels [6]string }
 // enter records a heading of level 1 to 6 and returns the path down to it.
 func (h *headings) enter(level int, text string) []string {
 	level = min(max(level, 1), 6)
-	h.levels[level-1] = text
+	h.levels[level-1] = shorten(text, maxHeading)
 	for i := level; i < 6; i++ {
 		h.levels[i] = ""
 	}

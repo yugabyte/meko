@@ -42,7 +42,8 @@ func UploadOfferOf(o memory.UploadOffer, forMCP bool) UploadOffer {
 
 // DocumentStatus is document-status's reply, and knowledgebase_document_status's: Cloud's state
 // words and message, upload while the bytes are awaited, document once they're stored, and the
-// legacy pipeline fields at the top (document_status is what AgentK reads).
+// legacy pipeline fields at the top. AgentK reads state, and document_status only from a Meko
+// without it.
 type DocumentStatus struct {
 	DocumentKey string         `json:"document_key"`
 	Filename    string         `json:"filename"`

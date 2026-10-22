@@ -48,7 +48,25 @@ var vecTables = []vecTable{
 	{"memories_vec", "memories", "user_id TEXT, agent_id TEXT, conversation_id TEXT"},
 	{"entities_vec", "entities", "user_id TEXT, agent_id TEXT, conversation_id TEXT"},
 	{"message_chunks_vec", "message_chunks", "conversation_id TEXT"},
-	{"kb_chunks_vec", "kb_chunks", "source TEXT"}, // milestone 4: made at the next start on older databases
+	{"kb_chunks_vec", "kb_chunks", "source TEXT"}, // milestone 4: on an older database, Migrate makes it
+}
+
+// ensureRecordedVectors makes the vector tables that are missing once the embedding model is
+// recorded: a table a newer migration added (kb_chunks_vec on a database from before milestone 4),
+// which would otherwise appear only at the memory engine's next hello, while vectorDims (which
+// checks vecTables[0]) already says vectors work. Nothing to do before the first hello, or on a
+// database without the settings table (a test's own migrations).
+func (s *Store) ensureRecordedVectors(ctx context.Context) error {
+	var n int
+	if err := s.w.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'settings'").
+		Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	e, ok, err := embedderIn(ctx, s.w)
+	if err != nil || !ok {
+		return err
+	}
+	return s.EnsureVectors(ctx, e)
 }
 
 // EnsureVectors records the memory engine's embedding model the first time and makes the vector tables

@@ -231,6 +231,37 @@ func minimalPDF(pages ...string) []byte {
 	return b.Bytes()
 }
 
+// A file whose chunks would hold far more text than the file (a huge heading over many tiny
+// sections) gives no more than the cap, and its headings are cut.
+func TestChunkTextIsCapped(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("# " + strings.Repeat("h", 100_000) + "\n\n")
+	for i := 0; i < 10_000; i++ { // ~230 bytes of chunk for each 7 bytes of file
+		b.WriteString("## a\nx\n")
+	}
+	data := []byte(b.String())
+	got, err := Chunks(context.Background(), "huge.md", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, c := range got {
+		total += len(c)
+		if runes(c) > ChunkSize+maxHeading {
+			t.Fatalf("a chunk of %d characters", runes(c))
+		}
+	}
+	if total > textCap(len(data)) || len(got) == 0 || len(got) == 10_000 {
+		t.Errorf("%d chunks with %d bytes of text from a %d-byte file", len(got), total, len(data))
+	}
+	if !strings.Contains(got[0], "…") {
+		t.Errorf("the heading wasn't cut: %.80q", got[0])
+	}
+	if c := capChunks([]string{"aa", "bb", "cc"}, 5); len(c) != 2 {
+		t.Errorf("capChunks kept %d", len(c))
+	}
+}
+
 func TestPDF(t *testing.T) {
 	ctx := context.Background()
 	data := minimalPDF("Quarterly report\nRevenue grew in every region", "Second page about hiring plans")
@@ -250,7 +281,7 @@ func TestPDF(t *testing.T) {
 	if _, err = Chunks(ctx, "blank.pdf", minimalPDF("")); !errors.Is(err, ErrNoText) {
 		t.Errorf("a PDF with no text: %v", err)
 	}
-	// The cap on extracted text: a page's text past it is cut.
+	// The cap on a PDF's extracted text: a page's text past it is cut.
 	if s, perr := pdfText(ctx, data, 10); perr != nil || len(s) != 10 {
 		t.Errorf("capped text: %q %v", s, perr)
 	}

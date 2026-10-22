@@ -183,10 +183,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	})
 	// Knowledge files a stopped server was indexing go back in the queue, and files no document
 	// names (a crash between storing a file and its row) are removed. Both are quick, and finish
-	// even when a stop arrives during start.
+	// even when a stop arrives during start. Neither failing stops the server (the memory engine is
+	// already running, and returning here would skip stopping it): the files wait for the next start.
 	boot := context.WithoutCancel(ctx)
 	if n, err := svc.RequeueInterrupted(boot); err != nil {
-		return err
+		log.Warn("couldn't queue again the knowledge files the last server didn't finish", "error", err)
 	} else if n > 0 {
 		log.Info("queued knowledge files again that the last server didn't finish", "count", n)
 	}

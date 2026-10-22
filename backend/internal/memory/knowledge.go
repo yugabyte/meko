@@ -38,7 +38,8 @@ const (
 	rrfK = 60
 	// DefaultKBMaxDistance is the farthest (cosine distance) a knowledge-base result may be from the
 	// query for context_search to keep it. Cloud's 0.5 suits its embedding model; with
-	// all-MiniLM-L6-v2 a paraphrase measured 0.52 from the turn that answered it.
+	// all-MiniLM-L6-v2 a paraphrased question measured 0.37 to 0.51 from the chunk that answered it,
+	// and unrelated chunks 0.87 to 0.99.
 	DefaultKBMaxDistance = 0.6
 	// chunkInsertBatch is how many chunks one write transaction stores, so indexing a large file
 	// never holds the writer for long.
@@ -220,7 +221,12 @@ func (s *Service) UploadURL(ctx context.Context, r UploadRequest) (UploadOffer, 
 			r.DatapackID, url.QueryEscape(key)))
 	}
 	existing, err := s.st.DocumentByHash(ctx, r.DatapackID, hash)
+	key := s.documentKey(r.DatapackID, hash, r.Filename)
 	switch {
+	case err == nil && existing.Status == store.DocFailed && !s.files.Has(r.DatapackID, hash):
+		// It failed because its bytes are gone: they're needed again, under its key. Once they
+		// arrive, the document is queued again (AddDocument requeues a FAILED one).
+		key = existing.Key
 	case err == nil:
 		if existing.Status == store.DocFailed {
 			if _, _, err = s.st.AddDocument(ctx, existing); err != nil {
@@ -233,7 +239,6 @@ func (s *Service) UploadURL(ctx context.Context, r UploadRequest) (UploadOffer, 
 	case !errors.Is(err, store.ErrNotFound):
 		return UploadOffer{}, err
 	}
-	key := s.documentKey(r.DatapackID, hash, r.Filename)
 	tk := &ticket{upload: true, datapack: r.DatapackID, key: key, filename: r.Filename, docType: docType, hash: hash,
 		size: r.Size, agent: r.AgentID}
 	token, err := s.tickets.add(tk)
@@ -550,7 +555,9 @@ func (s *Service) IndexQueued(ctx context.Context) error {
 	}
 }
 
-// index extracts and chunks one claimed file. A file that can't be read is FAILED with the reason.
+// index extracts and chunks one claimed file. A file that can't be indexed is FAILED with the
+// reason, so it never stays PROCESSING (which only a restart would put back in the queue); only a
+// stop (ctx ending) leaves it for the next start to queue again.
 func (s *Service) index(ctx context.Context, d store.Document) error {
 	start := time.Now()
 	fail := func(reason string) error {
@@ -559,12 +566,23 @@ func (s *Service) index(ctx context.Context, d store.Document) error {
 		}
 		return s.st.FailDocument(context.WithoutCancel(ctx), d.Rowid, reason)
 	}
+	// An error of Meko's own (a disk or database failure): logged, and the file failed with a reason
+	// the user can act on, since uploading it again queues it again.
+	failInternal := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err() // stopping: the next start queues it again
+		}
+		if s.log != nil {
+			s.log.Warn("couldn't index a knowledge file", "document_id", d.ID, "error", err)
+		}
+		return fail("indexing it failed; upload it again to retry")
+	}
 	data, err := s.files.Read(d.DatapackID, d.ContentHash)
 	if errors.Is(err, os.ErrNotExist) {
 		return fail("the file's bytes are missing; upload it again")
 	}
 	if err != nil {
-		return err
+		return failInternal(err)
 	}
 	ectx, cancel := context.WithTimeout(ctx, knowledge.Deadline(d.SizeBytes))
 	defer cancel()
@@ -579,7 +597,7 @@ func (s *Service) index(ctx context.Context, d store.Document) error {
 	case errors.Is(err, knowledge.ErrInvalid):
 		return fail(strings.TrimPrefix(err.Error(), knowledge.ErrInvalid.Error()+": "))
 	case err != nil:
-		return err
+		return failInternal(err)
 	}
 	for i := 0; i < len(chunks); i += chunkInsertBatch {
 		end := min(i+chunkInsertBatch, len(chunks))
@@ -588,7 +606,7 @@ func (s *Service) index(ctx context.Context, d store.Document) error {
 			return nil // deleted meanwhile, with its datapack
 		}
 		if err != nil {
-			return err
+			return failInternal(err) // FailDocument drops the chunks already stored
 		}
 		s.kickEmbedder()
 	}
@@ -676,8 +694,12 @@ func (s *Service) SearchKnowledge(ctx context.Context, datapack, query string, l
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if s.log != nil && !errors.Is(err, memoryengine.ErrRerankerNotReady) {
-			s.log.Warn("couldn't rerank knowledge-base results; returning them unranked", "error", err)
+		if s.log != nil {
+			if errors.Is(err, memoryengine.ErrRerankerNotReady) { // loading, or reviving a dead worker
+				s.log.Debug("knowledge-base results are unranked: the reranker isn't ready", "error", err)
+			} else {
+				s.log.Warn("couldn't rerank knowledge-base results; returning them unranked", "error", err)
+			}
 		}
 		return cands, nil
 	}
@@ -690,7 +712,9 @@ func (s *Service) SearchKnowledge(ctx context.Context, datapack, query string, l
 }
 
 // fuse merges the vector and keyword candidates, ordered by reciprocal-rank fusion (ties by
-// distance): a chunk both found is a hybrid match and comes first.
+// distance). A chunk both found is a hybrid match and adds both ranks' shares, so it usually comes
+// first; with a large pool (limit past about 60), a hybrid ranked low in both lists can fall below
+// a single list's best.
 func fuse(semantic, keyword []store.KBHit) []KBResult {
 	type cand struct {
 		r     KBResult

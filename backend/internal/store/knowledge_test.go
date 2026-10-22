@@ -350,6 +350,14 @@ func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// The memory engine said hello on this milestone-3 database, so its model is recorded; there's
+	// no kb_chunks_vec, which milestone 4 added.
+	for k, v := range map[string]string{keyEmbedderProvider: testModel.Provider, keyEmbedderModel: testModel.Model,
+		keyEmbeddingDims: fmt.Sprint(testModel.Dims)} {
+		if _, err := s.w.Exec("INSERT INTO settings(key, value) VALUES (?, ?)", k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := s.w.Exec("INSERT INTO datapacks(id, name, created_at, updated_at) " +
 		"VALUES ('a', 'dp-a', '', '')"); err != nil {
 		t.Fatal(err)
@@ -363,8 +371,12 @@ func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnsureVectors(ctx, testModel); err != nil {
-		t.Fatal(err)
+	// The upgrade made kb_chunks_vec at once, with no hello: a promotion before the memory engine is
+	// back copies its vector instead of failing on a missing table.
+	var n int
+	err := s.r.QueryRow("SELECT count(*) FROM sqlite_master WHERE name = 'kb_chunks_vec'").Scan(&n)
+	if err != nil || n != 1 {
+		t.Fatalf("kb_chunks_vec after the upgrade: %d %v", n, err)
 	}
 	pending, err := s.PendingKBChunks(ctx, 10)
 	if err != nil || len(pending) != 1 || pending[0].Text != "an old promotion" {

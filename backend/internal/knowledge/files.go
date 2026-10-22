@@ -108,6 +108,16 @@ func (f *Files) Discard(rec *Received) {
 	}
 }
 
+// Has reports whether a datapack's file with this content is there.
+func (f *Files) Has(datapack, hash string) bool {
+	p, err := f.Path(datapack, hash)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}
+
 // Open opens a datapack's file.
 func (f *Files) Open(datapack, hash string) (*os.File, error) {
 	p, err := f.Path(datapack, hash)
