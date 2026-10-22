@@ -20,7 +20,13 @@ function Similarity({ value }: { value: number | undefined }) {
   return <Badge tone={value >= 0.5 ? "success" : value >= WEAK_MEMORY ? "primary" : "neutral"}>{value.toFixed(2)}</Badge>;
 }
 
-const memorySimilarity = (m: MemoryHit) => m.raw_similarity_score ?? m.score;
+// Rounded to the two places the badge shows, so a memory shown as 0.40 counts as 0.40.
+const round2 = (v: number) => Math.round(v * 100) / 100;
+const memorySimilarity = (m: MemoryHit) => {
+  const v = m.raw_similarity_score ?? m.score;
+  return v === undefined ? undefined : round2(v);
+};
+const isWeak = (m: MemoryHit) => (memorySimilarity(m) ?? 1) < WEAK_MEMORY;
 
 function MemoryCard({ m }: { m: MemoryHit }) {
   return (
@@ -36,8 +42,8 @@ function MemoryCard({ m }: { m: MemoryHit }) {
 
 function Memories({ hits }: { hits: MemoryHit[] }) {
   const [showWeak, setShowWeak] = useState(false);
-  const strong = hits.filter((m) => (memorySimilarity(m) ?? 1) >= WEAK_MEMORY);
-  const weak = hits.filter((m) => (memorySimilarity(m) ?? 1) < WEAK_MEMORY);
+  const strong = hits.filter((m) => !isWeak(m));
+  const weak = hits.filter(isWeak);
   return (
     <div className="space-y-2">
       {strong.length === 0 && <p className="text-sm text-muted-foreground">No strong matches.</p>}
@@ -64,14 +70,26 @@ function Memories({ hits }: { hits: MemoryHit[] }) {
   );
 }
 
-// n is null when the source wasn't searched.
-function Section({ icon, title, n, children }: { icon: ReactNode; title: string; n: number | null; children: ReactNode }) {
+// n is null when the source wasn't searched; badge, if set, is the count shown instead of n.
+function Section({
+  icon,
+  title,
+  n,
+  badge,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  n: number | null;
+  badge?: number;
+  children: ReactNode;
+}) {
   return (
     <section className="space-y-2">
       <h3 className="flex items-center gap-2 text-sm font-medium">
         {icon}
         {title}
-        {n !== null && <Badge>{n}</Badge>}
+        {n !== null && <Badge>{badge ?? n}</Badge>}
       </h3>
       {n === null ? (
         <p className="text-sm text-muted-foreground">Not searched: Meko's memory engine isn't ready yet.</p>
@@ -126,7 +144,10 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
       )}
       {r && (
         <div className="space-y-6">
-          <Section icon={<Brain className="size-4 text-primary" />} title="Memories" n={r.memory?.length ?? null}>
+          <Section icon={<Brain className="size-4 text-primary" />} title="Memories"
+            n={r.memory?.length ?? null}
+            badge={r.memory?.filter((m) => !isWeak(m)).length}
+          >
             <Memories hits={r.memory ?? []} />
           </Section>
           <Section icon={<FileText className="size-4 text-primary" />} title="Knowledge base" n={r.knowledge_base?.length ?? null}>
