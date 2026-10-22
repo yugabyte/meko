@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 import { BranchGoneError, addWorktree, checkBranchName, listBaseBranches, restoreWorktree } from '../../src/server/git.js';
-import { SUGGEST_MIN_AHEAD, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
+import { SUGGEST_MIN_AHEAD, UnknownCommitError, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 /** git refuses to fetch into a branch being rebased or bisected from 2.38 on. */
@@ -223,6 +223,34 @@ describe('changes vs. the base (real git)', () => {
 
     // The footer's numbers match the panel, untracked files included.
     expect(await diffStat(wt, 'main')).toEqual({ files: c.files.length, added: c.added, removed: c.removed });
+  });
+
+  it('lists the branch\'s commits and shows one commit alone', async () => {
+    writeFileSync(join(wt, 'added.txt'), 'a\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'first');
+    writeFileSync(join(wt, 'README.md'), '# test\nmore\n');
+    writeFileSync(join(wt, 'added.txt'), 'a\nb\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'second');
+    writeFileSync(join(wt, 'draft.md'), 'x\n'); // untracked: only in the full diff
+    const [second, first] = [git(wt, 'rev-parse', 'HEAD'), git(wt, 'rev-parse', 'HEAD~1')];
+
+    const all = (await changes(wt, 'main'))!;
+    expect(all.commit).toBeNull();
+    expect(all.commits.map((c) => [c.sha, c.subject])).toEqual([[second, 'second'], [first, 'first']]);
+    expect(all.files.map((f) => f.path)).toEqual(['README.md', 'added.txt', 'draft.md']);
+
+    const last = (await changes(wt, 'main', new Set(), second))!;
+    expect(last.commit).toMatchObject({ sha: second, subject: 'second' });
+    expect(last.files.map((f) => f.path)).toEqual(['README.md', 'added.txt']);
+    expect(last.files.find((f) => f.path === 'added.txt')).toMatchObject({ kind: 'modified', added: 1, removed: 0, uncommitted: false });
+    expect(last.files.find((f) => f.path === 'added.txt')!.patch).toMatch(/\n a\n\+b$/);
+    expect((await changes(wt, 'main', new Set(), first))!.files.map((f) => [f.path, f.kind])).toEqual([['added.txt', 'added']]);
+
+    // Only the branch's own commits: not a base commit, nor anything typed.
+    await expect(changes(wt, 'main', new Set(), git(wt, 'rev-parse', 'main'))).rejects.toBeInstanceOf(UnknownCommitError);
+    await expect(changes(wt, 'main', new Set(), '--output=/tmp/x')).rejects.toBeInstanceOf(UnknownCommitError);
   });
 
   it('serves both sides of a changed image, and only images inside the repo', async () => {

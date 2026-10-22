@@ -6,7 +6,7 @@ import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, D
 import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
-import { changedImage, changes, diffBase, diffStat, suggestBase } from './changes.js';
+import { changedImage, changes, diffBase, diffStat, suggestBase, UnknownCommitError } from './changes.js';
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
   fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, remoteRepo, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
@@ -1996,12 +1996,15 @@ export class SessionManager {
   }
 
   /** What Discard would throw away: uncommitted files and commits no remote has. */
-  /** Every file changed on the session's branch vs. its base, committed or not. */
-  async changes(id: string): Promise<SessionChanges> {
+  /** Every file changed on the session's branch vs. its base, committed or not; or one commit's changes. */
+  async changes(id: string, commit?: string): Promise<SessionChanges> {
     const row = this.row(id);
     if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     // Files with review comments stay listed past the file cap, so no comment loses its file.
-    const c = await changes(row.worktree_path, row.base_branch, new Set(this.core.comments.list(id).map((x) => x.path)));
+    const c = await changes(row.worktree_path, row.base_branch, new Set(this.core.comments.list(id).map((x) => x.path)), commit).catch((e: unknown) => {
+      if (e instanceof UnknownCommitError) throw new HttpError(404, 'That commit isn\'t on this session\'s branch any more.');
+      throw e;
+    });
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
     // Only a session that can change its base (setBase) is offered one.
     if (row.kind !== 'review-pr' && !row.pr_number) c.suggestedBase = await suggestBase(row.worktree_path, row.base_branch, row.branch, c.ahead);
@@ -2009,12 +2012,12 @@ export class SessionManager {
   }
 
   /** One side of a changed image, for the Changes panel's preview. */
-  async changedImage(id: string, path: string, side: ChangeSide): Promise<{ type: string; data: Buffer }> {
+  async changedImage(id: string, path: string, side: ChangeSide, commit?: string): Promise<{ type: string; data: Buffer }> {
     const row = this.row(id);
     if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     let img: { type: string; data: Buffer } | null;
     try {
-      img = await changedImage(row.worktree_path, row.base_branch, path, side);
+      img = await changedImage(row.worktree_path, row.base_branch, path, side, commit);
     } catch {
       throw new HttpError(400, 'Only image files inside this session\'s repo can be previewed.');
     }

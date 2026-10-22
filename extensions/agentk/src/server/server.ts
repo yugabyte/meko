@@ -591,11 +591,12 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return reply.code(204).send();
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {
-    const { path = '', side } = req.query;
+  app.get<{ Params: { id: string }; Querystring: { commit?: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> =>
+    core.sessions.changes(req.params.id, req.query.commit || undefined));
+  app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string; commit?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {
+    const { path = '', side, commit } = req.query;
     if (side !== 'old' && side !== 'new') throw new HttpError(400, "side must be 'old' or 'new'.");
-    const img = await core.sessions.changedImage(req.params.id, path, side);
+    const img = await core.sessions.changedImage(req.params.id, path, side, commit || undefined);
     // Bytes from the repo: never let the browser run or sniff them, even when opened directly.
     return reply
       .type(img.type)
