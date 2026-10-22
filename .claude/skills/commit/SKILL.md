@@ -28,8 +28,8 @@ pass `--author` or change the identity.
 ```
 
 The release workflows read commit subjects. The repo releases two products, each on its own train:
-AgentK Local (`release.yml`, tags `agentk-v0.YYYYMMDD.N`) and Meko (`meko-release.yml`, tags
-`meko-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
+Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`) and AgentK Local (`release.yml`, tags
+`agentk-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
 AgentK's **What's new**). Subjects with component `meko` release Meko; every other component
 (`agentk`, `repo`) releases AgentK (`scripts/release/release-notes.sh --product`). Every other type
