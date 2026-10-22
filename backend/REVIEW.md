@@ -34,4 +34,5 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       `TestLibVersions`, and the build keeps the `sqlite_fts5` and `sqlite_vec` tags.
 - [ ] Commits are `chore(meko): ...` (or `chore(meko/<area>): ...`): nothing in `backend/` ships
       in AgentK Local's release yet.
-- [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code.
+- [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code, and so does the
+      repo root's `README.md` (Meko's commands, their flags and the build requirements).

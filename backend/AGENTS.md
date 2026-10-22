@@ -23,6 +23,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | `internal/storeapi/` | The store API the engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the engine's hello. Internal token only. |
 | `internal/engine/` | Finding Node and the built engine, the engine's child spec, and the Go client of its API on `run/engine.sock`. |
 | `internal/memory/` | The service MCP and REST call: memories (through the engine), learnings (keep and promote), artifacts, conversations, conversation search, the sweep that embeds turns, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
+| `assets/` | The Meko logo, dark and white, as Meko Cloud's web app has it; the repo's README shows it. |
 | `engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), and the client token MCP and REST clients send (`client.token`, kept across restarts). |
 | `internal/supervisor/` | Child processes (the engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
@@ -58,8 +59,9 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Commits and PR titles are `chore(meko): ...` (or `chore(meko/<area>): ...`). Nothing here
   ships in AgentK Local's release yet, and any `feat`, `fix`, `perf` or `deps` commit on `main`
   cuts an AgentK release.
-- Keep `docs/design.md` and this file current in the same commit as the code, and check the
-  change against [REVIEW.md](REVIEW.md).
+- Keep `docs/design.md` and this file current in the same commit as the code, and the repo
+  root's `README.md` too when the commands, their flags or the build requirements change. Check
+  the change against [REVIEW.md](REVIEW.md).
 - Every database call goes through `internal/store`, the only package that imports the SQLite
   driver. The engine has no database: it stores through the store API. Migrations are append-only: never
   edit one that has shipped.
