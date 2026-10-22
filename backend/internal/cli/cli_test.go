@@ -279,6 +279,7 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	p, _ := strconv.Atoi(port)
 	cfg := config.Default()
 	cfg.Server.Port = p
+	cfg.Secrets.Store = "file" // never the login Keychain, as MEKO_SECRETS=file does for the other tests
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, ServeOptions{Layout: l, Config: cfg}) }()

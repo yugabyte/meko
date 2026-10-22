@@ -131,6 +131,17 @@ func releaseServer(t *testing.T, version string, tgz []byte, sums string) *Clien
 	return &Client{Repo: "o/r", Token: "tok", API: srv.URL, HTTP: srv.Client()}
 }
 
+// realPath is path with its symlinks resolved, as Of reports it: on macOS the temp folder is under
+// /var, a link to /private/var.
+func realPath(t *testing.T, path string) string {
+	t.Helper()
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func newApp(t *testing.T, versions ...string) App {
 	t.Helper()
 	a := App{Root: filepath.Join(t.TempDir(), "app")}
@@ -180,7 +191,7 @@ func TestUpdaterStagesChecksAndSwitches(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(a.Dir(next), "memory_engine", "dist", "main.js")); err != nil {
 		t.Errorf("unpacked: %v", err)
 	}
-	if got, ver, ok := Of(a.CurrentExe()); !ok || ver != next || got.Root != a.Root {
+	if got, ver, ok := Of(a.CurrentExe()); !ok || ver != next || got.Root != realPath(t, a.Root) {
 		t.Errorf("Of(current) = %v %q %v", got, ver, ok)
 	}
 	p, _ := a.ReadPending()
@@ -318,7 +329,7 @@ func TestLinkCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ver, ok := Of(link); !ok || ver != "0.20261021.0" || got.Root != a.Root {
+	if got, ver, ok := Of(link); !ok || ver != "0.20261021.0" || got.Root != realPath(t, a.Root) {
 		t.Fatalf("Of(link) = %v %q %v", got, ver, ok)
 	}
 	if err := a.UnlinkCommand(home); err != nil {
