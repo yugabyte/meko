@@ -17,6 +17,7 @@ import { KnowledgePage } from "./pages/KnowledgePage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { NoAccessPage } from "./pages/NoAccessPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
 
@@ -49,9 +50,9 @@ export default function App() {
         version={health.data?.version}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
-        onCreated={(d) => {
+        onCreated={(id) => {
           list.reload();
-          navigate({ datapackId: d.datapack_id, tab: "overview" });
+          navigate({ datapackId: id, tab: "overview" });
         }}
       />
       <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
@@ -76,6 +77,10 @@ export default function App() {
             <DatapackHeader
               datapack={current.data}
               tab={route.tab}
+              onEdited={() => {
+                list.reload();
+                current.reload();
+              }}
               onDeleted={() => {
                 list.reload();
                 navigate({ tab: "overview" });
@@ -90,6 +95,7 @@ export default function App() {
               {route.tab === "conversations" && (
                 <ConversationsPage datapack={current.data} conversationId={route.itemId} />
               )}
+              {route.tab === "artifacts" && <ArtifactsPage datapack={current.data} />}
               {route.tab === "connect" && <ConnectPage datapack={current.data} />}
             </div>
           </>

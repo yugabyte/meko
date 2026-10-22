@@ -3,9 +3,10 @@
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
-import { api } from "../lib/api";
+import { api, type SearchSource } from "../lib/api";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
+import { Segmented } from "../components/Segmented";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
 
 // Memories below this cosine aren't shown. context_search returns every memory it ranks, as Cloud's
@@ -17,7 +18,9 @@ const WEAK_MEMORY = 0.4;
 // The cosine similarity every source is shown with: a memory's raw score, or 1 - distance.
 function Similarity({ value }: { value: number | undefined }) {
   if (value === undefined) return null;
-  return <Badge tone={value >= 0.5 ? "success" : value >= WEAK_MEMORY ? "primary" : "neutral"}>{value.toFixed(2)}</Badge>;
+  return (
+    <Badge tone={value >= 0.5 ? "success" : value >= WEAK_MEMORY ? "primary" : "neutral"}>{value.toFixed(2)}</Badge>
+  );
 }
 
 // Rounded to the two places the badge shows, so a memory shown as 0.40 counts as 0.40.
@@ -52,6 +55,9 @@ function Memories({ hits }: { hits: MemoryHit[] }) {
   );
 }
 
+// Whether a search with this source shows that section: all of them, or the one it searched.
+const shows = (searched: SearchSource, section: SearchSource) => searched === "auto" || searched === section;
+
 // n is null when the source wasn't searched; badge, if set, is the count shown instead of n.
 function Section({
   icon,
@@ -84,8 +90,18 @@ function Section({
   );
 }
 
+const SOURCES: readonly { id: SearchSource; label: string }[] = [
+  { id: "auto", label: "All" },
+  { id: "memory", label: "Memory" },
+  { id: "knowledge_base", label: "Knowledge base" },
+  { id: "conversation", label: "Conversations" },
+];
+
 export function SearchPage({ datapack }: { datapack: Datapack }) {
   const [query, setQuery] = useState("");
+  const [source, setSource] = useState<SearchSource>("auto");
+  // The source the shown results were searched with.
+  const [searched, setSearched] = useState<SearchSource>("auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
   const [result, setResult] = useState<ContextSearch>();
@@ -96,7 +112,8 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
     setBusy(true);
     setError(undefined);
     try {
-      setResult(await api.search(datapack.datapack_id, query.trim()));
+      setResult(await api.search(datapack.datapack_id, query.trim(), source));
+      setSearched(source);
     } catch (err) {
       setError(err as Error);
     } finally {
@@ -118,6 +135,7 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
           {busy ? <Spinner className="text-primary-foreground" /> : <Search className="size-4" />} Search
         </Button>
       </form>
+      <Segmented options={SOURCES} value={source} onChange={setSource} />
       {error && <ErrorNote error={error} />}
       {!r && !error && (
         <Empty icon={<Search className="size-8" />} title="Search everything in this datapack">
@@ -126,41 +144,53 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
       )}
       {r && (
         <div className="space-y-6">
-          <Section icon={<Brain className="size-4 text-primary" />} title="Memories"
-            n={r.memory?.length ?? null}
-            badge={r.memory?.filter((m) => !isWeak(m)).length}
-          >
-            <Memories hits={r.memory ?? []} />
-          </Section>
-          <Section icon={<FileText className="size-4 text-primary" />} title="Knowledge base" n={r.knowledge_base?.length ?? null}>
-            <div className="space-y-2">
-              {r.knowledge_base?.map((k) => (
-                <Card key={k.id} className="p-3">
-                  <div className="mb-1.5 flex gap-1.5">
-                    {k.metadata_filters?.source === "memory" && <Badge tone="success">promoted memory</Badge>}
-                    <Badge>{k.match_type}</Badge>
-                    <Similarity value={1 - k.distance} />
-                    {k.rerank_score !== undefined && <Badge>rerank {k.rerank_score.toFixed(2)}</Badge>}
-                  </div>
-                  <p className="line-clamp-6 whitespace-pre-wrap text-sm">{k.chunk_text}</p>
-                </Card>
-              ))}
-            </div>
-          </Section>
-          <Section
-            icon={<MessagesSquare className="size-4 text-primary" />}
-            title="Conversations"
-            n={r.conversation?.hits.length ?? null}
-          >
-            <div className="space-y-2">
-              {r.conversation?.hits.map((h) => (
-                <Card key={h.message_id + h.distance} className="flex items-start justify-between gap-4 p-3">
-                  <p className="line-clamp-4 whitespace-pre-wrap text-sm">{h.content}</p>
-                  <Similarity value={1 - h.distance} />
-                </Card>
-              ))}
-            </div>
-          </Section>
+          {shows(searched, "memory") && (
+            <Section
+              icon={<Brain className="size-4 text-primary" />}
+              title="Memories"
+              n={r.memory?.length ?? null}
+              badge={r.memory?.filter((m) => !isWeak(m)).length}
+            >
+              <Memories hits={r.memory ?? []} />
+            </Section>
+          )}
+          {shows(searched, "knowledge_base") && (
+            <Section
+              icon={<FileText className="size-4 text-primary" />}
+              title="Knowledge base"
+              n={r.knowledge_base?.length ?? null}
+            >
+              <div className="space-y-2">
+                {r.knowledge_base?.map((k) => (
+                  <Card key={k.id} className="p-3">
+                    <div className="mb-1.5 flex gap-1.5">
+                      {k.metadata_filters?.source === "memory" && <Badge tone="success">promoted memory</Badge>}
+                      <Badge>{k.match_type}</Badge>
+                      <Similarity value={1 - k.distance} />
+                      {k.rerank_score !== undefined && <Badge>rerank {k.rerank_score.toFixed(2)}</Badge>}
+                    </div>
+                    <p className="line-clamp-6 whitespace-pre-wrap text-sm">{k.chunk_text}</p>
+                  </Card>
+                ))}
+              </div>
+            </Section>
+          )}
+          {shows(searched, "conversation") && (
+            <Section
+              icon={<MessagesSquare className="size-4 text-primary" />}
+              title="Conversations"
+              n={r.conversation?.hits.length ?? null}
+            >
+              <div className="space-y-2">
+                {r.conversation?.hits.map((h) => (
+                  <Card key={h.message_id + h.distance} className="flex items-start justify-between gap-4 p-3">
+                    <p className="line-clamp-4 whitespace-pre-wrap text-sm">{h.content}</p>
+                    <Similarity value={1 - h.distance} />
+                  </Card>
+                ))}
+              </div>
+            </Section>
+          )}
         </div>
       )}
     </div>

@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { bytes, timeAgo } from "../lib/format";
 import type { Datapack, KnowledgeDocument } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { Table } from "../components/Table";
 import { Badge, Button, Card, cx, Empty, ErrorNote, Input, Loading, Spinner } from "../components/ui";
 
 // What Meko indexes (backend/internal/knowledge), and its size limit.
@@ -158,48 +159,40 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
         </Empty>
       ) : (
         <Card className="overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted text-left text-xs text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 text-right font-medium">Chunks</th>
-                <th className="px-3 py-2 text-right font-medium">Size</th>
-                <th className="px-3 py-2 font-medium">Uploaded</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {docs.data.items.map((d) => {
-                const s = STATUS[d.status] ?? { label: d.status, tone: "neutral" as const };
-                return (
-                  <tr key={d.id} className="group">
-                    <td className="max-w-xs truncate px-3 py-2" title={d.filename}>
-                      {d.filename}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span title={d.error}>
-                        <Badge tone={s.tone}>{s.label}</Badge>
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{d.chunks_processed}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{bytes(d.size_bytes)}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{timeAgo(d.uploaded_at)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100">
-                        <Button size="sm" variant="ghost" title="Download" onClick={() => download(d)}>
-                          <Download className="size-3.5" />
-                        </Button>
-                        <Button size="sm" variant="danger" title="Delete" onClick={() => remove(d)}>
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <Table
+            rows={docs.data.items}
+            rowKey={(d) => d.id}
+            columns={[
+              { label: "Name", cell: (d) => <span title={d.filename}>{d.filename}</span>, className: "max-w-xs truncate" },
+              {
+                label: "Status",
+                cell: (d) => {
+                  const s = STATUS[d.status] ?? { label: d.status, tone: "neutral" as const };
+                  return (
+                    <span title={d.error}>
+                      <Badge tone={s.tone}>{s.label}</Badge>
+                    </span>
+                  );
+                },
+              },
+              { label: "Chunks", right: true, cell: (d) => d.chunks_processed },
+              { label: "Size", right: true, cell: (d) => bytes(d.size_bytes) },
+              { label: "Uploaded", cell: (d) => timeAgo(d.uploaded_at), className: "text-muted-foreground" },
+              {
+                label: "",
+                cell: (d) => (
+                  <div className="flex justify-end gap-1 opacity-60 group-hover:opacity-100">
+                    <Button size="sm" variant="ghost" title="Download" onClick={() => download(d)}>
+                      <Download className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="danger" title="Delete" onClick={() => remove(d)}>
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                ),
+              },
+            ]}
+          />
         </Card>
       )}
     </div>

@@ -5,12 +5,17 @@ import { CheckCircle2, XCircle } from "lucide-react";
 import { count, timeAgo } from "../../lib/format";
 import { UI_AGENT_ID } from "../../lib/api";
 import type { Usage } from "../../lib/types";
+import { Table } from "../Table";
 import { Badge } from "../ui";
 import { MetricCard } from "./MetricCard";
 
-const th = "px-3 py-2 text-left text-xs font-medium text-muted-foreground";
-const td = "px-3 py-2";
 const ms = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${n} ms`);
+
+function results(c: Usage["recent"][number]): string {
+  if (!c.ok) return c.error_code;
+  const n = c.memory_n + c.kb_n + c.conversation_n;
+  return n > 0 ? `${c.memory_n} mem · ${c.kb_n} kb · ${c.conversation_n} conv` : "—";
+}
 
 export function ToolsCard({ usage }: { usage: Usage }) {
   const title = "Tools";
@@ -20,31 +25,22 @@ export function ToolsCard({ usage }: { usage: Usage }) {
   }
   return (
     <MetricCard title={title} subtitle={subtitle}>
-      <div className="-mx-5 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr>
-              <th className={th}>Tool</th>
-              <th className={`${th} text-right`}>Calls</th>
-              <th className={`${th} text-right`}>Errors</th>
-              <th className={`${th} text-right`}>p50</th>
-              <th className={`${th} text-right`}>p95</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {usage.tools.map((t) => (
-              <tr key={t.tool}>
-                <td className={`${td} font-mono text-xs`}>{t.tool}</td>
-                <td className={`${td} text-right tabular-nums`}>{count(t.calls)}</td>
-                <td className={`${td} text-right tabular-nums ${t.errors > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                  {count(t.errors)}
-                </td>
-                <td className={`${td} text-right tabular-nums`}>{ms(t.p50_ms)}</td>
-                <td className={`${td} text-right tabular-nums`}>{ms(t.p95_ms)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="-mx-5">
+        <Table
+          rows={usage.tools}
+          rowKey={(t) => t.tool}
+          columns={[
+            { label: "Tool", cell: (t) => t.tool, className: "font-mono text-xs" },
+            { label: "Calls", right: true, cell: (t) => count(t.calls) },
+            {
+              label: "Errors",
+              right: true,
+              cell: (t) => <span className={t.errors > 0 ? "text-destructive" : "text-muted-foreground"}>{count(t.errors)}</span>,
+            },
+            { label: "p50", right: true, cell: (t) => ms(t.p50_ms) },
+            { label: "p95", right: true, cell: (t) => ms(t.p95_ms) },
+          ]}
+        />
       </div>
       {usage.steps.length > 0 && (
         <div className="mt-4 border-t pt-3">
@@ -91,38 +87,29 @@ export function RecentCallsCard({ usage }: { usage: Usage }) {
   if (usage.recent.length === 0) return <MetricCard title={title} subtitle={subtitle} empty={["No calls yet", "They show here as they happen."]} />;
   return (
     <MetricCard title={title} subtitle={subtitle}>
-      <div className="-mx-5 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr>
-              <th className={th} />
-              <th className={th}>Tool</th>
-              <th className={th}>Agent</th>
-              <th className={th}>Results</th>
-              <th className={`${th} text-right`}>Time</th>
-              <th className={`${th} text-right`}>When</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {usage.recent.map((c, i) => {
-              const results = c.memory_n + c.kb_n + c.conversation_n;
-              return (
-                <tr key={c.at + i}>
-                  <td className={td} title={c.error_code || "ok"}>
-                    {c.ok ? <CheckCircle2 className="size-4 text-success" /> : <XCircle className="size-4 text-destructive" />}
-                  </td>
-                  <td className={`${td} font-mono text-xs`}>{c.tool}</td>
-                  <td className={`${td} max-w-[12rem] truncate font-mono text-xs text-muted-foreground`}>{c.agent_id || "—"}</td>
-                  <td className={`${td} text-xs text-muted-foreground`}>
-                    {c.ok ? (results > 0 ? `${c.memory_n} mem · ${c.kb_n} kb · ${c.conversation_n} conv` : "—") : c.error_code}
-                  </td>
-                  <td className={`${td} text-right tabular-nums`}>{ms(c.ms)}</td>
-                  <td className={`${td} text-right text-xs text-muted-foreground`}>{timeAgo(c.at)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="-mx-5">
+        <Table
+          rows={usage.recent}
+          rowKey={(c, i) => c.at + i}
+          columns={[
+            {
+              label: "",
+              cell: (c) =>
+                c.ok ? (
+                  <CheckCircle2 className="size-4 text-success" />
+                ) : (
+                  <span title={c.error_code}>
+                    <XCircle className="size-4 text-destructive" />
+                  </span>
+                ),
+            },
+            { label: "Tool", cell: (c) => c.tool, className: "font-mono text-xs" },
+            { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[12rem] truncate font-mono text-xs text-muted-foreground" },
+            { label: "Results", cell: results, className: "text-xs text-muted-foreground" },
+            { label: "Time", right: true, cell: (c) => ms(c.ms) },
+            { label: "When", right: true, cell: (c) => timeAgo(c.at), className: "text-xs text-muted-foreground" },
+          ]}
+        />
       </div>
     </MetricCard>
   );

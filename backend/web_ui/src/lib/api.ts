@@ -3,6 +3,8 @@
 
 import { getToken } from "./token";
 import type {
+  Artifact,
+  ArtifactList,
   ContextSearch,
   ConversationDetail,
   Conversation,
@@ -74,6 +76,8 @@ async function callTool<T>(name: string, args: Record<string, unknown>): Promise
 
 const enc = encodeURIComponent;
 
+export type SearchSource = "auto" | "memory" | "knowledge_base" | "conversation";
+
 export const api = {
   health: async (): Promise<Health> => {
     const res = await fetch("/healthz");
@@ -88,6 +92,9 @@ export const api = {
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
   metrics: (id: string) => request<Metrics>("GET", `/datapacks/${id}/metrics`),
+  artifacts: (id: string, q: string, page: number) =>
+    request<ArtifactList>("GET", `/datapacks/${id}/artifacts?q=${enc(q)}&page=${page}`),
+  artifact: (id: string, hash: string) => request<Artifact>("GET", `/datapacks/${id}/artifacts/${hash}`),
   usage: (id: string) => request<Usage>("GET", `/datapacks/${id}/usage`),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
 
@@ -150,9 +157,11 @@ export const api = {
     return offer;
   },
 
-  search: (id: string, query: string) =>
+  // source narrows it to one of memory, knowledge_base or conversation; auto searches all three.
+  search: (id: string, query: string, source: SearchSource = "auto") =>
     callTool<ContextSearch>("context_search", {
       query,
+      force_source: source,
       datapack_id: id,
       agent_id: UI_AGENT_ID,
       conversation_id: UI_CONVERSATION_ID,
