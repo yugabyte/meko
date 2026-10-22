@@ -40,19 +40,19 @@ func runUpdate(l paths.Layout, check bool, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if !newer {
-		fmt.Fprintf(stdout, "meko %s is the newest release.\n", ver)
+		fmt.Fprintf(stdout, "meko %s is the newest release\n", ver)
 		return exitOK
 	}
 	if check {
-		fmt.Fprintf(stdout, "meko %s is available (this is %s): meko update installs it.\n", next, ver)
+		fmt.Fprintf(stdout, "meko %s is available (this is %s): meko update installs it\n", next, ver)
 		return exitOK
 	}
-	fmt.Fprintf(stdout, "Installing meko %s.\n", next)
+	fmt.Fprintf(stdout, "Installing meko %s\n", next)
 	if err := u.Apply(ctx, rel, next); err != nil {
 		return fail(stderr, err)
 	}
 	if up, _ := running(l.Lock); !up {
-		fmt.Fprintf(stdout, "Installed meko %s; it runs at the next meko start.\n", next)
+		fmt.Fprintf(stdout, "Installed meko %s; it runs at the next meko start\n", next)
 		return exitOK
 	}
 	pid := currentPID(l)
@@ -77,6 +77,6 @@ func runUpdate(l paths.Layout, check bool, stdout, stderr io.Writer) int {
 			"nothing starts it again: run meko start, and after %d failed starts the next one rolls back to %s",
 			next, serviceStartTimeout, update.MaxFailedStarts, ver))
 	}
-	fmt.Fprintf(stdout, "Meko is running %s.\n", next)
+	fmt.Fprintf(stdout, "Meko is running %s\n", next)
 	return exitOK
 }

@@ -104,3 +104,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   one), bump the `replace` in `go.mod`, and update the versions `TestLibVersions` expects.
 - Lint is `.golangci.yml`: prod Meko's config with the changes listed at its top. Fix findings
   rather than adding to its exclusions; a `nolint` names the rule and says why.
+- The lines the CLI and `scripts/install.sh` print end without a period, like Go's error strings,
+  so a version, path or command at the end isn't read with one (`Installing meko 0.20261022.1`).
+  Periods between sentences stay. `TestOutputLinesEndWithoutPeriod` checks every line of the
+  strings `internal/cli` prints or formats with `fmt` and of the strings its functions return.

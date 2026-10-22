@@ -35,7 +35,7 @@ say() { printf '%s\n' "$*" >&2; }
 ok() { printf '  %s✓%s %-11s %s%s%s\n' "$g" "$n" "$1" "$d" "${2:-}" "$n" >&2; }
 die() { printf '\n  %s✗%s %s\n' "$r" "$n" "$*" >&2; exit 1; }
 
-agentk_hint="To add AgentK Local, install Meko and then run: meko install_extension agentk. For AgentK Local alone, run its own installer (see its README)."
+agentk_hint="To add AgentK Local, install Meko and then run: meko install_extension agentk. For AgentK Local alone, run its own installer (see its README)"
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -75,22 +75,22 @@ say ""
 say "${b}Meko installer${n}"
 say ""
 
-command -v tar >/dev/null 2>&1 || die "tar is required but was not found on PATH."
+command -v tar >/dev/null 2>&1 || die "tar is required but was not found on PATH"
 if command -v sha256sum >/dev/null 2>&1; then
   sha256_check() { sha256sum -c -; }
 elif command -v shasum >/dev/null 2>&1; then
   sha256_check() { shasum -a 256 -c -; }
 else
-  die "sha256sum (coreutils) or shasum is required but neither was found on PATH."
+  die "sha256sum (coreutils) or shasum is required but neither was found on PATH"
 fi
 
 have_gh=false
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   have_gh=true
 elif [ -z "${GITHUB_TOKEN:-}" ]; then
-  die "the repo is internal: install the GitHub CLI and sign in (gh auth login), or set GITHUB_TOKEN, then run this again."
+  die "the repo is internal: install the GitHub CLI and sign in (gh auth login), or set GITHUB_TOKEN, then run this again"
 else
-  command -v curl >/dev/null 2>&1 || die "curl is required (or a signed-in gh)."
+  command -v curl >/dev/null 2>&1 || die "curl is required (or a signed-in gh)"
 fi
 
 # ---- already installed ----
@@ -114,7 +114,7 @@ if [ -z "$version" ]; then
     tag=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$repo/releases?per_page=100" 2>/dev/null |
       sed -n 's/^ *"tag_name": *"\(meko-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -n 1) || tag=""
   fi
-  [ -n "$tag" ] || die "could not find a Meko release in $repo."
+  [ -n "$tag" ] || die "could not find a Meko release in $repo"
   version=${tag#meko-v}
 fi
 tag="meko-v$version"
@@ -125,11 +125,11 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 if $have_gh; then
   gh release download "$tag" --repo "$repo" --pattern "$tarball" --pattern SHA256SUMS --dir "$tmp" ||
-    die "download of $tarball from $repo's release $tag failed."
+    die "download of $tarball from $repo's release $tag failed"
 else
   base="https://github.com/$repo/releases/download/$tag"
   for f in "$tarball" SHA256SUMS; do
-    curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -o "$tmp/$f" "$base/$f" || die "download of $f failed."
+    curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -o "$tmp/$f" "$base/$f" || die "download of $f failed"
   done
 fi
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) || die "checksum verification failed for $tarball"

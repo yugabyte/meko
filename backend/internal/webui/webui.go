@@ -63,7 +63,7 @@ func Missing(reason error) http.Handler {
 		secure(w)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = fmt.Fprintf(w, "Meko's web UI isn't available: %v.\n", reason)
+		_, _ = fmt.Fprintf(w, "Meko's web UI isn't available: %v\n", reason)
 	})
 }
 

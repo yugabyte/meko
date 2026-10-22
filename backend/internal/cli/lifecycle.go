@@ -102,7 +102,7 @@ func startMeko(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("the %s service didn't answer within %s. Check: %s, and meko logs",
 			m.Kind(), serviceStartTimeout, m.StatusHint()))
 	}
-	fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d, data in %s, run by %s).\n",
+	fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d, data in %s, run by %s)\n",
 		st.Port, st.PID, l.Root, m.Kind())
 	return exitOK
 }
@@ -119,7 +119,7 @@ func runStop(l paths.Layout, keepExtensions bool, stdout, stderr io.Writer) int 
 		}
 		if up, _ := running(l.Lock); !up {
 			cleanRunFiles(l)
-			fmt.Fprintln(stdout, "Meko stopped.")
+			fmt.Fprintln(stdout, "Meko stopped")
 			return exitOK
 		}
 		// Still running: a server started by hand on the same folder. Stop it as below.
@@ -142,7 +142,7 @@ func runRestart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 			return fail(stderr, fmt.Errorf("the %s service didn't answer within %s. Check: %s, and meko logs",
 				m.Kind(), serviceStartTimeout, m.StatusHint()))
 		}
-		fmt.Fprintf(stdout, "Meko restarted at http://127.0.0.1:%d (pid %d).\n", st.Port, st.PID)
+		fmt.Fprintf(stdout, "Meko restarted at http://127.0.0.1:%d (pid %d)\n", st.Port, st.PID)
 		return exitOK
 	}
 	if code := stopMeko(l, stdout, stderr); code != exitOK {

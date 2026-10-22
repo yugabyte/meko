@@ -166,7 +166,7 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
 
 	code, out, _ = run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out, "Meko stopped.")
+	want(t, "stop", code, 0, out, "Meko stopped\n")
 
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status when stopped", code, exitNotRunning, out, "isn't running")
@@ -481,7 +481,7 @@ func TestServeRunsTheMemoryEngine(t *testing.T) {
 	var memoryEnginePid int
 	_, _ = fmt.Sscanf(string(b), "%d", &memoryEnginePid)
 	code, out, _ = run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out, "Meko stopped.")
+	want(t, "stop", code, 0, out, "Meko stopped\n")
 	if memoryEnginePid == 0 || syscall.Kill(memoryEnginePid, 0) == nil {
 		t.Errorf("the memory engine (pid %d) outlived stop", memoryEnginePid)
 	}
@@ -541,15 +541,15 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "add_memory by name", code, 0, out+errs, "Added memory ")
 	withStdin(t, "n\n")
 	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
-	want(t, "delete_datapack answered n", code, 1, errs, "Nothing was deleted.")
+	want(t, "delete_datapack answered n", code, 1, errs, "Nothing was deleted\n")
 	want(t, "delete_datapack's question", code, 1, out, "This deletes datapack scratch-notes and everything "+
-		"in it (memories, conversations, artifacts) for good.\nDelete it? [y/N] ")
+		"in it (memories, conversations, artifacts) for good\nDelete it? [y/N] ")
 	if _, out, _ = run("datapacks", "--data-dir", dir); !strings.Contains(out, "scratch-notes") {
 		t.Errorf("a declined delete_datapack deleted it:\n%s", out)
 	}
 	withStdin(t, "y\n")
 	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
-	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes.")
+	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes\n")
 	if _, out, _ = run("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
 	}
@@ -596,9 +596,9 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	withStdin(t, "")
 	code, out, errs = run("delete_datapack", "--data-dir", dir, "default")
 	want(t, "delete_datapack default with no answer", code, 1, out+errs, "It's the default datapack")
-	want(t, "delete_datapack default with no answer", code, 1, errs, "Nothing was deleted.")
+	want(t, "delete_datapack default with no answer", code, 1, errs, "Nothing was deleted\n")
 	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--force")
-	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default.")
+	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default\n")
 	if strings.Contains(out, "Delete it?") {
 		t.Errorf("delete_datapack --force asked:\n%s", out)
 	}
@@ -635,17 +635,17 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 	for _, answer := range []string{"n\n", "", "whatever\n"} {
 		withStdin(t, answer)
 		code, out, errs = run("destroy", "--data-dir", dir)
-		want(t, "destroy answered "+strconv.Quote(answer), code, 1, errs, "Nothing was removed.")
-		want(t, "destroy's question", code, 1, out, "Meko is running, so it's stopped first.\nDestroy it? [y/N] ")
+		want(t, "destroy answered "+strconv.Quote(answer), code, 1, errs, "Nothing was removed\n")
+		want(t, "destroy's question", code, 1, out, "Meko is running, so it's stopped first\nDestroy it? [y/N] ")
 		want(t, "destroy's summary", code, 1, out, "This removes Meko's data in "+dir+" (")
 		code, out, _ = run("status", "--data-dir", dir)
-		want(t, "status after a declined destroy", code, 0, out, "Meko is running.")
+		want(t, "status after a declined destroy", code, 0, out, "Meko is running\n")
 	}
 
 	withStdin(t, "Yes\n")
 	code, out, errs = run("destroy", "--data-dir", dir)
 	// A piped answer isn't echoed, so destroy ends the prompt's line itself.
-	want(t, "destroy", code, 0, out+errs, "Destroy it? [y/N] \nMeko stopped.\nRemoved "+dir+".\n")
+	want(t, "destroy", code, 0, out+errs, "Destroy it? [y/N] \nMeko stopped\nRemoved "+dir+"\n")
 	want(t, "destroy's note", code, 0, out, "its token no longer works: remove it (claude mcp remove meko)")
 	gone(t, dir)
 	code, out, _ = run("status", "--data-dir", dir)
@@ -662,7 +662,7 @@ func TestDestroyForce(t *testing.T) {
 	}
 	withStdin(t, "")
 	code, out, errs := run("destroy", "--data-dir", dir, "--force")
-	want(t, "destroy --force", code, 0, out+errs, "Removed "+dir+".")
+	want(t, "destroy --force", code, 0, out+errs, "Removed "+dir+"\n")
 	if strings.Contains(out, "Destroy it?") || strings.Contains(out, "Meko stopped") {
 		t.Errorf("destroy --force asked, or stopped a server that wasn't running:\n%s", out)
 	}
@@ -675,14 +675,14 @@ func TestDestroyNothingThere(t *testing.T) {
 	want(t, "destroy of no folder", code, 0, out+errs, "Nothing to remove: there's no data folder at "+dir)
 	empty := shortDir(t)
 	code, out, errs = run("destroy", "--data-dir", empty, "--force")
-	want(t, "destroy of an empty folder", code, 0, out+errs, "Nothing to remove: the data folder "+empty+" is empty.")
+	want(t, "destroy of an empty folder", code, 0, out+errs, "Nothing to remove: the data folder "+empty+" is empty\n")
 	// A link to an empty folder is left too: there's nothing to remove.
 	link := filepath.Join(shortDir(t), "link")
 	if err := os.Symlink(empty, link); err != nil {
 		t.Fatal(err)
 	}
 	code, out, errs = run("destroy", "--data-dir", link, "--force")
-	want(t, "destroy of a link to an empty folder", code, 0, out+errs, "is empty.")
+	want(t, "destroy of a link to an empty folder", code, 0, out+errs, "is empty\n")
 	if _, err := os.Lstat(link); err != nil {
 		t.Errorf("the link to an empty folder was removed: %v", err)
 	}
@@ -730,7 +730,7 @@ func TestDestroyKillsAHungServer(t *testing.T) {
 	}
 	_, child := startHungServe(t, dir)
 	code, out, errs := run("destroy", "--data-dir", dir, "--force")
-	want(t, "destroy of a hung server", code, 0, out+errs, "so it was killed.\nRemoved "+dir+".")
+	want(t, "destroy of a hung server", code, 0, out+errs, "so it was killed\nRemoved "+dir+"\n")
 	waitGone(t, dir, child, "destroy")
 	gone(t, dir)
 }
@@ -751,7 +751,7 @@ func TestDestroyFollowsASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errs := run("destroy", "--data-dir", link, "--force")
-	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+resolved+".")
+	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+resolved+"\n")
 	gone(t, target)
 	gone(t, link)
 }

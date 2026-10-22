@@ -147,7 +147,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	}
 	code, out, _ = run("stop", "--data-dir", dir)
 	want(t, "stop", code, 0, out, "ext stop")
-	want(t, "stop", code, 0, out, "Meko stopped.")
+	want(t, "stop", code, 0, out, "Meko stopped\n")
 	if f.calls[len(f.calls)-1] != "stop" {
 		t.Errorf("stop didn't go through the service: %v", f.calls)
 	}
@@ -157,7 +157,7 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	code, out, _ = run("restart", "--data-dir", dir)
 	want(t, "restart", code, 0, out, "Meko restarted")
 	code, out, _ = run("stop", "--data-dir", dir, "--keep-extensions")
-	want(t, "stop --keep-extensions", code, 0, out, "Meko stopped.")
+	want(t, "stop --keep-extensions", code, 0, out, "Meko stopped\n")
 	if got := readLog(t, log); got != "stop\nstart\n" {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
 	}
