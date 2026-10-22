@@ -865,3 +865,16 @@ func TestListMCPTools(t *testing.T) {
 	code, _, errs := run("list")
 	want(t, "list with nothing named", code, exitUsage, errs, "mcp-tools")
 }
+
+func TestSuggestedName(t *testing.T) {
+	for in, want := range map[string]string{
+		`attachment; filename="meko-default-2026-10-22.json"`: "meko-default-2026-10-22.json",
+		`attachment; filename="../../etc/passwd"`:             "passwd",
+		``:           "meko-export.json",
+		`attachment`: "meko-export.json",
+	} {
+		if got := suggestedName(in); got != want {
+			t.Errorf("suggestedName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
