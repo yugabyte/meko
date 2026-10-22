@@ -79,9 +79,23 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
         ) : (
           <Card className="divide-y">
             {promoted.data.promoted_memories.map((m) => (
-              <div key={m.id} className="flex items-start justify-between gap-4 p-3">
+              <div key={m.id} className="group flex items-start justify-between gap-4 p-3">
                 <p className="text-sm">{m.data}</p>
-                <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    title="Delete from the collective memory"
+                    className="opacity-60 group-hover:opacity-100"
+                    onClick={() =>
+                      confirm("Delete this collective memory? Every agent stops finding it.") &&
+                      act(() => api.deletePromoted(id, m.id))
+                    }
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
               </div>
             ))}
           </Card>

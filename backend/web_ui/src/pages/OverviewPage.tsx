@@ -1,4 +1,5 @@
-// A datapack at a glance: what it holds, how it's used, and the last 30 days of searches.
+// A datapack at a glance: how knowledge moves through it, what it holds, how it's used, and the
+// last 30 days of searches.
 
 import type { ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search, Sparkles, Users } from "lucide-react";
@@ -6,6 +7,7 @@ import { api } from "../lib/api";
 import { bytes, count, timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { LearningPipeline } from "../components/LearningPipeline";
 import { Card, ErrorNote, Loading } from "../components/ui";
 
 function Stat({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
@@ -33,6 +35,7 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
 
   return (
     <div className="space-y-6">
+      <LearningPipeline datapack={datapack} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Stat
           icon={<Brain className="size-3.5" />}

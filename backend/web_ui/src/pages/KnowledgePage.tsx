@@ -1,4 +1,5 @@
-// The knowledge base: drop or pick files to upload, watch them index, download or delete them.
+// The knowledge base: drop or pick files to upload, watch them index, download or delete them, and
+// its activity.
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Download, FileText, Trash2, UploadCloud } from "lucide-react";
@@ -6,6 +7,7 @@ import { api } from "../lib/api";
 import { bytes, timeAgo } from "../lib/format";
 import type { Datapack, KnowledgeDocument } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { KnowledgeActivityLog } from "../components/KnowledgeActivityLog";
 import { Table } from "../components/Table";
 import { Badge, Button, Card, cx, Empty, ErrorNote, Input, Loading, Spinner } from "../components/ui";
 
@@ -195,6 +197,11 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
           />
         </Card>
       )}
+
+      <KnowledgeActivityLog
+        datapackId={id}
+        refresh={(docs.data?.items ?? []).map((d) => d.id + d.status).join()}
+      />
     </div>
   );
 }
