@@ -194,7 +194,7 @@ func TestKnowledgeFilesThroughTheEngine(t *testing.T) {
 func TestKnowledgeFilesWaitForTheEngine(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, hashEmbedder)
-	h.stopEngine()
+	h.stopMemoryEngine()
 	offer := h.upload("notes.txt", []byte("the office plants are watered on fridays"))
 	if err := h.svc.IndexQueued(ctx); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestKnowledgeFilesWaitForTheEngine(t *testing.T) {
 	if n, err := h.svc.RequeueInterrupted(ctx); err != nil || n != 1 {
 		t.Fatalf("requeued %d %v", n, err)
 	}
-	h.startEngine()
+	h.startMemoryEngine()
 	h.index()
 	if st = h.status(offer.Key); st.Document.Status != store.DocCompleted {
 		t.Errorf("after the engine came back %+v", st.Document)
@@ -234,7 +234,7 @@ func shaHex(s string) string {
 
 // With the real models: the done-when. A file is found by a paraphrased question through
 // knowledgebase_search and context_search, a promoted memory is found the same way, the same file
-// twice is stored once, and no file text reaches the engine's log.
+// twice is stored once, and no file text reaches the memory engine's log.
 func TestKnowledgeSearchWithTheModels(t *testing.T) {
 	if testing.Short() {
 		t.Skip("downloads the embedding and reranking models on their first run")
@@ -286,9 +286,9 @@ func TestKnowledgeSearchWithTheModels(t *testing.T) {
 		t.Errorf("the promoted memory: %+v %v", res, err)
 	}
 
-	log, err := os.ReadFile(h.l.EngineLog)
+	log, err := os.ReadFile(h.l.MemoryEngineLog)
 	if err != nil || bytes.Contains(log, []byte("rollback")) || bytes.Contains(log, []byte("migrations")) {
-		t.Errorf("file or memory text in engine.log (%v):\n%s", err, log)
+		t.Errorf("file or memory text in memory_engine.log (%v):\n%s", err, log)
 	}
 }
 

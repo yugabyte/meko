@@ -11,7 +11,7 @@ import { EmbedderFactory, HistoryManagerFactory, LLMFactory, VectorStoreFactory 
 
 import { loadReranker, startUp } from "../src/app.js";
 import { HashEmbedder, Lanes } from "../src/embedder.js";
-import { Engine, HttpError, toResult } from "../src/engine.js";
+import { MemoryEngine, HttpError, toResult } from "../src/memoryengine.js";
 import { MekoHistory, MekoStore, NoLLM, PROVIDERS, register } from "../src/providers.js";
 import { OverlapReranker, type LocalReranker } from "../src/reranker.js";
 import { mekoScore } from "../src/scoring.js";
@@ -63,13 +63,13 @@ describe("toResult", () => {
 
 describe("with a store", () => {
   let fake: FakeStore;
-  let engine: Engine;
+  let memoryEngine: MemoryEngine;
   const embedder = new HashEmbedder();
 
   before(async () => {
     fake = await startFakeStore();
     register(new StoreClient(fake.socket, fake.token), embedder);
-    engine = new Engine(embedder);
+    memoryEngine = new MemoryEngine(embedder);
   });
   after(() => fake.close());
 
@@ -106,7 +106,7 @@ describe("with a store", () => {
   });
 
   test("adds verbatim, with role, actor and conversation, and no entities", async () => {
-    const r = await engine.add({
+    const r = await memoryEngine.add({
       datapack_id: "dp1",
       user_id: "u",
       agent_id: "claude_code:x",
@@ -150,7 +150,7 @@ describe("with a store", () => {
       [{ role: "user", content: "x", name: 7 }],
     ]) {
       await assert.rejects(
-        engine.add({ datapack_id: "dp1", user_id: "u", messages: messages as any }),
+        memoryEngine.add({ datapack_id: "dp1", user_id: "u", messages: messages as any }),
         (e: HttpError) => e.status === 400,
       );
     }
@@ -158,13 +158,13 @@ describe("with a store", () => {
 
   test("refuses extraction", async () => {
     await assert.rejects(
-      engine.add({ datapack_id: "dp1", user_id: "u", messages: [{ role: "user", content: "x" }], infer: true }),
+      memoryEngine.add({ datapack_id: "dp1", user_id: "u", messages: [{ role: "user", content: "x" }], infer: true }),
       (e: HttpError) => e.code === "INFER_UNAVAILABLE",
     );
   });
 
   test("search scores the Meko way and returns prod's shape", async () => {
-    await engine.add({
+    await memoryEngine.add({
       datapack_id: "dp2",
       user_id: "u",
       messages: [
@@ -172,7 +172,7 @@ describe("with a store", () => {
         { role: "user", content: "bananas are yellow" },
       ],
     });
-    const { results } = await engine.search({ datapack_id: "dp2", user_id: "u", query: "rate limit", limit: 5 });
+    const { results } = await memoryEngine.search({ datapack_id: "dp2", user_id: "u", query: "rate limit", limit: 5 });
     assert.equal(results[0].memory, "the rate limit is five hundred requests");
     for (const r of results) {
       assert.ok(r.score! >= 0 && r.score! <= 1, `score ${r.score}`);
@@ -182,17 +182,17 @@ describe("with a store", () => {
     // The keyword hit counts toward the top result's divisor, not the other one's.
     const top = results[0];
     assert.ok(top.score! > top.raw_similarity_score! / 2);
-    const other = await engine.search({ datapack_id: "dp2", user_id: "other", query: "rate limit" });
+    const other = await memoryEngine.search({ datapack_id: "dp2", user_id: "other", query: "rate limit" });
     assert.equal(other.results.length, 0, "another user's memories");
     await assert.rejects(
-      engine.search({ datapack_id: "dp2", user_id: "u", query: "rate", limit: "abc" as any }),
+      memoryEngine.search({ datapack_id: "dp2", user_id: "u", query: "rate", limit: "abc" as any }),
       (e: HttpError) => e.status === 400,
     );
   });
 
   test("search rescores all of mem0's candidates: mem0 cuts none", async () => {
     fake.requests.length = 0;
-    await engine.search({ datapack_id: "dp2", user_id: "u", query: "rate limit", limit: 10 });
+    await memoryEngine.search({ datapack_id: "dp2", user_id: "u", query: "rate limit", limit: 10 });
     const asked = fake.requests.filter((r) => r.path.endsWith("search")).map((r) => [r.path, r.body.top_k]);
     assert.deepEqual(asked, [
       ["/v1/collections/dp2/search", 240],
@@ -202,33 +202,33 @@ describe("with a store", () => {
   });
 
   test("update and delete go through mem0, and a missing id is a 404", async () => {
-    const { results } = await engine.add({ datapack_id: "dp3", user_id: "u", messages: [{ role: "user", content: "old" }] });
+    const { results } = await memoryEngine.add({ datapack_id: "dp3", user_id: "u", messages: [{ role: "user", content: "old" }] });
     const id = results[0].id as string;
-    await engine.update({ datapack_id: "dp3", memory_id: id, text: "new text" });
+    await memoryEngine.update({ datapack_id: "dp3", memory_id: id, text: "new text" });
     assert.equal(fake.rows.get("dp3")!.get(id)!.payload.data, "new text");
-    await engine.delete({ datapack_id: "dp3", memory_id: id });
+    await memoryEngine.delete({ datapack_id: "dp3", memory_id: id });
     assert.equal(fake.rows.get("dp3")!.has(id), false);
-    await assert.rejects(engine.delete({ datapack_id: "dp3", memory_id: id }), (e: HttpError) => e.status === 404);
+    await assert.rejects(memoryEngine.delete({ datapack_id: "dp3", memory_id: id }), (e: HttpError) => e.status === 404);
   });
 
   test("embeds in batches, within the limit", async () => {
-    const { vectors } = await engine.embed({ texts: ["a", "b"] });
+    const { vectors } = await memoryEngine.embed({ texts: ["a", "b"] });
     assert.equal(vectors.length, 2);
     assert.equal(vectors[0].length, 384);
-    await assert.rejects(engine.embed({ texts: new Array(257).fill("x") }), (e: HttpError) => e.status === 400);
+    await assert.rejects(memoryEngine.embed({ texts: new Array(257).fill("x") }), (e: HttpError) => e.status === 400);
   });
 
   test("embeds in the background on request, and refuses a background that isn't a boolean", async () => {
-    const { vectors } = await engine.embed({ texts: ["a"], background: true });
+    const { vectors } = await memoryEngine.embed({ texts: ["a"], background: true });
     assert.deepEqual(vectors, await embedder.embedBatch(["a"]));
     await assert.rejects(
-      engine.embed({ texts: ["a"], background: "yes" as unknown as boolean }),
+      memoryEngine.embed({ texts: ["a"], background: "yes" as unknown as boolean }),
       (e: HttpError) => e.status === 400,
     );
   });
 
   test("reranks with its reranker, and says when it has none ready", async () => {
-    const ranked = new Engine(embedder, 2, new OverlapReranker());
+    const ranked = new MemoryEngine(embedder, 2, new OverlapReranker());
     const { scores } = await ranked.rerank({ query: "deploy the server", texts: ["how to deploy the server", "lunch"] });
     assert.equal(scores.length, 2);
     assert.ok(scores[0] > scores[1]);
@@ -247,13 +247,13 @@ describe("with a store", () => {
       rerank: async () => [],
       close: async () => {},
     };
-    for (const e of [new Engine(embedder), new Engine(embedder, 2, loading)]) {
+    for (const e of [new MemoryEngine(embedder), new MemoryEngine(embedder, 2, loading)]) {
       await assert.rejects(e.rerank({ query: "q", texts: ["a"] }), (err: HttpError) => err.code === "RERANKER_NOT_READY");
     }
   });
 
   test("keeps the most recently used datapacks' Memory, and rebuilds a dropped one", async () => {
-    const small = new Engine(embedder, 2);
+    const small = new MemoryEngine(embedder, 2);
     const add = (dp: string) =>
       small.add({ datapack_id: dp, user_id: "u", agent_id: "a", messages: [{ role: "user", content: `lru ${dp}` }] });
     await add("lru-a");
@@ -344,9 +344,9 @@ describe("the API", () => {
     fake = await startFakeStore();
     const embedder = new HashEmbedder();
     register(new StoreClient(fake.socket, fake.token), embedder);
-    socket = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mk-")), "engine.sock");
+    socket = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mk-")), "mem_eng.sock");
     const health: Health = { state: "ready", embedder: embedder.info };
-    server = await startServer(socket, "tok", new Engine(embedder), () => health, () => {});
+    server = await startServer(socket, "tok", new MemoryEngine(embedder), () => health, () => {});
   });
   after(async () => {
     server.close();

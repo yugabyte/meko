@@ -1,7 +1,7 @@
-// Package storeapi is the store API the Node engine calls on run/store.sock: mem0's two storage
+// Package storeapi is the store API the memory engine calls on run/store.sock: mem0's two storage
 // interfaces (VectorStore and HistoryManager) as HTTP/JSON routes over internal/store, plus the
-// engine's hello. It listens only on the unix socket (0600, in the 0700 run folder) and needs the
-// per-start internal token. The engine keeps no database of its own: every row goes through here.
+// memory engine's hello. It listens only on the unix socket (0600, in the 0700 run folder) and needs the
+// per-start internal token. The memory engine keeps no database of its own: every row goes through here.
 package storeapi
 
 import (
@@ -36,8 +36,8 @@ type Server struct {
 	onHello func(store.Embedder)
 }
 
-// New builds the store API over st. onHello, if set, hears the embedding model of each engine
-// that says hello and is accepted.
+// New builds the store API over st. onHello, if set, hears the embedding model of each memory
+// engine that says hello and is accepted.
 func New(st *store.Store, token string, log *slog.Logger, onHello func(store.Embedder)) *Server {
 	e := echo.New()
 	e.HideBanner, e.HidePort = true, true
@@ -55,7 +55,7 @@ func New(st *store.Store, token string, log *slog.Logger, onHello func(store.Emb
 	e.Use(middleware.BodyLimit(BodyLimit))
 
 	v1 := e.Group("/v1")
-	v1.POST("/engine/hello", s.hello)
+	v1.POST("/memory_engine/hello", s.hello)
 	c := v1.Group("/collections/:collection")
 	c.POST("/insert", s.insert)
 	c.POST("/search", s.search)
@@ -155,12 +155,12 @@ func (s *Server) hello(c echo.Context) error {
 	if err := s.st.EnsureVectors(c.Request().Context(), e); err != nil {
 		var changed *store.ModelChangedError
 		if errors.As(err, &changed) {
-			s.log.Error("engine refused: its embedding model isn't the one the vectors were made with",
+			s.log.Error("memory engine refused: its embedding model isn't the one the vectors were made with",
 				"have", changed.Have.Model, "got", changed.Got.Model)
 		}
 		return fail(c, err)
 	}
-	s.log.Info("engine said hello", "provider", e.Provider, "model", e.Model, "dims", e.Dims)
+	s.log.Info("memory engine said hello", "provider", e.Provider, "model", e.Model, "dims", e.Dims)
 	if s.onHello != nil {
 		s.onHello(e)
 	}
@@ -304,7 +304,7 @@ func (s *Server) remove(c echo.Context) error {
 
 // deleteCollection is mem0's deleteCol, which would drop a datapack's memories: refused.
 func (s *Server) deleteCollection(c echo.Context) error {
-	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "The engine can't drop a datapack's memories.")
+	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "The memory engine can't drop a datapack's memories.")
 }
 
 func (s *Server) addHistory(c echo.Context) error {

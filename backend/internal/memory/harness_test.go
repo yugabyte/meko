@@ -10,21 +10,21 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
-	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/storeapi"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
-// The embedders a test can start the engine with.
+// The embedders a test can start the memory engine with.
 const (
 	hashEmbedder = "hash" // deterministic, no download: for plumbing
 	realEmbedder = ""     // the real model, from a cache shared across runs (CI keeps it)
 )
 
 // harness is the real thing minus the HTTP server: the store, its API on a unix socket, the Node
-// engine under the supervisor, and the service over them.
+// memory engine under the supervisor, and the service over them.
 type harness struct {
 	t      *testing.T
 	l      paths.Layout
@@ -36,31 +36,31 @@ type harness struct {
 	token  string
 	node   string
 	dir    string
-	o      engine.Options
+	o      memoryengine.Options
 }
 
-// engineDir is the built engine in this source tree. Without it (or Node) the test is skipped,
+// memoryEngineDir is the built memory engine in this source tree. Without it (or Node) the test is skipped,
 // except in CI, where make test builds it first and a skip would hide a broken build.
-func engineDir(t *testing.T) (node, dir string) {
+func memoryEngineDir(t *testing.T) (node, dir string) {
 	t.Helper()
 	missing := func(err error) {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skipf("%v (make test builds the engine)", err)
+		t.Skipf("%v (make test builds the memory engine)", err)
 	}
-	dir, err := engine.FindDir(engine.Options{Dir: filepath.Join("..", "..", "engine")})
+	dir, err := memoryengine.FindDir(memoryengine.Options{Dir: filepath.Join("..", "..", "memory_engine")})
 	if err != nil {
 		missing(err)
 	}
-	if node, err = engine.FindNode(engine.Options{}); err != nil {
+	if node, err = memoryengine.FindNode(memoryengine.Options{}); err != nil {
 		missing(err)
 	}
 	return node, dir
 }
 
 // modelsDir is where the real model is kept between runs: MEKO_TEST_MODELS, or
-// engine/.models in this source tree (ignored by git).
+// memory_engine/.models in this source tree (ignored by git).
 func modelsDir(t *testing.T, dir string) string {
 	t.Helper()
 	if d := os.Getenv("MEKO_TEST_MODELS"); d != "" {
@@ -75,7 +75,7 @@ func modelsDir(t *testing.T, dir string) string {
 
 func newHarness(t *testing.T, embedder string) *harness {
 	t.Helper()
-	node, dir := engineDir(t)
+	node, dir := memoryEngineDir(t)
 	ctx := context.Background()
 	root, err := os.MkdirTemp("/tmp", "mk-") // short: unix sockets have a path length limit
 	if err != nil {
@@ -119,40 +119,40 @@ func newHarness(t *testing.T, embedder string) *harness {
 	t.Cleanup(func() { _ = api.Shutdown(context.Background()) })
 
 	h := &harness{t: t, l: l, st: st, dp: dp, userID: userID, token: token, node: node, dir: dir,
-		o: engine.Options{TestEmbedder: embedder}}
-	h.svc = New(st, engine.NewClient(l.EngineSock, token), Options{UserID: userID, Log: log,
+		o: memoryengine.Options{TestEmbedder: embedder}}
+	h.svc = New(st, memoryengine.NewClient(l.MemoryEngineSock, token), Options{UserID: userID, Log: log,
 		FilesDir: l.KnowledgeFiles, BaseURL: "http://127.0.0.1:7778"})
-	h.startEngine()
+	h.startMemoryEngine()
 	return h
 }
 
-// startEngine starts the engine under a new supervisor and waits until it's ready.
-func (h *harness) startEngine() {
+// startMemoryEngine starts the memory engine under a new supervisor and waits until it's ready.
+func (h *harness) startMemoryEngine() {
 	h.t.Helper()
-	h.launchEngine()
-	h.waitEngine("ready")
+	h.launchMemoryEngine()
+	h.waitMemoryEngine("ready")
 }
 
-// launchEngine starts the engine under a new supervisor.
-func (h *harness) launchEngine() {
+// launchMemoryEngine starts the memory engine under a new supervisor.
+func (h *harness) launchMemoryEngine() {
 	h.t.Helper()
 	h.sup = supervisor.New(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	sp := engine.Spec(h.node, h.dir, h.l, h.token, h.o)
+	sp := memoryengine.Spec(h.node, h.dir, h.l, h.token, h.o)
 	sp.MinBackoff, sp.MaxBackoff = 50*time.Millisecond, 100*time.Millisecond
 	h.sup.Start(sp)
 	sup := h.sup
 	h.t.Cleanup(func() { _ = sup.Stop(context.Background()) })
 }
 
-func (h *harness) stopEngine() {
+func (h *harness) stopMemoryEngine() {
 	h.t.Helper()
 	if err := h.sup.Stop(context.Background()); err != nil {
 		h.t.Fatal(err)
 	}
 }
 
-// waitEngine waits (2 minutes at most: the first run downloads the model) for the engine's state.
-func (h *harness) waitEngine(state string) EngineStatus {
+// waitMemoryEngine waits (2 minutes at most: the first run downloads the model) for the memory engine's state.
+func (h *harness) waitMemoryEngine(state string) EngineStatus {
 	h.t.Helper()
 	var st EngineStatus
 	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
@@ -160,7 +160,7 @@ func (h *harness) waitEngine(state string) EngineStatus {
 			return st
 		}
 	}
-	log, _ := os.ReadFile(h.l.EngineLog)
-	h.t.Fatalf("the engine never got to %s: %+v\nengine.log:\n%s", state, st, log)
+	log, _ := os.ReadFile(h.l.MemoryEngineLog)
+	h.t.Fatalf("the memory engine never got to %s: %+v\nmemory_engine.log:\n%s", state, st, log)
 	return st
 }

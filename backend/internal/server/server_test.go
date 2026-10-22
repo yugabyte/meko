@@ -48,7 +48,7 @@ func startWith(t *testing.T, authMode string) (*Server, string, *bytes.Buffer) {
 		Auth:        authMode,
 		Logger:      slog.New(slog.NewJSONHandler(&logs, nil)),
 		Children: func() []supervisor.Status {
-			return []supervisor.Status{{Name: "engine", State: supervisor.Running}}
+			return []supervisor.Status{{Name: "memory_engine", State: supervisor.Running}}
 		},
 	})
 	go func() { _ = s.Serve(ln) }()

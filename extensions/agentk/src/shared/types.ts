@@ -1637,17 +1637,18 @@ export interface PastedImage {
 export const KB_UPLOAD_EXTS = ['pdf', 'txt', 'text', 'md', 'json', 'csv', 'xml', 'html', 'htm'] as const;
 
 /**
- * The largest file the knowledge route takes: the ceiling of Meko's upload route (smaller plans get
- * Meko's 413). Upload to Meko sends files held in a terminal's strip, which holds files up to
- * MAX_PASTE_BYTES, so from the UI that's the limit.
+ * The largest file the knowledge route takes: a standard plan's per-file cap in Meko (a free plan's
+ * is smaller, and Meko's 400 says so). Upload to Meko sends files held in a terminal's strip, which
+ * holds files up to MAX_PASTE_BYTES, so from the UI that's the limit.
  */
 export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /**
  * POST /api/sessions/:id/knowledge: a file added to the knowledge base of the session's project
- * datapack. `processing`: Meko is indexing it, and AgentK reports when it's done (a `knowledge`
- * event). `uploaded`: Meko took it, but answered with no document key or a status AgentK doesn't
- * know, so nothing more is reported. The others: Meko already had the same bytes.
+ * datapack. `processing`: the file is in Meko's storage and Meko indexes it, and AgentK reports when
+ * it's done (a `knowledge` event). `already_uploaded`: Meko already had the same bytes. The server
+ * no longer sends `uploaded` or `already_processed` (answers of Meko's removed single-call upload
+ * route); the UI still reads them as added and as already there.
  */
 export interface KnowledgeUpload {
   filename: string;
@@ -2387,8 +2388,9 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/knowledge?name=  file bytes → KnowledgeUpload   (the body is the file, as
 //        application/octet-stream, else 415; `name` is its base name, with an extension in KB_UPLOAD_EXTS, else 400;
 //        empty 400, over MAX_KB_UPLOAD_BYTES 413; 409 for an archived session, with Meko off, or a project with no
-//        dedicated datapack. Sent to Meko's knowledge-base upload route. Meko's 400, 403, 413 and 415 come back with
-//        their status; anything else Meko answers (a refused key included), or Meko unreachable, is a 502)
+//        dedicated datapack. Sent through Meko's presigned upload: upload-url, then the file to Meko's storage.
+//        Meko's 400, 403, 413 and 415 come back with their status, its 402 (no room on the plan) as a 413; anything
+//        else Meko or its storage answers (a refused key included), or either unreachable, is a 502)
 // GET    /api/sessions/:id/comments            → ReviewComment[]
 // POST   /api/sessions/:id/comments NewComment → ReviewComment
 // PATCH  /api/sessions/:id/comments/:cid { body } → ReviewComment   (drafts only)

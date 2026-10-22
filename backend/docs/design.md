@@ -11,7 +11,7 @@ data folder from `~/.meko-local` to `~/.meko`, and the Go module path to
 Developers switching binaries: stop any `meko-local serve` first (`meko-local stop`), then move
 `~/.meko-local` to `~/.meko` by hand if you want its data. The new binary checks only
 `run/meko.lock`, so in a folder where an old server still runs it thinks no server is running.
-`meko stop` would then kill the old server's engine, recorded in `run/children/`. `meko start` would
+`meko stop` would then kill the old server's memory engine, recorded in `run/children/`. `meko start` would
 delete the `run/admin.token` that server's CLI still needs.
 
 The foundation is the Go program everything else plugs into: one binary, `meko`, that is
@@ -33,7 +33,7 @@ In the foundation (milestone 1):
 - A supervisor that starts, watches, restarts and stops child processes.
 - Logging, shutdown, a single-instance lock, build and CI for Linux and macOS.
 
-Not in it (later milestones, sketched at the end): the engine's storage API and the Node engine,
+Not in it (later milestones, sketched at the end): the memory engine's storage API and the Node memory engine,
 MCP tools, the meko_ui REST API and serving the UI, knowledge-file ingestion, moving to Meko Cloud,
 installers and releases.
 
@@ -70,8 +70,8 @@ flowchart LR
   cli["meko start"] -->|spawns detached| serve["meko serve (parent)"]
   serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1, /mcp (later the UI)"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
-  serve -->|"starts, watches, restarts"| engine["Node engine (milestone 2)"]
-  engine -->|"store API, unix socket"| serve
+  serve -->|"starts, watches, restarts"| memory_engine["Node memory engine (milestone 2)"]
+  memory_engine -->|"store API, unix socket"| serve
   status["meko status / stop"] -->|"/api/v1/status, pid file"| serve
 ```
 
@@ -109,7 +109,7 @@ A client that needs Meko running, such as AgentK, runs `meko start`. It must not
   config.toml                optional; written only when the user changes a default
   meko.db, meko.db-wal       0600; the only database
   run/                       pid, port, lock, admin token, unix sockets (0600)
-  logs/                      meko.log, engine.log (rotated)
+  logs/                      meko.log, memory_engine.log (rotated)
   models/                    model files, when downloaded (milestone 2)
   knowledgebase-files/       knowledge files' bytes, <datapack>/<sha256> (milestone 4)
 ```
@@ -237,7 +237,7 @@ The memory and conversation tables come in milestone 2 (`0002_memory.sql` in #17
 `0003_conversations.sql` in #182); [memory-engine.md](memory-engine.md) describes them. Two things the
 foundation fixed hold: the FTS5 table has `datapack_id` as a column so the filter runs inside
 MATCH (the naive join with the filter outside FTS never finished at 200 MB), and the `vec0` tables
-are made when the engine first reports its model and dimension.
+are made when the memory engine first reports its model and dimension.
 
 ## HTTP server
 
@@ -274,7 +274,7 @@ the client token for MCP and REST clients (last bullet).
 
 ## Supervisor
 
-A small, generic process manager. The engine is its first user in milestone 2, and connectors
+A small, generic process manager. The memory engine is its first user in milestone 2, and connectors
 later. The foundation tests it with a stub child.
 
 - A child spec has: name, command, args, env, working folder, log file, a health check (a unix
@@ -285,22 +285,22 @@ later. The foundation tests it with a stub child.
   stderr go to `logs/<name>.log`.
 - Restarts back off exponentially (1 s doubling to 60 s). If a child crashes 5 times in 10
   minutes it's marked failed, and the server keeps running without it: features that need it
-  return a clear "engine unavailable" error, and `status` shows why.
+  return a clear "memory engine unavailable" error, and `status` shows why.
 - Children get their sockets and a per-start token through env (`MEKO_STORE_SOCKET`,
-  `MEKO_ENGINE_SOCKET`, `MEKO_INTERNAL_TOKEN`). The sockets sit in `run/` (0700) and are 0600.
+  `MEKO_MEMORY_ENGINE_SOCKET`, `MEKO_INTERNAL_TOKEN`). The sockets sit in `run/` (0700) and are 0600.
 
-### Go and the engine
+### Go and the memory engine
 
 The link is HTTP/JSON over unix sockets, one each way (decided). Go serves the store
-API on `run/store.sock`, and the engine serves its own API (add, search, extract) on
-`run/engine.sock`. Both sides speak the same protocol, the link can be tested with curl, and
+API on `run/store.sock`, and the memory engine serves its own API (add, search, extract) on
+`run/mem_eng.sock`. Both sides speak the same protocol, the link can be tested with curl, and
 nothing has to multiplex two directions over one pipe, which stdio JSON-RPC would require. It
 only goes over the internal sockets, never the TCP port.
 
 The store API (milestone 2) mirrors mem0-ts's two storage interfaces, `VectorStore` and
 `HistoryManager`, which is everything mem0-ts needs from a database. mem0's collection name maps
 to a datapack: `<datapack id>` to `memories`, and `<datapack id>_entities` to `entities`. The
-routes, the engine's API and the engine itself are in [memory-engine.md](memory-engine.md).
+routes, the memory engine's API and the memory engine itself are in [memory-engine.md](memory-engine.md).
 
 ## Logging
 
@@ -412,9 +412,9 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 
 | # | Milestone | Builds on the foundation with |
 |---|---|---|
-| 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
+| 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node memory engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
 | 3 | MCP and REST | Built in #197 (the rename) and the stack #201 to #204: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
-| 4 | Knowledge files | Built in #170: [knowledge.md](knowledge.md). Uploads through Cloud's presigned flow onto a sink on Meko, files in `knowledgebase-files/`, extraction and chunking in Go, embedding and Cloud's cross-encoder in the engine, dedupe by content hash, promoted memories in the knowledge base |
+| 4 | Knowledge files | Built in #170: [knowledge.md](knowledge.md). Uploads through Cloud's presigned flow onto a sink on Meko, files in `knowledgebase-files/`, extraction and chunking in Go, embedding and Cloud's cross-encoder in the memory engine, dedupe by content hash, promoted memories in the knowledge base |
 | 5 | Install and release | Native builds with Meko's own Node, launchd and systemd units, installers, prefixed release tags (`meko-v...`), not marked latest (#171) |
 | 6 | Web UI | The pinned meko_ui package served at `/`, local mode in meko_ui, browser access (#172) |
 | 7 | Move to Meko Cloud | The export bundle, and prod's import API (#173) |
@@ -423,7 +423,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 
 | Question | Answer | Decided |
 |---|---|---|
-| How should the Go server and the Node engine talk to each other? (`go-node-link`) | HTTP/JSON over unix sockets, one each way | As proposed: Go serves the store API on `run/store.sock`, the engine its API on `run/engine.sock`, with a per-start token. Built in milestone 2; the foundation's supervisor and `run/` layout already assume it. |
+| How should the Go server and the Node memory engine talk to each other? (`go-node-link`) | HTTP/JSON over unix sockets, one each way | As proposed: Go serves the store API on `run/store.sock`, the memory engine its API on `run/mem_eng.sock`, with a per-start token. Built in milestone 2; the foundation's supervisor and `run/` layout already assume it. |
 | How do we reuse prod's api_server code? (`api-server-reuse`) | No copy for now; build what Meko needs as its own stack | No code is copied from `api_server` and nothing waits on prod. Meko writes its own handlers, store and envelope, keeping only prod's wire shapes (the `{data, error}` envelope now; MCP and REST shapes later). |
 | Which default port? (`default-port`) | 7778 | 7778, configurable with `--port`, `MEKO_PORT` or `config.toml`; `serve` exits with a clear error if it's taken, with no random fallback. |
 | How does the browser authenticate in this phase? (`browser-auth`) | No browser login; CLI only | CLI-only access with the local admin token; no API keys yet. API keys come with MCP (milestone 3), browser access with the UI (milestone 4). Since revised: milestone 3 added a client token instead of keys, per-client API keys are #195, and the UI is milestone 6 (#172). |

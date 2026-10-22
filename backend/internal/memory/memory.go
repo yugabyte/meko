@@ -1,6 +1,6 @@
 // Package memory is Meko's memories, conversations and knowledge base as Go calls: what the MCP
 // tools and REST routes serve. Model work (embedding, reranking, and mem0's add and search) goes
-// to the Node engine; reads that need no model come straight from the store.
+// to the memory engine; reads that need no model come straight from the store.
 package memory
 
 import (
@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/knowledge"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
-// Errors the service returns, besides the engine's (engine.ErrUnavailable, *engine.NotReadyError).
+// Errors the service returns, besides the memory engine's (memoryengine.ErrUnavailable, *memoryengine.NotReadyError).
 var (
 	ErrNoDatapack = errors.New("no such datapack")
 	ErrNotFound   = errors.New("no such memory")
@@ -27,30 +27,30 @@ var (
 
 // Service is the memory, conversation and knowledge-base operations of one install.
 type Service struct {
-	st            *store.Store
-	eng           *engine.Client
-	userID        string
-	log           *slog.Logger
-	noEngine      string
-	child         func() (supervisor.Status, bool)
-	maxDistance   float64
-	kbMaxDistance float64
-	kick          chan struct{}
-	indexKick     chan struct{}
-	files         *knowledge.Files
-	fileMu        sync.Mutex // a file's bytes and its row change together: storing one, deleting one
-	tickets       *tickets
-	baseURL       string
+	st             *store.Store
+	eng            *memoryengine.Client
+	userID         string
+	log            *slog.Logger
+	noMemoryEngine string
+	child          func() (supervisor.Status, bool)
+	maxDistance    float64
+	kbMaxDistance  float64
+	kick           chan struct{}
+	indexKick      chan struct{}
+	files          *knowledge.Files
+	fileMu         sync.Mutex // a file's bytes and its row change together: storing one, deleting one
+	tickets        *tickets
+	baseURL        string
 }
 
 // Options configure a Service.
 type Options struct {
 	UserID string // the install's local user
 	Log    *slog.Logger
-	// NoEngine, if set, says why serve couldn't start the engine (no Node, or it isn't built).
-	NoEngine string
-	// EngineChild, if set, is the supervisor's status of the engine's child process.
-	EngineChild func() (supervisor.Status, bool)
+	// NoMemoryEngine, if set, says why serve couldn't start the memory engine (no Node, or it isn't built).
+	NoMemoryEngine string
+	// MemoryEngineChild, if set, is the supervisor's status of the memory engine's child process.
+	MemoryEngineChild func() (supervisor.Status, bool)
 	// MaxDistance is conversation search's cutoff; 0 means DefaultMaxDistance.
 	MaxDistance float64
 	// KBMaxDistance is context_search's cutoff for knowledge-base results; 0 means
@@ -62,31 +62,31 @@ type Options struct {
 	BaseURL string
 }
 
-// New is the service over st and the engine eng.
-func New(st *store.Store, eng *engine.Client, o Options) *Service {
+// New is the service over st and the memory engine eng.
+func New(st *store.Store, eng *memoryengine.Client, o Options) *Service {
 	if o.MaxDistance <= 0 {
 		o.MaxDistance = DefaultMaxDistance
 	}
 	if o.KBMaxDistance <= 0 {
 		o.KBMaxDistance = DefaultKBMaxDistance
 	}
-	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noEngine: o.NoEngine, child: o.EngineChild,
-		maxDistance: o.MaxDistance, kbMaxDistance: o.KBMaxDistance, kick: make(chan struct{}, 1),
-		indexKick: make(chan struct{}, 1), files: knowledge.NewFiles(o.FilesDir),
+	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noMemoryEngine: o.NoMemoryEngine,
+		child: o.MemoryEngineChild, maxDistance: o.MaxDistance, kbMaxDistance: o.KBMaxDistance,
+		kick: make(chan struct{}, 1), indexKick: make(chan struct{}, 1), files: knowledge.NewFiles(o.FilesDir),
 		tickets: &tickets{m: map[string]*ticket{}}, baseURL: strings.TrimSuffix(o.BaseURL, "/")}
 }
 
 // UserID is the install's local user, the user_id on every memory.
 func (s *Service) UserID() string { return s.userID }
 
-// engineErr turns the engine client's errors into the service's.
-func (s *Service) engineErr(err error) error {
-	var api *engine.APIError
+// memoryEngineErr turns the memory engine client's errors into the service's.
+func (s *Service) memoryEngineErr(err error) error {
+	var api *memoryengine.APIError
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, engine.ErrUnavailable) && s.noEngine != "":
-		return fmt.Errorf("%w: %s", engine.ErrUnavailable, s.noEngine)
+	case errors.Is(err, memoryengine.ErrUnavailable) && s.noMemoryEngine != "":
+		return fmt.Errorf("%w: %s", memoryengine.ErrUnavailable, s.noMemoryEngine)
 	case errors.As(err, &api) && api.Code == "NOT_FOUND":
 		return ErrNotFound
 	case errors.As(err, &api) && api.Status == 400:
@@ -113,24 +113,24 @@ type AddMemory struct {
 	ConversationID string
 	Text           string
 	// Messages, if set, are stored instead of Text: each non-system one becomes a memory.
-	Messages []engine.Message
+	Messages []memoryengine.Message
 	Metadata map[string]any
 }
 
 // AddMemory stores memories verbatim and returns what it added.
-func (s *Service) AddMemory(ctx context.Context, r AddMemory) ([]engine.Added, error) {
+func (s *Service) AddMemory(ctx context.Context, r AddMemory) ([]memoryengine.Added, error) {
 	if err := s.needDatapack(ctx, r.DatapackID); err != nil {
 		return nil, err
 	}
 	msgs := r.Messages
 	if len(msgs) == 0 {
-		msgs = []engine.Message{{Role: "user", Content: r.Text}}
+		msgs = []memoryengine.Message{{Role: "user", Content: r.Text}}
 	}
-	added, err := s.eng.Add(ctx, engine.AddRequest{
+	added, err := s.eng.Add(ctx, memoryengine.AddRequest{
 		DatapackID: r.DatapackID, UserID: s.userID, AgentID: r.AgentID, ConversationID: r.ConversationID,
 		Messages: msgs, Metadata: r.Metadata,
 	})
-	return added, s.engineErr(err)
+	return added, s.memoryEngineErr(err)
 }
 
 // Search asks for a datapack's memories that best match a query.
@@ -144,15 +144,15 @@ type Search struct {
 
 // SearchMemories is the best memories for a query, best first, with prod's 0-1 score and the
 // cosine as raw_similarity_score.
-func (s *Service) SearchMemories(ctx context.Context, r Search) ([]engine.Memory, error) {
+func (s *Service) SearchMemories(ctx context.Context, r Search) ([]memoryengine.Memory, error) {
 	if err := s.needDatapack(ctx, r.DatapackID); err != nil {
 		return nil, err
 	}
-	res, err := s.eng.Search(ctx, engine.SearchRequest{
+	res, err := s.eng.Search(ctx, memoryengine.SearchRequest{
 		DatapackID: r.DatapackID, UserID: s.userID, AgentID: r.AgentID, ConversationID: r.ConversationID,
 		Query: r.Query, Limit: r.Limit,
 	})
-	return res, s.engineErr(err)
+	return res, s.memoryEngineErr(err)
 }
 
 // UpdateMemory replaces a memory of the local user's, or returns ErrPromoted for one promoted.
@@ -163,7 +163,7 @@ func (s *Service) UpdateMemory(ctx context.Context, datapack, id, text string) e
 	if _, err := s.own(ctx, datapack, id); err != nil {
 		return err
 	}
-	return s.engineErr(s.eng.Update(ctx, datapack, id, text))
+	return s.memoryEngineErr(s.eng.Update(ctx, datapack, id, text))
 }
 
 // DeleteMemory deletes a memory of the local user's, or returns ErrPromoted for one promoted.
@@ -174,14 +174,14 @@ func (s *Service) DeleteMemory(ctx context.Context, datapack, id string) error {
 	if _, err := s.own(ctx, datapack, id); err != nil {
 		return err
 	}
-	return s.engineErr(s.eng.Delete(ctx, datapack, id))
+	return s.memoryEngineErr(s.eng.Delete(ctx, datapack, id))
 }
 
 // GetMemory is one of the local user's memories in the datapack, or ErrNotFound.
-func (s *Service) GetMemory(ctx context.Context, datapack, id string) (engine.Memory, error) {
+func (s *Service) GetMemory(ctx context.Context, datapack, id string) (memoryengine.Memory, error) {
 	rec, err := s.own(ctx, datapack, id)
 	if err != nil {
-		return engine.Memory{}, err
+		return memoryengine.Memory{}, err
 	}
 	return fromRecord(datapack, *rec), nil
 }
@@ -202,7 +202,7 @@ func (s *Service) own(ctx context.Context, datapack, id string) (*store.Record, 
 // ListMemories is the datapack's memories of the local user that match f, oldest first, up to
 // limit, and how many match in all.
 func (s *Service) ListMemories(ctx context.Context, datapack string, f store.Filter, limit int) (
-	[]engine.Memory, int, error) {
+	[]memoryengine.Memory, int, error) {
 	scoped := store.Filter{"user_id": s.userID}
 	if len(f) > 0 {
 		scoped["AND"] = []any{map[string]any(f)}
@@ -211,21 +211,21 @@ func (s *Service) ListMemories(ctx context.Context, datapack string, f store.Fil
 	if err != nil {
 		return nil, 0, err
 	}
-	out := make([]engine.Memory, len(recs))
+	out := make([]memoryengine.Memory, len(recs))
 	for i, r := range recs {
 		out[i] = fromRecord(datapack, r)
 	}
 	return out, total, nil
 }
 
-// fromRecord is a stored memory in prod's reply shape, as the engine's search returns them.
-func fromRecord(datapack string, r store.Record) engine.Memory {
+// fromRecord is a stored memory in prod's reply shape, as the memory engine's search returns them.
+func fromRecord(datapack string, r store.Record) memoryengine.Memory {
 	p := r.Payload
 	str := func(k string) string {
 		s, _ := p[k].(string)
 		return s
 	}
-	m := engine.Memory{
+	m := memoryengine.Memory{
 		ID: r.ID, Memory: str("data"), Hash: str("hash"), CreatedAt: str("createdAt"), UpdatedAt: str("updatedAt"),
 		UserID: str("user_id"), AgentID: str("agent_id"), RunID: str("meko_conversation_id"), ActorID: str("actor_id"),
 		Role: str("role"), AttributedTo: str("attributedTo"), ExpirationDate: str("expiration_date"),
@@ -248,20 +248,21 @@ func fromRecord(datapack string, r store.Record) engine.Memory {
 	return m
 }
 
-// EngineStatus is the engine's state for status reports: starting (no answer yet), loading (its
+// EngineStatus is the memory engine's state for status reports: starting (no answer yet), loading (its
 // model), ready, error (it says why), restarting (it crashed and the supervisor restarts it),
 // failed (it crashed too often and isn't restarted), or unavailable (it can't be started).
 type EngineStatus struct {
-	State    string           `json:"state"`
-	Reason   string           `json:"reason,omitempty"` // why it isn't ready
-	Embedder *engine.Embedder `json:"embedder,omitempty"`
-	Reranker *engine.Reranker `json:"reranker,omitempty"` // the knowledge base's; the engine is ready without it
+	State    string                 `json:"state"`
+	Reason   string                 `json:"reason,omitempty"` // why it isn't ready
+	Embedder *memoryengine.Embedder `json:"embedder,omitempty"`
+	// Reranker is the knowledge base's reranker; the memory engine is ready without it.
+	Reranker *memoryengine.Reranker `json:"reranker,omitempty"`
 }
 
-// EngineStatus asks the engine how it is.
+// EngineStatus asks the memory engine how it is.
 func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
-	if s.noEngine != "" {
-		return EngineStatus{State: "unavailable", Reason: s.noEngine}
+	if s.noMemoryEngine != "" {
+		return EngineStatus{State: "unavailable", Reason: s.noMemoryEngine}
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -281,7 +282,7 @@ func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
 
 // DeleteAllMemories deletes the local user's memories in a datapack written by one agent,
 // optionally only those of one conversation, and says how many it deleted. Each goes through the
-// engine, which also unlinks it from mem0's entities.
+// memory engine, which also unlinks it from mem0's entities.
 func (s *Service) DeleteAllMemories(ctx context.Context, datapack, agentID, conversationID string) (int, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return 0, err
@@ -291,7 +292,7 @@ func (s *Service) DeleteAllMemories(ctx context.Context, datapack, agentID, conv
 		return 0, err
 	}
 	for i, id := range ids {
-		if err := s.engineErr(s.eng.Delete(ctx, datapack, id)); err != nil && !errors.Is(err, ErrNotFound) {
+		if err := s.memoryEngineErr(s.eng.Delete(ctx, datapack, id)); err != nil && !errors.Is(err, ErrNotFound) {
 			return i, err
 		}
 	}
@@ -309,7 +310,7 @@ type Page struct {
 }
 
 // ListMemoryPage is a page of the local user's memories and how many match in all.
-func (s *Service) ListMemoryPage(ctx context.Context, p Page) ([]engine.Memory, int, error) {
+func (s *Service) ListMemoryPage(ctx context.Context, p Page) ([]memoryengine.Memory, int, error) {
 	if err := s.needDatapack(ctx, p.DatapackID); err != nil {
 		return nil, 0, err
 	}
@@ -318,7 +319,7 @@ func (s *Service) ListMemoryPage(ctx context.Context, p Page) ([]engine.Memory, 
 	if err != nil {
 		return nil, 0, err
 	}
-	out := make([]engine.Memory, len(recs))
+	out := make([]memoryengine.Memory, len(recs))
 	for i, r := range recs {
 		out[i] = fromRecord(p.DatapackID, r)
 	}

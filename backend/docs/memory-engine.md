@@ -7,8 +7,8 @@ doc matches the code at every step:
 |---|---|
 | #178 | The store: `0002_memory.sql`, mem0's filters, vector and keyword search, history; this doc |
 | #179 | The store API on `run/store.sock`, and `internal/envelope` |
-| #180 | The Node engine, `backend/engine` |
-| #181 | Running the engine under `serve`; `internal/engine` and `internal/memory` (memories) |
+| #180 | The Node memory engine, `backend/memory_engine` |
+| #181 | Running the memory engine under `serve`; `internal/memoryengine` and `internal/memory` (memories) |
 | #182 | Conversations and conversation search: `0003_conversations.sql`, `make bench` |
  Milestone 2 of the backend (issue #168), on the foundation in
 [design.md](design.md).
@@ -21,20 +21,20 @@ do:
 - **Conversations:** created idempotently per session, turns stored with a dedupe key, and turns
   indexed for conversation search, `context_search`'s conversation bucket.
 
-The engine is mem0's TypeScript library in a Node child process that `serve` supervises. It embeds
+The memory engine is mem0's TypeScript library in a Node child process that `serve` supervises. It embeds
 with a local model and makes no LLM calls in this milestone. Every database call stays in Go. MCP
 and the REST API come in milestone 3, so this milestone ends at a Go service layer
 (`internal/memory`) that the tests drive.
 
 Prod Meko's code is private and this repo will be public, so nothing here copies it or cites its
 paths: where Meko follows prod, this doc states the behavior and the code is written from
-scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0).
+scratch. The memory engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0).
 
 ## Left for later milestones
 
 | What | Decided so far |
 |---|---|
-| LLM extraction of memories from turns, and its LLM | Runs asynchronously from a durable queue in SQLite, which that milestone adds in its own migration. As in prod, only a turn's input is extracted, with earlier turns as context. The engine's `getLastMessages` will read Go's messages table. |
+| LLM extraction of memories from turns, and its LLM | Runs asynchronously from a durable queue in SQLite, which that milestone adds in its own migration. As in prod, only a turn's input is extracted, with earlier turns as context. The memory engine's `getLastMessages` will read Go's messages table. |
 | Links from turns to the memories they produced | A `message_memories` table written in the same transaction that marks a turn extracted (prod infers the link from timestamps). |
 | Learnings (keep, promote, counts) | Built in milestone 3: [api.md](api.md). |
 | Re-embedding, and embedders other than the local one | Until then the model is locked at first start (below). |
@@ -43,18 +43,18 @@ scratch. The engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0)
 
 | Decision | Why |
 |---|---|
-| **Public `mem0ai`, pinned exactly (3.3.1)**, with Meko's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | Meko Cloud's mem0 2.0 branch carries an unmodified upstream 3.1.2 TypeScript port (its Meko Cloud changes are Python-only), so the public package lost nothing when the engine started on it. The engine now runs ahead of that port. Of the `Memory` methods it calls (`add`, `search`, `update`, `delete`), 3.3.1 differs from 3.1.2 only in two ways: `add()` drops `actor_id` from the metadata it's given, which the next row works around, and a fix to its embedding cache lookup. The rest of 3.3.1 changes stores, LLMs and extraction that the engine doesn't use. mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `engine/test` checks the seam. |
-| **A verbatim add's speaker travels as `meko_actor_id`**, which `MekoStore.insert` stores as `actor_id` | mem0 3.3 drops `actor_id` from the metadata `add()` is given, as it drops the user, agent and run ids, and never sets it on a verbatim add. The engine sets the key from the message's `name` only, so a caller's metadata can't claim a speaker. |
-| **Meko Cloud's scoring, in our own code** | Upstream divides every memory by the most any memory in the results could reach; Meko Cloud divides each by what it earned, and returns the cosine as `raw_similarity_score`. The engine asks mem0's search for its score parts (`explain: true`) and rescores. |
+| **Public `mem0ai`, pinned exactly (3.3.1)**, with Meko's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | Meko Cloud's mem0 2.0 branch carries an unmodified upstream 3.1.2 TypeScript port (its Meko Cloud changes are Python-only), so the public package lost nothing when the memory engine started on it. The memory engine now runs ahead of that port. Of the `Memory` methods it calls (`add`, `search`, `update`, `delete`), 3.3.1 differs from 3.1.2 only in two ways: `add()` drops `actor_id` from the metadata it's given, which the next row works around, and a fix to its embedding cache lookup. The rest of 3.3.1 changes stores, LLMs and extraction that the memory engine doesn't use. mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `memory_engine/test` checks the seam. |
+| **A verbatim add's speaker travels as `meko_actor_id`**, which `MekoStore.insert` stores as `actor_id` | mem0 3.3 drops `actor_id` from the metadata `add()` is given, as it drops the user, agent and run ids, and never sets it on a verbatim add. The memory engine sets the key from the message's `name` only, so a caller's metadata can't claim a speaker. |
+| **Meko Cloud's scoring, in our own code** | Upstream divides every memory by the most any memory in the results could reach; Meko Cloud divides each by what it earned, and returns the cosine as `raw_similarity_score`. The memory engine asks mem0's search for its score parts (`explain: true`) and rescores. |
 | **Keyword scores are true BM25** (FTS5's `bm25()`, negated) | The scale mem0's BM25 sigmoid was tuned for. Prod's Postgres keyword search returns a `ts_rank_cd`-scale number the sigmoid maps close to 0. |
-| **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded, and the runtime milestone 4's cross-encoder runs on too ([knowledge.md](knowledge.md)). mem0-ts has no local transformers.js embedder, so the engine adds one. Changing the model needs re-embedding, which is deferred, so an engine reporting another model is refused. |
-| **No LLM:** mem0 always builds one, so the engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction is deferred. |
+| **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded, and the runtime milestone 4's cross-encoder runs on too ([knowledge.md](knowledge.md)). mem0-ts has no local transformers.js embedder, so the memory engine adds one. Changing the model needs re-embedding, which is deferred, so a memory engine reporting another model is refused. |
+| **No LLM:** mem0 always builds one, so the memory engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction is deferred. |
 | **Verbatim adds link no entities** | As in prod and upstream mem0: entities are linked for extracted memories (and on a text update). Search still queries the entity store and scores the boost. |
 | **Conversation and message ids are prod's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback; prod's ids keep the Cloud move lossless. Ids are unique per datapack, and the first agent owns the conversation: another agent creating one with the same session id is refused (`ErrAgentMismatch`) rather than handed a conversation it can't add to. |
 | **Conversation search keeps prod's shape with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, and a thread of the top 3 conversations' most recent searchable turns (50 in all, oldest first) | Prod's 0.35 suits its embedding models. With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. Hits aren't reranked (`rerank_score` is null): milestone 4's reranker serves the knowledge base only. |
-| **The engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
-| **Meko finds its own Node**: `[engine] node` (or `MEKO_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko isn't installed in AgentK's app folder). Release packaging of Node is milestone 5. |
-| **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new engine. The engine also exits on its own when its parent changes or `store.sock` goes away. |
+| **The memory engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`memory_engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
+| **Meko finds its own Node**: `[memory_engine] node` (or `MEKO_NODE`), then `<bin>/../node/bin/node`, then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko isn't installed in AgentK's app folder). Release packaging of Node is milestone 5. |
+| **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new memory engine. The memory engine also exits on its own when its parent changes or `store.sock` goes away. |
 
 ## Layout (#179–#181)
 
@@ -64,14 +64,14 @@ flowchart LR
     svc["internal/memory"]
     storeapi["internal/storeapi on run/store.sock"]
     store[("internal/store: meko.db")]
-    eng["internal/engine client"]
+    eng["internal/memoryengine client"]
     sup["internal/supervisor"]
     svc --> store
     svc --> eng
     storeapi --> store
   end
-  subgraph node["backend/engine (Node)"]
-    api["engine API on run/engine.sock"]
+  subgraph node["backend/memory_engine (Node)"]
+    api["memory engine API on run/mem_eng.sock"]
     mem0["mem0ai Memory, Meko scoring"]
     prov["providers: store, history, embedder, none LLM"]
     worker["worker thread: transformers.js"]
@@ -83,12 +83,12 @@ flowchart LR
 ```
 
 - Both sockets are 0600 in the 0700 `run/` folder and need the per-start internal token (a Bearer
-  token, separate from the admin token, passed to the engine in its environment). Neither is on
+  token, separate from the admin token, passed to the memory engine in its environment). Neither is on
   the TCP port. A data folder whose socket paths would pass 103 bytes (macOS's limit) is refused.
-- Go never holds a write transaction while it waits on the engine, which calls back into the
+- Go never holds a write transaction while it waits on the memory engine, which calls back into the
   store API and needs the single writer.
-- `/api/v1/status` reports the engine: `state` (starting, loading, ready, error, restarting,
-  failed, unavailable), `reason`, and the embedder. When the engine doesn't answer, the
+- `/api/v1/status` reports the memory engine: `state` (starting, loading, ready, error, restarting,
+  failed, unavailable), `reason`, and the embedder. When the memory engine doesn't answer, the
   supervisor's state of its child says whether it's starting, restarting after a crash, or failed.
   `meko status` prints it.
 - Get, update and delete reach only the local user's memories, as search and list do.
@@ -96,16 +96,21 @@ flowchart LR
 ### Data folder additions
 
 ```
-run/store.sock, run/engine.sock   the two APIs
-run/children/engine               "<pid> <pgid>" while the engine runs
-logs/engine.log                   the engine's JSON lines: ids, counts, timings, never text
-models/                           the embedding model, downloaded on first start
-engine/                           mem0's own config folder (MEM0_DIR)
+run/store.sock, run/mem_eng.sock   the two APIs
+run/children/memory_engine         "<pid> <pgid>" while the memory engine runs
+logs/memory_engine.log             the memory engine's JSON lines: ids, counts, timings, never text
+models/                            the embedding model, downloaded on first start
+memory_engine/                     mem0's own config folder (MEM0_DIR)
 ```
+
+A data folder from before the rename (when this was "the engine") may also hold `engine/`,
+`logs/engine.log*` and, after an old server was killed rather than stopped, `run/engine.sock`.
+Nothing reads them any more, and they can be deleted. Call-log rows written before the rename keep
+the error code `engine_unavailable`; nothing filters or counts by error code.
 
 ## Storage
 
-The migrations this engine's data lives in: `0002_memory.sql` (memories, entities, history; #178),
+The migrations this memory engine's data lives in: `0002_memory.sql` (memories, entities, history; #178),
 `0003_conversations.sql` (#182), and milestone 3's `0005_learnings_artifacts.sql` (learnings,
 promoted memories, provenance and artifacts; [api.md](api.md)).
 
@@ -130,7 +135,7 @@ promoted memories, provenance and artifacts; [api.md](api.md)).
   `embedded` 0 until searchable), and `datapacks.conversation_search_opt_out`.
 - Vector tables `memories_vec`, `entities_vec` and (#182) `message_chunks_vec`:
   `vec0(datapack_id TEXT partition key, <metadata columns>, embedding float[D] distance_metric=cosine)`,
-  keyed by the owner's rowid. They're made at the engine's first hello, when D is known (and the
+  keyed by the owner's rowid. They're made at the memory engine's first hello, when D is known (and the
   model recorded in `settings`), with a delete trigger on each owner table, since vec0 takes no
   foreign keys: every delete, a datapack's cascade included, takes its vectors along.
 
@@ -143,16 +148,16 @@ promoted memories, provenance and artifacts; [api.md](api.md)).
 | `POST .../keyword-search` | `keywordSearch` | Memories only; scores are `-bm25()`. |
 | `GET`, `PUT`, `DELETE .../vectors/:id`, `POST .../list` | `get`, `update`, `delete`, `list` | Scoped to the datapack; `get` of a missing id is `null`. |
 | `DELETE /v1/collections/:c` | `deleteCol` | Refused. |
-| `POST /v1/history/:datapack`, `GET /v1/history/:datapack/:memory` | history | `reset` is refused in the engine. |
-| `POST /v1/engine/hello` | engine start | Records the model and makes the vector tables, accepts the same model, refuses another (`MODEL_CHANGED`). |
+| `POST /v1/history/:datapack`, `GET /v1/history/:datapack/:memory` | history | `reset` is refused in the memory engine. |
+| `POST /v1/memory_engine/hello` | memory engine start | Records the model and makes the vector tables, accepts the same model, refuses another (`MODEL_CHANGED`). |
 
 Filters follow mem0's grammar: equality, `*`, lists as `in`, `eq ne gt gte lt lte in nin contains
 icontains`, and `AND`/`OR`/`NOT` (or `$and`/`$or`/`$not`), compiled to SQL over the columns or
 `json_extract` on the payload, every value bound.
 
-## The engine (`backend/engine`, #180)
+## The memory engine (`backend/memory_engine`, #180)
 
-TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` and the build.
+TypeScript on Node 22, built with `tsc` to `dist/`. `make memory_engine` runs `npm ci` and the build.
 
 | File | What |
 |---|---|
@@ -160,9 +165,9 @@ TypeScript on Node 22, built with `tsc` to `dist/`. `make engine` runs `npm ci` 
 | `src/app.ts` | The embedder, the providers, the API, then the hello; exits when the Go server goes. It retries a failed model load or hello with backoff (1 s up to 60 s, staying `loading` and saying why); only another model already in the store (`MODEL_CHANGED`) leaves it in `error`. It sets umask 077, so the model cache and mem0's config are the user's only. |
 | `src/providers.ts` | `MekoStore`, `MekoHistory`, `NoLLM` and `register()`, which wraps mem0's factories. |
 | `src/embedder.ts`, `src/embedworker.ts` | The worker-thread embedder (mean-pooled, normalized, batches of 32), and a hashing embedder for tests (set only by the CLI's tests, never by an environment variable of the shipped binary). |
-| `src/engine.ts` | One mem0 `Memory` per datapack, the 256 most recently used kept (a dropped one is rebuilt on its next call); verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, prod's reply shape), update, delete, embed. |
+| `src/memoryengine.ts` | One mem0 `Memory` per datapack, the 256 most recently used kept (a dropped one is rebuilt on its next call); verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, prod's reply shape), update, delete, embed. |
 | `src/scoring.ts` | Meko's score: `min((semantic + bm25 + boost) / (1 + [bm25 > 0] + 0.5·[boost > 0]), 1)`. |
-| `src/server.ts` | The API on `engine.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`. It logs routes, statuses and timings only, never an error's message. |
+| `src/server.ts` | The API on `mem_eng.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`. It logs routes, statuses and timings only, never an error's message. |
 
 Search asks mem0 for `max(limit × 16, 240)` results with their score parts. mem0 asks the store
 for 4× that many candidates and keeps its own top results, so the store provider returns only a
@@ -178,9 +183,9 @@ them (240 nearest memories and 240 keyword hits for the default limit of 10).
 - A turn is searchable when its input or output has 40 characters or more, its conversation has
   a datapack, the datapack hasn't opted out, and the caller didn't ask to skip it; the reply's
   `conversation_search_skipped` names which of the last three kept a substantive turn out (a short
-  turn is left out silently, as in prod). Adding a turn never waits on the engine: its chunks are
+  turn is left out silently, as in prod). Adding a turn never waits on the memory engine: its chunks are
   stored unembedded, and `RunEmbedder` (started by `serve`) embeds them right away, and every 30 s
-  catches any the engine missed while down (logged at debug while the engine is down or loading,
+  catches any the memory engine missed while down (logged at debug while the memory engine is down or loading,
   as a warning for any other failure).
 - Opting out also keeps turns that were still waiting for their vectors out of search: the store
   drops a chunk whose datapack opted out when its vector arrives. A chunk's rowid is never reused
@@ -200,7 +205,7 @@ On an 8-core Linux x64 dev server, with MiniLM q8 on transformers.js:
   (`MIN_MEMORY_SCORE`, cosine 0.81) 0.90, above AgentK's 0.75 recall cut.
 - At 200 MB of content in one datapack (`make bench`: 50 MB of memories, about 210k, and 150 MB of
   turns, about 225k chunks, with random vectors and Zipf-distributed words; searches through the
-  real engine and model):
+  real memory engine and model):
 
   | Search | p50 | p95 |
   |---|---|---|
@@ -234,18 +239,18 @@ In `make test` on Linux and macOS (CI caches the model):
   conversation, the opt-out (a waiting chunk dropped when its vector arrives), chunk rowids never
   reused, reading a conversation's newest turns.
 - **storeapi** (#179): the token, each route's shapes and refusals, the hello.
-- **engine** (#180; `tsx --test`, with a fake store): the factory override, Meko scoring, prod's reply
+- **memory engine** (#180; `tsx --test`, with a fake store): the factory override, Meko scoring, prod's reply
   shape, verbatim adds with role and actor and no entities, refusing extraction, update, delete;
   search rescoring all of mem0's candidates; the start-up retrying a failed load or hello and
   stopping at another model; the API refusing a body that isn't a JSON object, a malformed message
   and a non-numeric limit, and answering an oversized body with its 413.
-- **end to end** (#181, and #182 for conversations; the real engine): add, get, list, search, update, delete; the engine down and
-  back; an engine with another model refused; with MiniLM, a paraphrase found with a 0–1 score and
+- **end to end** (#181, and #182 for conversations; the real memory engine): add, get, list, search, update, delete; the memory engine down and
+  back; a memory engine with another model refused; with MiniLM, a paraphrase found with a 0–1 score and
   its cosine, an identifier above 0.75, and conversation search's cutoff; turns waiting for the
-  engine; no memory text in `engine.log`; `serve` starting the engine and `stop` stopping it, and
+  memory engine; no memory text in `memory_engine.log`; `serve` starting the memory engine and `stop` stopping it, and
   `stop` killing a hung serve's recorded children, and `stop` and the next `serve` killing those
   of a serve killed from outside; a recorded pid now held by another group leader left alone; get,
-  update and delete refusing another user's memory; a crashed engine's status. For conversations:
+  update and delete refusing another user's memory; a crashed memory engine's status. For conversations:
   another agent's session refused, each `conversation_search_skipped` reason, and the thread (three
   conversations, 50 turns, the newest of a conversation past 1000 turns, oldest first, the cutoff
   from the options).

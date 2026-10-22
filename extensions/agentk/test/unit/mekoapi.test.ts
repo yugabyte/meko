@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { MekoApi, MekoApiError, looksLikeMekoApi } from '../../src/server/mekoapi.js';
 import { fakeMekoApi } from '../helpers.js';
@@ -38,18 +39,59 @@ describe('MekoApi', () => {
     expect(await f.api.incomingShares()).toEqual([]);
   });
 
-  it('uploads a knowledge-base file as multipart, and reads how its indexing goes', async () => {
+  it('asks Meko for a presigned upload, posts the file there without the key, and reads how its indexing goes', async () => {
     const f = fakeMekoApi();
-    f.handle((c) => c.method === 'POST'
-      ? { status: 202, body: { data: { datapack_id: 'dp 1', document_key: 'k/notes.md', filename: 'notes.md', size: 5, status: 'processing' } } }
-      : ok({ document_status: 'completed', chunks_processed: 1 }));
-    expect(await f.api.uploadKnowledge('dp 1', 'notes.md', Buffer.from('# Hi\n'))).toEqual({ documentKey: 'k/notes.md', filename: 'notes.md', status: 'processing' });
-    expect(await f.api.documentStatus('dp 1', 'k/notes.md')).toBe('COMPLETED');
-    const [up, status] = f.calls;
-    expect([up.method, up.path, up.auth, up.type]).toEqual(['POST', '/datapacks/dp%201/knowledge-bases/upload', 'Bearer test-key', undefined]);
-    const file = up.form?.get('file') as File;
+    const storage = 'https://bucket.s3.test/';
+    f.handle((c) => c.path.endsWith('/upload-url')
+      ? ok({ url: storage, fields: { key: 'u/dp/h/notes.md', policy: 'p', 'x-amz-checksum-sha256': 'c' }, key: 'u/dp/h/notes.md', already_uploaded: false })
+      : c.path === storage ? { status: 204 }
+      : ok({ document_key: 'u/dp/h/notes.md', state: 'Indexing', document_status: 'PROCESSING' }));
+    const bytes = Buffer.from('# Hi\n');
+    const up = await f.api.requestUpload('dp 1', 'notes.md', bytes);
+    expect(up).toEqual({ url: storage, fields: [['key', 'u/dp/h/notes.md'], ['policy', 'p'], ['x-amz-checksum-sha256', 'c']], key: 'u/dp/h/notes.md', alreadyUploaded: false });
+    await f.api.postPresigned(up, 'notes.md', bytes);
+    expect(await f.api.documentStatus('dp 1', 'u/dp/h/notes.md')).toBe('indexing');
+    const [ask, post, status] = f.calls;
+    expect([ask.method, ask.path, ask.auth, ask.type]).toEqual(['POST', '/datapacks/dp%201/knowledge-bases/upload-url', 'Bearer test-key', 'application/json']);
+    expect(ask.body).toEqual({ filename: 'notes.md', size: 5, content_hash: createHash('sha256').update(bytes).digest('hex'), client: 'agent-k-local' });
+    expect([post.method, post.path, post.auth]).toEqual(['POST', storage, null]);
+    expect([...post.form!.keys()]).toEqual(['key', 'policy', 'x-amz-checksum-sha256', 'file']);
+    const file = post.form?.get('file') as File;
     expect([file.name, await file.text()]).toEqual(['notes.md', '# Hi\n']);
-    expect(status.path).toBe('/datapacks/dp%201/knowledge-bases/document-status?document_key=k%2Fnotes.md');
+    expect(status.path).toBe('/datapacks/dp%201/knowledge-bases/document-status?document_key=u%2Fdp%2Fh%2Fnotes.md');
+  });
+
+  it('reads an upload Meko already has, and refuses a reply it can\'t use', async () => {
+    const f = fakeMekoApi();
+    f.handle(() => ok({ url: '', key: 'u/dp/h/old.md', already_uploaded: true, existing_filename: 'old.md' }));
+    expect(await f.api.requestUpload('dp', 'old.md', Buffer.from('o'))).toEqual({ url: '', fields: [], key: 'u/dp/h/old.md', alreadyUploaded: true });
+    f.handle(() => ok({ url: 'https://bucket.s3.test/', key: 'k', already_uploaded: false }));
+    await expect(f.api.requestUpload('dp', 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    f.handle(() => ok({ url: 'https://bucket.s3.test/', fields: {}, already_uploaded: false }));
+    await expect(f.api.requestUpload('dp', 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
+  });
+
+  it("posts only over https, unless Meko's own API is on http, and words the storage's refusal without its URL", async () => {
+    const up = (url: string) => ({ url, fields: [['policy', 'p'] as [string, string]], key: 'k', alreadyUploaded: false });
+    const f = fakeMekoApi();
+    await expect(f.api.postPresigned(up('http://minio.test/b?X-Amz-Signature=s'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    await expect(f.api.postPresigned(up('not a url'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    expect(f.calls).toEqual([]);
+    const local = fakeMekoApi('http://localhost:8080/api/v1');
+    local.handle(() => ({ status: 204 }));
+    await local.api.postPresigned(up('http://minio.test/b'), 'a.md', Buffer.from('a'));
+    expect(local.calls.map((c) => c.path)).toEqual(['http://minio.test/b']);
+
+    f.handle(() => ({ status: 400, body: '<?xml version="1.0"?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the maximum allowed size</Message></Error>' }));
+    const e = await f.api.postPresigned(up('https://bucket.s3.test/?sig=s'), 'a.md', Buffer.from('a')).catch((x: unknown) => x);
+    expect(e).toMatchObject({ status: 400, code: 'STORAGE_EntityTooLarge', message: 'Your proposed upload exceeds the maximum allowed size' });
+    f.handle(() => ({ status: 502, body: 'Bad gateway' }));
+    await expect(f.api.postPresigned(up('https://bucket.s3.test/'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ status: 502, code: 'STORAGE_HTTP_502' });
+    const down = new MekoApi(() => ({ baseUrl: 'https://meko.test/api/v1', apiKey: 'k' }), (async () => {
+      throw new TypeError('fetch failed');
+    }) as typeof fetch);
+    const gone = await down.postPresigned(up('https://bucket.s3.test/x?sig=s'), 'a.md', Buffer.from('a')).catch((x: unknown) => x);
+    expect(gone).toMatchObject({ code: 'UNREACHABLE', message: "Couldn't reach Meko's file storage at bucket.s3.test: fetch failed" });
   });
 
   it("reads a share link, changes it one step a call, and joins by a link's token", async () => {

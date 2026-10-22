@@ -1,12 +1,12 @@
 // Embedders: the local model on transformers.js, run in a worker thread so embedding never blocks
-// the engine's HTTP loop, and a deterministic hashing embedder for tests that can't download a
+// the memory engine's HTTP loop, and a deterministic hashing embedder for tests that can't download a
 // model.
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 
 import type { Embedder } from "mem0ai/oss";
 
-/** What the engine reports to the Go server: the vector tables are made at this width. */
+/** What the memory engine reports to the Go server: the vector tables are made at this width. */
 export interface EmbedderInfo {
   provider: string;
   model: string;
@@ -188,7 +188,7 @@ export class WorkerEmbedder implements LocalEmbedder {
 }
 
 /**
- * For tests only (MEKO_ENGINE_TEST_EMBEDDER=hash): each word hashed into one of 384 buckets, then
+ * For tests only (MEKO_MEMORY_ENGINE_TEST_EMBEDDER=hash): each word hashed into one of 384 buckets, then
  * normalized. Texts sharing words are close, which is enough to test the plumbing without a model.
  */
 export class HashEmbedder implements LocalEmbedder {

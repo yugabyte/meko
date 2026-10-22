@@ -106,7 +106,7 @@ func TestConversationTools(t *testing.T) {
 	wantError(t, e, "conversation_create", map[string]any{"title": "  "}, "invalid_title")
 	wantError(t, e, "conversation_create", map[string]any{"title": "t", "metadata": "{"}, "invalid_metadata")
 
-	long := strings.Repeat("the build cache lives in backend/engine/.models ", 2)
+	long := strings.Repeat("the build cache lives in backend/memory_engine/.models ", 2)
 	r = ok(t, e, "conversation_add_message", map[string]any{"conversation_id": id, "agent_id": "agent-k-local",
 		"input": long, "output": "noted", "plan": []string{"a", "b"}, "seed": "turn-1"})
 	if r.JSON["status"] != "accepted" || len(str(r.JSON["message_id"])) != 32 {

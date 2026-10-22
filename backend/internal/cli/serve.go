@@ -18,10 +18,10 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/config"
-	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/logging"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/rest"
 	"github.com/yugabyte/meko/backend/internal/server"
@@ -37,7 +37,7 @@ const (
 	childStopTimeout = 15 * time.Second
 )
 
-// testEmbedder, if set, makes the engine use a deterministic hashing embedder instead of
+// testEmbedder, if set, makes the memory engine use a deterministic hashing embedder instead of
 // downloading its model. Only this package's tests set it (cli_test.go's TestMain), so no
 // environment can switch the shipped binary's model.
 var testEmbedder string
@@ -146,7 +146,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 
-	// The store API the engine calls, on its unix socket with a per-start token of its own.
+	// The store API the memory engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -167,14 +167,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		log.Warn("killed children a previous server left running", "count", n, "error", err)
 	}
 	sup := supervisor.New(log)
-	noEngine := startEngine(sup, l, cfg, internalToken, log)
-	svc := memory.New(st, engine.NewClient(l.EngineSock, internalToken), memory.Options{
-		UserID: userID, Log: log, NoEngine: noEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
+	noMemoryEngine := startMemoryEngine(sup, l, cfg, internalToken, log)
+	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internalToken), memory.Options{
+		UserID: userID, Log: log, NoMemoryEngine: noMemoryEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
 		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
 		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
-		EngineChild: func() (supervisor.Status, bool) {
+		MemoryEngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
-				if c.Name == engine.Name {
+				if c.Name == memoryengine.Name {
 					return c, true
 				}
 			}
@@ -196,7 +196,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		log.Info("removed knowledge files no document names", "count", n)
 	}
 	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
-	// engine missed while down; indexes knowledge files; and keeps the call log to its retention.
+	// memory engine missed while down; indexes knowledge files; and keeps the call log to its retention.
 	embedCtx, stopEmbedder := context.WithCancel(context.Background())
 	embedderDone := make(chan struct{})
 	go func() {
@@ -222,7 +222,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
 		},
 		Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, Engine: svc.EngineStatus,
+		Children: sup.Statuses, MemoryEngine: svc.EngineStatus,
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
 			Credential: server.CredentialOf}),
 		REST: func(g *echo.Group) {
@@ -267,15 +267,16 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	return serveErr
 }
 
-// startEngine starts the memory engine under sup, or says why it can't (no Node, or the engine
+// startMemoryEngine starts the memory engine under sup, or says why it can't (no Node, or the memory engine
 // isn't built): the server then runs without it, and memory features say why.
-func startEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string, log *slog.Logger) string {
-	o := engine.Options{Node: cfg.Engine.Node, Dir: cfg.Engine.Dir, TestEmbedder: testEmbedder}
-	node, err := engine.FindNode(o)
+func startMemoryEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string,
+	log *slog.Logger) string {
+	o := memoryengine.Options{Node: cfg.MemoryEngine.Node, Dir: cfg.MemoryEngine.Dir, TestEmbedder: testEmbedder}
+	node, err := memoryengine.FindNode(o)
 	if err == nil {
 		var dir string
-		if dir, err = engine.FindDir(o); err == nil {
-			sup.Start(engine.Spec(node, dir, l, token, o))
+		if dir, err = memoryengine.FindDir(o); err == nil {
+			sup.Start(memoryengine.Spec(node, dir, l, token, o))
 			log.Info("memory engine starting", "node", node, "dir", dir)
 			return ""
 		}
@@ -285,7 +286,7 @@ func startEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, 
 }
 
 func removeRunFiles(l paths.Layout) {
-	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.EngineSock} {
+	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.MemoryEngineSock} {
 		_ = paths.RemoveIfExists(p)
 	}
 }

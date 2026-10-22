@@ -120,21 +120,21 @@ jobs:
             backend/go.mod
             backend/go.sum
 
-      # The memory engine (backend/engine) is TypeScript on Node.
+      # The memory engine (backend/memory_engine) is TypeScript on Node.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: backend/engine/package-lock.json
+          cache-dependency-path: backend/memory_engine/package-lock.json
 
       # The Go end-to-end tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
       - name: Cache the embedding model
         uses: actions/cache@v6
         with:
-          path: backend/engine/.models
+          path: backend/memory_engine/.models
           key: models-all-MiniLM-L6-v2-751bff3-q8-ms-marco-MiniLM-L-6-v2-a091443-q8
 
-      - run: make build engine
+      - run: make build memory_engine
       - run: ./bin/meko version
 
       - name: Lint
@@ -146,7 +146,7 @@ jobs:
       - run: go vet -tags sqlite_fts5,sqlite_vec ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: npm run typecheck
-        working-directory: backend/engine
+        working-directory: backend/memory_engine
       - run: make test
 
   # Merging into main requires this check and `PR title` by name: renaming it means updating the

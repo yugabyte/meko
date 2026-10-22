@@ -10,28 +10,28 @@ import (
 	"strconv"
 )
 
-// Settings keys for the embedding model, recorded at the engine's first hello.
+// Settings keys for the embedding model, recorded at the memory engine's first hello.
 const (
 	keyEmbedderProvider = "embedder_provider"
 	keyEmbedderModel    = "embedder_model"
 	keyEmbeddingDims    = "embedding_dims"
 )
 
-// Embedder names the embedding model the engine runs. Its dimension is the vector tables' width.
+// Embedder names the embedding model the memory engine runs. Its dimension is the vector tables' width.
 type Embedder struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Dims     int    `json:"dims"`
 }
 
-// ErrNoVectors means the vector tables don't exist yet: the engine hasn't reported its model.
+// ErrNoVectors means the vector tables don't exist yet: the memory engine hasn't reported its model.
 var ErrNoVectors = errors.New("the memory engine hasn't reported its embedding model yet")
 
-// ModelChangedError refuses an engine whose model isn't the one the vectors were made with.
+// ModelChangedError refuses a memory engine whose model isn't the one the vectors were made with.
 type ModelChangedError struct{ Have, Got Embedder }
 
 func (e *ModelChangedError) Error() string {
-	return fmt.Sprintf("the stored vectors were made with %s %s (%d dims), but the engine runs %s %s (%d dims). "+
+	return fmt.Sprintf("the stored vectors were made with %s %s (%d dims), but the memory engine runs %s %s (%d dims). "+
 		"Changing the embedding model needs re-embedding, which Meko can't do yet",
 		e.Have.Provider, e.Have.Model, e.Have.Dims, e.Got.Provider, e.Got.Model, e.Got.Dims)
 }
@@ -51,8 +51,8 @@ var vecTables = []vecTable{
 	{"kb_chunks_vec", "kb_chunks", "source TEXT"}, // milestone 4: made at the next start on older databases
 }
 
-// EnsureVectors records the engine's embedding model the first time and makes the vector tables
-// at its width. Later it checks the engine still runs the same model: a different one gets a
+// EnsureVectors records the memory engine's embedding model the first time and makes the vector tables
+// at its width. Later it checks the memory engine still runs the same model: a different one gets a
 // *ModelChangedError, since the stored vectors can't be compared with its.
 func (s *Store) EnsureVectors(ctx context.Context, e Embedder) error {
 	if e.Dims <= 0 || e.Model == "" {
@@ -101,7 +101,7 @@ func (s *Store) EnsureVectors(ctx context.Context, e Embedder) error {
 	return nil
 }
 
-// Embedder is the recorded embedding model; ok is false before the engine's first hello.
+// Embedder is the recorded embedding model; ok is false before the memory engine's first hello.
 func (s *Store) Embedder(ctx context.Context) (e Embedder, ok bool, err error) {
 	return embedderIn(ctx, s.r)
 }

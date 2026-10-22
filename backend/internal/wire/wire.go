@@ -5,8 +5,8 @@ package wire
 import (
 	"time"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -159,7 +159,7 @@ type MemoryList struct {
 
 // MemoryListOf is a page of memories in Cloud's list shape. Every memory listed is the local
 // user's own.
-func MemoryListOf(ms []engine.Memory, criteria map[string]any, total, page, pageSize int) MemoryList {
+func MemoryListOf(ms []memoryengine.Memory, criteria map[string]any, total, page, pageSize int) MemoryList {
 	out := MemoryList{Criteria: criteria, Memories: make([]MemoryItem, len(ms)), TopK: pageSize, Total: total,
 		Page: max(page, 1), PageSize: pageSize, TotalPages: max(1, (total+pageSize-1)/max(pageSize, 1))}
 	for i, m := range ms {
@@ -286,7 +286,7 @@ type ContextSearch struct {
 // ContextSearchResults is each source's results: null when it wasn't searched.
 type ContextSearchResults struct {
 	KnowledgeBase []memory.KBResult           `json:"knowledge_base"`
-	Memory        []engine.Memory             `json:"memory"`
+	Memory        []memoryengine.Memory       `json:"memory"`
 	Conversation  *memory.ConversationResults `json:"conversation"`
 }
 

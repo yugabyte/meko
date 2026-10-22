@@ -1,5 +1,5 @@
 // Package envelope is the {data, error} reply every Meko API uses: the HTTP server's /api/v1,
-// and the internal store API the engine calls.
+// and the internal store API the memory engine calls.
 package envelope
 
 import (

@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/knowledge"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -613,7 +613,7 @@ func (s *Service) embedKnowledgeBatch(ctx context.Context) (int, error) {
 	}
 	vecs, err := s.eng.EmbedBackground(ctx, texts)
 	if err != nil {
-		return 0, s.engineErr(err)
+		return 0, s.memoryEngineErr(err)
 	}
 	return len(pending), s.st.PutKBChunkVectors(ctx, ids, vecs)
 }
@@ -651,7 +651,7 @@ func (s *Service) SearchKnowledge(ctx context.Context, datapack, query string, l
 	}
 	vecs, err := s.eng.Embed(ctx, []string{query})
 	if err != nil {
-		return nil, s.engineErr(err)
+		return nil, s.memoryEngineErr(err)
 	}
 	pool := max(kbPool, limit)
 	semantic, err := s.st.SearchKBVectors(ctx, datapack, vecs[0], pool)
@@ -666,7 +666,7 @@ func (s *Service) SearchKnowledge(ctx context.Context, datapack, query string, l
 	if len(cands) == 0 {
 		return []KBResult{}, nil
 	}
-	top := cands[:min(len(cands), max(maxReranked, limit), engine.MaxRerank)]
+	top := cands[:min(len(cands), max(maxReranked, limit), memoryengine.MaxRerank)]
 	texts := make([]string, len(top))
 	for i, c := range top {
 		texts[i] = c.ChunkText
@@ -676,7 +676,7 @@ func (s *Service) SearchKnowledge(ctx context.Context, datapack, query string, l
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if s.log != nil && !errors.Is(err, engine.ErrRerankerNotReady) {
+		if s.log != nil && !errors.Is(err, memoryengine.ErrRerankerNotReady) {
 			s.log.Warn("couldn't rerank knowledge-base results; returning them unranked", "error", err)
 		}
 		return cands, nil

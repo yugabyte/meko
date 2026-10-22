@@ -50,10 +50,10 @@ type Options struct {
 	ClientToken string
 	// Auth is config.AuthToken, or config.AuthNone to let /mcp and the data routes take requests
 	// with no credential.
-	Auth     string
-	Logger   *slog.Logger
-	Children func() []supervisor.Status
-	Engine   func(ctx context.Context) memory.EngineStatus // nil reports no engine
+	Auth         string
+	Logger       *slog.Logger
+	Children     func() []supervisor.Status
+	MemoryEngine func(ctx context.Context) memory.EngineStatus // nil reports no memory engine
 	// MCP, if set, serves /mcp (internal/mcp), with a body limit of MCPBodyLimit.
 	MCP http.Handler
 	// REST, if set, adds the /api/v1 routes meko_ui calls (internal/rest) to the group.
@@ -91,9 +91,9 @@ func New(opts Options) *Server {
 	if opts.Auth == "" {
 		opts.Auth = config.AuthToken
 	}
-	if opts.Engine == nil {
-		opts.Engine = func(context.Context) memory.EngineStatus {
-			return memory.EngineStatus{State: "unavailable", Reason: "no engine in this server"}
+	if opts.MemoryEngine == nil {
+		opts.MemoryEngine = func(context.Context) memory.EngineStatus {
+			return memory.EngineStatus{State: "unavailable", Reason: "no memory engine in this server"}
 		}
 	}
 	e := echo.New()
@@ -275,7 +275,7 @@ type StatusReply struct {
 	StartedAt     time.Time           `json:"started_at"`
 	UptimeSeconds int64               `json:"uptime_seconds"`
 	Children      []supervisor.Status `json:"children"`
-	Engine        memory.EngineStatus `json:"engine"`
+	MemoryEngine  memory.EngineStatus `json:"memory_engine"`
 	Auth          string              `json:"auth"` // token, or none
 }
 
@@ -288,7 +288,7 @@ func (s *Server) status(c echo.Context) error {
 	return envelope.OK(c, StatusReply{
 		Version: i.Version, PID: i.PID, Port: s.opts.Port, DataDir: i.DataDir, StartedAt: i.StartedAt,
 		UptimeSeconds: int64(time.Since(i.StartedAt).Seconds()), Children: children,
-		Engine: s.opts.Engine(c.Request().Context()), Auth: s.opts.Auth,
+		MemoryEngine: s.opts.MemoryEngine(c.Request().Context()), Auth: s.opts.Auth,
 	})
 }
 

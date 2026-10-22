@@ -207,3 +207,44 @@ func TestKnowledgeRoutes(t *testing.T) {
 	wantErr(t, e, "DELETE", kb+"/documents/"+id, nil, 404, "NOT_FOUND")
 	wantErr(t, e, "DELETE", kb+"/documents/not-a-uuid", nil, 404, "NOT_FOUND")
 }
+
+// AgentK Local's upload (extensions/agentk/src/server/mekoapi.ts requestUpload, postPresigned and
+// documentStatus, since #225), replayed as it sends it: upload-url with the client token and its
+// client name, the fields then the file to the link with no token, then document-status until its
+// state is final. A change to those calls updates this replay.
+func TestAgentKUpload(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	kb := "/datapacks/" + e.DatapackID + "/knowledge-bases"
+	file := []byte("# Deploys\n\nProduction deploys need two approvals from the release team.\n")
+	offer := obj(okData(t, e, "POST", kb+"/upload-url", map[string]any{"filename": "deploys.md", "size": len(file),
+		"content_hash": sha(file), "client": "agent-k-local"}, 200))
+	key, link := str(offer["key"]), str(offer["url"])
+	fields := obj(offer["fields"])
+	if key == "" || link == "" || fields == nil || offer["already_uploaded"] != false ||
+		!strings.HasPrefix(link, "http://127.0.0.1:") {
+		t.Fatalf("offer %v", offer)
+	}
+	if code := post(t, link, fields, "deploys.md", file); code < 200 || code > 299 {
+		t.Fatalf("the link answered %d", code)
+	}
+	state := ""
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		st := obj(okData(t, e, "GET", kb+"/document-status?document_key="+url.QueryEscape(key), nil, 200))
+		if state = strings.ToLower(str(st["state"])); state == "completed" || state == "failed" {
+			break
+		}
+	}
+	if state != "completed" {
+		t.Fatalf("state %q", state)
+	}
+	// The same bytes again: already_uploaded with the key, and nothing to post.
+	again := obj(okData(t, e, "POST", kb+"/upload-url", map[string]any{"filename": "deploys.md", "size": len(file),
+		"content_hash": sha(file), "client": "agent-k-local"}, 200))
+	if again["already_uploaded"] != true || str(again["key"]) != key {
+		t.Errorf("again %v", again)
+	}
+	docs := obj(okData(t, e, "GET", kb+"/documents", nil, 200))
+	if items := arr(docs["items"]); len(items) != 1 || obj(items[0])["uploaded_by_user_id"] != e.UserID {
+		t.Errorf("documents %v", docs)
+	}
+}
