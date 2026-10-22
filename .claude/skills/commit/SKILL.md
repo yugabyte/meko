@@ -27,17 +27,20 @@ pass `--author` or change the identity.
 <type>(<component>[/<area>])[!]: <summary>
 ```
 
-The release workflow reads commit subjects: a push to `main` with any `feat`, `fix`, `perf` or
-`deps` commit since the last release cuts a new version (`0.YYYYMMDD.N`), and those subjects
-become the release notes (and the app's **What's new**). Every other type lands without a release. Use exactly one of these
-nine types:
+The release workflows read commit subjects. The repo releases two products, each on its own train:
+AgentK Local (`release.yml`, tags `agentk-v0.YYYYMMDD.N`) and Meko (`meko-release.yml`, tags
+`meko-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
+product's last release cuts its next version, and those subjects become its release notes (and
+AgentK's **What's new**). Subjects with component `meko` release Meko; every other component
+(`agentk`, `repo`) releases AgentK (`scripts/release/release-notes.sh --product`). Every other type
+lands without a release. Use exactly one of these nine types:
 
 | Type | Releases? | Use for |
 |---|---|---|
 | `feat` | yes | New user-visible behavior |
 | `fix` | yes | Bug fixes, including build or packaging fixes that change what ships |
 | `perf` | yes | Faster, same behavior |
-| `deps` | yes | Dependency bumps that ship (Dependabot's AgentK npm PRs use it too); Meko's are `chore(meko)`, since nothing in `backend/` ships yet |
+| `deps` | yes | Dependency bumps that ship (Dependabot's npm and Go PRs use it too: `deps(agentk)`, `deps(meko)`, `deps(meko/memory-engine)`) |
 | `ci` | no | Workflows, Dependabot config, GitHub Actions bumps |
 | `test` | no | Tests only |
 | `docs` | no | Markdown docs: README, CONTRIBUTING, AGENTS, REVIEW, `docs/` |

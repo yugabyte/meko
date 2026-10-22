@@ -6,13 +6,13 @@
 #   scripts/check-title.sh [--no-length] "<title>"
 #
 # PRs are squash-merged with the PR title as the commit subject, and
-# scripts/release-notes.sh reads the type to decide whether to release, so a
+# scripts/release/release-notes.sh reads the type to decide whether to release, so a
 # PR title follows the same rules. --no-length skips the length limit
 # (Dependabot's subjects run long). Exits 0 when the title is valid, 1 with
 # the reason when it isn't, 2 on bad usage.
 set -eu
 
-# The types, and the ones that release (RELEASE in scripts/release-notes.sh, kept equal by
+# The types, and the ones that release (RELEASE in scripts/release/release-notes.sh, kept equal by
 # test/unit/check-title.test.ts). Only a releasing type can be marked breaking with `!`.
 TYPES='feat|fix|perf|deps|ci|test|docs|nit|chore'
 RELEASE='feat|fix|perf|deps'

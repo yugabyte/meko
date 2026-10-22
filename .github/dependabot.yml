@@ -5,8 +5,9 @@
 # Every AgentK npm bump is `deps(agentk): ...`, so it cuts a release once merged to main: the web
 # UI's libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
 # release. Action bumps are `ci(repo): ...` and ship with the next release. Meko's bumps are
-# `chore(meko): ...` (Go modules) and `chore(meko/memory-engine): ...` (the memory engine's npm packages): nothing
-# in backend/ ships in AgentK's release yet, and a `deps` subject would cut one.
+# `deps(meko): ...` (Go modules) and `deps(meko/memory-engine): ...` (the memory engine's
+# production npm packages, which its tarballs bundle), so they cut a Meko release
+# (meko-release.yml); the memory engine's dev-only bumps are `chore(meko/memory-engine): ...`.
 # No `include: scope`: it would add `(deps)`, giving `deps(agentk)(deps): ...`.
 # extensions/agentk/test/unit/dependabot.test.ts checks this against both scripts.
 version: 2
@@ -64,7 +65,7 @@ updates:
     assignees:
       - hari90
     commit-message:
-      prefix: chore(meko)
+      prefix: deps(meko)
     ignore:
       # go.mod replaces mattn/go-sqlite3 with a tag of the yugabyte/go-sqlite3 fork (SQLite with
       # sqlite-vec), so a bump of the require line would change nothing: upgrade the fork's tag by hand.
@@ -84,7 +85,7 @@ updates:
     assignees:
       - hari90
     commit-message:
-      prefix: chore(meko/memory-engine)
+      prefix: deps(meko/memory-engine)
       prefix-development: chore(meko/memory-engine)
     ignore:
       # Types track the Node major the memory engine runs on (engines: >=22.13).
