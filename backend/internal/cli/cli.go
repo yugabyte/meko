@@ -1,6 +1,6 @@
 // Package cli is the meko command: start, stop, restart, status, serve, version, token, logs,
 // destroy, install, uninstall, install_extension, uninstall_extension and update, and the MCP calls
-// search, add_memory, datapacks, create_datapack and delete_datapack.
+// search, add_memory, datapacks, create_datapack, delete_datapack, upload and upload_status.
 package cli
 
 import (
@@ -57,17 +57,21 @@ Usage:
   meko uninstall_extension agentk
                  stop starting and stopping it with Meko (it stays installed)
 
-  meko search "<question>"       search memories and past conversations (context_search)
+  meko search "<question>"       search memories, the knowledge base and past conversations
+                                 (context_search)
   meko add_memory "<text>"       save a memory, word for word (memory_add); - or no text reads stdin
   meko datapacks                 list the datapacks
   meko create_datapack <name>    create a datapack (datapack_create)
   meko delete_datapack <name|id>
                                  delete a datapack and everything in it, for good (datapack_delete);
                                  it asks first, unless --force
-                 search and add_memory take --datapack NAME|ID (default: the default datapack,
-                 which Meko makes on first start and doesn't make again once deleted);
-                 search takes --source auto|memory|conversation and --limit N;
-                 all five take --json for the tool's raw reply
+  meko upload <file>...          add files to the knowledge base (knowledgebase_upload_document) and
+                                 wait until they're indexed; --no-wait returns once they're uploaded
+  meko upload_status <key>       how an uploaded file is doing (knowledgebase_document_status)
+                 search, add_memory, upload and upload_status take --datapack NAME|ID (default: the
+                 default datapack, which Meko makes on first start and doesn't make again once
+                 deleted); search takes --source auto|memory|knowledge_base|conversation and
+                 --limit N; all seven take --json for the tools' raw replies
 
 Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
 start, restart and serve also take --port (default 7778) and --log-level (debug, info, warn, error).
@@ -98,7 +102,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	var t toolFlags
 	var c cmdFlags
 	switch cmd {
-	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "version", "logs":
+	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
+		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
+	case "version", "logs":
 		fs.BoolVar(&t.json, "json", false, "print raw JSON")
 	case "token":
 		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
@@ -123,14 +129,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.memoryEngine, "memory-engine", false, "only the memory engine's log (memory_engine.log)")
 		fs.BoolVar(&c.service, "service", false, "only the service's stderr (service.log)")
 	}
-	if cmd == "search" || cmd == "add_memory" {
+	if cmd == "search" || cmd == "add_memory" || cmd == "upload" || cmd == "upload_status" {
 		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id")
+	}
+	if cmd == "upload" {
+		fs.BoolVar(&t.noWait, "no-wait", false, "return once the files are uploaded, before they're indexed")
 	}
 	if cmd == "delete_datapack" {
 		fs.BoolVar(&t.force, "force", false, "delete without asking")
 	}
 	if cmd == "search" {
-		fs.StringVar(&t.source, "source", "auto", "auto, memory or conversation")
+		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")
 		fs.IntVar(&t.limit, "limit", 8, "the most results per source")
 	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
@@ -143,9 +152,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
 	switch cmd {
-	case "start", "stop", "restart", "status", "serve", "version", "token", "logs", "destroy", "install", "uninstall",
-		"install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
-		"create_datapack", "delete_datapack":
+	case "start", "stop", "restart", "status", "serve", "version", "token", "logs", "destroy", "install",
+		"uninstall", "install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
+		"create_datapack", "delete_datapack", "upload", "upload_status":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -153,12 +162,22 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(rest); err != nil {
 		return exitUsage
 	}
-	// These take one argument, and their flags may follow it.
-	if (cmd == "search" || cmd == "add_memory" || cmd == "create_datapack" || cmd == "delete_datapack" ||
-		cmd == "install_extension" || cmd == "uninstall_extension") && fs.NArg() > 0 {
-		t.text = fs.Arg(0)
-		if err := fs.Parse(fs.Args()[1:]); err != nil {
-			return exitUsage
+	// These take one argument, and upload any number; their flags may follow.
+	switch cmd {
+	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
+		"uninstall_extension":
+		if fs.NArg() > 0 {
+			t.text = fs.Arg(0)
+			if err := fs.Parse(fs.Args()[1:]); err != nil {
+				return exitUsage
+			}
+		}
+	case "upload":
+		for fs.NArg() > 0 {
+			t.files = append(t.files, fs.Arg(0))
+			if err := fs.Parse(fs.Args()[1:]); err != nil {
+				return exitUsage
+			}
 		}
 	}
 	if fs.NArg() > 0 {
@@ -199,7 +218,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runUninstallExtension(l, t.text, stdout, stderr)
 	case "update":
 		return runUpdate(l, c.check, stdout, stderr)
-	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack":
+	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
 		return runTool(l, cmd, t, stdin, stdout, stderr)
 	}
 	// start loads the config too, so a bad file is reported before anything starts.

@@ -109,24 +109,36 @@ func (s *Service) UpdateDatapack(ctx context.Context, id string, name, descripti
 	return d, nil
 }
 
-// DeleteDatapack deletes a datapack and everything in it.
+// DeleteDatapack deletes a datapack and everything in it, its knowledge files' bytes too.
 func (s *Service) DeleteDatapack(ctx context.Context, id string) error {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
 	err := s.st.DeleteDatapack(ctx, id)
 	if errors.Is(err, store.ErrNoDatapack) {
 		return ErrNoDatapack
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err = s.files.RemoveDatapack(id); err != nil && s.log != nil {
+		s.log.Warn("couldn't remove a deleted datapack's knowledge files; the next start sweeps them",
+			"datapack_id", id, "error", err)
+	}
+	return nil
 }
 
 // DatapackCounts is what a datapack holds of the local user's, as datapack_describe reports it.
 type DatapackCounts struct {
-	Memories      int // learnings and kept memories
-	Learnings     int // memories waiting for a keep-or-promote decision
-	Promoted      int // collective memories
-	Conversations int
+	Memories        int // learnings and kept memories
+	Learnings       int // memories waiting for a keep-or-promote decision
+	Promoted        int // collective memories
+	Conversations   int
+	KnowledgeChunks int  // the knowledge base's chunks: files' and promoted memories'
+	KnowledgeBase   bool // the datapack has a knowledge base
 }
 
-// CountDatapack counts a datapack's memories, learnings, promoted memories and conversations.
+// CountDatapack counts a datapack's memories, learnings, promoted memories, conversations and
+// knowledge-base chunks.
 func (s *Service) CountDatapack(ctx context.Context, id string) (DatapackCounts, error) {
 	if err := s.needDatapack(ctx, id); err != nil {
 		return DatapackCounts{}, err
@@ -135,6 +147,10 @@ func (s *Service) CountDatapack(ctx context.Context, id string) (DatapackCounts,
 	if err != nil {
 		return DatapackCounts{}, err
 	}
+	chunks, hasBase, err := s.st.KnowledgeCounts(ctx, id)
+	if err != nil {
+		return DatapackCounts{}, err
+	}
 	return DatapackCounts{Memories: c.Memories, Learnings: c.Learnings, Promoted: c.Promoted,
-		Conversations: c.Conversations}, nil
+		Conversations: c.Conversations, KnowledgeChunks: chunks, KnowledgeBase: hasBase}, nil
 }

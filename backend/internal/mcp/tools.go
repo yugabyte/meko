@@ -227,6 +227,7 @@ var (
 func allTools() []*tool {
 	out := make([]*tool, 0, 32)
 	out = append(out, searchTools()...)
+	out = append(out, knowledgeTools()...)
 	out = append(out, memoryTools()...)
 	out = append(out, conversationTools()...)
 	out = append(out, datapackTools()...)

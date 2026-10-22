@@ -57,7 +57,7 @@ meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   memory_engine/package.json, dist/, node_modules/, stubs/
-  models/                      the pinned embedding model
+  models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```
 
@@ -68,16 +68,20 @@ meko-<version>/
 - `make memory_engine` installs with `ONNXRUNTIME_NODE_INSTALL=skip`: onnxruntime-node's install script
   would otherwise download a 270 MB CUDA provider on linux-x64, which also timed out on CI runners.
 - `models/` is fetched by the tarball's own Node through the trimmed memory engine
-  (`memory_engine/scripts/fetch-model.mjs`), which checks they run on the build machine. It's
-  transformers.js's cache layout for the pinned revision, plus copies of the model's JSON files at
-  the unrevisioned path: transformers.js 4.3's `pipeline()` checks whether a model has a tokenizer at
-  the `main` revision whatever revision it loads, so offline it would find none.
+  (`memory_engine/scripts/fetch-model.mjs`): the embedder (all-MiniLM-L6-v2) and the knowledge
+  base's reranker (ms-marco-MiniLM-L-6-v2), 47 MB together. The script runs each one, then loads
+  it again with remote models off, so a folder that wouldn't work offline fails the build. It's
+  transformers.js's cache layout for the pinned revisions, plus copies of each model's JSON files at
+  the unrevisioned path: transformers.js 4.3 looks for a model's tokenizer files at the `main`
+  revision whatever revision it loads (`pipeline()` for the embedder, `AutoTokenizer` for the
+  reranker), so offline it would find none.
 - `serve` finds `<bin>/../models` (`memoryengine.FindModels`) and passes it to the memory engine with
-  `MEKO_MODELS_OFFLINE=1`, which sets transformers.js's `allowRemoteModels = false`: a release never
-  downloads a model, and the first start works offline. A build from source still downloads into
+  `MEKO_MODELS_OFFLINE=1`, which sets transformers.js's `allowRemoteModels = false` in both
+  workers: a release never downloads a model, and the first start works offline. A build from source still downloads into
   the data folder's `models/`.
-- Measured on linux-x64 for 0.20261022.0: the tarball is 118 MB; unpacked, Node is 117 MB, the
-  memory engine 194 MB (onnxruntime-node 45 MB), the model 24 MB and `meko` 24 MB.
+- Measured on linux-x64 for 0.20261022.0, before the reranker came (#170): the tarball was 118 MB;
+  unpacked, Node 117 MB, the memory engine 194 MB (onnxruntime-node 45 MB), the embedder 24 MB and
+  `meko` 24 MB. The reranker adds about 23 MB.
 - `scripts/smoke-release.sh <tarball> <version>` unpacks a tarball, checks `meko version --json`,
   starts it on a fresh data folder, waits for the memory engine, saves a memory, finds it, checks that
   nothing was downloaded into `models/`, and stops.
@@ -229,7 +233,7 @@ Changing the store doesn't move secrets: the client token is made again.
 - `scripts/install_test.go`: the installer with a fake `gh`: unpacking and running `meko install`,
   "already installed", `--reinstall`, a bad checksum, AgentK's flags refused, and Intel Macs and
   macOS 13 refused.
-- The memory engine: offline loading never downloads.
+- The memory engine: offline loading never downloads, for the embedder and the reranker.
 - Each release build runs `scripts/smoke-release.sh` on its own platform.
 
 Not covered automatically: a real launchd or systemd service (`meko install` writes the user's own

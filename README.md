@@ -13,10 +13,12 @@ This repo holds `meko`, which runs Meko on your own machine, and the extensions 
 [Meko Cloud](https://mekodata.ai) is the hosted service.
 
 `meko` is one binary, both the command line and the server. It serves Meko Cloud's MCP tools at
-`/mcp` (memories, conversations, datapacks, artifacts, `context_search`) and the `/api/v1` REST
-API Meko's web app uses, with Cloud's tool names, arguments and reply shapes, so an agent set up
-for Cloud works against it. Everything lives in one SQLite file under `~/.meko`. Search mixes
-vector similarity (sqlite-vec, with an embedding model that runs locally) and keywords (FTS5).
+`/mcp` (memories, conversations, datapacks, artifacts, knowledge files, `context_search`) and the
+`/api/v1` REST API Meko's web app uses, with Cloud's tool names, arguments and reply shapes, so an
+agent set up for Cloud works against it. Everything lives under `~/.meko`: one SQLite file, and
+knowledge files' bytes beside it. Search mixes vector similarity (sqlite-vec, with an embedding
+model that runs locally) and keywords (FTS5); knowledge-base results are reranked by Cloud's
+cross-encoder, also run locally.
 The server listens only on `127.0.0.1`.
 
 Meko is under construction. It has its storage, memory engine, conversations, MCP and REST, and
@@ -38,7 +40,8 @@ meko install_extension agentk     # optional: AgentK Local, using this Meko
 It downloads the newest Meko release, checks its checksum, unpacks it into `~/.meko/app`, links
 `~/.local/bin/meko`, and sets Meko up as a login service (launchd on macOS, systemd on Linux) that
 restarts on failure and updates itself, rolling back an update that keeps failing to start. The
-release bundles its own Node and the embedding model, so the first start needs no network. It
+release bundles its own Node and its models (the embedder and the reranker), so the first start
+needs no network. It
 takes `--version`, `--reinstall` and `--no-service` (pass them through `sh -s --`). How it all
 works: [`backend/docs/install.md`](backend/docs/install.md).
 
@@ -73,16 +76,19 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko install_extension agentk` | Install AgentK Local pointed at this Meko; `meko start` and `stop` then run it too |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
 | `meko destroy [--force]` | Stop Meko and remove its data folder, everything in it, for good. It asks first; `--force` doesn't |
-| `meko search "<question>"` | Search memories and past conversations (`context_search`) |
+| `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
 | `meko datapacks` | List the datapacks |
 | `meko create_datapack <name>` | Create a datapack |
 | `meko delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
+| `meko upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
+| `meko upload_status <key>` | How an uploaded file is doing |
 
 Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
 SQLite's locking doesn't work over the network; `meko status` prints where it is. `start`,
-`restart` and `serve` take `--port` (default 7778). `search` and `add_memory` take `--datapack NAME|ID`, and use
+`restart` and `serve` take `--port` (default 7778). `search`, `add_memory`, `upload` and
+`upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
 it's deleted, they need `--datapack`. The data commands take `--json` for the raw reply.
 
@@ -113,6 +119,7 @@ Its README covers installing and using it.
 - Meko's design: [`backend/docs/design.md`](backend/docs/design.md) (the server and storage),
   [`backend/docs/memory-engine.md`](backend/docs/memory-engine.md) (memories, conversations,
   search), [`backend/docs/api.md`](backend/docs/api.md) (MCP, REST and the CLI) and
+  [`backend/docs/knowledge.md`](backend/docs/knowledge.md) (knowledge files) and
   [`backend/docs/install.md`](backend/docs/install.md) (releases, the installer, the service,
   extensions, updates and secrets).
 - AgentK Local: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).

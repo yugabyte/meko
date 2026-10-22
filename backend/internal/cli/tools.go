@@ -36,8 +36,10 @@ const toolTimeout = time.Minute
 // toolFlags are the flags and argument of the tool commands and token.
 type toolFlags struct {
 	text, datapack, source string
+	files                  []string
 	limit                  int
 	json, mcp, force       bool
+	noWait                 bool
 }
 
 // toolError is a tool's in-band error reply.
@@ -154,8 +156,8 @@ func (t *toolSession) defaultDatapackID(ctx context.Context) (string, error) {
 	return d.ID, json.Unmarshal([]byte(text), &d)
 }
 
-// runTool runs a tool command (search, add_memory, datapacks, create_datapack, delete_datapack)
-// against the running server.
+// runTool runs a tool command (search, add_memory, datapacks, create_datapack, delete_datapack, upload,
+// upload_status) against the running server.
 func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
@@ -165,7 +167,11 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		fmt.Fprintf(stderr, "meko: Meko isn't running (data in %s). Start it with meko start.\n", l.Root)
 		return exitNotRunning
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
+	timeout := toolTimeout
+	if cmd == "upload" {
+		timeout = uploadTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	t, err := connectTools(ctx, l)
 	if err != nil {
@@ -183,6 +189,10 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		err = toolCreateDatapack(ctx, t, f, stdout)
 	case "delete_datapack":
 		err = toolDeleteDatapack(ctx, t, f, stdin, stdout)
+	case "upload":
+		err = toolUpload(ctx, t, f, stdout)
+	case "upload_status":
+		err = toolUploadStatus(ctx, t, f, stdout)
 	}
 	if errors.Is(err, errDeclined) {
 		fmt.Fprintln(stderr, "Nothing was deleted.")
@@ -332,6 +342,12 @@ func toolSearch(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writ
 	}
 	var r struct {
 		Results struct {
+			KnowledgeBase []struct {
+				ChunkText   string   `json:"chunk_text"`
+				RerankScore *float64 `json:"rerank_score"`
+				Distance    float64  `json:"distance"`
+				DocumentID  string   `json:"document_id"`
+			} `json:"knowledge_base"`
 			Memory []struct {
 				Memory    string   `json:"memory"`
 				Score     *float64 `json:"score"`
@@ -350,9 +366,20 @@ func toolSearch(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writ
 	if err := json.Unmarshal([]byte(reply), &r); err != nil {
 		return err
 	}
-	if len(r.Results.Memory) == 0 && (r.Results.Conversation == nil || len(r.Results.Conversation.Hits) == 0) {
+	if len(r.Results.Memory) == 0 && len(r.Results.KnowledgeBase) == 0 &&
+		(r.Results.Conversation == nil || len(r.Results.Conversation.Hits) == 0) {
 		fmt.Fprintln(stdout, "Nothing found.")
 		return nil
+	}
+	if len(r.Results.KnowledgeBase) > 0 {
+		fmt.Fprintln(stdout, "Knowledge base (relevance):")
+		for _, k := range r.Results.KnowledgeBase {
+			score := 1 - k.Distance
+			if k.RerankScore != nil {
+				score = *k.RerankScore
+			}
+			fmt.Fprintf(stdout, "  %.2f  %s  (document %s)\n", score, oneLine(k.ChunkText), k.DocumentID)
+		}
 	}
 	if len(r.Results.Memory) > 0 {
 		fmt.Fprintln(stdout, "Memories (score):")

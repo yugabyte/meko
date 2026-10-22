@@ -71,7 +71,9 @@ func (s *Store) BackupPath(v int) string { return fmt.Sprintf("%s.bak-%d", s.pat
 
 // Migrate brings the schema up to date. Each migration runs in its own transaction with the new
 // version. An existing database is first copied with VACUUM INTO, so a failed upgrade can be
-// rolled back; a database newer than this binary is refused.
+// rolled back; a database newer than this binary is refused. Then, once the embedding model is
+// recorded, it makes any vector table a newer migration needs (vectors.go), so they're all there
+// before the memory engine's next hello.
 func (s *Store) Migrate(ctx context.Context) error {
 	ms, err := loadMigrations()
 	if err != nil {
@@ -87,7 +89,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			s.path, cur, latest)
 	}
 	if cur == latest {
-		return nil
+		return s.ensureRecordedVectors(ctx)
 	}
 	if cur > 0 {
 		bak := s.BackupPath(cur)
@@ -106,7 +108,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("migration %s failed: %w", m.name, err)
 		}
 	}
-	return nil
+	return s.ensureRecordedVectors(ctx)
 }
 
 func (s *Store) apply(ctx context.Context, m migration) error {

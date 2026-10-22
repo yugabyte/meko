@@ -161,7 +161,7 @@ func TestContextSearch(t *testing.T) {
 		}
 	}
 	res := obj(r.JSON["results"])
-	if res["knowledge_base"] != nil || len(arr(res["memory"])) == 0 ||
+	if kb, isList := res["knowledge_base"].([]any); !isList || len(kb) != 0 || len(arr(res["memory"])) == 0 ||
 		len(arr(obj(res["conversation"])["hits"])) == 0 {
 		t.Fatalf("context_search: %s", r.Text)
 	}
@@ -186,7 +186,7 @@ func TestContextSearch(t *testing.T) {
 	calls, _ := e.Store.Calls(context.Background(), e.DatapackID, time.Time{})
 	var found bool
 	for _, c := range calls {
-		if c.Tool == "context_search" && c.MemoryN > 0 && c.ConversationN > 0 && len(c.Steps) == 2 && c.TokensSent > 0 {
+		if c.Tool == "context_search" && c.MemoryN > 0 && c.ConversationN > 0 && len(c.Steps) == 3 && c.TokensSent > 0 {
 			found = true
 		}
 		if strings.Contains(fmt.Sprintf("%+v", c), "release") {
@@ -330,7 +330,7 @@ func TestPromoteAndArtifacts(t *testing.T) {
 	r = ok(t, e, "memory_get_all", map[string]any{"conversation_id": "c", "promoted": true})
 	pm := arr(r.JSON["promoted_memories"])
 	if len(pm) != 1 || obj(pm[0])["data"] != "the team uses trunk-based development" ||
-		obj(pm[0])["promoted_to_kb_at"] != nil {
+		obj(pm[0])["promoted_to_kb_at"] == nil {
 		t.Errorf("promoted list: %s", r.Text)
 	}
 	r = ok(t, e, "datapack_describe", map[string]any{"conversation_id": "c"})

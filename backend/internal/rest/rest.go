@@ -1,6 +1,6 @@
 // Package rest is the /api/v1 subset meko_ui calls, with Meko Cloud's routes and reply shapes in
 // the {data, error} envelope: the local user, datapacks and their metrics, artifacts, memories and
-// learnings, and conversations. Shapes MCP shares come from internal/wire; the rest are here.
+// learnings, conversations, and knowledge files. Shapes MCP shares come from internal/wire; the rest are here.
 package rest
 
 import (
@@ -85,6 +85,8 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/conversations/count", a.countConversations)
 	g.GET("/datapacks/:id/conversations/:conversation", a.conversation)
 	g.PATCH("/datapacks/:id/conversation-search-opt-out", a.setOptOut)
+
+	a.registerKnowledge(g)
 }
 
 // Errors as Meko Cloud's API replies them.

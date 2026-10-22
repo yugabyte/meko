@@ -10,7 +10,7 @@
 #   make memory_engine                    memory_engine/dist and its dependencies
 #   (cd memory_engine && npm prune --omit=dev)   production dependencies only
 #
-# It downloads the memory engine's pinned embedding model with the bundled Node (which also proves that
+# It downloads the memory engine's pinned models with the bundled Node (which also proves that
 # Node, the memory engine and onnxruntime run here). Produces
 # <out-dir>/meko-<version>-<linux|darwin>-<arch>.tar.gz holding:
 #
@@ -19,7 +19,7 @@
 #     node/bin/node, node/LICENSE  Meko's own Node
 #     memory_engine/package.json, dist/, node_modules/, stubs/
 #                                the memory engine, trimmed to this platform
-#     models/                    the pinned embedding model, read offline (MEKO_MODELS_OFFLINE)
+#     models/                    the pinned embedder and reranker, read offline (MEKO_MODELS_OFFLINE)
 #     VERSION, LICENSE
 set -eu
 

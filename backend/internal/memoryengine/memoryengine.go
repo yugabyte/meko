@@ -228,11 +228,22 @@ type Embedder struct {
 	Dims     int    `json:"dims"`
 }
 
-// Health is what the memory engine says about itself: loading (its model), ready, or error (with why).
+// Reranker is the knowledge base's reranking model and its state: loading, ready, or error (with
+// why). The memory engine is ready without it.
+type Reranker struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	State    string `json:"state"`
+	Error    string `json:"error,omitempty"`
+}
+
+// Health is what the memory engine says about itself: loading (its model), ready, or error (with
+// why).
 type Health struct {
-	State    string   `json:"state"`
-	Error    string   `json:"error,omitempty"`
-	Embedder Embedder `json:"embedder"`
+	State    string    `json:"state"`
+	Error    string    `json:"error,omitempty"`
+	Embedder Embedder  `json:"embedder"`
+	Reranker *Reranker `json:"reranker,omitempty"`
 }
 
 // Health asks the memory engine how it is. It fails with ErrUnavailable if nothing accepts the connection,
@@ -375,11 +386,41 @@ func (c *Client) Delete(ctx context.Context, datapack, id string) error {
 // MaxEmbed is the most texts one Embed call takes.
 const MaxEmbed = 256
 
-// Embed embeds texts with the memory engine's model.
+// Embed embeds texts with the memory engine's model, as a search's query is: ahead of background work.
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	return c.embed(ctx, texts, false)
+}
+
+// EmbedBackground embeds texts behind any search's queries: for the sweeps that index turns and
+// knowledge files, so a search never waits behind more than one of their batches.
+func (c *Client) EmbedBackground(ctx context.Context, texts []string) ([][]float32, error) {
+	return c.embed(ctx, texts, true)
+}
+
+func (c *Client) embed(ctx context.Context, texts []string, background bool) ([][]float32, error) {
 	var out struct {
 		Vectors [][]float32 `json:"vectors"`
 	}
-	err := c.call(ctx, http.MethodPost, "/v1/embed", map[string][]string{"texts": texts}, &out)
+	err := c.call(ctx, http.MethodPost, "/v1/embed", map[string]any{"texts": texts, "background": background}, &out)
 	return out.Vectors, err
+}
+
+// MaxRerank is the most texts one Rerank call takes.
+const MaxRerank = 200
+
+// ErrRerankerNotReady is the reranker still loading, or failed to load: the engine works without it.
+var ErrRerankerNotReady = errors.New("the reranking model isn't loaded")
+
+// Rerank is the reranker's raw score (a logit, higher is more relevant) for each text against the
+// query, or ErrRerankerNotReady.
+func (c *Client) Rerank(ctx context.Context, query string, texts []string) ([]float64, error) {
+	var out struct {
+		Scores []float64 `json:"scores"`
+	}
+	err := c.call(ctx, http.MethodPost, "/v1/rerank", map[string]any{"query": query, "texts": texts}, &out)
+	var api *APIError
+	if errors.As(err, &api) && api.Code == "RERANKER_NOT_READY" {
+		return nil, fmt.Errorf("%w: %s", ErrRerankerNotReady, api.Message)
+	}
+	return out.Scores, err
 }

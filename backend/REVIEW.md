@@ -8,9 +8,12 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
-- [ ] Every route but `/healthz` needs a credential, checked on the matched route (`c.Path()`),
-      never the raw URL: the admin token on `/api/v1/status` and `/api/v1/version`, the admin or
-      client token everywhere else, and nothing there only with `[server] auth = "none"`
+- [ ] Every route but `/healthz` and the knowledge-file links needs a credential, checked on the
+      matched route (`c.Path()`), never the raw URL. The links (`/api/v1/knowledge-uploads/:ticket`,
+      `/api/v1/knowledge-downloads/:ticket`) take a one-time ticket instead: 256 random bits, 5 minutes,
+      an upload's bound to its datapack, key, size and SHA-256 ([docs/knowledge.md](docs/knowledge.md)).
+      Otherwise it's the admin token on `/api/v1/status` and `/api/v1/version`, the admin or client
+      token everywhere else, and nothing there only with `[server] auth = "none"`
       ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store API and the memory engine's API listen only
       on their unix sockets (0600) and need the internal token on every route, the memory engine's
       `/healthz` too (its reply can say why the memory engine failed). The server binds 127.0.0.1 only, checks `Host`,
@@ -42,8 +45,13 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] An update is checked before it's switched to (checksum, then the staged `meko version --json`),
       and anything that changes the database's schema keeps rollback working: `Migrate` backs the
       file up, and `store.RestoreBackup` can put it back.
-- [ ] A release keeps working offline: the tarball bundles the model (`MEKO_MODELS_OFFLINE`), and
+- [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
+      (`MEKO_MODELS_OFFLINE`), and
       `scripts/smoke-release.sh` passes on each platform.
 - [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `agent-k-local`.
-- [ ] `docs/design.md`, `docs/memory-engine.md`, `docs/install.md` and `AGENTS.md` here match the code,
-      and so does the repo root's `README.md` (Meko's commands, their flags and the build requirements).
+- [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
+      temporary name and renamed before their row commits, removed after it's deleted; their text
+      never reaches a log or an error reply.
+- [ ] `docs/design.md`, `docs/memory-engine.md`, `docs/knowledge.md`, `docs/install.md` and
+      `AGENTS.md` here match the code, and so does the repo root's `README.md` (Meko's commands,
+      their flags and the build requirements).

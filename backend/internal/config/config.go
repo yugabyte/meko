@@ -24,6 +24,15 @@ type Config struct {
 	ConversationSearch ConversationSearch `toml:"conversation_search"`
 	Secrets            Secrets            `toml:"secrets"`
 	Update             Update             `toml:"update"`
+	KnowledgeBase      KnowledgeBase      `toml:"knowledge_base"`
+}
+
+// KnowledgeBase is the [knowledge_base] table.
+type KnowledgeBase struct {
+	// MaxDistance is the farthest (cosine distance, 0 to 2) a knowledge-base result may be from the
+	// query for context_search to keep it. 0 means the default, tuned for the embedding model
+	// (internal/memory).
+	MaxDistance float64 `toml:"max_distance"`
 }
 
 // Update is the [update] table: how a release install updates itself.
@@ -179,6 +188,9 @@ func (c Config) validate() error {
 	}
 	if d := c.ConversationSearch.MaxDistance; d < 0 || d > 2 {
 		return fmt.Errorf("conversation_search.max_distance %g is out of range: use 0 to 2", d)
+	}
+	if d := c.KnowledgeBase.MaxDistance; d < 0 || d > 2 {
+		return fmt.Errorf("knowledge_base.max_distance %g is out of range: use 0 to 2", d)
 	}
 	return nil
 }

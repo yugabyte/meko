@@ -112,6 +112,7 @@ its extensions, AgentK first, through their own CLIs ([install.md](install.md)).
   run/                       pid, port, lock, admin token, unix sockets (0600)
   logs/                      meko.log, memory_engine.log (rotated)
   models/                    model files, when downloaded (milestone 2)
+  knowledgebase-files/       knowledge files' bytes, <datapack>/<sha256> (milestone 4)
 ```
 
 The database must sit on a local disk, not a network filesystem: SQLite's WAL locking doesn't work
@@ -414,7 +415,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 |---|---|---|
 | 2 | Memory engine | Built in five stacked PRs, #178 to #182: [memory-engine.md](memory-engine.md). The store API, the memory and conversation tables, the Node memory engine (public `mem0ai` with Meko's providers) as the first supervised child, conversation search; children's process groups recorded in `run/` so `stop`'s SIGKILL path reaches them too |
 | 3 | MCP and REST | Built in #197 (the rename) and the stack #201 to #204: [api.md](api.md). `/mcp` with Meko Cloud's tools, the `/api/v1` subset meko_ui calls, the client token, the call log |
-| 4 | Knowledge files | Upload, parsing and chunking in Go, embedding and reranking in the memory engine, dedupe by content hash (#170) |
+| 4 | Knowledge files | Built in #170: [knowledge.md](knowledge.md). Uploads through Cloud's presigned flow onto a sink on Meko, files in `knowledgebase-files/`, extraction and chunking in Go, embedding and Cloud's cross-encoder in the memory engine, dedupe by content hash, promoted memories in the knowledge base |
 | 5 | Install and release | Built in #171: [install.md](install.md). Native builds with Meko's own Node and the model bundled, `meko-v` releases marked latest, the installer, launchd and systemd services, extensions (AgentK), updates with rollback, the secret store |
 | 6 | Web UI | The pinned meko_ui package served at `/`, local mode in meko_ui, browser access (#172) |
 | 7 | Move to Meko Cloud | The export bundle, and prod's import API (#173) |
