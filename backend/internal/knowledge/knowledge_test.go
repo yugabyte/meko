@@ -163,14 +163,16 @@ func TestChunksByType(t *testing.T) {
 		t.Errorf("scripts or styles leaked into the text:\n%s", joined)
 	}
 
-	for name, data := range map[string]string{"a.json": `{"k": "v"}`, "a.xml": "<a>b</a>", "a.txt": "\ufeffhi\r\nthere"} {
-		got, err = Chunks(ctx, name, []byte(data))
-		if err != nil || len(got) != 1 {
-			t.Errorf("%s: %q %v", name, got, err)
+	// JSON and XML are chunked as they are; text loses its BOM and CRs.
+	for name, c := range map[string]struct{ data, want string }{
+		"a.json": {`{"k": "v"}`, `{"k": "v"}`},
+		"a.xml":  {"<a>b</a>", "<a>b</a>"},
+		"a.txt":  {"\ufeffhi\r\nthere", "hi\nthere"},
+	} {
+		got, err = Chunks(ctx, name, []byte(c.data))
+		if err != nil || len(got) != 1 || got[0] != c.want {
+			t.Errorf("%s: %q %v, want %q", name, got, err, c.want)
 		}
-	}
-	if got[0] != "hi\nthere" {
-		t.Errorf("txt: BOM or CRLF kept: %q", got[0])
 	}
 
 	if _, err = Chunks(ctx, "a.txt", []byte("  \n\n ")); !errors.Is(err, ErrNoText) {
