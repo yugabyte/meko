@@ -1,13 +1,21 @@
+import { createHash } from 'node:crypto';
 import type { DatapackMember, DatapackPeople, DatapackPendingInvite, LinkGrant, ShareGrant } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
 import { strOrNull } from './meko.js';
 
-/** Meko's answer to a knowledge-base upload. */
-export interface KnowledgeUploadReply {
-  documentKey: string;
-  filename: string;
-  /** `processing`, or `already_uploaded` / `already_processed` when Meko had the same bytes. */
-  status: string;
+/**
+ * Meko's answer to a request to add a file to a knowledge base: where to post it, or that the
+ * datapack already has the same bytes. The URL and fields are a credential for this one file until
+ * they expire (5 minutes): never log them.
+ */
+export interface PresignedUpload {
+  /** The storage URL the file is posted to; empty when `alreadyUploaded`. */
+  url: string;
+  /** The signed form fields that go before the file, as Meko gave them; empty when `alreadyUploaded`. */
+  fields: [string, string][];
+  /** The document's key in the datapack: what `documentStatus` takes. */
+  key: string;
+  alreadyUploaded: boolean;
 }
 
 /** A share invite waiting for us, from GET /datapacks/incoming-shares. */
@@ -60,8 +68,10 @@ type Json = Record<string, unknown>;
 type Fetch = typeof fetch;
 
 const TIMEOUT_MS = 30000;
-/** A knowledge-base upload: up to 50 MB on the way out. */
+/** A file posted to Meko's storage: up to 50 MB on the way out. */
 const UPLOAD_TIMEOUT_MS = 120000;
+/** Says who asked for an upload URL, in Meko's logs. */
+const UPLOAD_CLIENT = 'agent-k-local';
 
 export function asGrant(v: unknown): ShareGrant | null {
   const g = typeof v === 'string' ? v.trim().toLowerCase() : '';
@@ -124,7 +134,8 @@ export async function looksLikeMekoApi(baseUrl: string, fetchImpl: Fetch = fetch
 
 /**
  * Client for Meko's REST API (the share and invite routes, and knowledge-base uploads), with the same API key as MCP. Replies
- * come as `{ data }` or `{ error: { code, message } }`.
+ * come as `{ data }` or `{ error: { code, message } }`. The one call that isn't to Meko's API, posting a file to the storage
+ * URL Meko gives, goes without the key.
  */
 export class MekoApi {
   constructor(private creds: () => { baseUrl: string | null; apiKey: string }, private fetchImpl: Fetch = fetch) {}
@@ -248,21 +259,66 @@ export class MekoApi {
   }
 
   /**
-   * Adds a file to a datapack's knowledge base (Meko's single-call upload: Meko stores it and starts
-   * indexing). Meko takes the type from the extension and checks it against the bytes.
+   * Asks Meko where to put a file for a datapack's knowledge base (its presigned flow): Meko signs an
+   * S3 POST for exactly these bytes (their size and SHA-256), and indexes the file once it lands, with
+   * no call back. Meko takes the type from the extension and checks it against the bytes.
    */
-  async uploadKnowledge(datapackId: string, filename: string, bytes: Uint8Array): Promise<KnowledgeUploadReply> {
-    const form = new FormData();
-    // A request body's bytes: never a SharedArrayBuffer, which Blob can't take.
-    form.append('file', new Blob([bytes as Uint8Array<ArrayBuffer>]), filename);
-    const r = await this.request<Json>('POST', `/datapacks/${encodeURIComponent(datapackId)}/knowledge-bases/upload`, form, UPLOAD_TIMEOUT_MS);
-    return { documentKey: str(r?.document_key), filename: str(r?.filename) || filename, status: str(r?.status) };
+  async requestUpload(datapackId: string, filename: string, bytes: Uint8Array): Promise<PresignedUpload> {
+    const r = await this.request<Json>('POST', `/datapacks/${encodeURIComponent(datapackId)}/knowledge-bases/upload-url`, {
+      filename,
+      size: bytes.length,
+      content_hash: createHash('sha256').update(bytes).digest('hex'),
+      client: UPLOAD_CLIENT,
+    });
+    const key = str(r?.key);
+    if (r?.already_uploaded === true && key) return { url: '', fields: [], key, alreadyUploaded: true };
+    const url = str(r?.url);
+    const f = r?.fields;
+    if (!key || !url || !f || typeof f !== 'object' || Array.isArray(f)) throw badReply('the upload request');
+    return { url, fields: Object.entries(f as Json).map(([k, v]) => [k, str(v)]), key, alreadyUploaded: false };
   }
 
-  /** How far Meko got indexing a document: its `document_status` (PENDING, PROCESSING, COMPLETED, FAILED…), upper-cased. */
+  /**
+   * Posts a file where `requestUpload` said: the signed fields, then the file last (S3 ignores
+   * fields after it), without Meko's key. Only over https, unless Meko's own API is on http (a
+   * self-hosted Meko's storage). Errors name the storage's host, never the URL or fields.
+   */
+  async postPresigned(upload: PresignedUpload, filename: string, bytes: Uint8Array): Promise<void> {
+    let target: URL;
+    try {
+      target = new URL(upload.url);
+    } catch {
+      throw badReply('the upload request');
+    }
+    const httpOk = this.creds().baseUrl?.startsWith('http:') ?? false;
+    if (target.protocol !== 'https:' && !(httpOk && target.protocol === 'http:')) {
+      throw new MekoApiError(200, 'BAD_REPLY', `Meko gave an upload address AgentK won't send a file to (${target.protocol}).`);
+    }
+    const form = new FormData();
+    for (const [k, v] of upload.fields) form.append(k, v);
+    // A request body's bytes: never a SharedArrayBuffer, which Blob can't take.
+    form.append('file', new Blob([bytes as Uint8Array<ArrayBuffer>]), filename);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(upload.url, { method: 'POST', body: form, signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
+    } catch (e) {
+      const why = (e as Error)?.name === 'TimeoutError' ? 'timed out' : (e as Error)?.message || String(e);
+      throw new MekoApiError(0, 'UNREACHABLE', `Couldn't reach Meko's file storage at ${target.host}: ${why}`);
+    }
+    const text = await res.text();
+    if (res.ok) return;
+    // S3's refusal: `<Error><Code>…</Code><Message>…</Message></Error>`.
+    const tag = (name: string) => new RegExp(`<${name}>([^<]*)</${name}>`).exec(text)?.[1]?.trim() || null;
+    throw new MekoApiError(res.status, `STORAGE_${tag('Code') ?? `HTTP_${res.status}`}`, tag('Message') ?? `Meko's file storage answered ${res.status}.`);
+  }
+
+  /**
+   * How far Meko got with a document, lower-cased: its `state` (awaiting_upload, abandoned, oversized,
+   * indexing, completed, failed), or from a Meko without it, its indexer's `document_status`.
+   */
   async documentStatus(datapackId: string, documentKey: string): Promise<string> {
     const r = await this.request<Json>('GET',
       `/datapacks/${encodeURIComponent(datapackId)}/knowledge-bases/document-status?document_key=${encodeURIComponent(documentKey)}`);
-    return str(r?.document_status).toUpperCase();
+    return (str(r?.state) || str(r?.document_status)).toLowerCase();
   }
 }

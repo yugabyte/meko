@@ -36,6 +36,11 @@ describe('knowledge-base files', () => {
     [new MekoApiError(413, 'FILE_TOO_LARGE', 'Free plans take files up to 5 MB'), 413, /^Free plans take files up to 5 MB$/],
     [new MekoApiError(400, 'INVALID_FILE', 'content does not match .pdf'), 400, /^content does not match .pdf$/],
     [new MekoApiError(0, 'UNREACHABLE', "Couldn't reach Meko's API at x: fetch failed"), 502, /Couldn't reach Meko's API/],
+    [new MekoApiError(402, 'FREE_TIER_KB_STORAGE_LIMIT', 'Upgrade to Standard to upload new documents.'), 413, /^Upgrade to Standard to upload new documents\.$/],
+    [new MekoApiError(503, 'S3_DISABLED', 'file uploads are not configured'), 502, /^This Meko isn't set up to take files: file uploads are not configured\.$/],
+    [new MekoApiError(403, 'STORAGE_AccessDenied', 'Invalid according to Policy: Policy expired.'), 502, /its link expired or was refused\. Try again\.$/],
+    [new MekoApiError(400, 'STORAGE_EntityTooSmall', 'Your proposed upload is smaller than the minimum allowed size'), 502, /^Meko's file storage refused the upload: Your proposed upload is smaller/],
+    [new MekoApiError(404, 'STORAGE_HTTP_404', "Meko's file storage answered 404."), 502, /^Meko's file storage refused the upload/],
   ])('words Meko refusing an upload (%s)', (e, status, message) => {
     const h = uploadError(e, 'adlc/proj/r/p');
     expect(h.status).toBe(status);

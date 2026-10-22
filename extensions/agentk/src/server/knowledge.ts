@@ -2,7 +2,7 @@ import { KB_TYPES_TEXT, isKnowledgeFile } from '../shared/knowledge.js';
 import { MAX_KB_UPLOAD_BYTES, type KnowledgeUpload } from '../shared/types.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
-import { MekoApiError, type KnowledgeUploadReply, type MekoApi } from './mekoapi.js';
+import { MekoApiError, type MekoApi, type PresignedUpload } from './mekoapi.js';
 import { HttpError } from './projects.js';
 import { dedicatedDatapack } from './store.js';
 
@@ -12,6 +12,8 @@ const FAST_FOR_MS = 60_000;
 const SLOW_POLL_MS = 30_000;
 /** When AgentK stops following an upload that's still indexing. */
 const GIVE_UP_MS = 15 * 60_000;
+/** Meko's document states that end an upload without indexing it. */
+const FAILED_STATES = new Set(['failed', 'abandoned', 'oversized']);
 
 export interface KnowledgeTiming {
   fastPollMs: number;
@@ -61,6 +63,11 @@ export function knowledgeName(name: unknown): string {
 /** Meko's refusal of an upload, in words the user can act on, with the status to answer with. */
 export function uploadError(e: unknown, datapackName: string): HttpError {
   if (!(e instanceof MekoApiError)) return new HttpError(502, `Couldn't add the file to the knowledge base: ${errMsg(e)}`);
+  // Meko's file storage refusing the post itself (postPresigned): a 403 is its link expiring.
+  if (e.code.startsWith('STORAGE_')) {
+    return new HttpError(502, e.status === 403 ? "Meko's file storage refused the upload: its link expired or was refused. Try again."
+      : `Meko's file storage refused the upload: ${e.message}`);
+  }
   // Never a 401 to the browser: that signs it out.
   if (e.status === 401 || /SCOPE/i.test(e.code)) return new HttpError(502, 'Meko refused AgentK\'s key. Check it on the Meko tab in Settings.');
   if (e.status === 403) {
@@ -72,13 +79,16 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
   }
   if (e.status === 404) return new HttpError(502, `Meko couldn't find ${datapackName}: ${e.message}. Check the project's datapack on its home page.`);
   if (e.status === 400 || e.status === 413 || e.status === 415) return new HttpError(e.status, e.message);
+  // No room left on the owner's plan: Meko's message says which plan to move to.
+  if (e.status === 402) return new HttpError(413, e.message);
+  if (e.code === 'S3_DISABLED') return new HttpError(502, `This Meko isn't set up to take files: ${e.message}.`);
   if (e.status === 0) return new HttpError(502, e.message);
   return new HttpError(502, `Meko couldn't add the file: ${e.message} Try again in a minute; if it keeps failing, add it from Meko's web app.`);
 }
 
 /**
  * Files added to a session's knowledge base (POST /api/sessions/:id/knowledge): checked, sent to
- * the project's dedicated datapack through Meko's upload route (the key stays on the server), put
+ * the project's dedicated datapack through Meko's presigned upload (the key stays on the server), put
  * in the session's Meko call log, and followed while Meko indexes them, with a `knowledge` event
  * when it's done.
  */
@@ -104,26 +114,28 @@ export class KnowledgeService {
 
     const at = Date.now();
     const generation = this.generation;
-    let reply: KnowledgeUploadReply | null = null;
+    let upload: PresignedUpload | null = null;
     let error: unknown = null;
     try {
-      reply = await this.api.uploadKnowledge(dp.id, filename, body);
+      // Meko signs a post for these bytes, they go to its storage, and Meko indexes them from there.
+      upload = await this.api.requestUpload(dp.id, filename, body);
+      if (!upload.alreadyUploaded) await this.api.postPresigned(upload, filename, body);
     } catch (e) {
       error = e;
     }
+    // Never the upload's URL or fields: they're a credential for the file.
     this.core.mekoLog.record({
       tool: 'knowledge_base_upload', at, ms: Date.now() - at, ok: !error, attempts: 1,
       args: { datapack_id: dp.id, filename, size: body.length },
-      text: reply ? JSON.stringify(reply) : null, error: error ? errMsg(error) : null, tag: null,
+      text: upload ? JSON.stringify({ key: upload.key, already_uploaded: upload.alreadyUploaded }) : null,
+      error: error ? errMsg(error) : null, tag: null,
       session: { id: row.id, createdAt: row.created_at },
     });
-    if (!reply) throw uploadError(error, dp.name);
-    // Followed only with a key to follow it by; any other answer is an upload AgentK can't report on.
-    const status = reply.status === 'already_uploaded' || reply.status === 'already_processed' ? reply.status
-      : reply.status === 'processing' && reply.documentKey ? 'processing' : 'uploaded';
+    if (error || !upload) throw uploadError(error, dp.name);
+    const status = upload.alreadyUploaded ? 'already_uploaded' : 'processing';
     // Meko's settings changed while it uploaded: its document may not be on the Meko AgentK asks now.
-    if (status === 'processing' && generation === this.generation) this.follow(row.id, dp.id, reply.documentKey, filename);
-    return { filename, documentKey: reply.documentKey, datapackName: dp.name, status };
+    if (status === 'processing' && generation === this.generation) this.follow(row.id, dp.id, upload.key, filename);
+    return { filename, documentKey: upload.key, datapackName: dp.name, status };
   }
 
   /** Stops following every upload (the server is stopping). */
@@ -175,7 +187,8 @@ export class KnowledgeService {
       if (!quiet) f.warned = true;
     }
     if (this.stopped || this.followed.get(key) !== f) return;
-    const result = status === 'COMPLETED' ? 'indexed' : status === 'FAILED' ? 'failed'
+    // An upload whose link expired unused, or bigger than it was signed for, never gets indexed.
+    const result = status === 'completed' ? 'indexed' : FAILED_STATES.has(status) ? 'failed'
       : stuck || Date.now() - f.startedAt >= this.timing.giveUpMs ? 'unknown' : null;
     if (!result) {
       this.schedule(key, f);

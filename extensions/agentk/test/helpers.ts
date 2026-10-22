@@ -86,8 +86,9 @@ export interface ApiCall {
 export type ApiHandler = (call: ApiCall) => { status?: number; body?: unknown } | undefined;
 
 /**
- * Meko's REST API, faked through `fetch`. Without a handler (or when it returns undefined) every
- * route answers 401, as Meko does for a key it doesn't accept.
+ * Meko's REST API, faked through `fetch`, and the storage its presigned uploads go to (a call's
+ * `path` is the whole URL when it isn't under `baseUrl`). Without a handler (or when it returns
+ * undefined) every route answers 401, as Meko does for a key it doesn't accept.
  */
 export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
   const calls: ApiCall[] = [];
@@ -105,7 +106,10 @@ export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
     };
     calls.push(call);
     const r = state.handler?.(call) ?? { status: 401, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } };
-    return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
+    const status = r.status ?? 200;
+    // A string body goes as it is (S3's XML); 204 has none.
+    const body = status === 204 ? null : typeof r.body === 'string' ? r.body : r.body === undefined ? '' : JSON.stringify(r.body);
+    return new Response(body, { status, headers: { 'Content-Type': typeof r.body === 'string' ? 'application/xml' : 'application/json' } });
   }) as typeof fetch;
   const api = new MekoApi(() => ({ baseUrl, apiKey: 'test-key' }), fetchImpl);
   return {
