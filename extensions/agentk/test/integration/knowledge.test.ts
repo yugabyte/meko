@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,14 +38,19 @@ describe('adding files to a knowledge base', () => {
       method: 'POST', url: `/api/sessions/${id}/knowledge?name=${encodeURIComponent(name)}`,
       headers: { cookie, 'content-type': 'application/octet-stream', ...headers }, payload,
     });
-  const uploads = () => env.mekoApi.calls.filter((c) => c.path.endsWith('/knowledge-bases/upload'));
+  const uploads = () => env.mekoApi.calls.filter((c) => c.path.endsWith('/knowledge-bases/upload-url'));
+  const STORAGE = 'https://storage.test/kb-bucket';
+  const stored = () => env.mekoApi.calls.filter((c) => c.path.startsWith(STORAGE));
+  /** Meko's answer to upload-url: a signed post to the storage, with the document's key. */
+  const presigned = (key: string) =>
+    ({ body: { data: { url: STORAGE, fields: { key, policy: 'cG9saWN5', 'x-amz-signature': 'secret-sig' }, key, already_uploaded: false } } });
 
   it("sends the file to the project datapack's knowledge base, behind the login and only as raw bytes", async () => {
     const p = await project('alpha');
     session(p.id, 's1');
     await app.inject({ method: 'PATCH', url: `/api/projects/${p.id}`, headers: { cookie }, payload: { settings: { mekoLog: true } } });
-    env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload')
-      ? { status: 202, body: { data: { document_key: 'dk-1', filename: 'notes.md', status: 'processing' } } }
+    env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload-url') ? presigned('dk-1')
+      : c.path.startsWith(STORAGE) ? { status: 204 }
       : { status: 404, body: { error: { code: 'NOT_FOUND', message: 'not registered yet' } } });
 
     expect((await upload('s1', 'notes.md', Buffer.from('# Hi'), { cookie: '' })).statusCode).toBe(401);
@@ -60,15 +66,26 @@ describe('adding files to a knowledge base', () => {
     const ok = await upload('s1', 'notes.md', Buffer.from('# Hi'));
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toEqual({ filename: 'notes.md', documentKey: 'dk-1', datapackName: 'adlc/proj/r/alpha', status: 'processing' });
-    const [sent] = uploads();
-    expect(sent.path).toBe('/datapacks/dp-alpha/knowledge-bases/upload');
-    expect(await (sent.form?.get('file') as File).text()).toBe('# Hi');
-    // In the session's Meko call log, as AgentK's call.
-    expect(readFileSync(mekoLogPath(env.core.paths.designs, 's1'), 'utf8')).toContain('"tool":"knowledge_base_upload"');
+    const [asked] = uploads();
+    expect([asked.path, asked.auth]).toEqual(['/datapacks/dp-alpha/knowledge-bases/upload-url', 'Bearer test-key']);
+    expect(asked.body).toEqual({ filename: 'notes.md', size: 4, content_hash: createHash('sha256').update('# Hi').digest('hex'), client: 'agent-k-local' });
+    // The bytes go to the storage Meko named, with its signed fields first and without the key.
+    const [post] = stored();
+    expect(post.auth).toBeNull();
+    expect([...post.form!.keys()]).toEqual(['key', 'policy', 'x-amz-signature', 'file']);
+    expect(await (post.form?.get('file') as File).text()).toBe('# Hi');
+    // In the session's Meko call log, as AgentK's call, without the signed post.
+    const log = readFileSync(mekoLogPath(env.core.paths.designs, 's1'), 'utf8');
+    expect(log).toContain('"tool":"knowledge_base_upload"');
+    expect(log).not.toMatch(/storage\.test|secret-sig/);
 
     // Meko's refusal comes back (worded by uploadError, tested on its own).
     env.mekoApi.handle(() => ({ status: 403, body: { error: { code: 'FORBIDDEN', message: 'forbidden' } } }));
     expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(403);
+    // So does the storage's.
+    env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload-url') ? presigned('dk-1')
+      : { status: 403, body: '<Error><Code>AccessDenied</Code><Message>Invalid according to Policy: Policy expired.</Message></Error>' });
+    expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(502);
   });
 
   it('saves a file of any type for Claude, behind the login, owner-only, and only as raw bytes', async () => {
@@ -121,44 +138,54 @@ describe('adding files to a knowledge base', () => {
     const events: ServerEvent[] = [];
     env.core.on('notify', (e: ServerEvent) => events.push(e));
     const statuses: Record<string, unknown[]> = {
-      // Not registered yet, then indexing, then done.
-      'dk-a': [404, 'PROCESSING', 'COMPLETED'],
-      'dk-b': ['FAILED'],
+      // Not registered yet, then waiting for the bytes, then indexing, then done.
+      'dk-a': [404, 'awaiting_upload', 'indexing', 'completed'],
+      'dk-b': ['failed'],
+      // Its link expired before the bytes arrived.
+      'dk-x': ['abandoned'],
+      // An older Meko with no state.
+      'dk-y': [{ document_status: 'PROCESSING' }, { document_status: 'COMPLETED' }],
       // A refused key: no point waiting 15 minutes.
       'dk-c': [401],
     };
     env.mekoApi.handle((c: ApiCall) => {
-      if (c.path.endsWith('/upload')) {
-        const name = (c.form?.get('file') as File).name;
-        if (name === 'nokey.md') return { status: 202, body: { data: { status: 'processing' } } };
-        return { status: name === 'old.md' ? 200 : 202, body: { data: { document_key: `dk-${name[0]}`, status: name === 'old.md' ? 'already_processed' : 'processing' } } };
+      if (c.path.endsWith('/upload-url')) {
+        const name = (c.body as { filename: string }).filename;
+        if (name === 'old.md') return { body: { data: { url: '', key: 'dk-o', already_uploaded: true, existing_filename: 'old.md' } } };
+        return presigned(`dk-${name[0]}`);
       }
+      if (c.path.startsWith(STORAGE)) return { status: 204 };
       const key = new URL(`https://x${c.path}`).searchParams.get('document_key')!;
       const next = statuses[key].length > 1 ? statuses[key].shift() : statuses[key][0];
-      if (next === 404) return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no such document' } } };
+      if (next === 404) return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'document not found for document_key' } } };
       if (next === 401) return { status: 401, body: { error: { code: 'UNAUTHORIZED', message: 'invalid or expired token' } } };
-      return { body: { data: { document_status: next } } };
+      return { body: { data: typeof next === 'string' ? { document_key: key, state: next } : next } };
     });
     try {
       expect((await kb.upload('s3', 'a.md', Buffer.from('a'))).status).toBe('processing');
       expect((await kb.upload('s3', 'b.md', Buffer.from('b'))).status).toBe('processing');
       expect((await kb.upload('s3', 'c.md', Buffer.from('c'))).status).toBe('processing');
-      expect((await kb.upload('s3', 'old.md', Buffer.from('o'))).status).toBe('already_processed');
-      // No key to follow it by: Meko took it, and AgentK won't say more.
-      expect((await kb.upload('s3', 'nokey.md', Buffer.from('n'))).status).toBe('uploaded');
-      await waitFor(() => events.length, (n) => n >= 3);
+      expect((await kb.upload('s3', 'x.md', Buffer.from('x'))).status).toBe('processing');
+      expect((await kb.upload('s3', 'y.md', Buffer.from('y'))).status).toBe('processing');
+      // Meko already had the bytes: nothing goes to the storage.
+      const posts = stored().length;
+      expect(await kb.upload('s3', 'old.md', Buffer.from('o'))).toMatchObject({ status: 'already_uploaded', documentKey: 'dk-o' });
+      expect(stored()).toHaveLength(posts);
+      await waitFor(() => events.length, (n) => n >= 5);
       expect(events.sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)))).toEqual([
         { type: 'knowledge', sessionId: 's3', filename: 'a.md', result: 'indexed' },
         { type: 'knowledge', sessionId: 's3', filename: 'b.md', result: 'failed' },
         { type: 'knowledge', sessionId: 's3', filename: 'c.md', result: 'unknown' },
+        { type: 'knowledge', sessionId: 's3', filename: 'x.md', result: 'failed' },
+        { type: 'knowledge', sessionId: 's3', filename: 'y.md', result: 'indexed' },
       ]);
       // The refused key was asked once; a file Meko already had isn't followed.
       expect(env.mekoApi.calls.filter((c) => c.path.includes('document_key=dk-c'))).toHaveLength(1);
       expect(env.mekoApi.calls.some((c) => c.path.includes('document_key=dk-o'))).toBe(false);
 
       // Meko turned off, or its URL or key changed: no more status calls, and nothing said.
-      statuses['dk-d'] = ['PROCESSING'];
-      statuses['dk-e'] = ['PROCESSING'];
+      statuses['dk-d'] = ['indexing'];
+      statuses['dk-e'] = ['indexing'];
       await kb.upload('s3', 'd.md', Buffer.from('d'));
       env.core.updateConfig((c) => {
         c.meko.enabled = false;
@@ -169,14 +196,14 @@ describe('adding files to a knowledge base', () => {
         c.meko.enabled = true;
       });
       // A change of Meko's settings while an upload is on its way: its document isn't followed on the new Meko.
-      statuses['dk-f'] = ['PROCESSING'];
+      statuses['dk-f'] = ['indexing'];
       const late = kb.upload('s3', 'f.md', Buffer.from('f'));
       kb.forget();
       expect((await late).status).toBe('processing');
       const asked = env.mekoApi.calls.length;
       await new Promise((r) => setTimeout(r, 50));
       expect(env.mekoApi.calls.length).toBe(asked);
-      expect(events).toHaveLength(3);
+      expect(events).toHaveLength(5);
     } finally {
       kb.stop();
     }
