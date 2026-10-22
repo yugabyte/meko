@@ -64,10 +64,12 @@ func (s *Store) Calls(ctx context.Context, datapack string, since time.Time) ([]
 		since.UTC().Format(timeLayout), datapack, datapack)
 }
 
-// ConversationCalls is the calls made in one of a datapack's conversations, oldest first.
-func (s *Store) ConversationCalls(ctx context.Context, datapack, conversation string) ([]Call, error) {
-	return s.calls(ctx, selectCalls+"WHERE datapack_id = ? AND conversation_id = ? ORDER BY at, id",
-		datapack, conversation)
+// ConversationCalls is the calls made in one of a datapack's conversations since a time, oldest
+// first, with the conversation's calls that failed before their datapack was known (datapack_id ”).
+func (s *Store) ConversationCalls(ctx context.Context, datapack, conversation string, since time.Time) ([]Call,
+	error) {
+	return s.calls(ctx, selectCalls+"WHERE conversation_id = ? AND (datapack_id = ? OR datapack_id = '') "+
+		"AND at >= ? ORDER BY at, id", conversation, datapack, since.UTC().Format(timeLayout))
 }
 
 const selectCalls = "SELECT id, at, tool, datapack_id, agent_id, conversation_id, credential, ok, error_code, ms, " +

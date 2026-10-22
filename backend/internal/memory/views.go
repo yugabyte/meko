@@ -78,8 +78,8 @@ func (s *Service) CountConversations(ctx context.Context, datapack string) (int,
 type Turn struct {
 	store.Message
 	Memories []store.SavedMemory
-	// Calls is the turn's decision trace: the conversation's Meko calls (its searches and saves)
-	// in the same window as Memories, apart from the calls that store the conversation itself.
+	// Calls is the turn's decision trace: the conversation's Meko calls (what it read and what it
+	// wrote) in the same window as Memories, apart from the calls that store the conversation itself.
 	Calls []store.Call
 }
 
@@ -124,21 +124,23 @@ func (s *Service) ConversationThread(ctx context.Context, datapack, id string, l
 	if err != nil {
 		return c, nil, err
 	}
-	calls, err := s.st.ConversationCalls(ctx, datapack, c.ID)
+	// From the conversation's own start: a session's conversation deleted and made again has the
+	// same id, and the old one's calls stay in the call log.
+	calls, err := s.st.ConversationCalls(ctx, datapack, c.ID, c.CreatedAt)
 	if err != nil {
 		return c, nil, err
 	}
 	turns := make([]Turn, len(msgs))
+	next := 0 // calls and turns are both oldest first: each call is looked at once
 	for i, m := range msgs {
 		turns[i] = Turn{Message: m, Memories: []store.SavedMemory{}, Calls: []store.Call{}}
-		in := func(t time.Time) bool { return t.After(after) && !t.After(m.CreatedAt) }
 		for _, sm := range saved {
-			if in(sm.CreatedAt) {
+			if sm.CreatedAt.After(after) && !sm.CreatedAt.After(m.CreatedAt) {
 				turns[i].Memories = append(turns[i].Memories, sm)
 			}
 		}
-		for _, cl := range calls {
-			if in(cl.At) && !notInTrace[cl.Tool] {
+		for ; next < len(calls) && !calls[next].At.After(m.CreatedAt); next++ {
+			if cl := calls[next]; cl.At.After(after) && !notInTrace[cl.Tool] {
 				turns[i].Calls = append(turns[i].Calls, cl)
 			}
 		}

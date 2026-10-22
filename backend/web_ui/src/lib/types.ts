@@ -47,7 +47,6 @@ export interface Metrics {
   daily_activity: DayActivity[];
 }
 
-// GET /datapacks/:id/usage: Meko local's own view of the call log.
 // One Meko call from the call log, as /usage's recent calls and a turn's decision trace give it.
 export interface MekoCall {
   // Absent from an older server's reply.
@@ -62,8 +61,11 @@ export interface MekoCall {
   memory_n: number;
   kb_n: number;
   conversation_n: number;
+  // Whether the tool only reads, as its definition says; in a turn's trace only.
+  read_only?: boolean;
 }
 
+// GET /datapacks/:id/usage: Meko local's own view of the call log.
 export interface Usage {
   calls: number;
   errors: number;

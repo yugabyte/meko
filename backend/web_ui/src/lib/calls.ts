@@ -2,10 +2,16 @@
 
 import type { MekoCall } from "./types";
 
-// The tools that look things up, as against those that save or change something.
+// The tools that report what they found (result counts), which the trace's "found" total sums.
 const SEARCHES = new Set(["context_search", "memory_search", "knowledgebase_search"]);
 
 export const isSearch = (c: MekoCall) => SEARCHES.has(c.tool);
+
+// Whether a call only read: the server says so from the tool's definition; failing that, a search.
+export const isRead = (c: MekoCall) => c.read_only ?? isSearch(c);
+
+// How long the call log keeps a call (the server's CallRetention).
+export const CALL_RETENTION_DAYS = 90;
 
 export const resultCount = (c: MekoCall) => c.memory_n + c.kb_n + c.conversation_n;
 
