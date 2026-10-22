@@ -32,7 +32,7 @@ the service, extensions, updates and secrets). The rules for the whole repo are 
 | `internal/service/` | The login service: a launchd LaunchAgent or a systemd user unit from embedded templates, run with launchctl or systemctl. |
 | `internal/secrets/` | The secret store: the login Keychain through `/usr/bin/security` (macOS), or 0600 files in the data folder. |
 | `internal/extensions/` | `extensions.json`: the extensions `meko start` and `stop` run, and the ones `install_extension` knows (agentk). |
-| `internal/update/` | Release installs (`~/.meko/app/<version>`, `app/current`), GitHub releases, staging and checking an update, probation and rollback. |
+| `internal/update/` | Release installs (`~/.local/share/meko/app/<version>`, `app/current`, outside the data folder), GitHub releases, staging and checking an update, probation and rollback. |
 | `internal/supervisor/` | Child processes (the memory engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |

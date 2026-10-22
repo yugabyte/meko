@@ -20,7 +20,7 @@ import (
 
 // Stage downloads a Meko release into the app folder: the tarball and SHA256SUMS, the checksum
 // checked, unpacked beside the installed versions and checked to run here (its meko version
-// --json must name the version). It returns the version folder. Nothing in use changes.
+// --json must name the version), as app/<version>. Nothing in use changes.
 func (a App) Stage(ctx context.Context, c *Client, rel Release, version string) error {
 	goos, arch := Platform()
 	name := TarballName(version, goos, arch)
@@ -103,14 +103,23 @@ func (a App) Unpack(tarball, version string) error {
 		return err
 	}
 	dest := a.Dir(version)
-	old := dest + ".old-" + randomSuffix()
+	old := ""
 	if _, err := os.Stat(dest); err == nil {
+		old = dest + ".old-" + randomSuffix()
 		if err := os.Rename(dest, old); err != nil {
 			return err
 		}
-		defer func() { _ = os.RemoveAll(old) }()
 	}
-	return os.Rename(top, dest)
+	if err := os.Rename(top, dest); err != nil {
+		if old != "" {
+			_ = os.Rename(old, dest) // keep the copy that was there
+		}
+		return err
+	}
+	if old != "" {
+		_ = os.RemoveAll(old)
+	}
+	return nil
 }
 
 // CheckBinary runs `<exe> version --json` and checks it names version: a binary that can't run on

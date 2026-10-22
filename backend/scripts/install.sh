@@ -12,16 +12,16 @@
 #   --non-interactive   ask nothing (it asks nothing today; accepted for scripts)
 #
 # It downloads meko-<version>-<platform>-<arch>.tar.gz and SHA256SUMS from the meko-v<version>
-# release, checks the checksum, unpacks it into ~/.meko/app/<version> and runs its
+# release, checks the checksum, unpacks it into ~/.local/share/meko/app/<version> and runs its
 # `meko install`, which points app/current and ~/.local/bin/meko at it and sets up the service.
 #
-# Environment: MEKO_HOME (default ~/.meko: releases go in its app/), MEKO_REPO (default
+# Environment: XDG_DATA_HOME (releases go in its meko/app, default ~/.local/share/meko/app; the data
+# folder, ~/.meko or MEKO_HOME, is apart, so meko destroy never removes them), MEKO_REPO (default
 # yugabyte/agent-k-local), GITHUB_TOKEN (used when gh isn't there).
 set -eu
 
 repo=${MEKO_REPO:-yugabyte/agent-k-local}
-meko_home=${MEKO_HOME:-$HOME/.meko}
-app="$meko_home/app"
+app="${XDG_DATA_HOME:-$HOME/.local/share}/meko/app"
 version=""
 reinstall=false
 no_service=false
@@ -137,7 +137,6 @@ ok "Release" "$version ($platform-$arch), checksum verified"
 
 # ---- unpack into app/<version> ----
 mkdir -p "$app"
-chmod 700 "$meko_home" 2>/dev/null || true
 staging="$app/.staging.$$"
 rm -rf "$staging"
 mkdir -p "$staging"

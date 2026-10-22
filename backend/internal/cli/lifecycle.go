@@ -76,10 +76,18 @@ func runStart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	return code
 }
 
+// errServiceFlags: the service runs serve with only --data-dir, so it reads the port and log level
+// from config.toml; start and restart can't pass them on.
+var errServiceFlags = errors.New("a service runs Meko here, and it reads config.toml: set [server] port " +
+	"or [log] level there, then run meko restart")
+
 func startMeko(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	m := serviceOf(l)
 	if m == nil {
 		return startDetached(l, o, "", stdout, stderr)
+	}
+	if o.Port != 0 || o.LogLevel != "" {
+		return fail(stderr, errServiceFlags)
 	}
 	if up, err := running(l.Lock); err != nil {
 		return fail(stderr, err)
@@ -123,6 +131,9 @@ func runStop(l paths.Layout, keepExtensions bool, stdout, stderr io.Writer) int 
 func runRestart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	pid := currentPID(l)
 	if m := serviceOf(l); m != nil {
+		if o.Port != 0 || o.LogLevel != "" {
+			return fail(stderr, errServiceFlags)
+		}
 		if err := m.Restart(); err != nil {
 			return fail(stderr, err)
 		}
@@ -140,8 +151,9 @@ func runRestart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	return startDetached(l, o, "", stdout, stderr)
 }
 
-// runExtensions runs `<command> <action>` for every registered extension. A failure is reported
-// and the others still run: stopping Meko must not wait on an extension that won't stop.
+// runExtensions runs `<command> <action>` for every registered extension, one after another. A
+// failure is reported and the others still run; an extension that hangs holds this up for at most
+// its timeout (extensions.StopTimeout for stop), and then Meko goes on.
 func runExtensions(l paths.Layout, action string, stdout, stderr io.Writer) {
 	reg, err := extensions.Load(l.Root)
 	if err != nil {

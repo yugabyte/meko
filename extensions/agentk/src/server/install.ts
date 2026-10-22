@@ -270,7 +270,9 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
     return false;
   }
   let meko = resolveMeko(cfg);
-  if (o.urlArg) meko = { ...meko, url: o.urlArg };
+  // A key goes only where it already goes: a URL given without a key starts keyless, so the key is
+  // asked for (or given with --meko-key) rather than sent to the new host.
+  if (o.urlArg) meko = { url: o.urlArg, apiKey: '' };
   let storeKey = false;
   // A Meko on this computer, when there's one and it's wanted: its URL and client token.
   const useLocalMeko = async (): Promise<boolean> => {

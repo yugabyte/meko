@@ -17,17 +17,18 @@ import (
 // App is a release install's app folder.
 type App struct{ Root string }
 
-// DefaultRoot is where the installer puts releases: $MEKO_HOME/app, or ~/.meko/app. It doesn't
-// follow the data folder off a network home: binaries are fine there.
+// DefaultRoot is where the installer puts releases: $XDG_DATA_HOME/meko/app, or
+// ~/.local/share/meko/app. It's outside the data folder, so meko destroy, which removes the data
+// folder whole, never removes the binary the service runs.
 func DefaultRoot() (string, error) {
-	if h := os.Getenv(paths.HomeEnv); h != "" {
-		return filepath.Abs(filepath.Join(h, "app"))
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Abs(filepath.Join(x, "meko", "app"))
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".meko", "app"), nil
+	return filepath.Join(home, ".local", "share", "meko", "app"), nil
 }
 
 // Running finds the release install the running binary belongs to: it's app/<version>/bin/meko,

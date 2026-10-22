@@ -1,6 +1,7 @@
 // Package update finds, installs and rolls back Meko's releases, and finds extensions' releases.
 //
-// A release install lives in an app folder (~/.meko/app, or $MEKO_HOME/app): one folder per
+// A release install lives in an app folder (~/.local/share/meko/app, or $XDG_DATA_HOME/meko/app),
+// outside the data folder: one folder per
 // version, app/current pointing at the one in use, and ~/.local/bin/meko pointing at
 // app/current/bin/meko. Updating stages the new version beside the others, checks that its binary
 // runs here, records update-pending.json and repoints app/current; the service manager then starts

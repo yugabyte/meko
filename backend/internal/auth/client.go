@@ -122,6 +122,13 @@ func (c ClientTokens) Ensure() (string, error) {
 	if tok, err = NewToken(); err != nil {
 		return "", err
 	}
+	// Two makers at once (serve starting while meko token runs) must agree on one token: a store
+	// that can add only when there's none keeps the first.
+	if a, ok := c.Store.(interface {
+		Add(name, value string) (string, error)
+	}); ok {
+		return a.Add(ClientTokenName, tok)
+	}
 	if err = c.Store.Set(ClientTokenName, tok); err != nil {
 		return "", err
 	}

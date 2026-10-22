@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -235,7 +236,7 @@ func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	argsFile := filepath.Join(home, "installer-args")
 	// The installer puts agent-k-local in ~/.local/bin, as AgentK's does.
-	installer := fmt.Sprintf("#!/bin/sh\necho \"$*\" > %q\nmkdir -p \"$HOME/.local/bin\"\n"+
+	installer := fmt.Sprintf("#!/bin/sh\n# --meko-url\necho \"$*\" > %q\nmkdir -p \"$HOME/.local/bin\"\n"+
 		"printf '#!/bin/sh\\n' > \"$HOME/.local/bin/agent-k-local\"\n"+
 		"chmod 700 \"$HOME/.local/bin/agent-k-local\"\n", argsFile)
 	var srv *httptest.Server
@@ -378,5 +379,92 @@ func TestLogsFollowsAcrossRotation(t *testing.T) {
 	<-done
 	if got := out.String(); got != "one\ntwo\nthree\n" {
 		t.Errorf("followed %q", got)
+	}
+}
+
+func TestInstallExtensionRefusesAnAgentKTooOld(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	// An AgentK release from before --meko-url, in its release layout.
+	home, _ := os.UserHomeDir()
+	ver := filepath.Join(home, ".agent-k-local", "app", "0.20261001.0")
+	log := fakeExtension(t, filepath.Join(ver, "bin", "agent-k-local"))
+	js := filepath.Join(ver, "lib", "dist", "server", "install.js")
+	if err := os.MkdirAll(filepath.Dir(js), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(js, []byte("parseArgs({ options: { 'meko-key': {} } })"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(ver, "bin", "agent-k-local"), filepath.Join(bin, "agent-k-local")); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs = run("install_extension", "agentk", "--data-dir", dir)
+	want(t, "install_extension on an old AgentK", code, 1, errs, "predates --meko-url")
+	if got := readLog(t, log); got != "" {
+		t.Errorf("the old AgentK was run: %q", got)
+	}
+}
+
+func TestStartRefusesFlagsTheServiceWouldIgnore(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	configurePort(t, dir, port)
+	useFakeService(t)
+	code, out, errs := run("install", "--data-dir", dir)
+	want(t, "install", code, 0, out+errs, "Meko is running at")
+	code, _, errs = run("restart", "--data-dir", dir, "--log-level", "debug")
+	want(t, "restart --log-level", code, 1, errs, "reads config.toml")
+	code, _, errs = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, errs, "")
+	code, _, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start --port", code, 1, errs, "reads config.toml")
+}
+
+// Under launchd, which restarts serve however it exits, a serve that finds the data folder taken
+// waits for it instead of exiting 75 every few seconds.
+func TestServeUnderLaunchdWaitsForTheFolder(t *testing.T) {
+	dir, port := setup(t)
+	shorten(t, &lockRetry, 50*time.Millisecond)
+	t.Setenv("MEKO_SERVICE", "launchd")
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireLock(l.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := strconv.Atoi(port)
+	cfg := config.Default()
+	cfg.Server.Port = p
+	cfg.Secrets.Store = "file"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, ServeOptions{Layout: l, Config: cfg}) }()
+	select {
+	case err := <-done:
+		t.Fatalf("serve gave up instead of waiting: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	releaseLock(held)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(l.Port); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("serve didn't start once the folder was free")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

@@ -127,6 +127,19 @@ describe('installer: Meko is optional', () => {
     expect(c.meko).toMatchObject({ url: 'http://127.0.0.1:7790/mcp', apiKey: 'tok' });
   });
 
+  it('never sends a saved key to a URL given without one', async () => {
+    const c = cfg();
+    c.meko.apiKey = 'mko_tkn_saved';
+    const { d, checked } = deps({ answers: ['other-key'] });
+    expect(await installMeko(c, { urlArg: 'http://other.example/mcp', noMeko: false }, d)).toBe(true);
+    expect(checked).toEqual(['http://other.example/mcp other-key']);
+    const quiet = deps({ canAsk: false });
+    const c2 = cfg();
+    c2.meko.apiKey = 'mko_tkn_saved';
+    expect(await installMeko(c2, { urlArg: 'http://other.example/mcp', noMeko: false }, quiet.d)).toBe(false);
+    expect(quiet.checked).toEqual([]);
+  });
+
   it('checks a key it is given and sets up Claude Code', async () => {
     const c = cfg();
     const { d, said, calls } = deps({ canAsk: false });

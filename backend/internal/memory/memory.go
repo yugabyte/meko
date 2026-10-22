@@ -41,6 +41,7 @@ type Service struct {
 	fileMu         sync.Mutex // a file's bytes and its row change together: storing one, deleting one
 	tickets        *tickets
 	baseURL        string
+	keepDeleted    func() bool
 }
 
 // Options configure a Service.
@@ -60,6 +61,10 @@ type Options struct {
 	FilesDir string
 	// BaseURL is this server's, http://127.0.0.1:<port>, for the upload and download links it gives.
 	BaseURL string
+	// KeepDeletedFiles, if set and true, leaves a deleted knowledge file's bytes on disk for the next
+	// start's sweep: while an update is on probation, a rollback restores the database from before
+	// it, and its rows must still find their bytes.
+	KeepDeletedFiles func() bool
 }
 
 // New is the service over st and the memory engine eng.
@@ -73,7 +78,8 @@ func New(st *store.Store, eng *memoryengine.Client, o Options) *Service {
 	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noMemoryEngine: o.NoMemoryEngine,
 		child: o.MemoryEngineChild, maxDistance: o.MaxDistance, kbMaxDistance: o.KBMaxDistance,
 		kick: make(chan struct{}, 1), indexKick: make(chan struct{}, 1), files: knowledge.NewFiles(o.FilesDir),
-		tickets: &tickets{m: map[string]*ticket{}}, baseURL: strings.TrimSuffix(o.BaseURL, "/")}
+		tickets: &tickets{m: map[string]*ticket{}}, baseURL: strings.TrimSuffix(o.BaseURL, "/"),
+		keepDeleted: o.KeepDeletedFiles}
 }
 
 // UserID is the install's local user, the user_id on every memory.

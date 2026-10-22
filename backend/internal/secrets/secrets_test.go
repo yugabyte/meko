@@ -70,12 +70,13 @@ echo "$*" >> "$dir/argv"
 item() { printf '%s' "$1" | tr '/' '_'; }
 cmd() {
   op=$1; shift
-  acct=""; val=""
+  acct=""; val=""; upd=0
   while [ $# -gt 0 ]; do
     case $1 in
       -a) acct=$2; shift 2 ;;
       -w) if [ "$op" = add-generic-password ]; then val=$2; shift 2; else shift; fi ;;
       -s) shift 2 ;;
+      -U) upd=1; shift ;;
       *) shift ;;
     esac
   done
@@ -85,7 +86,11 @@ cmd() {
       [ -f "$f" ] || { echo "security: The specified item could not be found in the keychain." >&2; exit 44; }
       cat "$f"; echo ;;
     delete-generic-password) [ -f "$f" ] || exit 44; rm -f "$f" ;;
-    add-generic-password) printf '%s' "$val" > "$f" ;;
+    add-generic-password)
+      if [ "$upd" = 0 ] && [ -f "$f" ]; then
+        echo "security: The specified item already exists in the keychain." >&2; return 45
+      fi
+      printf '%s' "$val" > "$f" ;;
   esac
 }
 if [ "$1" = -i ]; then
@@ -144,6 +149,19 @@ func TestKeychainThroughSecurity(t *testing.T) {
 	}
 }
 
+func TestKeychainAddKeepsTheFirst(t *testing.T) {
+	useFakeSecurity(t)
+	k := NewKeychain("/data/one")
+	got, err := k.Add("client-token", secret)
+	if err != nil || got != secret {
+		t.Fatalf("first add: %q, %v", got, err)
+	}
+	got, err = k.Add("client-token", secret+"ff")
+	if err != nil || got != secret {
+		t.Fatalf("second add: %q, %v (want the first one kept)", got, err)
+	}
+}
+
 func TestKeychainErrorsNameTheFix(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "security")
@@ -199,6 +217,9 @@ func TestRealKeychain(t *testing.T) {
 	}
 	if err := k.Set("client-token", secret); err != nil {
 		t.Fatal(err)
+	}
+	if got, err := k.Add("client-token", "0000"); err != nil || got != secret {
+		t.Fatalf("add over an existing item: %q, %v (want it kept)", got, err)
 	}
 	if err := k.Set("client-token", secret+"ff"); err != nil {
 		t.Fatalf("replacing: %v", err)

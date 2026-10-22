@@ -2,7 +2,9 @@
 // tokens later. On macOS they're in the login Keychain; elsewhere (and on a Mac set to
 // [secrets] store = "file") they're files in the data folder, readable only by their owner.
 //
-// A secret never reaches a log, an error message or a command line.
+// A secret never reaches a log or an error message, and reaches a command line only where an
+// installer takes it as a flag: meko install_extension passes the client token to AgentK's
+// installer as --meko-key, as REVIEW.md allows.
 package secrets
 
 import (

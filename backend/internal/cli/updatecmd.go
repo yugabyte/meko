@@ -69,8 +69,13 @@ func runUpdate(l paths.Layout, check bool, stdout, stderr io.Writer) int {
 		}
 	}
 	if _, ok := waitAnswering(l, serviceStartTimeout, pid); !ok {
-		return fail(stderr, fmt.Errorf("meko %s didn't answer within %s: see meko logs. It's rolled back after "+
-			"%d failed starts", next, serviceStartTimeout, update.MaxFailedStarts))
+		if serviceOf(l) != nil {
+			return fail(stderr, fmt.Errorf("meko %s didn't answer within %s: see meko logs. The service rolls it "+
+				"back after %d failed starts", next, serviceStartTimeout, update.MaxFailedStarts))
+		}
+		return fail(stderr, fmt.Errorf("meko %s didn't answer within %s: see meko logs. Without the service "+
+			"nothing starts it again: run meko start, and after %d failed starts the next one rolls back to %s",
+			next, serviceStartTimeout, update.MaxFailedStarts, ver))
 	}
 	fmt.Fprintf(stdout, "Meko is running %s.\n", next)
 	return exitOK

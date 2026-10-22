@@ -35,7 +35,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 meko install_extension agentk     # optional: AgentK Local, using this Meko
 ```
 
-It downloads the newest Meko release, checks its checksum, unpacks it into `~/.meko/app`, links
+It downloads the newest Meko release, checks its checksum, unpacks it into `~/.local/share/meko/app`, links
 `~/.local/bin/meko`, and sets Meko up as a login service (launchd on macOS, systemd on Linux) that
 restarts on failure and updates itself, rolling back an update that keeps failing to start. The
 release bundles its own Node and its models (the embedder and the reranker), so the first start

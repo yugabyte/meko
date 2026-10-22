@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
@@ -57,6 +58,12 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 		fmt.Fprintln(stderr, "Nothing was removed.")
 		return exitError
 	}
+	// The client token may be outside the folder (the login Keychain): found now, deleted after.
+	cfg, cerr := config.Load(l.Config, os.Getenv, config.Overrides{})
+	if cerr != nil {
+		cfg = config.Default()
+	}
+	ct, cterr := clientTokens(l, cfg)
 
 	// Under its service, a server that only gets a signal is started again: stop the service first.
 	m := serviceOf(l)
@@ -81,6 +88,11 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 	}
 	if err != nil {
 		return fail(stderr, err)
+	}
+	if cterr == nil {
+		if err = ct.Delete(); err != nil {
+			return fail(stderr, fmt.Errorf("removed %s, but not its client token: %w", l.Root, err))
+		}
 	}
 	fmt.Fprintf(stdout, "Removed %s.\n", l.Root)
 	if m != nil {

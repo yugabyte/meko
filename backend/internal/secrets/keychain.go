@@ -90,6 +90,29 @@ func (k *Keychain) Set(name, value string) error {
 	return nil
 }
 
+// Add stores the secret unless the store already has one by that name, and returns whichever it
+// holds after: without -U, add-generic-password refuses an existing item, so two callers adding at
+// once agree on the first one's value.
+func (k *Keychain) Add(name, value string) (string, error) {
+	if err := checkName(name); err != nil {
+		return "", err
+	}
+	if err := checkValue(value); err != nil {
+		return "", err
+	}
+	acct := k.account(name)
+	if strings.ContainsAny(acct, "\"\\\n") {
+		return "", fmt.Errorf("the data folder %s can't name a Keychain item: it holds a quote, backslash or newline", k.root)
+	}
+	line := fmt.Sprintf("add-generic-password -s %q -a %q -w %q", KeychainService, acct, value)
+	if k.keychain != "" {
+		line += fmt.Sprintf(" %q", k.keychain)
+	}
+	// An item that's already there is reported as an error on stderr; the Get below settles it.
+	_, _ = k.run(strings.NewReader(line+"\n"), "-i")
+	return k.Get(name)
+}
+
 // Delete removes the secret.
 func (k *Keychain) Delete(name string) error {
 	if err := checkName(name); err != nil {

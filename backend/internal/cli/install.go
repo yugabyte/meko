@@ -147,20 +147,17 @@ func runUninstall(l paths.Layout, purge, force bool, stdout, stderr io.Writer) i
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if purge {
-		cfg, cerr := config.Load(l.Config, os.Getenv, config.Overrides{})
-		if cerr != nil {
-			cfg = config.Default()
+	// Read before a purge removes the data folder, which holds the extension list.
+	var exts []string
+	if reg, rerr := extensions.Load(l.Root); rerr == nil {
+		for _, n := range reg.Names() {
+			exts = append(exts, fmt.Sprintf("Extension %s is still installed: %s uninstall removes it.", n,
+				reg.Entries[n].Command))
 		}
-		ct, cterr := clientTokens(l, cfg)
+	}
+	if purge {
 		if code := runDestroy(l, force, stdin, stdout, stderr); code != exitOK {
 			return code
-		}
-		// A file-kept token went with the folder; a Keychain item is outside it.
-		if cterr == nil {
-			if err = ct.Delete(); err != nil {
-				return fail(stderr, err)
-			}
 		}
 	}
 	if m, merr := newManager(); merr == nil && m.Installed() && (m.DataDir() == l.Root || m.DataDir() == "") {
@@ -181,20 +178,18 @@ func runUninstall(l paths.Layout, purge, force bool, stdout, stderr io.Writer) i
 		}
 	}
 	if app.Root != "" {
+		if err = app.UnlinkCommand(home); err != nil {
+			return fail(stderr, err)
+		}
 		if _, serr := os.Stat(app.Root); serr == nil {
-			if err = app.UnlinkCommand(home); err != nil {
-				return fail(stderr, err)
-			}
 			if err = app.Remove(); err != nil {
 				return fail(stderr, err)
 			}
 			fmt.Fprintf(stdout, "Removed the releases in %s and the meko command.\n", app.Root)
 		}
 	}
-	if reg, rerr := extensions.Load(l.Root); rerr == nil {
-		for _, n := range reg.Names() {
-			fmt.Fprintf(stdout, "Extension %s is still installed: %s uninstall removes it.\n", n, reg.Entries[n].Command)
-		}
+	for _, line := range exts {
+		fmt.Fprintln(stdout, line)
 	}
 	if !purge {
 		fmt.Fprintf(stdout, "Your data is still in %s; meko destroy (or meko uninstall --purge) removes it.\n", l.Root)
@@ -239,6 +234,10 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 		args = append(args, "--non-interactive")
 	}
 	if cmd := extensions.FindCommand(cat.Command, home); cmd != "" {
+		if tooOld(cmd) {
+			return fail(stderr, fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
+				"needs: update it (the Update button in AgentK Local), then run this again", cat.Title))
+		}
 		fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko.\n", cat.Title, cmd)
 		if err = runAttached(cmd, append([]string{"install"}, args...), stdout, stderr); err != nil {
 			return fail(stderr, fmt.Errorf("%s install failed: %w", cat.Command, err))
@@ -287,11 +286,34 @@ func runExtensionInstaller(repo string, cat extensions.Catalog, args []string, s
 	if err := c.Download(ctx, a, script); err != nil {
 		return err
 	}
+	// Releases from before Meko's extensions refuse --meko-url, and their installer looks for the
+	// repo's latest release, which is Meko's now.
+	b, rerr := os.ReadFile(script) //nolint:gosec // G304: our download
+	if rerr != nil || !strings.Contains(string(b), "--meko-url") {
+		return fmt.Errorf("the newest %s release (%s) is older than this Meko and can't use it yet: it comes "+
+			"with the next %s release", cat.Title, rel.Tag, cat.Title)
+	}
 	fmt.Fprintf(stdout, "Installing %s %s (%s).\n", cat.Title, ver, rel.Tag)
 	if err := runAttached("sh", append([]string{script}, args...), stdout, stderr); err != nil {
 		return fmt.Errorf("%s's installer failed: %w", cat.Title, err)
 	}
 	return nil
+}
+
+// tooOld reports whether an installed AgentK Local is a release from before --meko-url: its
+// install.js (AgentK's release layout, <version>/lib/dist/server/install.js beside bin/) doesn't name
+// the flag. A layout it doesn't recognize (a build from source) isn't judged.
+func tooOld(cmd string) bool {
+	real, err := filepath.EvalSymlinks(cmd)
+	if err != nil {
+		return false
+	}
+	js := filepath.Join(filepath.Dir(filepath.Dir(real)), "lib", "dist", "server", "install.js")
+	b, err := os.ReadFile(js) //nolint:gosec // G304: AgentK's own file
+	if err != nil {
+		return false
+	}
+	return !strings.Contains(string(b), "meko-url")
 }
 
 // runAttached runs a command with the terminal: an installer asks its questions there.

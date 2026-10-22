@@ -492,6 +492,9 @@ func (s *Service) DeleteDocument(ctx context.Context, datapack, id string) (int,
 	case err != nil:
 		return 0, err
 	}
+	if s.keepDeleted != nil && s.keepDeleted() {
+		return n, nil // SweepFiles removes the bytes at a start after the update is done
+	}
 	if err = s.files.Remove(datapack, d.ContentHash); err != nil && s.log != nil {
 		s.log.Warn("couldn't remove a deleted knowledge file's bytes; the next start sweeps them",
 			"document_id", d.ID, "error", err)

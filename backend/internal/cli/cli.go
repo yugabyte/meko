@@ -21,8 +21,9 @@ const (
 	exitError      = 1
 	exitUsage      = 2
 	exitNotRunning = 3 // status, when no server runs
-	// exitLocked: serve found another server holding the data folder. The service files tell their
-	// manager not to restart on it (restarting won't help); it's EX_TEMPFAIL, as AgentK's.
+	// exitLocked: serve found another server holding the data folder. The systemd unit tells systemd
+	// not to restart on it (restarting won't help); it's EX_TEMPFAIL, as AgentK's. launchd can't skip
+	// one exit code, so a serve it runs waits for the folder instead of exiting (waitForLock).
 	exitLocked = 75
 )
 
@@ -74,7 +75,8 @@ Usage:
                  --limit N; all seven take --json for the tools' raw replies
 
 Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
-start, restart and serve also take --port (default 7778) and --log-level (debug, info, warn, error).
+start, restart and serve also take --port (default 7778) and --log-level (debug, info, warn, error);
+under the service, set them in config.toml instead.
 `
 
 // stdin is what add_memory, destroy and uninstall --purge read; tests replace it.

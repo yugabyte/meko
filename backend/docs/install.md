@@ -24,7 +24,8 @@ repo is internal, and:
 1. Checks the platform: Linux x64 or arm64, or an Apple Silicon Mac on macOS 14 or newer.
 2. Finds the newest `meko-v*` release (or `--version`), downloads
    `meko-<version>-<linux|darwin>-<x64|arm64>.tar.gz` and `SHA256SUMS`, and checks the checksum.
-3. Unpacks it to `~/.meko/app/<version>` (`$MEKO_HOME/app`), clearing macOS's quarantine flag in
+3. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
+   folder, clearing macOS's quarantine flag in
    case the tarball came through a browser.
 4. Runs that version's `meko install`.
 
@@ -40,11 +41,12 @@ says so and changes nothing, unless given `--reinstall` or another version.
   a server started by hand on the same data folder first. `--no-service` skips the service.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
-`meko uninstall` removes the service, `~/.local/bin/meko` and `app/`, and keeps the data;
-`--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`) and
-deletes the client token from the Keychain too. Extensions stay installed. `meko destroy` stops the
-service before the server, so its manager doesn't start the server again mid-removal, and says the
-service is still installed.
+`meko uninstall` removes the service, `~/.local/bin/meko` and the app folder, and keeps the data;
+`--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`).
+Extensions stay installed. `meko destroy` stops the service before the server, so its manager
+doesn't start the server again mid-removal; removes the data folder and the client token (also when
+it's in the Keychain, outside the folder); and says the service is still installed. The releases
+are outside the data folder, so the service can still start Meko on a fresh one.
 
 ## Release builds
 
@@ -124,7 +126,12 @@ need an `agent-k-local-*` tarball.
 | stderr | `<data>/logs/service.log` | the same (`StandardError=append:`) |
 | Shared home | | `ConditionHost=<host>` |
 
-- `serve` exits 75 when another server holds the data folder, so the unit doesn't restart forever.
+- When another server holds the data folder, `serve` exits 75, and the systemd unit doesn't restart
+  on it. launchd can't skip one exit code (`KeepAlive` has to restart on 0, which is how an update
+  restarts), so a `serve` launchd runs waits for the folder instead, saying so once in
+  `service.log`.
+- `meko start --port` and `meko restart --log-level` are refused while a service runs the data
+  folder: the service passes only `--data-dir`, so set them in `config.toml`.
 - The stop timeouts are 35 s because `serve` drains requests for up to 10 s, then stops its
   children for up to 15 s more; launchd's default of 20 s would kill it partway.
 - The data folder is written into the service file, so the CLI uses a service only when the
@@ -148,7 +155,11 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
 - `meko install_extension agentk` needs a running Meko. When `agent-k-local` is on PATH or in
   `~/.local/bin`, it runs `agent-k-local install --meko-url <url> --meko-key <client token>`, which
   keeps AgentK's other settings. Otherwise it downloads the newest AgentK release's `install.sh`
-  (tags `agentk-v*`, then `v*`) and runs it with the same two flags. Nothing else is passed, apart
+  (tags `v*`, and `agentk-v*` once #230 switches them) and runs it with the same two flags. An
+  AgentK from before `--meko-url` is refused with a message, rather than failing on the flag: an
+  installed one by its `install.js`, a release by its `install.sh`. So `install_extension` works
+  once an AgentK release built after #229 is out; run `release.yml` by hand (force) right after
+  #229 merges, since #229 itself is a `meko` commit and cuts no AgentK release. Nothing else is passed, apart
   from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agent-k-local stop`
@@ -163,7 +174,7 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
 A release install's app folder:
 
 ```
-~/.meko/app/                 ($MEKO_HOME/app)
+~/.local/share/meko/app/     ($XDG_DATA_HOME/meko/app), outside the data folder
   <version>/                 one per installed release, each with bin/meko and VERSION
   current -> <version>       what the service runs
   update-pending.json        an update on probation
@@ -193,6 +204,9 @@ A release install's app folder:
   since the upgrade are only in the file moved aside. Then `app/current` goes back, the version goes
   into `bad-versions`, a WARN goes to `meko.log` and `service.log`, and the old binary is `exec`ed in
   its place.
+- While an update is on probation, deleting a knowledge file leaves its bytes on disk
+  (`memory.Options.KeepDeletedFiles`): a rollback restores rows from before the update, and they
+  must still find their files. The sweep at a start after the update is done removes them.
 - `[update] channel = "off"` stops checks; `[update] repo` (or `MEKO_UPDATE_REPO`) points at a fork.
 
 ## Secrets
@@ -211,7 +225,9 @@ A release install's app folder:
   missing on most servers, and locked at boot when lingering starts Meko before login.
 
 The client token stays in `client.token` with the file store. With the Keychain, an existing
-`client.token` moves into it the first time it's read. A Keychain that refuses (locked, as over SSH)
+`client.token` moves into it the first time it's read, and a new token is added without `-U`
+(`Keychain.Add`), which refuses an item that's already there: `serve` and `meko token` making one at
+once agree on the first, as the file store's hard link makes them. A Keychain that refuses (locked, as over SSH)
 makes `serve` wait and retry every 10 s instead of exiting, so launchd doesn't restart it in a loop.
 Changing the store doesn't move secrets: the client token is made again.
 

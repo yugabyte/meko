@@ -43,7 +43,7 @@ func setup(t *testing.T, sums func(tarball []byte) string) env {
 	root := t.TempDir()
 	e := env{home: filepath.Join(root, "home"), assets: filepath.Join(root, "assets"),
 		args: filepath.Join(root, "meko-args")}
-	e.app = filepath.Join(e.home, ".meko", "app")
+	e.app = filepath.Join(e.home, ".local", "share", "meko", "app")
 	bin := filepath.Join(root, "bin")
 	for _, d := range []string{e.home, e.assets, bin} {
 		if err := os.MkdirAll(d, 0o700); err != nil {

@@ -131,9 +131,10 @@ function toComparison(c: GhComparison): Comparison {
 const compareRoute = (repo: string, base: string, head: string) => `repos/${repo}/compare/${base}...${head}`;
 
 /**
- * The prefixes of AgentK's release tags, newest scheme first: `agentk-v<version>`, and `v<version>`
- * before releases were scoped by product (scripts/release/product.sh). Meko's `meko-v…` releases
- * are another product's: their versions don't parse, so they're never offered.
+ * The prefixes of AgentK's release tags: `v<version>` today, and `agentk-v<version>` once #230
+ * switches to it (scripts/release/product.sh), so a version reading both is out before the switch.
+ * Meko's `meko-v…` releases are another product's: their versions don't parse, so they're never
+ * offered.
  */
 export const TAG_PREFIXES = ['agentk-v', 'v'] as const;
 

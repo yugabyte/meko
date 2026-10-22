@@ -61,6 +61,12 @@ jobs:
         run: |
           set -eu
           if [ -n "${DISPATCH_TAG:-}" ]; then
+            # Only AgentK's own tags: a meko-v… tag is Meko's release (meko-release.yml), and this would
+            # replace its installer and checksums.
+            case $DISPATCH_TAG in
+              v[0-9]*) ;;
+              *) echo "$DISPATCH_TAG isn't an AgentK Local release tag (v<version>)"; exit 1 ;;
+            esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
             # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
             git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||

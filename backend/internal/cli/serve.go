@@ -67,6 +67,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 	lock, err := acquireServeLock(l.Lock)
+	if errors.Is(err, errLocked) && os.Getenv("MEKO_SERVICE") == "launchd" {
+		// launchd's KeepAlive can't skip one exit code the way systemd's RestartPreventExitStatus=75
+		// does, so exiting would only be retried every few seconds: wait for the folder instead.
+		lock, err = waitForLock(ctx, l)
+		if lock == nil && err == nil {
+			return nil // stopped while waiting
+		}
+	}
 	if errors.Is(err, errLocked) {
 		pid, _ := readInt(l.Pid)
 		return &lockedError{root: l.Root, pid: pid}
@@ -206,6 +214,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		UserID: userID, Log: log, NoMemoryEngine: noMemoryEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
 		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
 		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
+		// On probation after an update: a rollback restores the database, and its rows need their files.
+		KeepDeletedFiles: func() bool {
+			if !isRelease {
+				return false
+			}
+			p, _ := app.ReadPending()
+			return p != nil && p.To == release
+		},
 		MemoryEngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
 				if c.Name == memoryengine.Name {
@@ -335,6 +351,28 @@ func startMemoryEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Co
 	}
 	log.Warn("the memory engine can't start; memory features are off", "reason", err)
 	return err.Error()
+}
+
+// lockRetry is how often a launchd-run serve tries the data folder's lock again while another server
+// holds it.
+var lockRetry = 5 * time.Second
+
+// waitForLock waits for another server to release the data folder, saying so once on stderr (the
+// service's log). It returns a nil lock and error when ctx ends first.
+func waitForLock(ctx context.Context, l paths.Layout) (*os.File, error) {
+	pid, _ := readInt(l.Pid)
+	fmt.Fprintf(os.Stderr, "meko: %v; waiting for it to stop\n", &lockedError{root: l.Root, pid: pid})
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(lockRetry):
+		}
+		lock, err := acquireLock(l.Lock)
+		if !errors.Is(err, errLocked) {
+			return lock, err
+		}
+	}
 }
 
 // rollbackError is Serve's way of saying it rolled back a failing update: Run then runs exe, the
