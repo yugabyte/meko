@@ -83,7 +83,7 @@ export default function App() {
             />
             <div className="p-8">
               {route.tab === "overview" && <OverviewPage datapack={current.data} />}
-              {route.tab === "analytics" && <AnalyticsPage datapack={current.data} />}
+              {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
               {route.tab === "search" && <SearchPage datapack={current.data} />}
               {route.tab === "memories" && <MemoriesPage datapack={current.data} onChanged={onChanged} />}
               {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}

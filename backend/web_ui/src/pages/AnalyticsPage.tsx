@@ -17,7 +17,8 @@ import { SplitCard } from "../components/metrics/SplitCard";
 import { StatPairCard } from "../components/metrics/StatPairCard";
 import { AgentsCard, RecentCallsCard, ToolsCard } from "../components/metrics/UsageCards";
 
-export function AnalyticsPage({ datapack }: { datapack: Datapack }) {
+// onChanged reloads the datapack, whose counts the memory breakdown reads.
+export function AnalyticsPage({ datapack, onChanged }: { datapack: Datapack; onChanged: () => void }) {
   const id = datapack.datapack_id;
   const metrics = useLoad(() => api.metrics(id), [id]);
   const usage = useLoad(() => api.usage(id), [id]);
@@ -30,6 +31,7 @@ export function AnalyticsPage({ datapack }: { datapack: Datapack }) {
   const refresh = () => {
     metrics.reload();
     usage.reload();
+    onChanged();
   };
 
   return (
@@ -51,7 +53,7 @@ export function AnalyticsPage({ datapack }: { datapack: Datapack }) {
         />
         <MemoryBreakdownCard
           promoted={d.promoted}
-          privateCount={d.privateCount}
+          kept={d.kept}
           pending={d.pending}
           onReview={() => navigate({ datapackId: id, tab: "memories" })}
         />

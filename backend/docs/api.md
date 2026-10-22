@@ -66,7 +66,9 @@ for metrics. Each row records:
 - whether it worked (with its error code) and how long it took;
 - the result counts per source (memory, knowledge base, conversation);
 - the results by match quality, as Meko Cloud bands them: 0.75 and up, 0.5 and up, below, by cosine
-  similarity (a memory's `raw_similarity_score`, else its `score`; 1 − `distance` for the others);
+  similarity (a memory's `raw_similarity_score`, else its `score`; 1 − `distance` for the others).
+  Bands are counted when the call is recorded, so calls recorded before memories were banded by
+  cosine (they were by `score`) keep their old bands until the call log's 90 days age them out;
 - `context_search`'s token estimate (sent and saved), and what `track_token_usage` reports;
 - its steps as JSON (`[{step, ms, n}]`), enough for milestone 6's trace drawer to show timings.
 

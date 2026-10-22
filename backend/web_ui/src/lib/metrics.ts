@@ -1,6 +1,7 @@
-// The Analytics tab's numbers, all derived from one /metrics payload so no two cards disagree.
-// Formulas follow Meko Cloud's Analytics tab, except token estimates, which come from bytes: Meko
-// local's chunks are 1000 characters, not Cloud's 1024 tokens.
+// The Analytics tab's numbers, derived in one place from /metrics and the datapack's own counts
+// (the memory breakdown), so no two cards compute the same number differently. Formulas follow Meko
+// Cloud's Analytics tab, except token estimates, which come from bytes: Meko local's chunks are 1000
+// characters, not Cloud's 1024 tokens.
 
 import type { Datapack, Metrics } from "./types";
 
@@ -30,8 +31,8 @@ export interface Derived {
   qualityScore: number | null; // (high + mid) / total
   queries: number;
   promoted: number;
-  privateCount: number;
-  pending: number;
+  kept: number; // kept as private memories
+  pending: number; // learnings, neither kept nor promoted yet
 }
 
 function split(knowledge: number, memory: number, conversation: number): Split {
@@ -61,7 +62,8 @@ export function derive(m: Metrics, d: Datapack): Derived {
     qualityScore: scored > 0 ? (high + mid) / scored : null,
     queries: m.daily_activity.reduce((s, day) => s + day.hybrid + day.kb + day.memory, 0),
     promoted,
-    privateCount: d.memory_count ?? 0,
+    // memory_count is learnings and kept memories; learnings are the pending part of it.
+    kept: Math.max(0, (d.memory_count ?? 0) - (d.learnings_count ?? 0)),
     pending: d.learnings_count ?? 0,
   };
 }

@@ -9,7 +9,7 @@ const NO_DATA: [string, string] = ["No retrieval data yet", "This fills in once 
 
 export function EfficiencyCard({ d, requests }: { d: Derived; requests: number }) {
   const title = "Context efficiency";
-  const subtitle = "Tokens sent vs. a fixed baseline per query";
+  const subtitle = "Tokens sent vs. sending the raw context per query";
   if (d.savedPct === null || d.avgTokensSent === null || d.avgTokensIfRaw === null) {
     return <MetricCard title={title} subtitle={subtitle} empty={NO_DATA} />;
   }
