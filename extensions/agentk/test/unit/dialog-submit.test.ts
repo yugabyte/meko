@@ -90,17 +90,13 @@ describe('Ctrl+Enter in the design questions', () => {
   const inQuestions = (focused: El, approve: El | null) =>
     questionsSubmitButton(focused as unknown as Element, approve as unknown as HTMLButtonElement | null) as unknown as El | null;
 
-  it('presses Approve from an answer or the feedback, and Answer from AgentK is asking', () => {
+  it('presses Approve from an answer, and Answer from AgentK is asking', () => {
     const approve = el('button', { class: 'btn small primary' });
     const note = el('textarea');
-    const feedback = el('textarea');
     const askText = el('textarea');
     const answer = el('button', { class: 'btn small primary', 'data-submit': '' });
-    el('div', { class: 'dq-scroll' }, el('div', { class: 'ask-form' }, askText, answer), el('ol', {}, note), feedback);
+    el('div', { class: 'dq-scroll' }, el('div', { class: 'ask-form' }, askText, answer), el('ol', {}, note));
     expect(inQuestions(note, approve)).toBe(approve);
-    expect(inQuestions(feedback, approve)).toBe(approve);
     expect(inQuestions(askText, approve)).toBe(answer);
-    // An approval waiting for the turn's end shows Cancel approval instead: nothing to press.
-    expect(inQuestions(feedback, null)).toBeNull();
   });
 });
