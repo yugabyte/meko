@@ -21,11 +21,9 @@ model that runs locally) and keywords (FTS5); knowledge-base results are reranke
 cross-encoder, also run locally.
 The server listens only on `127.0.0.1`.
 
-Meko is under construction. It has its storage, memory engine, conversations, MCP and REST, and
-releases with an installer that runs it as a login service and keeps it updated
-([#171](https://github.com/yugabyte/agent-k-local/issues/171)). Knowledge files
-([#170](https://github.com/yugabyte/agent-k-local/issues/170)) and its web UI
-([#172](https://github.com/yugabyte/agent-k-local/issues/172)) come next.
+Meko is under construction. It has its storage, memory engine, conversations, knowledge files,
+MCP and REST, and an installer that runs it as a login service and keeps it updated. Its web UI
+([#172](https://github.com/yugabyte/agent-k-local/issues/172)) comes next.
 
 ## Install
 
