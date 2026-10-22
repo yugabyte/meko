@@ -150,6 +150,19 @@ describe('Meko client', () => {
     });
   });
 
+  it("reads knowledge-base hits in Meko's shape: the text in chunk_text, the rerank score as the score", async () => {
+    meko.tools.context_search = () => ({ results: { memory: [], knowledge_base: [
+      { id: 'c1', chunk_text: 'Deploys need two approvals.', document_id: 'doc1', distance: 0.3, rerank_score: 0.97,
+        match_type: 'hybrid', metadata_filters: {} },
+      { id: 'c2', chunk_text: 'No rerank score.', document_id: 'doc1', distance: 0.4, match_type: 'semantic', metadata_filters: {} },
+    ] } });
+    const hits = await client.search('deploys', { id: 'd1', name: 'dp' }, 'agent', 'conv');
+    expect(hits.map((h) => [h.source, h.id, h.text, h.score])).toEqual([
+      ['knowledge_base', 'c1', 'Deploys need two approvals.', 0.97],
+      ['knowledge_base', 'c2', 'No rerank score.', 0.4],
+    ]);
+  });
+
   it("records each of AgentK's calls by tool and size, tagged with the step that made it, never their content", async () => {
     const records: MekoCallRecord[] = [];
     client.onCall = (r) => records.push(r);

@@ -503,7 +503,8 @@ export function strOrNull(v: unknown): string | null {
 }
 
 function pickText(it: Json): string {
-  for (const k of ['memory', 'text', 'content', 'chunk', 'summary', 'message', 'page_content']) {
+  // chunk_text: a knowledge-base hit, as Meko Cloud and the local Meko send it.
+  for (const k of ['memory', 'text', 'content', 'chunk', 'chunk_text', 'summary', 'message', 'page_content']) {
     const v = it[k];
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
@@ -511,7 +512,8 @@ function pickText(it: Json): string {
 }
 
 function pickScore(it: Json): number | null {
-  for (const k of ['score', 'similarity', 'distance']) {
+  // rerank_score: a knowledge-base hit's 0-1 relevance, which beats its distance (lower is closer).
+  for (const k of ['score', 'similarity', 'rerank_score', 'distance']) {
     if (typeof it[k] === 'number') return it[k] as number;
   }
   return null;
