@@ -101,7 +101,7 @@ release scripts with `--product meko`:
 
 | | AgentK Local (`release.yml`) | Meko (`meko-release.yml`) |
 |---|---|---|
-| Tag | `v0.YYYYMMDD.N` (`agentk-v…` after #230, once the release that reads both prefixes is out) | `meko-v0.YYYYMMDD.N` |
+| Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
 | Releases on | feat/fix/perf/deps subjects other than `meko` | feat/fix/perf/deps subjects with component `meko` |
 | Assets | AgentK tarballs, `SHA256SUMS`, its `install.sh` | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` |
 | Latest | `--latest=false` | `--latest` |
@@ -155,7 +155,7 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
 - `meko install_extension agentk` needs a running Meko. When `agent-k-local` is on PATH or in
   `~/.local/bin`, it runs `agent-k-local install --meko-url <url> --meko-key <client token>`, which
   keeps AgentK's other settings. Otherwise it downloads the newest AgentK release's `install.sh`
-  (tags `v*`, and `agentk-v*` once #230 switches them) and runs it with the same two flags. An
+  (tags `agentk-v*`, and `v*` from before) and runs it with the same two flags. An
   AgentK from before `--meko-url` is refused with a message, rather than failing on the flag: an
   installed one by its `install.js`, a release by its `install.sh`. So `install_extension` works
   once an AgentK release built after #229 is out; run `release.yml` by hand (force) right after

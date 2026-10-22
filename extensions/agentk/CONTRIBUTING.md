@@ -103,11 +103,14 @@ sorts higher.
    (node-pty built from source with Xcode's clang). Each bundles Node 22, the compiled server and
    web UI, and production dependencies, and is smoke-tested (`version`, and `selftest`, which
    spawns a real pty).
-3. It creates the tag and GitHub release `v<version>` with the tarballs, `SHA256SUMS` and
+3. It creates the tag and GitHub release `agentk-v<version>` (`v<version>` before releases were
+   tagged by product; Meko's are `meko-v<version>`) with the tarballs, `SHA256SUMS` and
    `install.sh`, not marked "latest" (that's Meko's), and attests build provenance where the
    plan allows.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/release/prune-releases.sh --product agentk`, which leaves Meko's releases alone.
-   A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
+   A lane is the tag's prefix and the version's prerelease identifier (`-beta.2` → `beta`), or
+   `stable` without one. The newest `v<version>` release is never deleted: installs from before the
+   switch to `agentk-v` tags update through it.
    Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
    between two tags) are unaffected.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
@@ -124,7 +127,7 @@ collector of your own, set `[call_home] url` in the dev home's `config.toml`
 an identical copy of `docs/call-home-report.schema.json`; change both together.
 
 Run the Release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
-a **tag** to rebuild the assets of an existing release. Only tags from after the move to
+a **tag** (`agentk-v…` or `v…`) to rebuild the assets of an existing release. Only tags from after the move to
 `extensions/agentk` can be rebuilt; the workflow refuses older ones.
 
 Release tarball layout:

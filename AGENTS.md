@@ -17,7 +17,7 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
 | `scripts/release/` | The release scripts both products share, with `--product agentk\|meko`: the next version, the release notes (and whether to release), and pruning old releases. |
-| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the two release trains (`release.yml` for AgentK, tags `v…` until #230 makes them `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release), and Dependabot. |
+| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the two release trains (`release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release), and Dependabot. |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
 | `README.md`, `LICENSE` | The repo's README (Meko: what it is, building it, its commands, and its extensions) and the license for everything in it. AgentK Local's README is `extensions/agentk/README.md`. |
 
