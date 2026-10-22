@@ -21,8 +21,8 @@ is in [docs/design.md](docs/design.md): an index, with one file per area under `
 read (UI, docs, messages), and `agentk` names the command, the npm package, the release tarballs
 (`agentk-<version>-…`), the systemd units (`agentk.service`, `agentk-host.service`) and the launchd
 labels (`com.yugabyte.agentk`, `.host`). What installs from before the rename still have keeps
-working: every release also ships its tarball as `agent-k-local-<version>-…` with
-`bin/agent-k-local` linked to `bin/agentk` (`scripts/package-release.sh`), the installer links
+working: every release also ships its tarball as `agent-k-local-<version>-…` (until #238), its
+`bin/agent-k-local` is a link to `bin/agentk` (`scripts/package-release.sh`), the installer links
 both commands (and the server adds `agentk` beside an old link: `src/server/cmdlink.ts`), and a
 service keeps its old name until `agentk install` moves it (`dropOldNames` in `src/server/service.ts`).
 `agent-k-local` itself stays in the repo name, `~/.agent-k-local` (moving it is #236), the

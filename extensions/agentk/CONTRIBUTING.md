@@ -142,7 +142,7 @@ agentk-<version>/
   CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
 ```
 
-Each release also carries the same files as `agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz`,
+Until #238, each release also carries the same files as `agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz`,
 in `agent-k-local-<version>/`: the name and layout the updaters and installers from before the
 rename look for, so those installs still update. The release workflow smoke-tests both.
 

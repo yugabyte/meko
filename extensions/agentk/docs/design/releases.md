@@ -34,7 +34,7 @@ Part of the [AgentK design](../design.md).
   would never update again. Both hold `bin/agent-k-local`, a link to `bin/agentk`, which the
   services installed then start. The updater installs only newer releases, all of which have the
   new name, so it reads only that; the installer falls back to the old name for an older
-  `--version`. Dropping the old copy strands every install still on a release from before the rename.
+  `--version`. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
   The installer and the updater pick the tarball for their platform. The updater skips releases
   with no build for its platform; the installer takes the latest release (or `--version`) and stops
   with a clear message if it has none. Releases since macOS support always include the macOS
