@@ -21,7 +21,7 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | `internal/testenv/` | A whole server for tests: store, store API, the memory engine with the hashing embedder, the service and the HTTP server. |
 | `internal/envelope/` | The `{data, error}` reply every API uses, and the error handler that keeps internal errors generic. |
 | `internal/storeapi/` | The store API the memory engine calls on `run/store.sock`: mem0's VectorStore and HistoryManager over `internal/store`, and the memory engine's hello. Internal token only. |
-| `internal/memoryengine/` | Finding Node and the built memory engine, its's child spec, and the Go client of its API on `run/mem_eng.sock`. |
+| `internal/memoryengine/` | Finding Node and the built memory engine, its child spec, and the Go client of its API on `run/mem_eng.sock`. |
 | `internal/memory/` | The service MCP and REST call: memories (through the memory engine), learnings (keep and promote), artifacts, conversations, conversation search, the sweep that embeds turns, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
 | `assets/` | The Meko logo, dark and white, as Meko Cloud's web app has it; the repo's README shows it. |
 | `memory_engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |

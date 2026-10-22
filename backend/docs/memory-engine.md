@@ -103,8 +103,10 @@ models/                            the embedding model, downloaded on first star
 memory_engine/                     mem0's own config folder (MEM0_DIR)
 ```
 
-A data folder from before the rename (when this was "the engine") may also hold `engine/` and
-`logs/engine.log*`. Nothing reads them any more, and they can be deleted.
+A data folder from before the rename (when this was "the engine") may also hold `engine/`,
+`logs/engine.log*` and, after an old server was killed rather than stopped, `run/engine.sock`.
+Nothing reads them any more, and they can be deleted. Call-log rows written before the rename keep
+the error code `engine_unavailable`; nothing filters or counts by error code.
 
 ## Storage
 
