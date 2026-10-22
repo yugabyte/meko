@@ -238,7 +238,9 @@ func WriteFile(path string, data []byte) error {
 }
 
 // LooksLikeDataDir reports whether dir is a Meko data folder, so it's safe to remove whole: it
-// holds meko.db or run/meko.lock, and it isn't / or the home folder.
+// holds meko.db, and it isn't / or the home folder. Only a server makes meko.db. Other files aren't
+// proof: the CLI's own commands make run/meko.lock (status, stop) and Ensure's folders and
+// client.token (token) in whatever folder --data-dir names.
 func LooksLikeDataDir(dir string) bool {
 	dir = filepath.Clean(dir)
 	if dir == "/" {
@@ -247,11 +249,7 @@ func LooksLikeDataDir(dir string) bool {
 	if home, err := os.UserHomeDir(); err == nil && sameDir(dir, home) {
 		return false
 	}
-	l := New(dir)
-	if fi, err := os.Lstat(l.DB); err == nil && fi.Mode().IsRegular() {
-		return true
-	}
-	fi, err := os.Lstat(l.Lock)
+	fi, err := os.Lstat(New(dir).DB)
 	return err == nil && fi.Mode().IsRegular()
 }
 

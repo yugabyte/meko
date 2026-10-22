@@ -193,7 +193,7 @@ func TestLooksLikeDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	for dir, want := range map[string]bool{
-		withDB: true, withLock: true, empty: false, home: false, "/": false,
+		withDB: true, withLock: false, empty: false, home: false, "/": false,
 		filepath.Join(empty, "none"): false,
 	} {
 		if got := LooksLikeDataDir(dir); got != want {

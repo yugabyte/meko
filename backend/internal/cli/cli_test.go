@@ -598,8 +598,9 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 
 	withStdin(t, "Yes\n")
 	code, out, errs = run("destroy", "--data-dir", dir)
-	want(t, "destroy", code, 0, out+errs, "Meko stopped.\nRemoved "+dir+".\n")
-	want(t, "destroy's note", code, 0, out, "claude mcp remove meko")
+	// A piped answer isn't echoed, so destroy ends the prompt's line itself.
+	want(t, "destroy", code, 0, out+errs, "Destroy it? [y/N] \nMeko stopped.\nRemoved "+dir+".\n")
+	want(t, "destroy's note", code, 0, out, "its token no longer works: remove it (claude mcp remove meko)")
 	gone(t, dir)
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status after destroy", code, exitNotRunning, out, "isn't running")
@@ -629,6 +630,16 @@ func TestDestroyNothingThere(t *testing.T) {
 	empty := shortDir(t)
 	code, out, errs = run("destroy", "--data-dir", empty, "--force")
 	want(t, "destroy of an empty folder", code, 0, out+errs, "Nothing to remove: the data folder "+empty+" is empty.")
+	// A link to an empty folder is left too: there's nothing to remove.
+	link := filepath.Join(shortDir(t), "link")
+	if err := os.Symlink(empty, link); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = run("destroy", "--data-dir", link, "--force")
+	want(t, "destroy of a link to an empty folder", code, 0, out+errs, "is empty.")
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("the link to an empty folder was removed: %v", err)
+	}
 }
 
 // destroy removes only a folder that looks like Meko's, and never the home folder.
@@ -640,6 +651,18 @@ func TestDestroyRefusesAForeignFolder(t *testing.T) {
 	}
 	code, _, errs := run("destroy", "--data-dir", dir, "--force")
 	want(t, "destroy of a foreign folder", code, 1, errs, "doesn't look like Meko's data folder")
+
+	// A mistyped --data-dir on token (and then status) gives the folder Meko's run/meko.lock,
+	// client.token and empty folders, which still don't make it Meko's.
+	if code, _, errs = run("token", "--data-dir", dir); code != 0 {
+		t.Fatalf("token: %s", errs)
+	}
+	run("status", "--data-dir", dir)
+	if _, err := os.Stat(paths.New(dir).Lock); err != nil {
+		t.Fatalf("status didn't make the lock file, so this doesn't test it: %v", err)
+	}
+	code, _, errs = run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of a folder token and status wrote in", code, 1, errs, "doesn't look like Meko's data folder")
 
 	t.Setenv("HOME", dir)
 	if err := os.WriteFile(filepath.Join(dir, "meko.db"), nil, 0o600); err != nil {
@@ -656,6 +679,9 @@ func TestDestroyRefusesAForeignFolder(t *testing.T) {
 func TestDestroyKillsAHungServer(t *testing.T) {
 	dir, _ := setup(t)
 	shorten(t, &stopTimeout, time.Second)
+	if err := os.WriteFile(paths.New(dir).DB, nil, 0o600); err != nil { // as a real serve makes
+		t.Fatal(err)
+	}
 	_, child := startHungServe(t, dir)
 	code, out, errs := run("destroy", "--data-dir", dir, "--force")
 	want(t, "destroy of a hung server", code, 0, out+errs, "so it was killed.\nRemoved "+dir+".")
@@ -682,4 +708,65 @@ func TestDestroyFollowsASymlink(t *testing.T) {
 	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+resolved+".")
 	gone(t, target)
 	gone(t, link)
+}
+
+// A folder that can't be moved aside (its parent isn't writable) is left whole, not half removed.
+func TestDestroyLeavesAFolderItCantMove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes in any folder")
+	}
+	parent := shortDir(t)
+	dir := filepath.Join(parent, "meko")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.New(dir).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	code, _, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy in a read-only parent", code, 1, errs, "Nothing was removed")
+	if _, err := os.Stat(paths.New(dir).DB); err != nil {
+		t.Errorf("meko.db is gone: %v", err)
+	}
+}
+
+// When removing the moved folder fails partway, the symlink to it goes anyway: it points at nothing.
+func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes files in any folder")
+	}
+	target := shortDir(t)
+	if err := os.WriteFile(paths.New(target).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stuck := filepath.Join(target, "logs")
+	if err := os.Mkdir(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "meko.log"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		moved, _ := filepath.Glob(target + ".destroying-*")
+		for _, m := range moved {
+			_ = os.Chmod(filepath.Join(m, "logs"), 0o700)
+			_ = os.RemoveAll(m)
+		}
+	})
+	link := filepath.Join(shortDir(t), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("destroy", "--data-dir", link, "--force")
+	want(t, "destroy that fails partway", code, 1, errs, "removing it failed partway")
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("the link to the moved folder is still there: %v", err)
+	}
 }
