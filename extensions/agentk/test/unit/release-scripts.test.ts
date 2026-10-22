@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -102,5 +102,56 @@ describe('prune-releases.sh', () => {
     expect(prune('agentk', '0')).toBe([
       'agentk-v0.20260104.0', 'agentk-v0.20260103.0', 'agentk-v0.20260103.0-beta.1', 'v0.20260101.0',
     ].map((t) => `would delete ${t}\n`).join(''));
+  });
+});
+
+describe('release.yml’s hand-run rebuild', () => {
+  // The plan step's own shell, cut out of the workflow: its run block, dedented.
+  const plan = (() => {
+    const lines = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/release.yml', import.meta.url)), 'utf8').split('\n');
+    const start = lines.findIndex((l) => /^\s+- id: p$/.test(l));
+    const run = lines.findIndex((l, i) => i > start && /^\s+run: \|$/.test(l));
+    const indent = /^\s*/.exec(lines[run + 1]!)![0];
+    const body: string[] = [];
+    for (const l of lines.slice(run + 1)) {
+      if (l.trim() && !l.startsWith(indent)) break;
+      body.push(l.slice(indent.length));
+    }
+    return body.join('\n');
+  })();
+  const rebuild = (tag: string) => {
+    const out = join(root, 'out');
+    writeFileSync(out, '');
+    const r = spawnSync('sh', ['-c', plan], { cwd: repo, encoding: 'utf8', env: { ...process.env, DISPATCH_TAG: tag, GITHUB_OUTPUT: out } });
+    return { status: r.status, stdout: r.stdout, output: readFileSync(out, 'utf8') };
+  };
+
+  beforeEach(() => {
+    git('tag', 'v0.20261001.0'); // from before the move to extensions/agentk
+    mkdirSync(join(repo, 'extensions/agentk'), { recursive: true });
+    writeFileSync(join(repo, 'extensions/agentk/package.json'), '{}\n');
+    git('add', '.');
+    commit('chore(repo): move AgentK');
+    for (const t of ['v0.20261022.2', 'agentk-v0.20261023.0', 'meko-v0.20261023.0']) git('tag', t);
+  });
+
+  it.each([
+    ['agentk-v0.20261023.0', '0.20261023.0'],
+    ['v0.20261022.2', '0.20261022.2'],
+  ])('rebuilds an AgentK tag of either prefix (%s)', (tag, version) => {
+    const r = rebuild(tag);
+    expect(r.status).toBe(0);
+    expect(r.output).toBe(`release=true\nrebuild=true\ntag=${tag}\nversion=${version}\nref=${tag}\n`);
+  });
+
+  it.each([
+    ['meko-v0.20261023.0', "isn't an AgentK Local release tag"],
+    ['agentk-v0.20261099.0', 'no such tag'],
+    ['v0.20261001.0', 'from before AgentK Local moved'],
+  ])('refuses %s', (tag, why) => {
+    const r = rebuild(tag);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain(why);
+    expect(r.output).toBe('');
   });
 });

@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: Rebuild assets for this existing tag instead (one from after the move to extensions/agentk)
+        description: Rebuild assets for this existing agentk-v or v tag instead (one from after the move to extensions/agentk)
         required: false
 
 # Read-only by default: only publish, which runs none of the dependency installs or tests,
@@ -62,21 +62,17 @@ jobs:
         run: |
           set -eu
           if [ -n "${DISPATCH_TAG:-}" ]; then
-            # Only AgentK's own tags: a meko-v… tag is Meko's release (meko-release.yml), and this would
-            # replace its installer and checksums.
+            # Only AgentK's own tags: agentk-v<version>, or v<version> from before releases were tagged by
+            # product. A meko-v… tag is Meko's release (meko-release.yml), and this would replace its
+            # installer and checksums.
             case $DISPATCH_TAG in
-              v[0-9]*) ;;
-              *) echo "$DISPATCH_TAG isn't an AgentK Local release tag (v<version>)"; exit 1 ;;
+              agentk-v[0-9]*|v[0-9]*) ;;
+              *) echo "$DISPATCH_TAG isn't an AgentK Local release tag (agentk-v<version> or v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
             # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
             git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||
               { echo "$DISPATCH_TAG is from before AgentK Local moved to extensions/agentk and can't be rebuilt"; exit 1; }
-            # AgentK's tags are agentk-v<version>, or v<version> from before releases were tagged by product.
-            case $DISPATCH_TAG in
-              agentk-v[0-9]*|v[0-9]*) ;;
-              *) echo "$DISPATCH_TAG isn't an AgentK Local release tag (agentk-v<version> or v<version>)"; exit 1 ;;
-            esac
             version=${DISPATCH_TAG#agentk-v}
             version=${version#v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
