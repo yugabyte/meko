@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { submitButton } from '../../src/web/components/common.js';
+import { questionsSubmitButton } from '../../src/web/components/DesignQuestions.js';
 import { isSubmitKey } from '../../src/web/util.js';
 
 /** Just enough of an element for submitButton: its selectors (tag, classes, attributes, `.a b` descendants) and classList. */
@@ -82,5 +83,20 @@ describe('Ctrl+Enter in a dialog', () => {
     const other = el('textarea');
     expect(pick(el('div', {}, other, answer), other)).toBe(answer);
     expect(pick(el('div', {}, other, el('button', { class: 'btn primary' })), other)).toBeNull();
+  });
+});
+
+describe('Ctrl+Enter in the design questions', () => {
+  const inQuestions = (focused: El, approve: El | null) =>
+    questionsSubmitButton(focused as unknown as Element, approve as unknown as HTMLButtonElement | null) as unknown as El | null;
+
+  it('presses Approve from an answer, and Answer from AgentK is asking', () => {
+    const approve = el('button', { class: 'btn small primary' });
+    const note = el('textarea');
+    const askText = el('textarea');
+    const answer = el('button', { class: 'btn small primary', 'data-submit': '' });
+    el('div', { class: 'dq-scroll' }, el('div', { class: 'ask-form' }, askText, answer), el('ol', {}, note));
+    expect(inQuestions(note, approve)).toBe(approve);
+    expect(inQuestions(askText, approve)).toBe(answer);
   });
 });

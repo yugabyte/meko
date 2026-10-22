@@ -223,7 +223,8 @@ with a submit button, that's the submit button if it's primary and nothing other
 two-factor); else the dialog footer's primary button; else, outside a form and footer, a primary
 button marked `data-submit` (Answer, in AgentK is asking). A field that takes Enter itself keeps it:
 in the Another PR box, `Ctrl+Enter` is Find, as Enter is, so a session can't start on the PR picked
-before.
+before. The design's Questions view does the same with **Approve with answers** ([Design
+panel](design-panel.md)).
 
 To give Claude an image or any other file, paste it into the terminal (`⌘V`, or `Ctrl+V` /
 `Ctrl+Shift+V` on Linux and Windows) or drop it on it. Claude Code's own `Ctrl+V` reads the
