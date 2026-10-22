@@ -5,7 +5,7 @@ import { Database, Moon, Plus, Sun } from "lucide-react";
 import { href, navigate } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import type { Datapack } from "../lib/types";
-import { CreateDatapackDialog } from "./CreateDatapackDialog";
+import { DatapackDialog } from "./DatapackDialog";
 import { Button, cx } from "./ui";
 
 export function Sidebar({
@@ -21,7 +21,7 @@ export function Sidebar({
   version?: string;
   theme: Theme;
   onToggleTheme: () => void;
-  onCreated: (d: Datapack) => void;
+  onCreated: (id: string) => void;
 }) {
   const [creating, setCreating] = useState(false);
   return (
@@ -67,11 +67,11 @@ export function Sidebar({
       </div>
 
       {creating && (
-        <CreateDatapackDialog
+        <DatapackDialog
           onClose={() => setCreating(false)}
-          onCreated={(d) => {
+          onSaved={(id) => {
             setCreating(false);
-            onCreated(d);
+            onCreated(id);
           }}
         />
       )}

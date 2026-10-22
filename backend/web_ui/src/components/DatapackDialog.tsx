@@ -1,4 +1,5 @@
-// Creates a datapack by name (3 to 60 characters) and an optional description.
+// Creates a datapack, or edits one's name and description when given it. Names are 3 to 60
+// characters.
 
 import { useState } from "react";
 import { api } from "../lib/api";
@@ -6,15 +7,18 @@ import type { Datapack } from "../lib/types";
 import { Dialog } from "./Dialog";
 import { Button, ErrorNote, Input } from "./ui";
 
-export function CreateDatapackDialog({
+export function DatapackDialog({
+  datapack,
   onClose,
-  onCreated,
+  onSaved,
 }: {
+  datapack?: Datapack;
   onClose: () => void;
-  onCreated: (d: Datapack) => void;
+  // The new datapack's id when one was created, else the edited one's.
+  onSaved: (id: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [name, setName] = useState(datapack?.datapack_name ?? "");
+  const [description, setDescription] = useState(datapack?.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
 
@@ -22,7 +26,12 @@ export function CreateDatapackDialog({
     setBusy(true);
     setError(undefined);
     try {
-      onCreated(await api.createDatapack(name.trim(), description.trim()));
+      if (datapack) {
+        await api.updateDatapack(datapack.datapack_id, { name: name.trim(), description: description.trim() });
+        onSaved(datapack.datapack_id);
+      } else {
+        onSaved((await api.createDatapack(name.trim(), description.trim())).datapack_id);
+      }
     } catch (e) {
       setError(e as Error);
       setBusy(false);
@@ -31,7 +40,7 @@ export function CreateDatapackDialog({
 
   return (
     <Dialog
-      title="New datapack"
+      title={datapack ? "Edit datapack" : "New datapack"}
       onClose={onClose}
       actions={
         <>
@@ -39,7 +48,7 @@ export function CreateDatapackDialog({
             Cancel
           </Button>
           <Button variant="primary" disabled={busy || name.trim().length < 3} onClick={submit}>
-            Create
+            {datapack ? "Save" : "Create"}
           </Button>
         </>
       }

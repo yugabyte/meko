@@ -1,9 +1,10 @@
 # Meko backend: web UI
 
-Milestone 6 (#172). A light UI for one person on their own machine: browse and search a datapack,
-add, keep, promote and delete memories, upload and manage knowledge files, read conversations, and
-copy the commands that connect an agent. It calls the REST routes and MCP tools in
-[api.md](api.md) and adds no routes of its own.
+Milestone 6 (#172). A light UI for one person on their own machine: browse, edit and search a
+datapack (all sources or one), add memories and keep, promote or delete several at once, upload and
+manage knowledge files, download artifacts, read conversations, see its analytics, and copy the
+commands that connect an agent. It calls the REST routes and MCP tools in [api.md](api.md); the one
+route it added is `/usage`.
 
 ## Decisions
 

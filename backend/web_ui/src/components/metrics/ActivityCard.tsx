@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { count } from "../../lib/format";
 import type { DayActivity } from "../../lib/types";
-import { Card, cx } from "../ui";
+import { Segmented } from "../Segmented";
+import { Card } from "../ui";
+
+const MODES = [
+  { id: "line", label: "Line" },
+  { id: "bar", label: "Bar" },
+] as const;
 
 const DAYS = 30;
 
@@ -39,17 +45,7 @@ export function ActivityCard({ activity, total }: { activity: DayActivity[]; tot
             {count(total)} <span className="text-base font-normal text-muted-foreground">queries, last 30 days</span>
           </div>
         </div>
-        <div className="flex rounded-lg border p-0.5 text-xs">
-          {(["line", "bar"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={cx("rounded-md px-2.5 py-1 capitalize", mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground")}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <Segmented size="sm" options={MODES} value={mode} onChange={setMode} />
       </div>
 
       {total === 0 ? (

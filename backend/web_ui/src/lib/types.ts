@@ -146,6 +146,23 @@ export interface UploadOffer {
   existing_filename?: string;
 }
 
+export interface Artifact {
+  artifact_id: string;
+  content_hash: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  last_accessed_at?: string;
+  content_base64?: string;
+}
+
+export interface ArtifactList {
+  items: Artifact[];
+  total: number;
+  has_more: boolean;
+}
+
 export interface ProvisionStatus {
   mcp_server_url: string;
   mcp_api_key: string;
