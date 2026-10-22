@@ -49,6 +49,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
 | `meko token [--mcp]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code |
+| `meko destroy [--force]` | Stop Meko and remove its data folder, everything in it, for good. It asks first; `--force` doesn't |
 | `meko search "<question>"` | Search memories and past conversations (`context_search`) |
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
 | `meko datapacks` | List the datapacks |

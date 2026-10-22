@@ -175,3 +175,29 @@ func TestEnsurePrivateDirRefusesSymlink(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestLooksLikeDataDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	withDB, withLock, empty := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.WriteFile(New(withDB).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(withLock).Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(New(withLock).Lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(New(home).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]bool{
+		withDB: true, withLock: true, empty: false, home: false, "/": false,
+		filepath.Join(empty, "none"): false,
+	} {
+		if got := LooksLikeDataDir(dir); got != want {
+			t.Errorf("LooksLikeDataDir(%s) = %v, want %v", dir, got, want)
+		}
+	}
+}

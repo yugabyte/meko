@@ -82,6 +82,7 @@ flowchart LR
 | `stop` | Sends SIGTERM to the pid in `run/meko.pid`, waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children), then SIGKILL. Not running: says so and exits 0. |
 | `status` | Prints running or not, version, port, uptime, data folder and each child's state, from `/api/v1/status`. Exits 3 when not running. |
 | `version` | Version, commit, Go version, SQLite and sqlite-vec versions. |
+| `destroy` | Removes the data folder, everything in it, for good. It prints the folder and its size and asks `Destroy it? [y/N]` (it reads stdin, and end of input means no; a no exits 1), or doesn't ask with `--force`. It removes only a folder holding `meko.db` or `run/meko.lock`, never `/` or the home folder; a symlinked folder loses its target and then the link. It stops the server as `stop` does (nothing is removed if that fails), takes `run/meko.lock`, renames the folder to `<root>.destroying-<pid>` so a `start` at that moment finds all of it or none, releases the lock and removes the renamed folder. The binary and a Claude Code registration stay; it says so. When the folder is `/var/tmp/<user>/meko`, `/var/tmp/<user>` stays (AgentK keeps its `state.db` there). |
 
 Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`).
 

@@ -547,3 +547,119 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	code, _, errs = run("add_memory", "--data-dir", dir, "x")
 	want(t, "add_memory with no default", code, 1, errs, "there's no default datapack (it was deleted): pass --datapack")
 }
+
+// withStdin makes text what the commands read as stdin, for one test.
+func withStdin(t *testing.T, text string) {
+	t.Helper()
+	old := stdin
+	stdin = strings.NewReader(text)
+	t.Cleanup(func() { stdin = old })
+}
+
+// gone checks that a destroyed data folder and its renamed copy are both gone.
+func gone(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s is still there: %v", dir, err)
+	}
+	if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}
+
+// destroy asks first and removes nothing unless told yes; told yes, it stops the server and
+// removes the folder, and a start afterwards makes a new one.
+func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
+	dir, port := setup(t)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko is running")
+
+	for _, answer := range []string{"n\n", "", "whatever\n"} {
+		withStdin(t, answer)
+		code, out, errs = run("destroy", "--data-dir", dir)
+		want(t, "destroy answered "+strconv.Quote(answer), code, 1, errs, "Nothing was removed.")
+		want(t, "destroy's question", code, 1, out, "Meko is running, so it's stopped first.\nDestroy it? [y/N] ")
+		want(t, "destroy's summary", code, 1, out, "This removes Meko's data in "+dir+" (")
+		code, out, _ = run("status", "--data-dir", dir)
+		want(t, "status after a declined destroy", code, 0, out, "Meko is running.")
+	}
+
+	withStdin(t, "Yes\n")
+	code, out, errs = run("destroy", "--data-dir", dir)
+	want(t, "destroy", code, 0, out+errs, "Meko stopped.\nRemoved "+dir+".\n")
+	want(t, "destroy's note", code, 0, out, "claude mcp remove meko")
+	gone(t, dir)
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status after destroy", code, exitNotRunning, out, "isn't running")
+
+	code, out, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start after destroy", code, 0, out+errs, "Meko is running")
+}
+
+func TestDestroyForce(t *testing.T) {
+	dir, _ := setup(t)
+	if err := os.WriteFile(paths.New(dir).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withStdin(t, "")
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy --force", code, 0, out+errs, "Removed "+dir+".")
+	if strings.Contains(out, "Destroy it?") || strings.Contains(out, "Meko stopped") {
+		t.Errorf("destroy --force asked, or stopped a server that wasn't running:\n%s", out)
+	}
+	gone(t, dir)
+}
+
+func TestDestroyNothingThere(t *testing.T) {
+	dir := filepath.Join(shortDir(t), "none")
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of no folder", code, 0, out+errs, "Nothing to remove: there's no data folder at "+dir)
+}
+
+// destroy removes only a folder that looks like Meko's, and never the home folder.
+func TestDestroyRefusesAForeignFolder(t *testing.T) {
+	dir := shortDir(t)
+	notes := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(notes, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of a foreign folder", code, 1, errs, "doesn't look like Meko's data folder")
+
+	t.Setenv("HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "meko.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs = run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of the home folder", code, 1, errs, "doesn't look like Meko's data folder")
+	if _, err := os.Stat(notes); err != nil {
+		t.Errorf("destroy removed a file it refused to: %v", err)
+	}
+}
+
+// destroy kills a server that ignores SIGTERM, and its recorded child, before removing the folder.
+func TestDestroyKillsAHungServer(t *testing.T) {
+	dir, _ := setup(t)
+	shorten(t, &stopTimeout, time.Second)
+	_, child := startHungServe(t, dir)
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of a hung server", code, 0, out+errs, "so it was killed.\nRemoved "+dir+".")
+	waitGone(t, dir, child, "destroy")
+	gone(t, dir)
+}
+
+// A symlinked data folder loses the folder it points to, and then the link.
+func TestDestroyFollowsASymlink(t *testing.T) {
+	target := shortDir(t)
+	if err := os.WriteFile(paths.New(target).DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(shortDir(t), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("destroy", "--data-dir", link, "--force")
+	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+target+".")
+	gone(t, target)
+	gone(t, link)
+}
