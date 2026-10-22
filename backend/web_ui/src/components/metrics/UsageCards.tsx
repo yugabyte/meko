@@ -5,17 +5,12 @@ import { useState } from "react";
 import { CheckCircle2, ChevronRight, XCircle } from "lucide-react";
 import { count, duration, timeAgo } from "../../lib/format";
 import { UI_AGENT_ID } from "../../lib/api";
-import type { Usage } from "../../lib/types";
+import { callResults } from "../../lib/calls";
+import type { MekoCall, Usage } from "../../lib/types";
 import { Table } from "../Table";
 import { CallTraceDialog } from "./CallTraceDialog";
 import { Badge } from "../ui";
 import { MetricCard } from "./MetricCard";
-
-function results(c: Usage["recent"][number]): string {
-  if (!c.ok) return c.error_code;
-  const n = c.memory_n + c.kb_n + c.conversation_n;
-  return n > 0 ? `${c.memory_n} mem · ${c.kb_n} kb · ${c.conversation_n} conv` : "—";
-}
 
 export function ToolsCard({ usage }: { usage: Usage }) {
   const title = "Tools";
@@ -82,7 +77,7 @@ export function AgentsCard({ usage }: { usage: Usage }) {
 }
 
 export function RecentCallsCard({ usage }: { usage: Usage }) {
-  const [open, setOpen] = useState<Usage["recent"][number]>();
+  const [open, setOpen] = useState<MekoCall>();
   const title = "Recent calls";
   const subtitle = "The latest 25, newest first. Open one to see how long each step took.";
   if (usage.recent.length === 0) return <MetricCard title={title} subtitle={subtitle} empty={["No calls yet", "They show here as they happen."]} />;
@@ -107,7 +102,7 @@ export function RecentCallsCard({ usage }: { usage: Usage }) {
             },
             { label: "Tool", cell: (c) => c.tool, className: "text-xs" },
             { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[12rem] truncate text-xs text-muted-foreground" },
-            { label: "Results", cell: results, className: "text-xs text-muted-foreground" },
+            { label: "Results", cell: callResults, className: "text-xs text-muted-foreground" },
             { label: "Time", right: true, cell: (c) => duration(c.ms) },
             { label: "When", right: true, cell: (c) => timeAgo(c.at), className: "text-xs text-muted-foreground" },
             {

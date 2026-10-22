@@ -2,14 +2,12 @@
 // search's sources run side by side, so steps can add up to more than the whole).
 
 import { dateTime, duration } from "../../lib/format";
-import type { Usage } from "../../lib/types";
+import type { MekoCall } from "../../lib/types";
 import { Dialog } from "../Dialog";
 import { KeyValues } from "../KeyValues";
 import { Badge, Button } from "../ui";
 
-type Call = Usage["recent"][number];
-
-export function CallTraceDialog({ call, onClose }: { call: Call; onClose: () => void }) {
+export function CallTraceDialog({ call, onClose }: { call: MekoCall; onClose: () => void }) {
   // An older server's calls carry no steps.
   const steps = call.steps ?? [];
   const longest = Math.max(1, call.ms, ...steps.map((s) => s.ms));

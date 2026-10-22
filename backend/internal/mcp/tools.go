@@ -223,6 +223,18 @@ var (
 		desc: "The memory's UUID, from the id field of memory_search or memory_get_all."}
 )
 
+// ReadOnly says whether a tool only reads (a search, a get), from its own definition. An unknown
+// tool reads as not read-only.
+func ReadOnly(tool string) bool { return readOnlyTools[tool] }
+
+var readOnlyTools = func() map[string]bool {
+	out := map[string]bool{}
+	for _, t := range allTools() {
+		out[t.name] = t.kind == readOnly
+	}
+	return out
+}()
+
 // ToolInfo is a tool as `meko list mcp-tools` shows it.
 type ToolInfo struct {
 	Name, Title, Summary string
