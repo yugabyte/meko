@@ -5,8 +5,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
 
 - [ ] `make test` and `make lint` pass in `backend/`; new behavior has a test.
-- [ ] Every database call goes through `internal/store`. The only other package that imports the
-      SQLite driver is `internal/sqlitevec`, which links SQLite's C code; only its test runs a query.
+- [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
+      driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
 - [ ] Every route but `/healthz` needs a credential, checked on the matched route (`c.Path()`),
       never the raw URL: the admin token on `/api/v1/status` and `/api/v1/version`, the admin or
@@ -29,7 +29,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       `internal/mcp/agentk_contract_test.go`.
 - [ ] The engine stores only through the store API, its dependencies stay pinned, and nothing copies
       or cites prod Meko's private code.
-- [ ] `third_party/` is vendored and unchanged; an upgrade replaces the files and updates `VERSION`.
+- [ ] No third-party C code is copied into `backend/`. SQLite and sqlite-vec come from the
+      `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates
+      `TestLibVersions`, and the build keeps the `sqlite_fts5` and `sqlite_vec` tags.
 - [ ] Commits are `chore(meko): ...` (or `chore(meko/<area>): ...`): nothing in `backend/` ships
       in AgentK Local's release yet.
 - [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code, and so does the

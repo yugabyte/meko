@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,6 +24,45 @@ func open(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// The driver is go.mod's replace (yugabyte/go-sqlite3): a new tag there that changes either
+// version updates these on purpose.
+func TestLibVersions(t *testing.T) {
+	v, err := LibVersions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.SQLite != "3.53.4" || v.SQLiteVec != "v0.1.9" {
+		t.Fatalf("SQLite %s and sqlite-vec %s; want 3.53.4 and v0.1.9", v.SQLite, v.SQLiteVec)
+	}
+}
+
+// A binary built without the sqlite_vec tag gets errNoVec from Open and LibVersions. vecErr
+// matches SQLite's wording, which a query of an unknown function checks through the driver.
+func TestVecErr(t *testing.T) {
+	other := errors.New("disk I/O error")
+	for _, c := range []struct {
+		in, want error
+	}{
+		{errors.New("no such function: vec_version"), errNoVec},
+		{other, other},
+		{nil, nil},
+	} {
+		if got := vecErr(c.in); got != c.want {
+			t.Errorf("vecErr(%v) = %v; want %v", c.in, got, c.want)
+		}
+	}
+
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	err = db.QueryRow("SELECT meko_no_such_function()").Scan(new(string))
+	if err == nil || !strings.Contains(err.Error(), "no such function: meko_no_such_function") {
+		t.Fatalf("an unknown function gave %v; vecErr expects SQLite's \"no such function: <name>\"", err)
+	}
 }
 
 func TestMigrateFreshAndAgain(t *testing.T) {
