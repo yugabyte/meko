@@ -66,7 +66,7 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
   // Meko's file storage refusing the post itself (postPresigned): a 403 is its link expiring.
   if (e.code.startsWith('STORAGE_')) {
     return new HttpError(502, e.status === 403 ? "Meko's file storage refused the upload: its link expired or was refused. Try again."
-      : `Meko's file storage refused the upload: ${e.message}`);
+      : `Meko's file storage refused the upload: ${e.message} Try again in a minute; if it keeps failing, add it from Meko's web app.`);
   }
   // Never a 401 to the browser: that signs it out.
   if (e.status === 401 || /SCOPE/i.test(e.code)) return new HttpError(502, 'Meko refused AgentK\'s key. Check it on the Meko tab in Settings.');
@@ -81,7 +81,9 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
   if (e.status === 400 || e.status === 413 || e.status === 415) return new HttpError(e.status, e.message);
   // No room left on the owner's plan: Meko's message says which plan to move to.
   if (e.status === 402) return new HttpError(413, e.message);
-  if (e.code === 'S3_DISABLED') return new HttpError(502, `This Meko isn't set up to take files: ${e.message}.`);
+  if (e.code === 'S3_DISABLED') {
+    return new HttpError(502, `This Meko isn't set up to take files (${e.message}). Ask whoever runs that Meko server to set up its file storage.`);
+  }
   if (e.status === 0) return new HttpError(502, e.message);
   return new HttpError(502, `Meko couldn't add the file: ${e.message} Try again in a minute; if it keeps failing, add it from Meko's web app.`);
 }

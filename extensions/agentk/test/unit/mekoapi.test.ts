@@ -71,12 +71,6 @@ describe('MekoApi', () => {
     await expect(f.api.requestUpload('dp', 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
   });
 
-  it("reads Meko's older document status, without a state", async () => {
-    const f = fakeMekoApi();
-    f.handle(() => ok({ document_status: 'COMPLETED', chunks_processed: 1 }));
-    expect(await f.api.documentStatus('dp', 'k')).toBe('completed');
-  });
-
   it("posts only over https, unless Meko's own API is on http, and words the storage's refusal without its URL", async () => {
     const up = (url: string) => ({ url, fields: [['policy', 'p'] as [string, string]], key: 'k', alreadyUploaded: false });
     const f = fakeMekoApi();

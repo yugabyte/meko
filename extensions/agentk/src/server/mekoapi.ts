@@ -140,12 +140,11 @@ export async function looksLikeMekoApi(baseUrl: string, fetchImpl: Fetch = fetch
 export class MekoApi {
   constructor(private creds: () => { baseUrl: string | null; apiKey: string }, private fetchImpl: Fetch = fetch) {}
 
-  /** A FormData `body` goes as multipart (fetch sets its boundary); anything else as JSON. */
-  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = TIMEOUT_MS): Promise<T> {
+  /** A `body` goes as JSON. */
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const { baseUrl, apiKey } = this.creds();
     if (!baseUrl) throw new MekoApiError(0, 'NO_API_URL', "Meko's API URL isn't known. Set it on the Meko tab in Settings.");
     if (!apiKey) throw new MekoApiError(0, 'NO_KEY', 'No Meko API key is configured.');
-    const form = body instanceof FormData;
     let res: Response;
     try {
       res = await this.fetchImpl(`${baseUrl}${path}`, {
@@ -153,10 +152,10 @@ export class MekoApi {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           Accept: 'application/json',
-          ...(body !== undefined && !form ? { 'Content-Type': 'application/json' } : {}),
+          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
-        body: form ? body : body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(timeoutMs),
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(TIMEOUT_MS),
       });
     } catch (e) {
       const why = (e as Error)?.name === 'TimeoutError' ? 'timed out' : (e as Error)?.message || String(e);

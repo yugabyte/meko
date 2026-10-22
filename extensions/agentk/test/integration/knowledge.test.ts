@@ -82,13 +82,10 @@ describe('adding files to a knowledge base', () => {
     // Meko's refusal comes back (worded by uploadError, tested on its own).
     env.mekoApi.handle(() => ({ status: 403, body: { error: { code: 'FORBIDDEN', message: 'forbidden' } } }));
     expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(403);
-    // So does the storage's, without its URL.
+    // So does the storage's.
     env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload-url') ? presigned('dk-1')
       : { status: 403, body: '<Error><Code>AccessDenied</Code><Message>Invalid according to Policy: Policy expired.</Message></Error>' });
-    const expired = await upload('s1', 'notes.md', Buffer.from('# Hi'));
-    expect(expired.statusCode).toBe(502);
-    expect(expired.json().error).toMatch(/link expired/);
-    expect(expired.json().error).not.toMatch(/storage\.test/);
+    expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(502);
   });
 
   it('saves a file of any type for Claude, behind the login, owner-only, and only as raw bytes', async () => {

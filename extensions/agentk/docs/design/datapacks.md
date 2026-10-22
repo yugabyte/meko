@@ -250,8 +250,9 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   the file in Meko's web app, or have that Meko updated); a 404 in it, a datapack Meko doesn't have
   (check the project's datapack); Meko's own message for 400 (a type it doesn't take, or a file
   over the plan's per-file cap) and for 402 (no room left on the plan), as a 413; a 503
-  `S3_DISABLED`, a Meko not set up for files; the storage's refusal (`STORAGE_<S3 code>`), a
-  403 there being the link expiring; anything else, try again or use Meko's web app. Only 400,
+  `S3_DISABLED`, a Meko whose file storage its admin has to set up; the storage's refusal
+  (`STORAGE_<S3 code>`), a 403 there being the link expiring (try again), anything else its
+  message plus try again or use Meko's web app; anything else, try again or use Meko's web app. Only 400,
   403, 413 and 415 keep their status; the rest are 502, so the browser never gets a 401, which
   would sign it out. The upload is in the session's Meko call log (`knowledge_base_upload`), with
   the key and never the URL or fields: they're a credential for the file until they expire.
