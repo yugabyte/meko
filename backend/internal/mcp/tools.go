@@ -223,6 +223,29 @@ var (
 		desc: "The memory's UUID, from the id field of memory_search or memory_get_all."}
 )
 
+// ToolInfo is a tool as `meko list mcp-tools` shows it.
+type ToolInfo struct {
+	Name, Title, Summary string
+}
+
+// Tools lists every tool in tools/list's order, each with the first sentence of its description.
+func Tools() []ToolInfo {
+	ts := allTools()
+	out := make([]ToolInfo, len(ts))
+	for i, t := range ts {
+		out[i] = ToolInfo{Name: t.name, Title: t.title, Summary: firstSentence(t.desc)}
+	}
+	return out
+}
+
+// firstSentence is text up to its first ". " (or all of it), without the full stop.
+func firstSentence(text string) string {
+	if i := strings.Index(text, ". "); i >= 0 {
+		return text[:i]
+	}
+	return strings.TrimSuffix(text, ".")
+}
+
 // allTools is every tool, in the order tools/list gives them.
 func allTools() []*tool {
 	out := make([]*tool, 0, 32)

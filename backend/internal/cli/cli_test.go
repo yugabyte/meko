@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
@@ -846,4 +847,21 @@ func TestUI(t *testing.T) {
 		len(opened) != 1 || opened[0] != link {
 		t.Errorf("ui: %d %q, opened %v", code, out, opened)
 	}
+}
+
+// list mcp-tools needs no server: it reads the tool definitions.
+func TestListMCPTools(t *testing.T) {
+	code, out, _ := run("list", "mcp-tools")
+	want(t, "list mcp-tools", code, 0, out, "knowledgebase_upload_file")
+	if lines := strings.Count(out, "\n"); lines != len(mcp.Tools()) {
+		t.Errorf("%d lines, want one per tool (%d)", lines, len(mcp.Tools()))
+	}
+	code, out, _ = run("list", "mcp-tools", "--json")
+	var tools []map[string]string
+	if err := json.Unmarshal([]byte(out), &tools); code != 0 || err != nil || len(tools) != len(mcp.Tools()) ||
+		tools[0]["name"] != "context_search" || tools[0]["summary"] == "" {
+		t.Errorf("--json: %d %v %q", code, err, out)
+	}
+	code, _, errs := run("list")
+	want(t, "list with nothing named", code, exitUsage, errs, "mcp-tools")
 }
