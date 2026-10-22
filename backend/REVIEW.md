@@ -32,4 +32,5 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] `third_party/` is vendored and unchanged; an upgrade replaces the files and updates `VERSION`.
 - [ ] Commits are `chore(meko): ...` (or `chore(meko/<area>): ...`): nothing in `backend/` ships
       in AgentK Local's release yet.
-- [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code.
+- [ ] `docs/design.md`, `docs/memory-engine.md` and `AGENTS.md` here match the code, and so does the
+      repo root's `README.md` (Meko's commands, their flags and the build requirements).

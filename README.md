@@ -33,7 +33,7 @@ for the memory engine.
 ```sh
 cd backend
 make build engine       # bin/meko, and the memory engine
-./bin/meko start        # runs in the background on 127.0.0.1:7778, data in ~/.meko
+./bin/meko start        # runs in the background on 127.0.0.1:7778
 ./bin/meko status       # wait for "Engine: ready"
 ```
 
@@ -55,15 +55,18 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko create_datapack <name>` | Create a datapack |
 | `meko delete_datapack <name\|id> --yes` | Delete a datapack and everything in it, for good |
 
-Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`). `start` and `serve` take
-`--port` (default 7778). `search` and `add_memory` take `--datapack NAME|ID`, and the default
-datapack is used without it. The data commands take `--json` for the raw reply.
+Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
+network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
+SQLite's locking doesn't work over the network; `meko status` prints where it is. `start` and
+`serve` take `--port` (default 7778). `search` and `add_memory` take `--datapack NAME|ID`, and use
+the default datapack without it. Meko makes the default datapack only on first start, so once
+it's deleted, they need `--datapack`. The data commands take `--json` for the raw reply.
 
 ## Connect an agent
 
-Register Meko with Claude Code by running the command `meko token --mcp` prints. Add
-`--scope local` to it to use Meko only in the repo you're in. Meko's tools then show up as
-`mcp__meko__*`. Any MCP client works the same way: Streamable HTTP at
+Register Meko with Claude Code by running the command `meko token --mcp` prints. As printed, it
+registers Meko only for the folder you run it in (Claude Code's default `local` scope); add
+`--scope user` to it to use Meko in every repo. Meko's tools then show up as `mcp__meko__*`. Any MCP client works the same way: Streamable HTTP at
 `http://127.0.0.1:7778/mcp`, with `Authorization: Bearer <token>`.
 
 The REST API takes the same token:

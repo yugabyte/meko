@@ -59,8 +59,9 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Commits and PR titles are `chore(meko): ...` (or `chore(meko/<area>): ...`). Nothing here
   ships in AgentK Local's release yet, and any `feat`, `fix`, `perf` or `deps` commit on `main`
   cuts an AgentK release.
-- Keep `docs/design.md` and this file current in the same commit as the code, and check the
-  change against [REVIEW.md](REVIEW.md).
+- Keep `docs/design.md` and this file current in the same commit as the code, and the repo
+  root's `README.md` too when the commands, their flags or the build requirements change. Check
+  the change against [REVIEW.md](REVIEW.md).
 - Every database call goes through `internal/store`. The only other package that imports the
   SQLite driver is `internal/sqlitevec`, which links SQLite's C code; only its test runs a query.
   The engine has no database: it stores through the store API. Migrations are append-only: never
