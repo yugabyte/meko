@@ -1,5 +1,5 @@
-// The datapack's memories: add one, filter, page, and select several to delete, or (learnings) to
-// keep or promote into the collective memory.
+// The datapack's memories: add one, filter, page, delete one, and select several to delete, or
+// (learnings) to keep or promote into the collective memory.
 
 import { useState, type FormEvent } from "react";
 import { Brain, Check, Plus, Sparkles, Trash2 } from "lucide-react";
@@ -120,20 +120,33 @@ export function MemoriesPage({ datapack, onChanged }: { datapack: Datapack; onCh
           />
           <Card className="divide-y">
             {list.data.memories.map((m) => (
-              <label key={m.id} className="flex cursor-pointer items-start gap-3 p-3 hover:bg-accent/50">
+              <label key={m.id} className="group flex cursor-pointer items-start gap-3 p-3 hover:bg-accent/50">
                 <input
                   type="checkbox"
                   className="mt-1 accent-primary"
                   checked={selected.has(m.id)}
                   onChange={() => setSelected(toggle(selected, m.id))}
                 />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm">{m.data}</p>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                     <Badge>{m.agent_id}</Badge>
                     {timeAgo(m.created_at)}
                   </div>
                 </div>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  title="Delete this memory"
+                  className="shrink-0 opacity-60 group-hover:opacity-100"
+                  onClick={(e) => {
+                    // The row is a label: a click on it would also tick the box.
+                    e.preventDefault();
+                    if (confirm("Delete this memory?")) void act(() => api.deleteMemory(id, m.id));
+                  }}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
               </label>
             ))}
           </Card>
