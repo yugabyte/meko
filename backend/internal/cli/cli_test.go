@@ -26,6 +26,8 @@ func TestMain(m *testing.M) {
 	for _, k := range []string{paths.HomeEnv, "MEKO_PORT", "MEKO_LOG_LEVEL"} {
 		_ = os.Unsetenv(k)
 	}
+	// Never the login Keychain: the tests and the servers they start keep secrets in files.
+	_ = os.Setenv("MEKO_SECRETS", "file")
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		if mode := os.Getenv("MEKO_TEST_SERVE"); mode != "" {
 			hungServe(mode)
@@ -156,9 +158,11 @@ func TestStartStatusStop(t *testing.T) {
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "Children:      none")
 	want(t, "status's auth", code, 0, out, "Auth:          token")
+	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
+	want(t, "status's updates", code, 0, out, "Updates:       none (a build from source)")
 
 	code, _, errs = run("serve", "--data-dir", dir, "--port", strconv.Itoa(freePort(t)))
-	want(t, "second serve", code, 1, errs, "already running for "+dir)
+	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
 
 	code, out, _ = run("stop", "--data-dir", dir)
 	want(t, "stop", code, 0, out, "Meko stopped.")
@@ -190,6 +194,9 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	}
 	code, mcpOut, _ := run("token", "--data-dir", dir, "--mcp")
 	want(t, "token --mcp with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
+	code, js, _ := run("token", "--data-dir", dir, "--json")
+	want(t, "token --json with no server", code, 0, js,
+		`{"running":false,"token":"`+strings.TrimSpace(tok)+`","url":"http://127.0.0.1:7778/mcp"}`)
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")
@@ -197,6 +204,9 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 		if again != tok {
 			t.Fatalf("start %d: token %q, want %q", i, again, tok)
 		}
+		_, js, _ = run("token", "--data-dir", dir, "--json")
+		want(t, "token --json with a server", 0, 0, js, `"running":true,"token":"`+strings.TrimSpace(tok)+
+			`","url":"http://127.0.0.1:`+port+`/mcp"`)
 		stopped, sout, _ := run("stop", "--data-dir", dir)
 		want(t, "stop", stopped, 0, sout, "stopped")
 	}

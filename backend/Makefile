@@ -17,9 +17,11 @@ MEMORY_ENGINE_SRC := $(wildcard memory_engine/src/*.ts) memory_engine/tsconfig.j
 build:
 	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko ./cmd/meko
 
-# The memory engine's dependencies, installed again only when the lockfile changes.
+# The memory engine's dependencies, installed again only when the lockfile changes. onnxruntime-node's
+# install script would download a CUDA provider on linux-x64 (and time out on CI runners); Meko runs
+# on the CPU, so it's skipped.
 memory_engine/node_modules/.package-lock.json: memory_engine/package.json memory_engine/package-lock.json
-	cd memory_engine && npm ci --no-audit --no-fund
+	cd memory_engine && ONNXRUNTIME_NODE_INSTALL=skip npm ci --no-audit --no-fund
 
 memory_engine/dist/main.js: memory_engine/node_modules/.package-lock.json $(MEMORY_ENGINE_SRC)
 	cd memory_engine && npm run build

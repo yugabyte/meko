@@ -6,7 +6,10 @@
 //	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
 //	    children/      each child's pid and process group, for stop
-//	  logs/            meko.log, start.log, memory_engine.log
+//	  logs/            meko.log, start.log, memory_engine.log, service.log (the service's stderr)
+//	  secrets/         secrets kept in files ([secrets] store = "file"); the client token stays in client.token
+//	  extensions.json  the extensions meko start and stop run
+//	  update.json      what the last update check found
 //	  models/          embedding model files, downloaded on first start
 //	  memory_engine/   the memory engine's own state (mem0's config folder)
 package paths
@@ -35,6 +38,7 @@ type Layout struct {
 	ClientToken      string // the clients' token, kept across restarts
 	Log              string
 	StartLog         string
+	ServiceLog       string // the service's stderr: errors from before serve's own log opens
 	StoreSock        string // the store API the memory engine calls
 	MemoryEngineSock string // the memory engine's API
 	ChildrenDir      string
@@ -60,6 +64,7 @@ func New(root string) Layout {
 		ClientToken:      filepath.Join(root, "client.token"),
 		Log:              filepath.Join(logs, "meko.log"),
 		StartLog:         filepath.Join(logs, "start.log"),
+		ServiceLog:       filepath.Join(logs, "service.log"),
 		StoreSock:        filepath.Join(run, "store.sock"),
 		MemoryEngineSock: filepath.Join(run, "mem_eng.sock"),
 		ChildrenDir:      filepath.Join(run, "children"),

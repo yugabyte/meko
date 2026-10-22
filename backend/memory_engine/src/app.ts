@@ -34,7 +34,9 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
   const token = need(env, "MEKO_INTERNAL_TOKEN");
   const store = new StoreClient(storeSocket, token);
   const embedder: LocalEmbedder =
-    env.MEKO_MEMORY_ENGINE_TEST_EMBEDDER === "hash" ? new HashEmbedder() : new WorkerEmbedder(need(env, "MEKO_MODELS_DIR"));
+    env.MEKO_MEMORY_ENGINE_TEST_EMBEDDER === "hash"
+      ? new HashEmbedder()
+      : new WorkerEmbedder(need(env, "MEKO_MODELS_DIR"), undefined, env.MEKO_MODELS_OFFLINE === "1");
   register(store, embedder);
   const memoryEngine = new MemoryEngine(embedder);
 

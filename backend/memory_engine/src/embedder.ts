@@ -46,9 +46,14 @@ export class WorkerEmbedder implements LocalEmbedder {
   private nextId = 1;
   private failure?: Error;
 
+  /**
+   * cacheDir holds the model files; offline means they're a release's bundled copy, so a missing
+   * file is an error rather than a download.
+   */
   constructor(
     private readonly cacheDir: string,
     private readonly model = DEFAULT_MODEL,
+    private readonly offline = false,
   ) {
     this.info = {
       provider: "transformers.js",
@@ -60,9 +65,9 @@ export class WorkerEmbedder implements LocalEmbedder {
 
   private start(): void {
     this.failure = undefined;
-    const { cacheDir, model } = this;
+    const { cacheDir, model, offline } = this;
     const worker = new Worker(new URL("./embedworker.js", import.meta.url), {
-      workerData: { cacheDir, model: model.id, revision: model.revision, dtype: model.dtype },
+      workerData: { cacheDir, model: model.id, revision: model.revision, dtype: model.dtype, offline },
     });
     this.worker = worker;
     this.loaded = new Promise((resolve, reject) => {

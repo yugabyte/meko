@@ -176,7 +176,9 @@ reads stdin, end of input means no, and a no exits 1), unless `--force`. It says
 datapack: Meko makes the default only on first start, and once it's gone `search` and
 `add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
-Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.
+Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the token
+and whether a server runs, for installers (AgentK's reads it). `meko logs` and the commands that
+install and run Meko came in #171 ([install.md](install.md)).
 
 ## Learnings, promotion and artifacts (#203)
 

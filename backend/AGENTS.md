@@ -3,14 +3,15 @@
 Meko's Go backend: one binary, `meko`, that is both the CLI and the server, the way
 yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/design.md](docs/design.md)
 (the foundation), [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
-conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
+conversations), [docs/api.md](docs/api.md) (MCP and REST) and [docs/install.md](docs/install.md)
+(release builds, releases, the installer, the service, extensions, updates and secrets). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
 
 ## Map
 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start` (re-runs the binary as a detached `serve`), `stop`, `status`, `serve`, `version`, `token`, `destroy` (stops the server and removes the data folder), and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
+| `internal/cli/` | The commands: `start`, `stop` and `restart` (through the login service once installed, else a detached `serve`; `start` and `stop` also run the extensions'), `status`, `logs`, `serve` (which also checks for updates and rolls back a failing one), `version`, `token`, `destroy` (stops the server and removes the data folder), `install`, `uninstall`, `install_extension`, `uninstall_extension`, `update`, and `search`, `add_memory`, `datapacks`, `create_datapack` and `delete_datapack` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
 | `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
@@ -26,9 +27,15 @@ conversations) and [docs/api.md](docs/api.md) (MCP and REST). The rules for the 
 | `assets/` | The Meko logo, dark and white, as Meko Cloud's web app has it; the repo's README shows it. |
 | `memory_engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), its API, its tests. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), and the client token MCP and REST clients send (`client.token`, kept across restarts). |
+| `internal/service/` | The login service: a launchd LaunchAgent or a systemd user unit from embedded templates, run with launchctl or systemctl. |
+| `internal/secrets/` | The secret store: the login Keychain through `/usr/bin/security` (macOS), or 0600 files in the data folder. |
+| `internal/extensions/` | `extensions.json`: the extensions `meko start` and `stop` run, and the ones `install_extension` knows (agentk). |
+| `internal/update/` | Release installs (`~/.meko/app/<version>`, `app/current`), GitHub releases, staging and checking an update, probation and rollback. |
 | `internal/supervisor/` | Child processes (the memory engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
+| `scripts/` | `install.sh` (Meko's installer, published with each release), `package-release.sh` and `smoke-release.sh` (the release build and its check), and their tests. |
+| `memory_engine/scripts/fetch-model.mjs` | Downloads the pinned embedding model for a release to bundle. |
 
 ## Commands
 
@@ -41,6 +48,7 @@ make memory_engine                                  # npm ci (when the lockfile 
 make test                                           # builds the memory engine, then go test -race and the memory engine's tests
 make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the memory engine
 make bench                                          # the search budget at 200 MB (minutes; not in CI)
+go test ./scripts/                                  # the installer, against a fake gh
 ```
 
 It needs Go 1.26 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum,
@@ -56,9 +64,10 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 
 ## Rules
 
-- Commits and PR titles are `chore(meko): ...` (or `chore(meko/<area>): ...`). Nothing here
-  ships in AgentK Local's release yet, and any `feat`, `fix`, `perf` or `deps` commit on `main`
-  cuts an AgentK release.
+- Commits and PR titles name the `meko` component (`fix(meko/cli): ...`). Meko releases on its
+  own train (`.github/workflows/meko-release.yml`, tags `meko-v<version>`): a `feat`, `fix`,
+  `perf` or `deps` commit with component `meko` on `main` cuts a Meko release, and never an AgentK
+  one. Use `chore` for what doesn't change what ships ([install.md](docs/install.md)).
 - Keep `docs/design.md` and this file current in the same commit as the code, and the repo
   root's `README.md` too when the commands, their flags or the build requirements change. Check
   the change against [REVIEW.md](REVIEW.md).
@@ -68,14 +77,17 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Memory engine dependencies are pinned exactly in `memory_engine/package.json`; `memory_engine/.npmrc` keeps npm from
   installing mem0ai's peers. Prod Meko's code is private: copy none of it and cite none of its
   paths (state the behavior instead).
-- Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`chore(meko): ...`)
-  and the memory engine's npm packages (`chore(meko/memory-engine): ...`) every Monday, with minor and patch
+- Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`deps(meko): ...`)
+  and the memory engine's npm packages (`deps(meko/memory-engine): ...`, or
+  `chore(meko/memory-engine): ...` for dev-only ones) every Monday, with minor and patch
   bumps grouped and `mem0ai` in a PR of its own. `mattn/go-sqlite3` is left out: it's replaced by the
   fork, so upgrade the fork's tag by hand.
 - Neither log ever holds memory or turn text: only ids, counts and timings. The memory engine never logs
   an error's message.
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
-  ports, never `~/.meko` or port 7778. Tests that need no model start the memory engine with the
+  ports, never `~/.meko` or port 7778. They never touch the user's own service, Keychain or
+  extensions: the CLI's tests set `HOME`, `MEKO_SECRETS=file`, a fake service manager and a PATH
+  without the machine's `agent-k-local`. Tests that need no model start the memory engine with the
   hashing embedder (`memoryengine.Options.TestEmbedder`; the CLI's tests set it through their own
   `MEKO_TEST_EMBEDDER`, which only the test binary reads).
 - No third-party C code is copied here. SQLite and sqlite-vec come from a tag of the

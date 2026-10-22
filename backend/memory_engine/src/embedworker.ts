@@ -1,18 +1,22 @@
 // The embedding worker thread: loads the model once (downloading it into the models folder the
-// first time), then embeds batches of texts one at a time, mean-pooled and normalized.
+// first time, unless it's a release's bundled copy), then embeds batches of texts one at a time,
+// mean-pooled and normalized.
 import { parentPort, workerData } from "node:worker_threads";
 
 import { env, pipeline, type FeatureExtractionPipeline } from "@huggingface/transformers";
 
-const { cacheDir, model, revision, dtype } = workerData as {
+const { cacheDir, model, revision, dtype, offline } = workerData as {
   cacheDir: string;
   model: string;
   revision: string;
   dtype: string;
+  offline: boolean;
 };
 const port = parentPort!;
 
 env.cacheDir = cacheDir;
+// A release ships the model: never fetch it, so a missing file says so instead of reaching out.
+env.allowRemoteModels = !offline;
 
 let extractor: FeatureExtractionPipeline;
 try {

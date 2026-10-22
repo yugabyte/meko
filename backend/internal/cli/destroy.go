@@ -58,6 +58,13 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 		return exitError
 	}
 
+	// Under its service, a server that only gets a signal is started again: stop the service first.
+	m := serviceOf(l)
+	if m != nil {
+		if err = m.Stop(); err != nil {
+			return fail(stderr, fmt.Errorf("%w. Nothing was removed", err))
+		}
+	}
 	msg, err := stopServer(l)
 	if err != nil {
 		return fail(stderr, fmt.Errorf("%w. Nothing was removed", err))
@@ -76,6 +83,10 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 		return fail(stderr, err)
 	}
 	fmt.Fprintf(stdout, "Removed %s.\n", l.Root)
+	if m != nil {
+		fmt.Fprintf(stdout, "The %s service is still installed, and starts Meko on an empty data folder at the "+
+			"next login: meko uninstall removes it.\n", m.Kind())
+	}
 	if exe, err := os.Executable(); err == nil {
 		fmt.Fprintf(stdout, "The meko binary is still at %s.\n", exe)
 	}

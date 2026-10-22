@@ -35,6 +35,30 @@ type Options struct {
 	Dir  string // the built memory engine: the folder holding package.json and dist/main.js
 	// TestEmbedder, for tests only, swaps the model for a deterministic hashing embedder.
 	TestEmbedder string
+	// Models is a folder of model files shipped with the release (models/ beside bin/), which the
+	// engine reads without downloading anything. Empty means download into the data folder's
+	// models/ (a build from source).
+	Models string
+}
+
+// FindModels is the release's bundled models folder, <bin>/../models, or "" when there's none.
+func FindModels() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if real, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = real
+	}
+	dir := filepath.Join(filepath.Dir(exe), "..", "models")
+	if fi, serr := os.Stat(dir); serr != nil || !fi.IsDir() {
+		return ""
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	return abs
 }
 
 // Errors the memory engine client returns.
@@ -152,10 +176,15 @@ func Spec(node, dir string, l paths.Layout, token string, o Options) supervisor.
 		"MEKO_MEMORY_ENGINE_SOCKET=" + l.MemoryEngineSock,
 		"MEKO_STORE_SOCKET=" + l.StoreSock,
 		"MEKO_INTERNAL_TOKEN=" + token,
-		"MEKO_MODELS_DIR=" + l.ModelsDir,
 		"MEKO_MEMORY_ENGINE_STATE_DIR=" + l.MemoryEngineDir,
 		"MEM0_TELEMETRY=false",
 		"MEM0_DIR=" + l.MemoryEngineDir,
+	}
+	if o.Models != "" {
+		// The release's own copy: read only, and nothing is fetched (it works offline).
+		env = append(env, "MEKO_MODELS_DIR="+o.Models, "MEKO_MODELS_OFFLINE=1")
+	} else {
+		env = append(env, "MEKO_MODELS_DIR="+l.ModelsDir)
 	}
 	if o.TestEmbedder != "" {
 		env = append(env, "MEKO_MEMORY_ENGINE_TEST_EMBEDDER="+o.TestEmbedder)
