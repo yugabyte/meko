@@ -1,4 +1,4 @@
-name: Release
+name: AgentK release
 
 # Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day, tagged
 # agentk-v<version> (v<version> before releases were tagged by product).

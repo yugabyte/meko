@@ -92,7 +92,7 @@ release that day (`0.20260924.0`, `0.20260924.1`, …). They are valid semver, s
 sorts higher.
 
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
-   Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
+   AgentK release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
    the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
    `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
    (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only
@@ -126,7 +126,7 @@ collector of your own, set `[call_home] url` in the dev home's `config.toml`
 (`.dev-home/config.toml`). The collector (`services/ak-local-call-home` in yugabyte/agent-k) has
 an identical copy of `docs/call-home-report.schema.json`; change both together.
 
-Run the Release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
+Run the AgentK release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
 a **tag** (`agentk-v…` or `v…`) to rebuild the assets of an existing release. Only tags from after the move to
 `extensions/agentk` can be rebuilt; the workflow refuses older ones.
 
