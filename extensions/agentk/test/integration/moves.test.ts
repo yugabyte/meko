@@ -88,7 +88,7 @@ describe('moves: moving a task session between stages', () => {
     expect(stages(s.id)).toEqual([{ stage: 'explore', moved_by: 'you' }, { stage: 'code', moved_by: 'you' }]);
     expect(events(s.id, 'kind')).toEqual([]);
     const text = sent()[0];
-    expect(text).toMatch(/^AgentK Local moved this session to the Code stage\. Stages: Explore → Design → Code → PR & Review → Merge & Close/);
+    expect(text).toMatch(/^AgentK moved this session to the Code stage\. Stages: Explore → Design → Code → PR & Review → Merge & Close/);
     expect(text).not.toContain("It's in Explore now");
     // Not the first prompt again: the conversation may have moved on from it.
     expect(text).toContain('Implement what this session has worked out so far');
@@ -118,7 +118,7 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'review' });
     expect(row(s.id).kind).toBe('plan');
     expect(['pr', 'review']).toContain(row(s.id).stage);
-    expect(sent()[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
+    expect(sent()[0]).toMatch(/^AgentK moved this session to the PR & Review stage\./);
     expect(sent()[0]).toContain('Open a pull request for this work.');
     await idle(s.id, 'PR turn');
     gh.pr = PR;
@@ -227,7 +227,7 @@ describe('moves: moving a task session between stages', () => {
     const sent = typed();
     await move(s.id, { stage: 'design' });
     expect(row(s.id)).toMatchObject({ stage: 'design', plan_mode: 0 });
-    expect(sent()[0]).toMatch(/^AgentK Local moved this session to the Design stage\./);
+    expect(sent()[0]).toMatch(/^AgentK moved this session to the Design stage\./);
     expect(sent()[0]).toContain('Design what this session is working toward now');
     expect(sent()[0]).toContain("Also give the user the design's open questions");
     expect(sent()[0]).not.toContain('Task: DESIGN_MD it');
@@ -275,7 +275,7 @@ describe('moves: moving a task session between stages', () => {
     const sent = typed();
     await move(s.id, { stage: 'design', instructions: ' Design only the server side. ' });
     const text = sent()[0];
-    expect(text).toMatch(/^AgentK Local moved this session to the Design stage\./);
+    expect(text).toMatch(/^AgentK moved this session to the Design stage\./);
     expect(text.indexOf('Design what this session is working toward now')).toBeLessThan(text.indexOf('The user added these instructions'));
     expect(text).not.toContain('Task: Fix the thing');
     expect(text.endsWith('\n\nDesign only the server side.')).toBe(true);
@@ -284,7 +284,7 @@ describe('moves: moving a task session between stages', () => {
     const t = await session({ start: 'code', prompt: 'do it', name: 'Look first' });
     await move(t.id, { stage: 'explore', instructions: 'Find out why the retries pile up.' });
     const back = sent().at(-1)!;
-    expect(back).toMatch(/^AgentK Local moved this session to the Explore stage\./);
+    expect(back).toMatch(/^AgentK moved this session to the Explore stage\./);
     expect(back).not.toContain('You are in the Explore stage');
     expect(back.endsWith('\n\nFind out why the retries pile up.')).toBe(true);
     expect(row(t.id).stage).toBe('explore');
@@ -308,7 +308,7 @@ describe('moves: moving a task session between stages', () => {
     const s = await session({ start: 'explore', prompt: 'look around' });
     const sent = typed();
     await move(s.id, { stage: 'review', instructions: 'Open it as a draft.' });
-    expect(sent()[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
+    expect(sent()[0]).toMatch(/^AgentK moved this session to the PR & Review stage\./);
     expect(sent()[0].indexOf('Open a pull request')).toBeLessThan(sent()[0].indexOf('The user added these instructions'));
     expect(sent()[0].endsWith('\n\nOpen it as a draft.')).toBe(true);
 
@@ -321,7 +321,7 @@ describe('moves: moving a task session between stages', () => {
     expect(events(t.id, 'pr')).toEqual(['Picked up PR #7']);
     const picked = sent().slice(before);
     expect(picked).toHaveLength(1);
-    expect(picked[0]).toMatch(/^AgentK Local moved this session to the PR & Review stage\./);
+    expect(picked[0]).toMatch(/^AgentK moved this session to the PR & Review stage\./);
     expect(picked[0]).not.toContain('Open a pull request');
     expect(picked[0].endsWith('\n\nAddress the open threads first.')).toBe(true);
     await idle(t.id, 'instructions turn');

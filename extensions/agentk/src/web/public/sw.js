@@ -1,4 +1,4 @@
-// AgentK Local's service worker. It shows the notifications (see showNotification in App.tsx):
+// AgentK's service worker. It shows the notifications (see showNotification in App.tsx):
 // unlike a page's own `new Notification()`, which Android Chrome refuses, its notifications stay
 // clickable after the page that showed them reloads (as open pages do after an update) or closes,
 // and a click can switch to whichever browser tab already shows the session.

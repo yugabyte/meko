@@ -1,7 +1,7 @@
 // A published Artifact's HTML, prepared for the design panel's sandboxed frame.
 //
 // The frame is sandboxed without allow-same-origin, so the page runs in an opaque origin:
-// it can't read AgentK Local's cookies or call its API. The policy below also limits what it
+// it can't read AgentK's cookies or call its API. The policy below also limits what it
 // can load to what Artifacts themselves may use (inline code, the two script CDNs, Google
 // Fonts, data: and blob: media), with no network requests of its own.
 

@@ -1,6 +1,6 @@
 # Task lifecycle
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 Every session but a Review a PR is a task that moves through stages, from exploring to a merged PR
 with the branch cleaned up. This first pipeline covers seven stages of the development lifecycle. The pipeline is
@@ -46,7 +46,7 @@ stateDiagram-v2
   MergeClose --> [*] : merged and cleaned up
 ```
 
-| Stage | Claude | AgentK Local | Moves on when |
+| Stage | Claude | AgentK | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
 | 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): bring the design's *Key Design Decisions* section up to date, adding it near the top, right after the goal, if the design has none (each question and each decision AgentK made itself, who decided it, the answer, what was decided and why, and the Meko items it rests on) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
@@ -124,7 +124,7 @@ stateDiagram-v2
   Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
   `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
   [Reviewing a PR](review-pr.md)) are added to a repo's own prompt too. This lets a team
-  change how designs are written or PRs described without changing agent-k-local. Review comments
+  change how designs are written or PRs described without changing AgentK. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),

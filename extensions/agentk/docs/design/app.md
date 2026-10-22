@@ -1,6 +1,6 @@
 # The app
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
@@ -31,7 +31,7 @@ are easy to tell apart. The server name is `[server] name` (set in Settings), el
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
 version moves below it first, then the user name is cut off before the server name.
 
-![The AgentK Local window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
+![The AgentK window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
 
 Session states, shown with a dot on each session (on its tab, or in the rail) and on its project:
 

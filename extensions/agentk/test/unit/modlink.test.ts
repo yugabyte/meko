@@ -143,7 +143,7 @@ describe('the link to AgentK\'s mod', () => {
     const handed = (await polls[1])!.prompts[0].id;
     links.closeAll();
     expect(await polls[0]).toBeNull();
-    expect(await caught).toBe('AgentK Local is stopping');
+    expect(await caught).toBe('AgentK is stopping');
     expect(links.accepting).toBe(false);
     expect(links.accept('b', handed)).toBe(false); // its ack arrives late: not run
   });

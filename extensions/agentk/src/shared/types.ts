@@ -738,7 +738,7 @@ export interface Session {
   /** The repo the session works in (the project's unless another one was picked). */
   repoPath: string;
   worktreePath: string;
-  /** The session's pane in the session host (`agent-k-local attach <paneName>`). */
+  /** The session's pane in the session host (`agentk attach <paneName>`). */
   paneName: string;
   desired: 'running' | 'archived';
   status: SessionStatus;
@@ -989,11 +989,11 @@ export interface HarnessStatus {
   updating: boolean;
 }
 
-/** The session host (`agent-k-local host`). It keeps running across updates, so it can be older than the server. */
+/** The session host (`agentk host`). It keeps running across updates, so it can be older than the server. */
 export interface SessionHostStatus {
   /** Its version, or null before it first answered. */
   version: string | null;
-  /** Too old for this server: it has to be restarted (`agent-k-local host restart`), which restarts and resumes every session. */
+  /** Too old for this server: it has to be restarted (`agentk host restart`), which restarts and resumes every session. */
   outdated: boolean;
 }
 

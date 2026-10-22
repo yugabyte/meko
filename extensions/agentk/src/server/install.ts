@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { homedir, hostname, userInfo } from 'node:os';
+import { hostname, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -22,8 +22,9 @@ import {
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, tildify, type Paths } from './paths.js';
-import { hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
+import { dropOldNames, hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
+import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
@@ -145,7 +146,7 @@ export function serviceFailure(svc: ServiceManager, message: string, logsDir: st
   const where = svc.kind === 'launchd' ? ` and ${tildify(join(logsDir, 'launchd*.log'))}` : '';
   return (
     `${message}\nCheck: ${svc.statusHint('server')}${where}.\n` +
-    'Or rerun with --no-service to skip the service setup, and start the server with: agent-k-local serve'
+    'Or rerun with --no-service to skip the service setup, and start the server with: agentk serve'
   );
 }
 
@@ -154,7 +155,7 @@ function installServices(paths: Paths): boolean {
   const svc = hostServices();
   if (!svc) throw new InstallError(`background services aren't supported on ${process.platform}; rerun with --no-service to skip the service setup.`);
   svc.preflight();
-  if (!existsSync(join(paths.app, 'current', 'bin', 'agent-k-local'))) {
+  if (!existsSync(join(paths.app, 'current', 'bin', COMMAND))) {
     ui.warn('Services', 'skipped: not a release install (running from a source checkout?)');
     return false;
   }
@@ -173,6 +174,7 @@ function installServices(paths: Paths): boolean {
       ui.ok('tmux', "removed an older version's tmux service; its sessions resume in the session host");
     }
   }
+  for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before the rename to AgentK`);
   try {
     svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
   } catch (e) {
@@ -426,7 +428,7 @@ export async function runInstall(args: string[]): Promise<void> {
     const cfg: Config = loadConfig(paths);
 
     // 1. Basics
-    if (!process.env.AK_INSTALLER) ui.title('AgentK Local setup');
+    if (!process.env.AK_INSTALLER) ui.title('AgentK setup');
     ui.section('Setup');
     if (interactive && process.stdin.isTTY) ui.note('Press Enter to keep the value in brackets.');
     const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
@@ -532,14 +534,14 @@ export async function runInstall(args: string[]): Promise<void> {
     }
     let running = false;
     if (values['no-service']) {
-      ui.warn('Services', 'skipped (--no-service). Start the server with: agent-k-local serve');
+      ui.warn('Services', 'skipped (--no-service). Start the server with: agentk serve');
     } else if (installServices(paths)) {
       const probe = await waitForServer(cfg);
       if (probe.ok) {
         ui.ok('Server', `answering on port ${cfg.server.port} (version ${probe.version})`);
         running = true;
       } else {
-        ui.warn('Server', `not answering yet (${probe.error}). See: agent-k-local logs`);
+        ui.warn('Server', `not answering yet (${probe.error}). See: agentk logs`);
       }
     }
 
@@ -553,7 +555,7 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.blank();
       // Local access needs no login (see localAccess in auth.ts), so there's no setup link to open.
       if (local || getOwner(handle)) {
-        ui.text(style.bold(running ? 'Done. AgentK Local is running:' : 'Done. AgentK Local will be at:'));
+        ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
         ui.blank();
         ui.text(`    ${style.cyan(`${base}/`)}`);
       } else {
@@ -568,9 +570,9 @@ export async function runInstall(args: string[]): Promise<void> {
           : 'none: it only listens on this computer');
       }
       if (tls?.selfSigned) ui.row('Certificate', 'self-signed, so your browser warns once');
-      if (!local) ui.row('New link', 'agent-k-local setup-link');
-      ui.row('Status', 'agent-k-local status');
-      ui.row('Logs', 'agent-k-local logs -f');
+      if (!local) ui.row('New link', 'agentk setup-link');
+      ui.row('Status', 'agentk status');
+      ui.row('Logs', 'agentk logs -f');
       ui.blank();
     } finally {
       handle.close();
@@ -613,7 +615,7 @@ function hasUncommittedWork(dir: string): boolean {
 }
 
 /**
- * Deletes everything in the AgentK Local home, except the session worktrees and design files
+ * Deletes everything in the AgentK home, except the session worktrees and design files
  * unless `all`. Returns the folders it kept (empty ones are removed, and then the home too).
  */
 export function purgeHome(paths: Paths, all: boolean): string[] {
@@ -677,7 +679,7 @@ export async function runUninstall(args: string[]): Promise<void> {
   }
   const { ask, close } = makePrompter(!values['non-interactive']);
   try {
-    say('This stops AgentK Local and ends every running session it hosts (Claude Code or Kiro).');
+    say('This stops AgentK and ends every running session it hosts (Claude Code or Kiro).');
     if (purge) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
     const wt = tildify(paths.worktrees);
     if (deleteWork) {
@@ -702,11 +704,12 @@ export async function runUninstall(args: string[]): Promise<void> {
     }
     // A session host started without a service (--no-service) ends with its sessions too.
     await new SessionHost(paths, { services: () => null }).stop().catch(() => undefined);
-    const link = join(homedir(), '.local', 'bin', 'agent-k-local');
-    try {
-      unlinkSync(link);
-    } catch {
-      // not installed there
+    for (const link of commandLinks()) {
+      try {
+        unlinkSync(link);
+      } catch {
+        // not installed there
+      }
     }
     // The Kiro agent AgentK wrote is its own: Kiro sessions ran as it.
     removeKiroAgent();

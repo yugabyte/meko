@@ -1,9 +1,9 @@
 # AgentK's mod in Claude
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 Claude Code runs *mods*: plugins of TypeScript function hooks that run inside the Claude process
-(early access). AgentK Local ships one, `agentk` (`src/mod/agentk`, a couple of hundred lines), that
+(early access). AgentK ships one, `agentk` (`src/mod/agentk`, a couple of hundred lines), that
 gives the server a way into each session besides the terminal. The server copies it to
 `run/mod/agentk` at startup, writing only files that changed, each through a temp file renamed into
 place; when a source file is missing or a write fails, it removes the run copy, so sessions start
@@ -55,7 +55,7 @@ bound again, so no hook is kept out for the 20 seconds a held poll would take:
 | `/mod/measure` | From `session.measure` after each turn: the context window's fill, and the plan limits. |
 | `/mod/held` | `{ held: [...] }`, as on a poll, as soon as it changes: a held prompt's `$.prompt.submit` resolved (its turn started) or another plugin refused it. |
 | `/mod/ask` | From a `tool.call` hook on Claude's `AskUserQuestion`: `{ id, questions }` (the call's `tool_use_id` and its questions). The server holds it up to 20 seconds and answers the user's answers by question index (`{ answers: { 0: "Blue" } }`), or 204, and the mod asks again; 410 when it dropped the ask, 400 (`{ error }`) for questions it can't show. Either way the mod then leaves the question to the terminal's dialog. |
-| `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK Local or the terminal, or ended. |
+| `/mod/ask/done` | `{ id }`: the call has its answer, from AgentK or the terminal, or ended. |
 | `/mod/questions` | From the `design_questions` tool the mod gives Claude: the design's questions and AgentK's own decisions, checked and saved (`{ text }` for Claude: how many questions, how many open, how many decisions and how many cite Meko), or what's wrong (400, `{ error }`). |
 | `/mod/learn` | A [learn step](recall-and-learn.md#the-learn-step)'s results, `{ id, step, model, text \| reason, usage }`: what the fork of the session found (`step: "facts"`, for a `learn` part of kind `extract`), then the duplicate check's reply (`step: "decisions"`, kind `check`). Answered at once, 204, so no request is held while AgentK works with Meko: what comes next arrives on a poll. 410 for a step AgentK gave up on; its usage is still recorded. |
 | `/mod/learn/start` | From `/agentk_learn`, a slash command the mod registers: starts a learn step, answered `{ text }` (the command's output: started, or why not). |
@@ -97,7 +97,7 @@ reset, and when a sweep every 2 seconds finds a link gone stale. The UI offers w
 **Claude's questions.** The mod's `tool.call` hook on `AskUserQuestion` lets Claude's own dialog
 open in the terminal as always (`next(e)`), and sends the questions to the server too
 (`/mod/ask`, asked again after each hold). Whichever is answered first wins: the terminal's answer
-is returned as it is; AgentK Local's comes back as the tool's result,
+is returned as it is; AgentK's comes back as the tool's result,
 `{ questions, answers: { "<question>": "<answer>" } }`, which closes the terminal's dialog (checked
 on Claude Code 2.1.286, and on 2.1.287 (the oldest that loads the mod now) and 2.1.291; so is the
 `design_questions` tool below). The hook's `.catch` falls back to `next(e)`, and any failure

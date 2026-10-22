@@ -4,7 +4,7 @@
 // it with meko stop, and never restarts it when Meko itself restarts or updates.
 //
 // The contract is the extension's CLI: `<command> start`, `<command> stop` and `<command> status`.
-// AgentK Local's agent-k-local is the first.
+// AgentK's agentk is the first.
 package extensions
 
 import (
@@ -27,8 +27,10 @@ import (
 // Known are the extensions meko install_extension can install, by name.
 var Known = map[string]Catalog{
 	"agentk": {
-		Title:   "AgentK Local",
-		Command: "agent-k-local",
+		Title:   "AgentK",
+		Command: "agentk",
+		// Its name before the rename to AgentK, which installs from then may still have alone.
+		OldCommands: []string{"agent-k-local"},
 		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
 		TagPrefixes: []string{"agentk-v", "v"},
 		Installer:   "install.sh",
@@ -39,6 +41,7 @@ var Known = map[string]Catalog{
 type Catalog struct {
 	Title       string
 	Command     string   // the program's name, looked for on PATH and in ~/.local/bin
+	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
 	Installer   string   // the release asset that installs it
 }
@@ -133,6 +136,17 @@ func (e Entry) Status() (bool, string) {
 	err := cmd.Run()
 	first, _, _ := bytes.Cut(bytes.TrimSpace(out.Bytes()), []byte("\n"))
 	return err == nil, string(first)
+}
+
+// Find looks for the extension's program by its name, then by its old ones (FindCommand). It
+// returns the absolute path, or "".
+func (c Catalog) Find(home string) string {
+	for _, name := range append([]string{c.Command}, c.OldCommands...) {
+		if p := FindCommand(name, home); p != "" {
+			return p
+		}
+	}
+	return ""
 }
 
 // FindCommand looks for an extension's program on PATH, then in ~/.local/bin (a fresh shell may

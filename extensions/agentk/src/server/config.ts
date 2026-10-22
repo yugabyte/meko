@@ -164,7 +164,7 @@ export function saveConfig(paths: Paths, cfg: Config): void {
   }
   mkdirSync(dirname(paths.config), { recursive: true });
   const header =
-    '# agent-k-local configuration. Settings changed in the web UI are written here too.\n' +
+    '# AgentK configuration. Settings changed in the web UI are written here too.\n' +
     '# Only settings that differ from the defaults are listed; add any other key to change it.\n' +
     '# Changes to [server] or [tls] take effect after a restart.\n\n';
   const body = (changedFrom(mapKeys(out, snake), mapKeys(DEFAULT_CONFIG, snake)) ?? {}) as Record<string, unknown>;

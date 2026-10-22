@@ -1,6 +1,6 @@
 # Meko recall and the learn step
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 ## Meko recall at start
 

@@ -145,9 +145,9 @@ describe('agentk-release.yml’s hand-run rebuild', () => {
   });
 
   it.each([
-    ['meko-v0.20261023.0', "isn't an AgentK Local release tag"],
+    ['meko-v0.20261023.0', "isn't an AgentK release tag"],
     ['agentk-v0.20261099.0', 'no such tag'],
-    ['v0.20261001.0', 'from before AgentK Local moved'],
+    ['v0.20261001.0', 'from before AgentK moved'],
   ])('refuses %s', (tag, why) => {
     const r = rebuild(tag);
     expect(r.status).toBe(1);

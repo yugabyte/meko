@@ -127,7 +127,7 @@ export function changePassword(db: Db, current: string, next: string, keepToken?
 /**
  * Issues a one-time setup link token. Before an owner exists it creates the
  * owner; afterwards it resets the owner's credentials (the recovery path when
- * a password is lost: run `agent-k-local setup-link` on the host).
+ * a password is lost: run `agentk setup-link` on the host).
  */
 export function issueSetupToken(db: Db): string {
   const token = randomBytes(24).toString('base64url');
@@ -287,7 +287,7 @@ export function newTotpSecret(): string {
   return base32Encode(randomBytes(20));
 }
 
-export function otpauthUrl(secret: string, username: string, issuer = 'AgentK Local'): string {
+export function otpauthUrl(secret: string, username: string, issuer = 'AgentK'): string {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(username)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}`;
 }
 
@@ -316,7 +316,7 @@ export class LoginLimiter {
   /**
    * `max` failures per client network in the window, and `siteMax` across all clients, so many
    * addresses can't share out a guessing run. Past the site-wide limit everyone waits, including
-   * the owner; `agent-k-local setup-link` on the host still gets them in (a valid setup link
+   * the owner; `agentk setup-link` on the host still gets them in (a valid setup link
    * isn't held back by the limit).
    */
   constructor(private max = 5, private windowMs = 15 * 60 * 1000, private siteMax = 50) {}

@@ -45,7 +45,7 @@ jobs:
           cat "$RUNNER_TEMP/scope" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/scope"
 
-  # AgentK Local (extensions/agentk).
+  # AgentK (extensions/agentk).
   agentk:
     name: AgentK (${{ matrix.os }})
     needs: changes
@@ -56,14 +56,14 @@ jobs:
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    # AgentK Local lives in extensions/agentk; its package.json and scripts are there.
+    # AgentK lives in extensions/agentk; its package.json and scripts are there.
     defaults:
       run:
         working-directory: extensions/agentk
     steps:
       - uses: actions/checkout@v7
 
-      # AgentK Local needs no tmux. Linux gets it only for the tests of moving older installs off
+      # AgentK needs no tmux. Linux gets it only for the tests of moving older installs off
       # it (extensions/agentk/test/integration/move-off-tmux.test.ts, skipped without tmux); drop
       # it with them.
       - name: Install system packages

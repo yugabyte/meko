@@ -1,6 +1,6 @@
 # Open project and New session
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 ## Open project
 

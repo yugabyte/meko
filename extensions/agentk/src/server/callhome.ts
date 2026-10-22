@@ -20,7 +20,7 @@ import { usageOverview } from './usage.js';
 import { HARNESS_IDS, harnessOf, type HarnessId } from '../shared/harnesses.js';
 
 // Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each install
-// sends counts to a collector run by the AgentK Local team: no names, paths, prompts, code or
+// sends counts to a collector run by the AgentK team: no names, paths, prompts, code or
 // anything that says who someone is.
 // Every string in the report is an enum, a version, a model id or a file extension, and the
 // report's shape is the collector's contract (CallHomeReport, docs/call-home-report.schema.json;
@@ -435,7 +435,7 @@ async function probeVersion(probe: Probe, cmd: string, args: string[], re: RegEx
 /** Which service manager runs this server, from what systemd and launchd put in its environment. */
 function serviceKind(): CallHomeInstall['service'] {
   if (process.platform === 'linux' && process.env.INVOCATION_ID) return 'systemd';
-  if (process.platform === 'darwin' && process.env.XPC_SERVICE_NAME?.includes('agent-k-local')) return 'launchd';
+  if (process.platform === 'darwin' && /com\.yugabyte\.(agentk|agent-k-local)\b/.test(process.env.XPC_SERVICE_NAME ?? '')) return 'launchd';
   return 'none';
 }
 

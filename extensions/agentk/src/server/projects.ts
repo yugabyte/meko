@@ -646,7 +646,7 @@ export class ProjectService {
     let p = this.creatingConversation.get(id);
     if (!p) {
       const dp = dedicatedDatapack(this.db, id);
-      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, projectConversationKey(id), `AgentK Local: ${r.name}`, timeoutMs)
+      p = this.core.meko.ensureConversation(AGENTK_AGENT_ID, dp?.id ?? null, projectConversationKey(id), `AgentK: ${r.name}`, timeoutMs)
         .then((conv) => {
           run(this.db, 'UPDATE projects SET meko_conversation_id = ? WHERE id = ?', conv, id);
           return conv;

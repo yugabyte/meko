@@ -8,7 +8,7 @@ name: AgentK release
 # Run the workflow by hand to force a release, or to rebuild the assets of an existing tag (one
 # from after the move to extensions/agentk).
 #
-# AgentK Local lives in extensions/agentk: jobs that run its scripts or npm work there.
+# AgentK lives in extensions/agentk: jobs that run its scripts or npm work there.
 
 on:
   push:
@@ -67,12 +67,12 @@ jobs:
             # installer and checksums.
             case $DISPATCH_TAG in
               agentk-v[0-9]*|v[0-9]*) ;;
-              *) echo "$DISPATCH_TAG isn't an AgentK Local release tag (agentk-v<version> or v<version>)"; exit 1 ;;
+              *) echo "$DISPATCH_TAG isn't an AgentK release tag (agentk-v<version> or v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
             # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
             git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||
-              { echo "$DISPATCH_TAG is from before AgentK Local moved to extensions/agentk and can't be rebuilt"; exit 1; }
+              { echo "$DISPATCH_TAG is from before AgentK moved to extensions/agentk and can't be rebuilt"; exit 1; }
             version=${DISPATCH_TAG#agentk-v}
             version=${version#v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
@@ -191,9 +191,12 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/smoke
-          tar -xzf out/*.tar.gz -C /tmp/smoke
-          v=$(/tmp/smoke/agent-k-local-*/bin/agent-k-local version)
+          tar -xzf out/agentk-*.tar.gz -C /tmp/smoke
+          v=$(/tmp/smoke/agentk-*/bin/agentk version)
           test "$v" = "$VERSION"
+          /tmp/smoke/agentk-*/bin/agentk selftest
+          # The copy under the old name, by the path installs from before the rename to AgentK run.
+          tar -xzf out/agent-k-local-*.tar.gz -C /tmp/smoke
           /tmp/smoke/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7
@@ -260,9 +263,12 @@ jobs:
           set -eu
           smoke="$RUNNER_TEMP/smoke"
           mkdir -p "$smoke"
-          tar -xzf out/*.tar.gz -C "$smoke"
-          v=$("$smoke"/agent-k-local-*/bin/agent-k-local version)
+          tar -xzf out/agentk-*.tar.gz -C "$smoke"
+          v=$("$smoke"/agentk-*/bin/agentk version)
           test "$v" = "$VERSION"
+          "$smoke"/agentk-*/bin/agentk selftest
+          # The copy under the old name, by the path installs from before the rename to AgentK run.
+          tar -xzf out/agent-k-local-*.tar.gz -C "$smoke"
           "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7

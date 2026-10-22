@@ -125,7 +125,7 @@ Next:
   meko status                      how it's doing
   meko logs                        what it's logging
   meko token --mcp                 the command that connects Claude Code to Meko
-  meko install_extension agentk    add AgentK Local, which uses this Meko
+  meko install_extension agentk    add AgentK, which uses this Meko
 `)
 	return exitOK
 }
@@ -204,7 +204,7 @@ func runUninstall(l paths.Layout, purge, force bool, stdout, stderr io.Writer) i
 func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) int {
 	cat, ok := extensions.Known[name]
 	if !ok {
-		return fail(stderr, fmt.Errorf("no extension called %q: meko knows agentk (AgentK Local)", name))
+		return fail(stderr, fmt.Errorf("no extension called %q: meko knows agentk", name))
 	}
 	if up, _ := running(l.Lock); !up {
 		return fail(stderr, errors.New("no Meko server is running: start it with meko start first"))
@@ -233,10 +233,10 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 	if !interactive() {
 		args = append(args, "--non-interactive")
 	}
-	if cmd := extensions.FindCommand(cat.Command, home); cmd != "" {
+	if cmd := cat.Find(home); cmd != "" {
 		if tooOld(cmd) {
 			return fail(stderr, fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
-				"needs: update it (the Update button in AgentK Local), then run this again", cat.Title))
+				"needs: update it (the Update button in AgentK), then run this again", cat.Title))
 		}
 		fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko\n", cat.Title, cmd)
 		if err = runAttached(cmd, append([]string{"install"}, args...), stdout, stderr); err != nil {
@@ -247,7 +247,7 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 			return fail(stderr, err)
 		}
 	}
-	cmd := extensions.FindCommand(cat.Command, home)
+	cmd := cat.Find(home)
 	if cmd == "" {
 		return fail(stderr, fmt.Errorf("%s was installed, but %s isn't on PATH or in ~/.local/bin", cat.Title, cat.Command))
 	}
@@ -300,7 +300,7 @@ func runExtensionInstaller(repo string, cat extensions.Catalog, args []string, s
 	return nil
 }
 
-// tooOld reports whether an installed AgentK Local is a release from before --meko-url: its
+// tooOld reports whether an installed AgentK is a release from before --meko-url: its
 // install.js (AgentK's release layout, <version>/lib/dist/server/install.js beside bin/) doesn't name
 // the flag. A layout it doesn't recognize (a build from source) isn't judged.
 func tooOld(cmd string) bool {

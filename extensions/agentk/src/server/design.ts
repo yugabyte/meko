@@ -202,7 +202,7 @@ function mekoRefs(v: unknown): MekoRef[] {
  * entries without a question or a usable id, and repeated ids, are dropped, text is capped, and
  * a recommendation must point at an option. A decision (`kind: "decision"`) is always resolved,
  * and one without its decision is dropped. A resolved entry that doesn't say who decided it keeps
- * what `prev` (the questions kept before) said: AgentK rewriting the file after AgentK Local
+ * what `prev` (the questions kept before) said: AgentK rewriting the file after the server
  * recorded the user's answers mustn't make them AgentK's, or nobody's. Throws when the JSON or its
  * shape is wrong.
  */

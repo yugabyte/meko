@@ -13,7 +13,7 @@ function AuthFrame({ title, sub, children }: { title: string; sub: string; child
         <div className="auth-brand">
           <img src="/logo.png" alt="" width={56} height={56} />
           <div>
-            <div className="brand-name">AgentK Local</div>
+            <div className="brand-name">AgentK</div>
             <div className="muted small">Agentic coder</div>
           </div>
         </div>
@@ -62,7 +62,7 @@ export function SetupScreen({ reset, onDone }: { reset: boolean; onDone: () => v
       <form className="stack" onSubmit={submit}>
         <Field
           label="Setup token"
-          hint={reset ? 'Printed by `agent-k-local setup-link` on the host. Run it again for a new one.' : 'Printed by the installer. Run `agent-k-local setup-link` for a new one.'}
+          hint={reset ? 'Printed by `agentk setup-link` on the host. Run it again for a new one.' : 'Printed by the installer. Run `agentk setup-link` for a new one.'}
         >
           <input id="setup-token" className="input mono" value={token} onChange={(e) => setToken(e.target.value)} required />
         </Field>
@@ -202,9 +202,9 @@ function ForgotPassword() {
     <div className="auth-forgot" id="login-forgot">
       <strong>Reset your login from the host</strong>
       <p className="muted small">
-        On the computer AgentK Local runs on, sign in as the user it runs as and run:
+        On the computer AgentK runs on, sign in as the user it runs as and run:
       </p>
-      <code className="auth-cmd">agent-k-local setup-link</code>
+      <code className="auth-cmd">agentk setup-link</code>
       <p className="muted small">
         Open the one-time link it prints (it expires in 7 days) and choose a new username and password. This also signs
         out every browser and turns off two-step sign-in, if you had it on. Your projects and sessions stay as they are.

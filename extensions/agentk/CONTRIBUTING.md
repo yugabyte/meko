@@ -1,4 +1,4 @@
-# Contributing to AgentK Local
+# Contributing to AgentK
 
 ## Development setup
 
@@ -6,7 +6,7 @@ Requirements: Linux or macOS, Node 22, git, and Claude
 Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is required to create
 projects.
 
-AgentK Local lives in `extensions/agentk` of the meko-local repo: run everything below from there.
+AgentK lives in `extensions/agentk` of the meko-local repo: run everything below from there.
 Paths are relative to it, except `.github/`, `.claude/`, `scripts/check-title.sh` and
 `scripts/ci-scope.sh`, which are at the repo root.
 
@@ -26,7 +26,7 @@ npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0
 
 Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
 access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
-use another folder), so it never opens an installed AgentK Local's database, hook socket or session
+use another folder), so it never opens an installed AgentK's database, hook socket or session
 host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
 restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
 an installed server is running there.
@@ -58,7 +58,7 @@ Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, 
 - Don't release: `ci`, `test`, `docs`, `nit` (comment-only changes, typos, formatting, refactors
   with no behavior change), `chore`.
 
-The component names the part of the repo: `agentk` for AgentK Local, `meko` for Meko
+The component names the part of the repo: `agentk` for AgentK, `meko` for Meko
 (`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
 slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
 (`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
@@ -130,23 +130,28 @@ Run the AgentK release workflow by hand with **force** to release without feat/f
 a **tag** (`agentk-v…` or `v…`) to rebuild the assets of an existing release. Only tags from after the move to
 `extensions/agentk` can be rebuilt; the workflow refuses older ones.
 
-Release tarball layout:
+Release tarball layout (`agentk-<version>-<linux|darwin>-<arch>.tar.gz`):
 
 ```
-agent-k-local-<version>/
-  bin/agent-k-local        launcher (packaging/agent-k-local), handles update rollback
+agentk-<version>/
+  bin/agentk               launcher (packaging/agentk), handles update rollback
+  bin/agent-k-local        a link to it, by its name before the rename to AgentK
   node/bin/node            bundled Node runtime
   lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/
   VERSION
   CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
 ```
 
+Until #238, each release also carries the same files as `agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz`,
+in `agent-k-local-<version>/`: the name and layout the updaters and installers from before the
+rename look for, so those installs still update. The release workflow smoke-tests both.
+
 ## Installing a release
 
 The repo is internal for now, so downloads go through an authenticated GitHub CLI. The repo's
 latest release is Meko's: its one-line install (`gh release download --repo
 yugabyte/agent-k-local --pattern install.sh --output - | sh`) installs Meko, and then
-`meko install_extension agentk` installs AgentK Local pointed at that Meko. AgentK Local alone comes
+`meko install_extension agentk` installs AgentK pointed at that Meko. AgentK alone comes
 from its own installer in the newest AgentK release:
 
 ```sh
@@ -162,18 +167,21 @@ Before anything else, the installer checks for git, curl, gh and a coding agent 
 Kiro CLI: either one is enough) and offers to install the missing ones, showing the commands and
 asking first. With neither agent there it asks which to install (`--agent claude|kiro` picks one
 without asking; Kiro CLI comes from its own installer at cli.kiro.dev), and it stops when no agent
-ends up installed. `agent-k-local install` then offers Meko's own setup for each agent it finds
+ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
 (Claude Code, Kiro), asking first. `--install-deps` skips the questions (and installs Claude Code
 when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and
-`--deps-only` stops after that step. Where AgentK Local
-is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agent-k-local`,
+`--deps-only` stops after that step. Where AgentK
+is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agentk`,
 and both services enabled or loaded), it says so and stops before any of that, unless given
 `--reinstall`, `--deps-only`, a `--version` other than the installed one, or options for
-`agent-k-local install` (other than `--non-interactive`). Its tests
+`agentk install` (other than `--non-interactive`). Its tests
 (`test/unit/install-script.test.ts`) run the real script against stub tools.
 
 The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current` at it, links
-`~/.local/bin/agent-k-local`, and runs `agent-k-local install`, which writes `config.toml`,
-checks Meko, installs the two background services (the `agent-k-local` and `agent-k-local-host`
-systemd user units on Linux; the `com.yugabyte.agent-k-local` and `com.yugabyte.agent-k-local.host`
+`~/.local/bin/agentk` (and `~/.local/bin/agent-k-local`, the command's name before the rename,
+which older services, scripts and Meko run), and runs `agentk install`, which writes `config.toml`,
+checks Meko, installs the two background services (the `agentk` and `agentk-host`
+systemd user units on Linux; the `com.yugabyte.agentk` and `com.yugabyte.agentk.host`
 LaunchAgents on macOS), and prints the address, or for remote access the one-time setup link.
+Services installed before the rename keep their old names (`agent-k-local…`) until `agentk
+install` moves them; see [recovery](docs/design/recovery.md).

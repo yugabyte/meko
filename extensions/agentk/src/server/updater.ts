@@ -60,7 +60,7 @@ export function compareSemver(a: string, b: string): number {
 
 /**
  * How long a new version must stay up before it counts as good: until then a crash loop rolls it
- * back (see packaging/agent-k-local); after it, the update is final and older versions are removed.
+ * back (see packaging/agentk); after it, the update is final and older versions are removed.
  */
 export const HEALTHY_MS = 5 * 60_000;
 
@@ -183,7 +183,7 @@ export class HttpsReleaseSource implements ReleaseSource {
   private cache = new Map<string, GhRelease[]>();
 
   private headers(accept = 'application/vnd.github+json'): Record<string, string> {
-    const h: Record<string, string> = { Accept: accept, 'User-Agent': 'agent-k-local-updater' };
+    const h: Record<string, string> = { Accept: accept, 'User-Agent': 'agentk-updater' };
     if (process.env.GITHUB_TOKEN) h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     return h;
   }
@@ -222,7 +222,7 @@ export class HttpsReleaseSource implements ReleaseSource {
     const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
     const res = process.env.GITHUB_TOKEN
       ? await fetch(a.url, { headers: this.headers('application/octet-stream'), signal })
-      : await fetch(a.browser_download_url, { headers: { 'User-Agent': 'agent-k-local-updater' }, signal });
+      : await fetch(a.browser_download_url, { headers: { 'User-Agent': 'agentk-updater' }, signal });
     if (!res.ok) throw new Error(`download of ${asset} failed with HTTP ${res.status}`);
     mkdirSync(destDir, { recursive: true });
     const dest = join(destDir, asset);
@@ -280,9 +280,13 @@ export function readBadVersions(paths: Paths): Set<string> {
   }
 }
 
-/** The release asset for a version on this platform and CPU: agent-k-local-<v>-<linux|darwin>-<x64|arm64>.tar.gz. */
+/**
+ * The release asset for a version on this platform and CPU: agentk-<v>-<linux|darwin>-<x64|arm64>.tar.gz.
+ * Releases also carry it as agent-k-local-<v>-…, the name from before the rename to AgentK, for the
+ * installs that look for that; every release newer than this one has both.
+ */
 export function tarballName(version: string, arch: string = process.arch, platform: string = process.platform): string {
-  return `agent-k-local-${version}-${platform}-${arch}.tar.gz`;
+  return `agentk-${version}-${platform}-${arch}.tar.gz`;
 }
 
 /** Pick the newest eligible release, or null. */
@@ -656,8 +660,8 @@ export class Updater {
 
       mkdirSync(staging, { recursive: true });
       await run('tar', ['-xzf', tarball, '-C', staging], { timeout: 5 * 60_000 });
-      const extracted = join(staging, `agent-k-local-${target}`);
-      if (!existsSync(join(extracted, 'bin', 'agent-k-local'))) throw new Error('unexpected tarball layout');
+      const extracted = join(staging, `agentk-${target}`);
+      if (!existsSync(join(extracted, 'bin', 'agentk'))) throw new Error('unexpected tarball layout');
 
       const dest = join(paths.app, target);
       const currentDir = this.currentDirName();
@@ -670,7 +674,7 @@ export class Updater {
         const env = { ...process.env };
         delete env.AK_APP_DIR;
         delete env.AK_VERSION;
-        await run(join(dest, 'bin', 'agent-k-local'), ['selftest'], { timeout: 60_000, env });
+        await run(join(dest, 'bin', 'agentk'), ['selftest'], { timeout: 60_000, env });
       } catch (e) {
         throw new Error(`self-test of ${target} failed: ${((e as { stderr?: string }).stderr || (e as Error).message).trim()}`, { cause: e });
       }

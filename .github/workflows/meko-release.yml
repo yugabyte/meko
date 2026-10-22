@@ -1,6 +1,6 @@
 name: Meko release
 
-# Meko (backend/) releases on its own train, beside AgentK Local's (agentk-release.yml). Versions are
+# Meko (backend/) releases on its own train, beside AgentK's (agentk-release.yml). Versions are
 # 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes backend/ cuts a
 # release when it contains meko feat/fix/perf/deps commits since the last Meko tag and the tests
 # pass. The release scripts are the repo root's scripts/release/*.sh --product meko. Meko's

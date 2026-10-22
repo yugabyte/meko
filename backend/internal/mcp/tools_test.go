@@ -94,9 +94,9 @@ func TestConversationTools(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{})
 	// No datapack: the default one. The same session id is the same conversation.
 	r := ok(t, e, "conversation_create", map[string]any{"agent_id": "agent-k-local", "datapack_id": nil,
-		"session_id": "agent-k-local-service", "title": "AgentK Local service"})
+		"session_id": "agent-k-local-service", "title": "AgentK service"})
 	id := str(r.JSON["id"])
-	if len(id) != 32 || r.JSON["title"] != "AgentK Local service" || r.JSON["app_id"] != nil {
+	if len(id) != 32 || r.JSON["title"] != "AgentK service" || r.JSON["app_id"] != nil {
 		t.Fatalf("create: %s", r.Text)
 	}
 	if again := ok(t, e, "conversation_create", map[string]any{"agent_id": "agent-k-local",
@@ -241,7 +241,7 @@ func TestDatapackTools(t *testing.T) {
 		t.Errorf("opt-out written by a refused update: %s", r.Text)
 	}
 
-	r = ok(t, e, "datapack_update", with("datapack_id", id, "description", "AgentK Local project \"b\""))
+	r = ok(t, e, "datapack_update", with("datapack_id", id, "description", "AgentK project \"b\""))
 	if r.JSON["message"] != "datapack updated" {
 		t.Errorf("update: %s", r.Text)
 	}
@@ -250,7 +250,7 @@ func TestDatapackTools(t *testing.T) {
 	}
 	ok(t, e, "datapack_update", with("datapack_id", id, "conversation_search_opt_out", true))
 	r = ok(t, e, "datapack_describe", with("datapack_id", id))
-	if r.JSON["description"] != "AgentK Local project \"b\"" || r.JSON["conversation_search_opt_out"] != true ||
+	if r.JSON["description"] != "AgentK project \"b\"" || r.JSON["conversation_search_opt_out"] != true ||
 		num(r.JSON["memory_count"]) != 0 || r.JSON["knowledge_chunk_count"] == nil {
 		t.Errorf("describe: %s", r.Text)
 	}

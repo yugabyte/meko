@@ -1,6 +1,6 @@
 # Releases and auto-update
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 - **CI (on PRs that change AgentK, and every push to `main`).** Typecheck, lint and unit tests, on
   Linux and macOS, run in `extensions/agentk` (the workflows, `scripts/check-title.sh`,
@@ -27,6 +27,14 @@ Part of the [AgentK Local design](../design.md).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
+  Each is published twice: as `agentk-<version>-<platform>-<arch>.tar.gz` (in `agentk-<version>/`,
+  with `bin/agentk`), and as `agent-k-local-<version>-…` (in `agent-k-local-<version>/`), the name
+  and layout that the updaters and installers from before the rename to AgentK look for. An
+  updater from then skips any release without its name, so without the second copy those installs
+  would never update again. Both hold `bin/agent-k-local`, a link to `bin/agentk`, which the
+  services installed then start. The updater installs only newer releases, all of which have the
+  new name, so it reads only that; the installer falls back to the old name for an older
+  `--version`. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
   The installer and the updater pick the tarball for their platform. The updater skips releases
   with no build for its platform; the installer takes the latest release (or `--version`) and stops
   with a clear message if it has none. Releases since macOS support always include the macOS
@@ -41,8 +49,8 @@ Part of the [AgentK Local design](../design.md).
 
 ```sh
 # The repo's one-line install (gh release download --pattern install.sh, from its latest release)
-# installs Meko, whose `meko install_extension agentk` installs AgentK Local pointed at it. AgentK
-# Local alone: its own install.sh from the newest AgentK release (no root; the repo is internal for
+# installs Meko, whose `meko install_extension agentk` installs AgentK pointed at it. AgentK
+# alone: its own install.sh from the newest AgentK release (no root; the repo is internal for
 # now, so this uses gh).
 gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
   --exclude-pre-releases --limit 50 --json tagName \
@@ -50,11 +58,11 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
   --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  0. stops, saying so, if AgentK Local is already installed in AK_HOME and set up: app/current,
-#     config.toml, ~/.local/bin/agent-k-local, and both services enabled (systemd) or loaded
-#     (launchd). Updates are offered in the app, and `agent-k-local install` redoes the setup.
+#  0. stops, saying so, if AgentK is already installed in AK_HOME and set up: app/current,
+#     config.toml, ~/.local/bin/agentk, and both services enabled (systemd) or loaded
+#     (launchd). Updates are offered in the app, and `agentk install` redoes the setup.
 #     --reinstall, --deps-only, a --version other than the installed one, or options for
-#     `agent-k-local install` (other than --non-interactive) go on
+#     `agentk install` (other than --non-interactive) go on
 #  1. checks for git, curl, gh and Claude Code; offers to
 #     install whatever is missing (it shows the commands and asks first): brew on macOS, the
 #     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
@@ -66,7 +74,7 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #     while a failed Linux package manager stops it; then offers `gh auth login` and `claude auth
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
-#  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
+#  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agentk install`:
 #  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
 #     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
 #  4. Meko (optional): verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json,

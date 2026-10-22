@@ -252,17 +252,17 @@ describe('session host (real ptys)', () => {
     const svc = {
       installed: () => true,
       start: () => void started++,
-      id: () => 'agent-k-local-host.service',
-      statusHint: () => 'systemctl --user status agent-k-local-host.service',
+      id: () => 'agentk-host.service',
+      statusHint: () => 'systemctl --user status agentk-host.service',
     } as unknown as ServiceManager;
     const owned = new SessionHost(paths, { services: () => svc, start: () => void (started += 100) });
-    await expect(owned.ensureServer()).rejects.toThrow(/agent-k-local-host\.service\) isn't running\. Check: systemctl --user status/);
+    await expect(owned.ensureServer()).rejects.toThrow(/agentk-host\.service\) isn't running\. Check: systemctl --user status/);
     expect(started).toBe(1);
 
     // Nor when only the server runs as a service (adding the host's failed): it would end with the server.
     const serverOnly = { ...svc, installed: (s: string) => s === 'server' } as unknown as ServiceManager;
     const half = new SessionHost(paths, { services: () => serverOnly, start: () => void (started += 100) });
-    await expect(half.ensureServer()).rejects.toThrow(/agent-k-local-host\.service\) isn't installed\. Run: agent-k-local install/);
+    await expect(half.ensureServer()).rejects.toThrow(/agentk-host\.service\) isn't installed\. Run: agentk install/);
     expect(started).toBe(1);
   });
 });
@@ -276,14 +276,14 @@ describe('a session host from an older version', () => {
       if (r.op === 'hello') return { ok: true, protocol: MIN_PROTOCOL - 1, version: '0.20261001.1', pid: 1, startedAt: 0 };
       throw new Error(`unexpected ${r.op}`);
     }) as SessionHost['request'];
-    await expect(host.ensureServer()).rejects.toThrow(/version 0\.20261001\.1\) is too old for this server\. Restart it with: agent-k-local host restart/);
+    await expect(host.ensureServer()).rejects.toThrow(/version 0\.20261001\.1\) is too old for this server\. Restart it with: agentk host restart/);
     expect(host.hello).toMatchObject({ version: '0.20261001.1', outdated: true });
     expect(changes).toBe(1);
     rmSync(home, { recursive: true, force: true });
   });
 });
 
-describe('agent-k-local host, attach, stop and start (the commands)', () => {
+describe('agentk host, attach, stop and start (the commands)', () => {
   const cli = fileURLToPath(new URL('../../src/server/cli.ts', import.meta.url));
   const tsx = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url));
   let home: string;
@@ -343,7 +343,7 @@ describe('agent-k-local host, attach, stop and start (the commands)', () => {
     } catch (e) {
       refused = String((e as { stderr: Buffer }).stderr);
     }
-    expect(refused).toContain('The AgentK Local server for this home is running');
+    expect(refused).toContain('The AgentK server for this home is running');
     expect((await host.panes()).size).toBe(1);
 
     // `stop` can't signal a server on another host sharing this home.
@@ -359,10 +359,10 @@ describe('agent-k-local host, attach, stop and start (the commands)', () => {
 
     // A lease whose live pid isn't a server (left by a crash, the pid since reused: here, this test) isn't signalled.
     writeFileSync(lock, JSON.stringify({ host: hostname(), pid: process.pid, version: 'x', port: 7777, startedAt: Date.now(), beatAt: Date.now() }));
-    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped AgentK Local and the 1 session(s) in it. They resume at: agent-k-local serve');
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('Stopped AgentK and the 1 session(s) in it. They resume at: agentk serve');
     await waitFor(() => host.serverRunning(), (up) => !up, 10000, 'host down');
     rmSync(lock);
-    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK Local is not running.');
+    expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK is not running.');
 
     // Without services there is nothing for `start` to start.
     refused = '';

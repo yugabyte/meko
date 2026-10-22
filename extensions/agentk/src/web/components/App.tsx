@@ -585,7 +585,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           />
         ) : (
           <>
-            {mobile && <TopBar onMenu={openDrawer} title="AgentK Local" />}
+            {mobile && <TopBar onMenu={openDrawer} title="AgentK" />}
             <div className="empty-main">
               <img src="/logo.png" alt="" width={96} height={96} />
               <h2>No projects yet</h2>

@@ -285,8 +285,8 @@ export function Banners({
       {state.sessionHost?.outdated && (
         <div className="banner warn" role="alert">
           <span className="banner-text">
-            The session host on {state.serverName} runs version {state.sessionHost.version}, too old for this version of AgentK
-            Local, so sessions can’t start. Run agent-k-local host restart there: running sessions restart and resume.
+            The session host on {state.serverName} runs version {state.sessionHost.version}, too old for this version of
+            AgentK, so sessions can’t start. Run agentk host restart there: running sessions restart and resume.
           </span>
         </div>
       )}
@@ -310,7 +310,7 @@ export function Banners({
       )}
       {stale && (
         <div className="banner info">
-          <span className="banner-text">AgentK Local was updated to v{stale}. Reload to use it.</span>
+          <span className="banner-text">AgentK was updated to v{stale}. Reload to use it.</span>
           <button className="btn primary small" onClick={() => location.reload()}>
             Reload
           </button>

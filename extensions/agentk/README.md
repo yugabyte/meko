@@ -1,15 +1,15 @@
 <p align="center"><img src="assets/AgentK-nobg.png" width="120" alt="AgentK logo"></p>
 
-# AgentK Local
+# AgentK
 
-The agentic coder for ADLC. AgentK Local lets you manage many projects and [Claude Code](https://claude.com/claude-code) or
+The agentic coder for ADLC. AgentK lets you manage many projects and [Claude Code](https://claude.com/claude-code) or
 [Kiro CLI](https://kiro.dev/cli/) sessions at once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
 datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
 your phone.
 
-![AgentK Local: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
+![AgentK: a session in the Design stage, with the live Claude Code terminal, its design (a Claude Artifact for a world clock widget) in the design panel waiting for approval, and the 5-hour and weekly limits in the rail](docs/screenshots/workbench.png)
 
 <table>
   <tr>
@@ -46,7 +46,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 meko install_extension agentk
 ```
 
-Or AgentK Local alone, from its newest release:
+Or AgentK alone, from its newest release:
 
 ```sh
 gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
@@ -62,27 +62,27 @@ default over SSH or on a machine with no display. Then it prints the address, or
 access a one-time setup link that creates your login. Local access trusts everyone who can log
 in to the computer, so pick remote on a shared host.
 
-Run again where AgentK Local is already installed with its services set up, the installer says so
-and stops without changing anything. Newer releases are offered in AgentK Local itself (the Update
+Run again where AgentK is already installed with its services set up, the installer says so
+and stops without changing anything. Newer releases are offered in AgentK itself (the Update
 banner, or the button in Settings). To change its setup (repos folder, access, port, Meko) or set
-up its services again, run `agent-k-local install`; to download and install it again, pass
-`--reinstall` (`… | sh -s -- --reinstall`). Options for `agent-k-local install`, like `--port`,
+up its services again, run `agentk install`; to download and install it again, pass
+`--reinstall` (`… | sh -s -- --reinstall`). Options for `agentk install`, like `--port`,
 also make it install again, so they're never dropped.
 
-Forgot your password? Run `agent-k-local setup-link` on the host and open the link it prints to
+Forgot your password? Run `agentk setup-link` on the host and open the link it prints to
 choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 
-If your home directory is shared with other hosts (over NFS, say), AgentK Local runs only on the
+If your home directory is shared with other hosts (over NFS, say), AgentK runs only on the
 host you installed it on: logging in to another host doesn't start a second server on the same
 `~/.agent-k-local`. To run it on another host too, give that host its own home with `AK_HOME`.
 
 If your home is under `/net` (the automounter's `/net/<host>/...`), Claude Code 2.1.292 and later
 asks before every file it reads or edits there, even in auto mode. When the home is this host's
-own folder, AgentK Local starts Claude in it without the `/net/<host>` prefix (with `HOME` to
+own folder, AgentK starts Claude in it without the `/net/<host>` prefix (with `HOME` to
 match), so sessions don't stop for that. In plain Claude Code, open your repos by that path too.
 
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
-Code keeps its login in your Keychain, so AgentK Local runs while you're logged in. For a Mac mini
+Code keeps its login in your Keychain, so AgentK runs while you're logged in. For a Mac mini
 that stays on, turn on automatic login and stop it sleeping (System Settings > Energy). With the
 macOS firewall on, allow incoming connections for `~/.agent-k-local/app/current/node/bin/node` so
 your phone can connect.
@@ -156,9 +156,9 @@ your phone can connect.
   project you're on when it's on that repo, else the first one on the repo; the other projects on the
   repo are offered too. If there's none, AgentK opens a project for it and clones the repo if needed.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
-  in the browser, and sessions run in AgentK Local's own session host (no tmux needed), so they keep
+  in the browser, and sessions run in AgentK's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
-  `agent-k-local attach <session>` (`Ctrl+\` detaches).
+  `agentk attach <session>` (`Ctrl+\` detaches).
 - **Claude Code or Kiro, per session.** New sessions start on the default agent (Settings →
   Harness), or pick **Agent** under **Advanced** in New session once both Claude Code and
   [Kiro CLI](https://kiro.dev/cli/) 2.32 or later are installed and signed in (`kiro-cli login`).
@@ -188,7 +188,7 @@ your phone can connect.
   Compare with another branch (a release branch for a backport, say) from the base in its header;
   when the branch has clearly moved onto another branch, the panel offers to switch.
 - **Paste images and files for Claude:** paste a screenshot or a file into the terminal, or drop
-  files on it, and Claude gets them with your next message, even when AgentK Local runs on another
+  files on it, and Claude gets them with your next message, even when AgentK runs on another
   machine. Images pasted into the New session dialog's first prompt go with it when the session starts.
 - **Add documents to the knowledge base:** with a PDF, Markdown, text, JSON, CSV, XML or HTML file
   waiting under the terminal, **Upload to Meko** adds it to the project datapack's knowledge base
@@ -201,7 +201,7 @@ your phone can connect.
 - **AgentK's mod in Claude:** with Claude Code 2.1.287 or later, each session loads a small Claude
   Code mod that takes AgentK's prompts and comments. Claude takes them when it's next idle, so they
   never land in a permission dialog or a running turn. When Claude asks you something
-  (`AskUserQuestion`), the question shows in AgentK Local too, on a phone as well: answer it there or
+  (`AskUserQuestion`), the question shows in AgentK too, on a phone as well: answer it there or
   in the terminal, whichever comes first. During Design you can send answers or approve while AgentK
   is still working: the answers wait in Claude for the turn to end, and the approval goes when the
   turn ends if it left the design alone. AgentK gives you its design questions through a tool, so
@@ -262,7 +262,7 @@ your phone can connect.
   turn, and what the learn step saved (memories added and corrected) and cost, on the project home
   and the Usage page. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
-- **Usage stats:** once a day (hourly in its first day) AgentK Local sends anonymous counts to YugabyteDB: how many
+- **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
@@ -277,13 +277,18 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 | Command | What it does |
 |---|---|
-| `agent-k-local status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
-| `agent-k-local stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
-| `agent-k-local logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
-| `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
-| `agent-k-local uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
-| `agent-k-local attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
-| `agent-k-local host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
+| `agentk status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
+| `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
+| `agentk logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
+| `agentk setup-link` | A new one-time login link; also resets a lost password |
+| `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
+| `agentk attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
+| `agentk host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
+
+The command was `agent-k-local` before the rename to AgentK, and that name keeps working. An
+install from then gets `agentk` the next time its server starts after an update; its services keep
+their old names (`agent-k-local.service`, `com.yugabyte.agent-k-local`) until you run `agentk
+install`, which renames the server's at once and the session host's once the host isn't running.
 
 ## Develop
 

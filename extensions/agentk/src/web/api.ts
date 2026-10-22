@@ -107,7 +107,7 @@ async function request<T>(
   } catch (e) {
     // Cancelled by the caller: theirs to ignore, not a server that's down.
     if (opts.signal?.aborted) throw e;
-    throw new ApiError(0, 'Can’t reach the AgentK Local server. Check that it is running.');
+    throw new ApiError(0, 'Can’t reach the AgentK server. Check that it is running.');
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();

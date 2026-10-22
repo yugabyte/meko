@@ -411,7 +411,7 @@ describe('web app: manifest and icons for the installed app', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^application\/manifest\+json/);
     const manifest = res.json() as { name: string; short_name: string; icons: { src: string; sizes: string; purpose: string }[] };
-    expect(manifest).toMatchObject({ name: 'AgentK Local', short_name: 'AgentK Local', start_url: '/', display: 'standalone' });
+    expect(manifest).toMatchObject({ name: 'AgentK', short_name: 'AgentK', start_url: '/', display: 'standalone' });
     expect(manifest.icons.map((i) => `${i.sizes} ${i.purpose}`)).toEqual(['192x192 any', '512x512 any', '512x512 maskable']);
     for (const icon of manifest.icons) {
       const img = await app.inject({ url: icon.src });

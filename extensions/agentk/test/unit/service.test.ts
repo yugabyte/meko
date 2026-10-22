@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EXIT_BUSY } from '../../src/server/instance.js';
 import {
+  dropOldNames,
   hostServices,
   LaunchdServices,
   parseLaunchdState,
@@ -20,13 +21,13 @@ const ok = { ok: true, out: '', err: '' };
 const fail = (err: string) => ({ ok: false, out: '', err });
 const files = { server: 'server file\n', host: 'host file\n' };
 
-const PRINT_RUNNING = `gui/501/com.yugabyte.agent-k-local = {
+const PRINT_RUNNING = `gui/501/com.yugabyte.agentk = {
 \tactive count = 1
-\tpath = /Users/me/Library/LaunchAgents/com.yugabyte.agent-k-local.plist
+\tpath = /Users/me/Library/LaunchAgents/com.yugabyte.agentk.plist
 \ttype = LaunchAgent
 \tstate = running
 
-\tprogram = /Users/me/.agent-k-local/app/current/bin/agent-k-local
+\tprogram = /Users/me/.agent-k-local/app/current/bin/agentk
 \tendpoints = {
 \t\tstate = active
 \t}
@@ -62,9 +63,9 @@ describe('service templates', () => {
       expect(text).toContain('<key>KeepAlive</key>\n  <true/>');
       expect(text).toContain('<string>en_US.UTF-8</string>');
     }
-    expect(out.host).toContain('<string>com.yugabyte.agent-k-local.host</string>');
-    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/app\/current\/bin\/agent-k-local<\/string>\s*<string>host<\/string>/);
-    expect(out.server).toContain('<string>/Users/me/.agent-k-local/app/current/bin/agent-k-local</string>');
+    expect(out.host).toContain('<string>com.yugabyte.agentk.host</string>');
+    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/app\/current\/bin\/agentk<\/string>\s*<string>host<\/string>/);
+    expect(out.server).toContain('<string>/Users/me/.agent-k-local/app/current/bin/agentk</string>');
     // The server never starts a host of its own under its job, so nothing it starts must outlive it.
     expect(out.server).not.toContain('AbandonProcessGroup');
   });
@@ -72,9 +73,9 @@ describe('service templates', () => {
   it('renders the systemd units: the session host, and the server that wants it, run only on this host and not restarted when busy', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
     const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
-    expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local host\n');
-    expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local serve');
-    expect(out.server).toContain('Wants=agent-k-local-host.service\n');
+    expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agentk host\n');
+    expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agentk serve');
+    expect(out.server).toContain('Wants=agentk-host.service\n');
     expect(out.server).not.toContain('tmux');
     // A home shared over NFS: every other host that mounts it would start its own server on it.
     for (const text of Object.values(out)) {
@@ -112,7 +113,7 @@ describe('servicesFor', () => {
     expect(serviceHome(launchd.host, 'launchd')).toBe('/Users/a&b/.agent-k-local');
     const systemd = renderServiceFiles(new SystemdServices(() => ok, {}, '/home/me'), { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
     expect(serviceHome(systemd.server, 'systemd')).toBe('/home/me/.agent-k-local');
-    expect(serviceHome('ExecStart=/home/me/.agent-k-local/app/current/bin/agent-k-local serve', 'systemd')).toBeNull();
+    expect(serviceHome('ExecStart=/home/me/.agent-k-local/app/current/bin/agentk serve', 'systemd')).toBeNull();
   });
 });
 
@@ -135,13 +136,13 @@ describe('SystemdServices', () => {
   it('writes both units, starts the host without restarting it, and restarts the server', () => {
     const { svc, calls } = make();
     svc.install(files);
-    expect(readFileSync(join(dir, 'systemd', 'user', 'agent-k-local-host.service'), 'utf8')).toBe(files.host);
+    expect(readFileSync(join(dir, 'systemd', 'user', 'agentk-host.service'), 'utf8')).toBe(files.host);
     expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
     expect(calls).toEqual([
       'systemctl --user daemon-reload',
-      'systemctl --user enable --now agent-k-local-host.service',
-      'systemctl --user enable agent-k-local.service',
-      'systemctl --user restart agent-k-local.service',
+      'systemctl --user enable --now agentk-host.service',
+      'systemctl --user enable agentk.service',
+      'systemctl --user restart agentk.service',
     ]);
     expect(svc.installed('host')).toBe(true);
   });
@@ -149,13 +150,13 @@ describe('SystemdServices', () => {
   it('stops a unit', () => {
     const { svc, calls } = make();
     svc.stop('server');
-    expect(calls).toEqual(['systemctl --user stop agent-k-local.service']);
+    expect(calls).toEqual(['systemctl --user stop agentk.service']);
   });
 
   it('reports a failed systemctl call as a ServiceError', () => {
     const { svc } = make((a) => (a.includes('restart') ? fail('Unit failed') : ok));
     expect(() => svc.install(files)).toThrow(ServiceError);
-    expect(() => svc.install(files)).toThrow(/restart agent-k-local.service failed: Unit failed/);
+    expect(() => svc.install(files)).toThrow(/restart agentk.service failed: Unit failed/);
   });
 
   it('reads the state that is-active prints, even when it exits non-zero', () => {
@@ -176,6 +177,36 @@ describe('SystemdServices', () => {
     expect(() => make((a) => (a[0] === 'sh' ? fail('') : ok)).svc.preflight()).toThrow(/systemctl was not found/);
   });
 
+  it('keeps units installed before the rename to AgentK under their old names until install moves them, and never a running host', () => {
+    const units = join(dir, 'systemd', 'user');
+    mkdirSync(units, { recursive: true });
+    writeFileSync(join(units, 'agent-k-local.service'), 'old server\n');
+    writeFileSync(join(units, 'agent-k-local-host.service'), 'old host\n');
+    const vars = { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' };
+    const hostActive = (a: string[]) => (a.join(' ') === 'systemctl --user is-active agent-k-local-host.service' ? { ok: true, out: 'active', err: '' } : ok);
+    const { svc, calls } = make(hostActive);
+    expect([svc.id('server'), svc.id('host')]).toEqual(['agent-k-local.service', 'agent-k-local-host.service']);
+    expect(svc.statusHint('host')).toBe('systemctl --user status agent-k-local-host.service');
+
+    expect(dropOldNames(svc)).toEqual([['agent-k-local.service', 'agentk.service']]);
+    expect(calls).toEqual([
+      'systemctl --user is-active agent-k-local-host.service',
+      'systemctl --user disable --now agent-k-local.service',
+      'systemctl --user daemon-reload',
+    ]);
+    expect(existsSync(join(units, 'agent-k-local.service'))).toBe(false);
+    // The server's new unit wants the host by the name it still runs under.
+    expect(renderServiceFiles(svc, vars).server).toContain('Wants=agent-k-local-host.service\n');
+
+    // Once the host stops, the next install moves it too; uninstalling removes either name.
+    const stopped = make().svc;
+    expect(dropOldNames(stopped)).toEqual([['agent-k-local-host.service', 'agentk-host.service']]);
+    expect(renderServiceFiles(stopped, vars).server).toContain('Wants=agentk-host.service\n');
+    writeFileSync(join(units, 'agent-k-local-host.service'), 'old host\n');
+    stopped.remove();
+    expect(readdirSync(units)).toEqual([]);
+  });
+
   it('removes both units, and the tmux unit of a version before the session host', () => {
     const { svc, calls } = make();
     svc.install(files);
@@ -188,8 +219,8 @@ describe('SystemdServices', () => {
     expect(existsSync(svc.file('host'))).toBe(false);
     expect(svc.legacyTmuxInstalled()).toBe(false);
     expect(calls).toEqual([
-      'systemctl --user disable --now agent-k-local.service',
-      'systemctl --user disable --now agent-k-local-host.service',
+      'systemctl --user disable --now agentk.service',
+      'systemctl --user disable --now agentk-host.service',
       'systemctl --user disable --now agent-k-local-tmux.service',
       'systemctl --user daemon-reload',
     ]);
@@ -236,44 +267,44 @@ describe('LaunchdServices', () => {
     const { svc, calls, loaded } = make();
     expect(svc.state('host')).toEqual({ running: false, text: 'not loaded' });
     svc.install(files);
-    const host = join(agents(), 'com.yugabyte.agent-k-local.host.plist');
-    expect(calls).toEqual([`bootstrap gui/501 ${host}`, `bootstrap gui/501 ${join(agents(), 'com.yugabyte.agent-k-local.plist')}`]);
-    expect([...loaded]).toEqual(['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local']);
+    const host = join(agents(), 'com.yugabyte.agentk.host.plist');
+    expect(calls).toEqual([`bootstrap gui/501 ${host}`, `bootstrap gui/501 ${join(agents(), 'com.yugabyte.agentk.plist')}`]);
+    expect([...loaded]).toEqual(['com.yugabyte.agentk.host', 'com.yugabyte.agentk']);
     expect(readFileSync(host, 'utf8')).toBe(files.host);
     expect(svc.state('server')).toEqual({ running: true, text: 'running' });
   });
 
   it('never reloads a loaded host job, and restarts an unchanged server in place', () => {
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local'] });
+    const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('host'), 'older host file\n');
     writeFileSync(svc.file('server'), files.server);
     svc.install(files);
-    expect(calls).toEqual(['kickstart -k gui/501/com.yugabyte.agent-k-local']);
+    expect(calls).toEqual(['kickstart -k gui/501/com.yugabyte.agentk']);
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
   });
 
   it('unloads a job to stop it, and leaves an unloaded one alone', () => {
-    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local'] });
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agentk'] });
     svc.stop('server');
     svc.stop('host');
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local']);
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agentk']);
     expect(loaded.size).toBe(0);
   });
 
   it('says so when a job is still loaded after bootout', () => {
     // launchctl print keeps finding the job: bootout failed, or it's still exiting.
     const stuck = new LaunchdServices(() => ok, home, 501, () => {});
-    expect(() => stuck.stop('server')).toThrow(/com.yugabyte.agent-k-local didn't stop/);
+    expect(() => stuck.stop('server')).toThrow(/com.yugabyte.agentk didn't stop/);
   });
 
   it('reloads the server job when its file changed', () => {
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agent-k-local.host', 'com.yugabyte.agent-k-local'] });
+    const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('server'), 'older server file\n');
     svc.install(files);
     expect(calls).toEqual([
-      'bootout gui/501/com.yugabyte.agent-k-local',
+      'bootout gui/501/com.yugabyte.agentk',
       `bootstrap gui/501 ${svc.file('server')}`,
     ]);
   });
@@ -286,15 +317,30 @@ describe('LaunchdServices', () => {
   });
 
   it('starts a job without disturbing a running one', () => {
-    const running = make({ loaded: ['com.yugabyte.agent-k-local.host'] });
+    const running = make({ loaded: ['com.yugabyte.agentk.host'] });
     running.svc.start('host');
-    expect(running.calls).toEqual(['kickstart gui/501/com.yugabyte.agent-k-local.host']);
+    expect(running.calls).toEqual(['kickstart gui/501/com.yugabyte.agentk.host']);
 
     const unloaded = make();
     mkdirSync(dirname(unloaded.svc.file('host')), { recursive: true });
     writeFileSync(unloaded.svc.file('host'), files.host);
     unloaded.svc.start('host');
     expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('host')}`]);
+  });
+
+  it('labels a job installed before the rename to AgentK by its old label until install moves it', () => {
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local'] });
+    mkdirSync(agents(), { recursive: true });
+    writeFileSync(join(agents(), 'com.yugabyte.agent-k-local.plist'), 'old server\n');
+    expect(svc.id('server')).toBe('com.yugabyte.agent-k-local');
+    const vars = { AK_HOME: '/Users/me/.agent-k-local', HOST: 'mac' };
+    // The file under the old name keeps its label, or launchctl wouldn't find the job it loads.
+    expect(renderServiceFiles(svc, vars).server).toContain('<key>Label</key>\n  <string>com.yugabyte.agent-k-local</string>');
+    expect(dropOldNames(svc)).toEqual([['com.yugabyte.agent-k-local', 'com.yugabyte.agentk']]);
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local']);
+    expect(loaded.size).toBe(0);
+    expect(existsSync(join(agents(), 'com.yugabyte.agent-k-local.plist'))).toBe(false);
+    expect(renderServiceFiles(svc, vars).server).toContain('<key>Label</key>\n  <string>com.yugabyte.agentk</string>');
   });
 
   it('removes both jobs and their files, and the tmux job of a version before the session host', () => {
@@ -306,7 +352,7 @@ describe('LaunchdServices', () => {
     calls.length = 0;
     svc.remove();
     expect(calls).toEqual([
-      'bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.host', 'bootout gui/501/com.yugabyte.agent-k-local.tmux',
+      'bootout gui/501/com.yugabyte.agentk', 'bootout gui/501/com.yugabyte.agentk.host', 'bootout gui/501/com.yugabyte.agent-k-local.tmux',
     ]);
     expect(loaded.size).toBe(0);
     expect(existsSync(svc.file('server'))).toBe(false);

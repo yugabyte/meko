@@ -857,8 +857,8 @@ function LocalAccessNote() {
     <div className="stack">
       <h3>No sign-in needed</h3>
       <p className="muted">
-        AgentK Local only listens on this computer, so it opens without a username and password. To reach it from other
-        devices, rerun <code>agent-k-local install</code> and choose remote access: that turns on HTTPS and a login.
+        AgentK only listens on this computer, so it opens without a username and password. To reach it from other
+        devices, rerun <code>agentk install</code> and choose remote access: that turns on HTTPS and a login.
       </p>
     </div>
   );

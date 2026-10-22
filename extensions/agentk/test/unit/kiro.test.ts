@@ -17,7 +17,7 @@ describe("Kiro's agentk agent", () => {
     // [meko] capture_transcripts off: Meko's capture hooks are left out, as Claude's sessions run without Meko's plugin.
     expect(agentkAgent(meko, ours, { mekoCapture: false }).hooks).toEqual({ agentSpawn: [{ command: '/run/hook.sh' }], stop: [], preToolUse: ours.preToolUse });
     expect(a).toEqual({
-      name: 'agentk', description: expect.stringMatching(/^Written by AgentK Local.* Based on meko-default\.$/), tools: ['@meko', 'read', 'write'], includeMcpJson: true,
+      name: 'agentk', description: expect.stringMatching(/^Written by AgentK.* Based on meko-default\.$/), tools: ['@meko', 'read', 'write'], includeMcpJson: true,
       hooks: {
         agentSpawn: [{ command: 'node kiro-handler.js agentSpawn' }, { command: '/run/hook.sh' }],
         stop: [{ command: 'node kiro-handler.js stop' }],
@@ -33,6 +33,9 @@ describe("Kiro's agentk agent", () => {
     expect(writeKiroAgent(a, home)).toBe(false);
     // A default agent named agentk (or a file with that name) is AgentK's own, not the user's.
     expect(readKiroAgent('agentk', home)).toBeNull();
+    // So is one written while the product was AgentK Local.
+    writeFileSync(join(home, 'agents', 'agentk-ask.json'), JSON.stringify({ name: 'agentk-ask', description: 'Written by AgentK Local, which rewrites it: edit your default agent instead.' }));
+    expect(readKiroAgent('agentk-ask', home)).toBeNull();
     writeFileSync(join(home, 'agents', 'mine.json'), JSON.stringify({ name: 'my-agent', tools: ['read'] }));
     expect(readKiroAgent('my-agent', home)).toEqual({ name: 'my-agent', tools: ['read'] });
   });

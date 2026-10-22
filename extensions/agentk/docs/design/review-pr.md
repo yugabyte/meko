@@ -1,6 +1,6 @@
 # Reviewing a PR
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 The other side of sharing a project: someone the author shared it with (see
 [Sharing a project](sharing.md)) opens its datapack as a project, from the invite's

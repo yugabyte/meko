@@ -647,7 +647,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(system).toContain('Stages: Explore → Design → Code → PR & Review → Merge & Close;');
     expect(system).toContain("It's in Explore now");
     // The name heads the task, so the first prompt needn't repeat it.
-    expect(args.at(-1)).toMatch(/Explore stage of an AgentK Local task[\s\S]*Task: Look around\n\nwhy is it slow/);
+    expect(args.at(-1)).toMatch(/Explore stage of an AgentK task[\s\S]*Task: Look around\n\nwhy is it slow/);
 
     await expect(env.core.sessions.action(s.id, 'approve-design')).rejects.toMatchObject({ status: 409 });
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toMatchObject({ status: 409 });
@@ -960,7 +960,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     for (const [host, inTmux] of [[false, []], [true, [s.paneName]]] as const) {
       core.services = services(host);
       core.legacyTmuxPanes = async () => new Set(inTmux);
-      await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+      await expect(env.core.start()).rejects.toThrow(/Run: agentk install/);
     }
     expect(argvLog(env).length).toBe(launches);
     // Only a pane this home doesn't know (a deleted session's): the tmux service is a leftover of

@@ -1,6 +1,6 @@
 # Architecture
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 There are three long-lived pieces on the host: the web server, the session host that owns every
 Claude process, and the state directory at `~/.agent-k-local`. The server is stateless enough to
@@ -12,7 +12,7 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver (headless) or your Mac"]
-    S["AgentK Local server<br/>HTTPS :7777"]
+    S["AgentK server<br/>HTTPS :7777"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
@@ -47,7 +47,7 @@ reaches Claude Code.
 exit status, until it is started again or ended. It answers the program's terminal queries
 (device attributes, cursor position, colors) itself from its headless xterm, so Claude gets one
 answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
-real terminal's with `agent-k-local attach`). Sessions don't inherit this install's `AK_HOME`,
+real terminal's with `agentk attach`). Sessions don't inherit this install's `AK_HOME`,
 `AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
 as live only once its program has started. It listens only on
 `host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
@@ -113,12 +113,12 @@ that lost the session doesn't ask again until it shows it again, so two idle scr
 it. Screens are told apart by a page id the browser makes per page load (a reconnect keeps the
 session), and another tab of the same browser by a browser id in `localStorage`; the other screen
 is named by its browser and system from the user agent. The board lives in the server's memory:
-after a restart, the first screen to reconnect and ask gets the session. `agent-k-local attach`
+after a restart, the first screen to reconnect and ask gets the session. `agentk attach`
 talks to the host directly and is not part of this: it still takes the size when used. The server
 log has each terminal socket's attach (its address and browser) and close, numbered, and one line
 per move with its reason.
 
-**From a terminal.** `agent-k-local attach <name>` shows a session's terminal in the one you run it
+**From a terminal.** `agentk attach <name>` shows a session's terminal in the one you run it
 in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no
 name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 

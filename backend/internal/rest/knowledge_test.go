@@ -208,7 +208,7 @@ func TestKnowledgeRoutes(t *testing.T) {
 	wantErr(t, e, "DELETE", kb+"/documents/not-a-uuid", nil, 404, "NOT_FOUND")
 }
 
-// AgentK Local's upload (extensions/agentk/src/server/mekoapi.ts requestUpload, postPresigned and
+// AgentK's upload (extensions/agentk/src/server/mekoapi.ts requestUpload, postPresigned and
 // documentStatus, since #225), replayed as it sends it: upload-url with the client token and its
 // client name, the fields then the file to the link with no token, then document-status until its
 // state is final. A change to those calls updates this replay.

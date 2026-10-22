@@ -510,6 +510,6 @@ export class ModLinks {
   closeAll(): void {
     clearInterval(this.sweeper);
     this.pause();
-    for (const s of [...this.links.keys()]) this.reset(s, 'AgentK Local is stopping');
+    for (const s of [...this.links.keys()]) this.reset(s, 'AgentK is stopping');
   }
 }

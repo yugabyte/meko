@@ -2,7 +2,7 @@
 //
 // Mermaid is imported only when a design has a diagram, so it stays out of the main bundle.
 //
-// What keeps a diagram from reaching AgentK Local's page is Mermaid's strict mode: labels are
+// What keeps a diagram from reaching AgentK's page is Mermaid's strict mode: labels are
 // sanitized (or drawn as SVG text) and click callbacks are off. Mermaid draws in the app's own
 // document, in a container it adds to <body>, before handing back the SVG, so while it draws, a
 // label that got past its sanitizing would be live in the app's origin, and images a diagram

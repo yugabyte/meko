@@ -1,6 +1,6 @@
 # Agents: Claude Code and Kiro
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 A session runs on one coding agent, its **harness**, picked when it starts and kept for its life (a
 conversation can't move between CLIs): Claude Code, or [Kiro CLI](https://kiro.dev/cli/). The
@@ -63,7 +63,7 @@ neither asks which to install (Claude Code first; `--agent claude|kiro` for unat
 `--install-deps` takes Claude Code without asking unless `--agent` says otherwise), with
 Anthropic's installer or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), and stops
 when that's declined or fails. It checks each agent's sign-in (`claude auth status`, `kiro-cli
-whoami`) and offers `claude auth login` or `kiro-cli login`. `agent-k-local install` then reads each
+whoami`) and offers `claude auth login` or `kiro-cli login`. `agentk install` then reads each
 agent's version (`settleAgents`): with none it stops, saying what to install; a default that isn't
 installed becomes the first agent that is; and Meko's setup is offered for each agent found (Claude
 Code's plugin and MCP server, Kiro's `--client kiro`), asking first, each a warning when declined.

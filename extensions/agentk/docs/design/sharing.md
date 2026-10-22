@@ -1,6 +1,6 @@
 # Sharing a project
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 A project is shared by sharing its dedicated datapack. Meko shares a datapack as an **invite**: the
 owner (or a maintainer) invites an email address with a role, Meko emails them, and they accept or
@@ -72,12 +72,13 @@ default: a viewer can't open the datapack as a project of their own) and **Share
 [Review a PR](review-pr.md) session.
 
 When AgentK creates a datapack for a new project, it sets the datapack's description (MCP
-`datapack_update`) to `AgentK Local project "<name>" · repo <remote>`, so whoever it's shared
+`datapack_update`) to `AgentK project "<name>" · repo <remote>`, so whoever it's shared
 with can find the repo. The remote is the repo's `upstream` when it's a fork with a network
 upstream, else its `origin`: people share the upstream repo, not your fork. Both are read with one
 `git config --get-regexp` call, which the repo scan uses too. Only a network remote goes in: a local path (`/home/me/src/x.git`, `../x`)
 is left out, and credentials in the URL (`https://user:token@…`) are removed, again when a
-description is read. The update runs in the background, so it never holds up the project; a
+description is read. Descriptions written before the product's rename start `AgentK Local
+project` and are read the same way. The update runs in the background, so it never holds up the project; a
 failure is logged. Meko shows the
 description only once an invite is accepted, so a pending invite is matched to a repo by name.
 

@@ -60,7 +60,7 @@ backend/
   Makefile                    build, test, lint (sets the cgo tags)
 ```
 
-The module path uses the repo's new name so nothing changes at the rename. AgentK Local's code is
+The module path uses the repo's new name so nothing changes at the rename. AgentK's code is
 in `extensions/agentk` (moved there in #158).
 
 ## Process model and CLI
@@ -432,7 +432,7 @@ and passes the backend CI job on its own, and each squash-merges as one `chore(b
 | Which default port? (`default-port`) | 7778 | 7778, configurable with `--port`, `MEKO_PORT` or `config.toml`; `serve` exits with a clear error if it's taken, with no random fallback. |
 | How does the browser authenticate in this phase? (`browser-auth`) | No browser login; CLI only | CLI-only access with the local admin token; no API keys yet. API keys come with MCP (milestone 3), browser access with the UI (milestone 4). Since revised: milestone 3 added a client token instead of keys, per-client API keys are #195, and the UI is milestone 6 (#172). |
 | How should the change be reviewed, given 25.6k lines of vendored SQLite and sqlite-vec code? (asked while coding) | Break the third-party code into its own PR; stacked PRs: base layout, third party, functionality | Three stacked PRs, one `chore(backend)` commit each (see Delivery). The header-version test moved into `internal/sqlitevec` so PR 2 stands alone. |
-| Which commit type? (came up while coding) | (no question asked; follows the repo's rules) | `chore(backend)`: nothing in `backend/` ships in AgentK Local's release, so a releasing type would cut an empty AgentK release. |
+| Which commit type? (came up while coding) | (no question asked; follows the repo's rules) | `chore(backend)`: nothing in `backend/` ships in AgentK's release, so a releasing type would cut an empty AgentK release. |
 | Check the third-party code in, or pull it at build time? (asked while coding) | Store third-party code in yugabyte forks, as yugabyte-db does; forks will take time, so copy the code for now | Vendored in `backend/third_party` at first (option A), until the forks existed. Since then, `third_party/` and `internal/sqlitevec` are gone: `go.mod` replaces go-sqlite3 with a tag of `yugabyte/go-sqlite3`, which compiles in sqlite-vec synced from `yugabyte/sqlite-vec` (see "Where SQLite and sqlite-vec come from"). The sqlite-vec fork stays unchanged: it gains no Go package. |
 | AgentK moved to `extensions/agentk` on main (#158) while this was in review | Rebase on main first, then open the three stacked PRs | Rebuilt the stack on the new main. The backend's docs moved out of AgentK's files into `backend/AGENTS.md`, `backend/REVIEW.md` and a row in the root `AGENTS.md`. |
 | Must `stop`'s SIGKILL path reach the children? (AgentK review of #166) | (no question asked) | Yes, from milestone 2, when the first child exists: serve records its children's process groups in `run/` and `stop` kills them after killing serve. The foundation starts no children, and `stop` now waits 30 s, longer than serve's own shutdown, so SIGKILL is only for a hung server. |

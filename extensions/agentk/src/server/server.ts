@@ -159,7 +159,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   /** The owner, for the account routes; a local-access install may not have one yet. */
   const ownerOr409 = () => {
     const owner = getOwner(db);
-    if (!owner) throw new HttpError(409, 'No login is set up. Run `agent-k-local setup-link` on the host to create one.');
+    if (!owner) throw new HttpError(409, 'No login is set up. Run `agentk setup-link` on the host to create one.');
     return owner;
   };
 
@@ -190,7 +190,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (bad) return reply.code(400).send({ error: bad });
     if (!consumeSetupToken(db, token)) {
       limiter.fail(ip);
-      return reply.code(403).send({ error: 'This setup link is invalid or already used. Run `agent-k-local setup-link` on the host for a new one.' });
+      return reply.code(403).send({ error: 'This setup link is invalid or already used. Run `agentk setup-link` on the host for a new one.' });
     }
     setOwner(db, username, password);
     audit(db, 'owner_set', { username, ip });

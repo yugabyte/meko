@@ -450,7 +450,7 @@ export class Lifecycle {
     try {
       changed = this.core.questions.set(row, checked.questions);
     } catch (e) {
-      return fail(`AgentK Local couldn't save the questions (${errMsg(e)}). Write them to ${this.sessions.questionsFile(row)} instead.`);
+      return fail(`AgentK couldn't save the questions (${errMsg(e)}). Write them to ${this.sessions.questionsFile(row)} instead.`);
     }
     // The same questions again change nothing. Before there's a design they're only saved, to
     // show with it when it comes.
@@ -469,7 +469,7 @@ export class Lifecycle {
     return {
       status: 200,
       body: {
-        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open)${decisions}${meko} to ${this.sessions.questionsFile(row)}. The user sees them beside the design in AgentK Local.`,
+        text: `Saved ${n === 1 ? '1 question' : `${n} questions`} (${open} open)${decisions}${meko} to ${this.sessions.questionsFile(row)}. The user sees them beside the design in AgentK.`,
       },
     };
   }

@@ -1,9 +1,9 @@
 # Usage stats
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 Each install sends a small report of counts once a day (every hour in its first day) to a
-collector run by the AgentK Local team, so we know how many installs are active and how much work
+collector run by the AgentK team, so we know how many installs are active and how much work
 goes through them. The collector is a
 separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
 `CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](../call-home-report.schema.json)

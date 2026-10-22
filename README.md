@@ -31,7 +31,7 @@ the installer is fetched with a signed-in `gh` (or `GITHUB_TOKEN`):
 
 ```sh
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
-meko install_extension agentk     # optional: AgentK Local, using this Meko
+meko install_extension agentk     # optional: AgentK, using this Meko
 ```
 
 It downloads the newest Meko release, checks its checksum, unpacks it into `~/.local/share/meko/app`, links
@@ -72,7 +72,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
 | `meko uninstall [--purge [--force]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data, asking first |
 | `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
-| `meko install_extension agentk` | Install AgentK Local pointed at this Meko; `meko start` and `stop` then run it too |
+| `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
 | `meko destroy [--force]` | Stop Meko and remove its data folder, everything in it, for good. It asks first; `--force` doesn't |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
@@ -106,7 +106,7 @@ curl -s localhost:7778/api/v1/datapacks -H "Authorization: Bearer $(./bin/meko t
 
 ## Extensions
 
-**[AgentK Local](extensions/agentk/README.md)** (`extensions/agentk`) is the agentic coder built
+**[AgentK](extensions/agentk/README.md)** (`extensions/agentk`) is the agentic coder built
 on Meko. It runs many Claude Code and Kiro CLI sessions from a browser or your phone, takes each
 task from design to merged PR, and keeps each project's designs and learnings in a Meko datapack.
 Its README covers installing and using it.
@@ -121,7 +121,7 @@ Its README covers installing and using it.
   [`backend/docs/knowledge.md`](backend/docs/knowledge.md) (knowledge files) and
   [`backend/docs/install.md`](backend/docs/install.md) (releases, the installer, the service,
   extensions, updates and secrets).
-- AgentK Local: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).
+- AgentK: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).
 
 ## License
 

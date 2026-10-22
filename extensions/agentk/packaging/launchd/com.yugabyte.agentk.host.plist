@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- AgentK Local web server. Written by `agent-k-local install`; changes are overwritten. -->
-<!-- The session host runs in its own job (com.yugabyte.agent-k-local.host) so restarting or
-     updating this one never ends a session. -->
+<!-- AgentK session host (holds every Claude session). Written by `agentk install`. -->
+<!-- It runs the version that was current when it started and keeps running across updates:
+     restarting it ends every Claude session (the server resumes them). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.yugabyte.agent-k-local</string>
+  <string>@HOST_ID@</string>
   <key>ProgramArguments</key>
   <array>
-    <string>@AK_HOME@/app/current/bin/agent-k-local</string>
-    <string>serve</string>
+    <string>@AK_HOME@/app/current/bin/agentk</string>
+    <string>host</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>AK_HOME</key>
     <string>@AK_HOME@</string>
-    <!-- launchd sets no locale; git, gh and Claude need a UTF-8 one. -->
+    <!-- launchd sets no locale; Claude needs a UTF-8 one to draw its UI. -->
     <key>LANG</key>
     <string>en_US.UTF-8</string>
   </dict>
@@ -26,12 +26,11 @@
   <true/>
   <key>ThrottleInterval</key>
   <integer>2</integer>
-  <key>ExitTimeOut</key>
-  <integer>15</integer>
-  <!-- The server writes its own log (logs/server.log); keep only errors here. -->
+  <key>ProcessType</key>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>/dev/null</string>
   <key>StandardErrorPath</key>
-  <string>@AK_HOME@/logs/launchd.log</string>
+  <string>@AK_HOME@/logs/launchd-host.log</string>
 </dict>
 </plist>

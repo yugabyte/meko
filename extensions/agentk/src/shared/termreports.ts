@@ -1,11 +1,11 @@
-// Terminal answers to a program's queries, told apart from typing (the web UI and `agent-k-local attach`),
+// Terminal answers to a program's queries, told apart from typing (the web UI and `agentk attach`),
 // and reports sent without anyone using the screen (the server's one-screen-per-session rule).
 
 /**
  * Whether terminal input is the terminal's answer to a query from the program (device attributes, cursor
  * position, mode and status reports, colors, version, keyboard flags) rather than something typed.
  * The session host answers those itself, once, so every viewer's own answers are dropped: a
- * browser's (xterm.js) and, with `agent-k-local attach`, a real terminal's. A modified
+ * browser's (xterm.js) and, with `agentk attach`, a real terminal's. A modified
  * F3 (`ESC [1;2R` … `ESC [1;8R`) reads like a cursor position report and is kept.
  */
 export function isTerminalReport(data: string): boolean {

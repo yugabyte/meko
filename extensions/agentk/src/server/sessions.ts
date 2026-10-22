@@ -85,11 +85,11 @@ export function askDetail(question: string): string {
  */
 export function workflowLine(kind: SessionKind, stage: Stage): string {
   if (kind === 'review-pr') {
-    return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK Local UI.";
+    return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
   }
-  const stages = 'Stages: Explore → Design → Code → PR & Review → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK Local UI.';
+  const stages = 'Stages: Explore → Design → Code → PR & Review → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
   if (stage !== 'explore') return stages;
-  return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK Local runs no design approval, PR, review or merge until the user moves it on.`;
+  return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK runs no design approval, PR, review or merge until the user moves it on.`;
 }
 
 /** The old session types a create request may still name, and where each starts. */
@@ -994,7 +994,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This ${this.harness(row).caps.label} session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
+      `This ${this.harness(row).caps.label} session is managed by AgentK. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
     if (row.kind !== 'review-pr' && row.branch_reused) {
       lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
@@ -1211,7 +1211,7 @@ export class SessionManager {
     const inRepo = (file: string) => roots.some((d) => file === d || file.startsWith(d + sep));
     if (!paths.some((f) => inRepo(resolve(p.cwd || row.worktree_path, f)))) return null;
     return h.deny(
-      `This session is in the Design stage: AgentK Local blocks changes to the repo until the user approves the design. ` +
+      `This session is in the Design stage: AgentK blocks changes to the repo until the user approves the design. ` +
       (h.caps.artifacts ? `Publish the design as an Artifact, or write it to ${this.designFile(row)}.` : `Write the design to ${this.designFile(row)}.`),
     );
   }
@@ -1356,7 +1356,7 @@ export class SessionManager {
     const answers = askAnswers(body, asking.questions);
     if (!this.mod.answerAsk(id, askId, answers)) throw gone();
     const n = Object.keys(answers).length;
-    this.event(id, 'ask', `Answered ${n === 1 ? "AgentK's question" : `${n} of AgentK's questions`} in AgentK Local`);
+    this.event(id, 'ask', `Answered ${n === 1 ? "AgentK's question" : `${n} of AgentK's questions`} in the AgentK UI`);
     // Claude takes the answer and carries on with its turn.
     if (row.status === 'needs_input') this.setStatus(id, 'working');
   }
@@ -1627,7 +1627,7 @@ export class SessionManager {
       const now = sessionRow(this.db, row.id);
       if (now?.desired !== 'running') return;
       if (now.status === 'working') this.update(row.id, { interrupted: 1 });
-      this.setStatus(row.id, 'exited', gone ? errMsg(e) : `Couldn't restart ${agentName(row)}: ${errMsg(e)}. AgentK Local tries again in 5 minutes, or Resume it now.`);
+      this.setStatus(row.id, 'exited', gone ? errMsg(e) : `Couldn't restart ${agentName(row)}: ${errMsg(e)}. AgentK tries again in 5 minutes, or Resume it now.`);
     }
   }
 

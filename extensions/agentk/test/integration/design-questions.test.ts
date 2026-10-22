@@ -43,7 +43,7 @@ describe("a design's open questions (real session host + git, fake claude)", () 
     expect(sent).toMatch(/### Other feedback Keep it short\./);
     expect(events(s.id)).toContain('Sent 1 answer to an open question and other feedback to AgentK');
     // The answered question is resolved with the answer as it goes, on disk too; the other waits for AgentK.
-    expect(sent).toContain('AgentK Local may have marked some already');
+    expect(sent).toContain('AgentK may have marked some already');
     expect(decided(s.id)).toEqual([['store', 'resolved', 'Datapack — RESOLVE_STORE please'], ['tabs', 'open', null]]);
     expect(onDisk(s.id)).toEqual(questions(s.id));
 

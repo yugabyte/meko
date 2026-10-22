@@ -1,39 +1,48 @@
 # Surviving crashes, restarts and updates
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 Two systemd user units run with lingering enabled, so they start at boot without anyone logging
 in:
 
-- `agent-k-local-host.service` runs the session host (`agent-k-local host`). It is never
+- `agentk-host.service` runs the session host (`agentk host`). It is never
   restarted by updates or reinstalls.
-- `agent-k-local.service` is the web server, with `Restart=always`. Updates restart only this unit.
+- `agentk.service` is the web server, with `Restart=always`. Updates restart only this unit.
+
+(On macOS they're the LaunchAgents `com.yugabyte.agentk.host` and `com.yugabyte.agentk`.) Until the
+rename to AgentK they were `agent-k-local-host.service` and `agent-k-local.service`
+(`com.yugabyte.agent-k-local.host` and `com.yugabyte.agent-k-local`). A service installed under
+its old name keeps it: `service.ts` names whichever is installed, and an update doesn't touch the
+units, which start `bin/agent-k-local`, a link to `bin/agentk` in every release since. `agentk
+install` moves them to the new names (`dropOldNames`): the server's at once, since it restarts the
+server anyway, and the host's only while the host isn't running, since stopping it would end every
+session. Until the host stops, the server's new unit names the host by its old name.
 
 Keeping the session host in its own unit is the key point. If it were a child of the server's unit,
 systemd would kill every Claude session on each update. The server never starts a host of its own
 while the host service is installed (it reports the service as down), nor while it runs as a
-service itself without the host's (it says to run `agent-k-local install`); without services (a
+service itself without the host's (it says to run `agentk install`); without services (a
 source checkout, `--no-service`) it starts one detached, in its own process group.
 
 **The host keeps its version.** A running host keeps the code it started with across updates:
 restarting it ends every Claude (the server's recovery resumes them). So the updater never deletes
 the version directory `run/host.json` names (node-pty runs a helper from it on macOS), and the
 server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one has to be
-restarted (`agent-k-local host restart`), which the server's log says. `agent-k-local host stop`
+restarted (`agentk host restart`), which the server's log says. `agentk host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
 the host again at once and resume them all. With the server stopped, they resume when it starts.
-`agent-k-local stop` stops both, the server first, and `agent-k-local start` starts them again.
+`agentk stop` stops both, the server first, and `agentk start` starts them again.
 Installed services stop through systemd (`systemctl --user stop`) or launchd (`bootout`), since
 both restart a process that is only killed or exits on its own. Then it checks the server's lease:
 a server outside the service (`serve` by hand, or any server without services) gets SIGTERM, but
-only when the lease names this machine and its pid is an `agent-k-local serve` (after a crash the
+only when the lease names this machine and its pid is an `agentk serve` (after a crash the
 pid can be another process's); a lease held on another host is refused. The host goes last:
 its service is stopped, then any host still on the socket (a detached one a server started before
 the services were installed) gets a stop request. The services still start again at the next login (or
 boot, with lingering) or reinstall; `start` starts them sooner.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
-(`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….host.plist`), with `RunAtLoad`
+(`~/Library/LaunchAgents/com.yugabyte.agentk.plist` and `….host.plist`), with `RunAtLoad`
 and `KeepAlive`. They start when you log in, not at boot: Claude Code keeps its login in the
 Keychain, which is only unlocked during a desktop login, so the installer refuses to run without
 one. The host runs in the foreground, as launchd wants. Both jobs set
@@ -46,15 +55,15 @@ moved an install off it by itself on its first start after the update (it added 
 ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
 on 2026-10-09 and was removed about a week later. A Claude must never run in tmux and in the host at
 once, so what's left is a guard (`Core.start`): while the tmux service is installed
-(`legacyTmuxInstalled`), the server refuses to start, saying to run `agent-k-local install`, unless
+(`legacyTmuxInstalled`), the server refuses to start, saying to run `agentk install`, unless
 the host service is installed too and none of this home's sessions that aren't archived is in
 tmux (`legacytmux.ts` lists the sessions on the old socket). An
 install that updated itself from a tmux version therefore fails to start and rolls back to it (the
 launcher's rollback; see [Releases](releases.md)), with its sessions still running in tmux.
-`agent-k-local install`, which the installer runs, moves it: before it installs the services it
+`agentk install`, which the installer runs, moves it: before it installs the services it
 removes the old ones, stopping the old server first and then the tmux service, which ends the
 Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
-was cut off). `agent-k-local uninstall` removes the tmux service too. Removing it ends the tmux
+was cut off). `agentk uninstall` removes the tmux service too. Removing it ends the tmux
 server on its socket, which every AgentK home on the account shared.
 
 An install can have both services: the move kept the tmux service while any `ak-` pane it didn't
@@ -64,7 +73,7 @@ a warning, and leaves the tmux service running rather than end the Claudes still
 (Refusing there, as versions 0.20261018.3 to 0.20261020.2 did, rolled back every update.) The host
 service alone doesn't prove the move finished: a tmux version reinstalled by hand after it keeps
 the host's file and resumes its sessions in tmux, which is why the guard also looks for this home's
-sessions there. With both services installed, `agent-k-local install` stops the server (it may be
+sessions there. With both services installed, `agentk install` stops the server (it may be
 the tmux version's, which would start them in tmux again) and removes the tmux service, ending any
 Claude still in it, and leaves the host and its sessions alone.
 
@@ -83,7 +92,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 - **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
   host name at install time. On any other host systemd skips them: nothing starts and nothing is
-  logged. Renaming the host means running `agent-k-local install` again, which rewrites the units
+  logged. Renaming the host means running `agentk install` again, which rewrites the units
   (the one-line installer stops early on an install it finds set up).
 - **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
   anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it

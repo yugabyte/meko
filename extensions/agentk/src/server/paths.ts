@@ -3,7 +3,7 @@ import { realpathSync, statSync } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/** Root of all agent-k-local state. Override with AK_HOME (tests, dev). */
+/** Root of all AgentK state. Override with AK_HOME (tests, dev). */
 export function akHome(): string {
   return process.env.AK_HOME ?? join(homedir(), '.agent-k-local');
 }

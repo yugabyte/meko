@@ -10,7 +10,7 @@ import { writeScript } from './scriptfile.js';
 
 /**
  * Markers a running Claude Code session puts in its children's environment.
- * If agent-k-local itself was started from inside Claude Code, these must not
+ * If AgentK itself was started from inside Claude Code, these must not
  * reach the sessions it launches (e.g. CLAUDE_CODE_CHILD_SESSION turns off
  * transcript saving, which breaks --resume). User settings such as
  * CLAUDE_CODE_USE_BEDROCK are deliberately kept.
@@ -27,7 +27,7 @@ export const CLAUDE_SESSION_MARKERS = [
  * so it always exits 0 and gives up after 3 seconds.
  */
 const HOOK_SCRIPT = `#!/bin/sh
-# Written by agent-k-local. Forwards Claude Code hook events to the server.
+# Written by AgentK. Forwards Claude Code hook events to the server.
 [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
 curl -s -o /dev/null --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
   -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
@@ -42,7 +42,7 @@ exit 0
  * ahead: the guard must never leave Claude stuck.
  */
 const GUARD_SCRIPT = `#!/bin/sh
-# Written by agent-k-local. Asks the server whether a file edit may go ahead.
+# Written by AgentK. Asks the server whether a file edit may go ahead.
 [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
 curl -sf --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
   -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
@@ -56,7 +56,7 @@ exit 0
  * when the server can't be reached or has nothing, and never fails or holds up Claude for long.
  */
 const CONTEXT_SCRIPT = `#!/bin/sh
-# Written by agent-k-local. Asks the server for context to start the session with.
+# Written by AgentK. Asks the server for context to start the session with.
 [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
 curl -sf --max-time 4 --unix-socket "$AK_HOOK_SOCK" \\
   -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\
@@ -68,10 +68,10 @@ exit 0
  * Status line: Claude Code runs it with a JSON description of the session, which includes
  * the plan usage limits (5-hour and weekly) on Pro and Max plans. It passes those to the
  * server in the background, then runs the user's own status line command with the same
- * input, so the terminal looks as it would without AgentK Local.
+ * input, so the terminal looks as it would without AgentK.
  */
 const STATUSLINE_SCRIPT = `#!/bin/sh
-# Written by agent-k-local. Reports plan usage limits, then prints the user's status line.
+# Written by AgentK. Reports plan usage limits, then prints the user's status line.
 input=$(cat)
 if [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ]; then
   case $input in

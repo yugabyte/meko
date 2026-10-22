@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -13,6 +13,10 @@ import { fileURLToPath } from 'node:url';
  * Versions before the session host ran sessions in tmux, in a tmux service. Its Claudes must never
  * run while the host runs them too, so the server refuses to start while it's installed, and
  * `install` and `uninstall` remove it (`removeLegacyTmux`), which ends them.
+ *
+ * Until the rename to AgentK the services were named agent-k-local (`agent-k-local.service`,
+ * `com.yugabyte.agent-k-local`). A service installed under its old name keeps it, and `id` and
+ * `file` name it, until `install` moves it to its new one (`dropOldName`).
  */
 export type Service = 'server' | 'host';
 
@@ -31,13 +35,17 @@ export interface BootCheck {
 
 export interface ServiceManager {
   readonly kind: 'systemd' | 'launchd';
-  /** The unit name or job label, as typed into systemctl or launchctl. */
+  /** The unit name or job label, as typed into systemctl or launchctl: its old one while it's installed under that. */
   id(s: Service): string;
   /** Where the unit file or property list lives. */
   file(s: Service): string;
   /** Throws a ServiceError when this host can't run the services, saying how to fix it. */
   preflight(): void;
   installed(s: Service): boolean;
+  /** Whether the service is installed under its name from before the rename to AgentK. */
+  oldName(s: Service): boolean;
+  /** Stops the service installed under its old name and deletes its file, so the next `install` writes it under its new one. */
+  dropOldName(s: Service): void;
   /**
    * Writes both service files and starts them. A running host is never
    * restarted (that would end every session); the server always is, so a
@@ -93,6 +101,11 @@ const sleepSync = (ms: number) => void Atomics.wait(new Int32Array(new SharedArr
 // Linux: systemd user units
 
 const SYSTEMD_UNITS: Record<Service, string> = {
+  server: 'agentk.service',
+  host: 'agentk-host.service',
+};
+/** The units' names before the rename to AgentK. */
+const SYSTEMD_OLD_UNITS: Record<Service, string> = {
   server: 'agent-k-local.service',
   host: 'agent-k-local-host.service',
 };
@@ -110,11 +123,22 @@ export class SystemdServices implements ServiceManager {
   ) {}
 
   id(s: Service): string {
-    return SYSTEMD_UNITS[s];
+    return this.oldName(s) ? SYSTEMD_OLD_UNITS[s] : SYSTEMD_UNITS[s];
   }
 
   private dir(): string {
     return join(this.env.XDG_CONFIG_HOME || join(this.home, '.config'), 'systemd', 'user');
+  }
+
+  oldName(s: Service): boolean {
+    return !existsSync(join(this.dir(), SYSTEMD_UNITS[s])) && existsSync(join(this.dir(), SYSTEMD_OLD_UNITS[s]));
+  }
+
+  dropOldName(s: Service): void {
+    if (!this.oldName(s)) return;
+    this.run('systemctl', ['--user', 'disable', '--now', SYSTEMD_OLD_UNITS[s]]);
+    rmSync(join(this.dir(), SYSTEMD_OLD_UNITS[s]), { force: true });
+    this.run('systemctl', ['--user', 'daemon-reload']);
   }
 
   file(s: Service): string {
@@ -159,6 +183,8 @@ export class SystemdServices implements ServiceManager {
 
   remove(): void {
     for (const s of ['server', 'host'] as const) {
+      // Both names, should a service be installed under each.
+      if (this.oldName(s)) this.dropOldName(s);
       this.run('systemctl', ['--user', 'disable', '--now', this.id(s)]);
       if (existsSync(this.file(s))) unlinkSync(this.file(s));
     }
@@ -187,7 +213,7 @@ export class SystemdServices implements ServiceManager {
       ok: false,
       label,
       detail: `no: couldn't enable lingering (${en.err || 'permission denied'}).`,
-      note: `Without it, AgentK Local only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`,
+      note: `Without it, AgentK only runs while you're logged in. Ask an admin: sudo loginctl enable-linger ${user}`,
     };
   }
 
@@ -200,6 +226,11 @@ export class SystemdServices implements ServiceManager {
 // macOS: LaunchAgents in the gui/<uid> domain
 
 const LAUNCHD_LABELS: Record<Service, string> = {
+  server: 'com.yugabyte.agentk',
+  host: 'com.yugabyte.agentk.host',
+};
+/** The jobs' labels before the rename to AgentK. */
+const LAUNCHD_OLD_LABELS: Record<Service, string> = {
   server: 'com.yugabyte.agent-k-local',
   host: 'com.yugabyte.agent-k-local.host',
 };
@@ -222,7 +253,21 @@ export class LaunchdServices implements ServiceManager {
   ) {}
 
   id(s: Service): string {
-    return LAUNCHD_LABELS[s];
+    return this.oldName(s) ? LAUNCHD_OLD_LABELS[s] : LAUNCHD_LABELS[s];
+  }
+
+  private plist(label: string): string {
+    return join(this.home, 'Library', 'LaunchAgents', `${label}.plist`);
+  }
+
+  oldName(s: Service): boolean {
+    return !existsSync(this.plist(LAUNCHD_LABELS[s])) && existsSync(this.plist(LAUNCHD_OLD_LABELS[s]));
+  }
+
+  dropOldName(s: Service): void {
+    if (!this.oldName(s)) return;
+    this.unloadLabel(LAUNCHD_OLD_LABELS[s]);
+    rmSync(this.plist(LAUNCHD_OLD_LABELS[s]), { force: true });
   }
 
   private domain(): string {
@@ -234,7 +279,7 @@ export class LaunchdServices implements ServiceManager {
   }
 
   file(s: Service): string {
-    return join(this.home, 'Library', 'LaunchAgents', `${this.id(s)}.plist`);
+    return this.plist(this.id(s));
   }
 
   preflight(): void {
@@ -323,6 +368,7 @@ export class LaunchdServices implements ServiceManager {
 
   remove(): void {
     for (const s of ['server', 'host'] as const) {
+      if (this.oldName(s)) this.dropOldName(s);
       this.unload(s);
       if (existsSync(this.file(s))) unlinkSync(this.file(s));
     }
@@ -357,6 +403,24 @@ export class LaunchdServices implements ServiceManager {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Before `install` writes the services, drops the ones installed under their names from before the
+ * rename to AgentK, so they're written under their new ones: the server's always (`install`
+ * restarts it anyway), the host's only while it isn't running, since stopping it would end every
+ * session. A running host keeps its old name, which the server's unit then names, until it stops.
+ * Returns each move, old name first.
+ */
+export function dropOldNames(svc: ServiceManager): [string, string][] {
+  const moved: [string, string][] = [];
+  for (const s of SERVICES) {
+    if (!svc.oldName(s) || (s === 'host' && svc.state('host').running)) continue;
+    const old = svc.id(s);
+    svc.dropOldName(s);
+    moved.push([old, svc.id(s)]);
+  }
+  return moved;
+}
 
 /** The service manager for this host, or null where we have none. */
 export function hostServices(platform: NodeJS.Platform = process.platform): ServiceManager | null {
@@ -407,15 +471,31 @@ export interface TemplateVars {
   HOST: string;
 }
 
-/** Fills in @AK_HOME@ and @HOST@ (XML-escaped in property lists). */
-export function renderTemplate(template: string, kind: ServiceManager['kind'], vars: TemplateVars): string {
-  const esc = kind === 'launchd' ? xmlEscape : (s: string) => s;
-  return template.replaceAll('@AK_HOME@', esc(vars.AK_HOME)).replaceAll('@HOST@', esc(vars.HOST));
+/** The services' names a template refers to: the ones they're installed under (`ServiceManager.id`). */
+interface ServiceIds {
+  SERVER_ID: string;
+  HOST_ID: string;
 }
+
+/** Fills in @AK_HOME@, @HOST@ and the services' ids (XML-escaped in property lists). */
+export function renderTemplate(template: string, kind: ServiceManager['kind'], vars: TemplateVars & Partial<ServiceIds>): string {
+  const esc = kind === 'launchd' ? xmlEscape : (s: string) => s;
+  let out = template;
+  for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`@${k}@`, esc(v));
+  return out;
+}
+
+/** The template files in packaging/<kind>/, by their new names whatever a service is installed under. */
+const TEMPLATES: Record<ServiceManager['kind'], Record<Service, string>> = {
+  systemd: SYSTEMD_UNITS,
+  launchd: { server: `${LAUNCHD_LABELS.server}.plist`, host: `${LAUNCHD_LABELS.host}.plist` },
+};
 
 /** Renders both service files from the templates shipped in packaging/<kind>/. */
 export function renderServiceFiles(svc: ServiceManager, vars: TemplateVars): Record<Service, string> {
-  const dir = templatesDir(svc.kind, basename(svc.file('server')));
-  const one = (s: Service) => renderTemplate(readFileSync(join(dir, basename(svc.file(s))), 'utf8'), svc.kind, vars);
+  const names = TEMPLATES[svc.kind];
+  const dir = templatesDir(svc.kind, names.server);
+  const ids = { SERVER_ID: svc.id('server'), HOST_ID: svc.id('host') };
+  const one = (s: Service) => renderTemplate(readFileSync(join(dir, names[s]), 'utf8'), svc.kind, { ...vars, ...ids });
   return { server: one('server'), host: one('host') };
 }

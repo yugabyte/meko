@@ -1,5 +1,5 @@
 {
-  "name": "agent-k-local",
+  "name": "agentk",
   "version": "0.0.0-dev",
   "description": "Self-hosted web workbench for Claude Code: projects, worktree-per-session, Meko datapacks",
   "license": "Apache-2.0",
@@ -9,7 +9,7 @@
     "node": ">=22.13"
   },
   "bin": {
-    "agent-k-local": "dist/server/cli.js"
+    "agentk": "dist/server/cli.js"
   },
   "scripts": {
     "dev": "concurrently -k -n server,web \"npm:dev:server\" \"npm:dev:web\"",

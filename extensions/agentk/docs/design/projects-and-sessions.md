@@ -1,6 +1,6 @@
 # Projects, worktrees and sessions
 
-Part of the [AgentK Local design](../design.md).
+Part of the [AgentK design](../design.md).
 
 A **project** is an effort to build or improve a feature, product or service. It works in a git
 repository on the host, picked from your repos folder (`~/code`), cloned into it, or made new there at creation.
