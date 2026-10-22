@@ -204,6 +204,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	_, tok, _ := run("token", "--data-dir", dir)
 	home, _ := os.UserHomeDir()
+	// An install from before the rename to AgentK, found by its old command.
 	ak := filepath.Join(home, ".local", "bin", "agent-k-local")
 	log := fakeExtension(t, ak)
 	code, out, errs = run("install_extension", "agentk", "--data-dir", dir)
@@ -235,10 +236,11 @@ func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	home, _ := os.UserHomeDir()
 	argsFile := filepath.Join(home, "installer-args")
-	// The installer puts agent-k-local in ~/.local/bin, as AgentK's does.
+	// The installer puts agentk in ~/.local/bin, and agent-k-local, its old name, as AgentK's does.
 	installer := fmt.Sprintf("#!/bin/sh\n# --meko-url\necho \"$*\" > %q\nmkdir -p \"$HOME/.local/bin\"\n"+
-		"printf '#!/bin/sh\\n' > \"$HOME/.local/bin/agent-k-local\"\n"+
-		"chmod 700 \"$HOME/.local/bin/agent-k-local\"\n", argsFile)
+		"printf '#!/bin/sh\\n' > \"$HOME/.local/bin/agentk\"\n"+
+		"chmod 700 \"$HOME/.local/bin/agentk\"\n"+
+		"ln -s agentk \"$HOME/.local/bin/agent-k-local\"\n", argsFile)
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -267,7 +269,7 @@ func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
 		t.Errorf("installer got %q", got)
 	}
 	reg, _ := extensions.Load(dir)
-	if reg.Entries["agentk"].Command != filepath.Join(home, ".local", "bin", "agent-k-local") {
+	if reg.Entries["agentk"].Command != filepath.Join(home, ".local", "bin", "agentk") {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 }

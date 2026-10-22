@@ -38,7 +38,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
 | Agents | A session runs on Claude Code or Kiro CLI, picked when it starts (default in Settings). Neither is required: AgentK installs and runs with either one, and says what to install when there's none. Everything Claude-specific sits behind one adapter per CLI; features only Claude Code has (the mod, Artifact designs, the 5-hour and weekly limits) stay with it; the rail shows Kiro's plan credits instead. Codex and Cursor CLI later. |
-| Process host | AgentK's own session host (`agent-k-local host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
+| Process host | AgentK's own session host (`agentk host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
 | Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL or start a new one there. |
 | Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
@@ -72,7 +72,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Integrations | Meko MCP over HTTP (optional) and its REST API for sharing, Claude Code hooks, git worktrees | Meko holds projects' datapacks when it's on. The hooks and git are thin adapters. |
 | Release | GitHub Actions, date-based versions, artifact attestations | Versioning and supply-chain checks with no extra tooling. |
 
-*Escape hatch:* `ssh host -t agent-k-local attach fix-retry-backoff` attaches to any session from
+*Escape hatch:* `ssh host -t agentk attach fix-retry-backoff` attaches to any session from
 iTerm (`Ctrl+\` detaches).
 
 ## Milestones

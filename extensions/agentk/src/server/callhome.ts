@@ -435,7 +435,7 @@ async function probeVersion(probe: Probe, cmd: string, args: string[], re: RegEx
 /** Which service manager runs this server, from what systemd and launchd put in its environment. */
 function serviceKind(): CallHomeInstall['service'] {
   if (process.platform === 'linux' && process.env.INVOCATION_ID) return 'systemd';
-  if (process.platform === 'darwin' && process.env.XPC_SERVICE_NAME?.includes('agent-k-local')) return 'launchd';
+  if (process.platform === 'darwin' && /com\.yugabyte\.(agentk|agent-k-local)\b/.test(process.env.XPC_SERVICE_NAME ?? '')) return 'launchd';
   return 'none';
 }
 

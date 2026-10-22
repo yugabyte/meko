@@ -18,11 +18,19 @@ between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project mem
 is in [docs/design.md](docs/design.md): an index, with one file per area under `docs/design/`.
 
 **Naming:** the product is **AgentK** (it was AgentK Local until October 2026) in anything people
-read (UI, docs, messages). The identifier `agent-k-local` stays in the repo name, the CLI command,
-`~/.agent-k-local`, the systemd units and launchd labels, tarball names, the npm package and the
-`client` AgentK names to Meko. Strings AgentK wrote under the old name and reads back still match
-it: project datapack descriptions (`AgentK Local project "…"`, `src/shared/datapacks.ts`) and the
-mark on the Kiro agents it writes (`src/server/kiro.ts`).
+read (UI, docs, messages), and `agentk` names the command, the npm package, the release tarballs
+(`agentk-<version>-…`), the systemd units (`agentk.service`, `agentk-host.service`) and the launchd
+labels (`com.yugabyte.agentk`, `.host`). What installs from before the rename still have keeps
+working: every release also ships its tarball as `agent-k-local-<version>-…` with
+`bin/agent-k-local` linked to `bin/agentk` (`scripts/package-release.sh`), the installer links
+both commands (and the server adds `agentk` beside an old link: `src/server/cmdlink.ts`), and a
+service keeps its old name until `agentk install` moves it (`dropOldNames` in `src/server/service.ts`).
+`agent-k-local` itself stays in the repo name, `~/.agent-k-local` (moving it is #236), the
+socket and state folders, and every id AgentK gives Meko (its agent id, conversation keys, the
+`source` of its memories, its upload `client`), which name what's stored there. Strings AgentK wrote
+under the old product name and reads back still match it: project datapack descriptions (`AgentK
+Local project "…"`, `src/shared/datapacks.ts`) and the mark on the Kiro agents it writes
+(`src/server/kiro.ts`).
 
 ## Commands
 
@@ -52,20 +60,20 @@ agents should read it before changing code there.
 | `src/shared/stages.ts` | The rules for moving a session by hand: where a task can move, what can't be moved, where the move dialog starts, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. |
 | `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/shared/branches.ts` | The branch prefix setting's `{login}` (`expandBranchPrefix`: gh's login, or left out with its joiner when gh can't say) and the default, `ak_{login}/`. Used by the server and the web UI. |
-| `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `agent-k-local attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
+| `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `agentk attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
 | `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out, and Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
 | `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot, and with the call's content for the Meko call log while the project keeps one), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
-| `scripts/install.sh` | The installer: stops early where AgentK is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, and a coding agent when neither Claude Code nor Kiro CLI is there: it asks which, or `--agent`) after asking, checks each agent's sign-in, downloads and verifies the newest AgentK release (found by its tag, `agentk-v…` or `v…`: the repo's latest release is Meko's), then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
+| `scripts/install.sh` | The installer: stops early where AgentK is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, and a coding agent when neither Claude Code nor Kiro CLI is there: it asks which, or `--agent`) after asking, checks each agent's sign-in, downloads and verifies the newest AgentK release (found by its tag, `agentk-v…` or `v…`: the repo's latest release is Meko's), then runs `agentk install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
 | `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, and (at the repo root, running from `extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release/release-notes.sh` decides which types and components release each product (AgentK or Meko, `--product`; `scripts/release/product.sh` names each one's tags and components); their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`; `test/unit/release-scripts.test.ts` tests what each product counts (versions, notes, pruning). The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../…`) runs AgentK's job, and that the `CI gate` job needs every other job. |
 | `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 | `docs/` | The design: [docs/design.md](docs/design.md) is its index (the decisions so far, and which part covers what), with one file per area under `docs/design/`. Also the usage report's schema (`call-home-report.schema.json`) and the screenshots. |
 
 ## Invariants (don't break these)
 
-1. **Sessions survive the server.** The session host runs in its own service (`agent-k-local-host.service`
-   on Linux, the `com.yugabyte.agent-k-local.host` LaunchAgent on macOS). Never start the host or a session's
+1. **Sessions survive the server.** The session host runs in its own service (`agentk-host.service`
+   on Linux, the `com.yugabyte.agentk.host` LaunchAgent on macOS). Never start the host or a session's
    Claude as children of the server's service or process group (one-shot `claude` commands that end with
    their request, such as `--version`, `update` and Ask AgentK's `claude -p`, are the server's own). Server restarts and updates must never stop a
    session. Manage the services only through `service.ts`. When the host service is installed, the server

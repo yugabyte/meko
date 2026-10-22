@@ -122,7 +122,7 @@ describe('config and db', () => {
     cfg.meko.apiKey = 'k';
     saveConfig(paths, cfg);
     const text = readFileSync(paths.config, 'utf8');
-    expect(text).toMatch(/^# agent-k-local configuration/);
+    expect(text).toMatch(/^# AgentK configuration/);
     expect(text).toContain('depth = 2');
     expect(text).toContain('api_key = "k"');
     expect(text.slice(text.indexOf('\n\n'))).not.toMatch(/port|roots|\[server\]|\[tmux\]/);

@@ -153,9 +153,9 @@ describe('AgentK release tags', () => {
 
 describe('tarballName', () => {
   it('names the platform and CPU, this host\'s by default', () => {
-    expect(tarballName('0.20260925.1', 'x64', 'linux')).toBe('agent-k-local-0.20260925.1-linux-x64.tar.gz');
-    expect(tarballName('0.20260925.1', 'arm64', 'darwin')).toBe('agent-k-local-0.20260925.1-darwin-arm64.tar.gz');
-    expect(tarballName('1.0.0')).toBe(`agent-k-local-1.0.0-${process.platform}-${process.arch}.tar.gz`);
+    expect(tarballName('0.20260925.1', 'x64', 'linux')).toBe('agentk-0.20260925.1-linux-x64.tar.gz');
+    expect(tarballName('0.20260925.1', 'arm64', 'darwin')).toBe('agentk-0.20260925.1-darwin-arm64.tar.gz');
+    expect(tarballName('1.0.0')).toBe(`agentk-1.0.0-${process.platform}-${process.arch}.tar.gz`);
   });
 });
 
@@ -211,13 +211,13 @@ const noCompare: ReleaseSource['compare'] = async () => {
 /** Build a fake release tarball for `version` whose `selftest` exits with `code`. */
 function buildRelease(releaseDir: string, version: string, code = 0, corrupt = false, selftestSecs = 0): void {
   const stage = mkdtempSync(join(tmpdir(), 'ak-rel-'));
-  const top = join(stage, `agent-k-local-${version}`);
+  const top = join(stage, `agentk-${version}`);
   mkdirSync(join(top, 'bin'), { recursive: true });
-  writeFileSync(join(top, 'bin', 'agent-k-local'), `#!/bin/sh\n[ "$1" = selftest ] && { sleep ${selftestSecs}; exit ${code}; }\nexit 0\n`);
-  chmodSync(join(top, 'bin', 'agent-k-local'), 0o755);
+  writeFileSync(join(top, 'bin', 'agentk'), `#!/bin/sh\n[ "$1" = selftest ] && { sleep ${selftestSecs}; exit ${code}; }\nexit 0\n`);
+  chmodSync(join(top, 'bin', 'agentk'), 0o755);
   writeFileSync(join(top, 'VERSION'), version + '\n');
   const name = tarballName(version, 'x64');
-  execFileSync('tar', ['-czf', join(releaseDir, name), '-C', stage, `agent-k-local-${version}`]);
+  execFileSync('tar', ['-czf', join(releaseDir, name), '-C', stage, `agentk-${version}`]);
   rmSync(stage, { recursive: true, force: true });
   const digest = corrupt ? '0'.repeat(64) : sha(readFileSync(join(releaseDir, name)));
   writeFileSync(join(releaseDir, 'SHA256SUMS'), `${digest}  ${name}\n`);
@@ -382,7 +382,7 @@ describe('Updater', () => {
     expect(again).toEqual(s);
     expect(s.lastError).toBeNull();
     expect(readlinkSync(join(fx.paths.app, 'current'))).toBe(to);
-    expect(existsSync(join(fx.paths.app, to, 'bin', 'agent-k-local'))).toBe(true);
+    expect(existsSync(join(fx.paths.app, to, 'bin', 'agentk'))).toBe(true);
     const pending = JSON.parse(readFileSync(fx.paths.updatePending, 'utf8'));
     expect(pending).toMatchObject({ from: '0.1.0', to, attempts: 0 });
     expect(fx.snapshot).toHaveBeenCalledWith(join(fx.paths.home, 'state.db.bak-0.1.0'));
@@ -506,7 +506,7 @@ describe('Updater', () => {
     for (let i = 0; i < 100 && !existsSync(join(fx.paths.app, '0.2.0')); i++) await new Promise((r) => setTimeout(r, 20));
     u.markHealthy();
     await applying;
-    expect(existsSync(join(fx.paths.app, '0.2.0', 'bin', 'agent-k-local'))).toBe(true);
+    expect(existsSync(join(fx.paths.app, '0.2.0', 'bin', 'agentk'))).toBe(true);
     expect(readlinkSync(join(fx.paths.app, 'current'))).toBe('0.2.0');
     // Or it fires in the old version while it shuts down for the restart.
     u.markHealthy();
@@ -593,16 +593,19 @@ describe('Updater', () => {
 // ---------------------------------------------------------------------------
 
 describe('bin wrapper rollback', () => {
-  const wrapper = resolve(__dirname, '../../packaging/agent-k-local');
+  const wrapper = resolve(__dirname, '../../packaging/agentk');
   let root: string;
 
-  function fakeVersion(home: string, version: string, message: string): void {
+  /** A version as its tarball unpacks: bin/agentk with bin/agent-k-local linked to it, or with `old` (from before the rename to AgentK) only bin/agent-k-local. */
+  function fakeVersion(home: string, version: string, message: string, { old = false } = {}): void {
     const dir = join(home, 'app', version);
     mkdirSync(join(dir, 'bin'), { recursive: true });
     mkdirSync(join(dir, 'node', 'bin'), { recursive: true });
     mkdirSync(join(dir, 'lib', 'dist', 'server'), { recursive: true });
-    copyFileSync(wrapper, join(dir, 'bin', 'agent-k-local'));
-    chmodSync(join(dir, 'bin', 'agent-k-local'), 0o755);
+    const cmd = old ? 'agent-k-local' : 'agentk';
+    copyFileSync(wrapper, join(dir, 'bin', cmd));
+    chmodSync(join(dir, 'bin', cmd), 0o755);
+    if (!old) symlinkSync('agentk', join(dir, 'bin', 'agent-k-local'));
     symlinkSync(process.execPath, join(dir, 'node', 'bin', 'node'));
     writeFileSync(join(dir, 'VERSION'), version + '\n');
     writeFileSync(join(dir, 'lib', 'dist', 'server', 'cli.js'), `console.log(${JSON.stringify(message)}, process.env.AK_VERSION)\n`);
@@ -610,12 +613,13 @@ describe('bin wrapper rollback', () => {
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'ak-wrap-'));
-    fakeVersion(root, '0.1.0', 'old');
+    fakeVersion(root, '0.1.0', 'old', { old: true });
     fakeVersion(root, '0.2.0', 'new');
     symlinkSync('0.2.0', join(root, 'app', 'current'));
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+  // By its old name, as services installed before the rename to AgentK start it.
   const runServe = () =>
     execFileSync(join(root, 'app', 'current', 'bin', 'agent-k-local'), ['serve'], {
       encoding: 'utf8',
@@ -630,7 +634,7 @@ describe('bin wrapper rollback', () => {
     expect(existsSync(join(root, 'bad-versions'))).toBe(false);
   });
 
-  it('rolls back after the third failed start, saying so in server.log', () => {
+  it('rolls back after the third failed start, saying so in server.log, to a version from before the rename too', () => {
     writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 3 }));
     mkdirSync(join(root, 'logs'));
     expect(runServe()).toBe('old 0.1.0');
@@ -642,7 +646,7 @@ describe('bin wrapper rollback', () => {
 
   it('ignores the pending file for commands other than serve', () => {
     writeFileSync(join(root, 'update-pending.json'), JSON.stringify({ from: '0.1.0', to: '0.2.0', attempts: 2 }));
-    const out = execFileSync(join(root, 'app', 'current', 'bin', 'agent-k-local'), ['version'], {
+    const out = execFileSync(join(root, 'app', 'current', 'bin', 'agentk'), ['version'], {
       encoding: 'utf8',
       env: { ...process.env, AK_HOME: root },
     }).trim();

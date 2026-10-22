@@ -45,7 +45,7 @@ export function kiroGuardScriptPath(paths: Paths): string {
  * write go ahead when the server can't be reached.
  */
 const KIRO_GUARD_SCRIPT = `#!/bin/sh
-# Written by agent-k-local. Asks the server whether a Kiro file write may go ahead.
+# Written by AgentK. Asks the server whether a Kiro file write may go ahead.
 [ -n "$AK_HOOK_TOKEN" ] && [ -S "$AK_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
 reason=$(curl -sf --max-time 3 --unix-socket "$AK_HOOK_SOCK" \\
   -H "X-AK-Token: $AK_HOOK_TOKEN" -H "Content-Type: application/json" \\

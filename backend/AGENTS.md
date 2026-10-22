@@ -95,7 +95,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
   ports, never `~/.meko` or port 7778. They never touch the user's own service, Keychain or
   extensions: the CLI's tests set `HOME`, `MEKO_SECRETS=file`, a fake service manager and a PATH
-  without the machine's `agent-k-local`. Tests that need no model start the memory engine with the
+  without the machine's `agentk` (or `agent-k-local`, its old name). Tests that need no model start the memory engine with the
   hashing embedder (`memoryengine.Options.TestEmbedder`; the CLI's tests set it through their own
   `MEKO_TEST_EMBEDDER`, which only the test binary reads).
 - No third-party C code is copied here. SQLite and sqlite-vec come from a tag of the

@@ -65,11 +65,11 @@ in to the computer, so pick remote on a shared host.
 Run again where AgentK is already installed with its services set up, the installer says so
 and stops without changing anything. Newer releases are offered in AgentK itself (the Update
 banner, or the button in Settings). To change its setup (repos folder, access, port, Meko) or set
-up its services again, run `agent-k-local install`; to download and install it again, pass
-`--reinstall` (`… | sh -s -- --reinstall`). Options for `agent-k-local install`, like `--port`,
+up its services again, run `agentk install`; to download and install it again, pass
+`--reinstall` (`… | sh -s -- --reinstall`). Options for `agentk install`, like `--port`,
 also make it install again, so they're never dropped.
 
-Forgot your password? Run `agent-k-local setup-link` on the host and open the link it prints to
+Forgot your password? Run `agentk setup-link` on the host and open the link it prints to
 choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 
 If your home directory is shared with other hosts (over NFS, say), AgentK runs only on the
@@ -158,7 +158,7 @@ your phone can connect.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
-  `agent-k-local attach <session>` (`Ctrl+\` detaches).
+  `agentk attach <session>` (`Ctrl+\` detaches).
 - **Claude Code or Kiro, per session.** New sessions start on the default agent (Settings →
   Harness), or pick **Agent** under **Advanced** in New session once both Claude Code and
   [Kiro CLI](https://kiro.dev/cli/) 2.32 or later are installed and signed in (`kiro-cli login`).
@@ -277,13 +277,18 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 | Command | What it does |
 |---|---|
-| `agent-k-local status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
-| `agent-k-local stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
-| `agent-k-local logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
-| `agent-k-local setup-link` | A new one-time login link; also resets a lost password |
-| `agent-k-local uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
-| `agent-k-local attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
-| `agent-k-local host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
+| `agentk status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
+| `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
+| `agentk logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
+| `agentk setup-link` | A new one-time login link; also resets a lost password |
+| `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
+| `agentk attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
+| `agentk host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
+
+The command was `agent-k-local` before the rename to AgentK, and that name keeps working. An
+install from then gets `agentk` the next time its server starts after an update; its services keep
+their old names (`agent-k-local.service`, `com.yugabyte.agent-k-local`) until you run `agentk
+install`, which renames the server's at once and the session host's once the host isn't running.
 
 ## Develop
 

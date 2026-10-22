@@ -191,9 +191,12 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/smoke
-          tar -xzf out/*.tar.gz -C /tmp/smoke
-          v=$(/tmp/smoke/agent-k-local-*/bin/agent-k-local version)
+          tar -xzf out/agentk-*.tar.gz -C /tmp/smoke
+          v=$(/tmp/smoke/agentk-*/bin/agentk version)
           test "$v" = "$VERSION"
+          /tmp/smoke/agentk-*/bin/agentk selftest
+          # The copy under the old name, by the path installs from before the rename to AgentK run.
+          tar -xzf out/agent-k-local-*.tar.gz -C /tmp/smoke
           /tmp/smoke/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7
@@ -260,9 +263,12 @@ jobs:
           set -eu
           smoke="$RUNNER_TEMP/smoke"
           mkdir -p "$smoke"
-          tar -xzf out/*.tar.gz -C "$smoke"
-          v=$("$smoke"/agent-k-local-*/bin/agent-k-local version)
+          tar -xzf out/agentk-*.tar.gz -C "$smoke"
+          v=$("$smoke"/agentk-*/bin/agentk version)
           test "$v" = "$VERSION"
+          "$smoke"/agentk-*/bin/agentk selftest
+          # The copy under the old name, by the path installs from before the rename to AgentK run.
+          tar -xzf out/agent-k-local-*.tar.gz -C "$smoke"
           "$smoke"/agent-k-local-*/bin/agent-k-local selftest
 
       - uses: actions/upload-artifact@v7

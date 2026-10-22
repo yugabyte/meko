@@ -93,7 +93,7 @@ function run(args: string[], env: Record<string, string> = {}) {
   return runAll(['--deps-only', ...args], env);
 }
 
-/** Runs the whole installer, past the tools to the download and `agent-k-local install`. */
+/** Runs the whole installer, past the tools to the download and `agentk install`. */
 function runAll(args: string[], env: Record<string, string> = {}) {
   const r = spawnSync(join(bin, 'sh'), [SCRIPT, ...args], {
     env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '', ...env },
@@ -349,35 +349,45 @@ describe('install.sh: when AgentK is already installed', () => {
   const current = (h = akHome()) => readlinkSync(join(h, 'app', 'current'));
 
   /**
-   * An install of `version`: unpacked, linked as app/current and ~/.local/bin/agent-k-local, and
-   * set up (config.toml, and both services, as long as there's no `no-services` file).
+   * An install of `version`: unpacked, linked as app/current and as ~/.local/bin/agentk and
+   * agent-k-local, and set up (config.toml, and both services, as long as there's no `no-services`
+   * file). `old`: one from before the rename to AgentK, with only agent-k-local; `oldServices`: its
+   * services still under their old names.
    */
-  function installed(version: string, h = akHome()) {
+  function installed(version: string, h = akHome(), { old = false, oldServices = old }: { old?: boolean; oldServices?: boolean } = {}) {
     mkdirSync(join(h, 'app', version, 'bin'), { recursive: true });
-    stub(join(h, 'app', version, 'bin'), 'agent-k-local', 'exit 0');
+    stub(join(h, 'app', version, 'bin'), old ? 'agent-k-local' : 'agentk', 'exit 0');
     symlinkSync(version, join(h, 'app', 'current'));
     writeFileSync(join(h, 'config.toml'), '');
     mkdirSync(join(home, '.local', 'bin'), { recursive: true });
-    symlinkSync(join(h, 'app', 'current', 'bin', 'agent-k-local'), join(home, '.local', 'bin', 'agent-k-local'));
+    for (const c of old ? ['agent-k-local'] : ['agentk', 'agent-k-local']) {
+      symlinkSync(join(h, 'app', 'current', 'bin', c), join(home, '.local', 'bin', c));
+    }
     const services = `[ -f "${root}/no-services" ] && exit 1`;
-    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled agent-k-local.service" ] || [ "$*" = "--user is-enabled agent-k-local-host.service" ] || exit 1; ${services}; echo enabled`);
-    stub(bin, 'launchctl', `case $2 in gui/1000/com.yugabyte.agent-k-local|gui/1000/com.yugabyte.agent-k-local.host) ;; *) exit 1 ;; esac; ${services}; exit 0`);
+    const [unit, label] = oldServices ? ['agent-k-local', 'com.yugabyte.agent-k-local'] : ['agentk', 'com.yugabyte.agentk'];
+    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled ${unit}.service" ] || [ "$*" = "--user is-enabled ${unit}-host.service" ] || exit 1; ${services}; echo enabled`);
+    stub(bin, 'launchctl', `case $2 in gui/1000/${label}|gui/1000/${label}.host) ;; *) exit 1 ;; esac; ${services}; exit 0`);
   }
 
   /**
    * Release `version` of AgentK under `tag`, as `gh release download` (or curl) hands it out,
    * listed after a newer Meko release, a prerelease and a draft (the repo's latest is Meko's).
+   * Its tarball is agentk-<version>-…, or with `old` agent-k-local-<version>-…, the only one a
+   * release from before the rename to AgentK has.
    */
-  function release(version: string, tag = `v${version}`) {
-    const dir = join(repo, 'ak', `agent-k-local-${version}`);
+  function release(version: string, tag = `v${version}`, { old = false } = {}) {
+    const name = old ? 'agent-k-local' : 'agentk';
+    const dir = join(repo, 'ak', `${name}-${version}`);
     mkdirSync(join(dir, 'bin'), { recursive: true });
     mkdirSync(join(dir, 'node', 'bin'), { recursive: true });
-    stub(join(dir, 'bin'), 'agent-k-local', `echo "agent-k-local $*" >> "${log}"`);
+    stub(join(dir, 'bin'), name, `echo "${name} $*" >> "${log}"`);
+    if (!old) symlinkSync('agentk', join(dir, 'bin', 'agent-k-local'));
     // Stands in for the bundled Node renaming app/current.tmp over app/current.
     stub(join(dir, 'node', 'bin'), 'node', 'ln -sfn "$(readlink "$3")" "$4" && rm "$3"');
-    const tarball = `agent-k-local-${version}-linux-x64.tar.gz`;
+    const tarball = `${name}-${version}-linux-x64.tar.gz`;
+    rmSync(join(repo, 'release-ak'), { recursive: true, force: true });
     mkdirSync(join(repo, 'release-ak'), { recursive: true });
-    execFileSync('tar', ['-czf', join(repo, 'release-ak', tarball), `agent-k-local-${version}`], { cwd: join(repo, 'ak') });
+    execFileSync('tar', ['-czf', join(repo, 'release-ak', tarball), `${name}-${version}`], { cwd: join(repo, 'ak') });
     const digest = createHash('sha256').update(readFileSync(join(repo, 'release-ak', tarball))).digest('hex');
     writeFileSync(join(repo, 'release-ak', 'SHA256SUMS'), `${digest}  ${tarball}\n`);
     writeFileSync(join(repo, 'release-ak.tag'), tag);
@@ -415,14 +425,42 @@ exit 0`);
     expect(r.err).toContain('AgentK is already installed, so nothing was changed');
     expect(r.err).toContain('Update banner or button');
     // ~/.local/bin isn't on this PATH, so the commands are shown with it.
-    expect(r.err).toContain('~/.local/bin/agent-k-local status');
+    expect(r.err).toContain('~/.local/bin/agentk status');
     expect(r.err).toContain('--output - | sh -s -- --reinstall');
     expect(r.calls).toEqual([]);
     expect(current()).toBe('1.2.3');
 
     const onPath = runAll([], { PATH: `${bin}:${join(home, '.local', 'bin')}` });
     expect(onPath.code).toBe(0);
-    expect(onPath.err).toMatch(/Status\S* +agent-k-local status/);
+    expect(onPath.err).toMatch(/Status\S* +agentk status/);
+  });
+
+  it('counts services still under their names from before the rename to AgentK as set up', () => {
+    rmSync(join(akHome(), 'app'), { recursive: true });
+    rmSync(join(home, '.local', 'bin'), { recursive: true });
+    installed('1.2.3', akHome(), { oldServices: true });
+    const r = runAll([]);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('AgentK is already installed');
+  });
+
+  it('installs an install from before the rename to AgentK again, which adds the agentk command', () => {
+    rmSync(join(akHome(), 'app'), { recursive: true });
+    rmSync(join(home, '.local', 'bin'), { recursive: true });
+    installed('1.2.3', akHome(), { old: true });
+    const r = runAll(['--non-interactive']);
+    expect(r.err).not.toContain('already installed');
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain('agentk install --non-interactive');
+    for (const c of ['agentk', 'agent-k-local']) expect(readlinkSync(join(home, '.local', 'bin', c))).toBe(join(akHome(), 'app', 'current', 'bin', c));
+  });
+
+  it("installs a release from before the rename to AgentK by its tarball's old name", () => {
+    release('1.2.0', 'v1.2.0', { old: true });
+    const r = runAll(['--version', '1.2.0', '--non-interactive']);
+    expect(r.code, r.err).toBe(0);
+    expect(current()).toBe('1.2.0');
+    expect(r.calls).toContain('agent-k-local install --non-interactive');
   });
 
   it('stops before the tools, even with tools missing and --install-deps', () => {
@@ -439,7 +477,7 @@ exit 0`);
     expect(r.err).not.toContain('already installed');
     expect(r.code).toBe(0);
     expect(downloads(r.calls)).toHaveLength(2);
-    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(r.calls).toContain('agentk install --non-interactive');
     expect(current()).toBe('1.2.4');
   });
 
@@ -449,12 +487,13 @@ exit 0`);
     expect(same.err).toContain('AgentK is already installed');
     expect(same.calls).toEqual([]);
 
-    // Either tag scheme's: agentk-v first, then v.
+    // Either tag scheme's: agentk-v first, then v; each with the tarball's name, then its old one.
     const other = runAll(['--version', '1.2.4']);
     expect(other.code).toBe(0);
     expect(downloads(other.calls)).toEqual([
-      expect.stringMatching(/^gh release download agentk-v1\.2\.4 /),
-      expect.stringMatching(/^gh release download v1\.2\.4 /),
+      expect.stringMatching(/^gh release download agentk-v1\.2\.4 .*--pattern agentk-1\.2\.4-/),
+      expect.stringMatching(/^gh release download agentk-v1\.2\.4 .*--pattern agent-k-local-1\.2\.4-/),
+      expect.stringMatching(/^gh release download v1\.2\.4 .*--pattern agentk-1\.2\.4-/),
     ]);
     expect(current()).toBe('1.2.4');
   });
@@ -474,7 +513,7 @@ exit 0`);
   it.each([
     // An install that failed at its services, or was uninstalled.
     ["the services aren't set up", () => writeFileSync(join(root, 'no-services'), '')],
-    ['~/.local/bin/agent-k-local is gone', () => rmSync(join(home, '.local', 'bin', 'agent-k-local'))],
+    ['~/.local/bin/agentk is gone', () => rmSync(join(home, '.local', 'bin', 'agentk'))],
     // An install that stopped before its setup was saved.
     ['config.toml is missing', () => rmSync(join(akHome(), 'config.toml'))],
   ])('installs again when %s', (_, breakIt) => {
@@ -482,16 +521,16 @@ exit 0`);
     const r = runAll(['--non-interactive']);
     expect(r.err).not.toContain('already installed');
     expect(r.code).toBe(0);
-    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(r.calls).toContain('agentk install --non-interactive');
     expect(current()).toBe('1.2.4');
-    expect(existsSync(join(home, '.local', 'bin', 'agent-k-local'))).toBe(true);
+    expect(existsSync(join(home, '.local', 'bin', 'agentk'))).toBe(true);
   });
 
-  it('passes options for agent-k-local install on rather than dropping them', () => {
+  it('passes options for agentk install on rather than dropping them', () => {
     const r = runAll(['--non-interactive', '--port', '8443', '--no-meko']);
     expect(r.err).not.toContain('already installed');
     expect(r.code).toBe(0);
-    expect(r.calls).toContain("agent-k-local install --non-interactive --port 8443 --no-meko");
+    expect(r.calls).toContain("agentk install --non-interactive --port 8443 --no-meko");
   });
 
   it('checks the LaunchAgents on a Mac', () => {
@@ -511,7 +550,7 @@ exit 0`);
     const other = join(root, 'other-home');
     const r = runAll(['--non-interactive'], { AK_HOME: other });
     expect(r.code).toBe(0);
-    expect(r.calls).toContain('agent-k-local install --non-interactive');
+    expect(r.calls).toContain('agentk install --non-interactive');
     expect(current(other)).toBe('1.2.4');
     expect(current()).toBe('1.2.3');
   });

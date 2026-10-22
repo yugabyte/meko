@@ -5,19 +5,24 @@
 #
 # Expects `npm run build` and `npm prune --omit=dev` to have run in extensions/agentk, on the
 # platform the tarball is for (node-pty is compiled natively). Produces
-# <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz containing:
+# <out-dir>/agentk-<version>-<linux|darwin>-<arch>.tar.gz containing:
 #
-#   agent-k-local-<version>/
-#     bin/agent-k-local        POSIX sh wrapper (packaging/agent-k-local)
+#   agentk-<version>/
+#     bin/agentk               POSIX sh wrapper (packaging/agentk)
+#     bin/agent-k-local        a link to it: its name before the rename, which older services start
 #     node/bin/node            bundled Node runtime
 #     node/LICENSE
 #     lib/package.json
 #     lib/dist/                compiled server + web assets, and AgentK's mod for Claude Code (dist/mod)
 #     lib/node_modules/        production dependencies only
-#     lib/packaging/systemd/   service templates used by `agent-k-local install` (Linux)
-#     lib/packaging/launchd/   service templates used by `agent-k-local install` (macOS)
+#     lib/packaging/systemd/   service templates used by `agentk install` (Linux)
+#     lib/packaging/launchd/   service templates used by `agentk install` (macOS)
 #     VERSION
 #     CALL_HOME_URL            the usage stats collector, when AK_CALL_HOME_URL is set
+#
+# and the same files as <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz, in
+# agent-k-local-<version>/: the name and layout the updaters and installers from before the rename
+# look for, so those installs still update.
 set -eu
 
 if [ $# -ne 4 ]; then
@@ -46,14 +51,15 @@ for p in "$repo/dist/server/cli.js" "$repo/dist/web/index.html" "$repo/dist/mod/
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
 
-name="agent-k-local-$version"
+name="agentk-$version"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
 
 mkdir -p "$root/bin" "$root/node/bin" "$root/lib/packaging"
-cp "$repo/packaging/agent-k-local" "$root/bin/agent-k-local"
-chmod 755 "$root/bin/agent-k-local"
+cp "$repo/packaging/agentk" "$root/bin/agentk"
+chmod 755 "$root/bin/agentk"
+ln -s agentk "$root/bin/agent-k-local"
 
 cp "$node_dir/bin/node" "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"
@@ -95,4 +101,7 @@ mkdir -p "$out_dir"
 tarball="$out_dir/$name-$platform-$arch.tar.gz"
 # COPYFILE_DISABLE keeps macOS tar from adding ._ metadata files.
 COPYFILE_DISABLE=1 tar -C "$stage" -czf "$tarball" "$name"
+old="agent-k-local-$version"
+mv "$root" "$stage/$old"
+COPYFILE_DISABLE=1 tar -C "$stage" -czf "$out_dir/$old-$platform-$arch.tar.gz" "$old"
 echo "$tarball"

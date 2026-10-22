@@ -1,5 +1,5 @@
 [Unit]
-Description=agent-k-local session host (holds every Claude session)
+Description=AgentK session host (holds every Claude session)
 Documentation=https://github.com/yugabyte/agent-k-local
 # The home can be on a shared (NFS) file system that other hosts mount: run only on the
 # host this was installed on, or every host you log into starts its own server on it.
@@ -11,7 +11,7 @@ Type=simple
 Environment=AK_HOME=@AK_HOME@
 # Runs the version that was current when it started, and keeps running across updates:
 # restarting it ends every Claude session (the server resumes them).
-ExecStart=@AK_HOME@/app/current/bin/agent-k-local host
+ExecStart=@AK_HOME@/app/current/bin/agentk host
 Restart=always
 RestartSec=2
 # 75: another host already runs on this home; restarting won't help.

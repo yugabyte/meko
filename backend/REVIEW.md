@@ -54,7 +54,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
       (`MEKO_MODELS_OFFLINE`), and
       `scripts/smoke-release.sh` passes on each platform.
-- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `agent-k-local`.
+- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `agentk`.
 - [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
       temporary name and renamed before their row commits, removed after it's deleted; their text
       never reaches a log or an error reply.

@@ -68,3 +68,27 @@ func TestFindCommandLooksInLocalBin(t *testing.T) {
 		t.Fatalf("found %q", got)
 	}
 }
+
+func TestCatalogFindsTheCommandByAnOldName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	put := func(name string) {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: test
+			t.Fatal(err)
+		}
+	}
+	ak := Known["agentk"]
+	// An AgentK from before the rename has only agent-k-local; a newer one has agentk too.
+	put("agent-k-local")
+	if got := ak.Find(home); got != filepath.Join(bin, "agent-k-local") {
+		t.Fatalf("found %q", got)
+	}
+	put("agentk")
+	if got := ak.Find(home); got != filepath.Join(bin, "agentk") {
+		t.Fatalf("found %q", got)
+	}
+}

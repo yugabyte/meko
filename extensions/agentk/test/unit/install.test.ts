@@ -44,12 +44,12 @@ describe('service failures', () => {
 
   it('say what to check and how to skip the services', () => {
     const mac = serviceFailure(new LaunchdServices(ok, '/Users/me', 501), 'launchctl bootstrap … failed: Bootstrap failed: 5', '/Users/me/.agent-k-local/logs');
-    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.agent-k-local and ');
+    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.agentk and ');
     expect(mac).toMatch(/logs\/launchd\*\.log\./);
     expect(mac).toContain('--no-service');
 
-    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart agent-k-local.service failed', '/home/me/.agent-k-local/logs');
-    expect(linux).toContain('Check: systemctl --user status agent-k-local.service.\n');
+    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart agentk.service failed', '/home/me/.agent-k-local/logs');
+    expect(linux).toContain('Check: systemctl --user status agentk.service.\n');
     expect(linux).not.toContain('launchd');
   });
 });
@@ -164,7 +164,7 @@ describe('uninstall --purge', () => {
 });
 
 describe('server PATH', () => {
-  it('adds ~/.local/bin (where the installer puts agent-k-local and gh) once', async () => {
+  it('adds ~/.local/bin (where the installer puts agentk and gh) once', async () => {
     const { withLocalBin } = await import('../../src/server/paths.js');
     expect(withLocalBin('/usr/bin:/bin', '/home/me')).toBe('/usr/bin:/bin:/home/me/.local/bin');
     expect(withLocalBin('/home/me/.local/bin:/usr/bin', '/home/me')).toBe('/home/me/.local/bin:/usr/bin');
@@ -208,6 +208,6 @@ describe('the Access question', () => {
 describe('CLI labels', () => {
   it('always leave a space before the detail, even when the label is long', () => {
     expect(pad('Meko')).toBe('Meko'.padEnd(14));
-    expect(pad('com.yugabyte.agent-k-local.host')).toBe('com.yugabyte.agent-k-local.host ');
+    expect(pad('com.yugabyte.agentk.host')).toBe('com.yugabyte.agentk.host ');
   });
 });

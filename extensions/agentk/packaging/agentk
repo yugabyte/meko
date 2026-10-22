@@ -1,5 +1,6 @@
 #!/bin/sh
-# agent-k-local launcher, installed as <AK_HOME>/app/<version>/bin/agent-k-local.
+# AgentK launcher, installed as <AK_HOME>/app/<version>/bin/agentk (and as bin/agent-k-local, its
+# name before the rename to AgentK, which services installed then still start).
 #
 # Runs the bundled Node on the bundled server. For `serve`, it also handles
 # rollback after a bad self-update: the updater writes update-pending.json
@@ -51,9 +52,12 @@ if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
     from=${rest%% *}
     to=${rest#* }
     failed=$((attempts - 1))
-    if [ "$failed" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
+    # A version from before the rename to AgentK has only bin/agent-k-local.
+    prev=$ak_home/app/$from/bin/agentk
+    [ -x "$prev" ] || prev=$ak_home/app/$from/bin/agent-k-local
+    if [ "$failed" -ge 3 ] && [ -n "$from" ] && [ -x "$prev" ]; then
       msg="version $to failed to start $failed times; rolling back to $from"
-      echo "agent-k-local: $msg" >&2
+      echo "agentk: $msg" >&2
       # In server.log too, beside the failed starts' errors: stderr may reach no one.
       { [ -d "$ak_home/logs" ] && printf '%s WARN %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >> "$ak_home/logs/server.log"; } 2>/dev/null || true
       ln -sfn "$from" "$ak_home/app/current.rollback"
@@ -62,7 +66,7 @@ if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
         "$ak_home/app/current.rollback" "$ak_home/app/current"
       [ -n "$to" ] && printf '%s\n' "$to" >> "$ak_home/bad-versions"
       rm -f "$ak_home/update-pending.json"
-      exec "$ak_home/app/$from/bin/agent-k-local" "$@"
+      exec "$prev" "$@"
     fi
   fi
 fi

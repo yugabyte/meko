@@ -24,9 +24,9 @@ their own copy.
   `https://host:7777/setup?token=…`. You open it, choose a username (up to 64 letters, digits,
   `.`, `@`, `-` or `_`: most email addresses work, but not ones with `+`) and password, and can
   optionally enrol TOTP. The token stops working after it is used. With local access it prints
-  the address instead; `agent-k-local setup-link` still makes a login for a later switch to remote.
+  the address instead; `agentk setup-link` still makes a login for a later switch to remote.
 - **Forgot password.** The sign-in screen's **Forgot password?** says how to get back in: run
-  `agent-k-local setup-link` on the host and open the link it prints. There is no email or
+  `agentk setup-link` on the host and open the link it prints. There is no email or
   self-service reset in the browser, on purpose: the one login guards a shell on the host, so a
   reset needs someone who can already run commands there. While a link is outstanding the setup
   screen shows (`AuthStatus.reset` says it replaces an existing login, so it reads **Reset your
@@ -55,13 +55,13 @@ their own copy.
   screen afresh once it does; Claude never waits on a viewer), and it skips state snapshots
   until it has drained, then gets the current one.
 - **TLS is mandatory.** Any address other than localhost requires HTTPS. You can point it at your
-  own certificate from the corp CA, or let it generate a self-signed pair; `agent-k-local status`
+  own certificate from the corp CA, or let it generate a self-signed pair; `agentk status`
   shows its fingerprint so you can trust it once on your laptop. The self-signed pair lasts 825 days and is made again
   at startup once it's within 30 days of expiring (trust the new fingerprint then). No HSTS header
   is sent: it would apply to every port of the host, including your other dev servers.
 - **Guard rails.** Failed logins are rate-limited: 5 per 15 minutes from one address (one /64 for
   IPv6, since a client usually holds a whole one), and 50 across all clients, after which everyone
-  waits (`agent-k-local setup-link` on the host still gets you in). A wrong username takes as long
+  waits (`agentk setup-link` on the host still gets you in). A wrong username takes as long
   to refuse as a wrong password. A TOTP code works once. There is an
   audit log of logins, failed logins, account changes and Meko settings changes. The Meko key is
   write-only from the browser's side: no response carries it, and a saved key goes only where it

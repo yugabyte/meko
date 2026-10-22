@@ -960,7 +960,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     for (const [host, inTmux] of [[false, []], [true, [s.paneName]]] as const) {
       core.services = services(host);
       core.legacyTmuxPanes = async () => new Set(inTmux);
-      await expect(env.core.start()).rejects.toThrow(/Run: agent-k-local install/);
+      await expect(env.core.start()).rejects.toThrow(/Run: agentk install/);
     }
     expect(argvLog(env).length).toBe(launches);
     // Only a pane this home doesn't know (a deleted session's): the tmux service is a leftover of

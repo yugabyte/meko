@@ -6,7 +6,7 @@ import { KIRO_SESSION_MARKERS } from './kiro.js';
 import { claudePath, type Paths } from './paths.js';
 
 /**
- * Markers a running coding agent puts in its children's environment. If agent-k-local itself was
+ * Markers a running coding agent puts in its children's environment. If AgentK itself was
  * started from inside one, these must not reach the sessions it launches, of either harness.
  */
 export const SESSION_MARKERS = [...CLAUDE_SESSION_MARKERS, ...KIRO_SESSION_MARKERS];
@@ -67,7 +67,7 @@ export function writeLauncher(paths: Paths, spec: LauncherSpec): string {
   const unset = (spec.unsetEnv ?? []).filter((k) => !(k in spec.env));
   const lines = [
     '#!/bin/sh',
-    `# agent-k-local launcher for session ${spec.sessionId}. Rewritten on every launch.`,
+    `# AgentK launcher for session ${spec.sessionId}. Rewritten on every launch.`,
     `if [ "$1" != ${INNER} ]; then`,
     `  cd ${shq(cwd)} || exit 1`,
     // Never let an outer agent session's markers, or this install's own home and app, leak in.

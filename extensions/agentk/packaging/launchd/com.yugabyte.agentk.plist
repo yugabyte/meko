@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- AgentK web server. Written by `agent-k-local install`; changes are overwritten. -->
-<!-- The session host runs in its own job (com.yugabyte.agent-k-local.host) so restarting or
+<!-- AgentK web server. Written by `agentk install`; changes are overwritten. -->
+<!-- The session host runs in its own job (@HOST_ID@) so restarting or
      updating this one never ends a session. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.yugabyte.agent-k-local</string>
+  <string>@SERVER_ID@</string>
   <key>ProgramArguments</key>
   <array>
-    <string>@AK_HOME@/app/current/bin/agent-k-local</string>
+    <string>@AK_HOME@/app/current/bin/agentk</string>
     <string>serve</string>
   </array>
   <key>EnvironmentVariables</key>

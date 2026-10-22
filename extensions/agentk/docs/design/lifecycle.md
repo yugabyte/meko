@@ -124,7 +124,7 @@ stateDiagram-v2
   Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
   `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
   [Reviewing a PR](review-pr.md)) are added to a repo's own prompt too. This lets a team
-  change how designs are written or PRs described without changing agent-k-local. Review comments
+  change how designs are written or PRs described without changing AgentK. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
   answers to the design through `design-answers` (`{{count}}`, `{{answers}}` and `{{questionsFile}}`),
   people's reviews through `review-people` (`{{reviewers}}`, the logins whose reviews started it),

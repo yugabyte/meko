@@ -111,7 +111,7 @@ release scripts with `--product meko`:
 Plan, then `make test`, then the three builds (each packaged and smoke-tested), then publish:
 `SHA256SUMS`, the release with notes from `release-notes.sh --product meko`, provenance attestation,
 and pruning. Installed AgentK updaters never pick a Meko release: they read only AgentK's tags and
-need an `agent-k-local-*` tarball.
+need an `agentk-*` tarball (`agent-k-local-*` before the rename to AgentK).
 
 ## The service
 
@@ -153,8 +153,9 @@ only see it started again), and `meko restart` restarts it. Without it, they sta
 `<data>/extensions.json` (0600) lists the extensions this Meko runs, with the command that controls
 each one. The contract is the extension's own CLI: `<command> start`, `stop` and `status`.
 
-- `meko install_extension agentk` needs a running Meko. When `agent-k-local` is on PATH or in
-  `~/.local/bin`, it runs `agent-k-local install --meko-url <url> --meko-key <client token>`, which
+- `meko install_extension agentk` needs a running Meko. When `agentk` (or `agent-k-local`, its name
+  before the rename, which an install from then may have alone: `Catalog.OldCommands`) is on PATH or
+  in `~/.local/bin`, it runs `<command> install --meko-url <url> --meko-key <client token>`, which
   keeps AgentK's other settings. Otherwise it downloads the newest AgentK release's `install.sh`
   (tags `agentk-v*`, and `v*` from before) and runs it with the same two flags. An
   AgentK from before `--meko-url` is refused with a message, rather than failing on the flag: an
@@ -162,7 +163,7 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
   an AgentK release from after #229, which itself is a `meko` commit and cut no AgentK release.
   Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
-- `meko start` starts the extensions after Meko; `meko stop` stops them first (`agent-k-local stop`
+- `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, updates and crashes never
   touch them: AgentK has its own services and updater.
@@ -244,7 +245,7 @@ Changing the store doesn't move secrets: the client token is made again.
 - `internal/store`: `RestoreBackup` undoes a real upgrade.
 - `internal/cli`: `install` with a fake service manager, start, stop and restart through it,
   extensions run on start and stop but not restart or `--keep-extensions`, `uninstall` and
-  `--purge`, `install_extension` with an installed `agent-k-local` and from a fake release,
+  `--purge`, `install_extension` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release,
   `logs` merging and following across rotation, `token --json`, `version --json`.
 - `scripts/install_test.go`: the installer with a fake `gh`: unpacking and running `meko install`,
   "already installed", `--reinstall`, a bad checksum, AgentK's flags refused, and Intel Macs and

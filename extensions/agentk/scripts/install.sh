@@ -21,7 +21,7 @@
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK is already installed
-#   anything else       forwarded to `agent-k-local install`
+#   anything else       forwarded to `agentk install`
 #                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
 #                       --port, --no-service); Meko is optional: without a key the install goes on
 #                       without it, and a Meko running on this computer is offered first
@@ -37,7 +37,9 @@
 #
 # Run again where AgentK is already installed and set up (services included), it says so
 # and stops without changing anything, unless given --reinstall, --deps-only, another --version
-# or options for `agent-k-local install` (--non-interactive aside), which go on as before.
+# or options for `agentk install` (--non-interactive aside), which go on as before. An install from
+# before the rename to AgentK (no ~/.local/bin/agentk) is installed again, which moves it to the new
+# names.
 #
 # Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
 # GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
@@ -123,9 +125,9 @@ ask() {
   case $answer in ''|[Yy]*) return 0 ;; *) return 1 ;; esac
 }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but was not found on PATH. $2"; }
-# The agents' installers, gh (as installed here) and agent-k-local itself live in ~/.local/bin,
+# The agents' installers, gh (as installed here) and agentk itself live in ~/.local/bin,
 # which a fresh shell may not have on PATH yet: look there too, so they aren't installed twice.
-# The user's own PATH, to tell them later whether their shell will find agent-k-local.
+# The user's own PATH, to tell them later whether their shell will find agentk.
 user_path=$PATH
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac
 short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
@@ -137,27 +139,34 @@ alone_cmd() {
 }
 
 # ---- already installed ----
-# Set up all the way: a release linked as app/current and as ~/.local/bin/agent-k-local, a
-# config.toml, and both background services, the last step of `agent-k-local install` (which
-# `agent-k-local uninstall` removes). Anything less, like an install that failed at its services
-# or one made with --no-service, goes on to install again. So do options for `agent-k-local
-# install`: they'd be dropped otherwise.
-services_set_up() {
+# Set up all the way: a release linked as app/current and as ~/.local/bin/agentk, a
+# config.toml, and both background services, the last step of `agentk install` (which
+# `agentk uninstall` removes). Anything less, like an install that failed at its services
+# or one made with --no-service, goes on to install again. So do options for `agentk
+# install`: they'd be dropped otherwise. A service may still have its name from before the
+# rename to AgentK (agent-k-local): `agentk install` moves the session host's only once it stops.
+service_set_up() {
   if [ "$platform" = darwin ]; then
-    launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local" >/dev/null 2>&1 &&
-      launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.host" >/dev/null 2>&1
+    launchctl print "gui/$(id -u)/com.yugabyte.$1" >/dev/null 2>&1 ||
+      launchctl print "gui/$(id -u)/com.yugabyte.$2" >/dev/null 2>&1
   else
-    systemctl --user is-enabled agent-k-local.service >/dev/null 2>&1 &&
-      systemctl --user is-enabled agent-k-local-host.service >/dev/null 2>&1
+    systemctl --user is-enabled "$1" >/dev/null 2>&1 || systemctl --user is-enabled "$2" >/dev/null 2>&1
   fi
 }
-if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/bin/agent-k-local" ] &&
-  [ -f "$ak_home/config.toml" ] && [ -x "$HOME/.local/bin/agent-k-local" ] && services_set_up; then
+services_set_up() {
+  if [ "$platform" = darwin ]; then
+    service_set_up agentk agent-k-local && service_set_up agentk.host agent-k-local.host
+  else
+    service_set_up agentk.service agent-k-local.service && service_set_up agentk-host.service agent-k-local-host.service
+  fi
+}
+if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/bin/agentk" ] &&
+  [ -f "$ak_home/config.toml" ] && [ -x "$HOME/.local/bin/agentk" ] && services_set_up; then
   installed=$(readlink "$ak_home/app/current" 2>/dev/null) || installed=""
   installed=${installed##*/}
   if [ -z "$version" ] || [ "$version" = "$installed" ]; then
     # shellcheck disable=SC2088 # shown to the user, not run
-    case ":$user_path:" in *":$HOME/.local/bin:"*) cmd=agent-k-local ;; *) cmd="~/.local/bin/agent-k-local" ;; esac
+    case ":$user_path:" in *":$HOME/.local/bin:"*) cmd=agentk ;; *) cmd="~/.local/bin/agentk" ;; esac
     row() { printf '    %s%-13s%s %s\n' "$d" "$1" "$n" "$2" >&2; }
     say ""
     say "${b}AgentK installer${n}"
@@ -377,7 +386,7 @@ if [ -n "$plan" ]; then
       { rm -rf "$kiro_tmp"; die "Kiro CLI's installer failed (see the output above). Install it yourself: https://kiro.dev/cli/"; }
     rm -rf "$kiro_tmp"
   fi
-  # gh and the agents land here; `agent-k-local install` (run below) needs them too.
+  # gh and the agents land here; `agentk install` (run below) needs them too.
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
   hash -r 2>/dev/null || true
   # (Homebrew's gh was checked with the other packages.)
@@ -455,27 +464,33 @@ else
   # The tag of a version asked for: either scheme's.
   tags="agentk-v$version v$version"
 fi
-tarball="agent-k-local-$version-$platform-$arch.tar.gz"
-
 # ---- download + verify ----
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
+# The tarball is named for its command: agentk, or agent-k-local in releases from before the
+# rename to AgentK (newer ones carry both).
 got=false
 for tag in $tags; do
-  if $have_gh; then
-    gh release download "$tag" --repo "$repo" --pattern "$tarball" --pattern SHA256SUMS --dir "$tmp" 2>"$tmp/.err" &&
-      { got=true; break; }
-  else
-    base="https://github.com/$repo/releases/download/$tag"
-    auth=""
-    [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
-    curl -fsSL ${auth:+-H "$auth"} -o "$tmp/$tarball" "$base/$tarball" 2>"$tmp/.err" &&
-      curl -fsSL ${auth:+-H "$auth"} -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" 2>"$tmp/.err" &&
-      { got=true; break; }
-  fi
+  for name in agentk agent-k-local; do
+    tarball="$name-$version-$platform-$arch.tar.gz"
+    rm -f "$tmp/SHA256SUMS"
+    if $have_gh; then
+      # It downloads SHA256SUMS alone, and succeeds, when the release has no such tarball.
+      gh release download "$tag" --repo "$repo" --pattern "$tarball" --pattern SHA256SUMS --dir "$tmp" 2>"$tmp/.err" &&
+        [ -f "$tmp/$tarball" ] && { got=true; break 2; }
+    else
+      base="https://github.com/$repo/releases/download/$tag"
+      auth=""
+      [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
+      curl -fsSL ${auth:+-H "$auth"} -o "$tmp/$tarball" "$base/$tarball" 2>"$tmp/.err" &&
+        curl -fsSL ${auth:+-H "$auth"} -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" 2>"$tmp/.err" &&
+        { got=true; break 2; }
+    fi
+  done
 done
 if ! $got; then
+  tarball="agentk-$version-$platform-$arch.tar.gz"
   cat "$tmp/.err" >&2
   if $have_gh; then die "download of $tarball from $repo failed.$missing_hint"; fi
   die "download of $tarball failed. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
@@ -492,14 +507,14 @@ staging="$ak_home/app/.staging.$$"
 rm -rf "$staging"
 mkdir -p "$staging"
 tar -xzf "$tmp/$tarball" -C "$staging"
-[ -x "$staging/agent-k-local-$version/bin/agent-k-local" ] || die "unexpected tarball layout"
+[ -x "$staging/$name-$version/bin/$name" ] || die "unexpected tarball layout"
 
 dest="$ak_home/app/$version"
 if [ -e "$dest" ]; then
   rm -rf "$dest.old"
   mv "$dest" "$dest.old"
 fi
-mv "$staging/agent-k-local-$version" "$dest"
+mv "$staging/$name-$version" "$dest"
 rm -rf "$staging" "$dest.old"
 
 ln -sfn "$version" "$ak_home/app/current.tmp"
@@ -511,11 +526,14 @@ ln -sfn "$version" "$ak_home/app/current.tmp"
 rm -f "$ak_home/update-pending.json"
 
 mkdir -p "$HOME/.local/bin"
-ln -sfn "$ak_home/app/current/bin/agent-k-local" "$HOME/.local/bin/agent-k-local"
+# Both names: agent-k-local, from before the rename, is what older services, scripts and Meko run.
+for link in agentk agent-k-local; do
+  [ -x "$dest/bin/$link" ] && ln -sfn "$ak_home/app/current/bin/$link" "$HOME/.local/bin/$link"
+done
 ok "Installed" "$short_home/app/$version"
 case ":$user_path:" in
-  *":$HOME/.local/bin:"*) ok "Command" "agent-k-local (in ~/.local/bin)" ;;
-  *) warn "Command" "add ~/.local/bin to your PATH to run 'agent-k-local' (and tools installed there) directly" ;;
+  *":$HOME/.local/bin:"*) ok "Command" "$name (in ~/.local/bin)" ;;
+  *) warn "Command" "add ~/.local/bin to your PATH to run '$name' (and tools installed there) directly" ;;
 esac
 
 # Releases from before --install-deps existed would refuse the flag: pass it only to one that has it.
@@ -527,11 +545,11 @@ if grep -q 'install-deps' "$dest/lib/dist/server/install.js" 2>/dev/null; then
 fi
 
 export AK_HOME="$ak_home"
-# Tells `agent-k-local install` the heading is already printed.
+# Tells `agentk install` the heading is already printed.
 export AK_INSTALLER=1
 # When piped into sh, stdin is the script itself: give the setup prompts the terminal.
 if [ -r /dev/tty ] && [ -t 2 ]; then
-  eval "exec \"\$ak_home/app/current/bin/agent-k-local\" install $forward" </dev/tty
+  eval "exec \"\$ak_home/app/current/bin/\$name\" install $forward" </dev/tty
 else
-  eval "exec \"\$ak_home/app/current/bin/agent-k-local\" install $forward"
+  eval "exec \"\$ak_home/app/current/bin/\$name\" install $forward"
 fi

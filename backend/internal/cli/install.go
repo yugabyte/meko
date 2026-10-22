@@ -233,7 +233,7 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 	if !interactive() {
 		args = append(args, "--non-interactive")
 	}
-	if cmd := extensions.FindCommand(cat.Command, home); cmd != "" {
+	if cmd := cat.Find(home); cmd != "" {
 		if tooOld(cmd) {
 			return fail(stderr, fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
 				"needs: update it (the Update button in AgentK), then run this again", cat.Title))
@@ -247,7 +247,7 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 			return fail(stderr, err)
 		}
 	}
-	cmd := extensions.FindCommand(cat.Command, home)
+	cmd := cat.Find(home)
 	if cmd == "" {
 		return fail(stderr, fmt.Errorf("%s was installed, but %s isn't on PATH or in ~/.local/bin", cat.Title, cat.Command))
 	}

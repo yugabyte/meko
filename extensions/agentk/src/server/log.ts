@@ -31,7 +31,7 @@ export function errMsg(e: unknown): string {
 
 /**
  * Also appends every line to a file (rotated at 5 MB, 3 kept). Journald on
- * some hosts keeps no user logs, so this is what `agent-k-local logs` reads.
+ * some hosts keeps no user logs, so this is what `agentk logs` reads.
  */
 export function fileLogger(file: string, inner: Logger = consoleLogger, maxBytes = 5 * 1024 * 1024, keep = 3): Logger {
   mkdirSync(dirname(file), { recursive: true });

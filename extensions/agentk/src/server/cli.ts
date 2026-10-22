@@ -18,6 +18,7 @@ import { getPaths, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
 import { hostServices, servicesFor } from './service.js';
+import { linkCommand } from './cmdlink.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
@@ -37,7 +38,7 @@ function version(): string {
 /**
  * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
  * so git, gh and claude resolve the way they do in a terminal. ~/.local/bin is added
- * when it's missing: the installer puts `agent-k-local` (and gh, when it installs it) there.
+ * when it's missing: the installer puts `agentk` (and gh, when it installs it) there.
  */
 function adoptLoginPath(): void {
   try {
@@ -68,7 +69,7 @@ async function serve(): Promise<void> {
   } catch (e) {
     if (!(e instanceof InstanceBusyError)) throw e;
     // Not in server.log: that belongs to the server holding the home.
-    console.error(`agent-k-local: ${e.message}`);
+    console.error(`agentk: ${e.message}`);
     uncountStart(paths, v);
     process.exit(EXIT_BUSY);
   }
@@ -87,6 +88,11 @@ async function serve(): Promise<void> {
 
 /** A start once it holds the home's lease: the database, Core, the web server, and the updater. */
 async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceLock, log: Logger): Promise<void> {
+  try {
+    if (linkCommand(paths)) log.info('added the agentk command (~/.local/bin/agentk) beside agent-k-local, its name before the rename');
+  } catch (e) {
+    log.warn(`couldn't add the agentk command to ~/.local/bin: ${errMsg(e)}`);
+  }
   const db = openDb(dbPath(paths, cfg));
   let core: Core | null = null;
   const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
@@ -149,7 +155,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     log.info(`local access: browsers on this computer need no login${owner ? ` (the login for ${owner.username} applies again once it listens on the network)` : ''}`);
   } else if (!getOwner(db)) {
     // Don't replace a link the installer (or `setup-link`) already printed.
-    if (setupTokenOutstanding(db)) log.info('waiting for first-time setup: open the link the installer printed, or run `agent-k-local setup-link` for a new one');
+    if (setupTokenOutstanding(db)) log.info('waiting for first-time setup: open the link the installer printed, or run `agentk setup-link` for a new one');
     else log.info(`first-time setup: ${url}/setup?token=${issueSetupToken(db)}`);
   }
 
@@ -186,7 +192,7 @@ async function logs(args: string[]): Promise<void> {
   const ni = args.findIndex((a) => a === '-n' || a === '--lines');
   const n = ni >= 0 ? Math.max(1, Number(args[ni + 1]) || 50) : 50;
   if (!existsSync(file)) {
-    console.error(`No log yet at ${file}. Is the server running? (agent-k-local status)`);
+    console.error(`No log yet at ${file}. Is the server running? (agentk status)`);
     process.exitCode = 1;
     return;
   }
@@ -281,7 +287,7 @@ async function host(args: string[]): Promise<void> {
       if (server) {
         throw new Error(
           `The AgentK server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
-            `session host again and resume every session. Stop both with: agent-k-local stop, or use: agent-k-local host restart`,
+            `session host again and resume every session. Stop both with: agentk stop, or use: agentk host restart`,
         );
       }
     }
@@ -318,7 +324,7 @@ async function host(args: string[]): Promise<void> {
     handle = await startHost({ paths, version: version(), appDir: process.env.AK_APP_DIR ?? null, log, onStop: exit });
   } catch (e) {
     if (!(e instanceof HostRunningError)) throw e;
-    console.error(`agent-k-local: ${e.message}`);
+    console.error(`agentk: ${e.message}`);
     process.exit(EXIT_BUSY);
   }
   process.on('SIGTERM', exit);
@@ -328,7 +334,7 @@ async function host(args: string[]): Promise<void> {
 /** Whether a pid is an AgentK server: after a crash its lease can name a pid another process has now. */
 function isServer(pid: number): boolean {
   try {
-    return /(agent-k-local|cli\.[jt]s) serve\b/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' }));
+    return /(agentk|agent-k-local|cli\.[jt]s) serve\b/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' }));
   } catch {
     return false;
   }
@@ -356,7 +362,7 @@ async function stop(): Promise<void> {
       // Its SIGTERM handler shuts down cleanly and releases the lease.
       process.kill(server.pid, 'SIGTERM');
       for (let i = 0; i < 200 && heldLease(paths.lock); i++) await sleep(100);
-      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 20 seconds. See: agent-k-local logs`);
+      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 20 seconds. See: agentk logs`);
       stopped = true;
     }
   }
@@ -371,7 +377,7 @@ async function stop(): Promise<void> {
   } catch (e) {
     if (!(e instanceof NoHostError)) throw e;
   }
-  const resume = svc?.installed('server') ? 'agent-k-local start' : 'agent-k-local serve';
+  const resume = svc?.installed('server') ? 'agentk start' : 'agentk serve';
   if (!stopped) console.log('AgentK is not running.');
   else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
 }
@@ -379,20 +385,20 @@ async function stop(): Promise<void> {
 /** Starts the services `stop` stopped. */
 async function start(): Promise<void> {
   const svc = servicesFor(getPaths().home);
-  if (!svc?.installed('server')) throw new Error('No background services run this home: run agent-k-local serve, or install them with agent-k-local install.');
+  if (!svc?.installed('server')) throw new Error('No background services run this home: run agentk serve, or install them with agentk install.');
   for (const s of ['host', 'server'] as const) {
     if (!svc.installed(s)) continue;
     svc.start(s);
     for (let i = 0; i < 50 && !svc.state(s).running; i++) await sleep(100);
     if (!svc.state(s).running) throw new Error(`${svc.id(s)} didn't start. Check: ${svc.statusHint(s)}`);
   }
-  console.log('Started AgentK; the server resumes the sessions in a few seconds. Check: agent-k-local status');
+  console.log('Started AgentK; the server resumes the sessions in a few seconds. Check: agentk status');
 }
 
 function help(): void {
   console.log(`AgentK ${version()}
 
-Usage: agent-k-local <command>
+Usage: agentk <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
