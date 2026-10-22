@@ -673,8 +673,13 @@ func TestDestroyFollowsASymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
+	// destroy names the folder with every symlink resolved, and on macOS /tmp is one (to /private/tmp).
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
 	code, out, errs := run("destroy", "--data-dir", link, "--force")
-	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+target+".")
+	want(t, "destroy through a symlink", code, 0, out+errs, "Removed "+resolved+".")
 	gone(t, target)
 	gone(t, link)
 }
