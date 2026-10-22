@@ -77,6 +77,7 @@ func Register(g *echo.Group, o Options) {
 
 	g.GET("/memories", a.listMemories)
 	g.DELETE("/memories/:memory", a.deleteMemory)
+	g.GET("/memories/:memory/history", a.memoryHistory)
 	g.POST("/promote-memories", a.promoteMemories)
 	g.POST("/keep-as-memory", a.keepMemories)
 	g.GET("/promoted-memories", a.listPromoted)

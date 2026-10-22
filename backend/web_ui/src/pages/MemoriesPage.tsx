@@ -2,12 +2,13 @@
 // (learnings) to keep or promote into the collective memory.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Brain, Check, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Brain, Check, History, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { MemoryHistoryDialog } from "../components/MemoryHistoryDialog";
 import { Pager } from "../components/Pager";
 import { Segmented } from "../components/Segmented";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
@@ -44,6 +45,7 @@ export function MemoriesPage({
     setPage(1);
     setSelected(new Set());
   }, [scope]);
+  const [historyOf, setHistoryOf] = useState<string>();
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -154,6 +156,15 @@ export function MemoriesPage({
                 </div>
                 <Button
                   size="sm"
+                  variant="ghost"
+                  title="See how this memory changed"
+                  className="shrink-0 opacity-60 group-hover:opacity-100"
+                  onClick={() => setHistoryOf(m.id)}
+                >
+                  <History className="size-3.5" /> History
+                </Button>
+                <Button
+                  size="sm"
                   variant="danger"
                   title="Delete this memory"
                   className="shrink-0 opacity-60 group-hover:opacity-100"
@@ -172,6 +183,9 @@ export function MemoriesPage({
             onNext={() => (setPage(page + 1), setSelected(new Set()))}
           />
         </>
+      )}
+      {historyOf && (
+        <MemoryHistoryDialog datapackId={id} memoryId={historyOf} onClose={() => setHistoryOf(undefined)} />
       )}
     </div>
   );

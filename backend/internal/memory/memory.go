@@ -183,6 +183,23 @@ func (s *Service) DeleteMemory(ctx context.Context, datapack, id string) error {
 	return s.memoryEngineErr(s.eng.Delete(ctx, datapack, id))
 }
 
+// MemoryHistory is a memory's changes, oldest first, as mem0 recorded them: its add and each update
+// with the text before and after. Only a memory the local user can get has one, through the same
+// check as GetMemory: another user's is ErrNotFound, as is a deleted memory (its rows don't say
+// whose it was) or a promoted one (ErrPromoted, now in the collective memory).
+func (s *Service) MemoryHistory(ctx context.Context, datapack, id string) ([]store.HistoryEntry, error) {
+	if err := s.needDatapack(ctx, datapack); err != nil {
+		return nil, err
+	}
+	if err := s.promoted(ctx, datapack, id); err != nil {
+		return nil, err
+	}
+	if _, err := s.own(ctx, datapack, id); err != nil {
+		return nil, err
+	}
+	return s.st.History(ctx, datapack, id)
+}
+
 // GetMemory is one of the local user's memories in the datapack, or ErrNotFound.
 func (s *Service) GetMemory(ctx context.Context, datapack, id string) (memoryengine.Memory, error) {
 	rec, err := s.own(ctx, datapack, id)
