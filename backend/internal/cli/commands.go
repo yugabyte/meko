@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,10 +16,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/store"
+	"github.com/yugabyte/meko/backend/internal/update"
 	"github.com/yugabyte/meko/backend/internal/version"
 )
 
@@ -29,10 +31,13 @@ var (
 	stopTimeout  = drainTimeout + childStopTimeout + 5*time.Second
 )
 
-// runStart starts serve in the background, in its own session, and waits until it answers.
-// The server's own stderr goes to logs/start.log, which is printed if it never answers, so
-// errors from before logging starts aren't lost.
-func runStart(l paths.Layout, o config.Overrides, stdout, stderr io.Writer) int {
+// startOptions are start's and restart's flags.
+type startOptions = config.Overrides
+
+// startDetached starts serve (exe, or this binary when it's "") in the background, in its own
+// session, and waits until it answers. The server's own stderr goes to logs/start.log, which is
+// printed if it never answers, so errors from before logging starts aren't lost.
+func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stderr io.Writer) int {
 	if up, err := running(l.Lock); err != nil {
 		return fail(stderr, err)
 	} else if up {
@@ -46,9 +51,11 @@ func runStart(l paths.Layout, o config.Overrides, stdout, stderr io.Writer) int 
 	if err := l.Ensure(); err != nil {
 		return fail(stderr, err)
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return fail(stderr, err)
+	if exe == "" {
+		var err error
+		if exe, err = os.Executable(); err != nil {
+			return fail(stderr, err)
+		}
 	}
 	args := []string{"serve", "--detached", "--data-dir", l.Root}
 	if o.Port != 0 {
@@ -116,7 +123,8 @@ func startLogTail(l paths.Layout) string {
 	return "  " + strings.Join(lines, "\n  ") + "\n"
 }
 
-func runStop(l paths.Layout, stdout, stderr io.Writer) int {
+// stopMeko stops the server by signal (stopServer) and says what happened.
+func stopMeko(l paths.Layout, stdout, stderr io.Writer) int {
 	msg, err := stopServer(l)
 	if err != nil {
 		return fail(stderr, err)
@@ -171,6 +179,7 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	}
 	if !up {
 		fmt.Fprintf(stdout, "Meko isn't running (data in %s).\n", l.Root)
+		printSetup(l, stdout)
 		return exitNotRunning
 	}
 	c, err := newClient(l)
@@ -220,16 +229,75 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, line)
 	}
+	printSetup(l, stdout)
 	return exitOK
 }
 
-// runToken prints the client token, making it if no server has yet. It reads the data folder, so
-// it works whether or not the server runs. While one runs it only reads: the server keeps the token
-// it loaded at start, so a token made now (after the file was deleted to replace it) would be one
-// the server refuses. With mcp it prints the command that registers Meko with Claude Code instead,
-// on the running server's port (or the configured one).
-func runToken(l paths.Layout, mcp bool, stdout, stderr io.Writer) int {
+// printSetup prints how Meko is installed: its service, its updates and its extensions.
+func printSetup(l paths.Layout, stdout io.Writer) {
+	if m := serviceOf(l); m != nil {
+		state := "stopped"
+		if m.Running() {
+			state = "running"
+		}
+		fmt.Fprintf(stdout, "  Service:       %s, %s (%s)\n", m.Kind(), state, m.File())
+	} else {
+		fmt.Fprintln(stdout, "  Service:       none (meko install sets one up)")
+	}
+	if app, ver, ok := runningRelease(); ok {
+		line := "  Updates:       release " + ver
+		if st, ok := update.ReadState(l.Root); ok {
+			switch {
+			case st.Error != "":
+				line += fmt.Sprintf("; the last check (%s) failed: %s", st.CheckedAt.Local().Format(time.DateTime), st.Error)
+			case st.Latest != "" && st.Latest != ver:
+				line += fmt.Sprintf("; %s is available (meko update)", st.Latest)
+			default:
+				line += fmt.Sprintf(", the newest (checked %s)", st.CheckedAt.Local().Format(time.DateTime))
+			}
+		}
+		if p, _ := app.ReadPending(); p != nil && p.To == ver {
+			line += fmt.Sprintf("; updated from %s, on probation (%d starts)", p.From, p.Attempts)
+		}
+		fmt.Fprintln(stdout, line)
+	} else {
+		fmt.Fprintln(stdout, "  Updates:       none (a build from source)")
+	}
+	reg, err := extensions.Load(l.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "  Extensions:    can't read them: %v\n", err)
+		return
+	}
+	for _, n := range reg.Names() {
+		ok, line := reg.Entries[n].Status()
+		state := "running"
+		if !ok {
+			state = "not running"
+		}
+		if line != "" {
+			state += " (" + line + ")"
+		}
+		fmt.Fprintf(stdout, "  Extension:     %s, %s\n", n, state)
+	}
+}
+
+// runToken prints the client token, making it if no server has yet. It reads where the install keeps
+// it (the data folder, or the Keychain), so it works whether or not the server runs. While one runs
+// it only reads: the server keeps the token it loaded at start, so a token made now (after the old
+// one was deleted to replace it) would be one the server refuses. With mcp it prints the command
+// that registers Meko with Claude Code instead, and with asJSON the MCP URL, the token and whether
+// a server runs, for installers (AgentK's reads it); both on the running server's port, or the
+// configured one.
+func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 	if err := l.Ensure(); err != nil {
+		return fail(stderr, err)
+	}
+	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
+	if err != nil {
+		return fail(stderr, err)
+	}
+	ct, err := clientTokens(l, cfg)
+	if err != nil {
 		return fail(stderr, err)
 	}
 	up, err := running(l.Lock)
@@ -238,47 +306,61 @@ func runToken(l paths.Layout, mcp bool, stdout, stderr io.Writer) int {
 	}
 	var tok string
 	if up {
-		tok, err = auth.ReadClientToken(l.ClientToken)
+		tok, err = ct.Read()
 		if errors.Is(err, fs.ErrNotExist) {
-			err = fmt.Errorf("%s is gone, but the running server still takes the token it loaded at start. "+
-				"Restart Meko (meko stop, then meko start) to make a new one", l.ClientToken)
+			err = fmt.Errorf("the client token is gone, but the running server still takes the one it loaded at start. " +
+				"Restart Meko (meko restart, or meko stop then meko start) to make a new one")
 		}
 	} else {
-		tok, err = auth.EnsureClientToken(l.ClientToken)
+		tok, err = ct.Ensure()
 	}
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if !mcp {
+	if !mcp && !asJSON {
 		fmt.Fprintln(stdout, tok)
 		return exitOK
 	}
 	// Only a running server's port file is current: one killed rather than stopped leaves its file.
-	var port int
+	port := cfg.Server.Port
 	if up {
-		port, err = readInt(l.Port)
-	}
-	if !up || err != nil {
-		cfg, cerr := config.Load(l.Config, os.Getenv, config.Overrides{})
-		if cerr != nil {
-			return fail(stderr, cerr)
+		if p, perr := readInt(l.Port); perr == nil {
+			port = p
 		}
-		port = cfg.Server.Port
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/mcp", port)
+	if asJSON {
+		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up})
+		fmt.Fprintln(stdout, string(b))
+		return exitOK
 	}
 	// The name must be meko: AgentK recognizes Meko's tools by it (mcp__meko__*).
-	fmt.Fprintf(stdout, "claude mcp add --transport http meko http://127.0.0.1:%d/mcp "+
-		"--header \"Authorization: Bearer %s\"\n", port, tok)
+	fmt.Fprintf(stdout, "claude mcp add --transport http meko %s --header \"Authorization: Bearer %s\"\n", url, tok)
 	return exitOK
 }
 
-func runVersion(stdout, stderr io.Writer) int {
+func runVersion(asJSON bool, stdout, stderr io.Writer) int {
 	v, err := store.LibVersions()
 	if err != nil {
 		return fail(stderr, err)
+	}
+	schema, err := store.LatestSchema()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if asJSON {
+		// The updater runs a staged release's meko version --json to check it runs here.
+		b, _ := json.Marshal(map[string]any{
+			"version": version.Version, "commit": version.Commit, "go": runtime.Version(),
+			"os": runtime.GOOS, "arch": runtime.GOARCH, "sqlite": v.SQLite, "sqlite_vec": v.SQLiteVec, "schema": schema,
+		})
+		fmt.Fprintln(stdout, string(b))
+		return exitOK
 	}
 	fmt.Fprintf(stdout, "meko %s (commit %s)\n", version.Version, version.Commit)
 	fmt.Fprintf(stdout, "  Go          %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(stdout, "  SQLite      %s\n", v.SQLite)
 	fmt.Fprintf(stdout, "  sqlite-vec  %s\n", v.SQLiteVec)
+	fmt.Fprintf(stdout, "  Schema      %d\n", schema)
 	return exitOK
 }

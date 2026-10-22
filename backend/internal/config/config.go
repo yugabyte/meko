@@ -22,6 +22,8 @@ type Config struct {
 	Log                Log                `toml:"log"`
 	MemoryEngine       MemoryEngine       `toml:"memory_engine"`
 	ConversationSearch ConversationSearch `toml:"conversation_search"`
+	Secrets            Secrets            `toml:"secrets"`
+	Update             Update             `toml:"update"`
 	KnowledgeBase      KnowledgeBase      `toml:"knowledge_base"`
 }
 
@@ -31,6 +33,29 @@ type KnowledgeBase struct {
 	// query for context_search to keep it. 0 means the default, tuned for the embedding model
 	// (internal/memory).
 	MaxDistance float64 `toml:"max_distance"`
+}
+
+// Update is the [update] table: how a release install updates itself.
+type Update struct {
+	// Channel is "stable" (the default) or "off" (no checks at all). Also MEKO_UPDATE_CHANNEL.
+	Channel string `toml:"channel"`
+	// Auto installs an update when one is found, while Meko runs as a service (default true). With
+	// false, updates are only reported (meko status), and meko update installs them. Also
+	// MEKO_UPDATE_AUTO.
+	Auto bool `toml:"auto"`
+	// IntervalHours is how often to check (default 6).
+	IntervalHours float64 `toml:"interval_hours"`
+	// Repo is the GitHub repo releases come from (default yugabyte/agent-k-local). Also
+	// MEKO_UPDATE_REPO.
+	Repo string `toml:"repo"`
+}
+
+// Secrets is the [secrets] table: where the client token and other secrets are kept.
+type Secrets struct {
+	// Store is "keychain" (the default on macOS) or "file" (the default elsewhere: files in the data
+	// folder, readable only by their owner). Also MEKO_SECRETS. Changing it doesn't move secrets: the
+	// client token is made again, and clients set up with the old one need the new one.
+	Store string `toml:"store"`
 }
 
 // ConversationSearch is the [conversation_search] table.
@@ -69,7 +94,8 @@ type Log struct {
 
 // Default is the configuration with nothing set.
 func Default() Config {
-	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"}}
+	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
+		Update: Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/agent-k-local"}}
 }
 
 // Overrides are settings given as flags; zero values mean unset.
@@ -112,6 +138,22 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	if v := env("MEKO_NODE"); v != "" {
 		c.MemoryEngine.Node = v
 	}
+	if v := env("MEKO_UPDATE_CHANNEL"); v != "" {
+		c.Update.Channel = v
+	}
+	if v := env("MEKO_UPDATE_AUTO"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("MEKO_UPDATE_AUTO=%q isn't true or false", v)
+		}
+		c.Update.Auto = b
+	}
+	if v := env("MEKO_UPDATE_REPO"); v != "" {
+		c.Update.Repo = v
+	}
+	if v := env("MEKO_SECRETS"); v != "" {
+		c.Secrets.Store = v
+	}
 	if v := env("MEKO_MEMORY_ENGINE_DIR"); v != "" {
 		c.MemoryEngine.Dir = v
 	}
@@ -131,6 +173,15 @@ func (c Config) validate() error {
 	// An unknown mode is refused, so a typo never turns auth off.
 	if c.Server.Auth != AuthToken && c.Server.Auth != AuthNone {
 		return fmt.Errorf("server.auth %q isn't one of %q, %q", c.Server.Auth, AuthToken, AuthNone)
+	}
+	if s := c.Secrets.Store; s != "" && s != "keychain" && s != "file" {
+		return fmt.Errorf("secrets.store %q isn't one of \"keychain\", \"file\"", s)
+	}
+	if ch := c.Update.Channel; ch != "stable" && ch != "off" {
+		return fmt.Errorf("update.channel %q isn't one of \"stable\", \"off\"", ch)
+	}
+	if h := c.Update.IntervalHours; h < 0.1 || h > 24*30 {
+		return fmt.Errorf("update.interval_hours %g is out of range: use 0.1 to 720", h)
 	}
 	if _, err := c.Log.SlogLevel(); err != nil {
 		return err

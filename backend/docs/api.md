@@ -196,7 +196,9 @@ file to its link and follows `knowledgebase_document_status` until it's indexed,
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
 <key>`. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
-Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services in #171.
+Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the token
+and whether a server runs, for installers (AgentK's reads it). `meko logs` and the commands that
+install and run Meko came in #171 ([install.md](install.md)).
 
 ## Learnings, promotion and artifacts (#203)
 

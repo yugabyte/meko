@@ -1,0 +1,310 @@
+name: Meko release
+
+# Meko (backend/) releases on its own train, beside AgentK Local's (release.yml). Versions are
+# 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes backend/ cuts a
+# release when it contains meko feat/fix/perf/deps commits since the last Meko tag and the tests
+# pass. The release scripts are the repo root's scripts/release/*.sh --product meko. Meko's
+# releases are the repo's "latest": their install.sh is the one-line install. Run the workflow by
+# hand to force a release, or to rebuild the assets of an existing meko-v tag.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'scripts/release/**'
+      - '.github/workflows/meko-release.yml'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release even if there are no meko feat/fix/perf/deps commits
+        type: boolean
+        default: false
+      tag:
+        description: Rebuild assets for this existing meko-v tag instead
+        required: false
+
+# Read-only by default: only publish gets to write releases and attestations.
+permissions:
+  contents: read
+
+# One Meko release at a time, so two pushes on the same day can't claim the same number.
+concurrency:
+  group: meko-release
+  cancel-in-progress: false
+
+env:
+  # Meko's own Node, bundled in each tarball. Bump deliberately; the SHASUMS256 check pins the bytes.
+  NODE_VERSION: 22.18.0
+  # onnxruntime-node's install script would download a CUDA provider Meko doesn't use.
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release: ${{ steps.p.outputs.release }}
+      rebuild: ${{ steps.p.outputs.rebuild }}
+      version: ${{ steps.p.outputs.version }}
+      tag: ${{ steps.p.outputs.tag }}
+      ref: ${{ steps.p.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: p
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -eu
+          if [ -n "${DISPATCH_TAG:-}" ]; then
+            case $DISPATCH_TAG in
+              meko-v[0-9]*) ;;
+              *) echo "$DISPATCH_TAG isn't a Meko release tag (meko-v<version>)"; exit 1 ;;
+            esac
+            git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
+            { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=${DISPATCH_TAG#meko-v}"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if sh scripts/release/release-notes.sh --product meko > /dev/null || [ "${FORCE:-false}" = "true" ]; then
+            version=$(sh scripts/release/next-version.sh --product meko)
+            echo "Releasing Meko $version"
+            { echo "release=true"; echo "rebuild=false"; echo "tag=meko-v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing to release: no meko feat/fix/perf/deps commits since the last Meko release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.rebuild == 'false'
+    runs-on: ubuntu-latest
+    # A hung step would otherwise hold the release concurrency group for GitHub's 6h default.
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.mod
+            backend/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/memory_engine/package-lock.json
+      - name: Cache the embedding model
+        uses: actions/cache@v6
+        with:
+          path: backend/memory_engine/.models
+          key: embedding-model-all-MiniLM-L6-v2-751bff3-q8
+      - run: make test
+
+  # Linux x64 and arm64, built in AlmaLinux 8 (glibc 2.28) so they run on RHEL 8 and newer.
+  build:
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.release == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: almalinux:8
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      CC: /opt/rh/gcc-toolset-13/root/usr/bin/gcc
+    steps:
+      - name: Install build toolchain
+        # Before checkout: backend/ doesn't exist yet.
+        working-directory: .
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ make git tar xz gzip findutils which procps-ng
+          git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.mod
+            backend/go.sum
+
+      - name: Download Node ${{ env.NODE_VERSION }}
+        run: |
+          set -eu
+          dist="node-v${NODE_VERSION}-linux-${ARCH}"
+          cd /tmp
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.xz"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+          grep " ${dist}.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+          tar -xJf "${dist}.tar.xz"
+          echo "NODE_DIR=/tmp/${dist}" >> "$GITHUB_ENV"
+          echo "/tmp/${dist}/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          set -eu
+          make build VERSION="$VERSION"
+          # npm's registry fetches can time out on a runner: try twice.
+          make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
+          (cd memory_engine && npm prune --omit=dev)
+
+      - name: Package
+        run: sh scripts/package-release.sh "$VERSION" "$ARCH" "$NODE_DIR" out
+
+      - name: Smoke-test the tarball
+        run: sh scripts/smoke-release.sh out/meko-"$VERSION"-linux-"$ARCH".tar.gz "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: meko-tarball-linux-${{ matrix.arch }}
+          path: backend/out/*.tar.gz
+          if-no-files-found: error
+
+  # macOS on Apple Silicon, for macOS 14 and newer.
+  build-macos:
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.release == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ARCH: arm64
+      VERSION: ${{ needs.plan.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: |
+            backend/go.mod
+            backend/go.sum
+
+      - name: Download Node ${{ env.NODE_VERSION }}
+        run: |
+          set -eu
+          dist="node-v${NODE_VERSION}-darwin-${ARCH}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.gz"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+          grep " ${dist}.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -
+          tar -xzf "${dist}.tar.gz"
+          echo "NODE_DIR=$RUNNER_TEMP/${dist}" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/${dist}/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          set -eu
+          make build VERSION="$VERSION"
+          make memory_engine || { rm -rf memory_engine/node_modules; make memory_engine; }
+          (cd memory_engine && npm prune --omit=dev)
+
+      - name: Package
+        run: sh scripts/package-release.sh "$VERSION" "$ARCH" "$NODE_DIR" out
+
+      - name: Smoke-test the tarball
+        run: sh scripts/smoke-release.sh out/meko-"$VERSION"-darwin-"$ARCH".tar.gz "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: meko-tarball-darwin-arm64
+          path: backend/out/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build, build-macos]
+    # Any build failure stops the release, so SHA256SUMS never loses a tarball.
+    if: always() && needs.build.result == 'success' && needs.build-macos.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the tag and release, upload assets, prune old releases
+      id-token: write # attest build provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false # gh uses GH_TOKEN; nothing here pushes with git
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: meko-tarball-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist-release
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cp ../backend/scripts/install.sh install.sh
+          cat SHA256SUMS
+
+      - name: Create the release
+        if: needs.plan.outputs.rebuild == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.ref }}
+        run: |
+          set -eu
+          sh scripts/release/release-notes.sh --product meko > notes.md || echo "Maintenance release." > notes.md
+          # The repo's latest release: its install.sh is the one-line install
+          # (gh release download --pattern install.sh). AgentK's releases are published --latest=false.
+          gh release create "$TAG" --target "$SHA" --title "Meko $TAG" --notes-file notes.md --latest --repo "$GITHUB_REPOSITORY" \
+            dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
+
+      - name: Replace assets on an existing release
+        if: needs.plan.outputs.rebuild == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: gh release upload "$TAG" dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Attest build provenance
+        # Artifact attestations need GitHub Enterprise Cloud for internal repos.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist-release/*.tar.gz
+
+      - name: Delete Meko releases beyond the newest 5
+        if: needs.plan.outputs.rebuild == 'false'
+        # A failed prune never fails the release; the next one tries again.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: 5
+        run: sh scripts/release/prune-releases.sh --product meko

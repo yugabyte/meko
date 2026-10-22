@@ -1,0 +1,112 @@
+package update
+
+import (
+	"fmt"
+	"runtime"
+	"strconv"
+	"strings"
+)
+
+// TagPrefix is Meko's release tags' prefix: meko-v0.YYYYMMDD.N.
+const TagPrefix = "meko-v"
+
+// Sums is the checksum file every release carries.
+const Sums = "SHA256SUMS"
+
+// Version is a release version: three numbers, as 0.20261021.5.
+type Version [3]int
+
+// ParseVersion reads a bare version (no prefix, no prerelease part).
+func ParseVersion(s string) (Version, bool) {
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return Version{}, false
+	}
+	var v Version
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || p == "" || (len(p) > 1 && p[0] == '0') {
+			return Version{}, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+// Less orders versions.
+func (v Version) Less(o Version) bool {
+	for i := range v {
+		if v[i] != o[i] {
+			return v[i] < o[i]
+		}
+	}
+	return false
+}
+
+func (v Version) String() string { return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]) }
+
+// Platform is this machine's in release file names: linux or darwin, x64 or arm64.
+func Platform() (string, string) {
+	arch := runtime.GOARCH
+	if arch == "amd64" {
+		arch = "x64"
+	}
+	return runtime.GOOS, arch
+}
+
+// TarballName is a Meko release's tarball for a platform.
+func TarballName(version, goos, arch string) string {
+	return fmt.Sprintf("meko-%s-%s-%s.tar.gz", version, goos, arch)
+}
+
+// Pick is the newest stable release whose tag is one of prefixes plus a version, that carries every
+// asset assets(version) names, and whose version isn't in skip. It returns the release and its
+// bare version.
+func Pick(releases []Release, prefixes []string, assets func(version string) []string,
+	skip map[string]bool) (Release, string, bool) {
+	var best Release
+	var bestV Version
+	found := false
+	for _, r := range releases {
+		if r.Draft || r.Prerelease {
+			continue
+		}
+		ver, ok := versionOf(r.Tag, prefixes)
+		if !ok || skip[ver] {
+			continue
+		}
+		v, _ := ParseVersion(ver)
+		missing := false
+		for _, a := range assets(ver) {
+			if _, ok := r.Asset(a); !ok {
+				missing = true
+			}
+		}
+		if missing {
+			continue
+		}
+		if !found || bestV.Less(v) {
+			best, bestV, found = r, v, true
+		}
+	}
+	return best, bestV.String(), found
+}
+
+// versionOf is the version a tag names after one of prefixes.
+func versionOf(tag string, prefixes []string) (string, bool) {
+	for _, p := range prefixes {
+		if rest, ok := strings.CutPrefix(tag, p); ok {
+			if _, ok := ParseVersion(rest); ok {
+				return rest, true
+			}
+		}
+	}
+	return "", false
+}
+
+// PickMeko is the newest Meko release with a tarball for this platform.
+func PickMeko(releases []Release, goos, arch string, bad map[string]bool) (Release, string, bool) {
+	return Pick(releases, []string{TagPrefix}, func(v string) []string {
+		return []string{TarballName(v, goos, arch), Sums}
+	}, bad)
+}

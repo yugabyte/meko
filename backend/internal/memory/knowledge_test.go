@@ -334,3 +334,27 @@ func waitReranker(t *testing.T, h *harness) {
 	}
 	t.Fatalf("the reranker never loaded: %+v", h.svc.EngineStatus(context.Background()))
 }
+
+// While an update is on probation, a deleted file's bytes stay for a rollback's restored rows; the
+// sweep at a later start removes them.
+func TestKnowledgeFileBytesStayDuringProbation(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, hashEmbedder)
+	offer := h.upload("ops.md", []byte("# Ops\n\nThe pager rotation changes every Monday.\n"))
+	h.index()
+	st := h.status(offer.Key)
+	h.svc.keepDeleted = func() bool { return true }
+	if _, err := h.svc.DeleteDocument(ctx, h.dp, st.Document.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(h.l.KnowledgeFiles, h.dp, st.Document.ContentHash)
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("the bytes went while on probation: %v", err)
+	}
+	if n, err := h.svc.SweepFiles(ctx); err != nil || n != 1 {
+		t.Fatalf("swept %d %v", n, err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Errorf("the sweep left them: %v", err)
+	}
+}

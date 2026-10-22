@@ -93,7 +93,9 @@ sorts higher.
 
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    Release workflow (`.github/workflows/release.yml`) runs the tests, picks the next version with
-   `scripts/next-version.sh`, and writes notes with `scripts/release-notes.sh`. Pushes with only
+   the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
+   `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
+   (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,
    performance and dependency changes.
 2. It builds self-contained tarballs in an AlmaLinux 8 container (glibc 2.28, so they run on
@@ -102,8 +104,9 @@ sorts higher.
    web UI, and production dependencies, and is smoke-tested (`version`, and `selftest`, which
    spawns a real pty).
 3. It creates the tag and GitHub release `v<version>` with the tarballs, `SHA256SUMS` and
-   `install.sh`, and attests build provenance where the plan allows.
-4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/prune-releases.sh`.
+   `install.sh`, not marked "latest" (that's Meko's), and attests build provenance where the
+   plan allows.
+4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/release/prune-releases.sh --product agentk`, which leaves Meko's releases alone.
    A lane is the version's prerelease identifier (`-beta.2` → `beta`), or `stable` without one.
    Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
    between two tags) are unaffected.
@@ -137,18 +140,20 @@ agent-k-local-<version>/
 
 ## Installing a release
 
-The repo is internal for now, so downloads go through an authenticated GitHub CLI:
+The repo is internal for now, so downloads go through an authenticated GitHub CLI. The repo's
+latest release is Meko's: its one-line install (`gh release download --repo
+yugabyte/agent-k-local --pattern install.sh --output - | sh`) installs Meko, and then
+`meko install_extension agentk` installs AgentK Local pointed at that Meko. AgentK Local alone comes
+from its own installer in the newest AgentK release:
 
 ```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
+  --exclude-pre-releases --limit 50 --json tagName \
+  --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
+  --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
-Pass options through `sh -s --`, for example:
-
-```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - \
-  | sh -s -- --version 0.2.0 --non-interactive --repos-root ~/code
-```
+Pass options through `sh -s --` (`--version 0.2.0 --non-interactive --repos-root ~/code`, …).
 
 Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code or
 Kiro CLI: either one is enough) and offers to install the missing ones, showing the commands and

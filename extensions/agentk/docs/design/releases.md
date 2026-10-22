@@ -16,9 +16,14 @@ Part of the [AgentK Local design](../design.md).
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
   with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
   `scripts/check-title.sh`), and PRs are squash-merged with the PR title
-  as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit since the last release
-  runs the tests and cuts the next version, and those subjects become the release notes; `ci`,
-  `test`, `docs`, `nit` and `chore` don't release.
+  as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for AgentK since its last
+  release runs the tests and cuts the next version, and those subjects become the release notes;
+  `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
+  (`backend/`) releases on its own, from its own tags (`meko-v…`), and its `meko` subjects never
+  release AgentK. Every other subject (`agentk`, `repo`, and older ones with no component or a
+  free-form one) counts for AgentK. The repo root's `scripts/release/` holds the scripts both
+  products use, with `--product agentk|meko`: `next-version.sh`, `release-notes.sh` and
+  `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
@@ -27,15 +32,21 @@ Part of the [AgentK Local design](../design.md).
   with a clear message if it has none. Releases since macOS support always include the macOS
   build: publishing waits for it. A hand-run rebuild takes only tags from after the move to
   `extensions/agentk`. Each release also includes `SHA256SUMS`, a build provenance attestation
-  and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, releases beyond the newest 5 in each lane (`stable`, or the
-  prerelease identifier such as `beta`) are deleted; their tags stay.
+  and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
+  prerelease identifier such as `beta`) are deleted; their tags stay, and Meko's are left alone.
 
 > **glibc.** RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run
 > in an AlmaLinux 8 container rather than on `ubuntu-latest`, so the binary loads on older hosts.
 
 ```sh
-# install (one line, no root). The repo is internal for now, so this uses gh.
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+# The repo's one-line install (gh release download --pattern install.sh, from its latest release)
+# installs Meko, whose `meko install_extension agentk` installs AgentK Local pointed at it. AgentK
+# Local alone: its own install.sh from the newest AgentK release (no root; the repo is internal for
+# now, so this uses gh).
+gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
+  --exclude-pre-releases --limit 50 --json tagName \
+  --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
+  --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
 #  0. stops, saying so, if AgentK Local is already installed in AK_HOME and set up: app/current,
@@ -57,8 +68,9 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agent-k-local install`:
 #  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
 #     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
-#  4. Meko (optional): verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json, or
-#     asks; Enter or --no-meko skips it) and offers to run Meko's setup for Claude Code if its
+#  4. Meko (optional): verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json,
+#     else offers a Meko running on this computer, else asks; Enter or --no-meko skips it;
+#     --meko-url and --meko-key name one) and offers to run Meko's setup for Claude Code if its
 #     plugin, MCP server or key is missing (declining is a warning)
 #  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
 #     sets up TLS
@@ -66,6 +78,15 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 #     or LaunchAgents on macOS (needs a desktop login)
 #  7. prints the one-time setup link (remote access), or the address (local access)
 ```
+
+**Tags.** The repo releases two products. AgentK's releases are tagged `v<version>`, and
+`agentk-v<version>` once releases are tagged by product (#230); Meko's are `meko-v<version>`. Meko's
+releases are the repo's "latest", since its installer is the one-line install, so AgentK's are
+published with `--latest=false`: the installer finds the newest AgentK release by its tag (the
+newest non-draft, non-prerelease `agentk-v…` or `v…`), and `--version` tries both tags. The updater
+reads both prefixes too (`TAG_PREFIXES`, `tagVersion` in `updater.ts`), skips Meko's, and downloads
+and compares (What's new) by each release's own tag. A version whose tag it hasn't listed is tried
+under each prefix, since pruning deletes releases but keeps their tags.
 
 **Update loop.** The server checks the GitHub Releases API at startup and every 6 hours
 (`update.interval_hours`). The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows a
@@ -112,8 +133,8 @@ since the release before it, and releases beyond the newest 5 are deleted, so on
 don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx`) shows every
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
-check: `repos/<repo>/compare/v<from>...v<to>`) and lists the `feat`, `fix`, `perf` and `deps`
-subjects by type, as `scripts/release-notes.sh` does (`src/server/releasenotes.ts`), with
+check: `repos/<repo>/compare/<from tag>...<to tag>`, each of either prefix) and lists the `feat`, `fix`, `perf` and `deps`
+subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out Meko's `meko` subjects) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.

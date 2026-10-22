@@ -59,9 +59,14 @@ export class WorkerReranker implements LocalReranker {
   private nextId = 1;
   private failure?: Error;
 
+  /**
+   * cacheDir holds the model files; offline means they're a release's bundled copy, so a missing
+   * file is an error rather than a download.
+   */
   constructor(
     private readonly cacheDir: string,
     private readonly model = DEFAULT_RERANKER,
+    private readonly offline = false,
   ) {
     this.info = { provider: "transformers.js", model: `${model.id}@${model.revision}:${model.dtype}` };
     this.start();
@@ -80,9 +85,9 @@ export class WorkerReranker implements LocalReranker {
     this.failure = undefined;
     this.isLoaded = false;
     this.started = Date.now();
-    const { cacheDir, model } = this;
+    const { cacheDir, model, offline } = this;
     const worker = new Worker(new URL("./rerankworker.js", import.meta.url), {
-      workerData: { cacheDir, model: model.id, revision: model.revision, dtype: model.dtype },
+      workerData: { cacheDir, model: model.id, revision: model.revision, dtype: model.dtype, offline },
     });
     this.worker = worker;
     this.loaded = new Promise((resolve, reject) => {

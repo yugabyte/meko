@@ -35,8 +35,14 @@ export async function run(env: NodeJS.ProcessEnv): Promise<void> {
   const token = need(env, "MEKO_INTERNAL_TOKEN");
   const store = new StoreClient(storeSocket, token);
   const testing = env.MEKO_MEMORY_ENGINE_TEST_EMBEDDER === "hash";
-  const embedder: LocalEmbedder = testing ? new HashEmbedder() : new WorkerEmbedder(need(env, "MEKO_MODELS_DIR"));
-  const reranker: LocalReranker = testing ? new OverlapReranker() : new WorkerReranker(need(env, "MEKO_MODELS_DIR"));
+  // A release's bundled models are read as they are: nothing is downloaded (MEKO_MODELS_OFFLINE).
+  const offline = env.MEKO_MODELS_OFFLINE === "1";
+  const embedder: LocalEmbedder = testing
+    ? new HashEmbedder()
+    : new WorkerEmbedder(need(env, "MEKO_MODELS_DIR"), undefined, offline);
+  const reranker: LocalReranker = testing
+    ? new OverlapReranker()
+    : new WorkerReranker(need(env, "MEKO_MODELS_DIR"), undefined, offline);
   register(store, embedder);
   const memoryEngine = new MemoryEngine(embedder, undefined, reranker);
 

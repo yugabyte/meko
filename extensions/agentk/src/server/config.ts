@@ -265,11 +265,16 @@ export function mekoWebUrlWarning(cfg: Config): string | null {
   const off = resolveMekoApiUrl(cfg) ? 'datapack links are' : 'datapack links and sharing are';
   // Only the host: a URL can carry credentials, and this goes to the log.
   let host = 'this Meko';
+  let local = false;
   try {
-    host = new URL(resolveMeko(cfg).url).host;
+    const u = new URL(resolveMeko(cfg).url);
+    host = u.host;
+    local = isLoopback(u.hostname.replace(/^\[|\]$/g, ''));
   } catch {
     /* not a URL: keep the generic name */
   }
+  // A Meko on this computer serves no web app yet: nothing to set.
+  if (local) return `${off} off: the Meko on this computer (${host}) has no web app yet; they come with Meko's web UI`;
   return `the Meko web app for ${host} isn't known, so ${off} off. Set it on the Meko tab in Settings, or with [meko] web_url in config.toml or MEKO_WEB_URL`;
 }
 

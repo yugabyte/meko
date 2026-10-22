@@ -24,10 +24,12 @@ import (
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/rest"
+	"github.com/yugabyte/meko/backend/internal/secrets"
 	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/storeapi"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/update"
 	"github.com/yugabyte/meko/backend/internal/version"
 )
 
@@ -65,6 +67,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 	lock, err := acquireServeLock(l.Lock)
+	if errors.Is(err, errLocked) && os.Getenv("MEKO_SERVICE") == "launchd" {
+		// launchd's KeepAlive can't skip one exit code the way systemd's RestartPreventExitStatus=75
+		// does, so exiting would only be retried every few seconds: wait for the folder instead.
+		lock, err = waitForLock(ctx, l)
+		if lock == nil && err == nil {
+			return nil // stopped while waiting
+		}
+	}
 	if errors.Is(err, errLocked) {
 		pid, _ := readInt(l.Pid)
 		return &lockedError{root: l.Root, pid: pid}
@@ -100,6 +110,38 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			log.Error("server stopped with an error", "error", err)
 		}
 	}()
+
+	// A release install on probation after an update: count this start, and roll back a version
+	// that keeps failing to start before it touches the database again.
+	app, release, isRelease := runningRelease()
+	onProbation := false
+	if isRelease {
+		p, perr := app.Started(release)
+		if perr != nil {
+			log.Warn("can't read the pending update", "error", perr)
+		}
+		if p != nil {
+			restored, rerr := store.RestoreBackup(l.DB, p.Schema)
+			if rerr != nil {
+				return fmt.Errorf("version %s failed to start %d times, and its database can't be rolled back: %w",
+					p.To, p.Attempts, rerr)
+			}
+			if err = app.RollBack(*p); err != nil {
+				return err
+			}
+			msg := fmt.Sprintf("version %s failed to start %d times; rolling back to %s", p.To, p.Attempts, p.From)
+			log.Warn(msg, "database_restored", restored)
+			// In service.log too: it's what someone reading why the service flapped looks at.
+			if f, ferr := os.OpenFile(l.ServiceLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); ferr == nil {
+				_, _ = fmt.Fprintf(f, "%s WARN %s\n", time.Now().UTC().Format(time.RFC3339), msg)
+				_ = f.Close()
+			}
+			return &rollbackError{exe: app.Exe(p.From)}
+		}
+		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
+			onProbation = true
+		}
+	}
 
 	st, err := store.Open(l.DB)
 	if err != nil {
@@ -141,7 +183,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return err
 	}
 	// The clients' token: made on first start, then kept, since clients store it once.
-	clientToken, err := auth.EnsureClientToken(l.ClientToken)
+	clientToken, err := ensureClientToken(ctx, l, cfg, log)
 	if err != nil {
 		return err
 	}
@@ -172,6 +214,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		UserID: userID, Log: log, NoMemoryEngine: noMemoryEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
 		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
 		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
+		// On probation after an update: a rollback restores the database, and its rows need their files.
+		KeepDeletedFiles: func() bool {
+			if !isRelease {
+				return false
+			}
+			p, _ := app.ReadPending()
+			return p != nil && p.To == release
+		},
 		MemoryEngineChild: func() (supervisor.Status, bool) {
 			for _, c := range sup.Statuses() {
 				if c.Name == memoryengine.Name {
@@ -240,11 +290,27 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			"write your memories through /mcp and /api/v1")
 	}
 
+	restart := make(chan struct{})
+	updCtx, stopUpdates := context.WithCancel(context.Background())
+	defer stopUpdates()
+	if isRelease {
+		startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart)
+	}
+
 	var serveErr error
 	select {
 	case <-ctx.Done():
 		log.Info("stopping")
+	case <-restart:
+		log.Info("stopping to restart into the update")
 	case serveErr = <-served:
+	}
+	stopUpdates()
+	if onProbation && serveErr == nil {
+		// A clean stop of a version on probation isn't a failed start.
+		if err := app.Uncount(release); err != nil {
+			log.Warn("can't update the pending update", "error", err)
+		}
 	}
 	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
@@ -272,18 +338,122 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 // isn't built): the server then runs without it, and memory features say why.
 func startMemoryEngine(sup *supervisor.Supervisor, l paths.Layout, cfg config.Config, token string,
 	log *slog.Logger) string {
-	o := memoryengine.Options{Node: cfg.MemoryEngine.Node, Dir: cfg.MemoryEngine.Dir, TestEmbedder: testEmbedder}
+	o := memoryengine.Options{Node: cfg.MemoryEngine.Node, Dir: cfg.MemoryEngine.Dir, TestEmbedder: testEmbedder,
+		Models: memoryengine.FindModels()}
 	node, err := memoryengine.FindNode(o)
 	if err == nil {
 		var dir string
 		if dir, err = memoryengine.FindDir(o); err == nil {
 			sup.Start(memoryengine.Spec(node, dir, l, token, o))
-			log.Info("memory engine starting", "node", node, "dir", dir)
+			log.Info("memory engine starting", "node", node, "dir", dir, "bundled_models", o.Models != "")
 			return ""
 		}
 	}
 	log.Warn("the memory engine can't start; memory features are off", "reason", err)
 	return err.Error()
+}
+
+// lockRetry is how often a launchd-run serve tries the data folder's lock again while another server
+// holds it.
+var lockRetry = 5 * time.Second
+
+// waitForLock waits for another server to release the data folder, saying so once on stderr (the
+// service's log). It returns a nil lock and error when ctx ends first.
+func waitForLock(ctx context.Context, l paths.Layout) (*os.File, error) {
+	pid, _ := readInt(l.Pid)
+	fmt.Fprintf(os.Stderr, "meko: %v; waiting for it to stop\n", &lockedError{root: l.Root, pid: pid})
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(lockRetry):
+		}
+		lock, err := acquireLock(l.Lock)
+		if !errors.Is(err, errLocked) {
+			return lock, err
+		}
+	}
+}
+
+// rollbackError is Serve's way of saying it rolled back a failing update: Run then runs exe, the
+// previous version, in its place.
+type rollbackError struct{ exe string }
+
+func (e *rollbackError) Error() string { return "rolled back to " + e.exe }
+
+// startUpdates runs a release install's update checks, and finishes an update on probation once it
+// has run update.HealthyAfter. Updates are installed only under the service, which starts the new
+// version after serve exits; a server started by hand only reports them.
+func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
+	log *slog.Logger, onProbation bool, restart chan struct{}) {
+	if onProbation {
+		go func() {
+			select {
+			case <-ctx.Done():
+			case <-time.After(update.HealthyAfter):
+				pruned, err := app.Healthy(release)
+				if err != nil {
+					log.Warn("can't finish the update", "error", err)
+					return
+				}
+				log.Info("the update is done", "version", release, "pruned", pruned)
+			}
+		}()
+	}
+	if cfg.Update.Channel == update.ChannelOff {
+		return
+	}
+	schema, err := store.LatestSchema()
+	if err != nil {
+		log.Warn("updates are off", "error", err)
+		return
+	}
+	var once sync.Once
+	u := &update.Updater{
+		App: app, Version: release, Client: newReleaseClient(cfg.Update.Repo), DataDir: l.Root,
+		Interval: time.Duration(cfg.Update.IntervalHours * float64(time.Hour)), FirstCheck: time.Minute,
+		Auto: cfg.Update.Auto && os.Getenv("MEKO_SERVICE") != "", Schema: schema, Log: log,
+		Restart: func() { once.Do(func() { close(restart) }) },
+	}
+	go u.Run(ctx)
+}
+
+// keychainRetry is how often serve tries the Keychain again while it refuses (locked, as when the
+// Mac has no login session).
+var keychainRetry = 10 * time.Second
+
+// ensureClientToken gets the client token from where this install keeps it. A Keychain that
+// refuses is waited for, not given up on: under launchd, exiting would only start the server again
+// and again.
+func ensureClientToken(ctx context.Context, l paths.Layout, cfg config.Config, log *slog.Logger) (string, error) {
+	ct, err := clientTokens(l, cfg)
+	if err != nil {
+		return "", err
+	}
+	for warned := false; ; {
+		tok, err := ct.Ensure()
+		if err == nil || ct.Store.Kind() != secrets.KindKeychain {
+			return tok, err
+		}
+		if !warned {
+			log.Warn("can't read the client token from the Keychain; trying again every 10 s", "error", err)
+			warned = true
+		}
+		select {
+		case <-ctx.Done():
+			return "", err
+		case <-time.After(keychainRetry):
+		}
+	}
+}
+
+// clientTokens is where this install keeps its client token ([secrets] store).
+func clientTokens(l paths.Layout, cfg config.Config) (auth.ClientTokens, error) {
+	s, err := secrets.Open(cfg.Secrets.Store, l.Root)
+	if err != nil {
+		return auth.ClientTokens{}, err
+	}
+	return auth.ClientTokens{Store: s, File: l.ClientToken}, nil
 }
 
 func removeRunFiles(l paths.Layout) {

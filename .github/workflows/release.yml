@@ -1,9 +1,11 @@
 name: Release
 
 # Versions are 0.<UTC date YYYYMMDD>.<n>, n counting from 0 for each release that day.
-# A push to main cuts a release when it contains feat/fix/perf/deps commits since the last
-# release tag and the tests pass. Run the workflow by hand to force a release, or to
-# rebuild the assets of an existing tag (one from after the move to extensions/agentk).
+# A push to main cuts a release when it contains AgentK's feat/fix/perf/deps commits (component
+# agentk or repo; meko commits release Meko, in meko-release.yml) since the last release tag and
+# the tests pass. The release scripts are the repo root's scripts/release/*.sh --product agentk.
+# Run the workflow by hand to force a release, or to rebuild the assets of an existing tag (one
+# from after the move to extensions/agentk).
 #
 # AgentK Local lives in extensions/agentk: jobs that run its scripts or npm work there.
 
@@ -59,6 +61,12 @@ jobs:
         run: |
           set -eu
           if [ -n "${DISPATCH_TAG:-}" ]; then
+            # Only AgentK's own tags: a meko-v… tag is Meko's release (meko-release.yml), and this would
+            # replace its installer and checksums.
+            case $DISPATCH_TAG in
+              v[0-9]*) ;;
+              *) echo "$DISPATCH_TAG isn't an AgentK Local release tag (v<version>)"; exit 1 ;;
+            esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
             # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
             git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||
@@ -66,8 +74,8 @@ jobs:
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=${DISPATCH_TAG#v}"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if sh scripts/release-notes.sh > /dev/null || [ "${FORCE:-false}" = "true" ]; then
-            version=$(sh scripts/next-version.sh)
+          if sh ../../scripts/release/release-notes.sh --product agentk > /dev/null || [ "${FORCE:-false}" = "true" ]; then
+            version=$(sh ../../scripts/release/next-version.sh --product agentk)
             echo "Releasing $version"
             { echo "release=true"; echo "rebuild=false"; echo "tag=v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
           else
@@ -297,8 +305,10 @@ jobs:
           SHA: ${{ needs.plan.outputs.ref }}
         run: |
           set -eu
-          sh extensions/agentk/scripts/release-notes.sh > notes.md || echo "Maintenance release." > notes.md
-          gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY" \
+          sh scripts/release/release-notes.sh --product agentk > notes.md || echo "Maintenance release." > notes.md
+          # Not "latest": the repo's latest release is Meko's (meko-release.yml), whose installer
+          # is the one-line install. AgentK's install.sh finds the newest AgentK release by tag.
+          gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
 
       - name: Replace assets on an existing release
@@ -322,4 +332,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           KEEP: 5
-        run: sh extensions/agentk/scripts/prune-releases.sh
+        run: sh scripts/release/prune-releases.sh --product agentk

@@ -21,13 +21,29 @@ model that runs locally) and keywords (FTS5); knowledge-base results are reranke
 cross-encoder, also run locally.
 The server listens only on `127.0.0.1`.
 
-Meko is under construction. It has its storage, memory engine, conversations, MCP and REST.
-Knowledge files ([#170](https://github.com/yugabyte/agent-k-local/issues/170)), an installer and
-releases ([#171](https://github.com/yugabyte/agent-k-local/issues/171)), and its web UI
-([#172](https://github.com/yugabyte/agent-k-local/issues/172)) come next, so for now you build it
-from source.
+Meko is under construction. It has its storage, memory engine, conversations, knowledge files,
+MCP and REST, and an installer that runs it as a login service and keeps it updated. Its web UI
+([#172](https://github.com/yugabyte/agent-k-local/issues/172)) comes next.
 
-## Build and run
+## Install
+
+On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon. The repo is internal for now, so
+the installer is fetched with a signed-in `gh` (or `GITHUB_TOKEN`):
+
+```sh
+gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+meko install_extension agentk     # optional: AgentK Local, using this Meko
+```
+
+It downloads the newest Meko release, checks its checksum, unpacks it into `~/.local/share/meko/app`, links
+`~/.local/bin/meko`, and sets Meko up as a login service (launchd on macOS, systemd on Linux) that
+restarts on failure and updates itself, rolling back an update that keeps failing to start. The
+release bundles its own Node and its models (the embedder and the reranker), so the first start
+needs no network. It
+takes `--version`, `--reinstall` and `--no-service` (pass them through `sh -s --`). How it all
+works: [`backend/docs/install.md`](backend/docs/install.md).
+
+## Build and run from source
 
 You need Go 1.26 (an older `go` downloads it on first use), a C compiler, and Node 22.13 or newer
 for the memory engine.
@@ -46,11 +62,17 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 
 | Command | What it does |
 |---|---|
-| `meko start` / `stop` | Start the server in the background, and stop it |
-| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode |
+| `meko start` / `stop` / `restart` | Start the server (through its service once installed), and stop or restart it. `start` and `stop` also start and stop the extensions; `stop --keep-extensions` doesn't |
+| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, its service, updates and extensions |
+| `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
-| `meko token [--mcp]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code |
+| `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL and token |
+| `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
+| `meko uninstall [--purge [--force]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data, asking first |
+| `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
+| `meko install_extension agentk` | Install AgentK Local pointed at this Meko; `meko start` and `stop` then run it too |
+| `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
 | `meko destroy [--force]` | Stop Meko and remove its data folder, everything in it, for good. It asks first; `--force` doesn't |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
@@ -62,9 +84,9 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 
 Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
-SQLite's locking doesn't work over the network; `meko status` prints where it is. `start` and
-`serve` take `--port` (default 7778). `search`, `add_memory`, `upload` and `upload_status` take
-`--datapack NAME|ID`, and use
+SQLite's locking doesn't work over the network; `meko status` prints where it is. `start`,
+`restart` and `serve` take `--port` (default 7778). `search`, `add_memory`, `upload` and
+`upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
 it's deleted, they need `--datapack`. The data commands take `--json` for the raw reply.
 
@@ -95,7 +117,9 @@ Its README covers installing and using it.
 - Meko's design: [`backend/docs/design.md`](backend/docs/design.md) (the server and storage),
   [`backend/docs/memory-engine.md`](backend/docs/memory-engine.md) (memories, conversations,
   search), [`backend/docs/api.md`](backend/docs/api.md) (MCP, REST and the CLI) and
-  [`backend/docs/knowledge.md`](backend/docs/knowledge.md) (knowledge files).
+  [`backend/docs/knowledge.md`](backend/docs/knowledge.md) (knowledge files) and
+  [`backend/docs/install.md`](backend/docs/install.md) (releases, the installer, the service,
+  extensions, updates and secrets).
 - AgentK Local: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).
 
 ## License

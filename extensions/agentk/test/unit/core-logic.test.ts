@@ -1041,6 +1041,10 @@ describe('Meko credentials', () => {
     cfg.meko.webUrl = 'https://meko.example.com';
     expect(mekoWebUrlWarning(cfg)).toBeNull();
     cfg.meko.webUrl = '';
+    cfg.meko.apiUrl = '';
+    // A Meko on this computer has no web app to set yet.
+    cfg.meko.url = 'http://127.0.0.1:7778/mcp';
+    expect(mekoWebUrlWarning(cfg)).toBe("datapack links and sharing are off: the Meko on this computer (127.0.0.1:7778) has no web app yet; they come with Meko's web UI");
     cfg.meko.enabled = false;
     expect(mekoWebUrlWarning(cfg)).toBeNull();
   });

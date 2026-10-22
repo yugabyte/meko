@@ -1,24 +1,32 @@
 #!/bin/sh
-# Release notes from commit subjects (<type>(<component>[/<area>])[!]: <summary>,
-# see scripts/check-title.sh; older ones may have no component) since the previous
-# release tag.
+# Release notes for one product from commit subjects (<type>(<component>[/<area>])[!]: <summary>,
+# see scripts/check-title.sh; older ones may have no component) since its previous release tag.
+# Only the product's own components count (product.sh): AgentK's notes skip meko subjects, and
+# Meko's take only them.
 #
-#   scripts/release-notes.sh [<from-ref>]      # default: the latest v0.* tag
+#   scripts/release/release-notes.sh [--product agentk|meko] [<from-ref>]
+#                                    # default product agentk, from its latest tag
 #
 # Also used to decide whether a push is worth releasing: exits 3 when there
-# are no feat/fix/perf/deps commits in the range. The other types don't
+# are no feat/fix/perf/deps commits for the product in the range. The other types don't
 # release, not even with a breaking-change marker.
 set -eu
+. "$(dirname "$0")/product.sh"
 
 # The types that release; each one has a section below.
 RELEASE='feat|fix|perf|deps'
 
-from=${1:-$(git tag -l 'v0.*' --sort=-v:refname | head -n 1)}
+from=${1:-$(newest_tag)}
 range=${from:+$from..}HEAD
+
+# The subjects on stdin (one per line) of types $1 (a regex) that release this product.
+own() {
+  grep -E "^($1)$scope!?: " | { if [ -n "$exclude" ]; then grep -vE "^($1)$exclude!?: "; else cat; fi; } || true
+}
 
 section() {
   # $1 = heading, $2 = type regex
-  lines=$(git log --no-merges --format='%s (%h)' "$range" | grep -E "^($2)(\([^)]*\))?!?: " || true)
+  lines=$(git log --no-merges --format='%s (%h)' "$range" | own "$2")
   [ -n "$lines" ] || return 0
   printf '### %s\n\n' "$1"
   printf '%s\n' "$lines" | sed -E "s/^($2)(\(([^)]*)\))?!?: /- \3: /; s/^- : /- /"
@@ -30,7 +38,7 @@ notes=$(
   breaking=$(
     for h in $(git log --no-merges --format=%H "$range"); do
       s=$(git log -1 --format=%s "$h")
-      printf '%s\n' "$s" | grep -qE "^($RELEASE)(\([^)]*\))?!?: " || continue
+      [ -n "$(printf '%s\n' "$s" | own "$RELEASE")" ] || continue
       printf '%s\n' "$s" | grep -E "^($RELEASE)(\([^)]*\))?!: " || true
       git log -1 --format=%b "$h" | grep -E '^BREAKING CHANGE: ' || true
     done

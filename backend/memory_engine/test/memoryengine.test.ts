@@ -10,10 +10,10 @@ import { after, before, describe, test } from "node:test";
 import { EmbedderFactory, HistoryManagerFactory, LLMFactory, VectorStoreFactory } from "mem0ai/oss";
 
 import { loadReranker, startUp } from "../src/app.js";
-import { HashEmbedder, Lanes } from "../src/embedder.js";
+import { DEFAULT_MODEL, HashEmbedder, Lanes, WorkerEmbedder } from "../src/embedder.js";
 import { MemoryEngine, HttpError, toResult } from "../src/memoryengine.js";
 import { MekoHistory, MekoStore, NoLLM, PROVIDERS, register } from "../src/providers.js";
-import { OverlapReranker, type LocalReranker } from "../src/reranker.js";
+import { DEFAULT_RERANKER, type LocalReranker, OverlapReranker, WorkerReranker } from "../src/reranker.js";
 import { mekoScore } from "../src/scoring.js";
 import { startServer, type Health } from "../src/server.js";
 import { StoreClient, StoreError } from "../src/storeclient.js";
@@ -28,6 +28,34 @@ describe("mekoScore", () => {
   });
   test("caps at 1", () => {
     assert.equal(mekoScore({ semanticScore: 1, bm25Score: 1, entityBoost: 0.5 }), 1);
+  });
+});
+
+describe("WorkerEmbedder", () => {
+  test("offline (a release's bundled models) never downloads: a missing model is an error", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meko-models-"));
+    const e = new WorkerEmbedder(dir, DEFAULT_MODEL, true);
+    try {
+      await assert.rejects(e.ready(), /can't load the embedding model Xenova\/all-MiniLM-L6-v2/);
+      assert.deepEqual(fs.readdirSync(dir), [], "nothing was fetched into the models folder");
+    } finally {
+      await e.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("WorkerReranker", () => {
+  test("offline (a release's bundled models) never downloads: a missing model is an error", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "meko-models-"));
+    const r = new WorkerReranker(dir, DEFAULT_RERANKER, true);
+    try {
+      await assert.rejects(r.ready(), /can't load the reranking model Xenova\/ms-marco-MiniLM-L-6-v2/);
+      assert.deepEqual(fs.readdirSync(dir), [], "nothing was fetched into the models folder");
+    } finally {
+      await r.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

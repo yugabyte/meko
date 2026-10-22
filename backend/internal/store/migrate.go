@@ -125,3 +125,51 @@ func (s *Store) apply(ctx context.Context, m migration) error {
 	}
 	return tx.Commit()
 }
+
+// LatestSchema is the schema version this binary migrates databases to.
+func LatestSchema() (int, error) {
+	ms, err := loadMigrations()
+	if err != nil {
+		return 0, err
+	}
+	return ms[len(ms)-1].version, nil
+}
+
+// RestoreBackup undoes an upgrade from schema version v, for rolling back to the meko that knew
+// only v: if the database at path is newer than v and Migrate's copy of it at v is there, the
+// newer file and its WAL move aside to <path>.failed-<version> and the copy is put back. Writes
+// made since the upgrade are in the file moved aside. It reports whether it restored anything.
+func RestoreBackup(path string, v int) (bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		return false, nil //nolint:nilerr // no database: nothing to restore
+	}
+	bak := fmt.Sprintf("%s.bak-%d", path, v)
+	if _, err := os.Stat(bak); err != nil {
+		return false, nil //nolint:nilerr // no copy at v: the upgrade didn't migrate, or it can't be undone
+	}
+	s, err := Open(path)
+	if err != nil {
+		return false, err
+	}
+	cur, err := s.SchemaVersion(context.Background())
+	if cerr := s.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil || cur <= v {
+		return false, err
+	}
+	failed := fmt.Sprintf("%s.failed-%d", path, cur)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if rerr := os.Rename(path+suffix, failed+suffix); rerr != nil && !os.IsNotExist(rerr) {
+			return false, rerr
+		}
+	}
+	b, err := os.ReadFile(bak) //nolint:gosec // G304: the data folder's own backup
+	if err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil { //nolint:gosec // G703: the data folder's own database
+		return false, err
+	}
+	return true, nil
+}

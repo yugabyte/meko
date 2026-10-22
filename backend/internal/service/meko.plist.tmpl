@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Meko. Written by `meko install`; changes are overwritten. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{.Label}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{xml .Exe}}</string>
+    <string>serve</string>
+    <string>--detached</string>
+    <string>--data-dir</string>
+    <string>{{xml .DataDir}}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MEKO_SERVICE</key>
+    <string>launchd</string>
+    <!-- launchd sets no locale. -->
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restarted however it exits: a clean exit 0 is how an update restarts. launchd can't skip
+       exit 75 as systemd does, so serve waits while another server holds the data folder. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <!-- serve drains requests for up to 10 s and stops its children for up to 15 s more; launchd's
+       default of 20 s would kill it partway. -->
+  <key>ExitTimeOut</key>
+  <integer>35</integer>
+  <!-- serve writes its own log (logs/meko.log); this keeps errors from before it starts. -->
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>{{xml .ServiceLog}}</string>
+</dict>
+</plist>

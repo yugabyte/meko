@@ -35,11 +35,24 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] No third-party C code is copied into `backend/`. SQLite and sqlite-vec come from the
       `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates
       `TestLibVersions`, and the build keeps the `sqlite_fts5` and `sqlite_vec` tags.
-- [ ] Commits are `chore(meko): ...` (or `chore(meko/<area>): ...`): nothing in `backend/` ships
-      in AgentK Local's release yet.
+- [ ] Commits name the `meko` component, and a `feat`, `fix`, `perf` or `deps` subject means it
+      changes what Meko ships (it cuts a Meko release).
+- [ ] Secrets (the client token, later provider keys) live only in `internal/secrets` or the client
+      token's file, and never reach a log, an error, or a command line other than an installer's
+      own `--meko-key`. The Keychain is written through `security -i` on stdin.
+- [ ] The service files keep their stop timeout above serve's own shutdown (35 s), exit 75 stays
+      "don't restart" for systemd and a launchd-run serve waits for the folder instead, and the CLI
+      uses a service only for the data folder it runs. Releases stay outside the data folder.
+- [ ] An update is checked before it's switched to (checksum, then the staged `meko version --json`),
+      and anything that changes the database's schema keeps rollback working: `Migrate` backs the
+      file up, and `store.RestoreBackup` can put it back.
+- [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
+      (`MEKO_MODELS_OFFLINE`), and
+      `scripts/smoke-release.sh` passes on each platform.
+- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `agent-k-local`.
 - [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
       temporary name and renamed before their row commits, removed after it's deleted; their text
       never reaches a log or an error reply.
-- [ ] `docs/design.md`, `docs/memory-engine.md`, `docs/knowledge.md` and `AGENTS.md` here match the
-      code, and so does the repo root's `README.md` (Meko's commands, their flags and the build
-      requirements).
+- [ ] `docs/design.md`, `docs/memory-engine.md`, `docs/knowledge.md`, `docs/install.md` and
+      `AGENTS.md` here match the code, and so does the repo root's `README.md` (Meko's commands,
+      their flags and the build requirements).

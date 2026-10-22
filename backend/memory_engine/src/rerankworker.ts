@@ -1,5 +1,5 @@
 // The reranker worker thread: loads the cross-encoder once (downloading it into the models folder
-// the first time), then scores (query, text) pairs one batch at a time, replying with the model's
+// the first time, unless it's a release's bundled copy), then scores (query, text) pairs one batch at a time, replying with the model's
 // raw logits.
 import { parentPort, workerData } from "node:worker_threads";
 
@@ -11,15 +11,18 @@ import {
   type PreTrainedTokenizer,
 } from "@huggingface/transformers";
 
-const { cacheDir, model, revision, dtype } = workerData as {
+const { cacheDir, model, revision, dtype, offline } = workerData as {
   cacheDir: string;
   model: string;
   revision: string;
   dtype: string;
+  offline: boolean;
 };
 const port = parentPort!;
 
 env.cacheDir = cacheDir;
+// A release ships the model: never fetch it, so a missing file says so instead of reaching out.
+env.allowRemoteModels = !offline;
 
 let tokenizer: PreTrainedTokenizer;
 let classifier: PreTrainedModel;

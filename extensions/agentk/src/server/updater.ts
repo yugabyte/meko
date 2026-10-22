@@ -130,10 +130,24 @@ function toComparison(c: GhComparison): Comparison {
 
 const compareRoute = (repo: string, base: string, head: string) => `repos/${repo}/compare/${base}...${head}`;
 
+/**
+ * The prefixes of AgentK's release tags: `v<version>` today, and `agentk-v<version>` once #230
+ * switches to it (scripts/release/product.sh), so a version reading both is out before the switch.
+ * Meko's `meko-v…` releases are another product's: their versions don't parse, so they're never
+ * offered.
+ */
+export const TAG_PREFIXES = ['agentk-v', 'v'] as const;
+
+/** The version an AgentK tag names, or the tag itself when it isn't one (which pickLatest skips). */
+export function tagVersion(tag: string): string {
+  for (const p of TAG_PREFIXES) if (tag.startsWith(p) && /^\d/.test(tag.slice(p.length))) return tag.slice(p.length);
+  return tag;
+}
+
 function toRelease(r: GhRelease): Release {
   return {
     tag: r.tag_name,
-    version: r.tag_name.replace(/^v/, ''),
+    version: tagVersion(r.tag_name),
     prerelease: r.prerelease,
     draft: r.draft,
     url: r.html_url,
@@ -375,7 +389,7 @@ const KV_URL = 'update.releaseUrl';
 const KV_JUST = 'update.justUpdatedFrom';
 const KV_LAST_FROM = 'update.lastUpdatedFrom';
 
-/** A version as its tag names it after the `v`, nothing around it. */
+/** A version as its tag names it after the prefix (`agentk-v`, `v`), nothing around it. */
 const BARE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Whether What's new can show the changes from `from` to `to`: both bare versions, `from` the older. */
@@ -399,6 +413,8 @@ export class Updater {
   private readonly appDir: string | undefined;
   /** What's new by range: the commits between two tags never change. */
   private notesCache = new Map<string, Promise<ReleaseNotes>>();
+  /** Each listed release's tag by its version, from the last check. */
+  private tags = new Map<string, string>();
 
   constructor(private deps: UpdaterDeps) {
     this.appDir = deps.appDir ?? process.env.AK_APP_DIR ?? undefined;
@@ -499,10 +515,10 @@ export class Updater {
     const { repo } = this.deps.config().update;
     let c: Comparison;
     try {
-      c = await (await this.source()).compare(repo, `v${from}`, `v${to}`);
+      c = await this.eachTag([from, to], ([a, b], src) => src.compare(repo, a!, b!));
     } catch (e) {
       const why = ((e as { stderr?: string }).stderr || (e as Error).message).trim();
-      throw new Error(`GitHub couldn't compare v${from} and v${to}: ${why}`, { cause: e });
+      throw new Error(`GitHub couldn't compare ${from} and ${to}: ${why}`, { cause: e });
     }
     return {
       from,
@@ -522,6 +538,30 @@ export class Updater {
 
   private async source(): Promise<ReleaseSource> {
     return this.deps.source ?? (await defaultReleaseSource());
+  }
+
+  /** The tags a version may have: the listed one, else each prefix's (a pruned release keeps its tag). */
+  private tagsOf(version: string): string[] {
+    const known = this.tags.get(version);
+    return known ? [known] : TAG_PREFIXES.map((p) => `${p}${version}`);
+  }
+
+  /**
+   * Runs `f` with a tag for each version, trying the next possible tags while GitHub doesn't know
+   * the ones tried (`tagsOf`); the last failure is thrown.
+   */
+  private async eachTag<T>(versions: string[], f: (tags: string[], src: ReleaseSource) => Promise<T>): Promise<T> {
+    const src = await this.source();
+    const combos = versions.reduce<string[][]>((acc, v) => acc.flatMap((c) => this.tagsOf(v).map((t) => [...c, t])), [[]]);
+    let last: unknown;
+    for (const tags of combos) {
+      try {
+        return await f(tags, src);
+      } catch (e) {
+        last = e;
+      }
+    }
+    throw last;
   }
 
   check(): Promise<UpdateStatus> {
@@ -546,6 +586,7 @@ export class Updater {
         arch: this.deps.arch,
         platform: this.deps.platform,
       });
+      this.tags = new Map(releases.map((r) => [r.version, r.tag]));
       this.latest = best?.version ?? null;
       this.releaseUrl = best?.url ?? null;
       this.lastError = null;
@@ -594,14 +635,15 @@ export class Updater {
     const cfg = this.deps.config();
     const staging = join(paths.app, `.staging-${target}-${randomBytes(4).toString('hex')}`);
     try {
-      const src = await this.source();
-      const tag = `v${target}`;
       const asset = tarballName(target, this.deps.arch, this.deps.platform);
       const dl = join(paths.downloads, target);
       rmSync(dl, { recursive: true, force: true });
       this.deps.log(`Downloading ${asset}`);
-      const tarball = await src.download(cfg.update.repo, tag, asset, dl);
-      const sums = await src.download(cfg.update.repo, tag, 'SHA256SUMS', dl);
+      // By the release's own tag: agentk-v<version>, or v<version> from before (TAG_PREFIXES).
+      const [tarball, sums] = await this.eachTag([target], async ([tag], src) => [
+        await src.download(cfg.update.repo, tag!, asset, dl),
+        await src.download(cfg.update.repo, tag!, 'SHA256SUMS', dl),
+      ]);
       await verifySha256(tarball, sums);
 
       if (cfg.update.requireAttestation) {

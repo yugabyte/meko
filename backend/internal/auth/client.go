@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/yugabyte/meko/backend/internal/secrets"
 )
 
 // The client token is what MCP and REST clients (Claude Code, AgentK, the CLI's own MCP calls)
@@ -76,4 +78,72 @@ func ReadClientToken(path string) (string, error) {
 		return "", fmt.Errorf("%s doesn't hold a token. %s", path, fix)
 	}
 	return tok, nil
+}
+
+// ClientTokenName is the client token's name in a secret store.
+const ClientTokenName = "client-token"
+
+// ClientTokens is where an install keeps its client token. With the file store it's client.token
+// in the data folder, where it has always been (EnsureClientToken). With the Keychain it's an item
+// there, and a client.token left from before moves into the Keychain the first time it's read.
+type ClientTokens struct {
+	Store secrets.Store
+	File  string // client.token in the data folder
+}
+
+// Read returns the token; fs.ErrNotExist means there's none yet.
+func (c ClientTokens) Read() (string, error) {
+	if c.Store == nil || c.Store.Kind() == secrets.KindFile {
+		return ReadClientToken(c.File)
+	}
+	tok, err := c.Store.Get(ClientTokenName)
+	if !errors.Is(err, secrets.ErrNotFound) {
+		return tok, err
+	}
+	tok, err = ReadClientToken(c.File)
+	if err != nil {
+		return "", err // fs.ErrNotExist when there was none to move either
+	}
+	if err = c.Store.Set(ClientTokenName, tok); err != nil {
+		return "", err
+	}
+	return tok, os.Remove(c.File)
+}
+
+// Ensure returns the token, making it the first time.
+func (c ClientTokens) Ensure() (string, error) {
+	if c.Store == nil || c.Store.Kind() == secrets.KindFile {
+		return EnsureClientToken(c.File)
+	}
+	tok, err := c.Read()
+	if !errors.Is(err, fs.ErrNotExist) {
+		return tok, err
+	}
+	if tok, err = NewToken(); err != nil {
+		return "", err
+	}
+	// Two makers at once (serve starting while meko token runs) must agree on one token: a store
+	// that can add only when there's none keeps the first.
+	if a, ok := c.Store.(interface {
+		Add(name, value string) (string, error)
+	}); ok {
+		return a.Add(ClientTokenName, tok)
+	}
+	if err = c.Store.Set(ClientTokenName, tok); err != nil {
+		return "", err
+	}
+	return c.Store.Get(ClientTokenName)
+}
+
+// Delete removes the token wherever it is.
+func (c ClientTokens) Delete() error {
+	if c.Store != nil {
+		if err := c.Store.Delete(ClientTokenName); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(c.File); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
