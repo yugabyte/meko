@@ -50,11 +50,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
       `MIN_MOD_CLAUDE` allows.
 - [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
-      answers the guard or context hooks, or reads a transcript goes through its adapter
-      (`src/server/harness/`), never straight to Claude Code's files or flags, and what only some
-      harnesses have (the mod, Artifacts, usage as tokens or credits) is read from `HARNESS_CAPS`,
-      not from the harness's name. Text about the process and its terminal names the session's agent
-      (`agentName()`), not "Claude", in error messages and screen-reader labels too. Anything AgentK
+      answers the guard or context hooks, reads a transcript, usage or conversation id, or runs Ask
+      AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
+      Claude Code's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
+      usage as tokens or credits, a minimum version) is read from `HARNESS_CAPS` or an optional
+      adapter method, not from the harness's name (no new `harness === 'kiro'` outside the adapters;
+      `docs/design/harnesses.md` lists the few that stay on purpose). Text about the process and its
+      terminal names the session's agent (`agentName()`), not "Claude", in error messages and
+      screen-reader labels too. Anything AgentK
       writes in the user's Kiro home (the `agentk` agent) is marked as AgentK's, inert without
       AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
       launch), and is removed by `uninstall`. A Kiro session reads and resumes only its own
@@ -278,8 +281,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
-      share notifies once. While Meko's API URL isn't known the share and invite routes answer 409
-      saying to set the web app URL, and the invite sync skips Meko's invites.
+      share notifies once (one joined here by its share link gets no notification or banner). While Meko's API URL isn't
+      known the share and invite routes answer 409 saying to set the web app URL, and the invite sync
+      skips Meko's invites. A share link's token is never logged or stored, and joining by a pasted
+      link sends its token to Meko only for a link on the configured web app, and only when picked.
 - [ ] Nothing that identifies a person or their work goes into the usage stats report
       (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
       field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and
@@ -310,10 +315,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       changes need no new tests.
 - [ ] **Docs are updated in the same change** (see the table in AGENTS.md): the part of
       `docs/design/` that covers the change (and the contents table in `docs/design.md` for a new
-      part), the repo root's `README.md`, `CONTRIBUTING.md`, `AGENTS.md` (AgentK's,
+      part), `README.md`, `CONTRIBUTING.md`, `AGENTS.md` (AgentK's,
       `src/server/AGENTS.md` or `src/web/AGENTS.md`, or the repo root's for the repo layout), `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
-- [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, and its type
+- [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, its component
+      names where the change is (`agentk` for AgentK, `repo` for root-only changes), and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
-      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type. There's no agent attribution.
+      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits. There's no agent attribution.

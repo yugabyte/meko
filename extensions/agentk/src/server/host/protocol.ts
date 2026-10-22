@@ -42,8 +42,6 @@ export interface HelloReply {
   startedAt: number;
 }
 
-export type HostReply = { ok: true; protocol: number; [k: string]: unknown } | { ok: false; protocol: number; error: string; code?: string };
-
 /** Frame types. Host → viewer: output bytes, or a JSON control message. Viewer → host: input bytes, or JSON control. */
 export const FRAME_DATA = 1;
 export const FRAME_CONTROL = 2;

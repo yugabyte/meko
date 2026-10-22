@@ -11,8 +11,10 @@ import type {
   EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
+  JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
 } from '../shared/types.js';
-import { MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
+import { LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
+import { shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
 import {
@@ -25,7 +27,8 @@ import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
-import { MekoApiError } from './mekoapi.js';
+import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
+import { resolveMekoWebUrl } from './config.js';
 import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
@@ -363,6 +366,102 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.delete<{ Params: { id: string; inviteId: string } }>('/api/meko/datapacks/:id/people/invites/:inviteId', async (req): Promise<DatapackPeople> =>
     sharing(req.params.id, () => core.invites.api.revoke(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
 
+  // ---- share links (Meko's: one per datapack; anyone signed in who opens it joins) ----
+  const noWebUrl = (what: string) =>
+    new HttpError(409, `Meko's web app URL isn't known, so AgentK can't ${what}. Set it on the Meko tab in Settings.`);
+  /** For the browser: the link on Meko's web app while it's on. The token goes nowhere else, the log included. */
+  const shareLinkOut = (l: ShareLinkRow, webUrl: string): ShareLink => ({
+    active: l.active,
+    grant: l.grant,
+    url: l.active && l.token ? shareLinkUrl(webUrl, l.token) : null,
+    joined: l.joined,
+    atLinkRole: l.atLinkRole,
+  });
+  app.get<{ Params: { id: string } }>('/api/meko/datapacks/:id/share-link', async (req): Promise<ShareLinkState> => {
+    shareable(req.params.id);
+    const webUrl = resolveMekoWebUrl(core.config);
+    if (!webUrl) return { link: null, unavailable: 'no-web-url' };
+    try {
+      return { link: shareLinkOut(await core.invites.api.shareLink(req.params.id), webUrl) };
+    } catch (e) {
+      if (e instanceof MekoApiError && e.status === 403) return { link: null, unavailable: 'permission' };
+      if (routeMissing(e)) return { link: null, unavailable: 'unsupported' };
+      throw core.invites.apiFailure(e, 'Meko');
+    }
+  });
+  app.put<{ Params: { id: string }; Body: ShareLinkChange }>('/api/meko/datapacks/:id/share-link', async (req): Promise<ShareLink> => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const keys = Object.keys(b).sort().join(',');
+    if (b.grant !== undefined && !LINK_GRANTS.includes(b.grant as LinkGrant)) throw new HttpError(400, 'A share link gives viewer or contributor access.');
+    const grant = b.grant as LinkGrant;
+    // Meko takes one change per call; turning on with a role is two.
+    let change: MekoShareLinkChange;
+    let what: string;
+    if (keys === 'active,grant' && b.active === true) [change, what] = [{ status: 'active' }, `turned on as ${grant}`];
+    else if (keys === 'active' && b.active === false) [change, what] = [{ status: 'off' }, 'turned off'];
+    else if (keys === 'grant') [change, what] = [{ grant }, `set to ${grant}`];
+    else if (keys === 'reset' && b.reset === true) [change, what] = [{ reset: true }, 'reset'];
+    else throw new HttpError(400, 'Make one change: turn the link on with a role, turn it off, change its role, or reset it.');
+    shareable(req.params.id);
+    const webUrl = resolveMekoWebUrl(core.config);
+    if (!webUrl) throw noWebUrl('share by link');
+    return sharing(req.params.id, async () => {
+      let link = await core.invites.api.setShareLink(req.params.id, change);
+      // Turned on, then given the role picked. Anyone who joins in between moves with the role change.
+      if (b.active === true && link.grant !== grant) link = await core.invites.api.setShareLink(req.params.id, { grant });
+      core.log.info(`share link of datapack ${req.params.id} ${what}`);
+      return shareLinkOut(link, webUrl);
+    });
+  });
+  app.post<{ Body: JoinByLinkRequest }>('/api/meko/share-links/join', async (req): Promise<JoinByLinkResult> => {
+    core.invites.requireSharing('join datapacks by link');
+    const webUrl = resolveMekoWebUrl(core.config);
+    if (!webUrl) throw noWebUrl('join datapacks by link');
+    // Only a link on our own Meko's web app: a look-alike link's token never reaches Meko.
+    const token = shareLinkToken(typeof req.body?.url === 'string' ? req.body.url : '', webUrl);
+    if (!token) throw new HttpError(400, `That isn't a share link from ${new URL(webUrl).host}.`);
+    let joined: RedeemedShareLink;
+    try {
+      joined = await core.invites.api.redeemShareLink(token);
+    } catch (e) {
+      if (e instanceof MekoApiError && e.code === 'REMOVED_FROM_DATAPACK') {
+        throw new HttpError(403, "You were removed from this datapack, so its link doesn't let you back in. Ask its owner to invite you again.");
+      }
+      if (routeMissing(e)) throw new HttpError(409, "This Meko doesn't have share links.");
+      if (e instanceof MekoApiError && e.status === 404) {
+        throw new HttpError(404, "This link doesn't work any more: its owner may have turned it off or reset it. Ask them for a new one.");
+      }
+      throw core.invites.apiFailure(e, "Meko couldn't join you through that link");
+    }
+    const id = joined.datapackId;
+    core.invites.joinedHere(id);
+    core.log.info(`joined datapack ${id} through a share link${joined.alreadyMember ? ' (already a member)' : ''}`);
+    // The share as the Open project dialog offers it. joinedHere() made any sync already running
+    // read Meko again, so the rows sync() uses are from after the join, ours or its own.
+    let listed: MekoDatapackRow | undefined;
+    try {
+      const stamp = core.invites.stamp();
+      const rows = await core.meko.listDatapacks();
+      listed = rows.find((r) => r.id === id);
+      await core.invites.sync({ rows, stamp });
+    } catch (e) {
+      core.log.warn("joined a datapack through a share link, but couldn't read the datapack list", errMsg(e));
+    }
+    const project = get<{ id: string; name: string }>(db, `SELECT p.id, p.name FROM project_datapacks d JOIN projects p ON p.id = d.project_id
+                           WHERE d.datapack_id = ? AND p.deleted_at IS NULL ORDER BY d.role = 'dedicated' DESC, p.position LIMIT 1`, id) ?? null;
+    // Our access as the datapack list has it (a maintainer may paste a viewer link), else the link's.
+    const grant: JoinByLinkResult['grant'] = listed?.grant === 'owner' ? 'owner' : asGrant(listed?.grant) ?? joined.grant;
+    const share = project ? null : core.invites.openShare(id);
+    return {
+      datapackId: id,
+      name: listed?.name ?? share?.name ?? null,
+      grant,
+      alreadyMember: joined.alreadyMember,
+      invite: share && grant !== 'viewer' ? share : null,
+      project,
+    };
+  });
+
   // The people invited before, suggested in the Share dialog. Local only, so they don't need Meko.
   app.get('/api/share-contacts', async (): Promise<ShareContact[]> => listContacts(db));
   app.delete<{ Params: { email: string } }>('/api/share-contacts/:email', async (req, reply) => {
@@ -601,7 +700,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['claudeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
-    const enabledBefore = { claude: core.config.claude.enabled, kiro: core.config.kiro.enabled };
+    const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
     if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
     // Checked against Meko before anything is saved.
     const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;

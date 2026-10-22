@@ -5,8 +5,8 @@ should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and
 
 AgentK Local lives in `extensions/agentk` of the meko-local repo; the repo's own
 [AGENTS.md](../../AGENTS.md) covers the rest of it. Paths here are relative to `extensions/agentk`,
-except `.github/`, `.claude/`, `scripts/check-title.sh`, `README.md` and `LICENSE`, which are at the
-repo root. Run the commands below from `extensions/agentk`.
+except `.github/`, `.claude/`, `scripts/check-title.sh`, `scripts/ci-scope.sh` and `LICENSE`,
+which are at the repo root. Run the commands below from `extensions/agentk`.
 
 AgentK Local is a self-hosted web workbench for Claude Code and Kiro CLI (either one is enough). A project is an effort on a feature
 or product, worked on in a git repo. Each task is a session with its own git worktree and a
@@ -44,18 +44,18 @@ agents should read it before changing code there.
 | `src/shared/types.ts` | The API contract: every REST route, WebSocket message and shared type. Change it first. |
 | `src/server/` | The server, the session host (`host/`) and the CLI. A row per module is in [src/server/AGENTS.md](src/server/AGENTS.md). |
 | `src/web/` | The React + xterm.js UI. A row per module, and the rules every UI change follows (it must work on a phone), are in [src/web/AGENTS.md](src/web/AGENTS.md) and [src/web/REVIEW.md](src/web/REVIEW.md). |
-| `src/shared/harnesses.ts` | The harnesses a session can run on (`claude`, `kiro`), their labels and what each can do (`HARNESS_CAPS`: the mod, Artifacts, a needs-you hook, plan limits, tokens or credits, whether a by-model row names it), which the server and the UI both gate on; `harnessOf()` reads a stored id. |
-| `src/shared/decisions.ts` | A design's Key Design Decisions (KDDs, `DesignQuestion`): numbering questions Q1… and AgentK's own decisions D1… (`decisionNumbers`), and which the user can answer (`answerable`: an open question, or a decision to change). Used by the server and the Questions tab. |
+| `src/shared/harnesses.ts` | The harnesses a session can run on (`claude`, `kiro`), their labels and what each can do (`HARNESS_CAPS`: the mod, Artifacts, tokens or credits, whether a by-model row names it, the oldest version sessions start on), which the server and the UI both gate on; `harnessOf()` reads a stored id. |
+| `src/shared/decisions.ts` | A design's Key Design Decisions (KDDs, `DesignQuestion`): numbering questions Q1… and AgentK's own decisions D1… (`decisionNumbers`), which the user can answer (`answerable`: an open question, or a decision to change), and the marker a design puts after a decision that rests on Meko (`MEKO_SOURCE_MARK`, `MEKO_SOURCE_CLASS`). Used by the server (the prompts), the Questions tab and the design panel (`design-frame.ts`). |
 | `src/shared/stages.ts` | The rules for moving a session by hand: where a task can move, what can't be moved, where the move dialog starts, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. |
 | `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/shared/branches.ts` | The branch prefix setting's `{login}` (`expandBranchPrefix`: gh's login, or left out with its joiner when gh can't say) and the default, `ak_{login}/`. Used by the server and the web UI. |
 | `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `agent-k-local attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
-| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, and the web app that goes with an MCP URL (`mekoWebUrl`). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out. |
+| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out, and Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
 | `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK Local while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot, and with the call's content for the Meko call log while the project keeps one), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
 | `scripts/install.sh` | The installer: stops early where AgentK Local is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, and a coding agent when neither Claude Code nor Kiro CLI is there: it asks which, or `--agent`) after asking, checks each agent's sign-in, downloads and verifies the release, then runs `agent-k-local install`. Tested against stub tools in `test/unit/install-script.test.ts`. |
-| `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, and (at the repo root, running from `extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release-notes.sh` decides which types release; their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`. |
+| `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, and (at the repo root, running from `extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release-notes.sh` decides which types release; their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`. The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../…`) runs AgentK's job, and that the `CI gate` job needs every other job. |
 | `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 | `docs/` | The design: [docs/design.md](docs/design.md) is its index (the decisions so far, and which part covers what), with one file per area under `docs/design/`. Also the usage report's schema (`call-home-report.schema.json`) and the screenshots. |
 
@@ -120,7 +120,8 @@ agents should read it before changing code there.
   `~/.claude.json` or Meko (see `test/helpers.ts`); `test/setup.ts` runs first in every test file, scrubs `MEKO_*`, `AK_*`,
   `CLAUDE*`, `KIRO_*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
-- Commits and PR titles: `<type>[(<component>)][!]: <summary>` with one of nine types, checked by
+- Commits and PR titles: `<type>(<component>[/<area>])[!]: <summary>` with one of nine types and,
+  for AgentK, the component `agentk` (`feat(agentk/web): …`), checked by
   the repo root's `scripts/check-title.sh`, and **no agent attribution** (see the repo root's
   `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
@@ -135,7 +136,7 @@ Docs are part of the change. Update them **in the same commit** as the code:
 | When you change… | Update |
 |---|---|
 | Behavior, architecture, lifecycle, security or data model | The part of `docs/design/` that covers it (a new part gets a row in the contents table of `docs/design.md`) |
-| Features, requirements, install steps | The repo root's `README.md` |
+| Features, requirements, install steps | `README.md` (the repo root's README is Meko's, and points here) |
 | Dev setup, checks, release process | `CONTRIBUTING.md` |
 | Module layout, invariants, commands, conventions | `AGENTS.md`: this one, or `src/server/AGENTS.md` or `src/web/AGENTS.md` for a module there (the repo root's for the repo layout and repo-wide rules) |
 | What reviewers should check | `REVIEW.md` |

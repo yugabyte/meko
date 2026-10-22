@@ -7,9 +7,14 @@ name and the most urgent session state shown on it. Drag a project to reorder th
 screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
 hold the project's sessions. With **List sessions under their project** ticked in Settings › General
 (off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
-under it in the rail instead of the tabs, oldest first, one row each with its status dot, its full name
+under it in the rail instead of the tabs, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage, so many show at once and any can be opened with one click,
-in any project. The session on screen is highlighted (its project's name turns bold instead), and
+in any project. The tabs and the rail list a project's sessions in the same order, kept on the server
+(`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
+any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
+takes a rail row's stage chip's place on hover, and is in the ⋯ sheet and the command palette (where
+touch screens find it). Each takes one below the project's lowest position, so no other row is
+renumbered. The session on screen is highlighted (its project's name turns bold instead), and
 **+ New session** follows each project's list (the project on screen shows it even with no
 sessions). The ▾ at the right of a project's row folds its list away and ▸ brings it back; a folded
 project keeps its dot and count, and takes the highlight when the session on screen is in it. Which
@@ -315,8 +320,10 @@ opens the dialog in an open window, or opens `/`, where the share's banner is wa
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
 app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
 top of the screen, in place of `⌘K`), and, with the setting on, lists the sessions under their projects as on a desktop.
-The app bar also holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
-can switch sessions without opening the drawer (each tab shows its status and stage). The session header,
+With the setting off, the app bar holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
+can switch sessions without opening the drawer (each tab shows its status and stage); with it on, the drawer
+lists them instead and the app bar names the session and its project, with the session's status dot, and puts
+a dot on the drawer button while another session in the project needs you. The session header,
 the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a

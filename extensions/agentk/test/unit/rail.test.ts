@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { railCollapsedSaved, railHiddenSaved, railSessionsSaved, railWidthSaved, saveRailSessions } from '../../src/web/rail.js';
+import { railCollapsedSaved, railHiddenSaved, railSessionsSaved, railWidthSaved, saveRailSessions, sessionTabsShown } from '../../src/web/rail.js';
 
 describe('projects pane', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -43,6 +43,19 @@ describe('projects pane', () => {
   ])('hides the pane for a stored %s: %s (shown by default)', (stored, hidden) => {
     vi.stubGlobal('localStorage', { getItem: () => stored });
     expect(railHiddenSaved()).toBe(hidden);
+  });
+
+  it.each([
+    [false, false, false, true],
+    [false, false, true, true],
+    [false, true, false, true],
+    [false, true, true, true],
+    [true, false, false, false],
+    [true, true, false, true],
+    [true, false, true, false],
+    [true, true, true, false],
+  ])('session tabs with rail sessions %s, pane hidden %s, phone %s: %s', (railSessions, railHidden, mobile, shown) => {
+    expect(sessionTabsShown(railSessions, railHidden, mobile)).toBe(shown);
   });
 
   // Last: the save is kept in the module for the rest of the file.

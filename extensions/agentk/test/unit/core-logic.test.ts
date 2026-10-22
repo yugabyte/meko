@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpCode, totpVerify, verifyPassword,
+  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpAccept, totpCode, verifyPassword,
 } from '../../src/server/auth.js';
 import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
@@ -41,8 +41,9 @@ describe('auth', () => {
     expect(base32Decode(secret).toString()).toBe('12345678901234567890');
     expect(totpCode(secret, 59_000)).toBe('287082');
     expect(totpCode(secret, 1_111_111_109_000)).toBe('081804');
-    expect(totpVerify(secret, '287082', 59_000 + 30_000)).toBe(true); // one step of drift
-    expect(totpVerify(secret, '287082', 59_000 + 120_000)).toBe(false);
+    const db = openDb(':memory:');
+    expect(totpAccept(db, secret, '287082', 59_000 + 120_000)).toBe(false);
+    expect(totpAccept(db, secret, '287082', 59_000 + 30_000)).toBe(true); // one step of drift
   });
 
   it('setup tokens are single use, and reported outstanding until used', () => {
@@ -233,6 +234,29 @@ describe('config and db', () => {
     // And notes when reviews started being held (People only skips AgentK's earlier rounds).
     expect(Number(kvGet(db, 'held-reviews-since'))).toBeGreaterThan(0);
     expect(parseSettings('{}').branchPrefix).toBe('ak_{login}/');
+    db.close();
+  });
+
+  it("lists a schema 38 database's sessions in each project oldest first, as before positions", () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db');
+    let db = openDb(file);
+    const version = schemaVersion(db);
+    for (const p of ['api', 'web']) run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES (?, ?, ?, 'main', 0)`, p, p, `/code/${p}`);
+    const session = (id: string, project: string, createdAt: number) =>
+      run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token, desired, status, stage, created_at)
+        VALUES (?, ?, ?, ?, ?, 'b', 'main', '/w', ?, 't', 'running', 'idle', 'code', ?)`, id, project, id, id, `c-${id}`, `t-${id}`, createdAt);
+    session('a2', 'api', 20);
+    session('w1', 'web', 5);
+    session('a1', 'api', 10);
+    session('a3', 'api', 20);
+    undoMigrations(db, 39);
+    db.exec('PRAGMA user_version = 38');
+    db.close();
+    db = openDb(file);
+    expect(schemaVersion(db)).toBe(version);
+    expect(all(db, 'SELECT id, position FROM sessions ORDER BY project_id, position')).toEqual([
+      { id: 'a1', position: 0 }, { id: 'a2', position: 1 }, { id: 'a3', position: 2 }, { id: 'w1', position: 0 },
+    ]);
     db.close();
   });
 
@@ -547,6 +571,10 @@ function dropV38(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'untrusted');
 }
 
+function dropV39(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'position');
+}
+
 function dropV36(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE held_reviews');
 }
@@ -676,10 +704,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 38 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 39 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38];
-  for (let v = 38; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39];
+  for (let v = 39; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

@@ -30,11 +30,8 @@ import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
-import { modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine } from './claude.js';
-import { HARNESS_CAPS, agentName, harnessOf } from '../shared/harnesses.js';
+import { agentName } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
-import { findKiroConversation, kiroConversation } from './harness/kiro.js';
-import { kiroSessionFile, kiroTurns } from './kiro.js';
 import { writeLauncher } from './launcher.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
 import { DESIGN_READY } from './lifecycle.js';
@@ -44,8 +41,7 @@ import {
   type MergeInfo, type SessionRow, type SessionRuntime,
 } from './store.js';
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
-import { ZERO_USAGE, ingestSessionUsage, recordKiroTurns, sessionTranscript, sessionUsage, usageBySession } from './usage.js';
-import { TRUST_PROMPT_RE, ensureWorkspaceTrust } from './trust.js';
+import { ZERO_USAGE, sessionUsage, usageBySession } from './usage.js';
 import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
@@ -336,12 +332,12 @@ export class SessionManager {
     this.loadUsage();
     return sessionRows(this.db, projectId)
       .filter((r) => r.desired === 'running')
-      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open));
+      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open, this.core.learn.progress(r.id)));
   }
 
   get(id: string): Session {
     const row = this.row(id);
-    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open);
+    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open, this.core.learn.progress(id));
   }
 
   row(id: string): SessionRow {
@@ -541,13 +537,14 @@ export class SessionManager {
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
-                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, position)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      (SELECT COALESCE(MIN(position), 0) - 1 FROM sessions WHERE project_id = ?))`,
         id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null);
+        push?.remote ?? null, push ? push.branch : null, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -965,15 +962,10 @@ export class SessionManager {
     return this.core.mekoStatus.configured ? projectDatapacks(this.db, projectId) : [];
   }
 
-  private env(row: SessionRow, mod: boolean): Record<string, string> {
+  private env(row: SessionRow): Record<string, string> {
     const dps = this.sessionDatapacks(row.project_id);
     const dedicated = dps.find((d) => d.role === 'dedicated');
-    const claude = harnessOf(row.harness) === 'claude';
     return {
-      // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
-      // Set even when empty: empty means the user has none, unset means a session from before this.
-      // Not a PR's own status line when its code isn't trusted: the relay runs it with sh.
-      ...(claude ? { AK_USER_STATUSLINE: userStatusLine(repoConfigTrusted(row) ? row.worktree_path : null, statusLineScriptPath(this.core.paths))?.command ?? '' } : {}),
       AK_SESSION: row.id,
       AK_HOOK_TOKEN: row.hook_token,
       // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
@@ -986,34 +978,15 @@ export class SessionManager {
       // resumed session) mustn't send transcripts either. It runs setInterval(tick, seconds * 1000),
       // and Node turns a delay past 2^31-1 ms into 1 ms, so this is the longest safe interval.
       ...(this.core.capture.enabled ? {} : { MEKO_CHECKPOINT_INTERVAL: String(MAX_TIMER_SECS) }),
-      // Plugins' hooks modules are early access in Claude Code, off unless this says otherwise.
-      ...(mod ? { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } : {}),
       // A home under /net: Claude reaches ~/.claude (memory, skills, plugins) by its local spelling.
       ...(claudePath(homedir()) !== homedir() ? { HOME: claudePath(homedir()) } : {}),
     };
   }
 
-  /**
-   * Whether the session's agent gets AgentK's mod, as far as is known now, for the prompt lines that
-   * name its tools: its harness runs the mod, the mod is on and its files are there, and Claude
-   * Code isn't known to be too old for it. A prompt is often rendered before the launch that settles
-   * it (`modDir()`), so a version not read yet counts as new enough; the lines say "if you have it".
-   */
+  /** Whether the session's agent gets AgentK's mod, as far as is known now, for the prompt lines that name its tools. */
   private offersMod(row: SessionRow): boolean {
-    return this.harness(row).caps.mod && this.core.config.claude.mod && existsSync(join(modDirPath(this.core.paths), 'hooks', 'register.ts'))
-      && this.core.claudeCode.status().supportsMod !== false;
+    return this.harness(row).offersMod?.(this.core.paths, this.core.config) ?? false;
   }
-
-  /**
-   * The folder of AgentK's mod for a launch (`--plugin-dir`), or null when it's off: turned off in
-   * the config, its files missing, or the Claude Code too old (or its version unreadable).
-   */
-  async modDir(): Promise<string | null> {
-    const dir = modDirPath(this.core.paths);
-    if (!this.core.config.claude.mod || !existsSync(join(dir, 'hooks', 'register.ts'))) return null;
-    return (await this.core.claudeCode.supportsMod()) ? dir : null;
-  }
-
 
   private systemPrompt(row: SessionRow, conversationId: string | null): string {
     const p = projectRow(this.db, row.project_id);
@@ -1021,7 +994,7 @@ export class SessionManager {
     const dedicated = dps.find((d) => d.role === 'dedicated');
     const shared = dps.filter((d) => d.role === 'shared');
     const lines = [
-      `This ${HARNESS_CAPS[harnessOf(row.harness)].label} session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
+      `This ${this.harness(row).caps.label} session is managed by AgentK Local. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
     if (row.kind !== 'review-pr' && row.branch_reused) {
       lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
@@ -1047,25 +1020,23 @@ export class SessionManager {
 
   /** The session's conversation is on disk, so a launch resumes it rather than starting over. */
   private transcriptExists(row: SessionRow): boolean {
-    if (harnessOf(row.harness) === 'kiro') this.kiroId(row);
+    this.findConversation(row);
     return this.harness(row).canResume(row);
   }
 
   /**
-   * A Kiro session's own conversation id: the one its hooks gave, else (no hook ever came) the
-   * newest Kiro started in its worktree since the session was created, looked for only while the
-   * session runs and owns the worktree (pooled worktrees keep earlier sessions' conversations), and
-   * kept once found so the choice doesn't move. Null when it has none.
+   * For a harness that picks its own conversation id (Kiro), a session whose hooks never said it
+   * (its agent died before the first): the conversation its agent started in the worktree, looked
+   * for only while the session runs and owns the worktree (pooled worktrees keep earlier sessions'
+   * conversations), and kept once found (`agent_session_id`) so the choice doesn't move.
    */
-  private kiroId(row: SessionRow): string | null {
-    const known = kiroConversation(row);
-    if (known || row.desired !== 'running' || !this.ownsWorktree(row)) return known;
-    const found = findKiroConversation(row);
-    if (found) {
-      run(this.db, 'UPDATE sessions SET agent_session_id = ? WHERE id = ?', found, row.id);
-      row.agent_session_id = found;
-    }
-    return found;
+  private findConversation(row: SessionRow): void {
+    const h = this.harness(row);
+    if (!h.findConversation || h.canResume(row) || row.desired !== 'running' || !this.ownsWorktree(row)) return;
+    const found = h.findConversation(row);
+    if (!found) return;
+    run(this.db, 'UPDATE sessions SET agent_session_id = ? WHERE id = ?', found, row.id);
+    row.agent_session_id = found;
   }
 
   /** The harness a session runs on. */
@@ -1127,22 +1098,13 @@ export class SessionManager {
     // Read again at every launch: a private repo can be made public.
     row = await this.checkHead(row.id);
     const h = this.harness(row);
-    if (h.id === 'claude') {
-      // Claude Code keys folder trust by the git root, which for a worktree is the main repo.
-      const repo = sessionRepo(this.db, row);
-      if (repo) await this.trustRepo(repo);
-      // Started by its local spelling (claudePath), a worktree isn't tied back to its repo (its .git
-      // file names the stored spelling), so Claude asks about the worktree itself: trust exactly it.
-      const cwd = claudePath(row.worktree_path);
-      if (cwd !== row.worktree_path) await this.trustRepo(cwd, true);
-    }
-    h.beforeLaunch?.(this.core.paths, this.core.config);
+    await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row) });
     this.pinDatapack(row);
     // In the background, reusing recent results: whether this session's Claude reaches AgentK's Meko.
     if (this.core.mekoStatus.configured) void this.core.claudeMeko.refresh();
     const designDir = join(this.core.paths.designs, row.id);
     mkdirSync(designDir, { recursive: true });
-    const mod = h.caps.mod ? await this.modDir() : null;
+    const modDir = (await h.modDir?.(this.core.paths, this.core.config)) ?? null;
     const conversation = await this.launchConversation(row, opts.conversation);
     const systemPrompt = this.systemPrompt(row, conversation);
     // A harness with no flag for it gets these lines from its context hook, at every start.
@@ -1153,9 +1115,9 @@ export class SessionManager {
       prompt: opts.prompt,
       systemPrompt,
       addDirs: [designDir],
-      pluginDirs: mod ? [mod] : [],
+      modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
-      env: this.env(row, !!mod),
+      env: this.env(row),
       unsetEnv: SESSION_ENV_UNSET,
       untrusted: !repoConfigTrusted(row),
     }));
@@ -1192,23 +1154,6 @@ export class SessionManager {
       else if (row.untrusted === 1) this.event(id, 'untrusted', "The PR's repo is private or internal now: the session runs with the repo's own config again.");
     }
     return this.row(id);
-  }
-
-  /**
-   * Makes sure Claude Code trusts the repo. Other Claude processes rewrite
-   * ~/.claude.json with their own copy when they start, which can drop a
-   * fresh entry, so a new entry is checked again after a moment. `exact`: only an entry for
-   * `repo` itself counts, not one for a parent.
-   */
-  async trustRepo(repo: string, exact = false): Promise<void> {
-    try {
-      for (let i = 0; i < 3; i++) {
-        if (ensureWorkspaceTrust(repo, exact) !== 'added') return;
-        await sleep(400);
-      }
-    } catch (e) {
-      this.core.log.warn(`could not mark ${repo} as trusted in Claude Code`, errMsg(e));
-    }
   }
 
   /**
@@ -1629,8 +1574,6 @@ export class SessionManager {
       void this.captureTranscript(r.id); // catches up on turns from before this server version
     }
     this.backfillUsage();
-    // Sessions may still run in tmux (an install moving off it): starting them here would run them twice.
-    if (!this.core.tmuxMoved) return;
     let panes: Map<string, PaneInfo>;
     try {
       await this.core.host.ensureServer();
@@ -1690,7 +1633,6 @@ export class SessionManager {
 
   /** Periodic check: dead panes become `exited`; missing panes (the host died) are recovered. */
   async reconcile(): Promise<void> {
-    if (!this.core.tmuxMoved) return;
     if (!(await this.core.host.serverRunning())) {
       this.core.log.warn('the session host is gone; recovering sessions');
       await this.recover();
@@ -1711,9 +1653,10 @@ export class SessionManager {
         if (this.followTranscript(row)) continue;
         // Claude fires no hooks until the folder-trust dialog is answered (new, resumed or recovered).
         const screen = await this.core.host.capture(row.tmux_name).catch(() => '');
-        if (TRUST_PROMPT_RE.test(screen)) {
+        const h = this.harness(row);
+        if (h.trustPrompt?.test(screen)) {
           const repo = sessionRepo(this.db, row);
-          if (repo) await this.trustRepo(repo); // so the next session skips it
+          if (repo) await h.trustFolder?.(repo, this.core.log); // so the next session skips it
           this.setStatus(row.id, 'needs_input', TRUST_DETAIL);
           this.notifyUser(row.id, 'Needs you', 'Confirm folder trust in the terminal.');
         }
@@ -1730,7 +1673,9 @@ export class SessionManager {
         this.setStatus(row.id, 'exited', pane.exitStatus ? `${name} exited with status ${pane.exitStatus}` : `${name} exited`);
         this.event(row.id, 'exited', `${name} exited`);
         this.notifyUser(row.id, 'Exited', `${name} exited. Resume it from the session header.`);
-        if (harnessOf(row.harness) !== 'claude') this.ingestUsage(row.id);
+        // Its last turn's usage: an agent may write it after its last hook (Kiro has none at its
+        // exit). For the others it's a read from where the last one stopped.
+        this.ingestUsage(row.id);
       }
     }
   }
@@ -1765,13 +1710,10 @@ export class SessionManager {
 
   /** When the session's transcript was last written (ms), or 0 when there is none yet. */
   private transcriptWrittenAt(row: SessionRow): number {
-    const kiro = harnessOf(row.harness) === 'kiro' ? this.kiroId(row) : null;
-    const files = harnessOf(row.harness) === 'kiro'
-      ? (kiro ? [kiroSessionFile(kiro), kiroSessionFile(kiro).replace(/\.json$/, '.jsonl')] : [])
-      : [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)];
-    return Math.max(0, ...files.map((f) => {
+    this.findConversation(row);
+    return Math.max(0, ...this.harness(row).activityFiles(row).map((f) => {
       try {
-        return f ? statSync(f).mtimeMs : 0;
+        return statSync(f).mtimeMs;
       } catch {
         return 0;
       }
@@ -1921,11 +1863,23 @@ export class SessionManager {
     return this.get(id);
   }
 
-  /** `PATCH /api/sessions/:id`: a new base (setBase), then a new name (rename); a bad name changes neither. */
+  /** `PATCH /api/sessions/:id`: a new base (setBase), Move to top (toTop), then a new name (rename); a bad name changes none. */
   async edit(id: string, req: UpdateSessionRequest): Promise<Session> {
     if (req.name !== undefined) sessionName(req.name);
+    if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
     if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
+    if (req.toTop) this.toTop(id);
     return this.rename(id, { name: req.name });
+  }
+
+  /** Puts a session first in its project's list: one below the lowest position, so no other row moves. */
+  toTop(id: string): void {
+    const r = this.row(id);
+    if (r.desired === 'archived') throw new HttpError(409, 'This session is archived, so it can\'t be moved.');
+    const others = get<{ m: number | null }>(this.db,
+      'SELECT MIN(position) AS m FROM sessions WHERE project_id = ? AND desired = \'running\' AND id != ?', r.project_id, id)?.m;
+    if (others === null || others === undefined || r.position < others) return;
+    this.update(id, { position: others - 1 });
   }
 
   /**
@@ -2339,9 +2293,9 @@ export class SessionManager {
   /** Sends the session's new turns to its Meko conversation. Never throws. */
   captureTranscript(id: string): Promise<void> {
     const r = sessionRow(this.db, id);
-    // Kiro's turns reach Meko through Meko's own Kiro hooks.
-    if (!r || !this.core.mekoStatus.configured || harnessOf(r.harness) !== 'claude') return Promise.resolve();
-    return this.core.capture.capture(id, sessionTranscript(r, transcriptPathFor));
+    const transcript = r && this.harness(r).captureTranscript?.(r);
+    if (!transcript || !this.core.mekoStatus.configured) return Promise.resolve();
+    return this.core.capture.capture(id, transcript);
   }
 
   /**
@@ -2427,52 +2381,32 @@ export class SessionManager {
     this.rereads.clear();
   }
 
-  /** Reads any new transcript lines for a session (Kiro's: its session file) and updates its token totals. */
+  /** Reads a session's new turns from its harness's files (a transcript, Kiro's session file) and updates its totals. */
   ingestUsage(id: string): void {
     this.loadUsage();
     const r = sessionRow(this.db, id);
     if (!r) return;
     this.usageReadAt.set(id, Date.now());
-    if (harnessOf(r.harness) === 'kiro') {
-      this.ingestKiro(r);
-      return;
-    }
+    this.findConversation(r);
+    let read;
     try {
-      if (!ingestSessionUsage(this.db, id, sessionTranscript(r, transcriptPathFor), r.base_branch)) return;
+      read = this.harness(r).readUsage(this.db, r);
     } catch (e) {
       this.core.log.warn(`reading token usage for ${id} failed`, errMsg(e));
       return;
     }
-    this.usage.set(id, sessionUsage(this.db, id));
-    this.core.changed();
-    void this.countPushedCommits(r);
-  }
-
-  /** A Kiro session's finished turns (credits, tokens) and its context fill after the last one, from its session file. */
-  private ingestKiro(r: SessionRow): void {
-    const conv = this.kiroId(r);
-    if (!conv) return;
-    const turns = kiroTurns(conv);
-    let changed = false;
-    try {
-      changed = recordKiroTurns(this.db, r.id, conv, turns);
-      // Marks the session as read, so backfillUsage leaves it alone at the next start.
-      run(this.db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
-                    ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, r.id, kiroSessionFile(conv), turns.length);
-    } catch (e) {
-      this.core.log.warn(`reading Kiro's usage for ${r.id} failed`, errMsg(e));
-    }
-    const pct = turns.at(-1)?.contextPercent;
-    if (typeof pct === 'number') {
-      const fill = Math.round(Math.min(100, Math.max(0, pct)));
-      if (this.contextFill.get(r.id) !== fill) {
-        this.contextFill.set(r.id, fill);
+    let changed = read.changed;
+    if (typeof read.contextPercent === 'number') {
+      const fill = Math.round(Math.min(100, Math.max(0, read.contextPercent)));
+      if (this.contextFill.get(id) !== fill) {
+        this.contextFill.set(id, fill);
         changed = true;
       }
     }
     if (!changed) return;
-    this.usage.set(r.id, sessionUsage(this.db, r.id));
+    this.usage.set(id, sessionUsage(this.db, id));
     this.core.changed();
+    void this.countPushedCommits(r);
   }
 
   /**

@@ -85,14 +85,25 @@ was gone or busy in.
 
 **Discard waits for it.** Unless skipped, Discard starts the step (trigger `discard`), sets
 `sessions.discarding` (`Session.discarding`) and answers at once with the session still running:
-the confirmation shows *Saving learnings, then discarding* with **Discard now**, which discards at
-once (`skipLearn`, interrupting the step). Save learnings is hidden meanwhile (`offersLearn` in
+the confirmation says what the step is doing (*Checking 3 facts against Meko, then discarding*,
+see **Its progress** below), with how long it has run, and offers **Discard now**, which discards at once (`skipLearn`, interrupting the step). Save learnings is hidden meanwhile (`offersLearn` in
 `src/web/util.ts`), so the step isn't shown twice. When the step ends, done, failed, timed out or
 interrupted (`Lifecycle.afterLearn`, and `onTurnEnd` for a typed step, which then does nothing else
 for the session), `SessionManager.discardNow()` discards the session, once however many ask. A
 restart that cut the step short finishes the discard in `recover()`, unless the step was a typed
 turn in a Claude still running: that turn goes on, and its end discards the session. Archive
 clears `discarding`.
+
+**Its progress.** `Session.learnProgress` says where a running step is: through the mod,
+`extract` (Claude looks back over the session), `search` (AgentK looks up what Meko has on each
+fact), `check` (the duplicate check) and `save` (`done` of `facts` gone through so far, a failed
+write included); `turn` for a typed step. `Learner.progress()` reads it from the open `meko_learns` row and the step's job, and
+each part pushes the state as it starts (and `save` after each fact), so the labels follow the step
+(`learnStepText()` in `src/web/util.ts`: *Finding what it learned*, *Saving 2 of 3 to Meko*), with
+the time since it started (`Elapsed` in `common.tsx`). Merge & Close's pill says which part of the close the session is
+in, `Session.closeStep` (`closeStep()` in `src/server/store.ts`): waiting for GitHub to merge the
+PR (even while a Save learnings step runs), then, once merged, the learn step (as above, with its
+time), waiting for Claude's turn to end, or cleaning up (`closingText()` in `src/web/util.ts`).
 
 **Only what's new.** Each step looks back over the whole session, but asks only for what earlier
 saves didn't cover. The prompt says to leave out what Claude saved itself (its `memory_add` calls are
@@ -120,7 +131,7 @@ gets the same list. The duplicate check still runs on what comes back.
    parallel). It puts a `check` part on the next poll: the duplicate check's prompt
    (`dedupPrompt()`), each fact numbered with those memories and their ids; a skip or an update
    names the memory it means.
-4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Haiku) and posts the reply.
+4. The mod runs it on a small model (`$.model.complete`, `DEDUP_MODEL`, Claude Haiku 5.5) and posts the reply.
 5. For each fact the server adds it (`memory_add`, as "Gotcha (component): …", with metadata
    `{ source, kind: "learned", fact, component, session, learn }`), skips it, or updates the memory
    it corrects (`memory_update`, as the agent that wrote it, with the check's corrected text unless

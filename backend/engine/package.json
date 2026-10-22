@@ -1,0 +1,28 @@
+{
+  "name": "@meko/engine",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Meko's memory engine: mem0 with Meko's providers, run as a child of meko serve.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "better-sqlite3": "file:stubs/better-sqlite3",
+    "compromise": "14.19.0",
+    "mem0ai": "3.3.1",
+    "natural": "8.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,5 +1,6 @@
 import type { ClaudeCodeStatus } from '../shared/types.js';
-import { MIN_MOD_CLAUDE, claudeVersion, runClaudeUpdate, versionAtLeast } from './claude.js';
+import { MIN_MOD_CLAUDE, runClaudeUpdate } from './claude.js';
+import { cliVersion, versionAtLeast } from './harness/version.js';
 import type { Config } from './config.js';
 import { HttpError } from './projects.js';
 
@@ -40,7 +41,7 @@ export class ClaudeCode {
   private now: () => number;
 
   constructor(private deps: ClaudeCodeDeps) {
-    this.readVersion = deps.readVersion ?? claudeVersion;
+    this.readVersion = deps.readVersion ?? cliVersion;
     this.runUpdate = deps.runUpdate ?? runClaudeUpdate;
     this.now = deps.now ?? Date.now;
   }

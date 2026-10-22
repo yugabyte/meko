@@ -6,8 +6,6 @@ import { decisionNumbers } from '../shared/decisions';
 import type { DesignAnswerInput, DesignAnswersRequest, DesignQuestion, Session } from '../shared/types';
 import { api } from './api';
 
-export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
 /**
  * One question's answer: an option (by index, and by label so it can be found again after a
  * revision moves it) or a custom answer, and its text: a note on the option, or the custom answer.

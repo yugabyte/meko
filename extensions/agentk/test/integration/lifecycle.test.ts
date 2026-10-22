@@ -404,9 +404,19 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       return query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : [];
     });
     Object.assign(env.meko, { similar });
+    // Each part of the step reaches the UI as it goes (Session.learnProgress, closeStep).
+    const seen: string[] = [];
+    const watch = () => {
+      const { learnProgress: p, closeStep } = env.core.sessions.get(s.id);
+      if (p) seen.push(`${closeStep} ${p.step} ${p.step === 'save' ? `${p.done}/${p.facts}` : p.facts}`);
+    };
+    env.core.on('change', watch);
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     await closed(s.id);
+    env.core.off('change', watch);
+    expect([...new Set(seen)]).toEqual(['learn extract 0', 'learn search 2', 'learn check 2', 'learn save 0/2', 'learn save 1/2', 'learn save 2/2']);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ learning: false, learnProgress: null, closeStep: null });
 
     const row = env.core.sessions.row(s.id);
     // The fact naming this machine was left out; the other two were checked against Meko.
@@ -428,10 +438,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(lastEvent(s.id, 'learned')).toBe('Saved 1 memory and corrected 1 in team/demo');
     // The fork's and the check's tokens count as the session's.
     expect(all(env.core.db, "SELECT agent, model, output FROM usage_messages WHERE session_id = ? AND agent = 'agentk:learn' ORDER BY message_id DESC", s.id))
-      .toEqual([{ agent: 'agentk:learn', model: 'claude-fake-1', output: 200 }, { agent: 'agentk:learn', model: 'claude-haiku-4-5-20251001', output: 200 }]);
+      .toEqual([{ agent: 'agentk:learn', model: 'claude-fake-1', output: 200 }, { agent: 'agentk:learn', model: 'claude-haiku-5-5', output: 200 }]);
     // Each part reached the mod on a poll, and each post was answered at once.
     expect(modLearn().map((x) => [x.job.kind, x.post.step, x.status])).toEqual([['extract', 'facts', 204], ['check', 'decisions', 204]]);
-    expect(modLearn()[1].job).toMatchObject({ prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-4-5-20251001' });
+    expect(modLearn()[1].job).toMatchObject({ prompt: expect.stringContaining('[m1] Polls run in parallel.'), model: 'claude-haiku-5-5' });
     await waitFor(toasts, (t) => t.length === 1, 5000, 'the toast');
     expect(toasts()).toEqual(['Saved 1 memory and corrected 1 in team/demo.']);
   });
@@ -588,6 +598,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     gh.status = { ...gh.status!, state: 'MERGED' };
     await env.core.lifecycle.pollReview(env.core.sessions.row(s.id));
     expect(env.core.sessions.row(s.id).stage).toBe('merge'); // waiting for the step
+    expect(env.core.sessions.get(s.id)).toMatchObject({ closeStep: 'learn', learnProgress: { step: 'extract' } });
     await closed(s.id);
     expect(learns(s.id)).toEqual([{ trigger: 'manual', path: 'mod', outcome: 'done' }]);
     expect(cleanups(s.id)).toBe(1);
@@ -723,7 +734,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     const branch = env.core.sessions.row(s.id).branch;
     // The discard waits for the learn step: the session runs until it ends.
     const waiting = await env.core.sessions.action(s.id, 'discard');
-    expect(waiting).toMatchObject({ desired: 'running', discarding: true, learning: true });
+    expect(waiting).toMatchObject({ desired: 'running', discarding: true, learning: true, learnProgress: { step: 'extract', facts: 0, done: 0 }, closeStep: null });
     // Asked again, it keeps waiting.
     await env.core.sessions.action(s.id, 'discard');
     await waitFor(() => lastEvent(s.id, 'discarded'), (t) => !!t, 10000, 'the discard');
@@ -738,7 +749,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
 
   it("saves what the session learned in a typed turn before discarding it, without the mod", async () => {
     const s = await inReview('Discard typed');
-    await env.core.sessions.action(s.id, 'discard');
+    expect(await env.core.sessions.action(s.id, 'discard')).toMatchObject({ discarding: true, learnProgress: { step: 'turn' } });
     await waitFor(() => lastEvent(s.id, 'discarded'), (t) => !!t, 10000, 'the discard');
     expect(learns(s.id)).toEqual([{ trigger: 'discard', path: 'turn', outcome: 'done' }]);
   });
@@ -971,8 +982,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await env.core.sessions.action(s.id, 'approve-design');
     // The approval asks for the key design decisions in the design before any code, and to keep it current.
     const file = join(env.core.paths.designs, s.id, 'design.md');
-    await waitFor(() => transcript(s.id), (t) => t.includes('add a \\"Key Design Decisions\\" section'), 10000, 'approval prompt');
-    expect(transcript(s.id)).toContain(`section to the design (edit ${file})`);
+    await waitFor(() => transcript(s.id), (t) => t.includes('bring the design\'s \\"Key Design Decisions\\" section up to date'), 10000, 'approval prompt');
+    expect(transcript(s.id)).toContain(`section up to date (edit ${file};`);
     expect(transcript(s.id)).toContain('If a new question comes up or the design changes while you work, update the design in the same turn');
     await idle(s.id, 'approval turn');
     await env.core.sessions.submit(s.id, 'DESIGN_QA');

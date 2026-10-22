@@ -167,14 +167,10 @@ export interface TestEnv {
   mekoApi: ReturnType<typeof fakeMekoApi>;
   mekoTools: ReturnType<typeof stubMekoTools>;
   fakeDir: string;
-  /** The tmux socket name this env's server would move sessions off (legacytmux.ts). */
-  socket: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
   cleanup(): Promise<void>;
 }
-
-let seq = 0;
 
 /** The Meko datapack pin file for a session's agent id. */
 export function sessionPinFile(session: { id: string; slug: string }): string {
@@ -220,7 +216,6 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   process.env.KIRO_HOME = join(home, 'kiro');
   process.env.FAKE_KIRO_DIR = join(home, 'fake-kiro');
   const paths = getPaths(join(home, 'ak'));
-  const socket = `akl-test-${process.pid}-${seq++}`;
   // The session host runs in this process, and never through this machine's background services.
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
   // A network bind, as on a remote-access install: a loopback one skips the login (localAccess).
@@ -250,18 +245,25 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   };
   const core = new Core({
     paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
-    host, services: () => null, legacyTmuxSocket: socket, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
+    host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, fakeDir, socket, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();
       db.close();
-      // core.stop() waited for the transcript captures that write into fakeDir; the retries cover
-      // any other late writer (removing a folder while something writes into it fails with ENOTEMPTY).
-      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      // core.stop() waited for what writes into the home after a test: the transcript captures (into
+      // fakeDir) and Kiro's one-shot runs (into FAKE_KIRO_DIR). Anything else still writing fails the
+      // removal with ENOTEMPTY, retries or not: they only try the folder again, and remove nothing
+      // written after their first pass. Name what was left, to find the writer.
+      try {
+        rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch (e) {
+        const left = existsSync(home) ? readdirSync(home, { recursive: true }).join(', ') : 'nothing';
+        throw new Error(`removing the test home failed (${(e as Error).message}); left in it: ${left}`, { cause: e });
+      }
     },
   };
 }

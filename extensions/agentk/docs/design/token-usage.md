@@ -17,8 +17,9 @@ counts as 1-hour, which is what Claude Code uses).
 
 **Cost.** Tokens are priced at Anthropic's API list prices (`src/shared/pricing.ts`: input, output
 and cache read per model, with cache writes at 1.25× input for the 5-minute cache and 2× for the
-1-hour one), from per-model sums. It's shown as **Est. cost**, what the tokens would cost on the
-API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
+1-hour one), from per-model sums. Sums can't tell a request's prompt size, so Claude Haiku 5.5 is
+priced at its rates for prompts of up to 100K tokens, never its 5× rate above that. It's shown as
+**Est. cost**, what the tokens would cost on the API: on a Pro or Max plan nobody pays per token, but raw token totals overstate cheap cache reads.
 A model with no known price adds tokens but no cost; the cost then reads `≥ $…` (**Est. cost,
 partial**), and the tooltip says how many responses were left out. Model ids match with a date
 (`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).
@@ -176,7 +177,8 @@ runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most, as `age
 inert agent written in that folder (no tools, MCP servers or hooks, like Ask AgentK's), so the
 user's default agent isn't loaded for it. Kiro keeps each run as an empty session: after every
 read AgentK deletes (`chat --delete-session`) the one the run named and any other Kiro session
-whose folder is `run/kiro-usage`, since a run cut off at its timeout never names its own. `parseKiroPlan` (`src/server/kiro.ts`)
+whose folder is `run/kiro-usage`, since a run cut off at its timeout never names its own. A server
+that is stopping waits up to 5 seconds for a read and its deletes still running. `parseKiroPlan` (`src/server/kiro.ts`)
 reads the plan name, the reset day and the credits line, and returns nothing without the credits
 line. Paid plans' bonus and overage lines haven't been seen, so they're matched loosely (a line
 with `bonus` and two numbers, `remaining` or `left` meaning what's left; a line with `overage`, its

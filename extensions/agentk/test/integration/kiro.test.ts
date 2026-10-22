@@ -138,7 +138,8 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     // Kiro finds the agent in the folder the ask runs in; it has nothing to act with.
     const ask = JSON.parse(readFileSync(join(input.cwd, '.kiro', 'agents', 'agentk-ask.json'), 'utf8'));
     expect(ask).toMatchObject({ tools: [], mcpServers: {}, includeMcpJson: false, hooks: {} });
-    await waitFor(() => lines(env, 'deleted.jsonl'), (d) => d.length === 1, 10000, 'the run deleted');
-    expect(lines(env, 'deleted.jsonl')[0].id).toBe('ask-1');
+    // The run's session is deleted in the background, and stopping waits for that.
+    await env.core.stop();
+    expect(lines(env, 'deleted.jsonl')).toEqual([{ id: 'ask-1', cwd: input.cwd }]);
   });
 });

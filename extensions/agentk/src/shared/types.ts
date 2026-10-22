@@ -48,8 +48,6 @@ export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 
  */
 export type SessionKind = 'task' | 'review-pr';
 
-export const SESSION_KINDS: SessionKind[] = ['task', 'review-pr'];
-
 /**
  * A session's kind as `sessions.kind` stores it and `Session.kind` sends it: `review-pr`, or a task
  * under one of the old session types' names (`plan` for new ones). Pages and releases from before
@@ -699,6 +697,29 @@ export interface Project {
   createdAt: number;
 }
 
+/** A running learn step's place (`Session.learnProgress`), for the UI to say what a Discard or Merge & Close waits on. */
+export interface LearnProgress {
+  /**
+   * Through the mod: `extract`, Claude looks back over the session for what it learned; `search`,
+   * AgentK finds what Meko already has on each fact; `check`, a small model checks them against
+   * it; `save`, AgentK writes them. Without the mod, `turn`: Claude saves them itself in a typed turn.
+   */
+  step: 'extract' | 'search' | 'check' | 'save' | 'turn';
+  /** The facts Claude found (0 while extracting, and for a turn). */
+  facts: number;
+  /** Facts the save part has been through so far, whatever became of each: written, corrected, found already saved or failed to write (in `save`). */
+  done: number;
+  /** When the learn step started (ms). */
+  startedAt: number;
+}
+
+/**
+ * Where a session in Merge & Close is: `merge`, waiting for GitHub to merge the PR; `turn`, merged
+ * and waiting for Claude's turn to end; `learn`, saving what it learned (`Session.learnProgress`);
+ * `cleanup`, letting go of the worktree and branches.
+ */
+export type CloseStep = 'merge' | 'turn' | 'learn' | 'cleanup';
+
 export interface Session {
   id: string;
   projectId: string;
@@ -785,6 +806,10 @@ export interface Session {
   approvalQueued: boolean;
   /** AgentK is saving what the session learned to its project's datapack (the learn step, or its typed turn). */
   learning: boolean;
+  /** Where that learn step is, while `learning`; null otherwise. */
+  learnProgress: LearnProgress | null;
+  /** Where Merge & Close is, while the session is in that stage; null in every other stage. */
+  closeStep: CloseStep | null;
   /** Claude is running a Meko tool call, as AgentK's mod reports it; false without the mod. */
   mekoCall: boolean;
   /** Discard was asked for: the session is discarded once its learn step ends. */
@@ -800,6 +825,8 @@ export interface Session {
   /** Set while status is `starting`. */
   startup: StartupState | null;
   lastEventAt: number | null;
+  /** Its place in the project's list, lowest first: a new session, or one moved to the top, goes first. */
+  position: number;
   createdAt: number;
   archivedAt: number | null;
   recoveredAt: number | null;
@@ -1164,6 +1191,52 @@ export interface ShareFailure {
 export interface ShareDatapackResult extends DatapackPeople {
   invited: string[];
   failed: ShareFailure[];
+}
+
+/** The roles a datapack's share link can give (Meko doesn't offer maintainer for links). */
+export type LinkGrant = 'viewer' | 'contributor';
+
+export const LINK_GRANTS: LinkGrant[] = ['viewer', 'contributor'];
+
+/** A datapack's share link: anyone signed in to Meko who opens `url` joins with `grant`. */
+export interface ShareLink {
+  active: boolean;
+  grant: LinkGrant;
+  /** `{web app}/share/{token}`; null while the link is off. */
+  url: string | null;
+  /** How many people have joined through it. */
+  joined: number;
+  /** How many members have the link's role through it: changing the role changes theirs too. */
+  atLinkRole: number;
+}
+
+/**
+ * GET /api/meko/datapacks/:id/share-link. With no link: `permission` (only the owner or a
+ * maintainer can share by link), `unsupported` (this Meko has no share links), `no-web-url` (Meko's
+ * web app URL isn't known, so the link can't be built).
+ */
+export type ShareLinkState = { link: ShareLink } | { link: null; unavailable: 'permission' | 'unsupported' | 'no-web-url' };
+
+/** PUT /api/meko/datapacks/:id/share-link: one change. Turning the link on names the role it gives. */
+export type ShareLinkChange = { active: true; grant: LinkGrant } | { active: false } | { grant: LinkGrant } | { reset: true };
+
+/** POST /api/meko/share-links/join: a share link pasted into Ask AgentK. */
+export interface JoinByLinkRequest {
+  url: string;
+}
+
+export interface JoinByLinkResult {
+  datapackId: string;
+  /** From the datapack list; null while Meko's list doesn't show it yet. */
+  name: string | null;
+  /** Our access: from the datapack list (a maintainer may paste a viewer link), else the link's role. */
+  grant: ShareGrant | 'owner' | null;
+  /** They had access already: nothing changed in Meko. */
+  alreadyMember: boolean;
+  /** The share to open as a project (a project datapack, not a viewer one, no project here uses it). Not a banner. */
+  invite: DatapackInvite | null;
+  /** The open project here that already uses the datapack. */
+  project: { id: string; name: string } | null;
 }
 
 /** Someone the Share dialog has invited before (in any project), suggested in it again. */
@@ -1954,6 +2027,8 @@ export interface UpdateSessionRequest {
    * Not for a review or a session with a PR, whose base is the PR's.
    */
   baseBranch?: string;
+  /** Moves the session to the top of its project's list. */
+  toTop?: boolean;
 }
 
 export interface AttachDatapackRequest {
@@ -2184,7 +2259,12 @@ export type TermServerMessage =
 //        the email is remembered for that GitHub login; every address invited is counted in the share contacts)
 // POST   /api/meko/datapacks/:id/people/invites/:inviteId/resend → DatapackPeople
 // DELETE /api/meko/datapacks/:id/people/invites/:inviteId        → DatapackPeople   (revokes a pending invite)
-//        The four above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
+// GET    /api/meko/datapacks/:id/share-link    → ShareLinkState   (the datapack's share link, or why there's none)
+// PUT    /api/meko/datapacks/:id/share-link ShareLinkChange → ShareLink   (turns it on with a role, off, changes the
+//        role or resets it; the token is never logged)
+//        The six above answer 409 when AgentK can't share (Meko is off, or its API URL isn't known).
+// POST   /api/meko/share-links/join JoinByLinkRequest → JoinByLinkResult   (joins the datapack a share link on Meko's
+//        web app shares, then syncs the shares; 400 for any other URL, which never reaches Meko)
 // GET    /api/share-contacts                   → ShareContact[]   (the people invited before, every project's, ranked:
 //        often and lately first)
 // DELETE /api/share-contacts/:email            → 204   (stops suggesting them; 404 when they weren't kept)
@@ -2253,7 +2333,8 @@ export type TermServerMessage =
 //        branch, worktree, Meko agent id and Claude Code's own name for the conversation stay; 400 for an empty or too
 //        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
 //        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
-//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone)
+//        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
+//        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
 //        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)

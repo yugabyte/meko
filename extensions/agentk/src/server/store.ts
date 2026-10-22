@@ -4,7 +4,7 @@ import { heldSummary } from './heldreviews.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, CiState, DatapackRef, DiffStat, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, CiState, CloseStep, DatapackRef, DiffStat, LearnProgress, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -83,6 +83,7 @@ export interface SessionRow {
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
+  position: number;
   /** Prompts waiting for Claude: JSON map of prompt name to { state, vars }. */
   pending_prompts: string;
   /** The PR head that last got a CI-fix prompt (or was handed to the user after the cap). */
@@ -246,7 +247,21 @@ export interface SessionRuntime {
   approvalQueued: boolean;
 }
 
-export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number): Session {
+/**
+ * Where a session in Merge & Close is (`Session.closeStep`): not merged yet, whatever else runs (a
+ * Save learnings step can run while GitHub hasn't merged it); then learning, the close's own step
+ * or Save learnings' still running, before a turn, since a typed learn step is one; then merged
+ * but in a turn (the close waits for its end, Lifecycle.merged); else cleaning up. Null in every
+ * other stage.
+ */
+export function closeStep(stage: Stage, s: { learning: boolean; merged: boolean; inTurn: boolean }): CloseStep | null {
+  if (stage !== 'merge') return null;
+  if (!s.merged) return 'merge';
+  if (s.learning) return 'learn';
+  return s.inTurn ? 'turn' : 'cleanup';
+}
+
+export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number, learnProgress: LearnProgress | null): Session {
   const design = get<{ updated_at: number; source: string | null; source_told: string | null }>(db, 'SELECT updated_at, source, source_told FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
@@ -293,10 +308,17 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     asking: rt.asking,
     mekoCall: rt.mekoCall,
     approvalQueued: rt.approvalQueued,
-    learning: !!get(db, 'SELECT 1 AS x FROM meko_learns WHERE session_id = ? AND ended_at IS NULL', r.id),
+    learning: !!learnProgress,
+    learnProgress,
+    closeStep: closeStep(r.stage, {
+      learning: !!learnProgress,
+      merged: r.stage === 'merge' && !!get(db, "SELECT 1 AS x FROM session_events WHERE session_id = ? AND kind = 'merged'", r.id),
+      inTurn: r.status === 'working' || r.status === 'starting' || rt.busy,
+    }),
     discarding: !!r.discarding,
     startup: r.status === 'starting' ? rt.startup : null,
     lastEventAt: r.last_event_at,
+    position: r.position,
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,

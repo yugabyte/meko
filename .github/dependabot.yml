@@ -1,10 +1,13 @@
 # Dependabot version updates, assigned to the maintainer.
 #
 # Commit prefixes follow the title rules (scripts/check-title.sh) and the release rules
-# (extensions/agentk/scripts/release-notes.sh). Every npm bump is `deps: ...`, so it cuts a
-# release once merged to main: the web UI's libraries (react, xterm, marked, dompurify) are
-# devDependencies that Vite bundles into the release. Action bumps are `ci: ...` and ship with the next release.
-# No `include: scope`: it would add `(deps)`, giving `deps(deps): ...`.
+# (extensions/agentk/scripts/release-notes.sh), and name the component: Dependabot adds the `: `.
+# Every AgentK npm bump is `deps(agentk): ...`, so it cuts a release once merged to main: the web
+# UI's libraries (react, xterm, marked, dompurify) are devDependencies that Vite bundles into the
+# release. Action bumps are `ci(repo): ...` and ship with the next release. Meko's bumps are
+# `chore(meko): ...` (Go modules) and `chore(meko/engine): ...` (the engine's npm packages): nothing
+# in backend/ ships in AgentK's release yet, and a `deps` subject would cut one.
+# No `include: scope`: it would add `(deps)`, giving `deps(agentk)(deps): ...`.
 # extensions/agentk/test/unit/dependabot.test.ts checks this against both scripts.
 version: 2
 updates:
@@ -17,8 +20,8 @@ updates:
     assignees:
       - hari90
     commit-message:
-      prefix: deps
-      prefix-development: deps
+      prefix: deps(agentk)
+      prefix-development: deps(agentk)
     ignore:
       # Types track the Node major we run on (engines, .nvmrc, the bundled runtime).
       - dependency-name: "@types/node"
@@ -52,6 +55,53 @@ updates:
         dependency-type: development
         update-types: [minor, patch]
 
+  # Meko's Go modules. CI's Backend job builds and tests each PR.
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    assignees:
+      - hari90
+    commit-message:
+      prefix: chore(meko)
+    ignore:
+      # go.mod replaces mattn/go-sqlite3 with a tag of the yugabyte/go-sqlite3 fork (SQLite with
+      # sqlite-vec), so a bump of the require line would change nothing: upgrade the fork's tag by hand.
+      - dependency-name: "github.com/mattn/go-sqlite3"
+    groups:
+      # Minor and patch bumps together; each major gets its own PR.
+      go:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Meko's memory engine (Node). Its dependencies are pinned exactly, and Dependabot keeps them so.
+  - package-ecosystem: npm
+    directory: /backend/engine
+    schedule:
+      interval: weekly
+      day: monday
+    assignees:
+      - hari90
+    commit-message:
+      prefix: chore(meko/engine)
+      prefix-development: chore(meko/engine)
+    ignore:
+      # Types track the Node major the engine runs on (engines: >=22.13).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # The engine registers its providers by wrapping mem0's internal factories, so mem0ai comes
+      # alone: a bump that breaks that seam doesn't hold back the others.
+      mem0ai:
+        patterns: ["mem0ai"]
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -60,7 +110,7 @@ updates:
     assignees:
       - hari90
     commit-message:
-      prefix: ci
+      prefix: ci(repo)
     groups:
       # Minor and patch bumps together; each major gets its own PR.
       actions:

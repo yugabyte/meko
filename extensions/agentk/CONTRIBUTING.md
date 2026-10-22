@@ -7,8 +7,8 @@ Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is requi
 projects.
 
 AgentK Local lives in `extensions/agentk` of the meko-local repo: run everything below from there.
-Paths are relative to it, except `.github/`, `.claude/` and `scripts/check-title.sh`, which are
-at the repo root.
+Paths are relative to it, except `.github/`, `.claude/`, `scripts/check-title.sh` and
+`scripts/ci-scope.sh`, which are at the repo root.
 
 ```sh
 cd extensions/agentk
@@ -41,24 +41,27 @@ npm run typecheck
 npm run lint
 npm test                        # unit + integration
 npm run test:unit
-npm run test:integration        # needs git; uses a stub `claude` (tmux only for the move-off-tmux tests)
+npm run test:integration        # needs git; uses a stub `claude`
 ```
 
-CI runs all of these on Linux and macOS for every push and pull request (`.github/workflows/ci.yml`,
-in `extensions/agentk`).
-Changes reach `main` only through PRs, squash-merged once CI and the PR title check pass.
+CI runs all of these on Linux and macOS for every push to `main` and every pull request that changes
+AgentK (`.github/workflows/ci.yml`, in `extensions/agentk`; `scripts/ci-scope.sh` at the repo root
+says which paths count, including the root files the tests read). Changes reach `main` only through
+PRs, squash-merged once the `CI gate` and `PR title` checks pass.
 
 ## Commits
 
-Commit subjects and PR titles are `<type>[(<component>)][!]: <summary>`, like
+Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, like
 [Conventional Commits](https://www.conventionalcommits.org/) but with exactly these types:
 
 - Release: `feat`, `fix`, `perf`, `deps`.
 - Don't release: `ci`, `test`, `docs`, `nit` (comment-only changes, typos, formatting, refactors
   with no behavior change), `chore`.
 
-The component is optional and any lowercase name (`fix(web): …`). `!` marks a breaking change,
-and only on a releasing type (`feat!: …`, `deps!: …`). PRs are squash-merged with the
+The component names the part of the repo: `agentk` for AgentK Local, `meko` for Meko
+(`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
+slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
+(`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
 repo root; the
@@ -67,17 +70,18 @@ agent attribution.
 
 ## Dependencies
 
-Dependabot (`.github/dependabot.yml`) checks npm packages and GitHub Actions every Monday and
-assigns its PRs to the maintainer. Packages that must move together (fastify, react, xterm,
+Dependabot (`.github/dependabot.yml`) checks AgentK's npm packages and GitHub Actions every Monday
+(and Meko's Go modules and engine packages, as `chore(meko): …` and `chore(meko/engine): …`, which
+never release; see `backend/AGENTS.md`) and assigns its PRs to the maintainer. Packages that must move together (fastify, react, xterm,
 vite, typescript with typescript-eslint, eslint) come in one PR per family, majors included.
 Other minor and patch bumps come grouped (runtime, dev, actions), and each other major bump
 gets its own PR. `@types/node` stays on the Node major we ship (22). `typescript` stays on 6
 until typescript-eslint supports TypeScript 7
 ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
 so its majors don't come at all; drop that `ignore` rule once it lands. Dependabot's commit subjects (and so its PR
-titles) follow the title and release rules: every npm bump is `deps: …` and releases once merged
+titles) follow the title and release rules: every npm bump is `deps(agentk): …` and releases once merged
 (the web UI's libraries are devDependencies bundled into the release, so dev-tool bumps release
-too), while `ci: …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
+too), while `ci(repo): …` waits for the next release. `test/unit/dependabot.test.ts` checks both. Mark a
 breaking major with `!` when merging it. Node itself (`.nvmrc`, `NODE_VERSION` in
 `release.yml`) is bumped by hand.
 

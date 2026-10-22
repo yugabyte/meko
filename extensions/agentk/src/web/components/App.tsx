@@ -7,7 +7,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
-import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, useRailSessions } from '../rail';
+import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
 import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
@@ -397,6 +397,14 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     }
   };
 
+  const sessionToTop = async (id: string) => {
+    try {
+      await api.updateSession(id, { toTop: true });
+    } catch (e) {
+      showToast(errorMessage(e));
+    }
+  };
+
   // A New session dialog whose project was closed meanwhile closes. One for a project just opened
   // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
@@ -510,6 +518,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           setModal({ kind: 'new-session', projectId });
         }}
         onRenameSession={(sessionId) => setModal({ kind: 'rename', sessionId })}
+        onSessionToTop={(sessionId) => void sessionToTop(sessionId)}
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
@@ -568,8 +577,9 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
+            onToTop={(sessionId) => void sessionToTop(sessionId)}
             onMenu={openDrawer}
-            showTabs={!railSessions || railHidden}
+            showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
             onError={showToast}
           />
@@ -658,9 +668,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
+          onSessionToTop={currentSession && live[0]?.id !== currentSession.id ? () => void sessionToTop(currentSession.id) : undefined}
           onSettings={() => setModal({ kind: 'settings' })}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
+          mekoWebUrl={state.meko.webUrl}
+          onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onStarted={({ project, session }) => {
             // As after Open project and New session: both shown until a state push brings them.
             setOpened(project);

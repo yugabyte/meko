@@ -6,6 +6,7 @@ import { MAX_SHARE_EMAILS, flattenPastedEmails, parseEmails, spliceEmails } from
 import { ApiError, api, errorMessage } from '../api';
 import { cx } from '../util';
 import { Busy, Dialog, ErrorText } from './common';
+import { ShareLink } from './ShareLink';
 import { ShareReviewers } from './ShareReviewers';
 import { ShareSuggestions } from './ShareSuggestions';
 
@@ -16,8 +17,8 @@ const GRANT_TEXT: Record<ShareGrant, { title: string; text: string }> = {
 };
 
 /**
- * Invite people to a project's dedicated datapack through Meko's share API, the reviewers of the
- * project's open PRs first. The Emails field takes a list; addresses the lists shown already have
+ * Invite people to a project's dedicated datapack through Meko's share API: its share link first
+ * (ShareLink.tsx), then the reviewers of the project's open PRs. The Emails field takes a list; addresses the lists shown already have
  * (as members or pending invites) are left out. Under it, the people invited before are suggested.
  */
 export function ShareDialog({
@@ -184,6 +185,7 @@ export function ShareDialog({
     <Dialog title={`Share “${projectName}”`} onClose={onClose}>
       <form className="stack" onSubmit={invite}>
         <span className="mono small muted share-dp">{datapack.name}</span>
+        <ShareLink datapackId={datapack.id} />
         <ShareReviewers projectId={projectId} focusSessionId={focusSessionId} people={people} onShare={shareReviewer} busy={busy !== null} />
         {!isProjectDatapack(datapack.name) && (
           <p className="hint">

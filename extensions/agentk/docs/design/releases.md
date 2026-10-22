@@ -2,15 +2,20 @@
 
 Part of the [AgentK Local design](../design.md).
 
-- **CI (on every PR).** Typecheck, lint and unit tests, on Linux and macOS, run in
-  `extensions/agentk` (the workflows, `scripts/check-title.sh` and Dependabot's config are at the
-  repo root). Integration tests run
+- **CI (on PRs that change AgentK, and every push to `main`).** Typecheck, lint and unit tests, on
+  Linux and macOS, run in `extensions/agentk` (the workflows, `scripts/check-title.sh`,
+  `scripts/ci-scope.sh` and Dependabot's config are at the repo root). `scripts/ci-scope.sh` decides
+  from a PR's changed paths whether AgentK's jobs run: `extensions/agentk/`, the root `scripts/` and
+  `.github/` (which AgentK's tests read) and any root file outside the known components do, root
+  Markdown, `.claude/` and `backend/` don't. Integration tests run
   against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
-  the PR is edited. Changes reach `main` only through PRs, squash-merged once CI and the title check pass.
+  the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
+  every component's jobs, run or skipped) and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
-  from 0 for each release that day. Commit subjects are `<type>[(<component>)][!]: <summary>`
-  with one of nine types (`scripts/check-title.sh`), and PRs are squash-merged with the PR title
+  from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
+  with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
+  `scripts/check-title.sh`), and PRs are squash-merged with the PR title
   as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit since the last release
   runs the tests and cuts the next version, and those subjects become the release notes; `ci`,
   `test`, `docs`, `nit` and `chore` don't release.
@@ -83,8 +88,13 @@ same button); a version that was rolled back is never offered again. When you cl
    as it's up;
 6. if the new version fails to come up three times in a row (the service manager restarts it) before
    it has been healthy for 5 minutes, points back to the previous version and marks the new one as
-   bad. A deliberate stop (SIGTERM, as for a service restart) takes its start back off the count,
-   so restarting by hand in that window isn't mistaken for a crash loop.
+   bad (`bad-versions`, which the updater never offers again). A deliberate stop (SIGTERM, as for a
+   service restart) takes its start back off the count, so restarting by hand in that window isn't
+   mistaken for a crash loop. A start that fails once it holds the home's lease (a migration,
+   Core's start, the web server) writes its error to `server.log`, and the launcher writes the
+   rollback there (once `logs/` exists), not only to stderr, which reaches no one where the service
+   manager's log isn't kept (a user journal that isn't persistent). A failure before the lease,
+   such as an unreadable `config.toml`, still goes only to stderr.
 
 Once a version has been healthy for 5 minutes, the server deletes every installed version under
 `app/` except the running one and one to roll back to by hand: the version it updated from, or

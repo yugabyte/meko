@@ -52,13 +52,10 @@ if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
     to=${rest#* }
     failed=$((attempts - 1))
     if [ "$failed" -ge 3 ] && [ -n "$from" ] && [ -x "$ak_home/app/$from/bin/agent-k-local" ]; then
-      echo "agent-k-local: version $to failed to start $failed times; rolling back to $from" >&2
-      # A version from before the session host runs sessions in tmux and would start every one
-      # again there: end the ones the host runs first (they resume in tmux), and remove the host
-      # service, which would otherwise keep restarting a host that version has no command for.
-      if [ ! -f "$ak_home/app/$from/lib/dist/server/host/host.js" ]; then
-        "$node" --disable-warning=ExperimentalWarning "$cli" host retire >/dev/null 2>&1 || true
-      fi
+      msg="version $to failed to start $failed times; rolling back to $from"
+      echo "agent-k-local: $msg" >&2
+      # In server.log too, beside the failed starts' errors: stderr may reach no one.
+      { [ -d "$ak_home/logs" ] && printf '%s WARN %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >> "$ak_home/logs/server.log"; } 2>/dev/null || true
       ln -sfn "$from" "$ak_home/app/current.rollback"
       # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
       "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' \

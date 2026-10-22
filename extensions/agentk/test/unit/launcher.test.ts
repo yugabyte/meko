@@ -3,8 +3,9 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, st
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  claudeLauncher, claudeVersion, hooksSettingsPath, modDirPath, versionAtLeast, writeHookFiles, writeModFiles, type LaunchSpec,
+  claudeLauncher, hooksSettingsPath, modDirPath, writeHookFiles, writeModFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
+import { cliVersion, versionAtLeast } from '../../src/server/harness/version.js';
 import { loginShellCommand, shq, writeLauncher } from '../../src/server/launcher.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { paneName } from '../../src/server/hostclient.js';
@@ -196,9 +197,9 @@ describe("AgentK's mod", () => {
     const bin = join(home, 'claude');
     writeFileSync(bin, '#!/bin/sh\necho "2.1.290 (Claude Code)"\n');
     chmodSync(bin, 0o755);
-    expect(await claudeVersion(bin)).toBe('2.1.290');
+    expect(await cliVersion(bin)).toBe('2.1.290');
     writeFileSync(bin, '#!/bin/sh\necho nope; exit 1\n');
-    expect(await claudeVersion(bin)).toBeNull();
-    expect(await claudeVersion(join(home, 'missing'))).toBeNull();
+    expect(await cliVersion(bin)).toBeNull();
+    expect(await cliVersion(join(home, 'missing'))).toBeNull();
   });
 });

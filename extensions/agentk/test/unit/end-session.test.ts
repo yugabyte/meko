@@ -22,4 +22,10 @@ describe('EndSessionButton', () => {
     expect(html).toMatch(/<button class="btn danger">Discard now<\/button>/);
     expect(html).not.toContain('>Archive<');
   });
+
+  it("says where the learn step is that a Discard waits on, and for how long", () => {
+    const html = render({ discarding: true, learnProgress: { step: 'check', facts: 3, done: 0, startedAt: Date.now() - 65_000 } });
+    expect(html).toContain('Checking 3 facts against Meko, then discarding');
+    expect(html).toMatch(/<span class="elapsed" aria-hidden="true">1m 0[56]s<\/span>/);
+  });
 });

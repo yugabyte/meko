@@ -1,10 +1,9 @@
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
-import { claudeConfigPath, ensureWorkspaceTrust } from './trust.js';
+import { claudeConfigPath } from './trust.js';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { moveOffTmux, retireTmuxService } from './legacytmux.js';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import { getOwner } from './auth.js';
 import * as github from './github.js';
@@ -20,6 +19,7 @@ import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles } from './claude.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { kiroDeletesSettled } from './kiro.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
@@ -37,11 +37,12 @@ import { ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
-import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, toProject } from './store.js';
+import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, sessionRows, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { SessionHost } from './hostclient.js';
-import { renderServiceFiles, servicesFor, type ServiceManager } from './service.js';
+import { legacyTmuxPanes } from './legacytmux.js';
+import { servicesFor, type ServiceManager } from './service.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
 
@@ -54,8 +55,8 @@ export interface CoreOptions {
   host?: SessionHost;
   /** The background services (server, session host); tests pass none. */
   services?: () => ServiceManager | null;
-  /** The tmux socket sessions of older versions ran on (legacytmux.ts); tests name their own. */
-  legacyTmuxSocket?: string;
+  /** The tmux sessions on older versions' socket (legacytmux.ts); tests pass their own. */
+  legacyTmuxPanes?: () => Promise<Set<string>>;
   log?: Logger;
   /** Timers for reconcile, GitHub polling and the share syncs. Tests turn these off. */
   timers?: boolean;
@@ -88,12 +89,15 @@ const KIRO_MEKO_TTL_MS = 10_000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
-/** How long stopping waits for transcript captures still running (systemd and launchd allow 15 s to stop). */
+/** How long stopping waits for transcript captures and Kiro's one-shot runs still running (systemd and launchd allow 15 s to stop). */
 const STOP_CAPTURE_MS = 5000;
 /** How long asking gh for its login may take (a session's start waits for it). */
 const GH_LOGIN_TIMEOUT_MS = 5000;
 /** After gh took too long to give its login, how long it isn't asked again (starts go on without it). */
 const GH_LOGIN_RETRY_MS = 60_000;
+
+/** Waits for `p`, but at most `ms`. */
+const within = (p: Promise<void>, ms: number) => Promise.race([p, new Promise<void>((r) => setTimeout(r, ms).unref())]);
 
 export class Core extends EventEmitter {
   readonly paths: Paths;
@@ -108,14 +112,7 @@ export class Core extends EventEmitter {
   readonly mekoLog: MekoCallLog;
   readonly host: SessionHost;
   readonly services: () => ServiceManager | null;
-  private legacyTmuxSocket: string | undefined;
-  /** The old tmux service is gone (or never was): nothing left to retire. */
-  private tmuxRetired = false;
-  /**
-   * This home's sessions still in tmux (versions before the session host) have been ended, or there
-   * were none. Recovery waits for it: a session must never run in tmux and in the host at once.
-   */
-  tmuxMoved = false;
+  readonly legacyTmuxPanes: () => Promise<Set<string>>;
   readonly log: Logger;
   readonly projects: ProjectService;
   readonly worktrees: WorktreePool;
@@ -194,8 +191,8 @@ export class Core extends EventEmitter {
     });
     this.meko.onTrace = (t) => this.mekoLog.record(t);
     this.services = o.services ?? (() => servicesFor(o.paths.home));
+    this.legacyTmuxPanes = o.legacyTmuxPanes ?? (() => legacyTmuxPanes(o.paths));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
-    this.legacyTmuxSocket = o.legacyTmuxSocket;
     this.timersOn = o.timers ?? true;
     this.username = safeUsername();
     this.hostFull = hostname();
@@ -219,7 +216,7 @@ export class Core extends EventEmitter {
       cwd: join(this.paths.run, 'ask'),
       projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
-      harness: async () => (await this.harnesses.ensureDefault(this.cfg))?.id ?? null,
+      asker: async () => (await this.harnesses.ensureDefault(this.cfg))?.ask ?? null,
     });
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.kiroPlan = new KiroPlanStore({
@@ -420,7 +417,22 @@ export class Core extends EventEmitter {
 
   async start(): Promise<void> {
     this.stopped = false;
-    this.tmuxMoved = false;
+    // A version before the session host ran sessions in tmux, and they may still run there: a host
+    // would start each one a second time. `install` ends them (it removes the tmux service), and
+    // this version's recovery then resumes them in the host. Refusing here also lets an update
+    // from such a version roll back by itself. The host service alone doesn't prove the sessions
+    // left tmux (a tmux version reinstalled after the move keeps its file), so with it installed
+    // this refuses only while a session of this home that isn't archived is still in tmux.
+    // Otherwise the tmux service is a leftover (the move kept it while a pane it didn't know, such
+    // as a deleted session's, was still in tmux), and refusing would roll back every update.
+    const svc = this.services();
+    if (svc?.legacyTmuxInstalled()) {
+      const inTmux = svc.installed('host') ? await this.legacyTmuxPanes() : null;
+      if (!inTmux || sessionRows(this.db).some((r) => r.status !== 'archived' && inTmux.has(r.tmux_name))) {
+        throw new Error("An AgentK Local version from before the session host is still installed here, and its sessions may still run in tmux. Run: agent-k-local install (it ends them there, and they resume in the session host)");
+      }
+      this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: agent-k-local install");
+    }
     // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
     // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on
     // them. With transcript capture off, Claude Code sessions run without the Meko plugin: its own
@@ -433,15 +445,12 @@ export class Core extends EventEmitter {
     // no one CLI has to be installed for AgentK to start.
     for (const h of this.harnesses.list()) {
       const ready = h.prepare(this.paths, this.cfg).catch((e) => this.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
-      // Kiro's plan is read once its version is known (whether it's available).
-      if (h.id === 'kiro' && this.timersOn) void ready.then(() => this.kiroPlan.refresh());
+      // Kiro's plan is read once its version is known (whether it's available), unless stopping began meanwhile.
+      if (h.id === 'kiro' && this.timersOn) void ready.then(() => (this.stopped ? undefined : this.kiroPlan.refresh()));
     }
     mkdirSync(this.paths.worktrees, { recursive: true });
-    try {
-      if (ensureWorkspaceTrust(this.paths.worktrees) === 'added') this.log.info(`trusted ${this.paths.worktrees} in Claude Code so new worktrees skip the folder-trust prompt`);
-    } catch (e) {
-      this.log.warn('could not update Claude Code folder trust', errMsg(e));
-    }
+    // So new worktrees skip a CLI's folder-trust prompt (Claude Code's).
+    for (const h of this.harnesses.list()) await h.trustFolder?.(this.paths.worktrees, this.log);
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
@@ -453,19 +462,9 @@ export class Core extends EventEmitter {
     void this.claudeMeko.refresh();
     // Not awaited: the New session dialog shows branch names with it once it's in.
     void this.ghLogin(this.paths.home);
-    this.addHostService();
     // A session host that is down must not keep the web server from starting: the UI stays
     // reachable, and recovery (which needs the host) retries on every reconcile tick.
-    const hostUp = await this.host.ensureServer().then(
-      () => true,
-      (e: unknown) => {
-        this.log.error('the session host is not available', e);
-        return false;
-      },
-    );
-    // Only once a host answers, so sessions still in tmux are never ended with nowhere to resume
-    // them; and before the hook socket is bound, so their Claudes report their end to no one.
-    if (hostUp) await this.moveOffTmux();
+    await this.host.ensureServer().catch((e: unknown) => this.log.error('the session host is not available', e));
     await this.bindHooks();
     this.hooksOn = true;
     this.learn.recover();
@@ -475,12 +474,7 @@ export class Core extends EventEmitter {
     this.prunePins();
     this.sweepStaged();
     if (this.timersOn) {
-      this.every(5000, async () => {
-        // A host that was down at start: end the sessions still in tmux once one answers.
-        if (!this.tmuxMoved && (await this.host.ensureServer().then(() => true, () => false))) await this.moveOffTmux();
-        await this.sessions.reconcile();
-      });
-      this.every(60000, () => this.retireTmux());
+      this.every(5000, () => this.sessions.reconcile());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());
@@ -508,8 +502,13 @@ export class Core extends EventEmitter {
     this.learn.stop();
     this.knowledge.stop();
     await this.closeHooks();
-    // Let the last turns reach Meko; one cut off here catches up when the server starts again.
-    await this.capture.settled(STOP_CAPTURE_MS);
+    // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
+    // one-shot runs already going (the plan read, deleting a run's session) get as long to end; one
+    // slower than that is left to finish on its own, as nothing kills it.
+    await Promise.all([
+      this.capture.settled(STOP_CAPTURE_MS),
+      within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
+    ]);
     await this.meko.close();
   }
 
@@ -559,43 +558,6 @@ export class Core extends EventEmitter {
       this.hookCheck = null;
     });
     return this.hookCheck;
-  }
-
-  /**
-   * Ends this home's sessions still running in tmux (versions before the session host), so recovery
-   * resumes them in the host. Call it only once a host answers. Remove after 2026-10-14.
-   */
-  private async moveOffTmux(): Promise<void> {
-    if (this.tmuxMoved) return;
-    try {
-      const ours = new Set(all<{ tmux_name: string }>(this.db, 'SELECT tmux_name FROM sessions').map((r) => r.tmux_name));
-      await moveOffTmux({ paths: this.paths, log: this.log, services: this.services(), ours, socket: this.legacyTmuxSocket });
-      this.tmuxMoved = true;
-    } catch (e) {
-      this.log.warn("couldn't end the sessions still running in tmux; trying again", errMsg(e));
-    }
-    await this.retireTmux();
-  }
-
-  /** Removes the old tmux service once the update is final. Remove after 2026-10-14. */
-  private async retireTmux(): Promise<void> {
-    if (this.tmuxRetired || !this.tmuxMoved) return;
-    this.tmuxRetired = await retireTmuxService({ paths: this.paths, log: this.log, services: this.services(), socket: this.legacyTmuxSocket });
-  }
-
-  /**
-   * A server that updated itself from a version without the session host service adds it: the
-   * updater swaps the app but never writes service files. Never restarts the server itself.
-   */
-  private addHostService(): void {
-    const svc = this.services();
-    if (!svc?.installed('server') || svc.installed('host') || !process.env.AK_APP_DIR) return;
-    try {
-      svc.addHost(renderServiceFiles(svc, { AK_HOME: this.paths.home, HOST: hostname() }));
-      this.log.info(`installed the session host service (${svc.id('host')})`);
-    } catch (e) {
-      this.log.error(`couldn't install the session host service (${svc.id('host')}); run: agent-k-local install`, e);
-    }
   }
 
   private sweepStaged(): void {

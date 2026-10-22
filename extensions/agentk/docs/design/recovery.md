@@ -22,6 +22,15 @@ server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one
 restarted (`agent-k-local host restart`), which the server's log says. `agent-k-local host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
 the host again at once and resume them all. With the server stopped, they resume when it starts.
+`agent-k-local stop` stops both, the server first, and `agent-k-local start` starts them again.
+Installed services stop through systemd (`systemctl --user stop`) or launchd (`bootout`), since
+both restart a process that is only killed or exits on its own. Then it checks the server's lease:
+a server outside the service (`serve` by hand, or any server without services) gets SIGTERM, but
+only when the lease names this machine and its pid is an `agent-k-local serve` (after a crash the
+pid can be another process's); a lease held on another host is refused. The host goes last:
+its service is stopped, then any host still on the socket (a detached one a server started before
+the services were installed) gets a stop request. The services still start again at the next login (or
+boot, with lingering) or reinstall; `start` starts them sooner.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
 (`~/Library/LaunchAgents/com.yugabyte.agent-k-local.plist` and `….host.plist`), with `RunAtLoad`
@@ -32,30 +41,37 @@ one. The host runs in the foreground, as launchd wants. Both jobs set
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
 back; reinstalling never reloads a loaded host job.
 
-**Moving off tmux.** Versions before the session host ran every Claude in tmux (socket `agentk`,
-or `[tmux] socket`), in a tmux service. The updater swaps the app but never writes service files,
-so on its first start a version with the session host adds the host service itself (`addHost`,
-which never restarts the server) and starts the host. Only once a host answers, and before binding
-the hook socket, does it end this home's sessions still in tmux (only panes named by its own
-`state.db`) and wait for their Claudes to exit; until then recovery waits too, so the sessions keep
-running in tmux and none runs twice (a host that comes up later is found by the reconcile tick).
-Recovery resumes them all in the host with `claude --resume`, auto-continuing the turns it cut off
-(the usual guards apply). The tmux service is removed once the update is final
-(`update-pending.json` gone) and no other home has AgentK sessions on its tmux server (removing the
-service ends that server, and its socket is shared by every home on the account). A rollback to a
-version without the host finds the tmux service still there, and the launcher first runs
-`agent-k-local host retire`: it removes the host service, ending every Claude in it, so they resume
-in tmux, none runs twice, and nothing keeps restarting a host that version can't run. To go back to
-such a version by hand, run `agent-k-local uninstall` (it removes both services, ending the
-sessions, and keeps your state), then install that version with `--version`. Without a tmux
-service, a tmux server left with no AgentK sessions is ended at once. This code (`legacytmux.ts`)
-goes after 2026-10-14.
+**Versions before the session host** ran every Claude in tmux, in a tmux service. The server
+moved an install off it by itself on its first start after the update (it added the host service,
+ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
+on 2026-10-09 and was removed about a week later. A Claude must never run in tmux and in the host at
+once, so what's left is a guard (`Core.start`): while the tmux service is installed
+(`legacyTmuxInstalled`), the server refuses to start, saying to run `agent-k-local install`, unless
+the host service is installed too and none of this home's sessions that aren't archived is in
+tmux (`legacytmux.ts` lists the sessions on the old socket). An
+install that updated itself from a tmux version therefore fails to start and rolls back to it (the
+launcher's rollback; see [Releases](releases.md)), with its sessions still running in tmux.
+`agent-k-local install`, which the installer runs, moves it: before it installs the services it
+removes the old ones, stopping the old server first and then the tmux service, which ends the
+Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
+was cut off). `agent-k-local uninstall` removes the tmux service too. Removing it ends the tmux
+server on its socket, which every AgentK home on the account shared.
 
-All of this sits behind one interface in `src/server/service.ts` (install, add or remove the host,
-start, restart, state, remove, boot check, removing the old tmux service), with a systemd and a
-launchd implementation picked by platform. `servicesFor(home)` uses the installed services only
-when their `AK_HOME` is exactly this home, so a dev server or a second home never acts on another
-install's services.
+An install can have both services: the move kept the tmux service while any `ak-` pane it didn't
+end was still in tmux (it ended only this home's sessions, so a deleted session's Claude, or
+another home's, kept it there). Its sessions already run in the host, so the server starts and logs
+a warning, and leaves the tmux service running rather than end the Claudes still in it.
+(Refusing there, as versions 0.20261018.3 to 0.20261020.2 did, rolled back every update.) The host
+service alone doesn't prove the move finished: a tmux version reinstalled by hand after it keeps
+the host's file and resumes its sessions in tmux, which is why the guard also looks for this home's
+sessions there. With both services installed, `agent-k-local install` stops the server (it may be
+the tmux version's, which would start them in tmux again) and removes the tmux service, ending any
+Claude still in it, and leaves the host and its sessions alone.
+
+All of this sits behind one interface in `src/server/service.ts` (install, start, stop, restart,
+state, remove, boot check, the old tmux service), with a systemd and a launchd implementation picked by platform.
+`servicesFor(home)` uses the installed services only when their `AK_HOME` is exactly this home, so
+a dev server or a second home never acts on another install's services.
 
 ## One server per home
 
@@ -90,7 +106,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 | Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the session host's panes, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](releases.md)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
 | Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`. |
-| Host reboot or crash | Worktrees, transcripts, state | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
+| Host reboot or crash | Worktrees, transcripts, state (after a crash or power cut, less the last `state.db` commits before it: `synchronous=NORMAL`, see [Projects and sessions](projects-and-sessions.md)) | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
 
 ```mermaid
 sequenceDiagram

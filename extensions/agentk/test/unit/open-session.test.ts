@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectWithSessions, Session } from '../../src/shared/types';
 import { lastOpenSession, openSessions, rememberOpenSession, sessionToOpen } from '../../src/web/util.js';
 
-const session = (id: string, createdAt: number, lastEventAt?: number) => ({ id, createdAt, lastEventAt }) as Session;
+const session = (id: string, createdAt: number, lastEventAt?: number, position = 0) => ({ id, createdAt, lastEventAt, position }) as Session;
 
 describe('sessionToOpen', () => {
   const live = [session('old', 1, 50), session('busy', 2, 90), session('new', 3)];
@@ -24,16 +24,17 @@ describe('sessionToOpen', () => {
 });
 
 describe('openSessions', () => {
-  it('lists the open sessions oldest first, without closed ones', () => {
+  it('lists the open sessions by position, oldest first on a tie, without closed ones', () => {
     const p = {
       sessions: [
         { ...session('b', 2), desired: 'running', status: 'idle' },
-        { ...session('gone', 0), desired: 'archived', status: 'idle' },
+        { ...session('gone', 0, undefined, -5), desired: 'archived', status: 'idle' },
         { ...session('a', 1), desired: 'running', status: 'working' },
+        { ...session('top', 4, undefined, -1), desired: 'running', status: 'idle' },
         { ...session('ended', 3), desired: 'running', status: 'archived' },
       ],
     } as ProjectWithSessions;
-    expect(openSessions(p).map((s) => s.id)).toEqual(['a', 'b']);
+    expect(openSessions(p).map((s) => s.id)).toEqual(['top', 'a', 'b']);
     expect(p.sessions[0].id).toBe('b');
   });
 });

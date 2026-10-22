@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
  * the server never ends a session. systemd user units run them on Linux,
  * LaunchAgents on macOS; everything else talks to them through `ServiceManager`.
  *
- * Versions before the session host ran sessions in tmux, in a tmux service. It is
- * only ever removed now (`removeLegacyTmux`). Remove that support after 2026-10-14.
+ * Versions before the session host ran sessions in tmux, in a tmux service. Its Claudes must never
+ * run while the host runs them too, so the server refuses to start while it's installed, and
+ * `install` and `uninstall` remove it (`removeLegacyTmux`), which ends them.
  */
 export type Service = 'server' | 'host';
 
@@ -43,21 +44,16 @@ export interface ServiceManager {
    * reinstall or upgrade runs the new version.
    */
   install(files: Record<Service, string>): void;
-  /**
-   * For a server that updated itself from a version without the host service: writes both
-   * files and starts the host, but never restarts the server (the caller is that server).
-   */
-  addHost(files: Record<Service, string>): void;
   /** Restarts a service (for the host, this ends every Claude; recovery resumes them). */
   restart(s: Service): void;
-  /** Stops and deletes the host service, ending every Claude in it (before a rollback to a version without it). */
-  removeHost(): void;
-  /** Whether the tmux service of versions before the session host is still installed. */
+  /** Whether the tmux service of versions before the session host is installed. */
   legacyTmuxInstalled(): boolean;
-  /** Stops and deletes the tmux service of versions before the session host. */
+  /** Stops and deletes the tmux service of versions before the session host, ending every Claude in it. */
   removeLegacyTmux(): void;
   /** Starts a service that isn't running; leaves a running one alone. */
   start(s: Service): void;
+  /** Stops a service until `start`, the next login or a reinstall (its supervisor doesn't bring it back sooner). */
+  stop(s: Service): void;
   state(s: Service): { running: boolean; text: string };
   /** Stops both services (and an old tmux one) and deletes their files. */
   remove(): void;
@@ -65,8 +61,6 @@ export interface ServiceManager {
   bootCheck(): BootCheck;
   /** A command that shows why a service isn't running. */
   statusHint(s: Service): string;
-  /** A command that stops a service until it's started again. */
-  stopHint(s: Service): string;
 }
 
 export type Runner = (cmd: string, args: string[]) => { ok: boolean; out: string; err: string };
@@ -145,13 +139,6 @@ export class SystemdServices implements ServiceManager {
     must(this.run, 'systemctl', ['--user', 'restart', this.id('server')]);
   }
 
-  addHost(files: Record<Service, string>): void {
-    mkdirSync(this.dir(), { recursive: true });
-    for (const s of SERVICES) writeFileSync(this.file(s), files[s]);
-    must(this.run, 'systemctl', ['--user', 'daemon-reload']);
-    must(this.run, 'systemctl', ['--user', 'enable', '--now', this.id('host')]);
-  }
-
   start(s: Service): void {
     this.run('systemctl', ['--user', 'start', this.id(s)]);
   }
@@ -160,24 +147,8 @@ export class SystemdServices implements ServiceManager {
     must(this.run, 'systemctl', ['--user', 'restart', this.id(s)]);
   }
 
-  removeHost(): void {
-    this.run('systemctl', ['--user', 'disable', '--now', this.id('host')]);
-    if (existsSync(this.file('host'))) unlinkSync(this.file('host'));
-    this.run('systemctl', ['--user', 'daemon-reload']);
-  }
-
-  private tmuxFile(): string {
-    return join(this.dir(), SYSTEMD_TMUX);
-  }
-
-  legacyTmuxInstalled(): boolean {
-    return existsSync(this.tmuxFile());
-  }
-
-  removeLegacyTmux(): void {
-    this.run('systemctl', ['--user', 'disable', '--now', SYSTEMD_TMUX]);
-    if (existsSync(this.tmuxFile())) unlinkSync(this.tmuxFile());
-    this.run('systemctl', ['--user', 'daemon-reload']);
+  stop(s: Service): void {
+    must(this.run, 'systemctl', ['--user', 'stop', this.id(s)]);
   }
 
   state(s: Service): { running: boolean; text: string } {
@@ -193,6 +164,16 @@ export class SystemdServices implements ServiceManager {
     }
     if (this.legacyTmuxInstalled()) this.removeLegacyTmux();
     else this.run('systemctl', ['--user', 'daemon-reload']);
+  }
+
+  legacyTmuxInstalled(): boolean {
+    return existsSync(join(this.dir(), SYSTEMD_TMUX));
+  }
+
+  removeLegacyTmux(): void {
+    this.run('systemctl', ['--user', 'disable', '--now', SYSTEMD_TMUX]);
+    rmSync(join(this.dir(), SYSTEMD_TMUX), { force: true });
+    this.run('systemctl', ['--user', 'daemon-reload']);
   }
 
   bootCheck(): BootCheck {
@@ -212,10 +193,6 @@ export class SystemdServices implements ServiceManager {
 
   statusHint(s: Service): string {
     return `systemctl --user status ${this.id(s)}`;
-  }
-
-  stopHint(s: Service): string {
-    return `systemctl --user stop ${this.id(s)}`;
   }
 }
 
@@ -319,14 +296,6 @@ export class LaunchdServices implements ServiceManager {
     for (const s of SERVICES) this.waitRunning(s);
   }
 
-  addHost(files: Record<Service, string>): void {
-    mkdirSync(dirname(this.file('server')), { recursive: true });
-    // The server's file applies the next time launchd loads it; reloading it now would stop us.
-    for (const s of SERVICES) writeFileSync(this.file(s), files[s]);
-    if (!this.loaded('host')) this.bootstrap('host');
-    this.waitRunning('host');
-  }
-
   start(s: Service): void {
     if (this.loaded(s)) this.run('launchctl', ['kickstart', this.target(s)]); // without -k it leaves a running job alone
     else if (this.installed(s)) this.run('launchctl', ['bootstrap', this.domain(), this.file(s)]);
@@ -337,22 +306,12 @@ export class LaunchdServices implements ServiceManager {
     else this.bootstrap(s);
   }
 
-  removeHost(): void {
-    this.unload('host');
-    if (existsSync(this.file('host'))) unlinkSync(this.file('host'));
-  }
-
-  private tmuxFile(): string {
-    return join(this.home, 'Library', 'LaunchAgents', `${LAUNCHD_TMUX}.plist`);
-  }
-
-  legacyTmuxInstalled(): boolean {
-    return existsSync(this.tmuxFile());
-  }
-
-  removeLegacyTmux(): void {
-    this.unloadLabel(LAUNCHD_TMUX);
-    if (existsSync(this.tmuxFile())) unlinkSync(this.tmuxFile());
+  stop(s: Service): void {
+    // KeepAlive restarts a killed job: unload it (`start`, the next login or a reinstall loads it again).
+    this.unload(s);
+    // unload waits 5 s; the server's ExitTimeOut is 15 s.
+    for (let i = 0; i < 150 && this.loaded(s); i++) this.pause(100);
+    if (this.loaded(s)) throw new ServiceError(`${this.id(s)} didn't stop. Check: ${this.statusHint(s)}`);
   }
 
   state(s: Service): { running: boolean; text: string } {
@@ -370,6 +329,19 @@ export class LaunchdServices implements ServiceManager {
     if (this.legacyTmuxInstalled()) this.removeLegacyTmux();
   }
 
+  private tmuxFile(): string {
+    return join(this.home, 'Library', 'LaunchAgents', `${LAUNCHD_TMUX}.plist`);
+  }
+
+  legacyTmuxInstalled(): boolean {
+    return existsSync(this.tmuxFile());
+  }
+
+  removeLegacyTmux(): void {
+    this.unloadLabel(LAUNCHD_TMUX);
+    rmSync(this.tmuxFile(), { force: true });
+  }
+
   bootCheck(): BootCheck {
     return {
       ok: true,
@@ -381,11 +353,6 @@ export class LaunchdServices implements ServiceManager {
 
   statusHint(s: Service): string {
     return `launchctl print ${this.target(s)}`;
-  }
-
-  stopHint(s: Service): string {
-    // KeepAlive restarts a job that is only killed: unload it (the next login, or a reinstall, loads it again).
-    return `launchctl bootout ${this.target(s)}`;
   }
 }
 

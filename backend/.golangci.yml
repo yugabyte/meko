@@ -1,0 +1,83 @@
+# golangci-lint v2. Prod Meko's config (meko/.golangci.yml) is the starting point. Changes:
+# - the cgo build tags, and misspell ignores "lustre" (a filesystem name);
+# - govet's fieldalignment is off: it reorders structs for bytes, against readability;
+# - errcheck allows a deliberate `_ =` (no check-blank). Its exclusions below apply everywhere, not
+#   per call site: fmt.Fprint* (used only for CLI output here), and Close or Rollback on handles
+#   that only ever clean up (listeners, response bodies, sql rows, transactions and databases). The
+#   Close of anything that writes (a file, the store, the log file) isn't excluded: it can be the
+#   only sign a write failed, so check it, or write `_ = f.Close()` where nothing was written.
+version: "2"
+run:
+  modules-download-mode: readonly
+  build-tags:
+    - sqlite_fts5
+    - sqlite_vec
+linters:
+  enable:
+    - gocritic
+    - gosec
+    - lll
+    - misspell
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.ReadCloser).Close
+        - (net.Listener).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Rows).Close
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    lll:
+      line-length: 120
+    misspell:
+      locale: US
+      ignore-rules:
+        - lustre # a filesystem (internal/paths)
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+        - name: unexported-return
+          severity: warning
+        - name: blank-imports
+          severity: warning
+        - name: context-as-argument
+          severity: warning
+        - name: dot-imports
+          severity: warning
+        - name: error-return
+          severity: warning
+        - name: error-strings
+          severity: warning
+        - name: error-naming
+          severity: warning
+        - name: increment-decrement
+          severity: warning
+        - name: var-naming
+          severity: warning
+        - name: range
+          severity: warning
+        - name: receiver-naming
+          severity: warning
+        - name: indent-error-flow
+          severity: warning
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy

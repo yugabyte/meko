@@ -124,19 +124,16 @@ short_home=$(printf '%s' "$ak_home" | sed "s|^$HOME|~|")
 # ---- already installed ----
 # Set up all the way: a release linked as app/current and as ~/.local/bin/agent-k-local, a
 # config.toml, and both background services, the last step of `agent-k-local install` (which
-# `agent-k-local uninstall` removes). Versions before the session host had a tmux service in its
-# place; their server adds the host service once it updates itself. Anything less, like an install that failed at its services
+# `agent-k-local uninstall` removes). Anything less, like an install that failed at its services
 # or one made with --no-service, goes on to install again. So do options for `agent-k-local
 # install`: they'd be dropped otherwise.
 services_set_up() {
   if [ "$platform" = darwin ]; then
     launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local" >/dev/null 2>&1 &&
-      { launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.host" >/dev/null 2>&1 ||
-        launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.tmux" >/dev/null 2>&1; }
+      launchctl print "gui/$(id -u)/com.yugabyte.agent-k-local.host" >/dev/null 2>&1
   else
     systemctl --user is-enabled agent-k-local.service >/dev/null 2>&1 &&
-      { systemctl --user is-enabled agent-k-local-host.service >/dev/null 2>&1 ||
-        systemctl --user is-enabled agent-k-local-tmux.service >/dev/null 2>&1; }
+      systemctl --user is-enabled agent-k-local-host.service >/dev/null 2>&1
   fi
 }
 if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/bin/agent-k-local" ] &&

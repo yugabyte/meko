@@ -107,11 +107,6 @@ export class ScreenBoard {
     }
   }
 
-  /** Whether `screen` has the session. */
-  has(screen: Screen): boolean {
-    return this.owner?.screen === screen;
-  }
-
   private find(screen: Screen): Entry | undefined {
     return this.entries.find((e) => e.screen === screen);
   }

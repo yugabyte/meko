@@ -7,7 +7,8 @@ import {
   withDesignLine,
 } from '../../src/server/design.js';
 import { mekoDatapackLineId } from '../../src/server/prompts.js';
-import { DESIGN_FRAME_CSP, MERMAID_VERSION, designFrameDoc, mermaidLoader } from '../../src/web/design-frame.js';
+import { MEKO_SOURCE_MARK } from '../../src/shared/decisions.js';
+import { DESIGN_FRAME_CSP, MEKO_MARK_DATA_URL, MERMAID_VERSION, designFrameDoc, mekoSourceStyle, mermaidLoader } from '../../src/web/design-frame.js';
 import { DIAGRAM_FAILED, ERROR_CHARS, mermaidLook } from '../../src/web/mermaid.js';
 
 describe('design capture', () => {
@@ -122,6 +123,21 @@ describe('design frame', () => {
     expect(DESIGN_FRAME_CSP).not.toMatch(/'self'/);
   });
 
+  it("draws Meko's mark on the design's markers, after the page and only when it has one", () => {
+    const page = `<html><body><h3>D1 · One SQLite file ${MEKO_SOURCE_MARK}</h3><pre class="mermaid">flowchart LR\n  a --> b</pre></body></html>`;
+    const style = mekoSourceStyle(page);
+    expect(style).toMatch(/^<style>span\.meko-source \{/);
+    expect(style).toContain(`mask: url("${MEKO_MARK_DATA_URL}")`);
+    expect(designFrameDoc(page, null)).toBe(`<!doctype html>${meta}${page}${style}${mermaidLoader(page)}`);
+    expect(mekoSourceStyle('<p>bare</p>')).toBe('');
+    expect(designFrameDoc('<p>bare</p>', null)).not.toContain('<style>');
+  });
+
+  it("carries Meko's m as a data: URL of public/meko-m.png", () => {
+    const png = readFileSync(join(import.meta.dirname, '../../src/web/public/meko-m.png'));
+    expect(MEKO_MARK_DATA_URL).toBe(`data:image/png;base64,${png.toString('base64')}`);
+  });
+
   it('passes an explicit app theme to the page', () => {
     expect(designFrameDoc('<html><head></head></html>', 'dark')).toBe(`<!doctype html><html data-theme="dark">${meta}<html><head></head></html>`);
     expect(designFrameDoc('<p>fragment</p>', 'light')).toMatch(/^<!doctype html><html data-theme="light"><meta /);
@@ -192,6 +208,6 @@ describe('design frame', () => {
 
   it('loads the same Mermaid version that is bundled for markdown designs', () => {
     const pkg = JSON.parse(readFileSync(join(process.cwd(), 'node_modules/mermaid/package.json'), 'utf8')) as { version: string };
-    expect(MERMAID_VERSION).toBe(pkg.version);
+    expect(mermaidLoader('<pre class="mermaid">graph TD</pre>')).toContain(`/npm/mermaid@${pkg.version}/dist/`);
   });
 });

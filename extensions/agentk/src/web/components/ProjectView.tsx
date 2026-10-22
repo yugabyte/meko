@@ -19,10 +19,10 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, HarnessLogo, NotesIcon, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -83,6 +83,7 @@ export function ProjectView({
   onMove,
   onOpenPr,
   onRename,
+  onToTop,
   onMenu,
   showTabs,
   harnessLogos,
@@ -100,9 +101,11 @@ export function ProjectView({
   onOpenPr: () => void;
   /** Opens the Rename session dialog. */
   onRename: (sessionId: string) => void;
+  /** Moves a session to the top of the project's list (the ⋯ sheet; the rail has its own button). */
+  onToTop: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
-  /** Show the session tabs above the terminal (the wide layout): the rail doesn't list the sessions, or is hidden. */
+  /** Show the session tabs, above the terminal or in a phone's app bar: the rail doesn't list the sessions, or (the wide layout only) is hidden. */
   showTabs: boolean;
   /** Show each session's harness logo in its tab: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
@@ -288,7 +291,9 @@ export function ProjectView({
   );
 
   // On a phone the tabs sit in the app bar, between the drawer button and the session's actions. On a
-  // desktop they sit above the terminal, unless the rail lists the sessions (a setting) and is shown.
+  // desktop they sit above the terminal. Neither shows them while the rail lists the sessions (a setting)
+  // and is shown; the phone's bar then names the session, with its dot, and marks the drawer button while
+  // another session needs you.
   const tabs = (
     <div className="tabs" role="tablist" ref={tabsRef}>
       {sessions.map((s) => (
@@ -316,8 +321,22 @@ export function ProjectView({
   return (
     <div className="project-view">
       {mobile ? (
-        <TopBar onMenu={onMenu}>
-          {tabs}
+        <TopBar
+          onMenu={onMenu}
+          menuDot={!showTabs && sessions.some((s) => s.id !== session?.id && dotState(s) === 'needs_input')}
+          sub={showTabs || !session ? undefined : project.name}
+          title={
+            showTabs ? undefined : session ? (
+              <>
+                <StatusDot status={dotState(session)} phase={session.id} />
+                {session.name}
+              </>
+            ) : (
+              project.name
+            )
+          }
+        >
+          {showTabs && tabs}
           {session?.status === 'exited' && (
             <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
               Resume
@@ -510,6 +529,7 @@ export function ProjectView({
           onMekoCalls={project.settings.mekoLog ? () => navigate({ view: 'meko', projectId: project.id, sessionId: session.id }) : undefined}
           onMove={() => onMove()}
           onRename={() => onRename(session.id)}
+          onToTop={sessions[0]?.id !== session.id ? () => onToTop(session.id) : undefined}
           onAct={act}
           onClose={() => setSheet(false)}
         />
@@ -762,7 +782,12 @@ function StageBar({
       break;
     }
     case 'merge':
-      gate = <span className="gate-pill"><Busy label="Merging and closing" /></span>;
+      gate = (
+        <span className="gate-pill">
+          <Busy label={closingText(session)} />
+          {session.closeStep === 'learn' && session.learnProgress && <Elapsed since={session.learnProgress.startedAt} />}
+        </span>
+      );
       break;
     case 'done':
       gate = <span className="gate-pill done">Done</span>;

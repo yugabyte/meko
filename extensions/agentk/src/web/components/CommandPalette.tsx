@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
 import {
-  STAGE_LABELS, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type LinkPlan, type ProjectWithSessions, type Session,
-  type SessionMatch, type StartFromLinkResult,
+  STAGE_LABELS, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
+  type ProjectWithSessions, type Session, type SessionMatch, type StartFromLinkResult,
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useMedia, useTouch } from '../hooks/useMedia';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, linkEntries, type LabelPart } from '../palette';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { attachFiles } from '../terminals';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
@@ -54,10 +54,13 @@ export function CommandPalette({
   onMoveSession,
   onOpenPr,
   onRenameSession,
+  onSessionToTop,
   onSettings,
   onStarted,
   askAgentk,
   onEditSession,
+  mekoWebUrl,
+  onOpenInvite,
 }: {
   projects: ProjectWithSessions[];
   currentProjectId: string | null;
@@ -72,6 +75,8 @@ export function CommandPalette({
   onOpenPr: () => void;
   /** Opens the Rename session dialog for the session on screen. */
   onRenameSession: () => void;
+  /** Moves the session on screen to the top of its project's list; left out when it's already there. */
+  onSessionToTop?: () => void;
   onSettings: () => void;
   /** A session started from a pasted link (in a project it may just have opened), or one AgentK proposed. */
   onStarted: (r: StartFromLinkResult) => void;
@@ -79,6 +84,10 @@ export function CommandPalette({
   askAgentk: boolean;
   /** Opens New session filled in with a task AgentK proposed. */
   onEditSession: (projectId: string, initial: CreateSessionRequest) => void;
+  /** Meko's web app: a share link pasted from it can be joined. */
+  mekoWebUrl: string | null;
+  /** Opens Open project with a share chosen (one just joined by its link). */
+  onOpenInvite: (invite: DatapackInvite) => void;
 }) {
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
@@ -124,13 +133,18 @@ export function CommandPalette({
     };
   }, [refKey, lookupKey, currentProjectId, stale]);
   const looked = stale ? undefined : cached;
+
+  // A Meko share link pasted: joined only when its item is picked.
+  const join = useMemo(() => joinEntry(q, mekoWebUrl), [q, mekoWebUrl]);
+  /** What joining by the link in the field came to, when there's nothing to open. */
+  const [joined, setJoined] = useState<{ url: string; result: JoinByLinkResult } | null>(null);
   const plan = looked && 'plan' in looked ? looked.plan : null;
 
   // Sessions about what was typed (their task, PR, design…), searched once typing pauses: in the
   // project on screen, or every project from elsewhere. Kept with the text they're for, so a result
   // never shows under other text.
   const typed = q.trim();
-  const findKey = typed.length > 1 && !refKey ? `${typed}@${currentProjectId ?? ''}` : null;
+  const findKey = typed.length > 1 && !refKey && !join ? `${typed}@${currentProjectId ?? ''}` : null;
   const [found, setFound] = useState<{ key: string; matches: SessionMatch[] } | null>(null);
   useEffect(() => {
     if (!findKey) return;
@@ -350,6 +364,15 @@ export function CommandPalette({
         run: onRenameSession,
       });
     }
+    if (currentSession && onSessionToTop) {
+      out.push({
+        id: 'session-to-top',
+        label: ['Move ', { session: currentSession.name }, ' to top'],
+        hint: 'Action',
+        keywords: 'move top first pin priority order reorder session',
+        run: onSessionToTop,
+      });
+    }
     if (currentSession) {
       out.push({
         id: 'attach-files',
@@ -403,7 +426,7 @@ export function CommandPalette({
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];
@@ -422,21 +445,51 @@ export function CommandPalette({
     });
   }, [found, findKey, projects, currentProjectId]);
 
+  const joinItems = useMemo<Item[]>(() => {
+    if (!join) return [];
+    const url = q.trim();
+    if (joined?.url === url) return [{ id: 'join-done', label: [joinedText(joined.result)], hint: '', keywords: '', wrap: true }];
+    const joinLink = async () => {
+      setStarting(join.id);
+      setStartError(null);
+      try {
+        const r = await api.joinByLink({ url });
+        if (!mounted.current) return;
+        if (r.project) {
+          onClose();
+          navigate({ view: 'home', projectId: r.project.id });
+        } else if (r.invite) {
+          onClose();
+          onOpenInvite(r.invite);
+        } else setJoined({ url, result: r });
+      } catch (e) {
+        if (mounted.current) setStartError(errorMessage(e));
+      } finally {
+        if (mounted.current) setStarting(null);
+      }
+    };
+    return [{
+      ...join, keywords: '', wrap: true, keepOpen: true,
+      busy: starting === join.id ? 'Joining' : undefined,
+      run: () => void (!starting && joinLink()),
+    }];
+  }, [join, q, joined, starting, onClose, onOpenInvite]);
+
   const shown = useMemo<Item[]>(() => {
     if (asking) return [];
     // Before typing again, the last answer's actions.
     if (!typed && last) return answerItems;
     // After the commands, and so picked by Enter when none matches (a sentence never does). Not for a pasted link.
-    const askItem: Item[] = askAgentk && typed && !refKey
+    const askItem: Item[] = askAgentk && typed && !refKey && !join
       ? [{ id: 'ask', label: [`Ask AgentK: “${typed}”`], hint: `${isMac() ? '⌘' : 'Ctrl'}+Enter`, keywords: '', run: () => void ask(typed), keepOpen: true }]
       : [];
     const matched = filterItems(items, q);
     // After Ask AgentK, so Enter still asks when a sentence matches nothing but finds sessions.
     const more = findItems.filter((f) => !matched.some((m) => m.id === `s-${f.id.slice('find-'.length)}`));
-    return [...linkItems, ...matched, ...askItem, ...more];
+    return [...joinItems, ...linkItems, ...matched, ...askItem, ...more];
     // ask() reads the chat and screen, which change no more often than the deps here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkItems, items, q, typed, refKey, asking, last, answerItems, askAgentk, findItems]);
+  }, [joinItems, linkItems, items, q, typed, refKey, join, asking, last, answerItems, askAgentk, findItems]);
 
   useEffect(() => setIdx(0), [q, plan, last]);
   useEffect(() => {
@@ -479,7 +532,8 @@ export function CommandPalette({
                 setIdx((i) => Math.max(0, i - 1));
               } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                if (askAgentk) void ask(q);
+                // Never a pasted share link: its token goes to Meko only.
+                if (askAgentk && !join) void ask(q);
               } else if (e.key === 'Enter') {
                 e.preventDefault();
                 choose(shown[idx]);

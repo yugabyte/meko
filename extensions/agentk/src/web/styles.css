@@ -881,6 +881,37 @@ textarea.input {
 .rail-sess-name {
   overflow-wrap: anywhere;
 }
+/* Move to top sits over the stage chip, shown in its place while the row is hovered or focused. */
+.rail-sess-row {
+  position: relative;
+  display: grid;
+}
+.rail-sess-top {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+.rail-sess-row:hover .rail-sess-top,
+.rail-sess-row:focus-within .rail-sess-top {
+  visibility: visible;
+}
+.rail-sess-row:hover:has(.rail-sess-top) .stchip,
+.rail-sess-row:focus-within:has(.rail-sess-top) .stchip {
+  visibility: hidden;
+}
+.rail-sess-top:hover {
+  color: var(--accent);
+}
 .rail-sess-new {
   display: block;
   padding-left: 27px;
@@ -1352,6 +1383,13 @@ textarea.input {
 .gate-pill.done {
   color: var(--ok);
   border-style: solid;
+}
+/* A running time after a Busy label (Elapsed in common.tsx): the learn step a Discard or Merge & Close waits on. */
+.elapsed {
+  margin-left: 6px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .blockers {
   padding: 0 14px 7px;
@@ -1841,6 +1879,31 @@ textarea.input {
   flex: none;
   width: 11px;
   height: 11px;
+  background: currentColor;
+  -webkit-mask: url('/meko-m.png') center / contain no-repeat;
+  mask: url('/meko-m.png') center / contain no-repeat;
+}
+/* A markdown design's marker on a key design decision from Meko (MEKO_SOURCE_MARK): the same
+   badge, its "from Meko" text kept for screen readers. Only in the design: other markdown (held
+   reviews) is other people's text. An Artifact's is in design-frame.ts. */
+.design-body .prose .meko-source {
+  display: inline-block;
+  position: relative;
+  box-sizing: content-box;
+  width: 11px;
+  height: 11px;
+  margin: 0 0.3em;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 0;
+  vertical-align: middle;
+  background: var(--meko-soft);
+  color: var(--meko);
+}
+.design-body .prose .meko-source::before {
+  content: '';
+  position: absolute;
+  inset: 3px 6px;
   background: currentColor;
   -webkit-mask: url('/meko-m.png') center / contain no-repeat;
   mask: url('/meko-m.png') center / contain no-repeat;
@@ -2558,6 +2621,21 @@ div[id^='dak-mermaid-'] .label {
 .share-person-btns {
   display: flex;
   gap: 6px;
+}
+/* The Share dialog's share link (ShareLink.tsx): rows that wrap, the URL field taking what's left. */
+.share-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.share-link-head {
+  justify-content: space-between;
+}
+.share-link-url {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 12px;
 }
 /* The people invited before, suggested under the Emails field (ShareSuggestions.tsx). */
 .share-suggest {
@@ -4348,6 +4426,7 @@ div[id^='dak-mermaid-'] .label {
   flex: none;
 }
 .topbar-menu {
+  position: relative;
   color: var(--ink);
 }
 .topbar-title {
@@ -4363,6 +4442,10 @@ div[id^='dak-mermaid-'] .label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.topbar-title b .dot {
+  margin-right: 7px;
+  vertical-align: 1px;
 }
 .topbar-sub {
   font-size: 12px;

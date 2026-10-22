@@ -146,35 +146,10 @@ describe('SystemdServices', () => {
     expect(svc.installed('host')).toBe(true);
   });
 
-  it('adds the host service for a server that updated itself, without restarting that server', () => {
+  it('stops a unit', () => {
     const { svc, calls } = make();
-    svc.addHost(files);
-    expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
-    expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
-    expect(calls).toEqual(['systemctl --user daemon-reload', 'systemctl --user enable --now agent-k-local-host.service']);
-  });
-
-  it('removes the host unit before a rollback to a version without it, and says how to stop a unit', () => {
-    const { svc, calls } = make();
-    svc.install(files);
-    calls.length = 0;
-    svc.removeHost();
-    expect(existsSync(svc.file('host'))).toBe(false);
-    expect(existsSync(svc.file('server'))).toBe(true);
-    expect(calls).toEqual(['systemctl --user disable --now agent-k-local-host.service', 'systemctl --user daemon-reload']);
-    expect(svc.stopHint('server')).toBe('systemctl --user stop agent-k-local.service');
-  });
-
-  it('removes the tmux unit of older versions', () => {
-    const { svc, calls } = make();
-    const tmuxUnit = join(dir, 'systemd', 'user', 'agent-k-local-tmux.service');
-    expect(svc.legacyTmuxInstalled()).toBe(false);
-    mkdirSync(dirname(tmuxUnit), { recursive: true });
-    writeFileSync(tmuxUnit, 'tmux unit\n');
-    expect(svc.legacyTmuxInstalled()).toBe(true);
-    svc.removeLegacyTmux();
-    expect(existsSync(tmuxUnit)).toBe(false);
-    expect(calls).toEqual(['systemctl --user disable --now agent-k-local-tmux.service', 'systemctl --user daemon-reload']);
+    svc.stop('server');
+    expect(calls).toEqual(['systemctl --user stop agent-k-local.service']);
   });
 
   it('reports a failed systemctl call as a ServiceError', () => {
@@ -201,16 +176,21 @@ describe('SystemdServices', () => {
     expect(() => make((a) => (a[0] === 'sh' ? fail('') : ok)).svc.preflight()).toThrow(/systemctl was not found/);
   });
 
-  it('removes both units', () => {
+  it('removes both units, and the tmux unit of a version before the session host', () => {
     const { svc, calls } = make();
     svc.install(files);
+    const tmuxUnit = join(dirname(svc.file('server')), 'agent-k-local-tmux.service');
+    writeFileSync(tmuxUnit, 'tmux unit\n');
+    expect(svc.legacyTmuxInstalled()).toBe(true);
     calls.length = 0;
     svc.remove();
     expect(existsSync(svc.file('server'))).toBe(false);
     expect(existsSync(svc.file('host'))).toBe(false);
+    expect(svc.legacyTmuxInstalled()).toBe(false);
     expect(calls).toEqual([
       'systemctl --user disable --now agent-k-local.service',
       'systemctl --user disable --now agent-k-local-host.service',
+      'systemctl --user disable --now agent-k-local-tmux.service',
       'systemctl --user daemon-reload',
     ]);
   });
@@ -273,35 +253,18 @@ describe('LaunchdServices', () => {
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
   });
 
-  it('adds the host job for a server that updated itself, leaving the server job loaded as it is', () => {
-    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local.tmux', 'com.yugabyte.agent-k-local'] });
-    svc.addHost(files);
-    expect(calls).toEqual([`bootstrap gui/501 ${svc.file('host')}`]);
-    expect(loaded.has('com.yugabyte.agent-k-local.host')).toBe(true);
-    expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
-  });
-
-  it('removes the host job before a rollback to a version without it, and unloads a job to stop it', () => {
-    const { svc, calls, loaded } = make();
-    svc.install(files);
-    calls.length = 0;
-    svc.removeHost();
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local.host']);
-    expect([...loaded]).toEqual(['com.yugabyte.agent-k-local']);
-    expect(existsSync(svc.file('host'))).toBe(false);
-    expect(svc.stopHint('server')).toBe('launchctl bootout gui/501/com.yugabyte.agent-k-local');
-  });
-
-  it('removes the tmux job of older versions', () => {
-    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local.tmux'] });
-    const plist = join(agents(), 'com.yugabyte.agent-k-local.tmux.plist');
-    mkdirSync(agents(), { recursive: true });
-    writeFileSync(plist, 'tmux job\n');
-    expect(svc.legacyTmuxInstalled()).toBe(true);
-    svc.removeLegacyTmux();
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local.tmux']);
+  it('unloads a job to stop it, and leaves an unloaded one alone', () => {
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agent-k-local'] });
+    svc.stop('server');
+    svc.stop('host');
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local']);
     expect(loaded.size).toBe(0);
-    expect(existsSync(plist)).toBe(false);
+  });
+
+  it('says so when a job is still loaded after bootout', () => {
+    // launchctl print keeps finding the job: bootout failed, or it's still exiting.
+    const stuck = new LaunchdServices(() => ok, home, 501, () => {});
+    expect(() => stuck.stop('server')).toThrow(/com.yugabyte.agent-k-local didn't stop/);
   });
 
   it('reloads the server job when its file changed', () => {
@@ -334,14 +297,20 @@ describe('LaunchdServices', () => {
     expect(unloaded.calls).toEqual([`bootstrap gui/501 ${unloaded.svc.file('host')}`]);
   });
 
-  it('removes both jobs and their files', () => {
+  it('removes both jobs and their files, and the tmux job of a version before the session host', () => {
     const { svc, calls, loaded } = make();
     svc.install(files);
+    writeFileSync(join(agents(), 'com.yugabyte.agent-k-local.tmux.plist'), 'tmux job\n');
+    loaded.add('com.yugabyte.agent-k-local.tmux');
+    expect(svc.legacyTmuxInstalled()).toBe(true);
     calls.length = 0;
     svc.remove();
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.host']);
+    expect(calls).toEqual([
+      'bootout gui/501/com.yugabyte.agent-k-local', 'bootout gui/501/com.yugabyte.agent-k-local.host', 'bootout gui/501/com.yugabyte.agent-k-local.tmux',
+    ]);
     expect(loaded.size).toBe(0);
     expect(existsSync(svc.file('server'))).toBe(false);
     expect(existsSync(svc.file('host'))).toBe(false);
+    expect(svc.legacyTmuxInstalled()).toBe(false);
   });
 });

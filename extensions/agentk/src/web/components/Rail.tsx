@@ -5,6 +5,7 @@ import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } f
 import type { ThemePref } from '../theme';
 import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, Ring, StatusDot } from './common';
+import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
   projects,
@@ -26,6 +27,7 @@ export function Rail({
   onSelectSession,
   onNewSession,
   onRenameSession,
+  onSessionToTop,
   onNewProject,
   onSettings,
   onLogout,
@@ -63,6 +65,8 @@ export function Rail({
   onNewSession: (projectId: string) => void;
   /** Double-clicking a session renames it; the phone layout uses Rename session in the ⋯ sheet. */
   onRenameSession: (sessionId: string) => void;
+  /** A session's ↑ button, shown on hover; touch screens use Move to top in the ⋯ sheet or the palette. */
+  onSessionToTop: (sessionId: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
   /** Signs out; left out when there's no login (local access). */
@@ -189,20 +193,33 @@ export function Rail({
               </div>
               {listed && !folded && (
                 <div className={cx('rail-sessions', harnessLogos && 'logos')} id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
-                  {sessions.map((s) => (
-                    <button
-                      key={s.id}
-                      className={cx('rail-sess', s.id === currentSessionId && 'sel')}
-                      onClick={() => onSelectSession(s)}
-                      onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
-                      aria-current={s.id === currentSessionId ? 'page' : undefined}
-                      title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
-                    >
-                      <StatusDot status={dotState(s)} phase={s.id} />
-                      {harnessLogos && <HarnessLogo harness={s.harness} />}
-                      <span className="rail-sess-name">{s.name}</span>
-                      <span className="stchip">{STAGE_LABELS[s.stage]}</span>
-                    </button>
+                  {sessions.map((s, j) => (
+                    <div key={s.id} className="rail-sess-row">
+                      <button
+                        className={cx('rail-sess', s.id === currentSessionId && 'sel')}
+                        onClick={() => onSelectSession(s)}
+                        onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
+                        aria-current={s.id === currentSessionId ? 'page' : undefined}
+                        title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
+                      >
+                        <StatusDot status={dotState(s)} phase={s.id} />
+                        {harnessLogos && <HarnessLogo harness={s.harness} />}
+                        <span className="rail-sess-name">{s.name}</span>
+                        <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+                      </button>
+                      {j > 0 && !touch && (
+                        <button
+                          className="rail-sess-top"
+                          onClick={() => onSessionToTop(s.id)}
+                          aria-label={`Move ${s.name} to top`}
+                          title="Move to top"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M5 4h14 M12 20V9 M7 13l5-5 5 5" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
                   ))}
                   <button className="rail-sess rail-sess-new" onClick={() => onNewSession(p.id)}>
                     + New session
@@ -320,9 +337,9 @@ function Limits({ limits, kiroPlan }: { limits: PlanLimits | null; kiroPlan: Kir
 }
 
 /** The agent's logo at the start of its row of limits; its name is in each meter's label. */
-function AgentMark({ harness }: { harness: 'claude' | 'kiro' }) {
+function AgentMark({ harness }: { harness: HarnessId }) {
   return (
-    <span className="lim-agent" title={harness === 'kiro' ? 'Kiro' : 'Claude'}>
+    <span className="lim-agent" title={HARNESS_CAPS[harness].short}>
       <HarnessLogo harness={harness} />
     </span>
   );

@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { KiroPlan } from '../shared/types.js';
 import type { Paths } from './paths.js';
+import { writeScript } from './scriptfile.js';
 
 /**
  * Kiro CLI (`kiro-cli`), what AgentK needs of it outside the adapter (src/server/harness/kiro.ts):
@@ -16,9 +17,6 @@ import type { Paths } from './paths.js';
 
 /** Variables Kiro sets in its children's environment; an AgentK started inside Kiro must not pass them on. */
 export const KIRO_SESSION_MARKERS = ['KIRO_SESSION_ID', 'KIRO_CLI_IS_CHILD_PROCESS', 'KIRO_CLI_ACP_CLIENT_NAME', 'KIRO_HOST_PID'];
-
-/** The oldest Kiro CLI AgentK runs sessions on (the one its hooks and session store were checked against). */
-export const MIN_KIRO = '2.32.0';
 
 /** The agent Kiro sessions run as (`--agent`), derived from the user's default agent with AgentK's hooks added. */
 export const AGENTK_AGENT = 'agentk';
@@ -57,9 +55,7 @@ exit 2
 
 export function writeKiroGuardScript(paths: Paths): void {
   mkdirSync(paths.run, { recursive: true });
-  const file = kiroGuardScriptPath(paths);
-  writeFileSync(file, KIRO_GUARD_SCRIPT);
-  chmodSync(file, 0o755);
+  writeScript(kiroGuardScriptPath(paths), KIRO_GUARD_SCRIPT);
 }
 
 type Json = Record<string, unknown>;
@@ -422,8 +418,20 @@ function inDays(n: string | undefined, now: number): string | null {
   return n ? new Date(now + Number(n) * 86_400_000).toISOString().slice(0, 10) : null;
 }
 
+/** The session deletes still running, for `kiroDeletesSettled`. */
+const deleting = new Set<Promise<void>>();
+
 /** Deletes one of Kiro's saved sessions (an Ask AgentK run's), in the background; never throws. */
 export function deleteKiroSession(command: string, id: string, cwd: string): void {
   if (!SESSION_ID.test(id)) return;
-  execFile(command, ['chat', '--delete-session', id], { cwd, timeout: 15_000 }, () => undefined).stdin?.end();
+  const done = new Promise<void>((resolve) => {
+    execFile(command, ['chat', '--delete-session', id], { cwd, timeout: 15_000 }, () => resolve()).stdin?.end();
+  });
+  deleting.add(done);
+  void done.then(() => deleting.delete(done));
+}
+
+/** Resolves once no session delete is running (including ones started meanwhile). Never throws. */
+export async function kiroDeletesSettled(): Promise<void> {
+  while (deleting.size) await Promise.all(deleting);
 }
