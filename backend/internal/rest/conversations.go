@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/wire"
@@ -91,12 +92,26 @@ type turn struct {
 	PromotedMemoryTexts []string `json:"promoted_memory_texts"`
 	LLMCalls            int      `json:"llm_calls"`
 	TotalTokens         int      `json:"total_tokens"`
+	// Calls is Meko's own decision trace for the turn (Cloud's comes from Langfuse): what it read
+	// and what it wrote, shaped as /usage's recent calls.
+	Calls []map[string]any `json:"calls"`
+}
+
+// callsOf is calls from the call log as /usage and the conversation thread give them.
+func callsOf(cs []store.Call) []map[string]any {
+	out := make([]map[string]any, len(cs))
+	for i, r := range cs {
+		out[i] = map[string]any{"id": r.ID, "steps": r.Steps, "at": wire.Time(r.At), "tool": r.Tool,
+			"agent_id": r.AgentID, "ok": r.OK, "error_code": r.ErrorCode, "ms": r.Ms, "memory_n": r.MemoryN,
+			"kb_n": r.KBN, "conversation_n": r.ConversationN, "read_only": mcp.ReadOnly(r.Tool)}
+	}
+	return out
 }
 
 func turnOf(t memory.Turn) turn {
 	out := turn{MessageID: t.ID, ObservationID: t.ID, StartedAt: wire.Time(t.CreatedAt), Input: t.Input,
 		Output: t.Output, Reasoning: t.Reasoning, Plan: t.Plan, MemoryIDs: []string{}, MemoryTexts: []string{},
-		PromotedMemoryIDs: []string{}, PromotedMemoryTexts: []string{}}
+		PromotedMemoryIDs: []string{}, PromotedMemoryTexts: []string{}, Calls: callsOf(t.Calls)}
 	for _, m := range t.Memories {
 		if m.Promoted {
 			out.PromotedMemoryIDs = append(out.PromotedMemoryIDs, m.ID)

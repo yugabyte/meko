@@ -1,5 +1,5 @@
 // The agents' conversations, most recently active first, and one conversation's turns with the
-// memories each produced.
+// memories each produced and its decision trace.
 
 import { useState } from "react";
 import { ArrowLeft, Brain, MessagesSquare } from "lucide-react";
@@ -8,6 +8,7 @@ import { dateTime, timeAgo } from "../lib/format";
 import { href, navigate } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { DecisionTrace } from "../components/DecisionTrace";
 import { Pager } from "../components/Pager";
 import { Badge, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
 
@@ -129,6 +130,7 @@ function Thread({ datapack, conversationId }: { datapack: Datapack; conversation
                     ))}
                   </div>
                 )}
+                <DecisionTrace turn={t} />
               </Card>
             ))}
             {c.thread_has_more && <p className="text-center text-xs text-muted-foreground">Showing the first 100 turns.</p>}
