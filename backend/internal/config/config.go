@@ -20,7 +20,7 @@ const DefaultPort = 7778
 type Config struct {
 	Server             Server             `toml:"server"`
 	Log                Log                `toml:"log"`
-	Engine             Engine             `toml:"engine"`
+	MemoryEngine       MemoryEngine       `toml:"memory_engine"`
 	ConversationSearch ConversationSearch `toml:"conversation_search"`
 }
 
@@ -46,11 +46,11 @@ const (
 	AuthNone  = "none"
 )
 
-// Engine is the [engine] table: where the memory engine and its Node are. Empty means the usual
-// places (internal/engine).
-type Engine struct {
+// MemoryEngine is the [memory_engine] table: where the memory engine and its Node are. Empty means the usual
+// places (internal/memoryengine).
+type MemoryEngine struct {
 	Node string `toml:"node"` // also MEKO_NODE
-	Dir  string `toml:"dir"`  // the built engine; also MEKO_ENGINE_DIR
+	Dir  string `toml:"dir"`  // the built memory engine; also MEKO_MEMORY_ENGINE_DIR
 }
 
 // Log is the [log] table.
@@ -101,10 +101,10 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 		c.Log.Level = v
 	}
 	if v := env("MEKO_NODE"); v != "" {
-		c.Engine.Node = v
+		c.MemoryEngine.Node = v
 	}
-	if v := env("MEKO_ENGINE_DIR"); v != "" {
-		c.Engine.Dir = v
+	if v := env("MEKO_MEMORY_ENGINE_DIR"); v != "" {
+		c.MemoryEngine.Dir = v
 	}
 	if o.Port != 0 {
 		c.Server.Port = o.Port

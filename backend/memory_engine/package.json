@@ -1,5 +1,5 @@
 {
-  "name": "@meko/engine",
+  "name": "@meko/memory-engine",
   "version": "0.0.0",
   "private": true,
   "description": "Meko's memory engine: mem0 with Meko's providers, run as a child of meko serve.",

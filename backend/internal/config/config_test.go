@@ -87,19 +87,20 @@ func TestLoadErrors(t *testing.T) {
 	}
 }
 
-func TestEngineSettings(t *testing.T) {
+func TestMemoryEngineSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[engine]\nnode = \"/file/node\"\ndir = \"/file/engine\"\n"), 0o600); err != nil {
+	toml := "[memory_engine]\nnode = \"/file/node\"\ndir = \"/file/memory_engine\"\n"
+	if err := os.WriteFile(path, []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Engine.Node != "/file/node" || c.Engine.Dir != "/file/engine" {
-		t.Fatalf("from the file: %+v %v", c.Engine, err)
+	if err != nil || c.MemoryEngine.Node != "/file/node" || c.MemoryEngine.Dir != "/file/memory_engine" {
+		t.Fatalf("from the file: %+v %v", c.MemoryEngine, err)
 	}
-	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_ENGINE_DIR": "/env/engine"}
+	env := map[string]string{"MEKO_NODE": "/env/node", "MEKO_MEMORY_ENGINE_DIR": "/env/memory_engine"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
-	if err != nil || c.Engine.Node != "/env/node" || c.Engine.Dir != "/env/engine" {
-		t.Fatalf("env over the file: %+v %v", c.Engine, err)
+	if err != nil || c.MemoryEngine.Node != "/env/node" || c.MemoryEngine.Dir != "/env/memory_engine" {
+		t.Fatalf("env over the file: %+v %v", c.MemoryEngine, err)
 	}
 }
 

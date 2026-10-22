@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -158,7 +158,7 @@ type AddedMessage struct {
 }
 
 // AddMessage stores a turn and, when it's searchable, its chunks, which the embedder sweep embeds.
-// It returns at once: nothing here waits on the engine.
+// It returns at once: nothing here waits on the memory engine.
 func (s *Service) AddMessage(ctx context.Context, r AddMessage) (AddedMessage, error) {
 	c, err := s.conversation(ctx, r.DatapackID, r.ConversationID, r.AgentID)
 	if err != nil {
@@ -319,7 +319,7 @@ func (s *Service) SearchConversations(ctx context.Context, datapack, exclude, qu
 	}
 	vecs, err := s.eng.Embed(ctx, []string{query})
 	if err != nil {
-		return ConversationResults{}, s.engineErr(err)
+		return ConversationResults{}, s.memoryEngineErr(err)
 	}
 	cands, err := s.st.SearchChunks(ctx, datapack, vecs[0], searchCandidates, normalizeID(exclude))
 	if err != nil {
@@ -401,8 +401,8 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// Embedder sweep timing: how many chunks one engine call embeds, and how often it looks for
-// chunks left behind (the engine was down or loading when their turns arrived).
+// Embedder sweep timing: how many chunks one memory engine call embeds, and how often it looks for
+// chunks left behind (the memory engine was down or loading when their turns arrived).
 const (
 	embedBatch = 64
 	sweepEvery = 30 * time.Second
@@ -423,9 +423,9 @@ func (s *Service) RunEmbedder(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		if err := s.EmbedPending(ctx); err != nil && ctx.Err() == nil {
-			var notReady *engine.NotReadyError
-			if errors.Is(err, engine.ErrUnavailable) || errors.As(err, &notReady) {
-				s.log.Debug("chunks wait for the engine", "error", err)
+			var notReady *memoryengine.NotReadyError
+			if errors.Is(err, memoryengine.ErrUnavailable) || errors.As(err, &notReady) {
+				s.log.Debug("chunks wait for the memory engine", "error", err)
 			} else {
 				s.log.Warn("can't embed turns for conversation search; retrying", "error", err)
 			}
@@ -453,7 +453,7 @@ func (s *Service) EmbedPending(ctx context.Context) error {
 		}
 		vecs, err := s.eng.Embed(ctx, texts)
 		if err != nil {
-			return s.engineErr(err)
+			return s.memoryEngineErr(err)
 		}
 		if err := s.st.PutChunkVectors(ctx, ids, vecs); err != nil {
 			return err

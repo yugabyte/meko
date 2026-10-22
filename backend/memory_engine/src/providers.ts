@@ -24,7 +24,7 @@ const enc = encodeURIComponent;
 
 /**
  * mem0's Memory.search (3.3.1) asks the store for max(topK × 4, 60) semantic and keyword candidates,
- * ranks them by its own score and keeps topK. The engine rescores mem0's results, so a datapack's
+ * ranks them by its own score and keeps topK. The memory engine rescores mem0's results, so a datapack's
  * collection returns only topK / 4 of what it's asked for: then mem0's candidates are exactly the
  * topK it returns, it cuts none, and Meko's score picks from all of them. The entity collection is
  * searched as asked. (Only Memory.search searches a datapack's collection while extraction is off.)
@@ -33,7 +33,7 @@ export const MEM0_OVERFETCH = 4;
 
 /**
  * mem0's Memory.add (3.3) drops actor_id from the metadata it's given, as it drops the user, agent
- * and run ids, and never sets it itself. So the engine passes a message's speaker under this key and
+ * and run ids, and never sets it itself. So the memory engine passes a message's speaker under this key and
  * MekoStore.insert stores it as actor_id, where the store, mem0's search and the Go server read it.
  */
 export const ACTOR_KEY = "meko_actor_id";
@@ -91,7 +91,7 @@ export class MekoStore implements VectorStore {
   }
 
   async deleteCol(): Promise<void> {
-    throw new Error("Meko's engine never drops a datapack's collection");
+    throw new Error("Meko's memory engine never drops a datapack's collection");
   }
 
   async list(filters?: SearchFilters, topK?: number): Promise<[VectorStoreResult[], number]> {
@@ -112,7 +112,7 @@ export class MekoStore implements VectorStore {
   async initialize(): Promise<void> {}
 }
 
-/** A payload with the speaker the engine passed under ACTOR_KEY as actor_id: see ACTOR_KEY. */
+/** A payload with the speaker the memory engine passed under ACTOR_KEY as actor_id: see ACTOR_KEY. */
 function withActor(payload: Record<string, any>): Record<string, any> {
   if (!(ACTOR_KEY in payload)) return payload;
   const { [ACTOR_KEY]: actor, ...rest } = payload;
@@ -171,7 +171,7 @@ export class MekoHistory {
   }
 
   async reset(): Promise<void> {
-    throw new Error("Meko's engine never resets memory history");
+    throw new Error("Meko's memory engine never resets memory history");
   }
 
   close(): void {}

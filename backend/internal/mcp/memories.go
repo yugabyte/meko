@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
 	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/wire"
 )
 
@@ -122,7 +122,7 @@ func memoryAdd(ctx context.Context, c *call, a args) (any, error) {
 		c.rec.ErrorCode = "invalid_metadata"
 		return plainText("Error: metadata must be a valid JSON string."), nil
 	}
-	var msgs []engine.Message
+	var msgs []memoryengine.Message
 	if present, ok := a.jsonValue("messages", &msgs); !ok {
 		c.rec.ErrorCode = "invalid_messages"
 		return plainText("Error: messages must be a valid JSON array of {role, content} objects."), nil
@@ -142,7 +142,7 @@ func memoryAdd(ctx context.Context, c *call, a args) (any, error) {
 		return nil, err
 	}
 	if added == nil {
-		added = []engine.Added{}
+		added = []memoryengine.Added{}
 	}
 	return map[string]any{"results": added}, nil
 }

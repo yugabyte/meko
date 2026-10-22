@@ -1,10 +1,10 @@
-// The engine API on run/engine.sock: HTTP/JSON with the per-start internal token, in the same
+// The memory engine API on run/mem_eng.sock: HTTP/JSON with the per-start internal token, in the same
 // {data, error} envelope as the Go server. Only the Go server calls it.
 import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 
-import { HttpError, type Engine } from "./engine.js";
+import { HttpError, type MemoryEngine } from "./memoryengine.js";
 import type { EmbedderInfo } from "./embedder.js";
 import { StoreError } from "./storeclient.js";
 
@@ -17,7 +17,7 @@ export interface Health {
   embedder: EmbedderInfo;
 }
 
-type Handler = (engine: Engine, body: any) => Promise<unknown>;
+type Handler = (memoryEngine: MemoryEngine, body: any) => Promise<unknown>;
 
 const routes: Record<string, Handler> = {
   "/v1/add": (e, b) => e.add(b),
@@ -30,7 +30,7 @@ const routes: Record<string, Handler> = {
 export function startServer(
   socket: string,
   token: string,
-  engine: Engine,
+  memoryEngine: MemoryEngine,
   health: () => Health,
   log: (msg: string, fields?: Record<string, unknown>) => void,
 ): Promise<http.Server> {
@@ -61,10 +61,10 @@ export function startServer(
       if (!handler || req.method !== "POST") return fail(res, 404, "NOT_FOUND", "no such route");
       const h = health();
       if (h.state !== "ready") {
-        return fail(res, 503, "ENGINE_NOT_READY", h.error ?? "the memory engine is still starting");
+        return fail(res, 503, "MEMORY_ENGINE_NOT_READY", h.error ?? "the memory engine is still starting");
       }
       const body = await readJSON(req);
-      reply(res, 200, { data: await handler(engine, body) });
+      reply(res, 200, { data: await handler(memoryEngine, body) });
     } catch (e) {
       if (e instanceof HttpError) return fail(res, e.status, e.code, e.message);
       // The store's refusals (no such datapack, a bad filter) name no memory text: pass them on.
@@ -79,7 +79,7 @@ export function startServer(
   });
 
   return new Promise((resolve, reject) => {
-    fs.rmSync(socket, { force: true }); // a killed engine's socket
+    fs.rmSync(socket, { force: true }); // a killed memory engine's socket
     server.once("error", reject);
     server.listen(socket, () => {
       fs.chmodSync(socket, 0o600);

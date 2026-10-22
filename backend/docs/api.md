@@ -100,7 +100,7 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
     which pass on Cloud's API code, `NOT_FOUND`.
   - Memory ids must be UUIDs (`invalid_memory_id`). One that's missing, someone else's, or
     (for update and delete) another agent's gets `not_found`.
-  - With the engine down: `engine_unavailable`, saying why.
+  - With the memory engine down: `memory_engine_unavailable`, saying why.
 - Every call is recorded in the call log, with its counts and steps and the credential it came in
   with. A call that replied with an error, in-band or in plain text, is recorded as failed, with
   its code.
@@ -139,10 +139,10 @@ Milestone 4 (#170) adds `knowledgebase_search` and the knowledge-file tools; the
 ### context_search
 
 - Its sources run at the same time (`memory.ContextSearch`), so it takes as long as the slower:
-  memory search (the engine's hybrid search, Meko Cloud's 0-1 `score` and the cosine as
+  memory search (the memory engine's hybrid search, Meko Cloud's 0-1 `score` and the cosine as
   `raw_similarity_score`), and conversation search (milestone 2's, which leaves out the caller's own
   conversation).
-- A source is `null` when it wasn't asked for (`force_source`) or the engine couldn't take the
+- A source is `null` when it wasn't asked for (`force_source`) or the memory engine couldn't take the
   query; empty when it found nothing. A source that fails otherwise is logged and empty, as in
   Cloud. `knowledge_base` is always `null` until milestone 4.
 - No score floor on `auto`; with `force_source: "memory"`, memory_search's 0.2 cosine floor.
@@ -159,7 +159,7 @@ A slow search must never make other requests wait (the PRD). The 500 ms p95 targ
 - The store's read pool has 8 connections. Vector, keyword and conversation-chunk scans each take
   one of 4 search slots first (`store.searchSlot`), so at least 4 connections stay free for lists,
   gets and counts. A search whose context ends while it waits for a slot gives up.
-- No write transaction is open while Go waits on the engine: the engine calls back into the store
+- No write transaction is open while Go waits on the memory engine: the memory engine calls back into the store
   API and needs the single writer.
 
 ## CLI (#202)
@@ -189,14 +189,14 @@ Meko's tools by that name (`mcp__meko__*`). `meko logs` comes with the services 
 - **Promotion** (`memory_promote`, and `POST /promote-memories` in #204) moves learnings into the
   datapack's collective memory, as Cloud does. Each is copied into `promoted_memories` with every
   column of its row but the lemmas (id, text, provenance, role, actor, hash, both dates), the copy
-  commits, and then the memory is deleted through the engine (which also unlinks mem0's entities),
+  commits, and then the memory is deleted through the memory engine (which also unlinks mem0's entities),
   so memory search no longer finds it. An id given twice is promoted once. A kept memory isn't a
   learning, so it's not found, as in Cloud. A separate table hides promoted memories from search
   without a filter on every scan. Updating or deleting a promoted id gets `memory_is_promoted`.
-- **When the engine fails a delete**, the copy is removed only while the memory is still there: a
-  request cut off after the engine got it may still have deleted it, and then the copy is all
-  that's left (it's reported inserted). With the engine down or starting, the call stops with
-  `engine_unavailable` so the caller retries; any other failure leaves that one a learning, in
+- **When the memory engine fails a delete**, the copy is removed only while the memory is still there: a
+  request cut off after the memory engine got it may still have deleted it, and then the copy is all
+  that's left (it's reported inserted). With the memory engine down or starting, the call stops with
+  `memory_engine_unavailable` so the caller retries; any other failure leaves that one a learning, in
   `not_found_ids`. An error after some ids were done carries `inserted_ids` and `not_found_ids`
   beside `error` and `detail`. A memory left copied but not deleted (the undo failed too) is
   finished by promoting it again.
@@ -252,7 +252,7 @@ today are tests and scripts. (The CLI's one `/api/v1` call is `/api/v1/status`, 
 | Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page, only to a request that sent a credential: with `auth = "none"`, one that sent none gets `""`, so the token keeps its meaning once auth is back on. Agents are those seen in memories, conversations and the call log. |
 | Metrics | `GET /datapacks/:id/metrics`, `GET /datapacks/:id/token-savings` | From the call log (90 days): searches (`context_search` as hybrid, `memory_search` as memory), tokens sent and saved, score bands, agents, last access, 30 days of activity. Sizes come from the store. Extraction and knowledge-file fields are 0 until #190 and #170. |
 | Artifacts | `GET /datapacks/:id/artifacts`, `POST .../artifacts/:hash/download-url`, `GET .../artifacts/:hash` | Pages from 1 (25, at most 200), newest first, `q` on the filename. `download-url` has no `url` (the bytes are in the database), so meko_ui reads them from the `GET`. A hash that isn't 64 hex: 400 `INVALID_PARAM`; missing: 404 `ARTIFACT_NOT_FOUND`. |
-| Memories | `GET /memories`, `DELETE /memories/:id`, `POST /promote-memories`, `POST /keep-as-memory`, `GET /promoted-memories`, `DELETE /promoted-memories/:id` | The list takes `datapack_id`, `scope=learnings|memories`, `q` (any case) and pages of 20 (at most 100), newest first, `top_k: 0`, every row the local user's (`is_mine`). Promote and keep take `{datapack_id, memory_ids}` (UUIDs, any case). A promotion that stops partway (the engine went down) replies 500 `INTERNAL_ERROR` with `promoted <id>` in `details` for each one it did. |
+| Memories | `GET /memories`, `DELETE /memories/:id`, `POST /promote-memories`, `POST /keep-as-memory`, `GET /promoted-memories`, `DELETE /promoted-memories/:id` | The list takes `datapack_id`, `scope=learnings|memories`, `q` (any case) and pages of 20 (at most 100), newest first, `top_k: 0`, every row the local user's (`is_mine`). Promote and keep take `{datapack_id, memory_ids}` (UUIDs, any case). A promotion that stops partway (the memory engine went down) replies 500 `INTERNAL_ERROR` with `promoted <id>` in `details` for each one it did. |
 | Conversations | `GET /datapacks/:id/conversations`, `GET /datapacks/:id/conversations/:cid`, `PATCH /datapacks/:id/conversation-search-opt-out` | The list is most recently active first, 20 to a page (200 at most), with `first_message`, `messages`, `memories_added`; `q` matches the title or any turn. A conversation's thread is oldest first, 100 turns to a page (500 at most). Each turn carries the memories it produced, by time window (below). `llm_calls`, `latency_ms` and `total_tokens` are 0, and `can_index` false. |
 
 ### Which memories a turn produced

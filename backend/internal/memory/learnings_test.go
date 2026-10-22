@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/yugabyte/meko/backend/internal/engine"
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -29,19 +29,19 @@ func TestPromoteMemories(t *testing.T) {
 		t.Fatalf("promote a duplicate: %+v %v", p, err)
 	}
 
-	// With the engine down the call fails, so the caller can retry, and the memory stays a learning.
-	h.stopEngine()
+	// With the memory engine down the call fails, so the caller can retry, and the memory stays a learning.
+	h.stopMemoryEngine()
 	p, err = h.svc.PromoteMemories(ctx, h.dp, "a", []string{second})
-	if !errors.Is(err, engine.ErrUnavailable) || len(p.Inserted) != 0 || len(p.NotFound) != 0 {
-		t.Fatalf("promote with no engine: %+v %v", p, err)
+	if !errors.Is(err, memoryengine.ErrUnavailable) || len(p.Inserted) != 0 || len(p.NotFound) != 0 {
+		t.Fatalf("promote with no memory engine: %+v %v", p, err)
 	}
 	if yes, _ := h.svc.IsPromoted(ctx, h.dp, second); yes {
-		t.Error("the copy of a memory the engine didn't delete was kept")
+		t.Error("the copy of a memory the memory engine didn't delete was kept")
 	}
 	if rec, _ := h.st.GetVector(ctx, store.Memories, h.dp, second); rec == nil {
 		t.Error("the memory is gone")
 	}
-	h.startEngine()
+	h.startMemoryEngine()
 
 	// A promotion cut short (copied, never deleted) finishes when it's promoted again.
 	if _, err = h.st.CopyToPromoted(ctx, h.dp, h.userID, third, "a"); err != nil {

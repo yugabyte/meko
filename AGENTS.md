@@ -12,7 +12,7 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
 
 | Path | What it is |
 |---|---|
-| `backend/` | Meko's Go backend: the `meko` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`), and its Node memory engine in `backend/engine`. |
+| `backend/` | Meko's Go backend: the `meko` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`), and its Node memory engine in `backend/memory_engine`. |
 | `extensions/agentk/` | AgentK Local: its code, tests, scripts, packaging and docs, with its own `package.json`. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |

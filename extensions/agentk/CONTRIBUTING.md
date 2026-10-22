@@ -71,7 +71,7 @@ agent attribution.
 ## Dependencies
 
 Dependabot (`.github/dependabot.yml`) checks AgentK's npm packages and GitHub Actions every Monday
-(and Meko's Go modules and engine packages, as `chore(meko): …` and `chore(meko/engine): …`, which
+(and Meko's Go modules and memory engine packages, as `chore(meko): …` and `chore(meko/memory-engine): …`, which
 never release; see `backend/AGENTS.md`) and assigns its PRs to the maintainer. Packages that must move together (fastify, react, xterm,
 vite, typescript with typescript-eslint, eslint) come in one PR per family, majors included.
 Other minor and patch bumps come grouped (runtime, dev, actions), and each other major bump
