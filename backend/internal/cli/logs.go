@@ -59,7 +59,7 @@ func runLogs(l paths.Layout, o logsOptions, stdout io.Writer) int {
 		all = append(all, parseLines(s.label, b)...)
 	}
 	if !found && !o.follow {
-		fmt.Fprintf(stdout, "No logs yet in %s.\n", l.LogDir)
+		fmt.Fprintf(stdout, "No logs yet in %s\n", l.LogDir)
 		return exitOK
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })

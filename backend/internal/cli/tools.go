@@ -164,7 +164,7 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		return fail(stderr, err)
 	}
 	if !up {
-		fmt.Fprintf(stderr, "meko: Meko isn't running (data in %s). Start it with meko start.\n", l.Root)
+		fmt.Fprintf(stderr, "meko: Meko isn't running (data in %s). Start it with meko start\n", l.Root)
 		return exitNotRunning
 	}
 	timeout := toolTimeout
@@ -195,7 +195,7 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		err = toolUploadStatus(ctx, t, f, stdout)
 	}
 	if errors.Is(err, errDeclined) {
-		fmt.Fprintln(stderr, "Nothing was deleted.")
+		fmt.Fprintln(stderr, "Nothing was deleted")
 		return exitError
 	}
 	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
@@ -249,7 +249,7 @@ func toolCreateDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout
 	if err := json.Unmarshal([]byte(reply), &r); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Created datapack %s (%s).\n", r.Name, r.ID)
+	fmt.Fprintf(stdout, "Created datapack %s (%s)\n", r.Name, r.ID)
 	return nil
 }
 
@@ -269,10 +269,10 @@ func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdin 
 	}
 	if !f.force {
 		fmt.Fprintf(stdout, "This deletes datapack %s and everything in it (memories, conversations, "+
-			"artifacts) for good.\n", named)
+			"artifacts) for good\n", named)
 		if def, derr := t.defaultDatapackID(ctx); derr == nil && def == id {
 			fmt.Fprintln(stdout, "It's the default datapack: Meko doesn't make another, so search and "+
-				"add_memory will need --datapack afterwards.")
+				"add_memory will need --datapack afterwards")
 		}
 		if !confirm(stdin, stdout, "Delete it? [y/N] ") {
 			return errDeclined
@@ -287,7 +287,7 @@ func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdin 
 		fmt.Fprintln(stdout, reply)
 		return err
 	}
-	fmt.Fprintf(stdout, "Deleted datapack %s.\n", named)
+	fmt.Fprintf(stdout, "Deleted datapack %s\n", named)
 	return nil
 }
 
@@ -321,7 +321,7 @@ func toolAdd(ctx context.Context, t *toolSession, f toolFlags, stdin io.Reader, 
 		return err
 	}
 	for _, m := range r.Results {
-		fmt.Fprintf(stdout, "Added memory %s.\n", m.ID)
+		fmt.Fprintf(stdout, "Added memory %s\n", m.ID)
 	}
 	return nil
 }
@@ -368,7 +368,7 @@ func toolSearch(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writ
 	}
 	if len(r.Results.Memory) == 0 && len(r.Results.KnowledgeBase) == 0 &&
 		(r.Results.Conversation == nil || len(r.Results.Conversation.Hits) == 0) {
-		fmt.Fprintln(stdout, "Nothing found.")
+		fmt.Fprintln(stdout, "Nothing found")
 		return nil
 	}
 	if len(r.Results.KnowledgeBase) > 0 {

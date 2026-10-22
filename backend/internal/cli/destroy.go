@@ -24,7 +24,7 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 	fi, err := os.Lstat(l.Root)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		fmt.Fprintf(stdout, "Nothing to remove: there's no data folder at %s.\n", l.Root)
+		fmt.Fprintf(stdout, "Nothing to remove: there's no data folder at %s\n", l.Root)
 		return exitOK
 	case err != nil:
 		return fail(stderr, err)
@@ -38,7 +38,7 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 	// Resolving the default folder on an NFS home makes /var/tmp/<user>/meko, so an empty one is
 	// nothing to remove rather than a folder that isn't Meko's.
 	if entries, rerr := os.ReadDir(l.Root); rerr == nil && len(entries) == 0 {
-		fmt.Fprintf(stdout, "Nothing to remove: the data folder %s is empty.\n", l.Root)
+		fmt.Fprintf(stdout, "Nothing to remove: the data folder %s is empty\n", l.Root)
 		return exitOK
 	}
 	if !paths.LooksLikeDataDir(l.Root) {
@@ -50,12 +50,12 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 		return fail(stderr, err)
 	}
 	fmt.Fprintf(stdout, "This removes Meko's data in %s (%s) for good: every datapack, memory and "+
-		"conversation, the config, the client token and the logs.\n", l.Root, humanSize(paths.DirSize(l.Root)))
+		"conversation, the config, the client token and the logs\n", l.Root, humanSize(paths.DirSize(l.Root)))
 	if up {
-		fmt.Fprintln(stdout, "Meko is running, so it's stopped first.")
+		fmt.Fprintln(stdout, "Meko is running, so it's stopped first")
 	}
 	if !force && !confirm(in, stdout, "Destroy it? [y/N] ") {
-		fmt.Fprintln(stderr, "Nothing was removed.")
+		fmt.Fprintln(stderr, "Nothing was removed")
 		return exitError
 	}
 	// The client token may be outside the folder (the login Keychain): found now, deleted after.
@@ -94,16 +94,16 @@ func runDestroy(l paths.Layout, force bool, in io.Reader, stdout, stderr io.Writ
 			return fail(stderr, fmt.Errorf("removed %s, but not its client token: %w", l.Root, err))
 		}
 	}
-	fmt.Fprintf(stdout, "Removed %s.\n", l.Root)
+	fmt.Fprintf(stdout, "Removed %s\n", l.Root)
 	if m != nil {
 		fmt.Fprintf(stdout, "The %s service is still installed, and starts Meko on an empty data folder at the "+
-			"next login: meko uninstall removes it.\n", m.Kind())
+			"next login: meko uninstall removes it\n", m.Kind())
 	}
 	if exe, err := os.Executable(); err == nil {
-		fmt.Fprintf(stdout, "The meko binary is still at %s.\n", exe)
+		fmt.Fprintf(stdout, "The meko binary is still at %s\n", exe)
 	}
 	fmt.Fprintln(stdout, "If you registered Meko with Claude Code, its token no longer works: remove it "+
-		"(claude mcp remove meko), and after meko start, register again with the line meko token --mcp prints.")
+		"(claude mcp remove meko), and after meko start, register again with the line meko token --mcp prints")
 	return exitOK
 }
 

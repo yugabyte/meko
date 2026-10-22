@@ -42,9 +42,9 @@ func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stder
 		return fail(stderr, err)
 	} else if up {
 		if port, err := readInt(l.Port); err == nil {
-			fmt.Fprintf(stdout, "Meko is already running at http://127.0.0.1:%d (data in %s).\n", port, l.Root)
+			fmt.Fprintf(stdout, "Meko is already running at http://127.0.0.1:%d (data in %s)\n", port, l.Root)
 		} else {
-			fmt.Fprintf(stdout, "Meko is already running, and still starting (data in %s).\n", l.Root)
+			fmt.Fprintf(stdout, "Meko is already running, and still starting (data in %s)\n", l.Root)
 		}
 		return exitOK
 	}
@@ -82,7 +82,7 @@ func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stder
 	for time.Now().Before(deadline) {
 		select {
 		case <-exited:
-			fmt.Fprintf(stderr, "meko: the server stopped while starting.\n%s", startLogTail(l))
+			fmt.Fprintf(stderr, "meko: the server stopped while starting\n%s", startLogTail(l))
 			return exitError
 		case <-time.After(100 * time.Millisecond):
 		}
@@ -91,7 +91,7 @@ func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stder
 			st, err := c.status(ctx)
 			cancel()
 			if err == nil && st.PID == cmd.Process.Pid {
-				fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d, data in %s).\n", st.Port, st.PID, l.Root)
+				fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d, data in %s)\n", st.Port, st.PID, l.Root)
 				return exitOK
 			}
 		}
@@ -104,7 +104,7 @@ func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stder
 		_ = cmd.Process.Kill()
 		<-exited
 	}
-	fmt.Fprintf(stderr, "meko: the server didn't answer within %s, so it was stopped. See %s.\n%s",
+	fmt.Fprintf(stderr, "meko: the server didn't answer within %s, so it was stopped. See %s\n%s",
 		startTimeout, l.Log, startLogTail(l))
 	return exitError
 }
@@ -142,7 +142,7 @@ func stopServer(l paths.Layout) (string, error) {
 	}
 	if !up {
 		cleanRunFiles(l) // left behind if the server was killed
-		return "Meko isn't running.", nil
+		return "Meko isn't running", nil
 	}
 	pid, err := readInt(l.Pid)
 	if err != nil {
@@ -153,14 +153,14 @@ func stopServer(l paths.Layout) (string, error) {
 		return "", fmt.Errorf("can't stop pid %d: %w", pid, err)
 	}
 	if waitUnlocked(l.Lock, stopTimeout) {
-		return "Meko stopped.", nil
+		return "Meko stopped", nil
 	}
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	if !waitUnlocked(l.Lock, 5*time.Second) {
 		return "", fmt.Errorf("pid %d didn't stop, even after SIGKILL", pid)
 	}
 	cleanRunFiles(l) // and its children, in process groups the SIGKILL didn't reach
-	return fmt.Sprintf("Meko didn't stop within %s, so it was killed.", stopTimeout), nil
+	return fmt.Sprintf("Meko didn't stop within %s, so it was killed", stopTimeout), nil
 }
 
 func waitUnlocked(lock string, d time.Duration) bool {
@@ -178,7 +178,7 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if !up {
-		fmt.Fprintf(stdout, "Meko isn't running (data in %s).\n", l.Root)
+		fmt.Fprintf(stdout, "Meko isn't running (data in %s)\n", l.Root)
 		printSetup(l, stdout)
 		return exitNotRunning
 	}
@@ -192,7 +192,7 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, fmt.Errorf("the server is running, but isn't answering: %w", err))
 	}
-	fmt.Fprintf(stdout, "Meko is running.\n")
+	fmt.Fprintf(stdout, "Meko is running\n")
 	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d\n", st.Port)
 	fmt.Fprintf(stdout, "  Version:       %s\n", st.Version)
 	fmt.Fprintf(stdout, "  PID:           %d\n", st.PID)

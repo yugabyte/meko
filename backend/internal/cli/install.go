@@ -51,7 +51,7 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 		exe = app.CurrentExe()
-		fmt.Fprintf(stdout, "Installed meko %s in %s.\n", ver, app.Dir(ver))
+		fmt.Fprintf(stdout, "Installed meko %s in %s\n", ver, app.Dir(ver))
 		if onPath(filepath.Dir(link)) {
 			fmt.Fprintf(stdout, "  Command: meko (%s)\n", link)
 		} else {
@@ -59,7 +59,7 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 		}
 	} else {
 		fmt.Fprintf(stdout, "Setting up this build of meko (%s). It isn't from a release, "+
-			"so it doesn't update itself.\n", exe)
+			"so it doesn't update itself\n", exe)
 	}
 	if err = l.Ensure(); err != nil {
 		return fail(stderr, err)
@@ -78,7 +78,7 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "  Data:    %s\n  Secrets: %s\n", l.Root, map[string]string{
 		"keychain": "in your login Keychain", "file": "in the data folder, readable only by you"}[ct.Store.Kind()])
 	if noService {
-		fmt.Fprintln(stdout, "No service was set up (--no-service): start Meko with meko start.")
+		fmt.Fprintln(stdout, "No service was set up (--no-service): start Meko with meko start")
 		return nextSteps(stdout)
 	}
 	m, err := newManager()
@@ -89,7 +89,7 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if other := m.DataDir(); m.Installed() && other != "" && other != l.Root {
-		fmt.Fprintf(stdout, "The service ran the data folder %s; it now runs %s.\n", other, l.Root)
+		fmt.Fprintf(stdout, "The service ran the data folder %s; it now runs %s\n", other, l.Root)
 	}
 	// A server run by hand holds the data folder, and the service's own couldn't start.
 	if up, _ := running(l.Lock); up && serviceOf(l) == nil {
@@ -115,7 +115,7 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("the service didn't answer within %s. Check: %s, and meko logs",
 			serviceStartTimeout, m.StatusHint()))
 	}
-	fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d).\n", st.Port, st.PID)
+	fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d)\n", st.Port, st.PID)
 	return nextSteps(stdout)
 }
 
@@ -151,7 +151,7 @@ func runUninstall(l paths.Layout, purge, force bool, stdout, stderr io.Writer) i
 	var exts []string
 	if reg, rerr := extensions.Load(l.Root); rerr == nil {
 		for _, n := range reg.Names() {
-			exts = append(exts, fmt.Sprintf("Extension %s is still installed: %s uninstall removes it.", n,
+			exts = append(exts, fmt.Sprintf("Extension %s is still installed: %s uninstall removes it", n,
 				reg.Entries[n].Command))
 		}
 	}
@@ -164,7 +164,7 @@ func runUninstall(l paths.Layout, purge, force bool, stdout, stderr io.Writer) i
 		if err = m.Remove(); err != nil {
 			return fail(stderr, err)
 		}
-		fmt.Fprintf(stdout, "Removed the %s service.\n", m.Kind())
+		fmt.Fprintf(stdout, "Removed the %s service\n", m.Kind())
 	}
 	if up, _ := running(l.Lock); up {
 		if code := stopMeko(l, stdout, stderr); code != exitOK {
@@ -185,14 +185,14 @@ func runUninstall(l paths.Layout, purge, force bool, stdout, stderr io.Writer) i
 			if err = app.Remove(); err != nil {
 				return fail(stderr, err)
 			}
-			fmt.Fprintf(stdout, "Removed the releases in %s and the meko command.\n", app.Root)
+			fmt.Fprintf(stdout, "Removed the releases in %s and the meko command\n", app.Root)
 		}
 	}
 	for _, line := range exts {
 		fmt.Fprintln(stdout, line)
 	}
 	if !purge {
-		fmt.Fprintf(stdout, "Your data is still in %s; meko destroy (or meko uninstall --purge) removes it.\n", l.Root)
+		fmt.Fprintf(stdout, "Your data is still in %s; meko destroy (or meko uninstall --purge) removes it\n", l.Root)
 	}
 	return exitOK
 }
@@ -238,7 +238,7 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 			return fail(stderr, fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
 				"needs: update it (the Update button in AgentK Local), then run this again", cat.Title))
 		}
-		fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko.\n", cat.Title, cmd)
+		fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko\n", cat.Title, cmd)
 		if err = runAttached(cmd, append([]string{"install"}, args...), stdout, stderr); err != nil {
 			return fail(stderr, fmt.Errorf("%s install failed: %w", cat.Command, err))
 		}
@@ -259,7 +259,7 @@ func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) 
 	if err := reg.Save(); err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "%s uses this Meko, and meko start and meko stop start and stop it too.\n", cat.Title)
+	fmt.Fprintf(stdout, "%s uses this Meko, and meko start and meko stop start and stop it too\n", cat.Title)
 	return exitOK
 }
 
@@ -293,7 +293,7 @@ func runExtensionInstaller(repo string, cat extensions.Catalog, args []string, s
 		return fmt.Errorf("the newest %s release (%s) is older than this Meko and can't use it yet: it comes "+
 			"with the next %s release", cat.Title, rel.Tag, cat.Title)
 	}
-	fmt.Fprintf(stdout, "Installing %s %s (%s).\n", cat.Title, ver, rel.Tag)
+	fmt.Fprintf(stdout, "Installing %s %s (%s)\n", cat.Title, ver, rel.Tag)
 	if err := runAttached("sh", append([]string{script}, args...), stdout, stderr); err != nil {
 		return fmt.Errorf("%s's installer failed: %w", cat.Title, err)
 	}
@@ -345,7 +345,7 @@ func runUninstallExtension(l paths.Layout, name string, stdout, stderr io.Writer
 	if err := reg.Save(); err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "meko start and stop no longer run %s. It's still installed: %s uninstall removes it.\n",
+	fmt.Fprintf(stdout, "meko start and stop no longer run %s. It's still installed: %s uninstall removes it\n",
 		name, e.Command)
 	return exitOK
 }

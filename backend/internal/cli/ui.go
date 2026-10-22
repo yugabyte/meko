@@ -30,7 +30,7 @@ func runUI(l paths.Layout, open bool, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if !up {
-		fmt.Fprintln(stderr, "meko: Meko isn't running. Start it with meko start.")
+		fmt.Fprintln(stderr, "meko: Meko isn't running. Start it with meko start")
 		return exitNotRunning
 	}
 	c, err := newClient(l)
@@ -46,12 +46,12 @@ func runUI(l paths.Layout, open bool, stdout, stderr io.Writer) int {
 	link := fmt.Sprintf("%s/#code=%s", c.base, code.Code)
 	if open {
 		if err = openBrowser(link); err != nil {
-			fmt.Fprintf(stderr, "meko: couldn't open the browser (%v); open the link below instead.\n", err)
+			fmt.Fprintf(stderr, "meko: couldn't open the browser (%v); open the link below instead\n", err)
 		}
 	}
 	fmt.Fprintln(stdout, link)
 	if !open {
-		fmt.Fprintf(stderr, "The link works once, within %d seconds.\n", code.ExpiresIn)
+		fmt.Fprintf(stderr, "The link works once, within %d seconds\n", code.ExpiresIn)
 	}
 	return exitOK
 }
