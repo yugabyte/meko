@@ -4,7 +4,7 @@ import {
   type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
   type SessionChanges,
 } from '../../shared/types';
-import { api, errorMessage } from '../api';
+import { ApiError, api, errorMessage } from '../api';
 import { anchorComment, defaultOpen, LARGE_DIFF_ROWS, parsePatch, ROW_PAGE, showsLine, sideLine, type DiffLine } from '../diff';
 import { useTouch } from '../hooks/useMedia';
 import { agentName, cx, relativeTime } from '../util';
@@ -80,7 +80,16 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     api
       .changes(session.id, commit)
       .then((d) => !cancelled && (setData(d), setFetchedAt(Date.now()), setError(null)))
-      .catch((e) => !cancelled && setError(errorMessage(e)))
+      .catch((e) => {
+        if (cancelled) return;
+        // The commit shown was rewritten (amended, rebased): back to All changes, with a fresh commit list.
+        if (commit && e instanceof ApiError && e.status === 404) {
+          setNote('The commit you were viewing isn’t on the branch any more (it was amended or rebased), so this shows All changes.');
+          setCommit(null);
+        } else {
+          setError(errorMessage(e));
+        }
+      })
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
@@ -107,8 +116,10 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     return m;
   }, [files]);
 
-  // A comment's sides are the base and the worktree, so comments belong to the full diff only.
-  const visible = useMemo(() => (commit ? [] : comments.filter((c) => showSent || c.state !== 'sent')), [comments, showSent, commit]);
+  // A comment's sides are the base and the worktree, so comments belong to the full diff only:
+  // they follow the diff on screen, not the pick still loading.
+  const shownCommit = data?.commit ?? null;
+  const visible = useMemo(() => (shownCommit ? [] : comments.filter((c) => showSent || c.state !== 'sent')), [comments, showSent, shownCommit]);
   const sentCount = comments.filter((c) => c.state === 'sent').length;
   const drafts = comments.filter((c) => c.state === 'draft').length;
   const queued = comments.filter((c) => c.state === 'queued').length;
@@ -323,7 +334,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         )}
         <span className="sp" />
         {files.length > 0 && <FilesMenu files={files} counts={countByPath} onJump={jump} />}
-        {sentCount > 0 && !commit && (
+        {sentCount > 0 && !shownCommit && (
           <button className="btn small" aria-pressed={showSent} onClick={() => setShowSent((s) => !s)}>
             {showSent ? 'Hide sent' : `Show sent (${sentCount})`}
           </button>
@@ -400,6 +411,13 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                 branch’s diff is very large. Their line counts are still shown.
               </p>
             )}
+            {data.commit && editor && (
+              // Kept on screen (not just in draftText) so it can be finished here, and so a reload waits for it.
+              <div className="cmt-gone">
+                <p className="muted small">Your comment on <span className="mono">{editor.path}</span>, in All changes</p>
+                <CommentEditor key={editor.id ?? 'new'} editor={editor} draft={draftText} onSave={save} onCancel={closeEditor} />
+              </div>
+            )}
             {placed.gone.length > 0 && (
               <div className="cmt-gone">
                 <p className="muted small">Comments on files that are no longer changed</p>
@@ -458,7 +476,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                       onMore={() => showMore(f.path, parsed.get(f.path)?.length ?? 0)}
                       renderAfter={(i) => {
                         const cs = placed.at.get(f.path)?.get(i);
-                        // A comment being written waits on All changes while a commit is shown.
+                        // While a commit is shown, a comment being written is at the top of the list instead.
                         const here = !data.commit && editor && !editor.id && editor.path === f.path && editorAt === i;
                         if (!cs && !here) return null;
                         return (

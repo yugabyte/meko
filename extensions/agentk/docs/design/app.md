@@ -116,11 +116,21 @@ Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of u
 read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
-disk, only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
+disk (in a commit's view, its parent's and its own, from git), only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
 a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file.
+
+The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
+branch's commits alone: the commits since the merge base, newest first (at most 200,
+`MAX_COMMITS`, `branchCommits()` in `changes.ts`), with short sha, subject and age, filtered by
+typing. A commit is compared with its first parent (git's empty tree for a root commit), without
+uncommitted or untracked files. Only a commit that menu lists is accepted (`?commit=<full sha>` on
+`/changes` and `/changes/image`), so nothing typed reaches git; one that's gone (amended or
+rebased) is a 404, and the panel goes back to All changes with a note. A commit's view takes no
+comments, since a comment's sides are the base and the worktree: its rows have no **+**, its
+comments aren't shown, and a comment being written stays open above the files, to finish or cancel.
 
 ### Changing the base
 

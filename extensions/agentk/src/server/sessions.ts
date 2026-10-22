@@ -46,6 +46,8 @@ import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
 const TRUST_DETAIL = 'Claude is asking whether you trust this folder. Answer in the terminal.';
+/** A Changes panel request for a commit the branch no longer has (amended or rebased away). */
+const GONE_COMMIT = 'That commit isn\'t on this session\'s branch any more (it was amended or rebased). Pick All changes or another commit from the commit menu.';
 
 /** A session's Meko conversation title. */
 function conversationTitle(session: string, project: string): string {
@@ -2002,7 +2004,7 @@ export class SessionManager {
     if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
     // Files with review comments stay listed past the file cap, so no comment loses its file.
     const c = await changes(row.worktree_path, row.base_branch, new Set(this.core.comments.list(id).map((x) => x.path)), commit).catch((e: unknown) => {
-      if (e instanceof UnknownCommitError) throw new HttpError(404, 'That commit isn\'t on this session\'s branch any more.');
+      if (e instanceof UnknownCommitError) throw new HttpError(404, GONE_COMMIT);
       throw e;
     });
     if (!c) throw new HttpError(409, `Couldn't find where ${row.branch} branched off ${row.base_branch}.`);
@@ -2018,10 +2020,14 @@ export class SessionManager {
     let img: { type: string; data: Buffer } | null;
     try {
       img = await changedImage(row.worktree_path, row.base_branch, path, side, commit);
-    } catch {
+    } catch (e) {
+      if (e instanceof UnknownCommitError) throw new HttpError(404, GONE_COMMIT);
       throw new HttpError(400, 'Only image files inside this session\'s repo can be previewed.');
     }
-    if (!img) throw new HttpError(404, side === 'old' ? 'This image isn\'t in the base branch.' : 'This image isn\'t in the worktree, or it is too large to preview.');
+    if (!img) {
+      const where = commit ? (side === 'old' ? 'the commit\'s parent' : 'this commit') : side === 'old' ? 'the base branch' : 'the worktree';
+      throw new HttpError(404, `This image isn't in ${where}, or it is too large to preview.`);
+    }
     return img;
   }
 
