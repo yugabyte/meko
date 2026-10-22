@@ -30,7 +30,7 @@ export function ToolsCard({ usage }: { usage: Usage }) {
           rows={usage.tools}
           rowKey={(t) => t.tool}
           columns={[
-            { label: "Tool", cell: (t) => t.tool, className: "font-mono text-xs" },
+            { label: "Tool", cell: (t) => t.tool, className: "text-xs" },
             { label: "Calls", right: true, cell: (t) => count(t.calls) },
             {
               label: "Errors",
@@ -48,7 +48,7 @@ export function ToolsCard({ usage }: { usage: Usage }) {
           <div className="flex flex-wrap gap-2 text-xs">
             {usage.steps.map((s) => (
               <span key={s.step} className="rounded-md bg-muted px-2 py-1">
-                <span className="font-mono">{s.step}</span> {duration(s.p50_ms)} / {duration(s.p95_ms)}
+                <span>{s.step}</span> {duration(s.p50_ms)} / {duration(s.p95_ms)}
               </span>
             ))}
           </div>
@@ -69,7 +69,7 @@ export function AgentsCard({ usage }: { usage: Usage }) {
       <div className="divide-y text-sm">
         {usage.agents.map((a) => (
           <div key={a.agent_id} className="flex items-center gap-2 py-2">
-            <span className="truncate font-mono text-xs">{a.agent_id}</span>
+            <span className="truncate text-xs">{a.agent_id}</span>
             {a.agent_id === UI_AGENT_ID && <Badge>this UI</Badge>}
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
               {count(a.calls)} calls · {count(a.searches)} searches · {timeAgo(a.last_at)}
@@ -105,8 +105,8 @@ export function RecentCallsCard({ usage }: { usage: Usage }) {
                   </span>
                 ),
             },
-            { label: "Tool", cell: (c) => c.tool, className: "font-mono text-xs" },
-            { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[12rem] truncate font-mono text-xs text-muted-foreground" },
+            { label: "Tool", cell: (c) => c.tool, className: "text-xs" },
+            { label: "Agent", cell: (c) => c.agent_id || "—", className: "max-w-[12rem] truncate text-xs text-muted-foreground" },
             { label: "Results", cell: results, className: "text-xs text-muted-foreground" },
             { label: "Time", right: true, cell: (c) => duration(c.ms) },
             { label: "When", right: true, cell: (c) => timeAgo(c.at), className: "text-xs text-muted-foreground" },

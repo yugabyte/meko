@@ -38,7 +38,6 @@ export function StatusPage() {
   const s: ServerStatus | undefined = status.data;
   if (!s) return null;
   const e = s.memory_engine;
-  const mono = (v: string) => <span className="font-mono text-xs">{v}</span>;
 
   return (
     <div className="max-w-4xl">
@@ -50,8 +49,8 @@ export function StatusPage() {
             rows={[
               ["Version", s.version],
               ["Uptime", `${uptime(s.uptime_seconds)} (since ${dateTime(s.started_at)})`],
-              ["Address", mono(`127.0.0.1:${s.port}`)],
-              ["Data folder", mono(s.data_dir)],
+              ["Address", `127.0.0.1:${s.port}`],
+              ["Data folder", s.data_dir],
               ["Auth", s.auth === "none" ? <Badge tone="warning">off</Badge> : "token"],
               ["PID", s.pid],
             ]}
@@ -62,12 +61,12 @@ export function StatusPage() {
             rows={[
               ["State", <State state={e.state} />],
               ...(e.reason ? [["Why", e.reason] as [string, string]] : []),
-              ["Embedder", e.embedder ? mono(`${e.embedder.model} (${e.embedder.dims} dims)`) : "—"],
+              ["Embedder", e.embedder ? `${e.embedder.model} (${e.embedder.dims} dims)` : "—"],
               [
                 "Reranker",
                 e.reranker ? (
                   <span className="flex flex-wrap items-center gap-2">
-                    <State state={e.reranker.state} /> {mono(e.reranker.model)}
+                    <State state={e.reranker.state} /> {e.reranker.model}
                   </span>
                 ) : (
                   "—"

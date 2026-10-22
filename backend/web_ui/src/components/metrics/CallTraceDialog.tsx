@@ -33,7 +33,7 @@ export function CallTraceDialog({ call, onClose }: { call: Call; onClose: () => 
             {call.steps.map((s) => (
               <div key={s.step}>
                 <div className="flex justify-between text-xs">
-                  <span className="font-mono">{s.step}</span>
+                  <span>{s.step}</span>
                   <span className="tabular-nums text-muted-foreground">
                     {duration(s.ms)} · {s.n} results
                   </span>
