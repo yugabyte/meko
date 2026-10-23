@@ -277,6 +277,7 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 | Command | What it does |
 |---|---|
+| `agentk ui` | Open the web UI in your browser (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
 | `agentk status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
 | `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `agentk logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |

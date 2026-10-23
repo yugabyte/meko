@@ -19,6 +19,7 @@ import { buildServer, findWebDir } from './server.js';
 import { fqdn, loadTls } from './tls.js';
 import { hostServices, servicesFor } from './service.js';
 import { linkCommand } from './cmdlink.js';
+import { openBrowser } from './browser.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
@@ -183,6 +184,16 @@ async function setupLink(): Promise<void> {
     : 'Open this one-time link to create your login. It expires in 7 days.');
   if (isLoopback(cfg.server.bind)) console.log('No login is needed while AgentK only listens on this computer; the login applies once it listens on the network.');
   db.close();
+}
+
+/** Opens the web UI in this computer's browser, or prints its URL when there's none to open. */
+async function ui(): Promise<void> {
+  const cfg = loadConfig(getPaths());
+  const url = baseUrl(cfg, !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind));
+  const probe = await probeLocal(cfg);
+  if (!probe.ok) throw new Error(`AgentK isn't answering at ${url} (${probe.error}). Start it with: agentk start (or agentk serve)`);
+  if (await openBrowser(url)) console.log(`Opened ${url}`);
+  else console.log(`Couldn't open a browser here. Open ${url} in yours.`);
 }
 
 /** Prints the server log; -f keeps following it, -n sets how many lines to show first. */
@@ -409,6 +420,7 @@ Usage: agentk <command>
                 session worktrees and designs; add --delete-worktrees to delete those too)
   setup-link    Print a one-time link to create (or reset) your login
   status        Show services, URL, certificate fingerprint and sessions
+  ui            Open the web UI in your browser (prints its URL when there's no browser to open)
   stop          Stop the server and the session host, ending every session (they resume at start, or
                 serve without services; the services also start again at the next login)
   start         Start the background services again after stop
@@ -429,6 +441,7 @@ async function main(): Promise<void> {
     case 'setup-link': return setupLink();
     case 'selftest': return selftest();
     case 'status': return status();
+    case 'ui': return ui();
     case 'stop': return stop();
     case 'start': return start();
     case 'attach': return (await import('./attachcli.js')).runAttach(getPaths(), args);
