@@ -12,11 +12,11 @@ import { dbPath, isLoopback, loadConfig, resolveMeko, type Config } from './conf
 import { Core } from './core.js';
 import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
 import { errMsg, fileLogger, type Logger } from './log.js';
-import { probeLocal } from './health.js';
+import { probeHost, probeLocal, serverUrl } from './health.js';
 import { MekoClient } from './meko.js';
 import { getPaths, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
-import { fqdn, loadTls } from './tls.js';
+import { loadTls } from './tls.js';
 import { hostServices, servicesFor } from './service.js';
 import { linkCommand } from './cmdlink.js';
 import { openBrowser } from './browser.js';
@@ -49,11 +49,6 @@ function adoptLoginPath(): void {
     /* keep the inherited PATH */
   }
   process.env.PATH = withLocalBin(process.env.PATH ?? '', homedir());
-}
-
-function baseUrl(cfg: ReturnType<typeof loadConfig>, tls: boolean): string {
-  const host = isLoopback(cfg.server.bind) ? '127.0.0.1' : fqdn();
-  return `${tls ? 'https' : 'http'}://${host}:${cfg.server.port}`;
 }
 
 async function serve(): Promise<void> {
@@ -148,7 +143,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   app = await buildServer(core, { tls, webDir, updater: updater.enabled ? updater : null });
   await app.listen({ host: cfg.server.bind, port: cfg.server.port });
 
-  const url = baseUrl(cfg, !!tls);
+  const url = serverUrl(cfg, !!tls);
   log.info(`AgentK ${v} listening on ${url}`);
   if (tls) log.info(`TLS certificate SHA-256 fingerprint: ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
   if (isLoopback(cfg.server.bind)) {
@@ -178,7 +173,7 @@ async function setupLink(): Promise<void> {
   const db = openDb(dbPath(paths, cfg));
   const tls = !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind);
   const reset = !!getOwner(db);
-  console.log(`${baseUrl(cfg, tls)}/setup?token=${issueSetupToken(db)}`);
+  console.log(`${serverUrl(cfg, tls)}/setup?token=${issueSetupToken(db)}`);
   console.log(reset
     ? 'This one-time link resets the username, password and authenticator for this install. It expires in 7 days.'
     : 'Open this one-time link to create your login. It expires in 7 days.');
@@ -189,9 +184,12 @@ async function setupLink(): Promise<void> {
 /** Opens the web UI in this computer's browser, or prints its URL when there's none to open. */
 async function ui(): Promise<void> {
   const cfg = loadConfig(getPaths());
-  const url = baseUrl(cfg, !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind));
+  const url = serverUrl(cfg, !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind));
   const probe = await probeLocal(cfg);
-  if (!probe.ok) throw new Error(`AgentK isn't answering at ${url} (${probe.error}). Start it with: agentk start (or agentk serve)`);
+  if (!probe.ok) {
+    const at = probeHost(cfg.server.bind);
+    throw new Error(`AgentK isn't answering on ${at.includes(':') ? `[${at}]` : at}:${cfg.server.port} (${probe.error}). Start it with: agentk start (or agentk serve)`);
+  }
   if (await openBrowser(url)) console.log(`Opened ${url}`);
   else console.log(`Couldn't open a browser here. Open ${url} in yours.`);
 }
@@ -253,7 +251,7 @@ async function status(): Promise<void> {
   const paths = getPaths();
   const cfg = loadConfig(paths);
   const tls = await loadTls(paths, cfg).catch(() => null);
-  const url = baseUrl(cfg, !!tls);
+  const url = serverUrl(cfg, !!tls);
   console.log(`AgentK ${version()}`);
   console.log(`home:     ${paths.home}`);
   console.log(`database: ${dbPath(paths, cfg)}`);

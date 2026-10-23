@@ -7,6 +7,8 @@ describe('agentk ui', () => {
     ['linux', { DISPLAY: ':0' }, 'xdg-open'],
     ['linux', { WAYLAND_DISPLAY: 'wayland-0' }, 'xdg-open'],
     ['linux', {}, null],
+    ['darwin', { SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' }, null],
+    ['linux', { DISPLAY: 'localhost:10.0', SSH_TTY: '/dev/pts/3' }, null],
   ] as const)('opens the browser on %s with %j through %s', (platform, env, cmd) => {
     expect(browserCommand(platform, env)).toBe(cmd);
   });

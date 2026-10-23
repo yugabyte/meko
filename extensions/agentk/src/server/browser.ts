@@ -2,9 +2,11 @@ import { spawn } from 'node:child_process';
 
 /**
  * The command that opens a URL in this computer's browser: `open` on macOS, `xdg-open` elsewhere,
- * or null with no display to show one on (an SSH login without X forwarding).
+ * or null over SSH, where it would open on this computer's screen rather than the user's, or with no
+ * display to show one on.
  */
 export function browserCommand(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.SSH_CONNECTION || env.SSH_TTY) return null;
   if (platform === 'darwin') return 'open';
   return env.DISPLAY || env.WAYLAND_DISPLAY ? 'xdg-open' : null;
 }
