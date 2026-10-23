@@ -59,7 +59,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
 | Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
 | Sharing | Everyone installs their own copy. One owner per install, with no shared instances. |
-| Client | Browser first. Chrome's "Install app" gives it a dock icon: the web app manifest (`manifest.webmanifest`) names it "AgentK" and supplies the logo as regular and maskable icons. `/favicon.ico` and `/apple-touch-icon.png` are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred. |
+| Client | Browser first, installable as a web app, which AgentK offers on first open (see [Installing the app](design/app.md#installing-the-app)). Installing gives it a dock icon: the web app manifest (`manifest.webmanifest`) names it "AgentK" and supplies the logo as regular and maskable icons. `/favicon.ico` and `/apple-touch-icon.png` are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred. |
 
 ## Tech stack
 

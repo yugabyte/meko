@@ -315,6 +315,26 @@ A project datapack shared with you also sends one notification (an `invite` even
 datapack); clicking it opens the Open project dialog for it. Tapped through the service worker, it
 opens the dialog in an open window, or opens `/`, where the share's banner is waiting.
 
+## Installing the app
+
+AgentK is a web app you can install: the manifest and the service worker above meet the browsers'
+rules (the service worker still caches nothing). The first time you open it in a browser that can
+install it, a banner offers to: **Install** opens the browser's own install dialog, and **Not now**
+hides the offer in that browser for good (`localStorage`, as the other banners do; installing is
+per browser and device, so the server doesn't keep it). The page catches the browser's
+`beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
+as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
+installed (Chrome stops making the offer in its tabs), or before sign-in. While the browser can
+still install it, **Install AgentK as an app** is in the `⌘K` palette too, even after Not now.
+Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
+next click), so one tap never brings up two prompts.
+
+An iPhone or iPad makes no offer, so there the banner says to tap Share, then Add to Home Screen;
+iOS shows notifications only for Home Screen web apps. Firefox and Safari on a Mac get no banner.
+Chrome offers nothing for a page whose certificate it doesn't trust, so with AgentK's self-signed
+certificate, trust its fingerprint (`agentk status`) first. Chrome may also wait until you've used
+the page a little before it offers, so the banner can appear a moment after the page loads.
+
 ## On a phone
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top

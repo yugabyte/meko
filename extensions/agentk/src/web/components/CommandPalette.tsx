@@ -7,6 +7,7 @@ import {
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { useMedia, useTouch } from '../hooks/useMedia';
+import { useInstall } from '../installapp';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { attachFiles } from '../terminals';
@@ -94,6 +95,7 @@ export function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { canPrompt: canInstall, install } = useInstall();
 
   // A pasted GitHub PR or issue: looked up once typing pauses, and kept while the palette is open
   // (per project on screen, which the plan prefers).
@@ -425,8 +427,10 @@ export function CommandPalette({
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
+    // Still offered after the banner's Not now, while the browser can install it.
+    if (canInstall) out.push({ id: 'install', label: ['Install AgentK as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];
