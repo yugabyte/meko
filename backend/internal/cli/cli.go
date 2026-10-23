@@ -71,10 +71,10 @@ Usage:
   meko upload <file>...          add files to the knowledge base (knowledgebase_upload_document) and
                                  wait until they're indexed; --no-wait returns once they're uploaded
   meko upload_status <key>       how an uploaded file is doing (knowledgebase_document_status)
-  meko export [<name|id>]        write a datapack (default: the default one) to a JSON file: its
-                                 memories, collective memories, conversations, and its knowledge
-                                 files and artifacts as lists; no embeddings or file contents;
-                                 -o FILE picks the file (default meko-<name>-<date>.json here);
+  meko export [<name|id>]        write a datapack (default: the default one) to a zip: its
+                                 memories, collective memories, conversations, knowledge files and
+                                 artifacts with their embeddings and file contents, and the call log;
+                                 -o FILE picks the file (default meko-<name>-<date>.zip here);
                                  it won't replace a file unless --force
   meko list mcp-tools            the MCP tools Meko serves, each with what it does; --json for all
                                  their names, titles and summaries

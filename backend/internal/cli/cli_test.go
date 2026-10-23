@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -922,10 +923,10 @@ func TestListMCPTools(t *testing.T) {
 
 func TestSuggestedName(t *testing.T) {
 	for in, want := range map[string]string{
-		`attachment; filename="meko-default-2026-10-22.json"`: "meko-default-2026-10-22.json",
-		`attachment; filename="../../etc/passwd"`:             "passwd",
-		``:           "meko-export.json",
-		`attachment`: "meko-export.json",
+		`attachment; filename="meko-default-2026-10-22.zip"`: "meko-default-2026-10-22.zip",
+		`attachment; filename="../../etc/passwd"`:            "passwd",
+		``:           "meko-export.zip",
+		`attachment`: "meko-export.zip",
 	} {
 		if got := suggestedName(in); got != want {
 			t.Errorf("suggestedName(%q) = %q, want %q", in, got, want)
@@ -966,46 +967,80 @@ func TestExport(t *testing.T) {
 	t.Chdir(here)
 	code, out, errs = run("export", "--data-dir", dir)
 	want(t, "export the default", code, 0, out+errs, "Exported to meko-default-")
-	names, _ := filepath.Glob(filepath.Join(here, "meko-default-*.json"))
+	names, _ := filepath.Glob(filepath.Join(here, "meko-default-*.zip"))
 	if len(names) != 1 {
 		t.Fatalf("files %v", names)
 	}
-	b, _ := os.ReadFile(names[0])
-	var x struct {
-		Format   string `json:"format"`
-		Memories []struct {
-			Text string `json:"text"`
-		} `json:"memories"`
+	z, err := zip.OpenReader(names[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err = json.Unmarshal(b, &x); err != nil || x.Format != "meko-datapack-export" || len(x.Memories) != 1 ||
-		x.Memories[0].Text != "releases ship on Tuesdays" {
-		t.Fatalf("%v %s", err, b)
+	entries := map[string]string{}
+	for _, f := range z.File {
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		_ = rc.Close()
+		entries[f.Name] = string(b)
+	}
+	_ = z.Close()
+	var header struct {
+		Format  string `json:"format"`
+		Version int    `json:"version"`
+	}
+	var mem struct {
+		Text      string    `json:"text"`
+		Embedding []float32 `json:"embedding"`
+	}
+	if err = json.Unmarshal([]byte(entries["datapack.json"]), &header); err != nil ||
+		header.Format != "meko-datapack-export" || header.Version != 2 {
+		t.Fatalf("header %v %q", err, entries["datapack.json"])
+	}
+	if err = json.Unmarshal([]byte(entries["memories.jsonl"]), &mem); err != nil ||
+		mem.Text != "releases ship on Tuesdays" || len(mem.Embedding) == 0 {
+		t.Fatalf("memories %v %q", err, entries["memories.jsonl"])
 	}
 	code, _, errs = run("export", "--data-dir", dir)
 	want(t, "export again", code, 1, errs, "already exists: pass --force")
 	code, out, errs = run("export", "--data-dir", dir, "--force")
 	want(t, "export --force", code, 0, out+errs, "Exported to")
 
-	out2 := filepath.Join(here, "by-name.json")
+	out2 := filepath.Join(here, "by-name.zip")
 	code, out, errs = run("export", "default", "--data-dir", dir, "-o", out2)
 	want(t, "export by name with -o after it", code, 0, out+errs, "Exported to "+out2)
-	code, out, errs = run("export", "--data-dir", dir, "-o", filepath.Join(here, "first.json"), "default")
-	want(t, "export with -o before the name", code, 0, out+errs, "first.json")
+	code, out, errs = run("export", "--data-dir", dir, "-o", filepath.Join(here, "first.zip"), "default")
+	want(t, "export with -o before the name", code, 0, out+errs, "first.zip")
 	code, _, errs = run("export", "nope", "--data-dir", dir)
 	want(t, "export an unknown name", code, 1, errs, `no datapack is named "nope"`)
 }
 
-// An export is complete only if the body ends the JSON object.
-func TestLastByte(t *testing.T) {
-	var l lastByte
-	for _, p := range []string{`{"a":[1,`, `2]}`, "\n  \t"} {
-		_, _ = l.Write([]byte(p))
+// An export is complete only if it opens as a zip holding its datapack.json.
+func TestCheckExport(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, entries ...string) string {
+		var b bytes.Buffer
+		z := zip.NewWriter(&b)
+		for _, e := range entries {
+			w, _ := z.Create(e)
+			_, _ = w.Write([]byte("{}"))
+		}
+		_ = z.Close()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, b.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	if l.b != '}' {
-		t.Errorf("last byte %q, want }", l.b)
+	if err := checkExport(write("ok.zip", "memories.jsonl", "datapack.json")); err != nil {
+		t.Errorf("a complete export: %v", err)
 	}
-	_, _ = l.Write([]byte(`,{"cut`))
-	if l.b == '}' {
-		t.Error("a cut body reads as complete")
+	if err := checkExport(write("headless.zip", "memories.jsonl")); err == nil {
+		t.Error("an export without datapack.json passed")
+	}
+	full := write("full.zip", "memories.jsonl", "datapack.json")
+	b, _ := os.ReadFile(full)
+	cut := filepath.Join(dir, "cut.zip")
+	_ = os.WriteFile(cut, b[:len(b)/2], 0o600) //nolint:gosec // G703: the test's own temp folder
+	if err := checkExport(cut); err == nil {
+		t.Error("a cut-off export passed")
 	}
 }

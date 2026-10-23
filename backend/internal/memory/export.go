@@ -1,43 +1,67 @@
 package memory
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
-// The export's format and version: a reader checks both before it trusts the rest.
+// The export's format and version: a reader checks both before it trusts the rest. Version 2 is
+// a zip; version 1 was one JSON file without embeddings or file contents.
 const (
 	ExportFormat  = "meko-datapack-export"
-	ExportVersion = 1
+	ExportVersion = 2
 )
 
-// exportLeftOut is what an export doesn't carry, said in the file itself: vectors, indexes and
-// entities are the local model's and rebuilt by whoever imports it, and v1 lists files and
-// artifacts without their bytes.
-var exportLeftOut = []string{
-	"embeddings (vectors, rebuilt on import)",
-	"keyword indexes and entities (rebuilt on import)",
-	"knowledge file contents and their chunks (listed by SHA-256)",
-	"artifact contents (listed by SHA-256)",
-	"the call log",
-}
+// exportLeftOut is what an export doesn't carry, said in its datapack.json: the keyword indexes
+// and entities, which whoever imports it rebuilds from the text.
+var exportLeftOut = []string{"keyword indexes and entities (rebuilt from the text on import)"}
+
+// The zip's entries. Each .jsonl holds one JSON object a line, so an importer can read a large one
+// a record at a time; files and artifacts are stored under their SHA-256.
+const (
+	exportManifest    = "datapack.json"
+	exportMemories    = "memories.jsonl"
+	exportCollective  = "collective_memories.jsonl"
+	exportConvs       = "conversations.jsonl"
+	exportKnowledge   = "knowledge.jsonl"
+	exportArtifacts   = "artifacts.jsonl"
+	exportCallLog     = "call_log.jsonl"
+	exportKnowledgeIn = "knowledge/"
+	exportArtifactsIn = "artifacts/"
+)
 
 // exportPage is how many rows each read takes as the export walks a datapack.
 const exportPage = 500
 
-// ExportDatapack writes one datapack as JSON, a section at a time so a large datapack is never all
-// in memory: its memories (with their history and whether each is a learning or kept), collective
-// memories, conversations with every turn, and its knowledge files and artifacts as lists. Ids and
-// dates are kept. version is Meko's, for the header.
+// ExportDatapack writes one datapack to w as a zip, an entry at a time: only the lists of files,
+// artifacts and calls are held whole, and one file's bytes at a time. Its entries:
+//   - datapack.json: the header (format, version, Meko's version, the embedding model and its
+//     dimensions, what's left out, each entry's count) and the datapack.
+//   - memories.jsonl: each memory with its state (learning or kept), history and embedding.
+//   - collective_memories.jsonl: each with its knowledge-base embedding.
+//   - conversations.jsonl: each with every turn, each turn with its search chunks and embeddings.
+//   - knowledge.jsonl, and knowledge/<sha256>.<ext>: each file's metadata, its chunks with their
+//     embeddings, and the file itself.
+//   - artifacts.jsonl, and artifacts/<sha256>.<ext>: the same for artifacts.
+//   - call_log.jsonl: the datapack's calls.
 //
-// Every read goes through one snapshot of the database, so writes made while it runs (a new turn,
-// a promotion) neither drop nor repeat a row. start is called once the reads that can fail before
-// the first byte (the datapack, the model) have worked, and gives the writer; an error before then
-// means nothing was written. An error after it leaves the file cut short.
+// Ids and dates are kept, and an embedding is null where the sweep hasn't embedded it yet. Every
+// read goes through one snapshot of the database, so writes made while it runs neither drop nor
+// repeat a row. Knowledge files' bytes are on disk, outside the snapshot: one deleted while it runs
+// goes out without them, its path "". start is called once the reads that can fail before the
+// first byte have worked, and gives the writer;
+// an error before then means nothing was written, and one after leaves the zip cut short.
 func (s *Service) ExportDatapack(ctx context.Context, datapack, version string, start func() io.Writer) error {
 	return s.st.Snapshot(ctx, func(st *store.Store) error {
 		return s.export(ctx, st, datapack, version, start)
@@ -75,21 +99,60 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 	if err != nil {
 		return err
 	}
+	// The lists the later entries walk, read now so a failure gets an error reply.
+	var docs []store.Document
+	if err = pages(func(offset int) (int, error) {
+		ds, _, derr := st.ListDocuments(ctx, store.DocumentPage{DatapackID: datapack, Limit: exportPage,
+			Offset: offset})
+		docs = append(docs, ds...)
+		return len(ds), derr
+	}); err != nil {
+		return err
+	}
+	var arts []store.Artifact
+	if err = pages(func(offset int) (int, error) {
+		as, _, aerr := st.ListArtifacts(ctx, datapack, "", exportPage, offset)
+		arts = append(arts, as...)
+		return len(as), aerr
+	}); err != nil {
+		return err
+	}
+	calls, err := st.Calls(ctx, datapack, time.Time{})
+	if err != nil {
+		return err
+	}
 
-	e := &exportWriter{w: start()}
-	e.raw(`{`)
-	e.field("format", ExportFormat)
-	e.field("version", ExportVersion)
-	e.field("exported_at", time.Now().UTC().Format(time.RFC3339))
-	e.field("meko_version", version)
-	e.field("embedding_model", model.Model)
-	e.field("left_out", exportLeftOut)
-	e.field("datapack", d)
+	z := zip.NewWriter(start())
+	counts := map[string]int{}
+	entry := func(name string) (io.Writer, error) {
+		return z.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate, Modified: time.Now()})
+	}
+	jsonl := func(name string, fill func(emit func(any) error) error) error {
+		f, ferr := entry(name)
+		if ferr != nil {
+			return ferr
+		}
+		enc := json.NewEncoder(f)
+		return fill(func(v any) error {
+			counts[name]++
+			return enc.Encode(v)
+		})
+	}
+	file := func(name string, r io.Reader) error {
+		f, ferr := entry(name)
+		if ferr == nil {
+			_, ferr = io.Copy(f, r)
+		}
+		return ferr
+	}
 
-	e.list("memories", func(emit func(any)) error {
+	if err = jsonl(exportMemories, func(emit func(any) error) error {
 		return pages(func(offset int) (int, error) {
-			recs, _, err := st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: datapack, UserID: s.userID,
+			recs, _, perr := st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: datapack, UserID: s.userID,
 				Limit: exportPage, Offset: offset})
+			if perr != nil {
+				return 0, perr
+			}
 			for _, r := range recs {
 				if promoted[r.ID] {
 					continue
@@ -99,77 +162,189 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 				if herr != nil {
 					return 0, herr
 				}
+				v, verr := st.MemoryEmbedding(ctx, datapack, m.ID)
+				if verr != nil {
+					return 0, verr
+				}
 				state := "kept"
 				if learnings[m.ID] {
 					state = "learning"
 				}
-				emit(map[string]any{"id": m.ID, "text": m.Memory, "hash": m.Hash, "state": state, "agent_id": m.AgentID,
-					"conversation_id": m.RunID, "role": m.Role, "actor_id": m.ActorID, "attributed_to": m.AttributedTo,
-					"expiration_date": m.ExpirationDate, "metadata": m.Metadata, "created_at": m.CreatedAt,
-					"updated_at": m.UpdatedAt, "history": h})
+				if err = emit(map[string]any{"id": m.ID, "text": m.Memory, "hash": m.Hash, "state": state,
+					"agent_id": m.AgentID, "conversation_id": m.RunID, "role": m.Role, "actor_id": m.ActorID,
+					"attributed_to": m.AttributedTo, "expiration_date": m.ExpirationDate, "metadata": m.Metadata,
+					"created_at": m.CreatedAt, "updated_at": m.UpdatedAt, "history": h,
+					"embedding": v}); err != nil {
+					return 0, err
+				}
 			}
-			return len(recs), err
+			return len(recs), nil
 		})
-	})
-	e.list("collective_memories", func(emit func(any)) error {
+	}); err != nil {
+		return err
+	}
+	if err = jsonl(exportCollective, func(emit func(any) error) error {
 		return pages(func(offset int) (int, error) {
-			ps, _, err := st.PromotedMemories(ctx, datapack, exportPage, offset)
+			ps, _, perr := st.PromotedMemories(ctx, datapack, exportPage, offset)
 			for _, p := range ps {
-				emit(map[string]any{"id": p.ID, "text": p.Text, "hash": p.Hash, "agent_id": p.AgentID,
+				if perr != nil {
+					break
+				}
+				v, verr := st.PromotedEmbedding(ctx, datapack, p.ID)
+				if verr != nil {
+					return 0, verr
+				}
+				perr = emit(map[string]any{"id": p.ID, "text": p.Text, "hash": p.Hash, "agent_id": p.AgentID,
 					"conversation_id": p.ConversationID, "role": p.Role, "actor_id": p.ActorID, "source": p.Source,
 					"connector_id": p.ConnectorID, "metadata": p.Payload, "created_at": p.CreatedAt,
-					"updated_at": p.UpdatedAt, "promoted_at": p.PromotedAt, "promoted_by": p.PromotedBy})
+					"updated_at": p.UpdatedAt, "promoted_at": p.PromotedAt, "promoted_by": p.PromotedBy,
+					"embedding": v})
 			}
-			return len(ps), err
+			return len(ps), perr
 		})
-	})
-	e.list("conversations", func(emit func(any)) error {
+	}); err != nil {
+		return err
+	}
+	if err = jsonl(exportConvs, func(emit func(any) error) error {
 		return pages(func(offset int) (int, error) {
-			cs, _, err := st.ListConversations(ctx, datapack, "", exportPage, offset)
+			cs, _, perr := st.ListConversations(ctx, datapack, "", exportPage, offset)
 			for _, c := range cs {
-				var turns []map[string]any
+				if perr != nil {
+					break
+				}
+				chunks, cerr := st.MessageChunks(ctx, datapack, c.ID)
+				if cerr != nil {
+					return 0, cerr
+				}
+				turns := []map[string]any{}
 				if terr := pages(func(mo int) (int, error) {
 					ms, merr := st.Messages(ctx, datapack, c.ID, exportPage, mo)
 					for _, m := range ms {
+						turnChunks := chunks[m.ID]
+						if turnChunks == nil {
+							turnChunks = []store.ExportChunk{}
+						}
 						turns = append(turns, map[string]any{"id": m.ID, "input": m.Input, "output": m.Output,
-							"reasoning": m.Reasoning, "plan": m.Plan, "metadata": m.Metadata, "created_at": m.CreatedAt})
+							"reasoning": m.Reasoning, "plan": m.Plan, "metadata": m.Metadata, "created_at": m.CreatedAt,
+							"chunks": turnChunks})
 					}
 					return len(ms), merr
 				}); terr != nil {
 					return 0, terr
 				}
-				if turns == nil {
-					turns = []map[string]any{}
-				}
-				emit(map[string]any{"id": c.ID, "title": c.Title, "agent_id": c.AgentID, "session_id": c.SessionID,
-					"metadata": c.Metadata, "created_at": c.CreatedAt, "updated_at": c.UpdatedAt, "turns": turns})
+				perr = emit(map[string]any{"id": c.ID, "title": c.Title, "agent_id": c.AgentID, "session_id": c.SessionID,
+					"run_id": c.RunID, "metadata": c.Metadata, "created_at": c.CreatedAt, "updated_at": c.UpdatedAt,
+					"turns": turns})
 			}
-			return len(cs), err
+			return len(cs), perr
 		})
-	})
-	e.list("knowledge_files", func(emit func(any)) error {
-		return pages(func(offset int) (int, error) {
-			ds, _, err := st.ListDocuments(ctx, store.DocumentPage{DatapackID: datapack, Limit: exportPage,
-				Offset: offset})
-			for _, d := range ds {
-				emit(map[string]any{"id": d.ID, "filename": d.Filename, "type": d.DocumentType, "sha256": d.ContentHash,
-					"size_bytes": d.SizeBytes, "status": d.Status, "chunks": d.ChunksProcessed, "uploaded_at": d.UploadedAt})
+	}); err != nil {
+		return err
+	}
+
+	// Knowledge files' bytes first, each opened as its path is decided: they live on disk, outside
+	// the snapshot, and one deleted since is left out (its record's path is then "").
+	stored := map[string]string{} // a document's id to where its bytes are in the zip
+	for _, d := range docs {
+		f, oerr := s.files.Open(datapack, d.ContentHash)
+		if errors.Is(oerr, os.ErrNotExist) {
+			continue
+		}
+		if oerr != nil {
+			return oerr
+		}
+		path := exportKnowledgeIn + d.ContentHash + safeExt(d.Filename)
+		err = file(path, f)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		stored[d.ID] = path
+	}
+	if err = jsonl(exportKnowledge, func(emit func(any) error) error {
+		for _, d := range docs {
+			chunks, cerr := st.DocumentChunks(ctx, d.Rowid)
+			if cerr != nil {
+				return cerr
 			}
-			return len(ds), err
-		})
-	})
-	e.list("artifacts", func(emit func(any)) error {
-		return pages(func(offset int) (int, error) {
-			as, _, err := st.ListArtifacts(ctx, datapack, "", exportPage, offset)
-			for _, a := range as {
-				emit(map[string]any{"id": a.ID, "filename": a.Filename, "content_type": a.ContentType,
-					"sha256": a.ContentHash, "size_bytes": a.SizeBytes, "agent_id": a.AgentID, "created_at": a.CreatedAt})
+			if chunks == nil {
+				chunks = []store.ExportChunk{}
 			}
-			return len(as), err
-		})
-	})
-	e.raw("}\n")
-	return e.err
+			if eerr := emit(map[string]any{"id": d.ID, "filename": d.Filename, "type": d.DocumentType,
+				"sha256": d.ContentHash, "size_bytes": d.SizeBytes, "status": d.Status, "error": d.Error,
+				"uploaded_at": d.UploadedAt, "completed_at": d.CompletedAt, "path": stored[d.ID],
+				"chunks": chunks}); eerr != nil {
+				return eerr
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err = jsonl(exportArtifacts, func(emit func(any) error) error {
+		for _, a := range arts {
+			if eerr := emit(map[string]any{"id": a.ID, "filename": a.Filename, "content_type": a.ContentType,
+				"sha256": a.ContentHash, "size_bytes": a.SizeBytes, "agent_id": a.AgentID, "created_at": a.CreatedAt,
+				"path": exportArtifactsIn + a.ContentHash + safeExt(a.Filename)}); eerr != nil {
+				return eerr
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, a := range arts {
+		b, aerr := st.ArtifactBytes(ctx, datapack, a.ContentHash)
+		if aerr != nil {
+			return aerr
+		}
+		if err = file(exportArtifactsIn+a.ContentHash+safeExt(a.Filename), bytes.NewReader(b)); err != nil {
+			return err
+		}
+	}
+
+	if err = jsonl(exportCallLog, func(emit func(any) error) error {
+		for _, c := range calls {
+			if eerr := emit(map[string]any{"id": c.ID, "at": c.At, "tool": c.Tool, "agent_id": c.AgentID,
+				"conversation_id": c.ConversationID, "credential": c.Credential, "ok": c.OK, "error_code": c.ErrorCode,
+				"ms": c.Ms, "memory_n": c.MemoryN, "kb_n": c.KBN, "conversation_n": c.ConversationN,
+				"score_high": c.ScoreHigh, "score_mid": c.ScoreMid, "score_low": c.ScoreLow,
+				"tokens_sent": c.TokensSent, "tokens_saved": c.TokensSaved, "input_tokens": c.InputTokens,
+				"output_tokens": c.OutputTokens, "steps": c.Steps}); eerr != nil {
+				return eerr
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The header last, so it can count what the other entries hold.
+	if err = jsonl(exportManifest, func(emit func(any) error) error {
+		return emit(map[string]any{"format": ExportFormat, "version": ExportVersion,
+			"exported_at": time.Now().UTC().Format(time.RFC3339), "meko_version": version,
+			"embedding": map[string]any{"model": model.Model, "dims": model.Dims}, "left_out": exportLeftOut,
+			"counts": map[string]int{"memories": counts[exportMemories], "collective_memories": counts[exportCollective],
+				"conversations": counts[exportConvs], "knowledge_files": counts[exportKnowledge],
+				"artifacts": counts[exportArtifacts], "calls": counts[exportCallLog]},
+			"datapack": d})
+	}); err != nil {
+		return err
+	}
+	return z.Close()
+}
+
+// unsafeExt is what a file's extension loses in its zip path.
+var unsafeExt = regexp.MustCompile(`[^a-z0-9]`)
+
+// safeExt is a filename's extension for its stored copy's path: lowercase letters and digits only,
+// at most 10, with its dot, or "" when it has none.
+func safeExt(name string) string {
+	ext := unsafeExt.ReplaceAllString(strings.ToLower(strings.TrimPrefix(filepath.Ext(name), ".")), "")
+	if ext == "" {
+		return ""
+	}
+	return "." + ext[:min(len(ext), 10)]
 }
 
 // ids collects what read returns, page by page, as a set.
@@ -201,62 +376,4 @@ func pages(read func(offset int) (int, error)) error {
 			return err
 		}
 	}
-}
-
-// exportWriter writes one JSON object by hand, a field or a list item at a time, and keeps the
-// first error, after which it writes nothing.
-type exportWriter struct {
-	w     io.Writer
-	err   error
-	comma bool // a field has been written, so the next needs a comma
-}
-
-func (e *exportWriter) raw(s string) {
-	if e.err == nil {
-		_, e.err = io.WriteString(e.w, s)
-	}
-}
-
-func (e *exportWriter) value(v any) {
-	if e.err != nil {
-		return
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		e.err = err
-		return
-	}
-	_, e.err = e.w.Write(b)
-}
-
-func (e *exportWriter) key(name string) {
-	if e.comma {
-		e.raw(",")
-	}
-	e.comma = true
-	e.value(name)
-	e.raw(":")
-}
-
-func (e *exportWriter) field(name string, v any) {
-	e.key(name)
-	e.value(v)
-}
-
-// list writes name as an array of what fill emits; an error from fill stops the export.
-func (e *exportWriter) list(name string, fill func(emit func(any)) error) {
-	e.key(name)
-	e.raw("[")
-	first := true
-	err := fill(func(v any) {
-		if !first {
-			e.raw(",")
-		}
-		first = false
-		e.value(v)
-	})
-	if err != nil && e.err == nil {
-		e.err = err
-	}
-	e.raw("]")
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
@@ -65,36 +66,37 @@ func toolExport(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags
 	if err != nil {
 		return err
 	}
-	// The server cuts the connection when an export fails partway, so a short body is an error here;
-	// a body that doesn't end the JSON object is one too.
-	end := &lastByte{}
-	n, err := io.Copy(io.MultiWriter(file, end), resp.Body)
+	// The server cuts the connection when an export fails partway, so a short body is an error here,
+	// and a zip that doesn't open (its index comes last) or lacks its header is one too.
+	n, err := io.Copy(file, resp.Body)
 	if cerr := file.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil && end.b != '}' {
-		err = errors.New("the export ended early")
+	if err == nil {
+		err = checkExport(out)
 	}
 	if err != nil {
 		_ = os.Remove(out) //nolint:gosec // G703: the file this command just created
 		return fmt.Errorf("export failed, nothing saved: %w", err)
 	}
-	fmt.Fprintf(stdout, "Exported to %s (%d bytes): memories, collective memories, conversations, and the knowledge "+
-		"file and artifact lists. Embeddings and file contents aren't included\n", out, n)
+	fmt.Fprintf(stdout, "Exported to %s (%d bytes): memories, collective memories, conversations, knowledge files "+
+		"and artifacts with their contents and embeddings, and the call log\n", out, n)
 	return nil
 }
 
-// lastByte remembers the last non-space byte written through it.
-type lastByte struct{ b byte }
-
-func (l *lastByte) Write(p []byte) (int, error) {
-	for i := len(p) - 1; i >= 0; i-- {
-		if c := p[i]; c != ' ' && c != '\n' && c != '\r' && c != '\t' {
-			l.b = c
-			break
+// checkExport opens a downloaded export: a complete zip that holds its datapack.json.
+func checkExport(path string) error {
+	z, err := zip.OpenReader(path)
+	if err != nil {
+		return fmt.Errorf("the export isn't a complete zip: %w", err)
+	}
+	defer func() { _ = z.Close() }()
+	for _, f := range z.File {
+		if f.Name == "datapack.json" {
+			return nil
 		}
 	}
-	return len(p), nil
+	return errors.New("the export has no datapack.json")
 }
 
 // suggestedName is the filename in a Content-Disposition header, without any folders, or a fallback.
@@ -104,5 +106,5 @@ func suggestedName(disposition string) string {
 			return filepath.Base(name)
 		}
 	}
-	return "meko-export.json"
+	return "meko-export.zip"
 }

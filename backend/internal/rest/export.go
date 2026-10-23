@@ -16,8 +16,8 @@ import (
 // unsafeName is what a datapack name loses in the export's filename.
 var unsafeName = regexp.MustCompile(`[^a-z0-9_-]+`)
 
-// exportDatapack sends a datapack as one JSON file to download (Meko's own; Cloud has none yet):
-// the format memory.ExportDatapack writes, streamed. A failure before the first byte gets an error
+// exportDatapack sends a datapack as one zip to download (Meko's own; Cloud has none yet): the
+// format memory.ExportDatapack writes, streamed. A failure before the first byte gets an error
 // reply. One after it can't change the 200 already sent, so the connection is cut instead: the
 // download then fails (an unexpected EOF) rather than ending cleanly with a short file.
 func (a *api) exportDatapack(c echo.Context) error {
@@ -37,9 +37,9 @@ func (a *api) exportDatapack(c echo.Context) error {
 	err = a.Service.ExportDatapack(ctx(c), id, version.Version, func() io.Writer {
 		started = true
 		h := c.Response().Header()
-		h.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		h.Set(echo.HeaderContentType, "application/zip")
 		h.Set(echo.HeaderContentDisposition,
-			fmt.Sprintf(`attachment; filename="meko-%s-%s.json"`, name, time.Now().UTC().Format("2006-01-02")))
+			fmt.Sprintf(`attachment; filename="meko-%s-%s.zip"`, name, time.Now().UTC().Format("2006-01-02")))
 		c.Response().WriteHeader(http.StatusOK)
 		return c.Response()
 	})

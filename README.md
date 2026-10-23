@@ -68,7 +68,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
 | `meko ui [--no-open]` | Open the web UI in the browser, signed in with the client token; `--no-open` only prints its link |
-| `meko export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one JSON file: memories, collective memories, conversations, and its knowledge files and artifacts as lists. Embeddings and file contents aren't included. It won't replace a file unless `--force` |
+| `meko export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
 | `meko list mcp-tools [--json]` | The MCP tools Meko serves, each with a line on what it does; needs no running server |
 | `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL and token |
 | `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
