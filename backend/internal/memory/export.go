@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -42,8 +44,8 @@ const (
 // exportPage is how many rows each read takes as the export walks a datapack.
 const exportPage = 500
 
-// ExportDatapack writes one datapack to w as a zip, an entry at a time so a large datapack is never
-// all in memory:
+// ExportDatapack writes one datapack to w as a zip, an entry at a time: only the lists of files,
+// artifacts and calls are held whole, and one file's bytes at a time. Its entries:
 //   - datapack.json: the header (format, version, Meko's version, the embedding model and its
 //     dimensions, what's left out, each entry's count) and the datapack.
 //   - memories.jsonl: each memory with its state (learning or kept), history and embedding.
@@ -56,8 +58,9 @@ const exportPage = 500
 //
 // Ids and dates are kept, and an embedding is null where the sweep hasn't embedded it yet. Every
 // read goes through one snapshot of the database, so writes made while it runs neither drop nor
-// repeat a row (files and artifacts are stored by content, so they can't change underneath). start
-// is called once the reads that can fail before the first byte have worked, and gives the writer;
+// repeat a row. Knowledge files' bytes are on disk, outside the snapshot: one deleted while it runs
+// goes out without them, its path "". start is called once the reads that can fail before the
+// first byte have worked, and gives the writer;
 // an error before then means nothing was written, and one after leaves the zip cut short.
 func (s *Service) ExportDatapack(ctx context.Context, datapack, version string, start func() io.Writer) error {
 	return s.st.Snapshot(ctx, func(st *store.Store) error {
@@ -96,7 +99,25 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 	if err != nil {
 		return err
 	}
-	vectors, err := st.MemoryEmbeddings(ctx, datapack, s.userID)
+	// The lists the later entries walk, read now so a failure gets an error reply.
+	var docs []store.Document
+	if err = pages(func(offset int) (int, error) {
+		ds, _, derr := st.ListDocuments(ctx, store.DocumentPage{DatapackID: datapack, Limit: exportPage,
+			Offset: offset})
+		docs = append(docs, ds...)
+		return len(ds), derr
+	}); err != nil {
+		return err
+	}
+	var arts []store.Artifact
+	if err = pages(func(offset int) (int, error) {
+		as, _, aerr := st.ListArtifacts(ctx, datapack, "", exportPage, offset)
+		arts = append(arts, as...)
+		return len(as), aerr
+	}); err != nil {
+		return err
+	}
+	calls, err := st.Calls(ctx, datapack, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -141,6 +162,10 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 				if herr != nil {
 					return 0, herr
 				}
+				v, verr := st.MemoryEmbedding(ctx, datapack, m.ID)
+				if verr != nil {
+					return 0, verr
+				}
 				state := "kept"
 				if learnings[m.ID] {
 					state = "learning"
@@ -149,7 +174,7 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 					"agent_id": m.AgentID, "conversation_id": m.RunID, "role": m.Role, "actor_id": m.ActorID,
 					"attributed_to": m.AttributedTo, "expiration_date": m.ExpirationDate, "metadata": m.Metadata,
 					"created_at": m.CreatedAt, "updated_at": m.UpdatedAt, "history": h,
-					"embedding": vectors[m.ID]}); err != nil {
+					"embedding": v}); err != nil {
 					return 0, err
 				}
 			}
@@ -195,13 +220,13 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 				if terr := pages(func(mo int) (int, error) {
 					ms, merr := st.Messages(ctx, datapack, c.ID, exportPage, mo)
 					for _, m := range ms {
-						cs := chunks[m.ID]
-						if cs == nil {
-							cs = []store.ExportChunk{}
+						turnChunks := chunks[m.ID]
+						if turnChunks == nil {
+							turnChunks = []store.ExportChunk{}
 						}
 						turns = append(turns, map[string]any{"id": m.ID, "input": m.Input, "output": m.Output,
 							"reasoning": m.Reasoning, "plan": m.Plan, "metadata": m.Metadata, "created_at": m.CreatedAt,
-							"chunks": cs})
+							"chunks": turnChunks})
 					}
 					return len(ms), merr
 				}); terr != nil {
@@ -217,17 +242,25 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 		return err
 	}
 
-	// Knowledge files: their metadata and chunks first, then their bytes, each its own entry.
-	var docs []store.Document
-	if err = pages(func(offset int) (int, error) {
-		ds, _, derr := st.ListDocuments(ctx, store.DocumentPage{DatapackID: datapack, Limit: exportPage,
-			Offset: offset})
-		docs = append(docs, ds...)
-		return len(ds), derr
-	}); err != nil {
-		return err
+	// Knowledge files' bytes first, each opened as its path is decided: they live on disk, outside
+	// the snapshot, and one deleted since is left out (its record's path is then "").
+	stored := map[string]string{} // a document's id to where its bytes are in the zip
+	for _, d := range docs {
+		f, oerr := s.files.Open(datapack, d.ContentHash)
+		if errors.Is(oerr, os.ErrNotExist) {
+			continue
+		}
+		if oerr != nil {
+			return oerr
+		}
+		path := exportKnowledgeIn + d.ContentHash + safeExt(d.Filename)
+		err = file(path, f)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		stored[d.ID] = path
 	}
-	stored := map[string]string{} // a document's id to where its bytes are in the zip, when they are
 	if err = jsonl(exportKnowledge, func(emit func(any) error) error {
 		for _, d := range docs {
 			chunks, cerr := st.DocumentChunks(ctx, d.Rowid)
@@ -237,44 +270,14 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 			if chunks == nil {
 				chunks = []store.ExportChunk{}
 			}
-			path := ""
-			if s.files.Has(datapack, d.ContentHash) {
-				path = exportKnowledgeIn + d.ContentHash + safeExt(d.Filename)
-				stored[d.ID] = path
-			}
 			if eerr := emit(map[string]any{"id": d.ID, "filename": d.Filename, "type": d.DocumentType,
 				"sha256": d.ContentHash, "size_bytes": d.SizeBytes, "status": d.Status, "error": d.Error,
-				"uploaded_at": d.UploadedAt, "completed_at": d.CompletedAt, "path": path,
+				"uploaded_at": d.UploadedAt, "completed_at": d.CompletedAt, "path": stored[d.ID],
 				"chunks": chunks}); eerr != nil {
 				return eerr
 			}
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-	for _, d := range docs {
-		path, ok := stored[d.ID]
-		if !ok {
-			continue
-		}
-		f, oerr := s.files.Open(datapack, d.ContentHash)
-		if oerr != nil {
-			return oerr
-		}
-		err = file(path, f)
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
-	}
-
-	// Artifacts: the list, then each one's bytes, read one at a time.
-	var arts []store.Artifact
-	if err = pages(func(offset int) (int, error) {
-		as, _, aerr := st.ListArtifacts(ctx, datapack, "", exportPage, offset)
-		arts = append(arts, as...)
-		return len(as), aerr
 	}); err != nil {
 		return err
 	}
@@ -291,19 +294,15 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 		return err
 	}
 	for _, a := range arts {
-		full, aerr := st.GetArtifact(ctx, datapack, a.ContentHash)
+		b, aerr := st.ArtifactBytes(ctx, datapack, a.ContentHash)
 		if aerr != nil {
 			return aerr
 		}
-		if err = file(exportArtifactsIn+a.ContentHash+safeExt(a.Filename), bytes.NewReader(full.Bytes)); err != nil {
+		if err = file(exportArtifactsIn+a.ContentHash+safeExt(a.Filename), bytes.NewReader(b)); err != nil {
 			return err
 		}
 	}
 
-	calls, err := st.Calls(ctx, datapack, time.Time{})
-	if err != nil {
-		return err
-	}
 	if err = jsonl(exportCallLog, func(emit func(any) error) error {
 		for _, c := range calls {
 			if eerr := emit(map[string]any{"id": c.ID, "at": c.At, "tool": c.Tool, "agent_id": c.AgentID,

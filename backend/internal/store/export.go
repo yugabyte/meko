@@ -22,38 +22,30 @@ type ExportChunk struct {
 	Embedding []float32       `json:"embedding"`
 }
 
-// MemoryEmbeddings is the vector of each of a user's memories in a datapack, by memory id.
-func (s *Store) MemoryEmbeddings(ctx context.Context, datapack, userID string) (map[string][]float32, error) {
-	rows, err := s.r.QueryContext(ctx, "SELECT id, rowid FROM memories WHERE datapack_id = ? AND user_id = ?",
-		datapack, userID)
+// MemoryEmbedding is a memory's vector, nil when it has none yet.
+func (s *Store) MemoryEmbedding(ctx context.Context, datapack, id string) ([]float32, error) {
+	var rowid int64
+	err := s.r.QueryRowContext(ctx, "SELECT rowid FROM memories WHERE datapack_id = ? AND id = ?", datapack, id).
+		Scan(&rowid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	type ref struct {
-		id    string
-		rowid int64
+	return s.vectorOf(ctx, "memories_vec", rowid)
+}
+
+// ArtifactBytes is an artifact's bytes, by its hash, or ErrNotFound. Unlike GetArtifact it only
+// reads: it doesn't record the read, so it works inside a Snapshot.
+func (s *Store) ArtifactBytes(ctx context.Context, datapack, hash string) ([]byte, error) {
+	var b []byte
+	err := s.r.QueryRowContext(ctx, "SELECT bytes FROM artifacts WHERE datapack_id = ? AND content_hash = ?",
+		datapack, hash).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
 	}
-	var refs []ref
-	for rows.Next() {
-		var r ref
-		if err = rows.Scan(&r.id, &r.rowid); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		refs = append(refs, r)
-	}
-	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
-		return nil, err
-	}
-	out := make(map[string][]float32, len(refs))
-	for _, r := range refs {
-		v, err := s.vectorOf(ctx, "memories_vec", r.rowid)
-		if err != nil {
-			return nil, err
-		}
-		out[r.id] = v
-	}
-	return out, nil
+	return b, err
 }
 
 // MessageChunks is each turn's chunks in a conversation of a datapack, by message id, in order.
