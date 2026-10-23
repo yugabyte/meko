@@ -18,12 +18,12 @@ describe('offering to install AgentK as an app', () => {
   });
 
   it.each([
-    ['iPhone', 'iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', 5, true],
-    ['iPad on iPadOS, which says it is a Mac', 'MacIntel', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 5, true],
-    ['a Mac', 'MacIntel', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 0, false],
-    ['Android', 'Linux armv81', 'Mozilla/5.0 (Linux; Android 15; Pixel 9)', 5, false],
-    ['Chrome on Windows', 'Win32', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 0, false],
-  ])('%s is iOS: %s', (_name, platform, ua, touch, ios) => {
+    ['iPhone', true, 'iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', 5],
+    ['iPad on iPadOS, which says it is a Mac', true, 'MacIntel', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 5],
+    ['a Mac', false, 'MacIntel', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 0],
+    ['Android', false, 'Linux armv81', 'Mozilla/5.0 (Linux; Android 15; Pixel 9)', 5],
+    ['Chrome on Windows', false, 'Win32', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 0],
+  ])('%s is iOS: %s', (_name, ios, platform, ua, touch) => {
     expect(isIos(platform, ua, touch)).toBe(ios);
   });
 });

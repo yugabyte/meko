@@ -182,7 +182,10 @@ function InviteBanners({
   );
 }
 
-/** The offer to install AgentK as an app (`installapp.ts`), until it's installed or turned down in this browser. */
+/**
+ * The offer to install AgentK as an app (`installapp.ts`), until it's installed or turned down in this
+ * browser. On iOS only Not now hides it: Safari can't tell that AgentK is on the Home Screen already.
+ */
 function InstallBanner() {
   const { offer, install, dismiss } = useInstall();
   if (!offer) return null;

@@ -330,7 +330,9 @@ Tapping Install doesn't also ask for notification permission (the first-click as
 next click), so one tap never brings up two prompts.
 
 An iPhone or iPad makes no offer, so there the banner says to tap Share, then Add to Home Screen;
-iOS shows notifications only for Home Screen web apps. Firefox and Safari on a Mac get no banner.
+iOS shows notifications only for Home Screen web apps. Safari can't tell that AgentK is on the Home
+Screen already (it has no `appinstalled`, and the Home Screen app keeps its storage apart), so in a
+Safari tab only Not now hides these steps; the Home Screen app itself never shows them. Firefox and Safari on a Mac get no banner.
 Chrome offers nothing for a page whose certificate it doesn't trust, so with AgentK's self-signed
 certificate, trust its fingerprint (`agentk status`) first. Chrome may also wait until you've used
 the page a little before it offers, so the banner can appear a moment after the page loads.
