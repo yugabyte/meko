@@ -351,6 +351,12 @@ coasting and slows down until it stops or a new touch lands, and the terminal on
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
 its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
 selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches Claude
-as a mouse click meanwhile. Tapping the terminal only brings up the keyboard in
-typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
+as a mouse click meanwhile. Tapping a link opens it in a new tab, the whole URL even when Claude
+Code broke it over rows itself: the next row carries it on when the URL runs into the row's last
+cell and the next row, indented no deeper than where the URL started, starts with URL characters
+(`linkAt()` in `src/web/termlinks.ts`). The tap opens it straight from the touch handler and is
+cancelled, so it doesn't also reach Claude as a click or open the link a second time through the
+mouse path. A tap is a finger that moves less than 8 px and lifts within half a second. A mouse click on a link
+goes through xterm's web-links addon, which only joins rows xterm wrapped itself. Tapping the
+terminal only brings up the keyboard in typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
 adjustable in the ⋯ sheet and remembered per browser.

@@ -12,16 +12,22 @@ import { HeldImages, type HeldImage } from './heldImages';
 import { isPastableImage, mekoPlan, mekoSummary, pickFiles, type MekoResult } from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, ctrlSequence, decayVelocity, flingVelocity, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
+  clampFont, ctrlSequence, decayVelocity, flingVelocity, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
   FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
+import { bufferRow, linkAt } from './termlinks';
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
 export type TermConn = 'connecting' | 'open' | 'closed' | 'ended';
 /** Which screen has the session: this one, this one once the other is idle, or another one. */
 export type TermScreen = 'here' | 'waiting' | 'elsewhere';
+
+/** Opens a link from the terminal in a new tab, cut off from this page. */
+function openLink(uri: string) {
+  window.open(uri, '_blank', 'noopener');
+}
 
 /** Random hex. Not crypto.randomUUID: a plain-http network bind isn't a secure context, which it needs. */
 function randomId(): string {
@@ -149,6 +155,8 @@ class SessionTerminal {
   /** Disconnected on purpose while the page is hidden; reconnects when it's shown again. */
   private paused = false;
   private touch: { x: number; y: number; travel: number } | null = null;
+  /** Where and when (ms) one finger went down, and how far (px) it has moved since: a tap opens a link. */
+  private tapStart: { x: number; y: number; t: number; moved: number } | null = null;
   /** In select mode, the buffer line the finger went down on. */
   private selectAnchor: number | null = null;
   /** Where the last swipe was, so momentum reports its wheel steps at the same cell. */
@@ -232,11 +240,8 @@ class SessionTerminal {
       macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
-    this.term.loadAddon(
-      new WebLinksAddon((_e, uri) => {
-        window.open(uri, '_blank', 'noopener');
-      }),
-    );
+    // Mouse clicks on links; a tap on one is opened by touchEnd.
+    this.term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)));
     this.term.open(this.el);
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
@@ -847,11 +852,13 @@ class SessionTerminal {
       e.preventDefault();
       e.stopPropagation();
       this.touch = null;
+      this.tapStart = null;
       this.selectAnchor = e.touches.length === 1 && t ? this.lineAt(t.clientY) : null;
       if (t) this.selectTo(t.clientY);
       return;
     }
     this.touch = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY, travel: 0 } : null;
+    this.tapStart = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY, t: e.timeStamp, moved: 0 } : null;
     this.samples = t ? [{ y: t.clientY, t: e.timeStamp }] : [];
     if (t) this.point = { x: t.clientX, y: t.clientY };
   };
@@ -863,6 +870,9 @@ class SessionTerminal {
       e.stopPropagation();
       if (e.touches.length === 1 && t) this.selectTo(t.clientY);
       return;
+    }
+    if (this.tapStart && t) {
+      this.tapStart.moved = Math.max(this.tapStart.moved, Math.hypot(t.clientX - this.tapStart.x, t.clientY - this.tapStart.y));
     }
     if (!this.touch || e.touches.length !== 1 || !t) return;
     e.preventDefault();
@@ -893,6 +903,22 @@ class SessionTerminal {
       }
       return;
     }
+    const tap = this.tapStart;
+    this.tapStart = null;
+    // A tap on a link opens it, the whole URL even when Claude broke it over rows. Cancelling the
+    // touchend stops the browser making mouse events of it: the web-links addon would open the
+    // URL again (cut off at the row's end), and Claude would get a click.
+    if (tap && isTap(tap.moved, e.timeStamp - tap.t)) {
+      const uri = this.linkUnder(tap.x, tap.y);
+      if (uri) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.touch = null;
+        this.samples = [];
+        openLink(uri);
+        return;
+      }
+    }
     const wasSwiping = !!this.touch;
     this.touch = null;
     const v = wasSwiping ? flingVelocity(this.samples, e.timeStamp) : 0;
@@ -900,8 +926,21 @@ class SessionTerminal {
     if (Math.abs(v) >= FLING_MIN) this.startFling(v);
   };
 
+  /**
+   * The link at a point on the screen, or null. Measured on xterm's screen, which is exactly the
+   * cells (the host element can be a fraction of a cell bigger), so the cell is the one drawn there.
+   */
+  private linkUnder(x: number, y: number): string | null {
+    const r = (this.term.element?.querySelector('.xterm-screen') ?? this.el).getBoundingClientRect();
+    if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) return null;
+    const buf = this.term.buffer.active;
+    const row = buf.viewportY + touchRow(y, r.top, r.height, this.term.rows);
+    return linkAt((i) => bufferRow(buf, i), row, touchCol(x, r.left, r.width, this.term.cols));
+  }
+
   private touchCancel = () => {
     this.touch = null;
+    this.tapStart = null;
     this.selectAnchor = null;
     this.samples = [];
   };

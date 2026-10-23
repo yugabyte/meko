@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 import { isPassiveReport } from '../../src/shared/termreports.js';
@@ -33,6 +33,28 @@ describe('select mode', () => {
     expect(touchRow(900, 100, 400, 20)).toBe(19);
     // No rows yet.
     expect(touchRow(10, 0, 400, 0)).toBe(0);
+  });
+});
+
+describe('tapping a link', () => {
+  it('finds the column under a finger, kept on the screen', () => {
+    // 60 columns over 600 px starting at 16: 10 px a column.
+    expect(touchCol(16, 16, 600, 60)).toBe(0);
+    expect(touchCol(25, 16, 600, 60)).toBe(0);
+    expect(touchCol(26, 16, 600, 60)).toBe(1);
+    expect(touchCol(316, 16, 600, 60)).toBe(30);
+    expect(touchCol(615, 16, 600, 60)).toBe(59);
+    expect(touchCol(0, 16, 600, 60)).toBe(0);
+    expect(touchCol(900, 16, 600, 60)).toBe(59);
+  });
+
+  it('counts a short, still touch as a tap, not a swipe or a long press', () => {
+    expect(isTap(0, 80)).toBe(true);
+    expect(isTap(TAP_MAX_MOVE - 0.5, 80)).toBe(true);
+    expect(isTap(TAP_MAX_MOVE, 80)).toBe(false);
+    expect(isTap(20, 80)).toBe(false);
+    expect(isTap(0, TAP_MAX_MS)).toBe(true);
+    expect(isTap(0, TAP_MAX_MS + 1)).toBe(false);
   });
 });
 

@@ -112,6 +112,21 @@ export function touchRow(y: number, top: number, height: number, rows: number): 
   return Math.min(Math.max(0, row), Math.max(0, rows - 1));
 }
 
+/** The screen column (0-based) under a finger at `x`, in a terminal drawn from `left` over `width` px. */
+export function touchCol(x: number, left: number, width: number, cols: number): number {
+  return touchRow(x, left, width, cols);
+}
+
+/** A touch is a tap when the finger moves less than this (px), under the smallest swipe step, so a tap never scrolls. */
+export const TAP_MAX_MOVE = 8;
+/** A tap lifts within this (ms), so a long press isn't one. */
+export const TAP_MAX_MS = 500;
+
+/** Whether a touch whose finger moved at most `moved` px from where it went down, for `ms`, was a tap. */
+export function isTap(moved: number, ms: number): boolean {
+  return moved < TAP_MAX_MOVE && ms <= TAP_MAX_MS;
+}
+
 /** Where a finger was, and when (ms), for a swipe's release speed. */
 export interface TouchSample {
   y: number;

@@ -195,7 +195,7 @@ your phone can connect.
   waiting under the terminal, **Upload to Meko** adds it to the project datapack's knowledge base
   once you confirm, and AgentK tells you when it's indexed.
 - **Works from your phone:** a drawer for projects, a key bar (Tab, arrows, Ctrl+C, a ▾ row
-  of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an attach key, and a select mode that copies the lines you drag over), a compose box that takes pasted images and files too, swipe to scroll back, and the stages and their gates
+  of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an attach key, and a select mode that copies the lines you drag over), a compose box that takes pasted images and files too, swipe to scroll back, tap a link to open it (the whole URL, even over wrapped rows), and the stages and their gates
   in the ⋯ menu.
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
