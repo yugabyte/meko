@@ -10,6 +10,7 @@ import { tempDir } from '../helpers.js';
 // Runs the real scripts/install.sh (mostly up to --deps-only) against stand-in tools: a PATH with only
 // the basic utilities it needs, plus stubs for uname, package managers, sudo, curl, gh and friends.
 const SCRIPT = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
+const BUNDLE = fileURLToPath(new URL('../../scripts/offline-bundle.sh', import.meta.url));
 const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk'];
 const GH_VERSION = '2.60.0';
 
@@ -553,6 +554,80 @@ exit 0`);
     expect(r.calls).toContain('agentk install --non-interactive');
     expect(current(other)).toBe('1.2.4');
     expect(current()).toBe('1.2.3');
+  });
+
+  describe('from a local tarball (--tarball)', () => {
+    const local = (v = '1.2.4') => join(repo, 'release-ak', `agentk-${v}-linux-x64.tar.gz`);
+
+    it('installs it, checked against the SHA256SUMS beside it, without downloading anything', () => {
+      const r = runAll(['--tarball', local(), '--non-interactive']);
+      expect(r.code, r.err).toBe(0);
+      expect(r.err).toContain('1.2.4 (linux-x64), checksum verified');
+      expect(downloads(r.calls)).toEqual([]);
+      expect(r.calls.filter((c) => c.startsWith('curl'))).toEqual([]);
+      expect(r.calls).toContain('agentk install --non-interactive');
+      expect(current()).toBe('1.2.4');
+    });
+
+    it("picks this computer's from a folder of them, and says when there's none", () => {
+      const r = runAll(['--tarball', join(repo, 'release-ak'), '--non-interactive']);
+      expect(r.code, r.err).toBe(0);
+      expect(current()).toBe('1.2.4');
+
+      const mac = runAll(['--tarball', join(repo, 'release-ak'), '--non-interactive'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
+      expect(mac.code).toBe(1);
+      expect(mac.err).toContain('no AgentK tarball for this computer (darwin-arm64)');
+    });
+
+    it.each([
+      ['a checksum that doesn\'t match', () => writeFileSync(join(repo, 'release-ak', 'SHA256SUMS'), `${'0'.repeat(64)}  agentk-1.2.4-linux-x64.tar.gz\n`), 'checksum verification failed'],
+      ['no SHA256SUMS', () => rmSync(join(repo, 'release-ak', 'SHA256SUMS')), 'no SHA256SUMS beside'],
+    ])('refuses one with %s', (_, breakIt, message) => {
+      breakIt();
+      const r = runAll(['--tarball', local(), '--non-interactive']);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(message);
+      expect(current()).toBe('1.2.3');
+    });
+
+    it("refuses one for another computer, or with --version", () => {
+      const mac = runAll(['--tarball', local(), '--non-interactive'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
+      expect(mac.code).toBe(1);
+      expect(mac.err).toContain("isn't for this computer (darwin-arm64)");
+
+      const both = runAll(['--tarball', local(), '--version', '1.2.4']);
+      expect(both.code).toBe(1);
+      expect(both.err).toContain('leave out --version');
+    });
+
+    it('installs from an offline bundle made by offline-bundle.sh', () => {
+      release('1.2.6', 'agentk-v1.2.6');
+      execFileSync('cp', [SCRIPT, join(repo, 'release-ak', 'install.sh')]);
+      const out = join(root, 'out');
+      const made = spawnSync(join(bin, 'sh'), [BUNDLE, '1.2.6', out], { env: { PATH: bin, HOME: home }, encoding: 'utf8' });
+      expect(made.status, made.stderr).toBe(0);
+      expect(made.stdout.trim()).toBe(join(out, 'agentk-1.2.6-offline.tar.gz'));
+      execFileSync('tar', ['-xzf', 'agentk-1.2.6-offline.tar.gz'], { cwd: out });
+      const dir = join(out, 'agentk-1.2.6-offline');
+      for (const f of ['install.sh', 'install-offline.sh', 'agentk-1.2.6-linux-x64.tar.gz', 'SHA256SUMS', 'LICENSE']) expect(existsSync(join(dir, f)), f).toBe(true);
+
+      writeFileSync(log, '');
+      const r = spawnSync(join(bin, 'sh'), [join(dir, 'install-offline.sh'), '--non-interactive'], {
+        env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' },
+        encoding: 'utf8',
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(downloads(calls())).toEqual([]);
+      expect(current()).toBe('1.2.6');
+    });
+
+    it("won't bundle a release whose installer can't install from a tarball", () => {
+      release('1.2.6', 'agentk-v1.2.6');
+      writeFileSync(join(repo, 'release-ak', 'install.sh'), '#!/bin/sh\n');
+      const made = spawnSync(join(bin, 'sh'), [BUNDLE, '1.2.6', join(root, 'out')], { env: { PATH: bin, HOME: home }, encoding: 'utf8' });
+      expect(made.status).toBe(1);
+      expect(made.stderr).toContain("can't install from a tarball");
+    });
   });
 
   it('still checks the tools with --deps-only', () => {

@@ -88,6 +88,20 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #  7. prints the one-time setup link (remote access), or the address (local access)
 ```
 
+**Offline bundle.** People without access to the repo (it's internal) can't run the installer's
+download step, but a release tarball needs nothing else: it carries its own Node and dependencies.
+`scripts/offline-bundle.sh <version>` (run with an authenticated `gh`) packs a release's tarballs
+(every platform), `SHA256SUMS`, its `install.sh` and an `install-offline.sh` into
+`agentk-<version>-offline.tar.gz` (about 160 MB). Unpacked anywhere, `sh install-offline.sh
+[options]` runs `install.sh --tarball <its folder>`, which takes the tarball for this computer,
+checks it against `SHA256SUMS` and goes on from step 2 above. `--tarball` also takes one tarball
+file; it installs the version it holds, so it can't be combined with `--version`. The installer
+still checks for the tools (step 1), since AgentK uses git and gh on the user's own repos. Only
+releases whose `install.sh` has `--tarball` can be bundled. Such an install still points at this
+repo for updates, so its update checks fail ("GitHub API returned 404"): set `update.channel =
+"off"` in its `config.toml`, and send a newer bundle to update it. Usage stats and Meko keep
+their defaults ([Usage stats](usage-stats.md); `--no-meko` skips Meko).
+
 **Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`
 (`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`. Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and `bad-versions` use them, and on the day of

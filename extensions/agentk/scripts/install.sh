@@ -21,9 +21,11 @@
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK is already installed
-#   --tarball <file>    install this release tarball (agentk-<version>-<platform>-<arch>.tar.gz)
-#                       instead of downloading one, checked against the SHA256SUMS beside it:
-#                       for an offline bundle, without access to the repo
+#   --tarball <file|folder>
+#                       install this release tarball (agentk-<version>-<platform>-<arch>.tar.gz),
+#                       or this computer's from a folder of them (an offline bundle), instead of
+#                       downloading one, checked against the SHA256SUMS beside it: for people
+#                       without access to the repo (scripts/offline-bundle.sh)
 #   anything else       forwarded to `agentk install`
 #                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
 #                       --port, --no-service); Meko is optional: without a key the install goes on
@@ -122,8 +124,16 @@ case $(uname -s) in
   *) die "only Linux and macOS are supported (found $(uname -s))" ;;
 esac
 
-# A local tarball names its version and platform: <name>-<version>-<platform>-<arch>.tar.gz.
+# A local tarball names its version and platform: <name>-<version>-<platform>-<arch>.tar.gz. A
+# folder (an offline bundle) holds one per platform: this computer's is used.
 if [ -n "$tarball_file" ]; then
+  [ -z "$version" ] || die "--tarball installs the version it holds: leave out --version"
+  if [ -d "$tarball_file" ]; then
+    for f in "$tarball_file"/agentk-*-"$platform-$arch".tar.gz; do
+      [ -f "$f" ] || die "no AgentK tarball for this computer ($platform-$arch) in $tarball_file"
+      tarball_file=$f
+    done
+  fi
   [ -f "$tarball_file" ] || die "no such file: $tarball_file"
   tarball_dir=$(cd "$(dirname "$tarball_file")" && pwd)
   tarball=${tarball_file##*/}
@@ -462,12 +472,13 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then have_gh
 say "${b}Download${n}"
 ok "Prerequisites" "git, curl, gh, $agents"
 
-if [ -n "$tarball_file" ]; then
-# ---- local tarball ----
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
-[ -f "$tarball_dir/SHA256SUMS" ] || die "no SHA256SUMS beside $tarball"
-cp "$tarball_dir/$tarball" "$tarball_dir/SHA256SUMS" "$tmp/"
+
+# ---- a local tarball (--tarball), or else the newest release (or --version) downloaded ----
+if [ -n "$tarball_file" ]; then
+  [ -f "$tarball_dir/SHA256SUMS" ] || die "no SHA256SUMS beside $tarball"
+  cp "$tarball_dir/$tarball" "$tarball_dir/SHA256SUMS" "$tmp/"
 else
 # ---- resolve version ----
 # The newest AgentK release, not the repo's latest (Meko's): tagged agentk-v<version>, or v<version>
@@ -492,10 +503,7 @@ else
   # The tag of a version asked for: either scheme's.
   tags="agentk-v$version v$version"
 fi
-# ---- download + verify ----
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT INT TERM
-
+# ---- download ----
 # The tarball is named for its command: agentk, or agent-k-local in releases from before the
 # rename to AgentK (newer ones carry both).
 got=false
@@ -526,6 +534,7 @@ fi
 rm -f "$tmp/.err"
 fi
 
+# ---- verify ----
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) ||
   die "checksum verification failed for $tarball"
 ok "Release" "$version ($platform-$arch), checksum verified"
