@@ -62,15 +62,21 @@ func writePage(out *strings.Builder, texts []pdf.Text) {
 	writeLine(out, line)
 }
 
-// spacedOut is how much longer than a line's usual step from one piece to the next a step must be
-// to be read as a word break, when the PDF gives neither widths nor spaces.
-const spacedOut = 1.5
+// How much longer than a line's usual step from one piece to the next a step must be to be read
+// as a word break when the PDF gives no widths: spacedOut where it draws no spaces either, and
+// columnGap, far past a letter and a space, where it draws spaces but leaves layout gaps without.
+const (
+	spacedOut = 1.5
+	columnGap = 3.0
+)
 
 // writeLine writes one line's pieces, with a space wherever a word break falls. Where to put one
 // depends on what the PDF says:
 //   - Widths: a gap between one piece's end and the next one's start over 0.15 of the font size.
 //   - No widths (design tools often leave them 0, so every letter's step reads as a gap) but its own
-//     space characters: those, and no more. Adding gaps then split every word into its letters.
+//     space characters: those, plus a jump far past any letter's step, which is a layout gap with no
+//     space drawn in it (a company on the left and its city on the right). Adding every gap then
+//     split every word into its letters.
 //   - Neither, letters stacked (a word's letters all at its start, as some PDFs draw a word at a
 //     time): any step forward, which is the next word.
 //   - Neither, letters spread out: a step from one piece's start to the next much longer than the
@@ -81,9 +87,9 @@ func writeLine(out *strings.Builder, line []pdf.Text) {
 		widths = widths || t.W > 0
 		drawnSpaces = drawnSpaces || strings.Contains(t.S, " ")
 	}
-	var usual float64 // the median step, for a line with neither
+	var usual float64 // the median step, for a line without widths
 	stacked := false  // some pieces start where the one before did
-	if !widths && !drawnSpaces {
+	if !widths {
 		var steps []float64
 		for i := 1; i < len(line); i++ {
 			switch d := line[i].X - line[i-1].X; {
@@ -107,6 +113,7 @@ func writeLine(out *strings.Builder, line []pdf.Text) {
 			case widths:
 				space = t.X-(prev.X+prev.W) > math.Max(math.Max(prev.FontSize, t.FontSize), 1)*0.15
 			case drawnSpaces:
+				space = usual > 0 && t.X-prev.X > usual*columnGap
 			case stacked:
 				space = t.X-prev.X >= 0.01
 			case usual > 0:

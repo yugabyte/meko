@@ -44,6 +44,8 @@ func TestPDFSpacing(t *testing.T) {
 		"no widths, drawn spaces": {glyphs("Shivam Dubey", 100, 0, 0), "Shivam Dubey"},
 		// Neither: a step well past the line's usual one is a word break.
 		"no widths, no spaces": {glyphs("Shivam|Dubey|builds", 100, 0, 6), "Shivam Dubey builds"},
+		// Drawn spaces, and a layout gap with none in it: a company on the left, its city on the right.
+		"no widths, drawn spaces and a column gap": {columns(), "Shivam Dubey Quantiphi Bengaluru"},
 		// Neither, a word's letters stacked at its start: each step forward is the next word.
 		"no widths, letters stacked": {stacked("Shivam", "Dubey"), "Shivam Dubey"},
 	}
@@ -70,4 +72,19 @@ func stacked(words ...string) []pdf.Text {
 		x += 40
 	}
 	return out
+}
+
+// columns is "Shivam Dubey" with its space drawn, then "Quantiphi" and, far to its right with no
+// space drawn between, "Bengaluru", all on one line with no widths.
+func columns() []pdf.Text {
+	out := glyphs("Shivam Dubey ", 100, 0, 0)
+	q := glyphs("Quantiphi", 100, 0, 0)
+	for i := range q {
+		q[i].X += 80
+	}
+	b := glyphs("Bengaluru", 100, 0, 0)
+	for i := range b {
+		b[i].X += 400
+	}
+	return append(append(out, q...), b...)
 }
