@@ -42,8 +42,16 @@ func TestPDFSpacing(t *testing.T) {
 		"widths, letters touching": {glyphs("Shivam|Dubey", 100, 6, 4), "Shivam Dubey"},
 		// Design tools leave widths 0 but draw their spaces: use those, add none.
 		"no widths, drawn spaces": {glyphs("Shivam Dubey", 100, 0, 0), "Shivam Dubey"},
-		// Neither: a step well past the line's usual one is a word break.
-		"no widths, no spaces": {glyphs("Shivam|Dubey|builds", 100, 0, 6), "Shivam Dubey builds"},
+		// Neither: a word break can't be told from a wide letter's step, so only a column gap is one.
+		"no widths, no spaces, small gaps":   {glyphs("Shivam|Dubey", 100, 0, 6), "ShivamDubey"},
+		"no widths, no spaces, column gap":   {glyphs("Shivam|Dubey", 100, 0, 30), "Shivam Dubey"},
+		"no widths, no spaces, wide letters": {proportional("Community"), "Community"},
+		// One piece with a width (a space glyph) doesn't make a width-less line use the gap rule.
+		"no widths but one space with a width": {oneWideSpace(), "Shivam Dubey"},
+		// One letter drawn twice at its spot doesn't make a spread-out line stacked.
+		"spread out with one doubled letter": {doubled(), "SShivam Dubey"},
+		// Stacked words, one holding a drawn space: the steps forward still break words.
+		"stacked words with a drawn space": {stacked("Dr. Smith", "joined"), "Dr. Smith joined"},
 		// Drawn spaces, and a layout gap with none in it: a company on the left, its city on the right.
 		"no widths, drawn spaces and a column gap": {columns(), "Shivam Dubey Quantiphi Bengaluru"},
 		// Neither, a word's letters stacked at its start: each step forward is the next word.
@@ -54,7 +62,8 @@ func TestPDFSpacing(t *testing.T) {
 			t.Errorf("%s: %q, want %q", name, got, tc.want)
 		}
 	}
-	// Lines break where the next piece is lower than half the font size, each line decided alone.
+	// Lines break where the next piece is more than half the font size above or below, each line
+	// decided alone.
 	two := page(glyphs("Shivam Dubey", 100, 0, 0), glyphs("Go|Rust", 80, 6, 4))
 	if two != "Shivam Dubey\nGo Rust" {
 		t.Errorf("two lines: %q", two)
@@ -87,4 +96,39 @@ func columns() []pdf.Text {
 		b[i].X += 400
 	}
 	return append(append(out, q...), b...)
+}
+
+// proportional draws a word one letter at a time with no widths, each letter's step its own advance
+// in a proportional font, so a wide "m" steps far further than the narrow letters around it.
+func proportional(word string) []pdf.Text {
+	advance := map[rune]float64{'m': 8.3, 'C': 7.2, 'o': 5.6, 'u': 5.6, 'n': 5.6, 'i': 2.2, 't': 2.8, 'y': 5}
+	out := make([]pdf.Text, 0, len(word))
+	x := 10.0
+	for _, r := range word {
+		out = append(out, pdf.Text{S: string(r), X: x, Y: 100, FontSize: 10})
+		a, ok := advance[r]
+		if !ok {
+			a = 5
+		}
+		x += a
+	}
+	return out
+}
+
+// oneWideSpace is "Shivam Dubey" with no widths, but a space glyph that has one.
+func oneWideSpace() []pdf.Text {
+	out := glyphs("Shivam Dubey", 100, 0, 0)
+	for i := range out {
+		if out[i].S == " " {
+			out[i].W = 2.5
+		}
+	}
+	return out
+}
+
+// doubled is "Shivam Dubey" spread out with no widths, its first letter drawn twice at one spot (as
+// faux bold does), so it comes out twice; the point is that the rest isn't split into letters.
+func doubled() []pdf.Text {
+	out := glyphs("Shivam Dubey", 100, 0, 0)
+	return append([]pdf.Text{out[0]}, out...)
 }

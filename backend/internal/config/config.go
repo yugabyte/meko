@@ -36,9 +36,9 @@ type WebUI struct {
 
 // KnowledgeBase is the [knowledge_base] table.
 type KnowledgeBase struct {
-	// MaxDistance is the farthest (cosine distance, 0 to 2) a knowledge-base result may be from the
-	// query for context_search to keep it. 0 means the default, tuned for the embedding model
-	// (internal/memory).
+	// MaxDistance is the farthest (cosine distance, 0 to 2) a knowledge-base result found by meaning
+	// alone may be from the query for context_search to keep it; a reranked keyword or hybrid match
+	// is kept past it. 0 means the default, tuned for the embedding model (internal/memory).
 	MaxDistance float64 `toml:"max_distance"`
 }
 

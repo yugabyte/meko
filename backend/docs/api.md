@@ -162,7 +162,7 @@ The knowledge-file tools (milestone 4, [knowledge.md](knowledge.md)):
 - Its sources run at the same time (`memory.ContextSearch`), so it takes as long as the slowest:
   memory search (the memory engine's hybrid search, Meko Cloud's 0-1 `score` and the cosine as
   `raw_similarity_score`), knowledge-base search (milestone 4's, keeping results within cosine
-  distance 0.6), and conversation search (milestone 2's, which leaves out the caller's own
+  distance 0.6, and reranked keyword or hybrid matches past it), and conversation search (milestone 2's, which leaves out the caller's own
   conversation).
 - A source is `null` when it wasn't asked for (`force_source`) or the memory engine couldn't take the
   query; empty when it found nothing. A source that fails otherwise is logged and empty, as in

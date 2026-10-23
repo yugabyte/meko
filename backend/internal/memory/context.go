@@ -85,15 +85,7 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 				}
 				res = []KBResult{}
 			}
-			// The distance cutoff is for meaning alone. A result the query's own words found (keyword
-			// or hybrid) is kept however far its meaning is, as Cloud keeps it: a name or an id matches
-			// on its words while its embedding sits far from a short query's.
-			kept := []KBResult{}
-			for _, k := range res {
-				if k.Distance <= s.kbMaxDistance || k.MatchType != "semantic" {
-					kept = append(kept, k)
-				}
-			}
+			kept := keptKB(res, s.kbMaxDistance)
 			step("knowledge_base_search", start, len(kept))
 			mu.Lock()
 			out.KnowledgeBase = kept
@@ -163,3 +155,18 @@ func aboveRaw(ms []memoryengine.Memory, minimum float64) []memoryengine.Memory {
 
 // FilterRaw keeps the memories whose cosine reaches MinRawSimilarity, as memory_search does.
 func FilterRaw(ms []memoryengine.Memory) []memoryengine.Memory { return aboveRaw(ms, MinRawSimilarity) }
+
+// keptKB is the knowledge-base results context_search returns: those within maxDistance of the
+// query, and those the query's own words found (keyword or hybrid) however far their meaning is,
+// as Cloud keeps them, since a name or an id matches on its words while its chunk's embedding sits
+// far from a short query. Only a reranked word match is kept past the cutoff: unranked (the
+// reranker loading or down), word matches are every chunk sharing any one of the query's words.
+func keptKB(res []KBResult, maxDistance float64) []KBResult {
+	kept := []KBResult{}
+	for _, k := range res {
+		if k.Distance <= maxDistance || (k.MatchType != "semantic" && k.RerankScore != nil) {
+			kept = append(kept, k)
+		}
+	}
+	return kept
+}

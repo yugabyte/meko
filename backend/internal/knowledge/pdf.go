@@ -62,62 +62,64 @@ func writePage(out *strings.Builder, texts []pdf.Text) {
 	writeLine(out, line)
 }
 
-// How much longer than a line's usual step from one piece to the next a step must be to be read
-// as a word break when the PDF gives no widths: spacedOut where it draws no spaces either, and
-// columnGap, far past a letter and a space, where it draws spaces but leaves layout gaps without.
-const (
-	spacedOut = 1.5
-	columnGap = 3.0
-)
+// columnGap is how much longer than a line's usual step from one piece to the next a step must be
+// to be read as a layout gap (a company on the left, its city on the right) when the PDF gives no
+// widths: far past any letter's advance and a space.
+const columnGap = 3.0
 
-// writeLine writes one line's pieces, with a space wherever a word break falls. Where to put one
-// depends on what the PDF says:
-//   - Widths: a gap between one piece's end and the next one's start over 0.15 of the font size.
-//   - No widths (design tools often leave them 0, so every letter's step reads as a gap) but its own
-//     space characters: those, plus a jump far past any letter's step, which is a layout gap with no
-//     space drawn in it (a company on the left and its city on the right). Adding every gap then
-//     split every word into its letters.
-//   - Neither, letters stacked (a word's letters all at its start, as some PDFs draw a word at a
-//     time): any step forward, which is the next word.
-//   - Neither, letters spread out: a step from one piece's start to the next much longer than the
-//     line's usual one.
+// writeLine writes one line's pieces, with a space wherever a word break falls. What the line is
+// made of decides where, each by most of its pieces, so one odd piece (a space glyph that has a
+// width, a letter drawn twice at one spot) can't flip the whole line:
+//   - Most letters have widths: a gap between one piece's end and the next one's start over 0.15
+//     of the font size.
+//   - No widths, most steps zero (a word's letters all drawn at its start, a word at a time): any
+//     step forward is the next word, as well as the spaces the PDF draws.
+//   - No widths, letters spread out (design tools often leave widths 0, so every letter's step
+//     reads as a gap): the PDF's own space characters, plus any jump past columnGap times the line's
+//     usual step. Without widths a word break can't be told from a wide letter's advance (the "m"
+//     in "Community"), so a line with neither spaces nor stacking gets only its column gaps: a few
+//     words run together rather than every word split into letters.
 func writeLine(out *strings.Builder, line []pdf.Text) {
-	widths, drawnSpaces := false, false
-	for _, t := range line {
-		widths = widths || t.W > 0
-		drawnSpaces = drawnSpaces || strings.Contains(t.S, " ")
-	}
-	var usual float64 // the median step, for a line without widths
-	stacked := false  // some pieces start where the one before did
-	if !widths {
-		var steps []float64
-		for i := 1; i < len(line); i++ {
-			switch d := line[i].X - line[i-1].X; {
+	var letters, wide, steps, zero int
+	var forward []float64
+	for i, t := range line {
+		if strings.TrimSpace(t.S) == "" {
+			continue
+		}
+		letters++
+		if t.W > 0 {
+			wide++
+		}
+		if i > 0 {
+			switch d := t.X - line[i-1].X; {
 			case math.Abs(d) < 0.01:
-				stacked = true
+				zero++
+				steps++
 			case d > 0:
-				steps = append(steps, d)
+				forward = append(forward, d)
+				steps++
 			}
 		}
-		if len(steps) > 0 {
-			sort.Float64s(steps)
-			usual = steps[len(steps)/2]
-		}
+	}
+	widths := wide*2 > letters
+	stacked := !widths && zero*2 > steps
+	var usual float64 // the median step forward
+	if len(forward) > 0 {
+		sort.Float64s(forward)
+		usual = forward[len(forward)/2]
 	}
 	for i, t := range line {
 		if i > 0 {
 			prev := line[i-1]
 			joined := strings.HasSuffix(prev.S, " ") || strings.HasPrefix(t.S, " ")
 			var space bool
-			switch {
+			switch step := t.X - prev.X; {
 			case widths:
 				space = t.X-(prev.X+prev.W) > math.Max(math.Max(prev.FontSize, t.FontSize), 1)*0.15
-			case drawnSpaces:
-				space = usual > 0 && t.X-prev.X > usual*columnGap
 			case stacked:
-				space = t.X-prev.X >= 0.01
-			case usual > 0:
-				space = t.X-prev.X > usual*spacedOut
+				space = step >= 0.01
+			default:
+				space = usual > 0 && step > usual*columnGap
 			}
 			if space && !joined {
 				out.WriteString(" ")
