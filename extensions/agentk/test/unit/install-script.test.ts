@@ -569,16 +569,6 @@ exit 0`);
       expect(current()).toBe('1.2.4');
     });
 
-    it("picks this computer's from a folder of them, and says when there's none", () => {
-      const r = runAll(['--tarball', join(repo, 'release-ak'), '--non-interactive']);
-      expect(r.code, r.err).toBe(0);
-      expect(current()).toBe('1.2.4');
-
-      const mac = runAll(['--tarball', join(repo, 'release-ak'), '--non-interactive'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
-      expect(mac.code).toBe(1);
-      expect(mac.err).toContain('no AgentK tarball for this computer (darwin-arm64)');
-    });
-
     it.each([
       ['a checksum that doesn\'t match', () => writeFileSync(join(repo, 'release-ak', 'SHA256SUMS'), `${'0'.repeat(64)}  agentk-1.2.4-linux-x64.tar.gz\n`), 'checksum verification failed'],
       ['no SHA256SUMS', () => rmSync(join(repo, 'release-ak', 'SHA256SUMS')), 'no SHA256SUMS beside'],
@@ -590,21 +580,37 @@ exit 0`);
       expect(current()).toBe('1.2.3');
     });
 
-    it("refuses one for another computer, or with --version", () => {
-      const mac = runAll(['--tarball', local(), '--non-interactive'], { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' });
-      expect(mac.code).toBe(1);
-      expect(mac.err).toContain("isn't for this computer (darwin-arm64)");
+    const mac = { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' };
+    it.each([
+      ['a tarball for another computer', () => [local()], mac, "isn't for this computer (darwin-arm64)"],
+      ['a folder with none for this computer', () => [join(repo, 'release-ak')], mac, 'no AgentK tarball for this computer (darwin-arm64)'],
+      ['a folder with two for this computer', () => {
+        execFileSync('cp', [local(), local('1.2.5')]);
+        return [join(repo, 'release-ak')];
+      }, {}, 'more than one AgentK tarball for this computer'],
+      ['--version beside it', () => [local(), '--version', '1.2.4'], {}, 'leave out --version'],
+    ])('refuses %s', (_, args, env, message) => {
+      const r = runAll(['--tarball', ...args(), '--non-interactive'], env);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(message);
+      expect(current()).toBe('1.2.3');
+    });
 
-      const both = runAll(['--tarball', local(), '--version', '1.2.4']);
-      expect(both.code).toBe(1);
-      expect(both.err).toContain('leave out --version');
+    it('stops for the version installed, offering a reinstall from the same tarball', () => {
+      release('1.2.3');
+      const r = runAll(['--tarball', join(repo, 'release-ak')]);
+      expect(r.code).toBe(0);
+      expect(r.err).toContain('AgentK is already installed');
+      expect(r.err).toContain(`--tarball ${join(repo, 'release-ak')} --reinstall`);
+      expect(r.err).not.toContain('gh release download');
+      expect(r.calls).toEqual([]);
     });
 
     it('installs from an offline bundle made by offline-bundle.sh', () => {
       release('1.2.6', 'agentk-v1.2.6');
       execFileSync('cp', [SCRIPT, join(repo, 'release-ak', 'install.sh')]);
       const out = join(root, 'out');
-      const made = spawnSync(join(bin, 'sh'), [BUNDLE, '1.2.6', out], { env: { PATH: bin, HOME: home }, encoding: 'utf8' });
+      const made = spawnSync(join(bin, 'sh'), [BUNDLE, 'v1.2.6', out], { env: { PATH: bin, HOME: home }, encoding: 'utf8' });
       expect(made.status, made.stderr).toBe(0);
       expect(made.stdout.trim()).toBe(join(out, 'agentk-1.2.6-offline.tar.gz'));
       execFileSync('tar', ['-xzf', 'agentk-1.2.6-offline.tar.gz'], { cwd: out });

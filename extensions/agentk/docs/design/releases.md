@@ -94,7 +94,9 @@ download step, but a release tarball needs nothing else: it carries its own Node
 (every platform), `SHA256SUMS`, its `install.sh` and an `install-offline.sh` into
 `agentk-<version>-offline.tar.gz` (about 160 MB). Unpacked anywhere, `sh install-offline.sh
 [options]` runs `install.sh --tarball <its folder>`, which takes the tarball for this computer,
-checks it against `SHA256SUMS` and goes on from step 2 above. `--tarball` also takes one tarball
+checks it against `SHA256SUMS` and goes on from step 2 above (a folder with two for this computer
+is refused: name the file). Run again for the version installed, it stops as in step 0 and offers
+the same `--tarball` with `--reinstall`, not a download. `--tarball` also takes one tarball
 file; it installs the version it holds, so it can't be combined with `--version`. The installer
 still checks for the tools (step 1), since AgentK uses git and gh on the user's own repos. Only
 releases whose `install.sh` has `--tarball` can be bundled. Such an install still points at this

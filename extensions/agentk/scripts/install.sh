@@ -42,7 +42,7 @@
 #
 # Run again where AgentK is already installed and set up (services included), it says so
 # and stops without changing anything, unless given --reinstall, --deps-only, another --version
-# or options for `agentk install` (--non-interactive aside), which go on as before. An install from
+# (or a --tarball holding one) or options for `agentk install` (--non-interactive aside), which go on as before. An install from
 # before the rename to AgentK (no ~/.local/bin/agentk) is installed again, which moves it to the new
 # names.
 #
@@ -88,7 +88,7 @@ while [ $# -gt 0 ]; do
     --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
     --reinstall) reinstall=true; shift ;;
-    --tarball) [ $# -ge 2 ] || die "--tarball needs a file"; tarball_file=$2; shift 2 ;;
+    --tarball) [ $# -ge 2 ] || die "--tarball needs a file or folder"; tarball_file=$2; shift 2 ;;
     --tarball=*) tarball_file=${1#--tarball=}; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
     *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
@@ -128,9 +128,12 @@ esac
 # folder (an offline bundle) holds one per platform: this computer's is used.
 if [ -n "$tarball_file" ]; then
   [ -z "$version" ] || die "--tarball installs the version it holds: leave out --version"
-  if [ -d "$tarball_file" ]; then
-    for f in "$tarball_file"/agentk-*-"$platform-$arch".tar.gz; do
-      [ -f "$f" ] || die "no AgentK tarball for this computer ($platform-$arch) in $tarball_file"
+  tarball_arg=$tarball_file
+  if [ -d "$tarball_arg" ]; then
+    tarball_file=""
+    for f in "$tarball_arg"/agentk-*-"$platform-$arch".tar.gz; do
+      [ -f "$f" ] || die "no AgentK tarball for this computer ($platform-$arch) in $tarball_arg"
+      [ -z "$tarball_file" ] || die "more than one AgentK tarball for this computer in $tarball_arg: pass --tarball the one to install"
       tarball_file=$f
     done
   fi
@@ -207,8 +210,14 @@ if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/
     say "  AgentK is already installed, so nothing was changed."
     row "Status" "$cmd status"
     row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
-    row "Update" "the Update banner or button in AgentK, when there's a newer release"
-    row "Reinstall" "$(alone_cmd) -s -- --reinstall"
+    if [ -n "$tarball_file" ]; then
+      # An offline install: no download to offer, and no updates (it can't reach the repo).
+      row "Update" "install a newer offline bundle the same way"
+      row "Reinstall" "sh $0 --tarball $tarball_arg --reinstall"
+    else
+      row "Update" "the Update banner or button in AgentK, when there's a newer release"
+      row "Reinstall" "$(alone_cmd) -s -- --reinstall"
+    fi
     exit 0
   fi
 fi

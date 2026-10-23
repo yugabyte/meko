@@ -166,6 +166,12 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 
 Pass options through `sh -s --` (`--version 0.2.0 --non-interactive --repos-root ~/code`, …).
 
+For someone without access to the repo, pack a release into one file with
+`scripts/offline-bundle.sh <version> [out-dir]` (it uses your `gh`): `agentk-<version>-offline.tar.gz`
+holds every platform's tarball, `SHA256SUMS`, the release's `install.sh` and an
+`install-offline.sh` that runs `install.sh --tarball` on its own folder (README has the steps they
+follow). Only releases whose installer has `--tarball` can be bundled.
+
 Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code or
 Kiro CLI: either one is enough) and offers to install the missing ones, showing the commands and
 asking first. With neither agent there it asks which to install (`--agent claude|kiro` picks one

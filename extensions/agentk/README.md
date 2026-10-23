@@ -69,6 +69,20 @@ up its services again, run `agentk install`; to download and install it again, p
 `--reinstall` (`… | sh -s -- --reinstall`). Options for `agentk install`, like `--port`,
 also make it install again, so they're never dropped.
 
+**Without access to the repo** (a customer, say), install from an offline bundle that someone with
+access made (`agentk-<version>-offline.tar.gz`, see [CONTRIBUTING.md](CONTRIBUTING.md)). It holds
+the release for every platform, so nothing of AgentK is downloaded:
+
+```sh
+tar -xzf agentk-<version>-offline.tar.gz
+sh agentk-<version>-offline/install-offline.sh            # e.g. --no-meko, --port 7777
+```
+
+It checks for the same tools and asks the same questions as above. Such an install can't reach
+this repo for updates, so set `channel = "off"` under `[update]` in `~/.agent-k-local/config.toml`
+(else every update check fails), and install a newer bundle the same way to update. Run again for
+the version already installed, it stops; pass `--reinstall` to install it again.
+
 Forgot your password? Run `agentk setup-link` on the host and open the link it prints to
 choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 

@@ -22,7 +22,9 @@ if [ $# -lt 1 ] || [ $# -gt 2 ]; then
   echo "usage: $0 <version> [out-dir]" >&2
   exit 2
 fi
+# A version, or its tag (agentk-v<version>, or v<version>), as install.sh takes it.
 version=${1#agentk-v}
+version=${version#v}
 out_dir=${2:-.}
 repo=${AK_REPO:-yugabyte/agent-k-local}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -38,7 +40,8 @@ gh release download "agentk-v$version" --repo "$repo" --dir "$root" \
 grep -q -e '--tarball' "$root/install.sh" ||
   { echo "the installer of $version can't install from a tarball: bundle a newer release" >&2; exit 1; }
 # Only the tarballs bundled: not the copies under the name from before the rename to AgentK.
-grep " agentk-$version-" "$root/SHA256SUMS" > "$root/SHA256SUMS.new"
+grep " agentk-$version-" "$root/SHA256SUMS" > "$root/SHA256SUMS.new" ||
+  { echo "SHA256SUMS of $version lists no agentk-$version-* tarball" >&2; exit 1; }
 mv "$root/SHA256SUMS.new" "$root/SHA256SUMS"
 # The license covers the whole repo, so it sits at the root, above extensions/agentk.
 cp "$here/../../../LICENSE" "$root/LICENSE"
