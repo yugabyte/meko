@@ -61,7 +61,7 @@ export function DatapackHeader({
             variant="ghost"
             disabled={exporting}
             onClick={exportIt}
-            title="Download this datapack as JSON: memories, collective memories, conversations, and the file and artifact lists (no embeddings or file contents)"
+            title="Download this datapack as a zip: memories, collective memories, conversations, knowledge files and artifacts, with their embeddings and file contents, and the call log"
           >
             <Download className="size-3.5" /> Export
           </Button>
