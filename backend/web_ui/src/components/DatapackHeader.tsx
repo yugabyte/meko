@@ -1,8 +1,9 @@
 // A datapack's name, description and tabs, with delete.
 
 import { useState } from "react";
-import { Pencil, Trash2, UserPlus } from "lucide-react";
+import { Download, Pencil, Trash2, UserPlus } from "lucide-react";
 import { api } from "../lib/api";
+import { saveBlob } from "../lib/download";
 import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { CloudBanner } from "./CloudBanner";
@@ -34,6 +35,18 @@ export function DatapackHeader({
 }) {
   const [deleting, setDeleting] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const exportIt = async () => {
+    setExporting(true);
+    try {
+      const { filename, blob } = await api.exportDatapack(datapack.datapack_id);
+      saveBlob(filename, blob);
+    } catch (e) {
+      alert(`Export failed: ${(e as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
   const [inviting, setInviting] = useState(false);
   return (
     <header className="border-b bg-card px-8 pt-6">
@@ -43,6 +56,15 @@ export function DatapackHeader({
           {datapack.description && <p className="mt-0.5 text-sm text-muted-foreground">{datapack.description}</p>}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={exporting}
+            onClick={exportIt}
+            title="Download this datapack as JSON: memories, collective memories, conversations, and the file and artifact lists (no embeddings or file contents)"
+          >
+            <Download className="size-3.5" /> Export
+          </Button>
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)} title="Edit name and description">
             <Pencil className="size-3.5" /> Edit
           </Button>

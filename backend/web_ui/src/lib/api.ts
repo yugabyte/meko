@@ -99,6 +99,16 @@ export const api = {
   artifacts: (id: string, q: string, page: number) =>
     request<ArtifactList>("GET", `/datapacks/${id}/artifacts?q=${enc(q)}&page=${page}`),
   artifact: (id: string, hash: string) => request<Artifact>("GET", `/datapacks/${id}/artifacts/${hash}`),
+  // The datapack as one JSON file, and the name the server suggests for it.
+  exportDatapack: async (id: string): Promise<{ filename: string; blob: Blob }> => {
+    const res = await fetch(`/api/v1/datapacks/${id}/export`, { headers: headers(false) });
+    if (!res.ok) {
+      const env = await res.json().catch(() => null);
+      throw new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? "EXPORT_FAILED");
+    }
+    const m = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+    return { filename: m?.[1] ?? "meko-export.json", blob: await res.blob() };
+  },
   usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
   server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
