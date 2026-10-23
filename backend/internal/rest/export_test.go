@@ -28,6 +28,11 @@ func TestExportDatapack(t *testing.T) {
 		return a[0].ID
 	}
 	learning, kept, promoted := add("a learning"), add("kept for later"), add("shared with every agent")
+	halfway := add("promotion stopped partway")
+	// A promotion that copied the memory but never deleted it leaves it in both tables.
+	if _, err := e.Store.CopyToPromoted(ctx, e.DatapackID, e.UserID, halfway, "a"); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.Service.UpdateMemory(ctx, e.DatapackID, learning, "a learning, edited"); err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +85,15 @@ func TestExportDatapack(t *testing.T) {
 		len(arr(byID[learning]["history"])) != 2 {
 		t.Errorf("memories %v", arr(x["memories"]))
 	}
-	if c := arr(x["collective_memories"]); len(c) != 1 || obj(c[0])["id"] != promoted || obj(c[0])["promoted_at"] == nil {
-		t.Errorf("collective %v", c)
+	collective := map[string]map[string]any{}
+	for _, c := range arr(x["collective_memories"]) {
+		collective[str(obj(c)["id"])] = obj(c)
+	}
+	if len(collective) != 2 || collective[promoted]["promoted_at"] == nil || collective[halfway] == nil {
+		t.Errorf("collective %v", arr(x["collective_memories"]))
+	}
+	if byID[halfway] != nil {
+		t.Error("a half-promoted memory is exported twice")
 	}
 	cs := arr(x["conversations"])
 	if len(cs) != 1 || obj(cs[0])["title"] != "release planning" || len(arr(obj(cs[0])["turns"])) != 1 ||

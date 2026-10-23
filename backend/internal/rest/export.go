@@ -2,6 +2,7 @@ package rest
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -16,8 +17,9 @@ import (
 var unsafeName = regexp.MustCompile(`[^a-z0-9_-]+`)
 
 // exportDatapack sends a datapack as one JSON file to download (Meko's own; Cloud has none yet):
-// the format memory.ExportDatapack writes, streamed. Once the body has started an error can only
-// cut it short, which leaves invalid JSON, so a reader can tell; the cause is logged.
+// the format memory.ExportDatapack writes, streamed. A failure before the first byte gets an error
+// reply. One after it can't change the 200 already sent, so the connection is cut instead: the
+// download then fails (an unexpected EOF) rather than ending cleanly with a short file.
 func (a *api) exportDatapack(c echo.Context) error {
 	id, ok, err := a.pathDatapack(c)
 	if !ok {
@@ -31,13 +33,22 @@ func (a *api) exportDatapack(c echo.Context) error {
 	if name == "" {
 		name = "datapack"
 	}
-	h := c.Response().Header()
-	h.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	h.Set(echo.HeaderContentDisposition,
-		fmt.Sprintf(`attachment; filename="meko-%s-%s.json"`, name, time.Now().UTC().Format("2006-01-02")))
-	c.Response().WriteHeader(http.StatusOK)
-	if err := a.Service.ExportDatapack(ctx(c), id, version.Version, c.Response()); err != nil {
-		a.Log.Error("export failed partway", "datapack_id", id, "error", err)
+	started := false
+	err = a.Service.ExportDatapack(ctx(c), id, version.Version, func() io.Writer {
+		started = true
+		h := c.Response().Header()
+		h.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		h.Set(echo.HeaderContentDisposition,
+			fmt.Sprintf(`attachment; filename="meko-%s-%s.json"`, name, time.Now().UTC().Format("2006-01-02")))
+		c.Response().WriteHeader(http.StatusOK)
+		return c.Response()
+	})
+	if err == nil {
+		return nil
 	}
-	return nil
+	if !started {
+		return serviceError(c, err)
+	}
+	a.Log.Error("export failed partway", "datapack_id", id, "error", err)
+	panic(http.ErrAbortHandler) // net/http closes the connection without ending the body
 }

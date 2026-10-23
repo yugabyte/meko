@@ -74,7 +74,8 @@ Usage:
   meko export [<name|id>]        write a datapack (default: the default one) to a JSON file: its
                                  memories, collective memories, conversations, and its knowledge
                                  files and artifacts as lists; no embeddings or file contents;
-                                 -o FILE picks the file (default meko-<name>-<date>.json here)
+                                 -o FILE picks the file (default meko-<name>-<date>.json here);
+                                 it won't replace a file unless --force
   meko list mcp-tools            the MCP tools Meko serves, each with what it does; --json for all
                                  their names, titles and summaries
                  search, add_memory, upload and upload_status take --datapack NAME|ID (default: the
@@ -154,6 +155,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if cmd == "export" {
 		fs.StringVar(&t.out, "o", "", "the file to write (default meko-<name>-<date>.json here)")
+		fs.BoolVar(&t.force, "force", false, "replace the file if it exists")
 	}
 	if cmd == "ui" {
 		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
