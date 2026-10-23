@@ -261,3 +261,16 @@ export interface Health {
   status: string;
   version: string;
 }
+
+// GET and PATCH /settings/usage-stats: whether usage stats go to YugabyteDB.
+export interface UsageStats {
+  enabled: boolean;
+  // Turned off by config.toml or the environment: the web UI can't turn them on.
+  forced_off: boolean;
+  // What turned them off: "web UI", "config.toml", "MEKO_CALL_HOME" or "YB_DISABLE_CALLHOME".
+  by?: string;
+  // On, but a build from source has nowhere to send them.
+  sends: boolean;
+  // Where they go while sends.
+  url?: string;
+}

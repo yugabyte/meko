@@ -18,6 +18,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/callhome"
+	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
@@ -45,11 +47,16 @@ type Env struct {
 	URL        string // http://127.0.0.1:<port>
 	DatapackID string // the default datapack
 	UserID     string
+	// UsageStats is the usage stats' setting. It never sends: Run isn't started, and it has no URL
+	// unless Options.CallHome gives one.
+	UsageStats *callhome.Sender
 }
 
 // Options change what Start runs.
 type Options struct {
 	Auth string // the [server] auth mode; "" is the default (token)
+	// CallHome is the [call_home] config; nil is the default (on, no URL).
+	CallHome *config.CallHome
 }
 
 // backendDir is this module's root, found from this file.
@@ -149,13 +156,18 @@ func Start(t *testing.T, o Options) *Env {
 		<-swept
 	})
 
+	callHome := config.CallHome{Enabled: true}
+	if o.CallHome != nil {
+		callHome = *o.CallHome
+	}
+	usage := callhome.New(callhome.Options{Store: st, Config: callHome, Tools: mcp.ToolNames(), Log: log})
 	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: server.Credential,
-		Log: log}
+		UsageStats: usage, Log: log}
 	upload, download := rest.Tickets(restOpts)
 	srv := server.New(server.Options{
 		Info: server.Info{Version: "test", DataDir: root, PID: os.Getpid(), StartedAt: time.Now()},
 		Port: port, Token: AdminToken, ClientToken: ClientToken, Auth: o.Auth, Logger: log,
-		MemoryEngine: svc.EngineStatus,
+		MemoryEngine: svc.EngineStatus, UsageStats: usage.State,
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: "test", Log: log,
 			Credential: server.CredentialOf}),
 		REST:   func(g *echo.Group) { rest.Register(g, restOpts) },
@@ -164,7 +176,8 @@ func Start(t *testing.T, o Options) *Env {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
-	e := &Env{T: t, Layout: l, Store: st, Service: svc, Server: srv, URL: url, DatapackID: dp, UserID: userID}
+	e := &Env{T: t, Layout: l, Store: st, Service: svc, Server: srv, URL: url, DatapackID: dp, UserID: userID,
+		UsageStats: usage}
 	e.waitMemoryEngine()
 	return e
 }

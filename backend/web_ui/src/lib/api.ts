@@ -20,6 +20,7 @@ import type {
   ServerStatus,
   UploadOffer,
   Usage,
+  UsageStats,
 } from "./types";
 
 // The agent the UI's own MCP calls are recorded as in the call log.
@@ -112,6 +113,9 @@ export const api = {
   usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
   server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
+
+  usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
+  setUsageStats: (enabled: boolean) => request<UsageStats>("PATCH", "/settings/usage-stats", { enabled }),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>
     request<MemoryPage>(

@@ -4,7 +4,9 @@ Part of the [AgentK design](../design.md).
 
 Each install sends a small report of counts once a day (every hour in its first day) to a
 collector run by the AgentK team, so we know how many installs are active and how much work
-goes through them. The collector is a
+goes through them. Release installs also send it to YugabyteDB's call home service
+(diagnostics.yugabyte.com, described below), which is to replace the
+AgentK team's collector. That collector is a
 separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
 `CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](../call-home-report.schema.json)
 is the same contract as a JSON Schema. The collector keeps an identical copy
@@ -97,9 +99,28 @@ written by `scripts/package-release.sh` from the `CALL_HOME_URL` repo variable, 
 appears in the repo. Dev servers and tests have neither, so they send nothing. Node's `fetch`
 ignores `HTTPS_PROXY`, so an install behind a proxy doesn't report.
 
+**YugabyteDB's call home service.** The same report also goes to `https://diagnostics.yugabyte.com`,
+where yugabyted and YugabyteDB's other products report (a Flask app on App Engine,
+`diagnostics_v2` in yugabyte/yugabyte-growth, writing to BigQuery `callhome_data`), so AgentK's
+numbers sit with theirs. This is the call home that stays when AgentK's own collector is retired.
+A second `CallHomeService` (target `yugabyte`) sends it on its own schedule, the same as above but
+kept apart (`kv` `yb_call_home_last_sent`, `yb_call_home_first_sent`; the install id and first day
+are shared), so one service being down never holds back the other. The body is yugabyted's
+envelope with the report as its payload (`YbCallHome` in `src/shared/types.ts`):
+`{callhome_type: "agentk", command: "heartbeat", timestamp, install_id, version, payload}`. The
+service routes on `callhome_type` to its `agentk` table. `timestamp` is UTC with microseconds and
+no zone (`2026-11-09T17:05:32.123000`), the only form it parses. It answers 200 even when it
+couldn't store a row, so check a change to the envelope by finding the row in BigQuery. Only release
+installs (with `AK_APP_DIR`) send there, unless `[call_home] diagnostics_url` names another URL.
+
 **Turning it off.** It's on by default. The **Send anonymous usage stats to YugabyteDB** checkbox
 in Settings → Account (under the password forms, or the local-access note) writes
-`[call_home] enabled = false`; from then on no report is built or sent, without a restart.
+`[call_home] enabled = false`; from then on no report is built or sent to either service, without a restart.
+`YB_DISABLE_CALLHOME` set to a true word (`true`, `t`, `yes`, `y`, `1`) in the server's own environment,
+yugabyted's switch, turns off both too, and the checkbox then shows off and disabled, naming it
+(`Settings.callHomeOffBy`). Under the systemd or launchd service the server's environment is the
+unit's or the plist's, not the shell's that ran `agentk start`, so a shell `export` doesn't reach it:
+use the checkbox or `[call_home] enabled` there.
 
 **Downloads** aren't sent from here: the collector reads every release asset's download count
 from the GitHub API each hour, so a pruned release loses at most an hour of downloads.

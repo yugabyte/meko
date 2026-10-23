@@ -124,7 +124,10 @@ sorts higher.
 `CALL_HOME_URL`. Without the variable, releases send nothing. To try the report against a
 collector of your own, set `[call_home] url` in the dev home's `config.toml`
 (`.dev-home/config.toml`). The collector (`services/ak-local-call-home` in yugabyte/agent-k) has
-an identical copy of `docs/call-home-report.schema.json`; change both together.
+an identical copy of `docs/call-home-report.schema.json`; change both together. Release installs
+(those with `AK_APP_DIR`) also send the same report to YugabyteDB's call home service,
+`https://diagnostics.yugabyte.com`, which needs no repo variable; a dev server sends there only when
+`[call_home] diagnostics_url` names a URL.
 
 Run the AgentK release workflow by hand with **force** to release without feat/fix/perf/deps commits, or with
 a **tag** (`agentk-v…` or `v…`) to rebuild the assets of an existing release. Only tags from after the move to

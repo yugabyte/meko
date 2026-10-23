@@ -258,6 +258,16 @@ func firstSentence(text string) string {
 	return strings.TrimSuffix(text, ".")
 }
 
+// ToolNames are the names of every tool, in tools/list's order.
+func ToolNames() []string {
+	ts := Tools()
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = t.Name
+	}
+	return out
+}
+
 // allTools is every tool, in the order tools/list gives them.
 func allTools() []*tool {
 	out := make([]*tool, 0, 32)

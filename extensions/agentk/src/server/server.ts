@@ -22,6 +22,7 @@ import {
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
+import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
 import type { Core } from './core.js';
 import { audit, get, run } from './db.js';
@@ -664,6 +665,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     idleWorktreesPerRepo: core.worktrees.cap(),
     idleWorktreeDays: core.worktrees.idleDays(),
     callHomeEnabled: core.config.callHome.enabled,
+    ...(ybCallHomeDisabled() ? { callHomeOffBy: 'YB_DISABLE_CALLHOME' as const } : {}),
     resolveConflicts: core.config.pr.resolveConflicts,
     defaultHarness: core.config.agents.default,
     claudeEnabled: core.config.claude.enabled,

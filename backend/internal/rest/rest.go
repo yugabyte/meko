@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/memory"
 )
@@ -29,7 +30,15 @@ type Options struct {
 	// Credential is the credential a request got in with (admin, client or none), set by the
 	// server's auth check.
 	Credential func(echo.Context) string
+	// UsageStats is the usage stats' setting the web UI shows; nil leaves its routes out.
+	UsageStats UsageStats
 	Log        *slog.Logger
+}
+
+// UsageStats reads and sets whether usage stats are sent (internal/callhome).
+type UsageStats interface {
+	State(ctx context.Context) (callhome.State, error)
+	SetEnabled(ctx context.Context, on bool) (callhome.State, error)
 }
 
 type api struct {
@@ -59,6 +68,10 @@ func Register(g *echo.Group, o Options) {
 	g.PATCH("/auth/me", a.setOnboarding)
 	g.PATCH("/auth/me/profile", a.setProfile)
 	g.GET("/auth/me/usage", a.usage)
+	if o.UsageStats != nil {
+		g.GET("/settings/usage-stats", a.usageStats)
+		g.PATCH("/settings/usage-stats", a.setUsageStats)
+	}
 
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)

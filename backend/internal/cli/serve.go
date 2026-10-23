@@ -18,7 +18,9 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/logging"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
@@ -45,6 +47,10 @@ const (
 // downloading its model. Only this package's tests set it (cli_test.go's TestMain), so no
 // environment can switch the shipped binary's model.
 var testEmbedder string
+
+// testCallHomeFirstCheck, if set, replaces the usage stats' random first delay, so a test sees a
+// report within seconds. Only this package's tests set it, as testEmbedder.
+var testCallHomeFirstCheck time.Duration
 
 // ServeOptions configure Serve.
 type ServeOptions struct {
@@ -248,14 +254,18 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	} else if n > 0 {
 		log.Info("removed knowledge files no document names", "count", n)
 	}
+	// Usage stats to YugabyteDB's call home service: from release installs, or to [call_home] url.
+	usage := callhome.New(callhome.Options{Store: st, Config: cfg.CallHome, Release: isRelease,
+		Facts: installFacts(l, cfg, svc), Tools: mcp.ToolNames(), Log: log, FirstCheck: testCallHomeFirstCheck})
 	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
-	// memory engine missed while down; indexes knowledge files; and keeps the call log to its retention.
+	// memory engine missed while down; indexes knowledge files; keeps the call log to its retention;
+	// and sends the usage stats.
 	embedCtx, stopEmbedder := context.WithCancel(context.Background())
 	embedderDone := make(chan struct{})
 	go func() {
 		defer close(embedderDone)
 		var wg sync.WaitGroup
-		for _, run := range []func(context.Context){svc.RunCallPruner, svc.RunIndexer} {
+		for _, run := range []func(context.Context){svc.RunCallPruner, svc.RunIndexer, usage.Run} {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -267,7 +277,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}()
 
 	restOpts := rest.Options{Service: svc, Port: cfg.Server.Port, ClientToken: clientToken,
-		Credential: server.Credential, Log: log}
+		Credential: server.Credential, UsageStats: usage, Log: log}
 	upload, download := rest.Tickets(restOpts)
 	var ui http.Handler
 	if dir, err := webui.FindDir(cfg.WebUI.Dir); err == nil {
@@ -283,7 +293,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
 		},
 		Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, MemoryEngine: svc.EngineStatus,
+		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State,
 		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
 			Credential: server.CredentialOf}),
 		REST: func(g *echo.Group) {
@@ -342,6 +352,34 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	log.Info("Meko stopped")
 	return serveErr
+}
+
+// installFacts is what the usage stats say about this install: versions, platform, settings and
+// state, never a name or path.
+func installFacts(l paths.Layout, cfg config.Config, svc *memory.Service) func(context.Context) callhome.Install {
+	secretsKind := cfg.Secrets.Store
+	if secretsKind == "" {
+		secretsKind = secrets.DefaultKind()
+	}
+	service := os.Getenv("MEKO_SERVICE")
+	if service != "launchd" && service != "systemd" {
+		service = "none"
+	}
+	return func(ctx context.Context) callhome.Install {
+		installed := map[string]bool{}
+		reg, err := extensions.Load(l.Root)
+		for name := range extensions.Known {
+			ok := false
+			if err == nil {
+				_, ok = reg.Entries[name]
+			}
+			installed[name] = ok
+		}
+		return callhome.Install{Version: version.Version, Commit: version.Commit, Platform: runtime.GOOS,
+			Arch: runtime.GOARCH, Go: runtime.Version(), Service: service, Auth: cfg.Server.Auth, Secrets: secretsKind,
+			Update:       callhome.Update{Channel: cfg.Update.Channel, Auto: cfg.Update.Auto},
+			MemoryEngine: svc.EngineStatus(ctx).State, Extensions: installed}
+	}
 }
 
 // startMemoryEngine starts the memory engine under sup, or says why it can't (no Node, or the memory engine

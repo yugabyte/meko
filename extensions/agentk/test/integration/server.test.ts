@@ -190,6 +190,18 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain(tomlKey);
   });
 
+  it("shows usage stats off while YB_DISABLE_CALLHOME turns them off", async () => {
+    const cookie = await setup();
+    const settings = async () => (await app.inject({ url: '/api/settings', headers: { cookie } })).json();
+    expect((await settings()).callHomeOffBy).toBeUndefined();
+    process.env.YB_DISABLE_CALLHOME = 'true';
+    try {
+      expect(await settings()).toMatchObject({ callHomeEnabled: true, callHomeOffBy: 'YB_DISABLE_CALLHOME' });
+    } finally {
+      delete process.env.YB_DISABLE_CALLHOME;
+    }
+  });
+
   it('Check again reads a harness version that changed since the last read', async () => {
     const cookie = await setup();
     env.core.updateConfig((c) => {
