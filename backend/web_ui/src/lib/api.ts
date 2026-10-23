@@ -12,6 +12,7 @@ import type {
   DocumentList,
   Health,
   KnowledgeActivity,
+  MemoryChange,
   MemoryPage,
   Metrics,
   PromotedMemory,
@@ -107,6 +108,8 @@ export const api = {
       "GET",
       `/memories?datapack_id=${id}&scope=${opts.scope}&q=${enc(opts.q)}&page=${opts.page}`,
     ),
+  memoryHistory: (id: string, memoryId: string) =>
+    request<{ history: MemoryChange[] }>("GET", `/memories/${memoryId}/history?datapack_id=${id}`),
   deleteMemory: (id: string, memoryId: string) =>
     request<unknown>("DELETE", `/memories/${memoryId}?datapack_id=${id}`),
   promote: (id: string, memoryIds: string[]) =>

@@ -85,6 +85,15 @@ export interface Memory {
   created_at: string;
 }
 
+// One change to a memory, as mem0 recorded it (GET /memories/:id/history).
+export interface MemoryChange {
+  action: "ADD" | "UPDATE" | "DELETE" | string;
+  previous_value: string | null;
+  new_value: string | null;
+  created_at: string;
+  updated_at: string | null; // when an update or delete happened
+}
+
 export interface MemoryPage {
   memories: Memory[];
   total: number;

@@ -90,6 +90,27 @@ func (a *api) deleteMemory(c echo.Context) error {
 	return envelope.OK(c, map[string]string{"id": id})
 }
 
+// memoryHistory is a memory's changes, oldest first: Meko's own route (Cloud has none).
+func (a *api) memoryHistory(c echo.Context) error {
+	dp, ok, err := a.datapack(c, c.QueryParam("datapack_id"))
+	if !ok {
+		return err
+	}
+	u, perr := uuid.Parse(c.Param("memory"))
+	if perr != nil {
+		return badRequest(c, "memory_id must be a valid UUID")
+	}
+	id := u.String() // stored ids are lowercase
+	h, err := a.Service.MemoryHistory(ctx(c), dp, id)
+	if errors.Is(err, memory.ErrPromoted) {
+		return notFound(c, "memory not found")
+	}
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return envelope.OK(c, map[string]any{"memory_id": id, "history": h})
+}
+
 // memoryIDs reads a body's datapack and memory ids; ok is false when the reply has been written.
 func (a *api) memoryIDs(c echo.Context) (dp, agent string, ids []string, ok bool, err error) {
 	var body struct {
