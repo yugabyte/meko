@@ -85,9 +85,12 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 				}
 				res = []KBResult{}
 			}
+			// The distance cutoff is for meaning alone. A result the query's own words found (keyword
+			// or hybrid) is kept however far its meaning is, as Cloud keeps it: a name or an id matches
+			// on its words while its embedding sits far from a short query's.
 			kept := []KBResult{}
 			for _, k := range res {
-				if k.Distance <= s.kbMaxDistance {
+				if k.Distance <= s.kbMaxDistance || k.MatchType != "semantic" {
 					kept = append(kept, k)
 				}
 			}
