@@ -197,6 +197,9 @@ your phone can connect.
 - **Works from your phone:** a drawer for projects, a key bar (Tab, arrows, Ctrl+C, a ▾ row
   of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an attach key, and a select mode that copies the lines you drag over), a compose box that takes pasted images and files too, swipe to scroll back, and the stages and their gates
   in the ⋯ menu.
+- **Install it as an app:** AgentK offers to install itself the first time you open it, for its own
+  window and an icon in your dock or on your home screen (on an iPhone, Share › Add to Home Screen,
+  which notifications need there).
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
 - **AgentK's mod in Claude:** with Claude Code 2.1.287 or later, each session loads a small Claude
