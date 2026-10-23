@@ -8,6 +8,7 @@ import { href, navigate, useRoute } from "./lib/route";
 import { applyTheme, initialTheme, type Theme } from "./lib/theme";
 import { clearToken } from "./lib/token";
 import { useLoad } from "./lib/useLoad";
+import { useShortcuts } from "./lib/useShortcuts";
 import { DatapackHeader } from "./components/DatapackHeader";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
@@ -32,6 +33,8 @@ export default function App() {
   const list = useLoad(() => api.datapacks(), []);
   const activeId = route.datapackId ?? list.data?.[0]?.datapack_id;
   const current = useLoad(() => (activeId ? api.datapack(activeId) : Promise.resolve(undefined)), [activeId]);
+
+  useShortcuts(activeId);
 
   const reloadCurrent = current.reload;
   const onChanged = useCallback(() => reloadCurrent(), [reloadCurrent]);
@@ -95,7 +98,7 @@ export default function App() {
                 {route.tab === "overview" && <OverviewPage datapack={current.data} />}
                 {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}
-                {route.tab === "memories" && <MemoriesPage datapack={current.data} onChanged={onChanged} />}
+                {route.tab === "memories" && <MemoriesPage datapack={current.data} routeScope={route.itemId} onChanged={onChanged} />}
                 {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "conversations" && (
                   <ConversationsPage datapack={current.data} conversationId={route.itemId} />

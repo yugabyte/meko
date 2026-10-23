@@ -919,3 +919,93 @@ func TestListMCPTools(t *testing.T) {
 	code, _, errs := run("list")
 	want(t, "list with nothing named", code, exitUsage, errs, "mcp-tools")
 }
+
+func TestSuggestedName(t *testing.T) {
+	for in, want := range map[string]string{
+		`attachment; filename="meko-default-2026-10-22.json"`: "meko-default-2026-10-22.json",
+		`attachment; filename="../../etc/passwd"`:             "passwd",
+		``:           "meko-export.json",
+		`attachment`: "meko-export.json",
+	} {
+		if got := suggestedName(in); got != want {
+			t.Errorf("suggestedName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// export writes a datapack's JSON to the file the server names, here or at -o, by name, id or the
+// default; it won't replace a file unless --force, and an unknown name exits 1.
+func TestExport(t *testing.T) {
+	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skip("the memory engine isn't built (make test builds it)")
+	}
+	dir, port := setup(t)
+	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
+	t.Setenv(testEmbedderEnv, "hash")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko is running")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if _, out, _ = run("status", "--data-dir", dir); strings.Contains(out, "Memory engine: ready") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the memory engine never got ready:\n%s", out)
+		}
+	}
+	code, out, errs = run("add_memory", "--data-dir", dir, "releases ship on Tuesdays")
+	want(t, "add_memory", code, 0, out+errs, "Added memory")
+
+	here := t.TempDir()
+	t.Chdir(here)
+	code, out, errs = run("export", "--data-dir", dir)
+	want(t, "export the default", code, 0, out+errs, "Exported to meko-default-")
+	names, _ := filepath.Glob(filepath.Join(here, "meko-default-*.json"))
+	if len(names) != 1 {
+		t.Fatalf("files %v", names)
+	}
+	b, _ := os.ReadFile(names[0])
+	var x struct {
+		Format   string `json:"format"`
+		Memories []struct {
+			Text string `json:"text"`
+		} `json:"memories"`
+	}
+	if err = json.Unmarshal(b, &x); err != nil || x.Format != "meko-datapack-export" || len(x.Memories) != 1 ||
+		x.Memories[0].Text != "releases ship on Tuesdays" {
+		t.Fatalf("%v %s", err, b)
+	}
+	code, _, errs = run("export", "--data-dir", dir)
+	want(t, "export again", code, 1, errs, "already exists: pass --force")
+	code, out, errs = run("export", "--data-dir", dir, "--force")
+	want(t, "export --force", code, 0, out+errs, "Exported to")
+
+	out2 := filepath.Join(here, "by-name.json")
+	code, out, errs = run("export", "default", "--data-dir", dir, "-o", out2)
+	want(t, "export by name with -o after it", code, 0, out+errs, "Exported to "+out2)
+	code, out, errs = run("export", "--data-dir", dir, "-o", filepath.Join(here, "first.json"), "default")
+	want(t, "export with -o before the name", code, 0, out+errs, "first.json")
+	code, _, errs = run("export", "nope", "--data-dir", dir)
+	want(t, "export an unknown name", code, 1, errs, `no datapack is named "nope"`)
+}
+
+// An export is complete only if the body ends the JSON object.
+func TestLastByte(t *testing.T) {
+	var l lastByte
+	for _, p := range []string{`{"a":[1,`, `2]}`, "\n  \t"} {
+		_, _ = l.Write([]byte(p))
+	}
+	if l.b != '}' {
+		t.Errorf("last byte %q, want }", l.b)
+	}
+	_, _ = l.Write([]byte(`,{"cut`))
+	if l.b == '}' {
+		t.Error("a cut body reads as complete")
+	}
+}

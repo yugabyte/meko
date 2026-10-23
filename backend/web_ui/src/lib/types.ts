@@ -85,6 +85,15 @@ export interface Memory {
   created_at: string;
 }
 
+// One change to a memory, as mem0 recorded it (GET /memories/:id/history).
+export interface MemoryChange {
+  action: "ADD" | "UPDATE" | "DELETE" | string;
+  previous_value: string | null;
+  new_value: string | null;
+  created_at: string;
+  updated_at: string | null; // when an update or delete happened
+}
+
 export interface MemoryPage {
   memories: Memory[];
   total: number;
@@ -174,6 +183,18 @@ export interface ArtifactList {
   items: Artifact[];
   total: number;
   has_more: boolean;
+}
+
+// GET .../knowledge-bases/activity-log: files uploaded and memories promoted, newest first.
+export interface KnowledgeActivity {
+  type: "file_upload" | "memory_promotion" | string;
+  timestamp: string;
+  document_name?: string; // a file's key, ending in its name
+  chunks_processed?: number;
+  size_bytes?: number;
+  memory_id?: string;
+  content?: string; // a promoted memory's text
+  agent_id?: string;
 }
 
 export interface ProvisionStatus {

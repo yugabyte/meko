@@ -83,6 +83,7 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/metrics", a.metrics)
 	g.GET("/datapacks/:id/token-savings", a.tokenSavings)
 	g.GET("/datapacks/:id/usage", a.callUsage)
+	g.GET("/datapacks/:id/export", a.exportDatapack)
 
 	g.GET("/datapacks/:id/artifacts", a.listArtifacts)
 	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.artifactDownloadURL)
@@ -90,6 +91,7 @@ func Register(g *echo.Group, o Options) {
 
 	g.GET("/memories", a.listMemories)
 	g.DELETE("/memories/:memory", a.deleteMemory)
+	g.GET("/memories/:memory/history", a.memoryHistory)
 	g.POST("/promote-memories", a.promoteMemories)
 	g.POST("/keep-as-memory", a.keepMemories)
 	g.GET("/promoted-memories", a.listPromoted)

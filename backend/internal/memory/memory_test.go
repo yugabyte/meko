@@ -97,6 +97,13 @@ func TestMemoriesThroughTheMemoryEngine(t *testing.T) {
 	if err = h.svc.DeleteMemory(ctx, h.dp, "theirs"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("delete of another user's memory: %v", err)
 	}
+	if err = h.st.AddHistory(ctx, h.dp, []store.HistoryEntry{{MemoryID: "theirs", Action: "ADD",
+		CreatedAt: "2026-10-22T00:00:00Z"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.svc.MemoryHistory(ctx, h.dp, "theirs"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("history of another user's memory: %v", err)
+	}
 	if _, err = h.svc.AddMemory(ctx, AddMemory{DatapackID: "nope", Text: "x"}); !errors.Is(err, ErrNoDatapack) {
 		t.Errorf("an unknown datapack: %v", err)
 	}

@@ -441,3 +441,36 @@ func TestDecisionTrace(t *testing.T) {
 		t.Errorf("second turn %v", second)
 	}
 }
+
+// A memory's history is each change mem0 recorded, oldest first, its text before and after. Only a
+// memory the local user can get has one: a deleted or promoted memory, or an unknown id, is 404.
+func TestMemoryHistory(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	ctx := context.Background()
+	added, err := e.Service.AddMemory(ctx, memory.AddMemory{DatapackID: e.DatapackID, Text: "ship on Tuesdays"})
+	if err != nil || len(added) != 1 {
+		t.Fatal(added, err)
+	}
+	id := added[0].ID
+	if err = e.Service.UpdateMemory(ctx, e.DatapackID, id, "ship on Wednesdays"); err != nil {
+		t.Fatal(err)
+	}
+	path := "/memories/" + id + "/history?datapack_id=" + e.DatapackID
+	h := arr(obj(okData(t, e, "GET", path, nil, 200))["history"])
+	if len(h) != 2 || obj(h[0])["action"] != "ADD" || obj(h[0])["new_value"] != "ship on Tuesdays" ||
+		obj(h[1])["action"] != "UPDATE" || obj(h[1])["previous_value"] != "ship on Tuesdays" ||
+		obj(h[1])["new_value"] != "ship on Wednesdays" {
+		t.Fatalf("history %v", h)
+	}
+	upper := "/memories/" + strings.ToUpper(id) + "/history?datapack_id=" + e.DatapackID
+	if u := obj(okData(t, e, "GET", upper, nil, 200)); u["memory_id"] != id || len(arr(u["history"])) != 2 {
+		t.Errorf("an uppercase id %v", u)
+	}
+	if _, err = e.Service.PromoteMemories(ctx, e.DatapackID, "", []string{id}); err != nil {
+		t.Fatal(err)
+	}
+	wantErr(t, e, "GET", path, nil, 404, "NOT_FOUND") // promoted: in the collective memory now
+	wantErr(t, e, "GET", "/memories/00000000-0000-0000-0000-000000000000/history?datapack_id="+e.DatapackID, nil,
+		404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/memories/nope/history?datapack_id="+e.DatapackID, nil, 400, "VALIDATION_ERROR")
+}

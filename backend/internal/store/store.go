@@ -43,7 +43,9 @@ func vecErr(err error) error {
 type Store struct {
 	path string
 	w    *sql.DB
-	r    *sql.DB
+	// r is what every read goes through: the read pool, or one read transaction (Snapshot).
+	r    reader
+	rdb  *sql.DB      // the read pool
 	dims atomic.Int64 // the vector tables' width once known (vectors.go)
 	// search holds a token per search running (searchSlot).
 	search chan struct{}
@@ -79,7 +81,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	r.SetMaxOpenConns(Readers)
-	return &Store{path: path, w: w, r: r, search: make(chan struct{}, SearchSlots)}, nil
+	return &Store{path: path, w: w, r: r, rdb: r, search: make(chan struct{}, SearchSlots)}, nil
 }
 
 func dsn(path string, readOnly bool) string {
@@ -118,7 +120,7 @@ func (s *Store) Checkpoint(ctx context.Context) error {
 
 // Close closes every connection.
 func (s *Store) Close() error {
-	return errors.Join(s.r.Close(), s.w.Close())
+	return errors.Join(s.rdb.Close(), s.w.Close())
 }
 
 // Versions are the SQLite and sqlite-vec versions compiled into the binary.
@@ -137,4 +139,27 @@ func LibVersions() (Versions, error) {
 	var v Versions
 	err = db.QueryRow("SELECT sqlite_version(), vec_version()").Scan(&v.SQLite, &v.SQLiteVec)
 	return v, vecErr(err)
+}
+
+// reader is what the store reads with: the read pool, or a transaction on it. It has ExecContext
+// only to be a querier; the read pool is opened read-only, so a write through it fails.
+type reader interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// Snapshot runs read with a Store whose reads all go through one read transaction, so they see the
+// database as it was at the first of them, whatever is written meanwhile: a long walk such as an
+// export pages through one moment in time. read must only read.
+func (s *Store) Snapshot(ctx context.Context, read func(*Store) error) error {
+	tx, err := s.rdb.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	snap := &Store{path: s.path, w: s.w, r: tx, rdb: s.rdb, search: s.search}
+	snap.dims.Store(s.dims.Load())
+	return read(snap)
 }

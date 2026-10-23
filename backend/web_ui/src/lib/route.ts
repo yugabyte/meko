@@ -9,7 +9,7 @@ export type Tab = (typeof TABS)[number];
 export interface Route {
   datapackId?: string;
   tab: Tab;
-  // A conversation open in the conversations tab.
+  // A conversation open in the conversations tab, or the memories tab's scope.
   itemId?: string;
   // A page of the whole install rather than of a datapack.
   view?: "status";

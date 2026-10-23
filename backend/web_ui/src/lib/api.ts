@@ -11,6 +11,8 @@ import type {
   Datapack,
   DocumentList,
   Health,
+  KnowledgeActivity,
+  MemoryChange,
   MemoryPage,
   Metrics,
   PromotedMemory,
@@ -93,10 +95,21 @@ export const api = {
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
+  // days 0 is the server's default window: 90 days of totals, 30 of activity.
   metrics: (id: string, days: number) => request<Metrics>("GET", `/datapacks/${id}/metrics?days=${days}`),
   artifacts: (id: string, q: string, page: number) =>
     request<ArtifactList>("GET", `/datapacks/${id}/artifacts?q=${enc(q)}&page=${page}`),
   artifact: (id: string, hash: string) => request<Artifact>("GET", `/datapacks/${id}/artifacts/${hash}`),
+  // The datapack as one JSON file, and the name the server suggests for it.
+  exportDatapack: async (id: string): Promise<{ filename: string; blob: Blob }> => {
+    const res = await fetch(`/api/v1/datapacks/${id}/export`, { headers: headers(false) });
+    if (!res.ok) {
+      const env = await res.json().catch(() => null);
+      throw new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? "EXPORT_FAILED");
+    }
+    const m = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+    return { filename: m?.[1] ?? "meko-export.json", blob: await res.blob() };
+  },
   usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
   server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
@@ -109,12 +122,16 @@ export const api = {
       "GET",
       `/memories?datapack_id=${id}&scope=${opts.scope}&q=${enc(opts.q)}&page=${opts.page}`,
     ),
+  memoryHistory: (id: string, memoryId: string) =>
+    request<{ history: MemoryChange[] }>("GET", `/memories/${memoryId}/history?datapack_id=${id}`),
   deleteMemory: (id: string, memoryId: string) =>
     request<unknown>("DELETE", `/memories/${memoryId}?datapack_id=${id}`),
   promote: (id: string, memoryIds: string[]) =>
     request<unknown>("POST", "/promote-memories", { datapack_id: id, memory_ids: memoryIds }),
   keep: (id: string, memoryIds: string[]) =>
     request<unknown>("POST", "/keep-as-memory", { datapack_id: id, memory_ids: memoryIds }),
+  deletePromoted: (id: string, memoryId: string) =>
+    request<unknown>("DELETE", `/promoted-memories/${memoryId}?datapack_id=${id}`),
   promoted: (id: string) =>
     request<{ promoted_memories: PromotedMemory[]; total: number }>("GET", `/promoted-memories?datapack_id=${id}`),
   addMemory: (id: string, text: string) =>
@@ -137,6 +154,11 @@ export const api = {
     request<DocumentList>("GET", `/datapacks/${id}/knowledge-bases/documents?q=${enc(q)}&page_size=200`),
   deleteDocument: (id: string, docId: string) =>
     request<unknown>("DELETE", `/datapacks/${id}/knowledge-bases/documents/${docId}`),
+  activity: (id: string, cursor: string) =>
+    request<{ items: KnowledgeActivity[]; has_more: boolean; next_cursor: string }>(
+      "GET",
+      `/datapacks/${id}/knowledge-bases/activity-log?limit=20&cursor=${enc(cursor)}`,
+    ),
   downloadURL: (id: string, uri: string) =>
     request<{ url: string }>("POST", `/datapacks/${id}/knowledge-bases/download-url`, { document_uri: uri }),
 
