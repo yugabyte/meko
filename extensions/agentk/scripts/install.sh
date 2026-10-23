@@ -21,6 +21,9 @@
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK is already installed
+#   --tarball <file>    install this release tarball (agentk-<version>-<platform>-<arch>.tar.gz)
+#                       instead of downloading one, checked against the SHA256SUMS beside it:
+#                       for an offline bundle, without access to the repo
 #   anything else       forwarded to `agentk install`
 #                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
 #                       --port, --no-service); Meko is optional: without a key the install goes on
@@ -54,6 +57,7 @@ deps_only=false
 reinstall=false
 setup_flags=false
 interactive=true
+tarball_file=""
 
 # Output: color and marks only on a terminal, never with NO_COLOR.
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
@@ -82,6 +86,8 @@ while [ $# -gt 0 ]; do
     --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
     --reinstall) reinstall=true; shift ;;
+    --tarball) [ $# -ge 2 ] || die "--tarball needs a file"; tarball_file=$2; shift 2 ;;
+    --tarball=*) tarball_file=${1#--tarball=}; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
     *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
@@ -115,6 +121,21 @@ case $(uname -s) in
     ;;
   *) die "only Linux and macOS are supported (found $(uname -s))" ;;
 esac
+
+# A local tarball names its version and platform: <name>-<version>-<platform>-<arch>.tar.gz.
+if [ -n "$tarball_file" ]; then
+  [ -f "$tarball_file" ] || die "no such file: $tarball_file"
+  tarball_dir=$(cd "$(dirname "$tarball_file")" && pwd)
+  tarball=${tarball_file##*/}
+  name=${tarball%%-[0-9]*}
+  rest=${tarball#"$name"-}
+  rest=${rest%.tar.gz}
+  case $name in agentk|agent-k-local) ;; *) die "$tarball isn't an AgentK release tarball" ;; esac
+  case $rest in
+    *-"$platform-$arch") version=${rest%-"$platform-$arch"} ;;
+    *) die "$tarball isn't for this computer ($platform-$arch)" ;;
+  esac
+fi
 
 # ---- prerequisites ----
 # Questions go to the terminal: when piped into sh, stdin is this script.
@@ -441,6 +462,13 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then have_gh
 say "${b}Download${n}"
 ok "Prerequisites" "git, curl, gh, $agents"
 
+if [ -n "$tarball_file" ]; then
+# ---- local tarball ----
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT INT TERM
+[ -f "$tarball_dir/SHA256SUMS" ] || die "no SHA256SUMS beside $tarball"
+cp "$tarball_dir/$tarball" "$tarball_dir/SHA256SUMS" "$tmp/"
+else
 # ---- resolve version ----
 # The newest AgentK release, not the repo's latest (Meko's): tagged agentk-v<version>, or v<version>
 # from before releases were tagged by product. Drafts and prereleases are skipped.
@@ -496,6 +524,7 @@ if ! $got; then
   die "download of $tarball failed. The repo is internal: install and log in to the GitHub CLI ('gh auth login') and try again."
 fi
 rm -f "$tmp/.err"
+fi
 
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) ||
   die "checksum verification failed for $tarball"
