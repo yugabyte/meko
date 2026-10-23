@@ -814,16 +814,20 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
   );
 }
 
-/** `[call_home] enabled`, saved as soon as it's changed. */
+/** `[call_home] enabled`, saved as soon as it's changed; off and disabled while YB_DISABLE_CALLHOME turns it off. */
 function UsageStatsCheck() {
   const [on, setOn] = useState<boolean | null>(null);
+  const [offBy, setOffBy] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
       .settings()
-      .then((x) => setOn(x.callHomeEnabled))
+      .then((x) => {
+        setOn(x.callHomeEnabled);
+        setOffBy(x.callHomeOffBy);
+      })
       .catch((e) => setError(errorMessage(e)));
   }, []);
 
@@ -843,10 +847,17 @@ function UsageStatsCheck() {
     <div className="stack">
       {on !== null && (
         <label className="check">
-          <input id="acc-usage-stats" type="checkbox" checked={on} disabled={busy} onChange={(e) => void change(e.target.checked)} />
+          <input
+            id="acc-usage-stats"
+            type="checkbox"
+            checked={on && !offBy}
+            disabled={busy || !!offBy}
+            onChange={(e) => void change(e.target.checked)}
+          />
           <span>Send anonymous usage stats to YugabyteDB</span>
         </label>
       )}
+      {offBy && <p className="muted small">Turned off by {offBy} in AgentK's environment.</p>}
       <ErrorText error={error} />
     </div>
   );

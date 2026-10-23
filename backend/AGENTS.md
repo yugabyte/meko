@@ -5,20 +5,21 @@ yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/desig
 (the foundation), [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
 conversations), [docs/api.md](docs/api.md) (MCP and REST), [docs/knowledge.md](docs/knowledge.md)
 (knowledge files), [docs/install.md](docs/install.md) (release builds, releases, the installer,
-the service, extensions, updates and secrets) and [docs/web-ui.md](docs/web-ui.md) (the web UI). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
+the service, extensions, updates and secrets), [docs/web-ui.md](docs/web-ui.md) (the web UI) and
+[docs/callhome.md](docs/callhome.md) (usage stats). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
 
 ## Map
 
 | Path | What it is |
 |---|---|
 | `cmd/meko/` | The entry point: hands the arguments to `internal/cli`. |
-| `internal/cli/` | The commands: `start`, `stop` and `restart` (through the login service once installed, else a detached `serve`; `start` and `stop` also run the extensions'), `status`, `logs`, `serve` (which also checks for updates and rolls back a failing one), `version`, `token`, `ui` (opens the web UI with the client token), `destroy` (stops the server and removes the data folder), `install`, `uninstall`, `install_extension`, `uninstall_extension`, `update`, and `search`, `add_memory`, `datapacks`, `create_datapack`, `delete_datapack`, `upload` and `upload_status` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
-| `internal/config/` | Settings: flags, then `MEKO_*`, then `config.toml`, then defaults (port 7778). |
+| `internal/cli/` | The commands: `start`, `stop` and `restart` (through the login service once installed, else a detached `serve`; `start` and `stop` also run the extensions'), `status`, `logs`, `serve` (which also checks for updates and rolls back a failing one), `version`, `token`, `ui` (opens the web UI with the client token), `destroy` (stops the server and removes the data folder), `install`, `uninstall`, `install_extension`, `uninstall_extension`, `update`, `list mcp-tools` (the tools from their definitions, no server needed), `export` (a datapack's zip export, through the REST route), and `search`, `add_memory`, `datapacks`, `create_datapack`, `delete_datapack`, `upload` and `upload_status` (MCP calls to the running server). The data folder's `flock` says whether a server runs. |
+| `internal/config/` | Settings: flags, then `MEKO_*` (and yugabyted's `YB_DISABLE_CALLHOME`), then `config.toml`, then defaults (port 7778). |
 | `internal/paths/` | The data folder's layout and permissions, and moving it off a network filesystem. |
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
-| `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`; the knowledge-file links' ticket), the Origin check that lets in only the web UI's own pages, the web UI's route, `/healthz` and `/api/v1` (status includes the memory engine's and the auth mode). |
+| `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`; the knowledge-file links' ticket), the Origin check that lets in only the web UI's own pages, the web UI's route, `/healthz` and `/api/v1` (status includes the memory engine's state, the auth mode and the usage stats' state). |
 | `internal/mcp/` | MCP at `/mcp`: Meko Cloud's tools on the official MCP Go SDK (stateless, JSON replies, raw arguments read loosely), recording each call. |
-| `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads, knowledge files, and the upload and download links. |
+| `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads, knowledge files, the upload and download links, and the usage stats setting (`/settings/usage-stats`). |
 | `internal/knowledge/` | Knowledge files before the database: the types Meko takes and the check of a file's first bytes, text extraction (PDF, HTML, Markdown, CSV, text), chunking, and the `knowledgebase-files/` folder their bytes live in. No queries, no memory engine. |
 | `internal/webui/` | Finding the built web UI and serving it: its files, `index.html` for the app's own routes, and the headers that keep other sites from framing it. |
 | `internal/wire/` | Meko Cloud's reply shapes, which MCP and REST both build their replies with. |
@@ -36,6 +37,7 @@ the service, extensions, updates and secrets) and [docs/web-ui.md](docs/web-ui.m
 | `internal/extensions/` | `extensions.json`: the extensions `meko start` and `stop` run, and the ones `install_extension` knows (agentk). |
 | `internal/update/` | Release installs (`~/.local/share/meko/app/<version>`, `app/current`, outside the data folder), GitHub releases, staging and checking an update, probation and rollback. |
 | `internal/supervisor/` | Child processes (the memory engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
+| `internal/callhome/` | Usage stats to YugabyteDB's call home service (`diagnostics.yugabyte.com`, from release installs): the report (counts only, from `store.UsageTotals` and `CallDays`), yugabyted's envelope, the schedule, and the on/off state the web UI and `status` show. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
 | `scripts/` | `install.sh` (Meko's installer, published with each release), `package-release.sh` and `smoke-release.sh` (the release build and its check), and their tests. |
@@ -92,6 +94,8 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   memory engine never logs an error's message.
 - Knowledge files' bytes live in `knowledgebase-files/`, only through `internal/knowledge`'s
   `Files`; a file and its `kb_documents` row change together under the service's `fileMu`.
+- Usage stats (`internal/callhome`) carry counts, enums and versions only: never a name, text,
+  path, host or token. A new field says what it counts in [docs/callhome.md](docs/callhome.md).
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
   ports, never `~/.meko` or port 7778. They never touch the user's own service, Keychain or
   extensions: the CLI's tests set `HOME`, `MEKO_SECRETS=file`, a fake service manager and a PATH

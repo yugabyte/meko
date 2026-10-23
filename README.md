@@ -63,11 +63,13 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | Command | What it does |
 |---|---|
 | `meko start` / `stop` / `restart` | Start the server (through its service once installed), and stop or restart it. `start` and `stop` also start and stop the extensions; `stop --keep-extensions` doesn't |
-| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, its service, updates and extensions |
+| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, usage stats, its service, updates and extensions |
 | `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
 | `meko ui [--no-open]` | Open the web UI in the browser, signed in with the client token; `--no-open` only prints its link |
+| `meko export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
+| `meko list mcp-tools [--json]` | The MCP tools Meko serves, each with a line on what it does; needs no running server |
 | `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL and token |
 | `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
 | `meko uninstall [--purge [--force]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data, asking first |
@@ -104,6 +106,14 @@ The REST API takes the same token:
 curl -s localhost:7778/api/v1/datapacks -H "Authorization: Bearer $(./bin/meko token)"
 ```
 
+## Usage stats
+
+Meko sends usage stats (counts, versions and settings, never names or contents) to YugabyteDB
+once a day, every hour on an install's first day. Turn them off in the web UI's Settings, or with
+`[call_home] enabled = false` in `config.toml`. `MEKO_CALL_HOME=false` and `YB_DISABLE_CALLHOME=true`
+work too, but only in the server's own environment: Meko's login service doesn't pass on your
+shell's. [`backend/docs/callhome.md`](backend/docs/callhome.md) says what's sent.
+
 ## Extensions
 
 **[AgentK](extensions/agentk/README.md)** (`extensions/agentk`) is the agentic coder built
@@ -120,7 +130,8 @@ Its README covers installing and using it.
   search), [`backend/docs/api.md`](backend/docs/api.md) (MCP, REST and the CLI) and
   [`backend/docs/knowledge.md`](backend/docs/knowledge.md) (knowledge files) and
   [`backend/docs/install.md`](backend/docs/install.md) (releases, the installer, the service,
-  extensions, updates and secrets).
+  extensions, updates and secrets) and [`backend/docs/callhome.md`](backend/docs/callhome.md)
+  (usage stats).
 - AgentK: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).
 
 ## License

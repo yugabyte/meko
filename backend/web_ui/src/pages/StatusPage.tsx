@@ -2,7 +2,7 @@
 // child processes the server supervises. Refreshes every few seconds.
 
 import { useEffect } from "react";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { dateTime } from "../lib/format";
 import type { ServerStatus } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
@@ -13,6 +13,10 @@ import { Badge, ErrorNote, Loading } from "../components/ui";
 
 const REFRESH_MS = 5000;
 
+// A server older than this page has no /api/v1/server.
+const OLDER_SERVER =
+  "This Meko server is older than the web UI, so it can't report its status. Restart it with meko restart, then reload.";
+
 function uptime(s: number): string {
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
@@ -21,7 +25,12 @@ function uptime(s: number): string {
 }
 
 function State({ state }: { state: string }) {
-  const tone = state === "ready" || state === "running" ? "success" : state === "failed" ? "danger" : "warning";
+  const tone =
+    state === "ready" || state === "running"
+      ? "success"
+      : ["error", "failed", "unavailable"].includes(state)
+        ? "danger"
+        : "warning";
   return <Badge tone={tone}>{state}</Badge>;
 }
 
@@ -34,6 +43,9 @@ export function StatusPage() {
   }, [reload]);
 
   if (status.loading && !status.data) return <Loading />;
+  if (status.error instanceof ApiError && status.error.status === 404) {
+    return <ErrorNote error={new Error(OLDER_SERVER)} />;
+  }
   if (status.error) return <ErrorNote error={status.error} />;
   const s: ServerStatus | undefined = status.data;
   if (!s) return null;

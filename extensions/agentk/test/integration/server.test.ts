@@ -190,6 +190,18 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain(tomlKey);
   });
 
+  it("shows usage stats off while YB_DISABLE_CALLHOME turns them off", async () => {
+    const cookie = await setup();
+    const settings = async () => (await app.inject({ url: '/api/settings', headers: { cookie } })).json();
+    expect((await settings()).callHomeOffBy).toBeUndefined();
+    process.env.YB_DISABLE_CALLHOME = 'true';
+    try {
+      expect(await settings()).toMatchObject({ callHomeEnabled: true, callHomeOffBy: 'YB_DISABLE_CALLHOME' });
+    } finally {
+      delete process.env.YB_DISABLE_CALLHOME;
+    }
+  });
+
   it('Check again reads a harness version that changed since the last read', async () => {
     const cookie = await setup();
     env.core.updateConfig((c) => {
@@ -333,6 +345,13 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(pic.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
     expect(pic.headers['x-content-type-options']).toBe('nosniff');
     expect(pic.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    // A commit the branch doesn't have: the same 404, with what to do, from the diff and its images.
+    const gone = await img(`path=pic.png&side=new&commit=${'0'.repeat(40)}`);
+    expect(gone.statusCode).toBe(404);
+    expect(gone.json().error).toMatch(/Pick All changes/);
+    const goneDiff = await app.inject({ url: `/api/sessions/${sid}/changes?commit=${'0'.repeat(40)}`, headers: { cookie } });
+    expect(goneDiff.statusCode).toBe(404);
+    expect(goneDiff.json().error).toMatch(/Pick All changes/);
 
     // Pasted images: behind the origin check, images only, saved for Claude to read by path.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);

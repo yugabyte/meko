@@ -524,6 +524,20 @@ export interface CallHomeReport {
   days: CallHomeDay[];
 }
 
+/**
+ * The same report as YugabyteDB's call home service (diagnostics.yugabyte.com) takes it: yugabyted's
+ * envelope, with the report as its payload. The service routes it by callhome_type to a table of its own.
+ */
+export interface YbCallHome {
+  callhome_type: 'agentk';
+  command: 'heartbeat';
+  /** UTC, with microseconds and no zone (`2026-11-09T17:05:32.123000`): the only form the service parses. */
+  timestamp: string;
+  install_id: string;
+  version: string;
+  payload: CallHomeReport;
+}
+
 export interface ProjectSettings {
   /** Send a continue prompt to sessions that were mid-turn when the host went down. */
   autoContinue: boolean;
@@ -1546,6 +1560,11 @@ export interface Settings {
   idleWorktreeDays: number;
   /** `[call_home] enabled`: send anonymous usage stats (the Account tab's checkbox). */
   callHomeEnabled: boolean;
+  /**
+   * Set while YB_DISABLE_CALLHOME in AgentK's environment turns usage stats off whatever `callHomeEnabled`
+   * says: the checkbox is then off and disabled. Read-only.
+   */
+  callHomeOffBy?: 'YB_DISABLE_CALLHOME';
   /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
   resolveConflicts: boolean;
   /** `[agents] default`: the harness new sessions start on unless the New session dialog picks another. */
@@ -1718,6 +1737,18 @@ export interface SessionChanges {
    * when there's none, and for a session that can't change its base (a review, or one with a PR).
    */
   suggestedBase: { branch: string; ahead: number } | null;
+  /** The branch's commits since it left the base, newest first, at most MAX_COMMITS. */
+  commits: BranchCommit[];
+  /** The one commit shown, when the diff is a single commit's rather than everything vs. the base. */
+  commit: BranchCommit | null;
+}
+
+/** A commit on a session's branch, as the Changes panel's commit menu lists it. */
+export interface BranchCommit {
+  sha: string;
+  subject: string;
+  /** Commit time, ms since the epoch. */
+  at: number;
 }
 
 export type CommentSide = 'old' | 'new';
@@ -2389,8 +2420,8 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
 // GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
 // DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)
-// GET    /api/sessions/:id/changes             → SessionChanges
-// GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
+// GET    /api/sessions/:id/changes?commit=     → SessionChanges   (commit: one of the branch's commits alone, by full sha)
+// GET    /api/sessions/:id/changes/image?path=&side=old|new&commit= → image bytes (previewable types only)
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)

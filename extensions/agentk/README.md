@@ -184,7 +184,8 @@ your phone can connect.
   worktrees when sessions end).
 - **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
-  **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt.
+  **Files** menu or `[` / `]`, and leave review comments on lines that go to Claude as one prompt. The
+  **All changes ▾** menu shows one of the branch's commits alone instead (read-only).
   Compare with another branch (a release branch for a backport, say) from the base in its header;
   when the branch has clearly moved onto another branch, the panel offers to switch.
 - **Paste images and files for Claude:** paste a screenshot or a file into the terminal, or drop
@@ -196,6 +197,9 @@ your phone can connect.
 - **Works from your phone:** a drawer for projects, a key bar (Tab, arrows, Ctrl+C, a ▾ row
   of more keys with a sticky Ctrl for Ctrl+letter shortcuts, Esc, Shift+Tab and an attach key, and a select mode that copies the lines you drag over), a compose box that takes pasted images and files too, swipe to scroll back, and the stages and their gates
   in the ⋯ menu.
+- **Install it as an app:** AgentK offers to install itself the first time you open it, for its own
+  window and an icon in your dock or on your home screen (on an iPhone, Share › Add to Home Screen,
+  which notifications need there).
 - **Status at a glance:** see which sessions are working, which need you (a permission prompt or a
   question), and which are idle, with browser notifications.
 - **AgentK's mod in Claude:** with Claude Code 2.1.287 or later, each session loads a small Claude
@@ -281,6 +285,7 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 | Command | What it does |
 |---|---|
+| `agentk ui` | Open the web UI in your browser (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
 | `agentk status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
 | `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `agentk logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |

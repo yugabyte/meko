@@ -258,3 +258,42 @@ func TestLocalUserIDAndDatapackExists(t *testing.T) {
 		t.Error("an error from the database (closed) wasn't passed on")
 	}
 }
+
+// A snapshot's reads all see the database as it was at the first of them, whatever is written
+// meanwhile, and it can't write.
+func TestSnapshot(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateDatapack(ctx, "before", ""); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Snapshot(ctx, func(snap *Store) error {
+		first, err := snap.Datapacks(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err = s.CreateDatapack(ctx, "during", ""); err != nil {
+			return err
+		}
+		again, err := snap.Datapacks(ctx)
+		if err != nil {
+			return err
+		}
+		if len(again) != len(first) {
+			t.Errorf("the snapshot saw a write made after it began: %d datapacks, then %d", len(first), len(again))
+		}
+		if _, err = snap.r.ExecContext(ctx, "DELETE FROM datapacks"); err == nil {
+			t.Error("a snapshot wrote")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := s.Datapacks(ctx); len(all) != 2 {
+		t.Errorf("after the snapshot: %d datapacks, want 2", len(all))
+	}
+}

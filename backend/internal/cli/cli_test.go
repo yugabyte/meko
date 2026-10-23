@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,6 +21,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
@@ -34,15 +39,21 @@ func TestMain(m *testing.M) {
 			hungServe(mode)
 		}
 		testEmbedder = os.Getenv(testEmbedderEnv)
+		testCallHomeFirstCheck, _ = time.ParseDuration(os.Getenv(testCallHomeFirstCheckEnv))
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	// Only in the tests' own process: a test sets it for the serve it starts.
-	_ = os.Unsetenv("MEKO_AUTH")
+	// Only in the tests' own process: a test sets them for the serve it starts.
+	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME"} {
+		_ = os.Unsetenv(k)
+	}
 	os.Exit(m.Run())
 }
 
 // testEmbedderEnv passes testEmbedder to the serve a test starts (as this test binary).
 const testEmbedderEnv = "MEKO_TEST_EMBEDDER"
+
+// testCallHomeFirstCheckEnv passes testCallHomeFirstCheck to the serve a test starts.
+const testCallHomeFirstCheckEnv = "MEKO_TEST_CALL_HOME_FIRST_CHECK"
 
 // hungServe stands in for a serve that takes the lock and writes its pid but never answers;
 // "hang-ignore-term" also ignores SIGTERM, so only SIGKILL stops it.
@@ -161,6 +172,7 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "status's auth", code, 0, out, "Auth:          token")
 	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
 	want(t, "status's updates", code, 0, out, "Updates:       none (a build from source)")
+	want(t, "status's usage stats", code, 0, out, "Usage stats:   on, but a build from source sends none")
 
 	code, _, errs = run("serve", "--data-dir", dir, "--port", strconv.Itoa(freePort(t)))
 	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
@@ -242,6 +254,50 @@ func TestStatusWarnsWhenAuthIsOff(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status", code, 0, out, "Auth:          none (every user and program on this machine")
+}
+
+func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
+	dir, port := setup(t)
+	got := make(chan []byte, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- b
+	}))
+	defer srv.Close()
+	t.Setenv("MEKO_CALL_HOME_URL", srv.URL+"/")
+	t.Setenv(testCallHomeFirstCheckEnv, "100ms")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "Usage stats:   on (sent to "+srv.URL+"/)")
+	select {
+	case b := <-got:
+		var e struct {
+			CallhomeType string `json:"callhome_type"`
+			InstallID    string `json:"install_id"`
+			Payload      struct {
+				Install struct {
+					Version string `json:"version"`
+				} `json:"install"`
+				Days []json.RawMessage `json:"days"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(b, &e); err != nil || e.CallhomeType != "meko" || e.InstallID == "" ||
+			e.Payload.Install.Version != "dev" || len(e.Payload.Days) != 30 {
+			t.Errorf("heartbeat %s: %+v %v", b, e, err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("no heartbeat")
+	}
+}
+
+func TestStatusSaysWhatTurnedUsageStatsOff(t *testing.T) {
+	dir, port := setup(t)
+	t.Setenv("YB_DISABLE_CALLHOME", "true")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "Usage stats:   off (turned off by YB_DISABLE_CALLHOME)")
 }
 
 func TestStalePidFileDoesntBlockStart(t *testing.T) {
@@ -845,5 +901,146 @@ func TestUI(t *testing.T) {
 	if link := strings.TrimSpace(out); code != 0 || !strings.HasPrefix(link, prefix) || link == first ||
 		len(opened) != 1 || opened[0] != link {
 		t.Errorf("ui: %d %q, opened %v", code, out, opened)
+	}
+}
+
+// list mcp-tools needs no server: it reads the tool definitions.
+func TestListMCPTools(t *testing.T) {
+	code, out, _ := run("list", "mcp-tools")
+	want(t, "list mcp-tools", code, 0, out, "knowledgebase_upload_file")
+	if lines := strings.Count(out, "\n"); lines != len(mcp.Tools()) {
+		t.Errorf("%d lines, want one per tool (%d)", lines, len(mcp.Tools()))
+	}
+	code, out, _ = run("list", "mcp-tools", "--json")
+	var tools []map[string]string
+	if err := json.Unmarshal([]byte(out), &tools); code != 0 || err != nil || len(tools) != len(mcp.Tools()) ||
+		tools[0]["name"] != "context_search" || tools[0]["summary"] == "" {
+		t.Errorf("--json: %d %v %q", code, err, out)
+	}
+	code, _, errs := run("list")
+	want(t, "list with nothing named", code, exitUsage, errs, "mcp-tools")
+}
+
+func TestSuggestedName(t *testing.T) {
+	for in, want := range map[string]string{
+		`attachment; filename="meko-default-2026-10-22.zip"`: "meko-default-2026-10-22.zip",
+		`attachment; filename="../../etc/passwd"`:            "passwd",
+		``:           "meko-export.zip",
+		`attachment`: "meko-export.zip",
+	} {
+		if got := suggestedName(in); got != want {
+			t.Errorf("suggestedName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// export writes a datapack's JSON to the file the server names, here or at -o, by name, id or the
+// default; it won't replace a file unless --force, and an unknown name exits 1.
+func TestExport(t *testing.T) {
+	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skip("the memory engine isn't built (make test builds it)")
+	}
+	dir, port := setup(t)
+	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
+	t.Setenv(testEmbedderEnv, "hash")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "Meko is running")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if _, out, _ = run("status", "--data-dir", dir); strings.Contains(out, "Memory engine: ready") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the memory engine never got ready:\n%s", out)
+		}
+	}
+	code, out, errs = run("add_memory", "--data-dir", dir, "releases ship on Tuesdays")
+	want(t, "add_memory", code, 0, out+errs, "Added memory")
+
+	here := t.TempDir()
+	t.Chdir(here)
+	code, out, errs = run("export", "--data-dir", dir)
+	want(t, "export the default", code, 0, out+errs, "Exported to meko-default-")
+	names, _ := filepath.Glob(filepath.Join(here, "meko-default-*.zip"))
+	if len(names) != 1 {
+		t.Fatalf("files %v", names)
+	}
+	z, err := zip.OpenReader(names[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]string{}
+	for _, f := range z.File {
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		_ = rc.Close()
+		entries[f.Name] = string(b)
+	}
+	_ = z.Close()
+	var header struct {
+		Format  string `json:"format"`
+		Version int    `json:"version"`
+	}
+	var mem struct {
+		Text      string    `json:"text"`
+		Embedding []float32 `json:"embedding"`
+	}
+	if err = json.Unmarshal([]byte(entries["datapack.json"]), &header); err != nil ||
+		header.Format != "meko-datapack-export" || header.Version != 2 {
+		t.Fatalf("header %v %q", err, entries["datapack.json"])
+	}
+	if err = json.Unmarshal([]byte(entries["memories.jsonl"]), &mem); err != nil ||
+		mem.Text != "releases ship on Tuesdays" || len(mem.Embedding) == 0 {
+		t.Fatalf("memories %v %q", err, entries["memories.jsonl"])
+	}
+	code, _, errs = run("export", "--data-dir", dir)
+	want(t, "export again", code, 1, errs, "already exists: pass --force")
+	code, out, errs = run("export", "--data-dir", dir, "--force")
+	want(t, "export --force", code, 0, out+errs, "Exported to")
+
+	out2 := filepath.Join(here, "by-name.zip")
+	code, out, errs = run("export", "default", "--data-dir", dir, "-o", out2)
+	want(t, "export by name with -o after it", code, 0, out+errs, "Exported to "+out2)
+	code, out, errs = run("export", "--data-dir", dir, "-o", filepath.Join(here, "first.zip"), "default")
+	want(t, "export with -o before the name", code, 0, out+errs, "first.zip")
+	code, _, errs = run("export", "nope", "--data-dir", dir)
+	want(t, "export an unknown name", code, 1, errs, `no datapack is named "nope"`)
+}
+
+// An export is complete only if it opens as a zip holding its datapack.json.
+func TestCheckExport(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, entries ...string) string {
+		var b bytes.Buffer
+		z := zip.NewWriter(&b)
+		for _, e := range entries {
+			w, _ := z.Create(e)
+			_, _ = w.Write([]byte("{}"))
+		}
+		_ = z.Close()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, b.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if err := checkExport(write("ok.zip", "memories.jsonl", "datapack.json")); err != nil {
+		t.Errorf("a complete export: %v", err)
+	}
+	if err := checkExport(write("headless.zip", "memories.jsonl")); err == nil {
+		t.Error("an export without datapack.json passed")
+	}
+	full := write("full.zip", "memories.jsonl", "datapack.json")
+	b, _ := os.ReadFile(full)
+	cut := filepath.Join(dir, "cut.zip")
+	_ = os.WriteFile(cut, b[:len(b)/2], 0o600) //nolint:gosec // G703: the test's own temp folder
+	if err := checkExport(cut); err == nil {
+		t.Error("a cut-off export passed")
 	}
 }

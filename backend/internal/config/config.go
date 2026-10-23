@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -26,7 +27,31 @@ type Config struct {
 	Update             Update             `toml:"update"`
 	KnowledgeBase      KnowledgeBase      `toml:"knowledge_base"`
 	WebUI              WebUI              `toml:"web_ui"`
+	CallHome           CallHome           `toml:"call_home"`
 }
+
+// CallHome is the [call_home] table: the usage stats Meko sends to YugabyteDB's call home service
+// (internal/callhome).
+type CallHome struct {
+	// Enabled is true by default. false here, MEKO_CALL_HOME=false or YB_DISABLE_CALLHOME (yugabyted's
+	// switch) turn usage stats off whatever the web UI's setting says; true only leaves it to the web UI.
+	// The variables are read from serve's own environment, which under the login service is the unit's
+	// or plist's, not the shell's.
+	Enabled bool `toml:"enabled"`
+	// URL is where they go. Empty is https://diagnostics.yugabyte.com, from release installs only. Also
+	// MEKO_CALL_HOME_URL.
+	URL string `toml:"url"`
+	// OffBy names what turned them off ("config.toml", "MEKO_CALL_HOME" or "YB_DISABLE_CALLHOME"),
+	// for status and the web UI; empty while Enabled. Not a setting.
+	OffBy string `toml:"-"`
+}
+
+// Where usage stats were turned off, for CallHome.OffBy.
+const (
+	OffByFile       = "config.toml"
+	OffByEnv        = "MEKO_CALL_HOME"
+	OffByYugabyteDB = "YB_DISABLE_CALLHOME"
+)
 
 // WebUI is the [web_ui] table: where the built web UI is. Empty means the usual place
 // (internal/webui).
@@ -36,9 +61,9 @@ type WebUI struct {
 
 // KnowledgeBase is the [knowledge_base] table.
 type KnowledgeBase struct {
-	// MaxDistance is the farthest (cosine distance, 0 to 2) a knowledge-base result may be from the
-	// query for context_search to keep it. 0 means the default, tuned for the embedding model
-	// (internal/memory).
+	// MaxDistance is the farthest (cosine distance, 0 to 2) a knowledge-base result found by meaning
+	// alone may be from the query for context_search to keep it; a reranked keyword or hybrid match
+	// is kept past it. 0 means the default, tuned for the embedding model (internal/memory).
 	MaxDistance float64 `toml:"max_distance"`
 }
 
@@ -102,7 +127,8 @@ type Log struct {
 // Default is the configuration with nothing set.
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
-		Update: Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/agent-k-local"}}
+		Update:   Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/agent-k-local"},
+		CallHome: CallHome{Enabled: true}}
 }
 
 // Overrides are settings given as flags; zero values mean unset.
@@ -167,6 +193,25 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	if v := env("MEKO_WEB_UI_DIR"); v != "" {
 		c.WebUI.Dir = v
 	}
+	if !c.CallHome.Enabled {
+		c.CallHome.OffBy = OffByFile
+	}
+	if v := env("MEKO_CALL_HOME"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("MEKO_CALL_HOME=%q isn't true or false", v)
+		}
+		c.CallHome.Enabled, c.CallHome.OffBy = b, ""
+		if !b {
+			c.CallHome.OffBy = OffByEnv
+		}
+	}
+	if YugabyteDBCallHomeOff(env("YB_DISABLE_CALLHOME")) {
+		c.CallHome.Enabled, c.CallHome.OffBy = false, OffByYugabyteDB
+	}
+	if v := env("MEKO_CALL_HOME_URL"); v != "" {
+		c.CallHome.URL = v
+	}
 	if o.Port != 0 {
 		c.Server.Port = o.Port
 	}
@@ -202,7 +247,22 @@ func (c Config) validate() error {
 	if d := c.KnowledgeBase.MaxDistance; d < 0 || d > 2 {
 		return fmt.Errorf("knowledge_base.max_distance %g is out of range: use 0 to 2", d)
 	}
+	if u := c.CallHome.URL; u != "" {
+		if p, err := url.Parse(u); err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" {
+			return fmt.Errorf("call_home.url %q isn't an http or https URL", u)
+		}
+	}
 	return nil
+}
+
+// YugabyteDBCallHomeOff reports whether YB_DISABLE_CALLHOME's value turns call home off: one of
+// yugabyted's true words.
+func YugabyteDBCallHomeOff(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "t", "yes", "y", "1":
+		return true
+	}
+	return false
 }
 
 // SlogLevel turns the level name into a slog level.

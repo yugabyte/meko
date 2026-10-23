@@ -131,11 +131,21 @@ Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of u
 read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
-disk, only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
+disk (in a commit's view, its parent's and its own, from git), only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
 a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file.
+
+The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
+branch's commits alone: the commits since the merge base, newest first (at most 200,
+`MAX_COMMITS`, `branchCommits()` in `changes.ts`), with short sha, subject and age, filtered by
+typing. A commit is compared with its first parent (git's empty tree for a root commit), without
+uncommitted or untracked files. Only a commit that menu lists is accepted (`?commit=<full sha>` on
+`/changes` and `/changes/image`), so nothing typed reaches git; one that's gone (amended or
+rebased) is a 404, and the panel goes back to All changes with a note. A commit's view takes no
+comments, since a comment's sides are the base and the worktree: its rows have no **+**, its
+comments aren't shown, and a comment being written stays open above the files, to finish or cancel.
 
 ### Changing the base
 
@@ -319,6 +329,28 @@ in that page. The service worker caches nothing and handles no requests.
 A project datapack shared with you also sends one notification (an `invite` event, once per
 datapack); clicking it opens the Open project dialog for it. Tapped through the service worker, it
 opens the dialog in an open window, or opens `/`, where the share's banner is waiting.
+
+## Installing the app
+
+AgentK is a web app you can install: the manifest and the service worker above meet the browsers'
+rules (the service worker still caches nothing). The first time you open it in a browser that can
+install it, a banner offers to: **Install** opens the browser's own install dialog, and **Not now**
+hides the offer in that browser for good (`localStorage`, as the other banners do; installing is
+per browser and device, so the server doesn't keep it). The page catches the browser's
+`beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
+as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
+installed (Chrome stops making the offer in its tabs), or before sign-in. While the browser can
+still install it, **Install AgentK as an app** is in the `⌘K` palette too, even after Not now.
+Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
+next click), so one tap never brings up two prompts.
+
+An iPhone or iPad makes no offer, so there the banner says to tap Share, then Add to Home Screen;
+iOS shows notifications only for Home Screen web apps. Safari can't tell that AgentK is on the Home
+Screen already (it has no `appinstalled`, and the Home Screen app keeps its storage apart), so in a
+Safari tab only Not now hides these steps; the Home Screen app itself never shows them. Firefox and Safari on a Mac get no banner.
+Chrome offers nothing for a page whose certificate it doesn't trust, so with AgentK's self-signed
+certificate, trust its fingerprint (`agentk status`) first. Chrome may also wait until you've used
+the page a little before it offers, so the banner can appear a moment after the page loads.
 
 ## On a phone
 

@@ -40,6 +40,7 @@ type toolFlags struct {
 	limit                  int
 	json, mcp, force       bool
 	noWait                 bool
+	out                    string // export's -o
 }
 
 // toolError is a tool's in-band error reply.
@@ -168,7 +169,7 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		return exitNotRunning
 	}
 	timeout := toolTimeout
-	if cmd == "upload" {
+	if cmd == "upload" || cmd == "export" {
 		timeout = uploadTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -193,6 +194,8 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 		err = toolUpload(ctx, t, f, stdout)
 	case "upload_status":
 		err = toolUploadStatus(ctx, t, f, stdout)
+	case "export":
+		err = toolExport(ctx, t, l, f, stdout)
 	}
 	if errors.Is(err, errDeclined) {
 		fmt.Fprintln(stderr, "Nothing was deleted")

@@ -47,6 +47,24 @@ export interface Metrics {
   daily_activity: DayActivity[];
 }
 
+// One Meko call from the call log, as /usage's recent calls and a turn's decision trace give it.
+export interface MekoCall {
+  // Absent from an older server's reply.
+  id?: number;
+  steps?: { step: string; ms: number; n: number }[];
+  at: string;
+  tool: string;
+  agent_id: string;
+  ok: boolean;
+  error_code: string;
+  ms: number;
+  memory_n: number;
+  kb_n: number;
+  conversation_n: number;
+  // Whether the tool only reads, as its definition says; in a turn's trace only.
+  read_only?: boolean;
+}
+
 // GET /datapacks/:id/usage: Meko local's own view of the call log.
 export interface Usage {
   calls: number;
@@ -54,19 +72,7 @@ export interface Usage {
   tools: { tool: string; calls: number; errors: number; p50_ms: number; p95_ms: number }[];
   steps: { step: string; calls: number; p50_ms: number; p95_ms: number }[];
   agents: { agent_id: string; calls: number; searches: number; last_at: string }[];
-  recent: {
-    id: number;
-    steps: { step: string; ms: number; n: number }[];
-    at: string;
-    tool: string;
-    agent_id: string;
-    ok: boolean;
-    error_code: string;
-    ms: number;
-    memory_n: number;
-    kb_n: number;
-    conversation_n: number;
-  }[];
+  recent: MekoCall[];
   input_tokens: number;
   output_tokens: number;
 }
@@ -77,6 +83,15 @@ export interface Memory {
   agent_id: string;
   conversation_id: string;
   created_at: string;
+}
+
+// One change to a memory, as mem0 recorded it (GET /memories/:id/history).
+export interface MemoryChange {
+  action: "ADD" | "UPDATE" | "DELETE" | string;
+  previous_value: string | null;
+  new_value: string | null;
+  created_at: string;
+  updated_at: string | null; // when an update or delete happened
 }
 
 export interface MemoryPage {
@@ -112,6 +127,11 @@ export interface Turn {
   input: string;
   output: string;
   memory_texts: string[];
+  // What the agent said about the turn: why it answered so, and the steps it took.
+  reasoning?: string;
+  plan?: string[];
+  // The Meko calls it made since the turn before; absent from an older server.
+  calls?: MekoCall[];
 }
 
 export interface ConversationDetail extends Conversation {
@@ -163,6 +183,18 @@ export interface ArtifactList {
   items: Artifact[];
   total: number;
   has_more: boolean;
+}
+
+// GET .../knowledge-bases/activity-log: files uploaded and memories promoted, newest first.
+export interface KnowledgeActivity {
+  type: "file_upload" | "memory_promotion" | string;
+  timestamp: string;
+  document_name?: string; // a file's key, ending in its name
+  chunks_processed?: number;
+  size_bytes?: number;
+  memory_id?: string;
+  content?: string; // a promoted memory's text
+  agent_id?: string;
 }
 
 export interface ProvisionStatus {
@@ -228,4 +260,17 @@ export interface ServerStatus {
 export interface Health {
   status: string;
   version: string;
+}
+
+// GET and PATCH /settings/usage-stats: whether usage stats go to YugabyteDB.
+export interface UsageStats {
+  enabled: boolean;
+  // Turned off by config.toml or the environment: the web UI can't turn them on.
+  forced_off: boolean;
+  // What turned them off: "web UI", "config.toml", "MEKO_CALL_HOME" or "YB_DISABLE_CALLHOME".
+  by?: string;
+  // On, but a build from source has nowhere to send them.
+  sends: boolean;
+  // Where they go while sends.
+  url?: string;
 }

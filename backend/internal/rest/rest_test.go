@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/memory"
+	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
@@ -364,4 +365,112 @@ func TestProvisionStatusWithAuthOff(t *testing.T) {
 	if r.Data["mcp_api_key"] != "" || r.Data["mcp_server_url"] == "" {
 		t.Errorf("provision-status with no credential: %v", r.Data)
 	}
+}
+
+// A turn's decision trace is the conversation's calls since the turn before it, what it read and
+// what it wrote, without the calls that store the conversation, next to the reasoning and plan it
+// sent. Calls from before the conversation existed (one deleted, then made again under the same
+// id) aren't in it; calls that failed before their datapack was known are.
+func TestDecisionTrace(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	ctx := context.Background()
+	const convID = "5a3c4b0f6d3e9b8a7c2d1e0f9a8b7c6d"
+	stale := store.Call{At: time.Now(), Tool: "memory_add", DatapackID: e.DatapackID, ConversationID: convID, OK: true}
+	e.Service.RecordCall(ctx, stale) // the earlier conversation's
+	time.Sleep(5 * time.Millisecond)
+	conv, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "a", DatapackID: e.DatapackID,
+		SessionID: convID, Title: "trace"})
+	if err != nil || conv.ID != convID {
+		t.Fatal(conv.ID, err)
+	}
+	call := func(tool string, ok bool, datapack string) {
+		t.Helper()
+		time.Sleep(5 * time.Millisecond)
+		e.Service.RecordCall(ctx, store.Call{At: time.Now(), Tool: tool, DatapackID: datapack, AgentID: "a",
+			ConversationID: conv.ID, OK: ok, Ms: 12, MemoryN: 2,
+			Steps: []store.Step{{Step: "memory_search", Ms: 9, N: 2}}})
+	}
+	turn := func(input, reasoning string, plan []string) {
+		t.Helper()
+		time.Sleep(5 * time.Millisecond)
+		if _, err := e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "a",
+			DatapackID: e.DatapackID, Input: input, Output: "ok", Seed: input, Reasoning: reasoning,
+			Plan: plan}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call("context_search", true, e.DatapackID)
+	call("memory_add", false, "")                        // failed before its datapack was known
+	call("conversation_add_message", true, e.DatapackID) // stores the turn: not part of its trace
+	turn("when do we release?", "The calendar memory says Tuesdays.", []string{"Search memories", "Answer"})
+	call("knowledgebase_search", true, e.DatapackID)
+	call("memory_add", true, "other-datapack") // the same id in another datapack
+	turn("who signs off?", "", nil)
+
+	reply := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/conversations/"+conv.ID, nil, 200))
+	th := arr(obj(reply["conversation"])["thread"])
+	if len(th) != 2 {
+		t.Fatalf("thread %v", th)
+	}
+	first, second := obj(th[0]), obj(th[1])
+	tools := func(tr map[string]any) []string {
+		calls := arr(tr["calls"])
+		out := make([]string, 0, len(calls))
+		for _, c := range calls {
+			out = append(out, str(obj(c)["tool"]))
+		}
+		return out
+	}
+	if got := tools(first); len(got) != 2 || got[0] != "context_search" || got[1] != "memory_add" {
+		t.Errorf("first turn's calls %v", got)
+	}
+	if c := obj(arr(first["calls"])[0]); c["ok"] != true || num(c["ms"]) != 12 || num(c["memory_n"]) != 2 ||
+		len(arr(c["steps"])) != 1 || c["id"] == nil || c["read_only"] != true {
+		t.Errorf("a call %v", c)
+	}
+	if c := obj(arr(first["calls"])[1]); c["ok"] != false || c["read_only"] != false {
+		t.Errorf("the failed memory_add %v", c)
+	}
+	if first["reasoning"] != "The calendar memory says Tuesdays." || len(arr(first["plan"])) != 2 {
+		t.Errorf("first turn's reasoning and plan %v %v", first["reasoning"], first["plan"])
+	}
+	if got := tools(second); len(got) != 1 || got[0] != "knowledgebase_search" {
+		t.Errorf("second turn's calls %v", got)
+	}
+	if second["reasoning"] != nil || arr(second["calls"]) == nil {
+		t.Errorf("second turn %v", second)
+	}
+}
+
+// A memory's history is each change mem0 recorded, oldest first, its text before and after. Only a
+// memory the local user can get has one: a deleted or promoted memory, or an unknown id, is 404.
+func TestMemoryHistory(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	ctx := context.Background()
+	added, err := e.Service.AddMemory(ctx, memory.AddMemory{DatapackID: e.DatapackID, Text: "ship on Tuesdays"})
+	if err != nil || len(added) != 1 {
+		t.Fatal(added, err)
+	}
+	id := added[0].ID
+	if err = e.Service.UpdateMemory(ctx, e.DatapackID, id, "ship on Wednesdays"); err != nil {
+		t.Fatal(err)
+	}
+	path := "/memories/" + id + "/history?datapack_id=" + e.DatapackID
+	h := arr(obj(okData(t, e, "GET", path, nil, 200))["history"])
+	if len(h) != 2 || obj(h[0])["action"] != "ADD" || obj(h[0])["new_value"] != "ship on Tuesdays" ||
+		obj(h[1])["action"] != "UPDATE" || obj(h[1])["previous_value"] != "ship on Tuesdays" ||
+		obj(h[1])["new_value"] != "ship on Wednesdays" {
+		t.Fatalf("history %v", h)
+	}
+	upper := "/memories/" + strings.ToUpper(id) + "/history?datapack_id=" + e.DatapackID
+	if u := obj(okData(t, e, "GET", upper, nil, 200)); u["memory_id"] != id || len(arr(u["history"])) != 2 {
+		t.Errorf("an uppercase id %v", u)
+	}
+	if _, err = e.Service.PromoteMemories(ctx, e.DatapackID, "", []string{id}); err != nil {
+		t.Fatal(err)
+	}
+	wantErr(t, e, "GET", path, nil, 404, "NOT_FOUND") // promoted: in the collective memory now
+	wantErr(t, e, "GET", "/memories/00000000-0000-0000-0000-000000000000/history?datapack_id="+e.DatapackID, nil,
+		404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/memories/nope/history?datapack_id="+e.DatapackID, nil, 400, "VALIDATION_ERROR")
 }

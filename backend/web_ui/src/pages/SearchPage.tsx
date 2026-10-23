@@ -4,8 +4,10 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
 import { api, type SearchSource } from "../lib/api";
+import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
+import { ExpandableText } from "../components/ExpandableText";
 import { Segmented } from "../components/Segmented";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
 
@@ -126,10 +128,11 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
     <div className="space-y-6">
       <form onSubmit={submit} className="flex gap-2">
         <Input
+          id={SEARCH_INPUT_ID}
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Ask what this datapack knows, e.g. “what do I like?”"
+          placeholder="Ask what this datapack knows, e.g. “what do I like?” (press / from anywhere)"
         />
         <Button variant="primary" disabled={busy || !query.trim()}>
           {busy ? <Spinner className="text-primary-foreground" /> : <Search className="size-4" />} Search
@@ -169,7 +172,7 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
                       <Similarity value={1 - k.distance} />
                       {k.rerank_score !== undefined && <Badge>rerank {k.rerank_score.toFixed(2)}</Badge>}
                     </div>
-                    <p className="line-clamp-6 whitespace-pre-wrap text-sm">{k.chunk_text}</p>
+                    <ExpandableText text={k.chunk_text} lines={6} />
                   </Card>
                 ))}
               </div>
@@ -184,7 +187,9 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
               <div className="space-y-2">
                 {r.conversation?.hits.map((h) => (
                   <Card key={h.message_id + h.distance} className="flex items-start justify-between gap-4 p-3">
-                    <p className="line-clamp-4 whitespace-pre-wrap text-sm">{h.content}</p>
+                    <div className="min-w-0 flex-1">
+                      <ExpandableText text={h.content} lines={4} />
+                    </div>
                     <Similarity value={1 - h.distance} />
                   </Card>
                 ))}

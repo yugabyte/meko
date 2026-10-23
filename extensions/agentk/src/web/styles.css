@@ -3783,6 +3783,15 @@ div[id^='dak-mermaid-'] .label {
   content: ' (current)';
   color: var(--muted);
 }
+.chg-commit {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chg-commit.cur {
+  font-weight: 600;
+}
 .files-filter {
   display: block;
   width: calc(100% - 16px);

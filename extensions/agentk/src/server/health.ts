@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isLoopback, type Config } from './config.js';
+import { fqdn } from './tls.js';
 
 export type Probe = { ok: true; version: string } | { ok: false; error: string };
 
@@ -11,6 +12,15 @@ export type Probe = { ok: true; version: string } | { ok: false; error: string }
 export function probeHost(bind: string): string {
   const b = bind.trim().replace(/^\[(.*)\]$/, '$1');
   return !b || b === '0.0.0.0' || b === '::' || b === 'localhost' ? '127.0.0.1' : b;
+}
+
+/**
+ * The server's URL: on the loopback address it listens on (the one `probeLocal` asks), else on
+ * this host's name, which its certificate names.
+ */
+export function serverUrl(cfg: Config, tls: boolean): string {
+  const host = isLoopback(cfg.server.bind) ? (cfg.server.bind === '::1' ? '[::1]' : '127.0.0.1') : fqdn();
+  return `${tls ? 'https' : 'http'}://${host}:${cfg.server.port}`;
 }
 
 /**

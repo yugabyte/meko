@@ -308,3 +308,29 @@ func TestUploadLocalFileNeedsAToken(t *testing.T) {
 		t.Errorf("with the token: %s", r.Text)
 	}
 }
+
+// context_search's distance cutoff is for meaning alone: a chunk the query's own words found
+// (keyword or hybrid) comes back however far its embedding is, as a name in a long file does.
+func TestContextSearchKeepsKeywordHits(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	doc := []byte("Profile of Zorblatt Quennimore. " + strings.Repeat("Worked on distributed storage, "+
+		"query planning, replication, consensus protocols and on-call rotations for several years. ", 8))
+	r := ok(t, e, "knowledgebase_upload_document", uploadArgs("profile.txt", doc))
+	if code := postFile(t, str(r.JSON["url"]), obj(r.JSON["fields"]), "profile.txt", doc); code != http.StatusNoContent {
+		t.Fatalf("upload answered %d", code)
+	}
+	if st := waitIndexed(t, e, str(r.JSON["key"])); st.JSON["state"] != "completed" {
+		t.Fatalf("status: %s", st.Text)
+	}
+	raw := arr(ok(t, e, "knowledgebase_search", map[string]any{"query": "zorblatt", "conversation_id": "c",
+		"datapack_id": ""}).JSON["results"])
+	if len(raw) == 0 || obj(raw[0])["match_type"] == "semantic" {
+		t.Fatalf("the name isn't a keyword hit: %v", raw)
+	}
+	r = ok(t, e, "context_search", map[string]any{"query": "zorblatt", "conversation_id": "c",
+		"force_source": "knowledge_base"})
+	kb := arr(obj(r.JSON["results"])["knowledge_base"])
+	if len(kb) == 0 || !strings.Contains(str(obj(kb[0])["chunk_text"]), "Zorblatt") {
+		t.Errorf("context_search dropped the keyword hit (distance %v): %s", obj(raw[0])["distance"], r.Text)
+	}
+}

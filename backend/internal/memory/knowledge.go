@@ -38,8 +38,9 @@ const (
 	trimRatio = 0.3
 	// rrfK is reciprocal-rank fusion's constant, which orders the candidates before reranking.
 	rrfK = 60
-	// DefaultKBMaxDistance is the farthest (cosine distance) a knowledge-base result may be from the
-	// query for context_search to keep it. Cloud's 0.5 suits its embedding model; with
+	// DefaultKBMaxDistance is the farthest (cosine distance) a knowledge-base result found by meaning
+	// alone may be from the query for context_search to keep it (keptKB keeps reranked word matches
+	// past it). Cloud's 0.5 suits its embedding model; with
 	// all-MiniLM-L6-v2 a paraphrased question measured 0.37 to 0.51 from the chunk that answered it,
 	// and unrelated chunks 0.87 to 0.99.
 	DefaultKBMaxDistance = 0.6

@@ -5,6 +5,7 @@ import { approveDesign, settleApprovals } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
+import { installPrompting } from '../installapp';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
@@ -227,10 +228,12 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     };
   }, [state, openedId, openedInState]);
 
-  // Ask for notification permission on the first click anywhere.
+  // Ask for notification permission on the first click anywhere, except one that just opened the
+  // browser's install dialog (the next click asks), so a tap never brings up two prompts.
   useEffect(() => {
     if (!canNotify || Notification.permission !== 'default') return;
     const ask = () => {
+      if (installPrompting()) return;
       Notification.requestPermission().catch(() => undefined);
       window.removeEventListener('click', ask);
     };

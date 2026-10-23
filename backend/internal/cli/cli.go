@@ -1,5 +1,5 @@
 // Package cli is the meko command: start, stop, restart, status, serve, version, token, ui, logs,
-// destroy, install, uninstall, install_extension, uninstall_extension and update, and the MCP calls
+// destroy, install, uninstall, install_extension, uninstall_extension, update and list, and the MCP calls
 // search, add_memory, datapacks, create_datapack, delete_datapack, upload and upload_status.
 package cli
 
@@ -71,6 +71,13 @@ Usage:
   meko upload <file>...          add files to the knowledge base (knowledgebase_upload_document) and
                                  wait until they're indexed; --no-wait returns once they're uploaded
   meko upload_status <key>       how an uploaded file is doing (knowledgebase_document_status)
+  meko export [<name|id>]        write a datapack (default: the default one) to a zip: its
+                                 memories, collective memories, conversations, knowledge files and
+                                 artifacts with their embeddings and file contents, and the call log;
+                                 -o FILE picks the file (default meko-<name>-<date>.zip here);
+                                 it won't replace a file unless --force
+  meko list mcp-tools            the MCP tools Meko serves, each with what it does; --json for all
+                                 their names, titles and summaries
                  search, add_memory, upload and upload_status take --datapack NAME|ID (default: the
                  default datapack, which Meko makes on first start and doesn't make again once
                  deleted); search takes --source auto|memory|knowledge_base|conversation and
@@ -108,7 +115,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
 		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
-	case "version", "logs":
+	case "version", "logs", "list":
 		fs.BoolVar(&t.json, "json", false, "print raw JSON")
 	case "token":
 		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
@@ -146,6 +153,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")
 		fs.IntVar(&t.limit, "limit", 8, "the most results per source")
 	}
+	if cmd == "export" {
+		fs.StringVar(&t.out, "o", "", "the file to write (default meko-<name>-<date>.json here)")
+		fs.BoolVar(&t.force, "force", false, "replace the file if it exists")
+	}
 	if cmd == "ui" {
 		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
 	}
@@ -161,7 +172,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "logs", "destroy", "install",
 		"uninstall", "install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
-		"create_datapack", "delete_datapack", "upload", "upload_status":
+		"create_datapack", "delete_datapack", "upload", "upload_status", "list", "export":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -172,7 +183,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"uninstall_extension":
+		"uninstall_extension", "list", "export":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if err := fs.Parse(fs.Args()[1:]); err != nil {
@@ -197,6 +208,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if cmd == "version" {
 		return runVersion(t.json, stdout, stderr)
+	}
+	if cmd == "list" {
+		return runList(t.text, t.json, stdout, stderr)
 	}
 	root, err := paths.Resolve(*dataDir)
 	if err != nil {
@@ -227,7 +241,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runUninstallExtension(l, t.text, stdout, stderr)
 	case "update":
 		return runUpdate(l, c.check, stdout, stderr)
-	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
+	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "export":
 		return runTool(l, cmd, t, stdin, stdout, stderr)
 	}
 	// start loads the config too, so a bad file is reported before anything starts.
