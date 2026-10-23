@@ -117,7 +117,10 @@ export function touchCol(x: number, left: number, width: number, cols: number): 
   return touchRow(x, left, width, cols);
 }
 
-/** A touch is a tap when the finger moves less than this (px), under the smallest swipe step, so a tap never scrolls. */
+/**
+ * A touch is a tap when the finger moves less than this (px): under the smallest swipe step, so a
+ * tap sends no wheel steps. (A quick one can still be a flick; the terminal checks that too.)
+ */
 export const TAP_MAX_MOVE = 8;
 /** A tap lifts within this (ms), so a long press isn't one. */
 export const TAP_MAX_MS = 500;

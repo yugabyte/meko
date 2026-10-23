@@ -22,7 +22,7 @@ describe('terminal key bar', () => {
 });
 
 describe('select mode', () => {
-  it('finds the row under a finger, kept on the screen', () => {
+  it('finds the row (or column) under a finger, kept on the screen', () => {
     // 20 rows over 400 px starting at 100: 20 px a row.
     expect(touchRow(100, 100, 400, 20)).toBe(0);
     expect(touchRow(119, 100, 400, 20)).toBe(0);
@@ -33,21 +33,12 @@ describe('select mode', () => {
     expect(touchRow(900, 100, 400, 20)).toBe(19);
     // No rows yet.
     expect(touchRow(10, 0, 400, 0)).toBe(0);
+    // Columns, for a tap on a link, the same way.
+    expect(touchCol(26, 16, 600, 60)).toBe(1);
   });
 });
 
 describe('tapping a link', () => {
-  it('finds the column under a finger, kept on the screen', () => {
-    // 60 columns over 600 px starting at 16: 10 px a column.
-    expect(touchCol(16, 16, 600, 60)).toBe(0);
-    expect(touchCol(25, 16, 600, 60)).toBe(0);
-    expect(touchCol(26, 16, 600, 60)).toBe(1);
-    expect(touchCol(316, 16, 600, 60)).toBe(30);
-    expect(touchCol(615, 16, 600, 60)).toBe(59);
-    expect(touchCol(0, 16, 600, 60)).toBe(0);
-    expect(touchCol(900, 16, 600, 60)).toBe(59);
-  });
-
   it('counts a short, still touch as a tap, not a swipe or a long press', () => {
     expect(isTap(0, 80)).toBe(true);
     expect(isTap(TAP_MAX_MOVE - 0.5, 80)).toBe(true);

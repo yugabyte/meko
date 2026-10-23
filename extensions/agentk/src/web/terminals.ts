@@ -905,24 +905,24 @@ class SessionTerminal {
     }
     const tap = this.tapStart;
     this.tapStart = null;
-    // A tap on a link opens it, the whole URL even when Claude broke it over rows. Cancelling the
-    // touchend stops the browser making mouse events of it: the web-links addon would open the
-    // URL again (cut off at the row's end), and Claude would get a click.
-    if (tap && isTap(tap.moved, e.timeStamp - tap.t)) {
-      const uri = this.linkUnder(tap.x, tap.y);
-      if (uri) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.touch = null;
-        this.samples = [];
-        openLink(uri);
-        return;
-      }
-    }
     const wasSwiping = !!this.touch;
     this.touch = null;
     const v = wasSwiping ? flingVelocity(this.samples, e.timeStamp) : 0;
     this.samples = [];
+    // A tap on a link opens it, the whole URL even when Claude broke it over rows; a flick, however
+    // short, still scrolls. Cancelling the touchend stops the browser making mouse events of it:
+    // the web-links addon would open the URL again (cut off at the row's end), Claude would get a
+    // click, and the pane's click (asking for a session open elsewhere, or focusing in typing mode)
+    // doesn't run either. The tap is only for the link.
+    if (tap && Math.abs(v) < FLING_MIN && isTap(tap.moved, e.timeStamp - tap.t)) {
+      const uri = this.linkUnder(tap.x, tap.y);
+      if (uri) {
+        e.preventDefault();
+        e.stopPropagation();
+        openLink(uri);
+        return;
+      }
+    }
     if (Math.abs(v) >= FLING_MIN) this.startFling(v);
   };
 

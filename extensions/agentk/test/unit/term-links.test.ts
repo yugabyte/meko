@@ -11,111 +11,111 @@ function row(text: string, cols: number, wrapped = false): TermRow {
   return { cells, wrapped };
 }
 
-/** linkAt over these rows, at the cell holding the `n`th (0-based) `needle` on row `y`. */
-function tap(rows: TermRow[], y: number, needle: string, n = 0): string | null {
-  const text = rows[y]!.cells.join('');
-  let col = -1;
-  for (let i = 0; i <= n; i++) col = text.indexOf(needle, col + 1);
+/** Rows as wrap-ansi draws them: the first one fills the screen's width. */
+function rows(...texts: string[]): TermRow[] {
+  return texts.map((t) => row(t, Array.from(texts[0]!).length));
+}
+
+/** linkAt over these rows, at the cell holding the first `needle` on row `y`. */
+function tap(rs: TermRow[], y: number, needle: string): string | null {
+  const col = rs[y]!.cells.join('').indexOf(needle);
   expect(col, `${needle} on row ${y}`).toBeGreaterThanOrEqual(0);
-  return linkAt((i) => rows[i], y, col);
+  return linkAt((i) => rs[i], y, col);
 }
 
 const SLACK = 'https://yugabyte.slack.com/archives/C0BE0G1N9ND/p1792458792999779';
 
 describe('the link under a tap', () => {
-  it('joins a URL Claude broke onto an indented row, from either row, but not from the indent', () => {
-    // The reported screen: the URL fills the first row, and Claude carries it on under the text.
-    const first = '● I posted in #amp-data-plane-dev: https://yugabyte.slack.co';
-    const cols = first.length;
-    const rows = [row('Called Slack', cols), row(first, cols), row('  m/archives/C0BE0G1N9ND/p1792458792999779', cols), row('', cols)];
-    expect(tap(rows, 1, 'https')).toBe(SLACK);
-    expect(tap(rows, 1, 'slack.co')).toBe(SLACK);
-    expect(tap(rows, 2, 'm/archives')).toBe(SLACK);
-    expect(tap(rows, 2, '9779')).toBe(SLACK);
-    expect(linkAt((i) => rows[i], 2, 0)).toBeNull();
-    expect(linkAt((i) => rows[i], 2, 1)).toBeNull();
-    expect(tap(rows, 1, 'posted')).toBeNull();
+  // Each URL is longer than its text's width, so wrap-ansi broke it, and carried it on at the margin.
+  it.each([
+    ['after a bullet (the reported screen)', rows('● I posted in #amp-data-plane-dev: https://yugabyte.slack.co', '  m/archives/C0BE0G1N9ND/p1792458792999779'), SLACK, [[0, 'https'], [0, 'slack.co'], [1, 'm/archives'], [1, '9779']]],
+    ['under a nested list item', rows('  - Tags: a thread reply: https://yugabyte.slack.co', '    m/archives/C0BE0G1N9ND/p1792458792999779'), SLACK, [[0, 'https'], [1, 'archives']]],
+    ['under a numbered item', rows('1. see https://example.com/abcdefghij', '   klmnopqrstuvwxyz'), 'https://example.com/abcdefghijklmnopqrstuvwxyz', [[1, 'klm']]],
+    ['over three rows', rows('- see https://example.com/a', '  bcdefghijklmnopqrstuvwxyz', '  /end and more'), 'https://example.com/abcdefghijklmnopqrstuvwxyz/end', [[0, 'https'], [1, 'q'], [2, 'end']]],
+    ['with no margin', rows('x https://example.com/abcdefghijklmnopqrst', 'uvwxyz/ ok'), 'https://example.com/abcdefghijklmnopqrstuvwxyz/', [[1, 'uvw']]],
+  ] as [string, TermRow[], string, [number, string][]][])('joins a URL Claude broke %s, from any row', (_name, rs, url, taps) => {
+    for (const [y, needle] of taps) expect(tap(rs, y, needle), `${needle} on row ${y}`).toBe(url);
   });
 
-  it('joins a URL over three rows', () => {
-    const rows = [row('- see https://example.com/a', 27), row('  bcdefghijklmnopqrstuvwxyz', 27), row('  /end and more', 27)];
-    const url = 'https://example.com/abcdefghijklmnopqrstuvwxyz/end';
-    expect(tap(rows, 0, 'https')).toBe(url);
-    expect(tap(rows, 1, 'q')).toBe(url);
-    expect(tap(rows, 2, 'end')).toBe(url);
-    expect(tap(rows, 2, 'more')).toBeNull();
+  it('leaves the indent before a carried-on URL to Claude', () => {
+    const rs = rows('● I posted in #amp-data-plane-dev: https://yugabyte.slack.co', '  m/archives/C0BE0G1N9ND/p1792458792999779');
+    expect(linkAt((i) => rs[i], 1, 0)).toBeNull();
+    expect(linkAt((i) => rs[i], 1, 1)).toBeNull();
+    expect(tap(rs, 0, 'posted')).toBeNull();
   });
 
-  it('joins under a nested list item', () => {
-    const first = '  - Tags: a thread reply: https://yugabyte.slack.co';
-    const rows = [row(first, first.length), row('    m/archives/C0BE0G1N9ND/p1792458792999779', first.length)];
-    expect(tap(rows, 1, 'archives')).toBe(SLACK);
-    expect(tap(rows, 0, 'https')).toBe(SLACK);
-  });
-
-  it('joins rows xterm wrapped itself', () => {
-    const rows = [row('see https://example.com/aaaa', 28), row('bbbb/c done', 28, true)];
-    expect(tap(rows, 0, 'example')).toBe('https://example.com/aaaabbbb/c');
-    expect(tap(rows, 1, 'c ')).toBe('https://example.com/aaaabbbb/c');
-    expect(tap(rows, 1, 'done')).toBeNull();
+  it.each([
+    // wrap-ansi sends the word after an exactly full row down with its space in front.
+    ['a new word after a URL that fills the row', rows('see https://example.com/page', ' Next: it works'), 'Next'],
+    ['a row indented deeper than the margin', rows('- see https://example.com/abc', '    defghijklmnop'), 'def'],
+    ['a row that starts left of the margin', rows('- see https://example.com/abc', 'defghijklmnop'), 'def'],
+    // A URL and that word together fit the text's width, so wrap-ansi wouldn't have broken them.
+    ['a next line too short to be the rest', rows('  see https://example.com/abc', '  so it works'), 'so'],
+    ['a border', rows('  x https://example.com/abc', '  │ defghijklmnopqrstuvw'), '│'],
+  ])("doesn't join %s", (_name, rs, next) => {
+    const url = rs[0]!.cells.join('').trimEnd().split(' ').pop();
+    expect(tap(rs, 0, 'https')).toBe(url);
+    expect(tap(rs, 1, next)).toBeNull();
   });
 
   it("doesn't join a URL that stops before the row's end", () => {
-    const rows = [row('see https://example.com/a', 30), row('  bcd', 30)];
-    expect(tap(rows, 0, 'https')).toBe('https://example.com/a');
-    expect(tap(rows, 1, 'bcd')).toBeNull();
+    const rs = [row('see https://example.com/a', 30), row('bcdefghijklmnopqrstu', 30)];
+    expect(tap(rs, 0, 'https')).toBe('https://example.com/a');
+    expect(tap(rs, 1, 'bcd')).toBeNull();
   });
 
-  it("doesn't join a row indented deeper than where the URL started", () => {
-    const rows = [row('x https://example.com/a', 23), row('      bcd', 23)];
-    expect(tap(rows, 0, 'https')).toBe('https://example.com/a');
-    expect(tap(rows, 1, 'bcd')).toBeNull();
+  it('takes only URL characters from the row it carries on to', () => {
+    const rs = rows('  x https://example.com/abc', '  defg│hijklmnopqrst');
+    expect(tap(rs, 0, 'https')).toBe('https://example.com/abcdefg');
+    expect(tap(rs, 1, 'hij')).toBeNull();
   });
 
-  it("doesn't join across a border", () => {
-    for (const next of ['  │ bcd', '  | bcd', '│ bcd']) {
-      const rows = [row('x https://example.com/a', 23), row(next, 23)];
-      expect(tap(rows, 0, 'https'), next).toBe('https://example.com/a');
-    }
+  it('joins rows xterm wrapped itself', () => {
+    const rs = [row('see https://example.com/aaaa', 28), row('bbbb/c done', 28, true)];
+    expect(tap(rs, 0, 'example')).toBe('https://example.com/aaaabbbb/c');
+    expect(tap(rs, 1, 'c ')).toBe('https://example.com/aaaabbbb/c');
+    expect(tap(rs, 1, 'done')).toBeNull();
   });
 
-  it('takes only URL characters from the row Claude carried it onto', () => {
-    const rows = [row('x https://example.com/a', 23), row('  bc│de', 23)];
-    expect(tap(rows, 0, 'https')).toBe('https://example.com/abc');
-    expect(tap(rows, 1, 'de')).toBeNull();
+  it('finds a long URL wherever it is tapped, however much of it is above', () => {
+    // 2,400 characters above the last row.
+    const first = `https://example.com/${'a'.repeat(100)}`;
+    const rs = rows(first, ...Array<string>(19).fill('a'.repeat(120)), 'aaaa done');
+    const url = `${first}${'a'.repeat(19 * 120 + 4)}`;
+    expect(tap(rs, 20, 'aaaa')).toBe(url);
+    expect(tap(rs, 0, 'https')).toBe(url);
   });
 
   it('leaves out trailing punctuation and brackets', () => {
-    const rows = [row('(see https://example.com/a', 26), row('  bc).', 26)];
-    expect(tap(rows, 1, 'bc')).toBe('https://example.com/abc');
-    expect(tap(rows, 1, ')')).toBeNull();
-    expect(tap(rows, 1, '.')).toBeNull();
+    const rs = rows('  (see https://example.com/abcdefghij', '  klmnopqrstuvwxyz).');
+    expect(tap(rs, 1, 'klm')).toBe('https://example.com/abcdefghijklmnopqrstuvwxyz');
+    expect(tap(rs, 1, ')')).toBeNull();
+    expect(tap(rs, 1, '.')).toBeNull();
   });
 
   it('finds the right cells after a wide character', () => {
     // 日 and 本 take two cells each.
-    const cells = ['日', '', '本', '', ' ', ...Array.from('https://example.com/a')];
-    const rows: TermRow[] = [{ cells, wrapped: false }, row('  bc', cells.length)];
-    expect(linkAt((i) => rows[i], 0, 5)).toBe('https://example.com/abc');
-    expect(linkAt((i) => rows[i], 0, 1)).toBeNull();
-    expect(tap(rows, 1, 'bc')).toBe('https://example.com/abc');
+    const cells = ['日', '', '本', '', ' ', ...Array.from('https://example.com/abcdef')];
+    const rs: TermRow[] = [{ cells, wrapped: false }, row('ghijklm', cells.length)];
+    expect(linkAt((i) => rs[i], 0, 5)).toBe('https://example.com/abcdefghijklm');
+    expect(linkAt((i) => rs[i], 0, 1)).toBeNull();
+    expect(tap(rs, 1, 'ghij')).toBe('https://example.com/abcdefghijklm');
   });
 
   it('tells apart two links on a row, and a link after a joined one', () => {
-    const rows = [row('https://a.io and https://b.io/x', 31), row('  y then https://c.io', 31)];
-    expect(tap(rows, 0, 'a.io')).toBe('https://a.io');
-    expect(tap(rows, 0, 'b.io')).toBe('https://b.io/xy');
-    expect(tap(rows, 1, 'y')).toBe('https://b.io/xy');
-    expect(tap(rows, 1, 'c.io')).toBe('https://c.io');
-    expect(tap(rows, 1, 'then')).toBeNull();
+    const rs = rows('https://a.io https://b.io/x', 'yyyyyyyyyyyyyy https://c.io');
+    expect(tap(rs, 0, 'a.io')).toBe('https://a.io');
+    expect(tap(rs, 0, 'b.io')).toBe('https://b.io/xyyyyyyyyyyyyyy');
+    expect(tap(rs, 1, 'y')).toBe('https://b.io/xyyyyyyyyyyyyyy');
+    expect(tap(rs, 1, 'c.io')).toBe('https://c.io');
   });
 
   it('finds a link on one row, and nothing past it or without a host', () => {
-    const rows = [row('open https://example.com now', 40), row('just https:// here', 40)];
-    expect(tap(rows, 0, 'example')).toBe('https://example.com');
-    expect(tap(rows, 0, 'now')).toBeNull();
-    expect(tap(rows, 1, 'https')).toBeNull();
-    expect(linkAt((i) => rows[i], 5, 0)).toBeNull();
+    const rs = [row('open https://example.com now', 40), row('just https:// here', 40)];
+    expect(tap(rs, 0, 'example')).toBe('https://example.com');
+    expect(tap(rs, 0, 'now')).toBeNull();
+    expect(tap(rs, 1, 'https')).toBeNull();
+    expect(linkAt((i) => rs[i], 5, 0)).toBeNull();
   });
 });
 
@@ -129,9 +129,9 @@ describe("the link under a tap, in xterm's buffer", () => {
   }
 
   it('joins a URL Claude broke with a cursor move, and one xterm wrapped', async () => {
-    // As Ink draws it: the first row, then the cursor to the next row and the indented rest.
-    const at = await screen(20, 'x https://a.io/bcdef\r\n  ghij\r\nhttps://b.io/klmnopqrstu');
-    expect(at(0, 2)).toBe('https://a.io/bcdefghij');
+    // As Claude draws it: the first row, then the cursor to the next row and the rest at the margin.
+    const at = await screen(20, '  x https://a.io/bcd\r\n  efghij\r\nhttps://b.io/klmnopqrstu');
+    expect(at(0, 4)).toBe('https://a.io/bcdefghij');
     expect(at(1, 3)).toBe('https://a.io/bcdefghij');
     expect(at(1, 0)).toBeNull();
     // 24 characters on 20 columns: xterm wraps the last 4 onto row 3.

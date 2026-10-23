@@ -1,7 +1,10 @@
 // The link under a finger in the terminal, for a tap on a phone. Mouse clicks go through
 // @xterm/addon-web-links; this finds the same links, and also joins a URL that Claude Code broke
-// over rows itself: Ink writes each row and indents the next to the text's margin, so xterm never
-// marks the next row wrapped (isWrapped), and the addon sees two links.
+// over rows itself. Claude wraps its text with wrap-ansi ({ trim: false, hard: true }, as Ink's
+// Text does) and writes each row on its own, so xterm never marks the next row wrapped
+// (isWrapped), and the addon sees two links. wrap-ansi breaks a word only when it's longer than the
+// text's whole width, and carries the rest on at the text's margin; a word that ends exactly at the
+// right edge sends the next one down with its space in front, one column past the margin.
 
 import type { IBuffer } from '@xterm/xterm';
 
@@ -36,26 +39,43 @@ function isUrl(text: string): boolean {
 /** The ASCII characters a URL can hold (RFC 3986): what a row Claude broke a URL onto may carry on with. */
 const URL_CHAR = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]$/;
 
-/** Rows looked at above and below the tapped one, and characters gathered, at most. */
+/** Rows looked at above and below the tapped one, at most. */
 const MAX_ROWS = 20;
-const MAX_CHARS = 2048;
+
+/** A bullet or list marker in front of a row's text: one symbol (●, -, *, ⎿), or a number and `.` or `)`. */
+const MARKER = /^(?:[^\p{L}\p{N}]|\d+[.)])$/u;
+
+/** Where a row's text starts: its first non-blank cell, or past a leading marker and the blanks after it. */
+function margin(row: TermRow): number {
+  const n = row.cells.length;
+  let c = 0;
+  while (c < n && row.cells[c] === ' ') c++;
+  let end = c;
+  while (end < n && row.cells[end] !== ' ') end++;
+  if (end === n || !MARKER.test(row.cells.slice(c, end).join(''))) return c;
+  while (end < n && row.cells[end] === ' ') end++;
+  return end;
+}
 
 /**
  * How `row` carries on from `above`: 'soft' when xterm wrapped it, the column its text starts at
- * when Claude broke a URL onto it, or null when it starts afresh. Claude's break is taken only when
- * the row above runs a URL's characters into its last cell, and this row, indented no deeper than
- * where that run started, starts with one.
+ * when Claude broke a word onto it, or null when it starts afresh. A break is taken only as
+ * wrap-ansi makes one: the row above runs a word into its last cell, this row starts that word's
+ * rest exactly at the row above's margin (a space in front means a new word), and the word is
+ * longer than the text's width, so this row's part reaches past the column the word started at.
  */
 function continuation(above: TermRow, row: TermRow): 'soft' | number | null {
   if (row.wrapped) return 'soft';
-  const last = above.cells.length - 1;
-  if (last < 0 || !URL_CHAR.test(above.cells[last]!)) return null;
-  let start = last;
-  while (start > 0 && URL_CHAR.test(above.cells[start - 1]!)) start--;
-  let indent = 0;
-  while (indent < row.cells.length && row.cells[indent] === ' ') indent++;
-  if (indent > start || indent >= row.cells.length || !URL_CHAR.test(row.cells[indent]!)) return null;
-  return indent;
+  const n = above.cells.length;
+  if (n === 0 || row.cells.length !== n || !URL_CHAR.test(above.cells[n - 1]!)) return null;
+  const m = margin(above);
+  let start = n - 1;
+  while (start > m && above.cells[start - 1] !== ' ') start--;
+  if (!URL_CHAR.test(row.cells[m] ?? ' ')) return null;
+  for (let c = 0; c < m; c++) if (row.cells[c] !== ' ') return null;
+  let end = m;
+  while (end < n && row.cells[end] !== ' ') end++;
+  return end > start ? m : null;
 }
 
 /**
@@ -86,7 +106,7 @@ export function linkAt(getRow: (y: number) => TermRow | undefined, y: number, co
     text += s;
     for (let i = 0; i < s.length; i++) at.push(c === null ? null : { row, col: c });
   };
-  for (let r = top; r <= bottom && text.length < MAX_CHARS; r++) {
+  for (let r = top; r <= bottom; r++) {
     const row = read(r)!;
     let from = 0;
     let urlEnd = row.cells.length;

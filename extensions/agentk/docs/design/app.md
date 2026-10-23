@@ -352,11 +352,17 @@ WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL
 its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
 selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches Claude
 as a mouse click meanwhile. Tapping a link opens it in a new tab, the whole URL even when Claude
-Code broke it over rows itself: the next row carries it on when the URL runs into the row's last
-cell and the next row, indented no deeper than where the URL started, starts with URL characters
-(`linkAt()` in `src/web/termlinks.ts`). The tap opens it straight from the touch handler and is
-cancelled, so it doesn't also reach Claude as a click or open the link a second time through the
-mouse path. A tap is a finger that moves less than 8 px and lifts within half a second. A mouse click on a link
-goes through xterm's web-links addon, which only joins rows xterm wrapped itself. Tapping the
+Code broke it over rows itself (`linkAt()` in `src/web/termlinks.ts`). Claude wraps with wrap-ansi,
+which breaks a word only when it's longer than the text's width and carries the rest on exactly at
+the text's margin. So the next row carries a URL on only when the URL runs into the row's last cell,
+the next row starts exactly at the row above's margin (past a bullet or list marker), and its part
+reaches past the column where the URL started. A word that only follows a URL filling the row comes
+down with its space in front, one column past the margin, so it isn't joined. The tap opens the
+link straight from the touch handler and is cancelled, so it doesn't also reach Claude as a click,
+open the link a second time through the mouse path, or do what a tap on the terminal does otherwise
+(ask for a session open on another screen, or focus it in typing mode). A tap is a finger that
+moves less than 8 px and lifts within half a second without flicking; a short, quick flick still
+scrolls. A mouse click on a link goes through xterm's web-links addon, which only joins rows xterm
+wrapped itself. Tapping the
 terminal only brings up the keyboard in typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
 adjustable in the ⋯ sheet and remembered per browser.
