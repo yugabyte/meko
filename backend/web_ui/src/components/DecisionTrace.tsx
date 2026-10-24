@@ -1,6 +1,6 @@
 // A turn's decision trace, collapsed to one summary line: what the agent read from Meko, why it
 // answered so and the steps it took (its own reasoning and plan), and what it wrote. Each call opens
-// its step timings. Meko local builds it from the call log; Cloud's comes from Langfuse.
+// its step timings. Meko builds it from the call log.
 
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Search, Sparkles, Wrench } from "lucide-react";

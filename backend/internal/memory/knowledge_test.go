@@ -264,7 +264,7 @@ func shaHex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// With the real models: the done-when. A file is found by a paraphrased question through
+// With the real models: the end-to-end check. A file is found by a paraphrased question through
 // knowledgebase_search and context_search, a promoted memory is found the same way, the same file
 // twice is stored once, and no file text reaches the memory engine's log.
 func TestKnowledgeSearchWithTheModels(t *testing.T) {

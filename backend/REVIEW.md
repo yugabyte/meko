@@ -36,7 +36,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       the memory engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
       `internal/mcp/agentk_contract_test.go`.
 - [ ] The memory engine stores only through the store API, its dependencies stay pinned, and nothing copies
-      or cites prod Meko's private code.
+      or cites Meko Cloud's private code.
 - [ ] No third-party C code is copied into `backend/`. SQLite and sqlite-vec come from the
       `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates
       `TestLibVersions`, and the build keeps the `sqlite_fts5` and `sqlite_vec` tags.
@@ -58,6 +58,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
       temporary name and renamed before their row commits, removed after it's deleted; their text
       never reaches a log or an error reply.
-- [ ] `docs/design.md`, `docs/memory-engine.md`, `docs/knowledge.md`, `docs/install.md` and
-      `AGENTS.md` here match the code, and so does the repo root's `README.md` (Meko's commands,
-      their flags and the build requirements).
+- [ ] The docs in `docs/` and `AGENTS.md` here match the code, and so does the repo root's
+      `README.md` (Meko's commands, their flags and the build requirements). They describe Meko as
+      it is, without status lines, milestones, PR or issue numbers or history, and say nothing of
+      Meko Cloud's internals beyond the behavior Meko matches.

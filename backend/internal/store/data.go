@@ -21,7 +21,7 @@ const (
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 // DefaultDatapackName names the datapack made on first start. It must not start with
-// meko_default_datapack: meko_ui sets up Langfuse keys for datapacks named that way.
+// meko_default_datapack, which Meko Cloud reserves for its own default datapacks.
 const DefaultDatapackName = "default"
 
 // Setting reads a setting; ok is false when it isn't set.

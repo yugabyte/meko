@@ -28,8 +28,8 @@ import (
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 )
 
-// BodyLimit caps request bodies on /api/v1. Routes outside that group (uploads, later) set their
-// own limit: one installed for every route would refuse their bodies before theirs could run.
+// BodyLimit caps request bodies on /api/v1. Routes outside that group (/mcp, the upload link) set
+// their own limit: one installed for every route would refuse their bodies before theirs could run.
 const BodyLimit = "1M"
 
 // Info is what status and version report.

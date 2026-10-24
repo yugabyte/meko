@@ -285,7 +285,7 @@ func (s *Service) SetConversationSearchOptOut(ctx context.Context, datapack stri
 type ConversationHit struct {
 	Content        string   `json:"content"`
 	Distance       float64  `json:"distance"`
-	RerankScore    *float64 `json:"rerank_score"` // null until the cross-encoder arrives (milestone 4)
+	RerankScore    *float64 `json:"rerank_score"` // always null: conversation hits aren't reranked
 	ConversationID string   `json:"conversation_id"`
 	MessageID      string   `json:"message_id"`
 	UserID         string   `json:"user_id"`
