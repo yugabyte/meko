@@ -65,8 +65,7 @@ slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a relea
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
 repo root; the
-`PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules, including: no
-agent attribution.
+`PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules.
 
 ## Dependencies
 
