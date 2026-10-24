@@ -117,7 +117,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
       c.kiro.enabled = false;
     });
     expect(env.core.state().askAgentk).toBe(false);
-    await expect(env.core.sessions.create(p.id, { name: 'none' })).rejects.toThrow(/^No coding agent is available: install Claude Code or Kiro CLI/);
+    await expect(env.core.sessions.create(p.id, { name: 'none' })).rejects.toThrow(/^No coding agent is available: install Claude Code, OpenCode or Kiro CLI/);
     await expect(env.core.askAgentk.ask({ text: 'hello' })).rejects.toThrow(/^No coding agent is available/);
   });
 

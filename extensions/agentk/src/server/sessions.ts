@@ -42,6 +42,7 @@ import {
 } from './store.js';
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
 import { ZERO_USAGE, sessionUsage, usageBySession } from './usage.js';
+import { removeOpenCodeSession } from './opencode.js';
 import { claudePath } from './paths.js';
 
 /** The status detail while Claude's folder-trust dialog waits (matched exactly: other details can quote Claude's own words). */
@@ -2237,6 +2238,8 @@ export class SessionManager {
         this.core.log.info(`kept the worktree of ${row.id} at ${row.worktree_path}: it has uncommitted changes`);
       }
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
+      // Its OpenCode instructions and usage log: the session can't be resumed any more.
+      removeOpenCodeSession(this.core.paths, row.id);
       removePastes(this.core.paths.pastes, row.id);
       removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);

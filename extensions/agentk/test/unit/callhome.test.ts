@@ -328,7 +328,7 @@ describe('the usage stats report', () => {
     expect(r.totals).toEqual({
       projects: { current: 2, deleted: 1, withDatapack: 1, sharedDatapacks: 1, repos: 1 },
       sessions: {
-        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1, 'review-pr': 0 }, byHarness: { claude: 4, kiro: 0 },
+        total: 4, open: 2, archived: 2, byKind: { explore: 1, plan: 2, quick: 1, 'review-pr': 0 }, byHarness: { claude: 4, opencode: 0, kiro: 0 },
         openByStage: { explore: 1, design: 0, code: 0, pr: 0, review: 1, merge: 0, done: 0, 'reviewing-pr': 0 },
       },
       shipped: { mergedPrs: 2, directPushes: 2, directCommits: 2, prCommits: 3, prAdditions: 100, prDeletions: 20 },
@@ -349,10 +349,11 @@ describe('the usage stats report', () => {
   it("counts sessions by harness, and Kiro's turns and the credits they billed on their day, apart from tokens", () => {
     const db = seeded();
     run(db, `UPDATE sessions SET harness = 'kiro' WHERE id = 's1'`);
+    run(db, `UPDATE sessions SET harness = 'opencode' WHERE id = 's2'`);
     run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, credits)
              VALUES ('s1', 'kiro:c:1', NULL, 'auto', ?, 0, 0, 0, 0, 0.25)`, at('2026-09-27T17:00:00Z'));
     const r = report(db);
-    expect(r.totals.sessions.byHarness).toEqual({ claude: 3, kiro: 1 });
+    expect(r.totals.sessions.byHarness).toEqual({ claude: 2, opencode: 1, kiro: 1 });
     expect(r.days.find((d) => d.day === '2026-09-27')!.kiro).toEqual({ sessionsCreated: 1, turns: 1, credits: 0.25 });
     expect(r.days.find((d) => d.day === '2026-09-26')!.kiro).toBeUndefined();
     expect(r.totals.tokens).not.toHaveProperty('credits');
@@ -552,15 +553,17 @@ describe('what the report says about the install', () => {
     return a;
   };
 
-  it('reads the Claude Code version, and Meko and access from the config', async () => {
+  it("reads the agents' versions, and Meko and access from the config", async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.server.bind = '127.0.0.1';
     cfg.meko.apiKey = 'key';
     cfg.update.channel = 'prerelease';
-    const facts = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n' }) });
+    const facts = await installFacts({
+      config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n', opencode: '1.19.4\n' }),
+    });
     expect(facts).toMatchObject({
       version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
-      claudeCode: '2.4.1', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
+      claudeCode: '2.4.1', opencode: '1.19.4', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
     });
     // A self-hosted Meko with no web app or API URL set: AgentK can't share.
     cfg.meko.url = 'https://meko.example.com/mcp';
@@ -586,6 +589,7 @@ describe('what the report says about the install', () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     const facts = await installFacts({ config: cfg, version: 'not a version!', firstDay: '2026-09-28', probe: probe({ claude: 'no digits here' }) });
     expect(facts).not.toHaveProperty('tmux');
+    expect(facts).not.toHaveProperty('opencode');
     expect(facts).toMatchObject({ version: '0.0.0', claudeCode: '', access: 'remote', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
   });
 

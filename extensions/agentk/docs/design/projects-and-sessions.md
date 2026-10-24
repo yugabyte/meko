@@ -66,8 +66,12 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
 
 [agents]
-# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → Harness); claude by default,
-                             # and the first available one while the one named isn't available
+# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude, opencode or kiro; Settings → Harness); claude by default,
+                             # and the first available one (in that order) while the one named isn't available
+
+[opencode]
+# command = "opencode"       # how OpenCode is run; the default is also found in ~/.opencode/bin
+# enabled = false            # don't offer OpenCode for new sessions; on by default (offered once `opencode --version` answers 1.19.4 or later)
 
 [kiro]
 # command = "kiro-cli"       # how Kiro CLI is run

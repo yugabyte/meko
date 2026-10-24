@@ -96,8 +96,12 @@ user's agent list): the system prompt below plus the answer's JSON schema (Kiro 
 option), no tools, no MCP servers, no hooks. The answer is the `runFinished` event's `finalText`, its
 JSON object read even inside a code fence; Kiro keeps every run as a session, so AgentK deletes the
 ask's (`chat --delete-session`) once it has the answer, in the background (a server that is
-stopping waits up to 5 seconds for deletes still running). `[ask_agentk] model` is Claude's; Kiro uses
-its own default. On Claude Code, the server runs it once per ask (`[claude] command`), with the
+stopping waits up to 5 seconds for deletes still running). On OpenCode it runs `opencode run
+--format json --agent agentk-ask`, the message on stdin, in the same folder, whose `opencode.json`
+(read by OpenCode as the folder's project config, so the agent never shows in the user's agent list)
+defines `agentk-ask` with the system prompt and the answer's shape and `permission: "deny"`, so it has
+no tools; the answer is its `text` events, and its session is deleted the same way (`opencode session
+delete`). `[ask_agentk] model` is Claude's; Kiro and OpenCode use their own default. On Claude Code, the server runs it once per ask (`[claude] command`), with the
 arguments as an array: `-p --model <[ask_agentk] model> --output-format json --json-schema <answer>
 --tools "" --strict-mcp-config --setting-sources user --settings {"disableAllHooks":true}
 --no-session-persistence --system-prompt <AgentK's>`, the message on stdin, in an empty folder

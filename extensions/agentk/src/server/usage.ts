@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DEFAULT_HARNESS, HARNESS_IDS, harnessOf } from '../shared/harnesses.js';
 import { costOf, priceFor } from '../shared/pricing.js';
@@ -11,6 +11,7 @@ import {
 import { openGapCounts } from './mekogaps.js';
 import { readSavedReplySync } from './savedreply.js';
 import type { KiroTurn } from './kiro.js';
+import { parseOpenCodeMessages } from './opencode.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -321,7 +322,7 @@ interface CostRow {
 const COST_SUMS = `u.model AS model, SUM(u.input) AS input, SUM(u.output) AS output, SUM(u.cache_read) AS cache_read,
   SUM(u.cache_write) AS cache_write, SUM(u.cache_write_1h) AS cache_write_1h, COUNT(*) AS messages`;
 
-/** Rows priced from their tokens: Claude Code's responses. Kiro's turns carry the credits it billed instead. */
+/** Rows priced from their tokens: Claude Code's and OpenCode's responses. Kiro's turns carry the credits it billed instead. */
 const PRICED = 'u.credits IS NULL';
 
 /** API-price cost of per-model sums. */
@@ -504,6 +505,39 @@ export function recordKiroTurns(db: Db, sessionId: string, conversation: string,
       sessionId, `kiro:${conversation}:${t.key}`, t.model, t.at, t.input, t.output, t.cacheRead, t.cacheWrite, t.credits);
       added += Number(r.changes);
     }
+  });
+  return added > 0;
+}
+
+/**
+ * Reads an OpenCode session's `messages.jsonl` (each finished response's tokens, written by AgentK's
+ * plugin) from where the last read stopped, into `usage_messages`, priced like Claude Code's. Its
+ * subagents' responses count too, under their own OpenCode session as the agent (`main`'s have none).
+ * A line still being written is read next time. True when rows were added.
+ */
+export function ingestOpenCodeUsage(db: Db, sessionId: string, file: string, main: string | null): boolean {
+  const prev = get<{ offset: number }>(db, 'SELECT offset FROM usage_files WHERE session_id = ? AND path = ?', sessionId, file);
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return false;
+  }
+  let offset = prev?.offset ?? 0;
+  if (Buffer.byteLength(text) < offset) offset = 0; // rewritten: start over (rows already in are skipped by id)
+  const rest = Buffer.from(text).subarray(offset).toString('utf8');
+  const end = rest.lastIndexOf('\n') + 1;
+  if (!end) return false;
+  let added = 0;
+  tx(db, () => {
+    for (const m of parseOpenCodeMessages(rest.slice(0, end))) {
+      const r = run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, cache_write_1h)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(session_id, message_id) DO NOTHING`,
+      sessionId, `opencode:${m.id}`, m.session && m.session !== main ? m.session : null, m.model, m.at, m.input, m.output, m.cacheRead, m.cacheWrite);
+      added += Number(r.changes);
+    }
+    run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
+             ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, sessionId, file, offset + Buffer.byteLength(rest.slice(0, end)));
   });
   return added > 0;
 }

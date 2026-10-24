@@ -8,6 +8,7 @@ import {
   type CallHomeReport, type CallHomeTokens, type YbCallHome,
 } from '../shared/types.js';
 import { isLoopback, mekoConfigured, resolveMekoApiUrl, resolveMekoWithSource, type Config } from './config.js';
+import { openCodeCommand } from './opencode.js';
 import { all, get, kvGet, kvSet, type Db } from './db.js';
 import { readFileTypes, sumFileTypes } from './filetypes.js';
 import { errMsg, type Logger } from './log.js';
@@ -474,6 +475,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   const probe = o.probe ?? defaultProbe;
   const claudeCode = await probeVersion(probe, o.config.claude.command, ['--version'], /(\d+\.\d+\.\d+)/);
   const kiro = o.config.kiro.enabled ? await probeVersion(probe, o.config.kiro.command, ['--version'], /(\d+\.\d+\.\d+)/) : '';
+  const opencode = o.config.opencode.enabled ? await probeVersion(probe, openCodeCommand(o.config.opencode.command), ['--version'], /(\d+\.\d+\.\d+)/) : '';
   const meko = mekoConfigured(o.config);
   return {
     version: reportVersion(o.version),
@@ -483,6 +485,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     node: reportVersion(process.versions.node),
     claudeCode,
     ...(kiro ? { kiro } : {}),
+    ...(opencode ? { opencode } : {}),
     access: isLoopback(o.config.server.bind) ? 'local' : 'remote',
     service: serviceKind(),
     meko: {

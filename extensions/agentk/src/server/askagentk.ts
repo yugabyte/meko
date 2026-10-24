@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { NO_AGENT } from '../shared/harnesses.js';
 import { parseGithubRef } from '../shared/github-refs.js';
@@ -10,6 +10,7 @@ import {
 } from '../shared/types.js';
 import type { Config } from './config.js';
 import { ASK_AGENT, askAgent, deleteKiroSession, readKiroRun, writeKiroAgent } from './kiro.js';
+import { OPENCODE_ASK_AGENT, deleteOpenCodeSession, openCodeAskConfig, openCodeCommand, readOpenCodeRun } from './opencode.js';
 import { HttpError } from './projects.js';
 
 /** The most actions an answer offers; Claude's later ones are dropped. */
@@ -89,8 +90,8 @@ export function kiroAskArgs(): string[] {
   return ['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', ASK_AGENT];
 }
 
-/** The `agentk-ask` agent's instructions: Claude's system prompt, and the answer's shape (Kiro has no JSON schema option). */
-export function kiroAskPrompt(): string {
+/** The `agentk-ask` agent's instructions: Claude's system prompt, and the answer's shape (Kiro and OpenCode have no JSON schema option). */
+export function askPromptWithShape(): string {
   return `${SYSTEM_PROMPT}\n\nAnswer with one JSON object and nothing else (no prose, no code fence), in this JSON schema's shape: ${JSON.stringify(ANSWER_SCHEMA)}`;
 }
 
@@ -301,7 +302,7 @@ export const claudeAsker: Asker = {
  */
 export const kiroAsker: Asker = {
   command(cfg, cwd) {
-    writeKiroAgent(askAgent(kiroAskPrompt()), join(cwd, '.kiro'));
+    writeKiroAgent(askAgent(askPromptWithShape()), join(cwd, '.kiro'));
     return { cmd: cfg.kiro.command, args: kiroAskArgs() };
   },
   read(run, cmd, timeoutSeconds, cwd) {
@@ -310,6 +311,47 @@ export const kiroAsker: Asker = {
     return answer;
   },
 };
+
+/** The arguments for one ask on OpenCode: a one-shot run as the `agentk-ask` agent, its events as JSON, the message on stdin. */
+export function openCodeAskArgs(): string[] {
+  return ['run', '--format', 'json', '--agent', OPENCODE_ASK_AGENT];
+}
+
+/**
+ * OpenCode: as the `agentk-ask` agent (every tool denied), defined in an `opencode.json` in the ask's
+ * folder, where OpenCode reads a project's config, so it never shows among the user's agents. It runs
+ * on OpenCode's default model. OpenCode keeps every run as a session; an ask's is deleted.
+ */
+export const openCodeAsker: Asker = {
+  command(cfg, cwd) {
+    writeFileSync(join(cwd, 'opencode.json'), openCodeAskConfig(askPromptWithShape()));
+    return { cmd: openCodeCommand(cfg.opencode.command), args: openCodeAskArgs() };
+  },
+  read(run, cmd, timeoutSeconds, cwd) {
+    const answer = readOpenCodeAnswer(run, cmd, timeoutSeconds);
+    if (answer.sessionId) deleteOpenCodeSession(cmd, answer.sessionId, cwd);
+    return answer;
+  },
+};
+
+/** What OpenCode printed (`readOpenCodeRun`), as an answer, or the error the palette shows. */
+export function readOpenCodeAnswer(run: AskRun, cmd: string, timeoutSeconds: number): { reply: string; actions: unknown; sessionId: string | null } {
+  if (run.spawnError) throw new HttpError(503, `OpenCode couldn't be run (${cmd}): install it, or set [opencode] command in config.toml.`);
+  if (run.timedOut) throw new HttpError(504, `AgentK didn't answer in ${timeoutSeconds} seconds. Try again, or use a command.`);
+  const r = readOpenCodeRun(run.stdout);
+  if (r.error || run.code !== 0) {
+    const said = r.error || run.stderr.trim().split('\n').filter(Boolean).at(-1) || '';
+    if (/api key|credential|unauthori[sz]ed|auth(?:entication)? (?:failed|error)|log ?in/i.test(said)) {
+      throw new HttpError(502, "OpenCode can't reach a model provider. Run opencode auth login in a terminal, then ask again.");
+    }
+    throw new HttpError(502, `OpenCode failed${said ? `: ${oneLine(said, 300)}` : ` (exit ${run.code ?? 'unknown'})`}. Try again.`);
+  }
+  const answer = jsonIn(r.text);
+  if (!answer || typeof answer.reply !== 'string') {
+    throw new HttpError(502, "AgentK's answer couldn't be read. Try again, or say it another way.");
+  }
+  return { reply: answer.reply.trim(), actions: answer.actions, sessionId: r.sessionId };
+}
 
 /** What Kiro printed (`readKiroRun`), as an answer, or the error the palette shows. */
 export function readKiroAnswer(run: AskRun, cmd: string, timeoutSeconds: number): { reply: string; actions: unknown; sessionId: string | null } {

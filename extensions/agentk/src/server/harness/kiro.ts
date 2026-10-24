@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { HARNESS_CAPS } from '../../shared/harnesses.js';
-import type { HarnessStatus } from '../../shared/types.js';
 import { kiroAsker } from '../askagentk.js';
 import { contextScriptPath, hookScriptPath } from '../claude.js';
 import type { Config } from '../config.js';
@@ -19,12 +18,8 @@ import { HttpError } from '../projects.js';
 import type { SessionRow } from '../store.js';
 import { recordKiroTurns } from '../usage.js';
 import type { Harness } from './types.js';
-import { cliVersion, versionAtLeast } from './version.js';
+import { cliState } from './version.js';
 
-/** The oldest kiro-cli sessions start on. */
-const MIN_VERSION = HARNESS_CAPS.kiro.minVersion;
-/** How long a version read is used before it's read again (Kiro updates itself). */
-const VERSION_TTL_MS = 10 * 60 * 1000;
 /** How long `kiro-cli update` may run before it's stopped. */
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** Kiro's file-writing tool, by the name its hook matchers take (Kiro 2.32 calls it `write` and keeps this alias). */
@@ -93,42 +88,8 @@ export function normalizeKiro(raw: HookPayload): HookPayload | null {
 
 /** Kiro CLI (`kiro-cli`). */
 export function kiroHarness(deps: { log: Logger; changed: () => void; readVersion?: (cmd: string) => Promise<string | null> }): Harness {
-  const readVersion = deps.readVersion ?? cliVersion;
-  let ver: { command: string; at: number; read: Promise<string | null> } | null = null;
-  let value: string | null = null;
-  /** The command the last finished read was for (`checked`). */
-  let readFor: string | null = null;
-  let updating = false;
-
-  const version = (cfg: Config, force = false): Promise<string | null> => {
-    const command = cfg.kiro.command;
-    if (!cfg.kiro.enabled) {
-      // Forgotten, so turning it back on reads it again before it's offered.
-      ver = null;
-      readFor = null;
-      return Promise.resolve(null);
-    }
-    const now = Date.now();
-    if (force || !ver || ver.command !== command || now - ver.at > VERSION_TTL_MS) {
-      const read = readVersion(command).then((v) => {
-        if (ver?.read === read && (v !== value || readFor !== command)) {
-          value = v;
-          readFor = command;
-          deps.changed();
-        }
-        return v;
-      });
-      ver = { command, at: now, read };
-    }
-    return ver.read;
-  };
-  const status = (cfg: Config): HarnessStatus => {
-    const v = cfg.kiro.enabled && readFor === cfg.kiro.command ? value : null;
-    return {
-      id: 'kiro', enabled: cfg.kiro.enabled, version: v, minVersion: MIN_VERSION, available: !!v && (!MIN_VERSION || versionAtLeast(v, MIN_VERSION)),
-      checked: !cfg.kiro.enabled || readFor === cfg.kiro.command, isDefault: cfg.agents.default === 'kiro', updating,
-    };
-  };
+  const cli = cliState({ id: 'kiro', changed: deps.changed, readVersion: deps.readVersion });
+  const version = cli.version;
   const refreshAgent = (paths: Paths, cfg: Config) => {
     try {
       if (writeAgentkAgent(paths, cfg)) deps.log.info(`wrote Kiro's ${AGENTK_AGENT} agent`);
@@ -202,22 +163,10 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
       return { changed, contextPercent: turns.at(-1)?.contextPercent };
     },
     ask: kiroAsker,
-    status,
+    status: cli.status,
     version,
-    async update(cfg) {
-      if (updating) throw new HttpError(409, 'Kiro is already being updated.');
-      updating = true;
-      deps.changed();
-      try {
-        await new Promise<void>((done) => {
-          execFile(cfg.kiro.command, ['update', '--non-interactive'], { timeout: UPDATE_TIMEOUT_MS, env: { ...process.env, NO_COLOR: '1' } }, () => done()).stdin?.end();
-        });
-        await version(cfg, true);
-      } finally {
-        updating = false;
-        deps.changed();
-      }
-      return status(cfg);
-    },
+    update: (cfg) => cli.update(cfg, (command) => new Promise<void>((done) => {
+      execFile(command, ['update', '--non-interactive'], { timeout: UPDATE_TIMEOUT_MS, env: { ...process.env, NO_COLOR: '1' } }, () => done()).stdin?.end();
+    })),
   };
 }

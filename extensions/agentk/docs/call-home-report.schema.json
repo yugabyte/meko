@@ -23,6 +23,7 @@
         "tmux": { "$ref": "#/$defs/optionalVersion", "description": "Sent only by versions before the session host (no longer by current ones); kept so their reports still validate." },
         "claudeCode": { "$ref": "#/$defs/optionalVersion" },
         "kiro": { "$ref": "#/$defs/optionalVersion", "description": "Kiro CLI's version; left out while Kiro is off or unreadable." },
+        "opencode": { "$ref": "#/$defs/optionalVersion", "description": "OpenCode's version; left out while OpenCode is off or unreadable." },
         "access": { "enum": ["local", "remote"] },
         "service": { "enum": ["systemd", "launchd", "none"] },
         "meko": {
@@ -67,6 +68,7 @@
               "additionalProperties": false,
               "properties": {
                 "claude": { "$ref": "#/$defs/count" },
+                "opencode": { "$ref": "#/$defs/count" },
                 "kiro": { "$ref": "#/$defs/count" }
               }
             },

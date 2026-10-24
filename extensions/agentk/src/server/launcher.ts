@@ -3,13 +3,14 @@ import { userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 import { CLAUDE_SESSION_MARKERS } from './claude.js';
 import { KIRO_SESSION_MARKERS } from './kiro.js';
+import { OPENCODE_SESSION_MARKERS } from './opencode.js';
 import { claudePath, type Paths } from './paths.js';
 
 /**
  * Markers a running coding agent puts in its children's environment. If AgentK itself was
- * started from inside one, these must not reach the sessions it launches, of either harness.
+ * started from inside one, these must not reach the sessions it launches, of any harness.
  */
-export const SESSION_MARKERS = [...CLAUDE_SESSION_MARKERS, ...KIRO_SESSION_MARKERS];
+export const SESSION_MARKERS = [...CLAUDE_SESSION_MARKERS, ...OPENCODE_SESSION_MARKERS, ...KIRO_SESSION_MARKERS];
 
 export function scrubSessionMarkers(env: NodeJS.ProcessEnv = process.env): void {
   for (const k of SESSION_MARKERS) delete env[k];

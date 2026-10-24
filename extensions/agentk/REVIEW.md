@@ -52,7 +52,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
       answers the guard or context hooks, reads a transcript, usage or conversation id, or runs Ask
       AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
-      Claude Code's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
+      Claude Code's, OpenCode's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
       usage as tokens or credits, a minimum version) is read from `HARNESS_CAPS` or an optional
       adapter method, not from the harness's name (no new `harness === 'kiro'` outside the adapters;
       `docs/design/harnesses.md` lists the few that stay on purpose). Text about the process and its
@@ -62,6 +62,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
       launch), and is removed by `uninstall`. A Kiro session reads and resumes only its own
       conversation: worktrees are pooled, and Kiro keeps earlier sessions' under the same folder.
+      Nothing is written to the user's OpenCode config: AgentK's plugin and Meko server reach only
+      AgentK's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and
+      a secret (Meko's key) goes in an owner-only file, never the session's environment.
       No harness is assumed installed, Claude Code included: AgentK starts, and every feature that
       needs an agent asks the registry for an available one (`Harnesses.defaultFor`/`pick`) and
       says what to install when there's none, rather than running `claude` regardless.
@@ -70,8 +73,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       updates). Nothing restarts the host by itself, and the program never waits on a viewer.
 - [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
-      wherever one is published (Claude Code's installer script from claude.ai and Kiro's from
-      cli.kiro.dev publish none, so they're only fetched over HTTPS), and checks the result rather than trusting the package manager.
+      wherever one is published (Claude Code's installer script from claude.ai, OpenCode's from
+      opencode.ai and Kiro's from cli.kiro.dev publish none, so they're only fetched over HTTPS), and checks the result rather than trusting the package manager.
 - [ ] Shell commands and scripts work with macOS's BSD tools as well as GNU ones (no `mv -T`,
       `stat -c`, `sha256sum`-only, `sleep infinity`, `sed -i` without a suffix, `readlink -f`).
 

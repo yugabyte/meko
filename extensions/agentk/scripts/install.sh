@@ -14,10 +14,10 @@
 #   --version <X.Y.Z>   install a specific version instead of the newest
 #   --install-deps      install missing tools (git, curl, gh, a coding agent, and Meko's
 #                       setup for the agents) without asking
-#   --agent <claude|kiro>
-#                       the coding agent to install when neither Claude Code nor Kiro CLI is
-#                       there (default: ask; Claude Code with --install-deps or when there's no
-#                       one to ask)
+#   --agent <claude|opencode|kiro>
+#                       the coding agent to install when none of Claude Code, OpenCode and Kiro
+#                       CLI is there (default: ask; Claude Code with --install-deps or when
+#                       there's no one to ask)
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK is already installed
@@ -28,9 +28,10 @@
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
 # (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and a
-# coding agent when neither Claude Code nor Kiro CLI is installed: Claude Code with Anthropic's
-# installer from claude.ai, or Kiro CLI with Kiro's from cli.kiro.dev, both over HTTPS (neither
-# publishes a checksum for its script), into ~/.local/bin. The installer shows the exact commands and asks first; with
+# coding agent when none of Claude Code, OpenCode and Kiro CLI is installed: Claude Code with
+# Anthropic's installer from claude.ai or Kiro CLI with Kiro's from cli.kiro.dev, into ~/.local/bin,
+# or OpenCode with its own from opencode.ai, into ~/.opencode/bin, all over HTTPS (none publishes a
+# checksum for its script). The installer shows the exact commands and asks first; with
 # --non-interactive it installs only with --install-deps. With GITHUB_TOKEN set, a missing gh
 # is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
 # it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
@@ -76,7 +77,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift 2 ;;
     --version=*) version=${1#--version=}; shift ;;
-    --agent) [ $# -ge 2 ] || die "--agent needs a value: claude or kiro"; agent=$2; shift 2 ;;
+    --agent) [ $# -ge 2 ] || die "--agent needs a value: claude, opencode or kiro"; agent=$2; shift 2 ;;
     --agent=*) agent=${1#--agent=}; shift ;;
     --install-deps) install_deps=yes; shift ;;
     --no-install-deps) install_deps=no; shift ;;
@@ -86,7 +87,7 @@ while [ $# -gt 0 ]; do
     *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
 done
-case $agent in ''|claude|kiro) ;; *) die "--agent takes claude or kiro (got $agent)" ;; esac
+case $agent in ''|claude|opencode|kiro) ;; *) die "--agent takes claude, opencode or kiro (got $agent)" ;; esac
 # A version, or its tag (agentk-v<version>, or v<version> from before).
 version=${version#agentk-v}
 version=${version#v}
@@ -203,7 +204,7 @@ say ""
 
 # What's missing, and the plan to install it: `plan` is shown to the user, `pkgs` goes to the
 # package manager, `gh_download` fetches gh from its GitHub release (Linux).
-missing="" pkgs="" plan="" gh_download=false claude_install=false kiro_install=false
+missing="" pkgs="" plan="" gh_download=false claude_install=false opencode_install=false kiro_install=false
 add_missing() { missing="${missing:+$missing, }$1"; }
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
@@ -217,24 +218,38 @@ if ! command -v gh >/dev/null 2>&1; then
     if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
   fi
 fi
-# Sessions run on Claude Code or Kiro CLI: one of them is enough. With neither, one is installed:
-# the one --agent names, else the one picked here, else Claude Code. --install-deps never asks.
-if ! command -v claude >/dev/null 2>&1 && ! command -v kiro-cli >/dev/null 2>&1; then
+# OpenCode's installer puts it in ~/.opencode/bin, and adds that to a shell's rc file only.
+opencode_bin="$HOME/.opencode/bin"
+has_opencode() { command -v opencode >/dev/null 2>&1 || [ -x "$opencode_bin/opencode" ]; }
+# Sessions run on Claude Code, OpenCode or Kiro CLI: one of them is enough. With none, one is
+# installed: the one --agent names, else the one picked here, else Claude Code. --install-deps never asks.
+if ! command -v claude >/dev/null 2>&1 && ! has_opencode && ! command -v kiro-cli >/dev/null 2>&1; then
   if [ -z "$agent" ] && $interactive && [ "$install_deps" = ask ]; then
     say "${b}Coding agent${n}"
-    warn "Missing" "AgentK runs sessions on Claude Code or Kiro CLI, and neither is installed"
-    printf '    Install Claude Code (1) or Kiro CLI (2)? %s[1]%s ' "$d" "$n" >&2
+    warn "Missing" "AgentK runs sessions on Claude Code, OpenCode or Kiro CLI, and none is installed"
+    printf '    Install Claude Code (1), OpenCode (2) or Kiro CLI (3)? %s[1]%s ' "$d" "$n" >&2
     read -r answer </dev/tty || answer=""
-    case $answer in ''|1|[Cc]*) agent=claude ;; 2|[Kk]*) agent=kiro ;; *) die "pick 1 (Claude Code) or 2 (Kiro CLI), or pass --agent claude or --agent kiro." ;; esac
+    case $answer in
+      ''|1|[Cc]*) agent=claude ;;
+      2|[Oo]*) agent=opencode ;;
+      3|[Kk]*) agent=kiro ;;
+      *) die "pick 1 (Claude Code), 2 (OpenCode) or 3 (Kiro CLI), or pass --agent claude, --agent opencode or --agent kiro." ;;
+    esac
   fi
-  if [ "$agent" = kiro ]; then
+  if [ "$agent" = opencode ]; then
+    add_missing "OpenCode"; opencode_install=true
+    # OpenCode's installer unpacks a tarball on Linux and a zip on macOS.
+    if [ "$platform" = darwin ]; then command -v unzip >/dev/null 2>&1 || { add_missing unzip; pkgs="$pkgs unzip"; }
+    else command -v tar >/dev/null 2>&1 || { add_missing tar; pkgs="$pkgs tar"; }
+    fi
+  elif [ "$agent" = kiro ]; then
     add_missing "Kiro CLI"; kiro_install=true
     # Kiro's installer unpacks a zip on Linux.
     [ "$platform" = darwin ] || command -v unzip >/dev/null 2>&1 || { add_missing unzip; pkgs="$pkgs unzip"; }
   elif [ "$agent" = claude ]; then
     add_missing "Claude Code"; claude_install=true
   else
-    add_missing "Claude Code (or Kiro CLI, with --agent kiro)"; claude_install=true
+    add_missing "Claude Code (or OpenCode or Kiro CLI, with --agent opencode or --agent kiro)"; claude_install=true
   fi
 fi
 
@@ -282,6 +297,8 @@ fi
 # The agents' own installers, the same on Linux and macOS: no root.
 $claude_install && plan="$plan
       curl -fsSL https://claude.ai/install.sh | bash      (Claude Code, into ~/.local/bin)"
+$opencode_install && plan="$plan
+      curl -fsSL https://opencode.ai/install | bash      (OpenCode, into ~/.opencode/bin)"
 $kiro_install && plan="$plan
       curl -fsSL https://cli.kiro.dev/install | bash      (Kiro CLI, into ~/.local/bin)"
 
@@ -378,6 +395,14 @@ if [ -n "$plan" ]; then
       { rm -rf "$cc_tmp"; die "Claude Code's installer failed (see the output above). Install it yourself: https://claude.com/claude-code"; }
     rm -rf "$cc_tmp"
   fi
+  if $opencode_install; then
+    command -v bash >/dev/null 2>&1 || die "OpenCode's installer needs bash, which wasn't found. Install OpenCode yourself: https://opencode.ai"
+    # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
+    oc_tmp=$(mktemp -d)
+    { curl -fsSL -o "$oc_tmp/install" https://opencode.ai/install && bash "$oc_tmp/install" </dev/null; } ||
+      { rm -rf "$oc_tmp"; die "OpenCode's installer failed (see the output above). Install it yourself: https://opencode.ai"; }
+    rm -rf "$oc_tmp"
+  fi
   if $kiro_install; then
     command -v bash >/dev/null 2>&1 || die "Kiro CLI's installer needs bash, which wasn't found. Install Kiro CLI yourself: https://kiro.dev/cli/"
     # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
@@ -392,6 +417,7 @@ if [ -n "$plan" ]; then
   # (Homebrew's gh was checked with the other packages.)
   ! $gh_download || command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
   ! $claude_install || command -v claude >/dev/null 2>&1 || die "Claude Code is still not available after installing it."
+  ! $opencode_install || has_opencode || die "OpenCode is still not available after installing it."
   ! $kiro_install || command -v kiro-cli >/dev/null 2>&1 || die "Kiro CLI is still not available after installing it."
   ok "Installed" "$missing"
 fi
@@ -407,6 +433,27 @@ if command -v claude >/dev/null 2>&1; then
       warn "Claude Code" "not signed in: run 'claude auth login' before starting sessions"
     fi
   fi
+fi
+# OpenCode needs a model provider: one signed in with `opencode auth login`, or a provider's key in
+# the environment, which `opencode auth list` names under Environment.
+if has_opencode; then
+  agents="${agents:+$agents, }OpenCode"
+  oc=opencode; command -v opencode >/dev/null 2>&1 || oc="$opencode_bin/opencode"
+  oc_auth=$("$oc" auth list </dev/null 2>/dev/null || true)
+  case $oc_auth in
+    *[!0-9]"0 credentials"*)
+      case $oc_auth in
+        *"environment variable"*) ;;
+        *)
+          if $interactive && ask "  OpenCode has no model provider signed in. Sign in now (opencode auth login)?"; then
+            "$oc" auth login </dev/tty || warn "OpenCode" "sign-in didn't finish; run 'opencode auth login' later"
+          else
+            warn "OpenCode" "no model provider signed in: run 'opencode auth login' before starting sessions"
+          fi
+          ;;
+      esac
+      ;;
+  esac
 fi
 if command -v kiro-cli >/dev/null 2>&1; then
   agents="${agents:+$agents, }Kiro"

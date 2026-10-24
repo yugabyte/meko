@@ -117,7 +117,7 @@ shell's. [`backend/docs/callhome.md`](backend/docs/callhome.md) says what's sent
 ## Extensions
 
 **[AgentK](extensions/agentk/README.md)** (`extensions/agentk`) is the agentic coder built
-on Meko. It runs many Claude Code and Kiro CLI sessions from a browser or your phone, takes each
+on Meko. It runs many Claude Code, OpenCode and Kiro CLI sessions from a browser or your phone, takes each
 task from design to merged PR, and keeps each project's designs and learnings in a Meko datapack.
 Its README covers installing and using it.
 
