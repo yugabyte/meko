@@ -11,6 +11,7 @@ import {
 import { commitsBetween, commitsBeyond, deleteBranch, fetchPrHead, git, moveReviewBranch, remoteFor, remoteRepo, tryGit, uncommittedCount } from './git.js';
 import * as github from './github.js';
 import { countFileTypes } from './filetypes.js';
+import { KIRO_PLAN_TURN_EVERY_MS } from './kiroplan.js';
 import { errMsg } from './log.js';
 import {
   andList, checkHeldRequest, decideHeld, dropOtherPrs, HELD_SINCE_KEY, heldBlocker, heldPromptLines, heldReviews, heldSummary, holdReview, reviewRoute,
@@ -973,6 +974,9 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row) return;
     this.sessions.setBusy(id, false);
+    // A Kiro turn just ran: re-read the plan so the rail's credits stay fresh, at most every
+    // KIRO_PLAN_TURN_EVERY_MS so a run of turns reads once. Never awaited; never blocks the turn.
+    if (row.harness === 'kiro') void this.core.kiroPlan.refreshIfStale(KIRO_PLAN_TURN_EVERY_MS);
     // A typed learn step's turn (no mod) is over; at Merge & Close the poll below then cleans up.
     this.core.learn.turnEnded(id);
     // A Discard that waited for it goes now, and nothing else for the session does.

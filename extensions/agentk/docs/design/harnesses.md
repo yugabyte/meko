@@ -127,7 +127,8 @@ version and comparing it is shared (`version.ts`), and so is the cached read of 
 (`minVersion`, which the installer checks too), and the Starting view's line (`loads`).
 
 What still names an agent outside the adapters, on purpose: Kiro's plan reader (`Core.kiroPlan`,
-read after Kiro's `prepare` and when a Kiro session is created; its plan is Kiro-only data in
+read after Kiro's `prepare`, when a Kiro session is created, and — at most every 10 min — when a
+Kiro session's turn ends; its plan is Kiro-only data in
 `AppState.kiroPlan`), the usage report's per-day `kiro` counts (`callhome.ts`, a field of the
 report's schema), each agent's Meko status (`Core.kiroMeko`, `Core.openCodeMeko`: `MekoStatus.kiro`,
 `.opencode`), the usage report's agent versions (`installFacts`), and the command a harness runs as
@@ -149,7 +150,7 @@ agent choice and sign-in check:
 | Conversation id | chosen (`--session-id`) | OpenCode's, from the plugin's events | Kiro's, from its hooks' `session_id`, else its session store |
 | AgentK's mod, Artifact designs | yes | no | no |
 | [Session tools](tools.md) and their skill | `--mcp-config run/tools/mcp.json`, the skill plugin `run/tools/claude` via `--plugin-dir`, `list` in `permissions.allow` | `mcp.agentk_sessions`, `skills.paths` and an `ask` rule for each write tool in `OPENCODE_CONFIG_CONTENT` | the `agentk` agent's `mcpServers.agentk_sessions`, the skill as a `skill://` resource (Kiro asks before each tool, `list` too) |
-| Plan limits in the rail | 5-hour and weekly, from the status line and the mod | none (they're the provider's) | credits this period, from `/usage` hourly |
+| Plan limits in the rail | 5-hour and weekly, from the status line and the mod | none (they're the provider's) | credits this period, from `/usage` hourly and, while Kiro is in use, at most every 10 min on a turn's end |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | `permission.asked` (an interrupted turn ends with its `session.execution.interrupted`) | none |
 | Usage | transcript tokens, priced | tokens from the plugin's log, priced | credits from Kiro's session file |
 | By-model usage rows | the model id | the agent first: **OpenCode · claude-sonnet-4-5** | the agent first: **Kiro · auto** (`labelModels`) |
