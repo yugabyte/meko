@@ -53,6 +53,12 @@ function answer(res: ServerResponse, v: Record<string, unknown> | string | null)
 /** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
 export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/held', '/mod/ask', '/mod/ask/done', '/mod/questions', '/mod/learn', '/mod/learn/start', '/mod/meko', '/mod/turn'];
 
+/** The route AgentK's session tools call (`agentk mcp`, src/server/mcp.ts), answered like the mod's routes. */
+export const TOOLS_ROUTE = '/tools';
+
+/** The routes that take a JSON body and answer JSON (`onMod`): the mod's and the session tools'. */
+const JSON_ROUTES = [...MOD_ROUTES, TOOLS_ROUTE];
+
 /** How the server answers the mod: the status, and a JSON body (always sent with a 200). */
 export interface ModReply {
   status: number;
@@ -66,7 +72,8 @@ export interface ModReply {
  * requests wait for the answer: JSON for Claude Code, plain text for a harness whose hook prints
  * what it gets (Kiro's guard reason and context), 204 when there is none.
  * The `/mod/*` routes are AgentK's mod in Claude: `onMod` answers them, and may hold a
- * `/mod/poll` open (its signal aborts when the mod's connection closes).
+ * `/mod/poll` open (its signal aborts when the mod's connection closes). `onMod` also answers
+ * `/tools`, the session tools' calls from `agentk mcp` in any harness's session.
  *
  * The socket is bound under a temporary name and renamed into place. Closing a
  * server unlinks the path it was bound to, so this way closing never removes a
@@ -82,7 +89,7 @@ export function startHookServer(
   onMod: (token: string, route: string, body: Record<string, unknown>, signal: AbortSignal) => Promise<ModReply> = async () => ({ status: 404 }),
 ): Promise<Server> {
   const server = createServer((req, res) => {
-    if (req.method !== 'POST' || ![...MOD_ROUTES, '/hook', '/guard', '/statusline', '/context'].includes(req.url ?? '')) {
+    if (req.method !== 'POST' || ![...JSON_ROUTES, '/hook', '/guard', '/statusline', '/context'].includes(req.url ?? '')) {
       res.writeHead(404).end();
       return;
     }
@@ -94,7 +101,7 @@ export function startHookServer(
       if (body.length > 4 * 1024 * 1024) req.destroy();
     });
     req.on('end', () => {
-      if (MOD_ROUTES.includes(req.url ?? '')) {
+      if (JSON_ROUTES.includes(req.url ?? '')) {
         let payload: unknown = null;
         try {
           payload = JSON.parse(body || '{}');

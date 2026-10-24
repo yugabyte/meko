@@ -145,6 +145,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`checkActions()`), and the browser runs one only when the user picks it (a lone `go`
       too), through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
+- [ ] AgentK's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
+      calls the UI's routes make, after `checkActions()`: the hook socket's `/tools` names the caller
+      by its token, refuses an untrusted PR head (`sessions.untrusted = 1`) and the tools turned off,
+      never opens the caller's own PR, and leaves a `tools` event on both sessions. Only read-only
+      tools (`readOnly` in `tooldefs.ts`) are pre-allowed in a harness; `agentk mcp` checks nothing
+      itself and loads nothing of the server's.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
       Claude Code ask before every file or refuse the mod's socket; what AgentK stores keeps its

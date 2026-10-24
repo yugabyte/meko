@@ -19,7 +19,8 @@ The design is split by area. Read this page first, then the part you need:
 | [Projects, worktrees and sessions](design/projects-and-sessions.md) | What a project and a session are, the layout on the host, `config.toml`, the schema, worktree reuse |
 | [Task lifecycle](design/lifecycle.md) | Stages and gates, queued gates, the design after approval, moving a session, instructions with a move |
 | [Reviewing a PR](design/review-pr.md) | Review a PR sessions |
-| [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK and finding a session by what it's about in the command palette |
+| [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK (and its Do all) and finding a session by what it's about in the command palette |
+| [AgentK's session tools](design/tools.md) | The `agentk_sessions` MCP server and skill every session gets, on any harness, to open projects, start sessions and move them between stages |
 | [Datapacks](design/datapacks.md) | Meko datapacks: dedicated and shared, pins, invites, adding files to the knowledge base |
 | [Sharing a project](design/sharing.md) | Sharing a project's datapack with teammates and reviewers |
 | [Meko recall and the learn step](design/recall-and-learn.md) | What Meko gives a session at start, and what it saves at the end |

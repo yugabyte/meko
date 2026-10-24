@@ -445,6 +445,8 @@ async function main(): Promise<void> {
     case 'attach': return (await import('./attachcli.js')).runAttach(getPaths(), args);
     case 'host': return host(args);
     case 'logs': return logs(args);
+    // AgentK's session tools as a stdio MCP server; sessions start it as mcpmain.js (tools.ts).
+    case 'mcp': return (await import('./mcp.js')).runMcp(version());
     case 'version':
     case '--version':
     case '-v':

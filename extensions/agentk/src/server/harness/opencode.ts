@@ -9,6 +9,7 @@ import {
   openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
 } from '../opencode.js';
 import { claudePath, type Paths } from '../paths.js';
+import { openCodeTools } from '../tools.js';
 import type { SessionRow } from '../store.js';
 import { ingestOpenCodeUsage } from '../usage.js';
 import type { Harness } from './types.js';
@@ -125,6 +126,7 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
           ...(conv ? { AK_OPENCODE_SESSION: conv } : {}),
           OPENCODE_CONFIG_CONTENT: openCodeSessionConfig({
             plugin: claudePath(openCodePluginPath(paths)), instructions: claudePath(instructions), dirs: l.addDirs.map((d) => claudePath(d)),
+            tools: l.tools ? openCodeTools(paths) : null,
           }),
           ...(meko ? { OPENCODE_CONFIG: claudePath(meko) } : {}),
           // A PR's own opencode.json and .opencode folders (plugins: code that would run) are left out.

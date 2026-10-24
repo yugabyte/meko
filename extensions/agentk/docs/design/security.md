@@ -117,6 +117,15 @@ answers Claude Code's folder-trust question for worktrees):
   worktree has one, or workspace MCP servers (`.kiro/settings/mcp.json`); the error says to review
   it on Claude Code.
 
+- [AgentK's session tools](tools.md), which start and move other sessions, refuse every call from an
+  untrusted session (`sessions.untrusted = 1`), and a Claude Code session launches without them;
+  Kiro's shared agent file has them, and the route refuses them.
+
+Every session that has the tools can act on the others only through the same checks as the UI
+(`runActions()` in `src/server/actions.ts`): no Open PR on its own session (that stays the user's
+gate), the tools that change something go through the harness's own permission ask, and each action
+leaves a `tools` event on the calling session and on the one it changed.
+
 `CLAUDE.md`, `AGENTS.md` and the code itself are still what Claude reads: the review prompts call
 the PR's content untrusted text, not instructions. A task started from a public repo's issue whose
 author has no role on the repo (not OWNER, MEMBER or COLLABORATOR) tells Claude to treat the issue

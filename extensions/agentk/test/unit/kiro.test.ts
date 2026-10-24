@@ -7,7 +7,7 @@ import { kiroMekoGaps } from '../../src/server/mekokiro.js';
 import { tempDir } from '../helpers.js';
 
 describe("Kiro's agentk agent", () => {
-  it("keeps the base agent's tools, MCP servers and hooks (Meko's capture), adds AgentK's after them, and drops Kiro's upgrade bookkeeping", () => {
+  it("keeps the base agent's tools, MCP servers and hooks (Meko's capture), adds AgentK's and its session tools after them, and drops Kiro's upgrade bookkeeping", () => {
     const meko = {
       name: 'meko-default', description: 'Meko', tools: ['@meko', 'read', 'write'], includeMcpJson: true, kiroUpgrade: { revision: 2 },
       hooks: { agentSpawn: [{ command: 'node kiro-handler.js agentSpawn' }], stop: [{ command: 'node kiro-handler.js stop' }] },
@@ -23,6 +23,13 @@ describe("Kiro's agentk agent", () => {
         stop: [{ command: 'node kiro-handler.js stop' }],
         preToolUse: [{ matcher: 'fs_write', command: '/run/kiro-guard.sh' }],
       },
+    });
+    const tools = { name: 'agentk_sessions', server: { command: '/ak/node', args: ['/ak/mcpmain.js'] }, skill: '/ak/run/tools/skills/agentk-sessions/SKILL.md', allowed: ['@agentk_sessions/list'] };
+    const base = { ...meko, mcpServers: { meko: { url: 'https://meko.test/mcp' } }, resources: ['file://AGENTS.md'], allowedTools: ['read'] };
+    expect(agentkAgent(base, ours, { tools })).toMatchObject({
+      mcpServers: { meko: { url: 'https://meko.test/mcp' }, agentk_sessions: tools.server },
+      resources: ['file://AGENTS.md', 'skill:///ak/run/tools/skills/agentk-sessions/SKILL.md'],
+      allowedTools: ['read', '@agentk_sessions/list'],
     });
   });
 

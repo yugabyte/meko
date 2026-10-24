@@ -1,8 +1,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { checkActions } from '../../src/server/actions.js';
 import {
-  AskAgentk, checkActions, readAnswer, runClaudeOnce, type AskProject, type AskRun, type AskRunner,
+  AskAgentk, readAnswer, runClaudeOnce, type AskProject, type AskRun, type AskRunner,
 } from '../../src/server/askagentk.js';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import type { Session, Stage } from '../../src/shared/types.js';
@@ -12,7 +13,7 @@ const session = (id: string, name: string, stage: Stage, over: Partial<Session> 
   ({ id, projectId: 'p1', name, stage, kind: 'task', status: 'idle', desired: 'running', branch: `ak/${id}`, prNumber: null, ...over }) as Session;
 
 const projects: AskProject[] = [{
-  id: 'p1', name: 'agent-k-local', repoPath: '/code/agent-k-local',
+  id: 'p1', name: 'agent-k-local', repoPath: '/code/agent-k-local', github: 'yugabyte/agent-k-local',
   sessions: [
     session('s-design', 'Agentic search', 'design'),
     session('s-code', 'Dark mode', 'code', { status: 'needs_input', prNumber: 12 }),
@@ -32,6 +33,12 @@ describe("Ask AgentK's answers", () => {
     ['a task in a project that isn\'t open', { type: 'start', projectId: 'nope', prompt: 'x' }, null, "Left out a task in a project that isn't open."],
     ['a task with no prompt', { type: 'start', projectId: 'p1', name: 'x' }, null, 'Left out a task with no prompt.'],
     ['a GitHub link', { type: 'link', ref: 'acme/demo#7' }, { type: 'link', ref: 'acme/demo#7' }, null],
+    ['a GitHub issue to start in a project, at Code', { type: 'link', ref: 'acme/demo#8', projectId: 'p1', stage: 'code' },
+      { type: 'link', ref: 'acme/demo#8', projectId: 'p1', start: 'code' }, null],
+    ['a GitHub issue in a project that isn\'t open', { type: 'link', ref: 'acme/demo#8', projectId: 'gone' }, null, "Left out acme/demo#8 in a project that isn't open."],
+    ['a project to open, with a new datapack by default', { type: 'openProject', repo: 'acme/demo', name: 'Demo\nwork' },
+      { type: 'openProject', repo: 'acme/demo', name: 'Demo work', datapack: 'new' }, null],
+    ['a project to open with no repo', { type: 'openProject', datapack: 'none' }, null, 'Left out opening a project with no repo.'],
     ['a link that isn\'t one', { type: 'link', ref: '#7' }, null, "Left out a link that isn't a GitHub PR or issue."],
     ['going to a session, its project from the session',
       { type: 'go', view: 'session', projectId: 'wrong', sessionId: 's-code' },
@@ -55,9 +62,9 @@ describe("Ask AgentK's answers", () => {
     expect(checkActions([raw], projects)).toEqual({ actions: action ? [action] : [], notes: note ? [note] : [] });
   });
 
-  it('offers at most three actions', () => {
+  it('offers at most eight actions', () => {
     const go = { type: 'go', view: 'settings' };
-    expect(checkActions([go, go, go, go], projects).actions).toHaveLength(3);
+    expect(checkActions(Array(9).fill(go), projects).actions).toHaveLength(8);
   });
 
   const run = (over: Partial<AskRun>): AskRun => ({ stdout: '', stderr: '', code: 0, spawnError: null, timedOut: false, aborted: false, ...over });
@@ -89,22 +96,31 @@ describe('asking AgentK', () => {
     config = structuredClone(DEFAULT_CONFIG);
     recorded = [];
     calls = [];
-    answer = { stdout: JSON.stringify({ structured_output: { reply: 'Starting it.', actions: [{ type: 'go', view: 'usage' }] } }) };
+    answer = { stdout: JSON.stringify({ structured_output: { reply: 'Starting it.', actions: [{ type: 'go', view: 'usage' }], together: true } }) };
   });
 
   it('asks Claude Code with no tools, MCP servers or hooks, about the running sessions only, and counts the ask', async () => {
     const r = await service().ask({ text: ' what needs me? ', history: [{ text: 'hi', reply: 'Hello.' }], projectId: 'p1', sessionId: null });
-    expect(r).toEqual({ reply: 'Starting it.', actions: [{ type: 'go', view: 'usage' }], notes: [] });
+    // One action is no Do all, together or not.
+    expect(r).toEqual({ reply: 'Starting it.', actions: [{ type: 'go', view: 'usage' }], together: false, notes: [] });
     const { args, input } = calls[0];
     expect(args.slice(0, 5)).toEqual(['-p', '--model', 'sonnet', '--output-format', 'json']);
     expect(args).toEqual(expect.arrayContaining(['--tools', '', '--strict-mcp-config', '--no-session-persistence', '--json-schema', '--system-prompt']));
     expect(args[args.indexOf('--settings') + 1]).toBe('{"disableAllHooks":true}');
     expect(input).toContain('"onScreen":{"projectId":"p1","sessionId":null}');
+    // A bare #5 is the project's GitHub repo's.
+    expect(input).toContain('"repo":"agent-k-local","github":"yugabyte/agent-k-local"');
     expect(input).toContain('"id":"s-code","name":"Dark mode","stage":"code","status":"needs_input","branch":"ak/s-code","pr":12');
     expect(input).not.toContain('s-gone');
     expect(input).toContain('User: hi\nAgentK: Hello.');
     expect(input.endsWith("The user's instruction:\nwhat needs me?")).toBe(true);
     expect(recorded).toEqual([{ ok: true, actions: 1 }]);
+
+    // Steps of one instruction: Do all.
+    answer = { stdout: JSON.stringify({ structured_output: {
+      reply: 'Both.', together: true, actions: [{ type: 'link', ref: 'yugabyte/agent-k-local#5', projectId: 'p1' }, { type: 'move', sessionId: 's-design', stage: 'code' }],
+    } }) };
+    expect((await service().ask({ text: 'start #5 and move Agentic search to Code' })).together).toBe(true);
   });
 
   it.each([

@@ -1439,26 +1439,68 @@ export interface AskAgentkTurn {
 }
 
 /**
- * An action Claude proposed, checked against the state when it answered. The browser runs it
- * through the route the UI already uses, which checks it again: `start` as POST
+ * An action Claude proposed, checked against the state when it answered. The browser runs one it
+ * picks through the route the UI already uses, which checks it again: `start` as POST
  * /api/projects/:id/sessions, `link` through the palette's GitHub link lookup, `move` and `openPr`
- * as the session's move and open-pr routes; `go` only navigates.
+ * as the session's move and open-pr routes, `openProject` as POST /api/actions/run; `go` only
+ * navigates. **Do all** runs every one but `go` with POST /api/actions/run, as AgentK's session
+ * tools do (`src/server/actions.ts`).
  */
 export type AskAgentkAction =
   | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string }
-  | { type: 'link'; ref: string }
+  /**
+   * A PR or issue (`owner/name#N` or its link). With `projectId` it can run as it is (POST
+   * /api/github-link/start): a PR as a Review a PR session, an issue as a task at `start` (Design by default).
+   */
+  | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code' }
   | { type: 'go'; view: 'session'; projectId: string; sessionId: string }
   | { type: 'go'; view: 'home'; projectId: string }
   | { type: 'go'; view: 'usage' | 'settings' }
   | { type: 'move'; sessionId: string; stage: MoveTarget; instructions: string }
-  | { type: 'openPr'; sessionId: string; instructions: string };
+  | { type: 'openPr'; sessionId: string; instructions: string }
+  /**
+   * Opens a project on `repo`: a scanned repo's path, a clone URL, or GitHub's `owner/name` (cloned
+   * when there's no clone here). `datapack`: `new` (a new dedicated datapack while Meko is on, the
+   * Open project dialog's default), `none`, or a datapack's id.
+   */
+  | { type: 'openProject'; repo: string; name: string; datapack: string };
+
+/** The most actions an answer carries (`AskAgentkResult.actions`), and the most one run takes (`RunActionsRequest`). */
+export const ACTIONS_MAX = 8;
 
 export interface AskAgentkResult {
   /** What AgentK says back: what it proposes, an answer, or a question when it can't tell what's meant. */
   reply: string;
-  /** At most three, in the order Claude gave them. */
+  /** At most ACTIONS_MAX, in the order Claude gave them. */
   actions: AskAgentkAction[];
+  /**
+   * The actions are the steps of one instruction ("start #1 and #5 and move X to Code"), so the
+   * palette offers **Do all** first; false, they're alternatives to pick one of.
+   */
+  together: boolean;
   /** Why a proposed action was left out (a project or session that doesn't exist, a move that isn't allowed). */
+  notes: string[];
+}
+
+/** POST /api/actions/run: actions to run in order (Ask AgentK's **Do all**), checked again against the state now. */
+export interface RunActionsRequest {
+  /** At most ACTIONS_MAX; `go` actions are left out (they only navigate). */
+  actions: AskAgentkAction[];
+}
+
+/** What one action came to, in the order they ran. One that fails doesn't stop the rest. */
+export interface ActionResult {
+  ok: boolean;
+  /** What happened, or why it didn't, in a line. */
+  text: string;
+  /** Where it led: the session started or changed, the project opened. */
+  projectId?: string;
+  sessionId?: string;
+}
+
+export interface RunActionsResult {
+  results: ActionResult[];
+  /** Why an action was left out before anything ran (as `AskAgentkResult.notes`). */
   notes: string[];
 }
 
@@ -1570,6 +1612,11 @@ export interface Settings {
   callHomeOffBy?: 'YB_DISABLE_CALLHOME';
   /** `[pr] resolve_conflicts`: AgentK resolves a PR's merge conflicts with its base (the General tab's checkbox). */
   resolveConflicts: boolean;
+  /**
+   * `[tools] enabled`: sessions get AgentK's session tools (the `agentk_sessions` MCP server and its
+   * skill), which open projects, start sessions and move them between stages (the General tab's checkbox).
+   */
+  toolsEnabled: boolean;
   /** `[agents] default`: the harness new sessions start on unless the New session dialog picks another. */
   defaultHarness: HarnessId;
   /** `[claude] enabled`: offer Claude Code for new sessions when its CLI answers. */
@@ -2354,6 +2401,8 @@ export type TermServerMessage =
 //        coding agent is available, 429 with two asks already running,
 //        502 when Claude Code fails, isn't signed in or its answer can't be read, 503 when it can't be run, 504 after
 //        [ask_agentk] timeout_seconds. Closing the request stops Claude.)
+// POST   /api/actions/run RunActionsRequest → RunActionsResult   (Ask AgentK's Do all: the actions checked against the state
+//        now, those that fit run in order, each with its result; 400 for more than ACTIONS_MAX or none that fit)
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
 //        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
 //        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters or given twice, or two `project`s)
@@ -2445,8 +2494,8 @@ export type TermServerMessage =
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
-//                                                           '' goes back to the host name; callHomeEnabled and
-//                                                           resolveConflicts are booleans; defaultHarness must be a
+//                                                           '' goes back to the host name; callHomeEnabled,
+//                                                           resolveConflicts and toolsEnabled are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
 //                                                           Ask AgentK that name none start on the first available one);
 //                                                           claudeEnabled, opencodeEnabled and kiroEnabled are booleans; the agents'

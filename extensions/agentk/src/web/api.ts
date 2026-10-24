@@ -6,6 +6,8 @@ import type {
   ShareLinkChange,
   ShareLinkState,
   AskAgentkRequest,
+  RunActionsRequest,
+  RunActionsResult,
   AskAgentkResult,
   AskAnswerRequest,
   AttachDatapackRequest,
@@ -190,6 +192,7 @@ export const api = {
   githubLink: (ref: string, projectId: string | null) => get<LinkPlan>(`/api/github-link?ref=${enc(ref)}${projectId ? `&project=${enc(projectId)}` : ''}`),
   startFromLink: (b: StartFromLinkRequest) => post<StartFromLinkResult>('/api/github-link/start', b),
   askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
+  runActions: (b: RunActionsRequest) => post<RunActionsResult>('/api/actions/run', b),
   usage: () => get<UsageOverview>('/api/usage'),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   /** Sessions, closed ones too, whose name, task, PR, branch or design has the words in `q`; in `projectId`, or every project open. */

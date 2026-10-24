@@ -1,0 +1,117 @@
+/**
+ * AgentK's session tools as an agent sees them: the `agentk_sessions` MCP server's tools, with
+ * their descriptions and input schemas. Kept on their own, with no imports, so `agentk mcp`
+ * (mcp.ts) loads nothing else; the server answers them in tools.ts.
+ */
+
+/** The MCP server's name in every harness's config: Claude Code's tools are `mcp__agentk_sessions__<tool>`, Kiro's `@agentk_sessions/<tool>`. */
+export const TOOLS_SERVER = 'agentk_sessions';
+
+/** The tools' input, and the server's answers, change only in ways this version number tells apart. */
+export const TOOLS_VERSION = 1;
+
+export type ToolName = 'list' | 'start_sessions' | 'move_session' | 'open_pr' | 'open_project';
+
+export interface ToolDef {
+  name: ToolName;
+  description: string;
+  inputSchema: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+  /** It changes nothing, so it's pre-allowed (each harness's allow list). */
+  readOnly?: boolean;
+}
+
+const STAGES = ['explore', 'design', 'code', 'review'];
+
+export const TOOL_DEFS: ToolDef[] = [
+  {
+    name: 'list',
+    readOnly: true,
+    description:
+      "Lists AgentK's open projects (id, name, repo folder and GitHub owner/name) and their running sessions (id, name, stage, " +
+      'status, branch, PR), with this session marked self. Call it first, and use only the ids it gives; see the agentk-sessions ' +
+      'skill for how to use these tools.',
+    inputSchema: { type: 'object', properties: { projectId: { type: 'string', description: 'Only this project.' } } },
+  },
+  {
+    name: 'start_sessions',
+    description:
+      'Starts up to 8 AgentK sessions in one call, in order. Each is either a GitHub issue or PR (ref: owner/name#N or its link; ' +
+      'for a bare #N use the project\'s github from list), which starts a task on the issue or a review of the PR, or a task ' +
+      "(name and prompt, the user's words kept). Returns one line per session: what started, or why it didn't.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessions: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 8,
+          items: {
+            type: 'object',
+            properties: {
+              projectId: { type: 'string', description: "The project to start it in. Default: this session's project." },
+              ref: { type: 'string', description: 'A GitHub issue or PR: owner/name#N or its link.' },
+              name: { type: 'string', description: 'A task without a ref: its short title.' },
+              prompt: { type: 'string', description: "A task without a ref: what to do, in the user's words." },
+              stage: { type: 'string', enum: ['explore', 'design', 'code'], description: "Where a task starts (an issue's: design or code). Default design." },
+            },
+          },
+        },
+      },
+      required: ['sessions'],
+    },
+  },
+  {
+    name: 'move_session',
+    description:
+      "Moves an AgentK session to another stage (explore, design, code, or review for PR & Review), as the user's move dialog " +
+      'does, this session included. instructions: what the user asked for in that stage, if anything.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string' },
+        stage: { type: 'string', enum: STAGES },
+        instructions: { type: 'string' },
+      },
+      required: ['sessionId', 'stage'],
+    },
+  },
+  {
+    name: 'open_pr',
+    description:
+      "Opens the PR of another AgentK session in Code, as its Open PR does. Not for this session: the user opens this session's PR. " +
+      'instructions: what the user asked for the PR, if anything.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string' }, instructions: { type: 'string' } },
+      required: ['sessionId'],
+    },
+  },
+  {
+    name: 'open_project',
+    description:
+      'Opens an AgentK project on a repo: a repo folder AgentK scans, GitHub owner/name (cloned when there is no clone), or a clone URL. ' +
+      'datapack: new (a new Meko datapack, the default), none, or a datapack id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string' },
+        name: { type: 'string', description: "The project's name. Default: the repo's." },
+        datapack: { type: 'string' },
+      },
+      required: ['repo'],
+    },
+  },
+];
+
+/** The tools a harness may run without asking, by their short names. */
+const READ_ONLY = TOOL_DEFS.filter((t) => t.readOnly).map((t) => t.name);
+
+/** Claude Code's names for them (`permissions.allow`). */
+export function claudeAllowedTools(): string[] {
+  return READ_ONLY.map((t) => `mcp__${TOOLS_SERVER}__${t}`);
+}
+
+/** Kiro's: `@server/tool` in the agent's `allowedTools`. */
+export function kiroAllowedTools(): string[] {
+  return READ_ONLY.map((t) => `@${TOOLS_SERVER}/${t}`);
+}

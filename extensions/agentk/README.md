@@ -144,8 +144,15 @@ your phone can connect.
 - **Ask AgentK in plain words:** type an instruction into **Ask AgentK** (`⌘K`), such as "start a
   design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
   AgentK asks the default agent (one quick call with no tools) and offers what to do: start a task at
-  Explore, Design or Code with a prompt, go to a session, move one to another stage, or open its PR.
-  Nothing runs until you pick it, a single "go to" included, and you can reply to refine it.
+  Explore, Design or Code with a prompt, start sessions on GitHub issues or PRs (`#5` is the project's
+  repo's), go to a session, move one to another stage, open its PR, or open a project. Nothing runs
+  until you pick it, a single "go to" included, and you can reply to refine it. For several steps at
+  once ("open sessions for #1, #5 and #6 and move the ABC session to Code"), **Do all** runs them in order.
+- **Sessions that manage sessions:** ask the agent in any session, on Claude Code, OpenCode or Kiro, to open a
+  project, start sessions (from a task or from GitHub issues and PRs), move a session to another stage
+  or open another session's PR. Every session gets AgentK's session tools (an MCP server) and a skill
+  that says how to use them; the agent asks before each change, as for its other tools, and you can
+  turn them off in Settings → General.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp
   login". Besides names, it searches each session's task, PR title, branch and design, closed sessions
   included, in the project you're on (every project from elsewhere), and lists the best matches with

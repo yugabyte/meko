@@ -10,6 +10,7 @@ import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
+import { SessionTools, type ActionProject } from './actions.js';
 import { AskAgentk } from './askagentk.js';
 import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
@@ -17,6 +18,7 @@ import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, reso
 import { all, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles } from './claude.js';
+import { writeToolFiles } from './tools.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { kiroDeletesSettled } from './kiro.js';
@@ -130,6 +132,8 @@ export class Core extends EventEmitter {
   readonly prReview: PrReviewService;
   readonly githubLinks: GithubLinkService;
   readonly askAgentk: AskAgentk;
+  /** AgentK's session tools: the calls `agentk mcp` makes from sessions. */
+  readonly tools: SessionTools;
   readonly limits: PlanLimitsStore;
   /** Kiro's plan allowance for the rail. */
   readonly kiroPlan: KiroPlanStore;
@@ -225,10 +229,11 @@ export class Core extends EventEmitter {
     this.askAgentk = new AskAgentk({
       config: () => this.cfg,
       cwd: join(this.paths.run, 'ask'),
-      projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
+      projects: () => this.actionProjects(),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
       asker: async () => (await this.harnesses.ensureDefault(this.cfg))?.ask ?? null,
     });
+    this.tools = new SessionTools(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.kiroPlan = new KiroPlanStore({
       db: this.db,
@@ -325,6 +330,11 @@ export class Core extends EventEmitter {
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */
+  /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
+  actionProjects(): ActionProject[] {
+    return projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) }));
+  }
+
   hostName(): string {
     return shortHost(this.hostFull);
   }
@@ -471,6 +481,12 @@ export class Core extends EventEmitter {
     // its SessionStart did. The setting, not whether the plugin's script was found: a plugin
     // installed after AgentK starts runs in sessions once capture is on.
     writeHookFiles(this.paths, { disabledPlugins: this.cfg.meko.captureTranscripts ? [] : mekoPluginKeys() });
+    // The session tools' MCP config and skill: without them sessions start without the tools.
+    try {
+      if (!writeToolFiles(this.paths)) this.log.warn("AgentK's session tools are missing from this install; sessions start without them");
+    } catch (e) {
+      this.log.warn("couldn't write AgentK's session tools; sessions start without them", errMsg(e));
+    }
     // Each harness's own files wait on its CLI (its version, Kiro's agent file), in the background:
     // no one CLI has to be installed for AgentK to start.
     for (const h of this.harnesses.list()) {
