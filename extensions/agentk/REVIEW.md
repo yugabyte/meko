@@ -276,6 +276,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       start, closing the project). Writing it never fails the call. Claude's calls reach it only
       from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
       file Claude Code saved comes only from the transcript's own session's `tool-results` folder.
+      Kiro's and OpenCode's reach it only from the usage read of their own files, once per call
+      (when its `meko_calls` row is new).
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies

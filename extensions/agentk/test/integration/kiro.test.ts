@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { sessionAgentId } from '../../src/server/meko.js';
-import { get } from '../../src/server/db.js';
+import { all, get } from '../../src/server/db.js';
 
 const lines = (env: TestEnv, file: string) => {
   const f = join(process.env.FAKE_KIRO_DIR!, file);
@@ -55,8 +55,8 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     // Kiro's id came with its hooks; its credits and context fill from its session file.
     expect(row.agent_session_id).toBe(lines(env, 'spawn.jsonl')[0].sessionId);
     const usage = await waitFor(() => env.core.sessions.get(s.id).usage, (u) => u.credits === 0.5, 10000, 'credits');
-    // Read once: the next start's backfill leaves the session alone.
-    expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM usage_files WHERE session_id = ?', s.id)).toEqual({ n: 1 });
+    // Read once, its session file and its log: the next start's backfill leaves the session alone.
+    expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM usage_files WHERE session_id = ?', s.id)).toEqual({ n: 2 });
     expect(usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1, credits: 0.5 });
     expect(env.core.sessions.get(s.id).contextPercent).toBe(13);
     // Credits aren't priced: the project's cost stays at zero, its credits are summed beside it.
@@ -81,6 +81,43 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     await env.core.sessions.action(s.id, 'resume');
     await waitFor(() => lines(env, 'argv.jsonl').length, (n) => n === 2, 10000, 'resume');
     expect(lines(env, 'argv.jsonl')[1].args).toEqual(['chat', '--agent', 'agentk', '--resume-id', row.agent_session_id]);
+  });
+
+  it("shows Meko's m while Kiro calls Meko, and records its calls for the counts, What Meko doesn't know and the call log", async () => {
+    // Kiro has no mod: its Meko calls are told by a hook before each call to a Meko server.
+    env.core.config.claude.mod = false;
+    const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
+    expect(agent.hooks.preToolUse).toContainEqual({ matcher: '@meko', command: expect.stringMatching(/hook\.sh'$/), timeout_ms: 5000 });
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    env.core.projects.update(p.id, { settings: { mekoLog: true } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro meko', prompt: 'meko 1500', start: 'code', harness: 'kiro' });
+    const get = (id: string) => env.core.sessions.get(id);
+    expect((await waitFor(() => get(s.id), (x) => x.mekoCall, 10000, 'the Meko call')).status).toBe('working');
+    await waitFor(() => get(s.id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the call and the turn to end');
+
+    // A search that found nothing, then one the user refused, whose m the turn's end takes away.
+    await env.core.sessions.submit(s.id, 'meko 10 empty');
+    await waitFor(() => all<{ n: number }>(env.core.db, 'SELECT COUNT(*) AS n FROM meko_calls WHERE session_id = ?', s.id)[0].n, (n) => n === 2, 10000, 'the second call');
+    await waitFor(() => get(s.id).status, (st) => st === 'idle', 10000, 'the second turn');
+    await env.core.sessions.submit(s.id, 'meko 1500 refused');
+    await waitFor(() => get(s.id).mekoCall, Boolean, 10000, 'the refused call');
+    await waitFor(() => get(s.id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the turn to end without the call');
+
+    const calls = all(env.core.db, 'SELECT tool, kind, agent, outcome, results, quality, query, model FROM meko_calls WHERE session_id = ? ORDER BY at, query', s.id);
+    expect(calls).toEqual([
+      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'found', results: 1, quality: null, query: 'meko 1500', model: null },
+      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'empty', results: 0, quality: 'empty', query: 'meko 10 empty', model: null },
+    ]);
+    const usage = (await env.core.projects.home(p.id)).usage;
+    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 2, found: 1, saves: 0 });
+    expect(usage.meko).toMatchObject({ lookups: 2, found: 1, empty: 1 });
+    expect(env.core.projects.mekoGaps(p.id, 'open', undefined, undefined).gaps.map((g) => g.query)).toContain('meko 10 empty');
+    // The call log has them as the session's agent's, with no time taken (Kiro doesn't say).
+    const page = await env.core.sessions.mekoCalls(s.id, { by: 'claude' });
+    expect(page.calls.map((c) => ({ tool: c.tool, ok: c.ok, ms: c.ms }))).toEqual([
+      { tool: 'memory_search', ok: true, ms: null }, { tool: 'memory_search', ok: true, ms: null },
+    ]);
+    expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'kiro' })]);
   });
 
   it("refuses a new session on a harness that isn't available, reading its version again first", async () => {

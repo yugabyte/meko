@@ -1,5 +1,5 @@
 import { costOf, priceFor } from '../shared/pricing.js';
-import type { CallHomeAgentkMeko, CallHomeLearn, CallHomeMekoTool, CallHomeTokens, MekoFirstTurn, MekoLearning, MekoUsage, SessionUsage } from '../shared/types.js';
+import { MEKO_LOG_TOOLS, type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoUsage, type SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, MIN_MEMORY_SCORE, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
 import { TOO_LARGE } from './savedreply.js';
@@ -34,6 +34,25 @@ export const REPORTED_TOOLS: readonly CallHomeMekoTool[] = [...LOOKUP_TOOLS, ...
 /** The Meko tool a tool name calls, or null for any other tool. */
 export function mekoTool(name: string): string | null {
   return MEKO_TOOL.exec(name)?.[1] ?? null;
+}
+
+const KNOWN_TOOLS: ReadonlySet<string> = new Set<string>(MEKO_LOG_TOOLS);
+
+/**
+ * The Meko tool a name made of a Meko server's name, `_` and the tool calls (OpenCode's
+ * `meko_context_search`), or null for any other tool. The server's name is `meko` or starts with it,
+ * and may hold `_` itself, so the split that leaves a tool Meko has wins.
+ */
+export function serverMekoTool(name: string): string | null {
+  if (!/^meko[\w-]*$/i.test(name)) return null;
+  let first: string | null = null;
+  for (let i = name.indexOf('_'); i > 0; i = name.indexOf('_', i + 1)) {
+    const tool = name.slice(i + 1);
+    if (!/^[a-z_]+$/.test(tool)) continue;
+    if (KNOWN_TOOLS.has(tool)) return tool;
+    first ??= tool;
+  }
+  return first;
 }
 
 export function mekoKind(tool: string): MekoKind {
@@ -94,19 +113,39 @@ export function parseMekoCalls(line: string): MekoCall[] {
     if (b?.type !== 'tool_use' || typeof b.id !== 'string' || typeof b.name !== 'string') continue;
     const tool = mekoTool(b.name);
     if (!tool) continue;
-    const q = (b.input as Json | undefined)?.query;
-    out.push({
-      toolUseId: b.id,
-      tool,
-      kind: mekoKind(tool),
-      at,
-      inputChars: JSON.stringify(b.input ?? {}).length,
+    out.push(mekoCallOf({
+      toolUseId: b.id, tool, at, input: b.input, contextTokens,
       model: typeof m.model === 'string' && m.model !== '<synthetic>' ? m.model : null,
-      contextTokens,
-      query: SEARCH_TOOLS.has(tool) && typeof q === 'string' && q.trim() ? q.trim().slice(0, QUERY_CHARS) : null,
-    });
+    }));
   }
   return out;
+}
+
+/** A Meko call as a `meko_calls` row has it, from what any agent's record of it says. */
+export function mekoCallOf(c: { toolUseId: string; tool: string; at: number; input: unknown; model: string | null; contextTokens: number | null }): MekoCall {
+  const q = c.input && typeof c.input === 'object' ? (c.input as Json).query : undefined;
+  return {
+    toolUseId: c.toolUseId,
+    tool: c.tool,
+    kind: mekoKind(c.tool),
+    at: c.at,
+    inputChars: JSON.stringify(c.input ?? {}).length,
+    model: c.model,
+    contextTokens: c.contextTokens,
+    query: SEARCH_TOOLS.has(c.tool) && typeof q === 'string' && q.trim() ? q.trim().slice(0, QUERY_CHARS) : null,
+  };
+}
+
+/**
+ * A call's result from its reply's text: found, empty or failed, and for a search how poor it was.
+ * `full` is the reply to judge the search by when the text is only a notice of it (Claude Code's
+ * for a reply too large for Claude), else the text. A null text is a reply too long to keep, which
+ * counts as found, as one too large for Claude does.
+ */
+export function mekoResultOf(toolUseId: string, call: PendingCall, text: string | null, isError: boolean, full: string | null = text): MekoResult {
+  if (text === null && !isError) return { toolUseId, outcome: call.kind === 'lookup' ? 'found' : 'ok', results: null, resultChars: 0, ...NO_QUALITY };
+  const res = classifyResult(call.kind, text ?? '', isError);
+  return { toolUseId, ...res, ...searchQuality(call.tool, res.outcome, full) };
 }
 
 /**
@@ -137,9 +176,8 @@ export function parseMekoResults(line: string, pending: ReadonlyMap<string, Pend
     const call = pending.get(b.tool_use_id);
     if (!call) continue;
     const text = resultText(b.content);
-    const res = classifyResult(call.kind, text, b.is_error === true);
     const full = SEARCH_TOOLS.has(call.tool) && TOO_LARGE.test(text) ? readSaved?.(text) ?? null : text;
-    out.push({ toolUseId: b.tool_use_id, ...res, ...searchQuality(call.tool, res.outcome, full) });
+    out.push(mekoResultOf(b.tool_use_id, call, text, b.is_error === true, full));
   }
   return out;
 }

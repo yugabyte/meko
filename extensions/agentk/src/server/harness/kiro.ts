@@ -8,8 +8,9 @@ import { run } from '../db.js';
 import type { HookPayload } from '../hooks.js';
 import {
   AGENTK_AGENT, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
-  kiroSessionFile, kiroTurns, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
+  kiroSessionFile, kiroSessionLog, kiroTurns, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
 } from '../kiro.js';
+import { kiroMekoServerNames } from '../mekokiro.js';
 import { kiroWorkspaceConfig } from '../headtrust.js';
 import { shq } from '../launcher.js';
 import { errMsg, type Logger } from '../log.js';
@@ -18,8 +19,8 @@ import { HttpError } from '../projects.js';
 import type { SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
 import { kiroToolsServer, skillPath, toolsReady } from '../tools.js';
-import { recordKiroTurns } from '../usage.js';
-import type { Harness } from './types.js';
+import { ingestKiroMekoCalls, recordKiroTurns } from '../usage.js';
+import type { Harness, UsageRead } from './types.js';
 import { cliState } from './version.js';
 
 /** How long `kiro-cli update` may run before it's stopped. */
@@ -34,14 +35,21 @@ const EVENTS: Record<string, string> = {
   agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop',
 };
 
-/** AgentK's hooks in the `agentk` agent: the forwarder on every event it follows, the context at start, the guard on writes. */
-export function agentkHooks(paths: Paths): KiroHooks {
+/**
+ * AgentK's hooks in the `agentk` agent: the forwarder on every event it follows, the context at
+ * start, the guard on writes, and the forwarder before each call to a Meko server (`mekoServers`,
+ * matched as `@<name>`, Kiro's matcher for every tool of an MCP server), for the dot's Meko m.
+ */
+export function agentkHooks(paths: Paths, mekoServers: string[] = ['meko']): KiroHooks {
   const cmd = (file: string) => shq(claudePath(file));
   const hook = { command: cmd(hookScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS };
   return {
     agentSpawn: [hook, { command: cmd(contextScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS }],
     userPromptSubmit: [hook],
-    preToolUse: [{ matcher: 'fs_write', command: cmd(kiroGuardScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS }],
+    preToolUse: [
+      { matcher: 'fs_write', command: cmd(kiroGuardScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS },
+      ...mekoServers.map((name) => ({ matcher: `@${name}`, ...hook })),
+    ],
     postToolUse: [{ matcher: '*', ...hook }],
     stop: [hook],
   };
@@ -60,7 +68,8 @@ export function writeAgentkAgent(paths: Paths, cfg: Config): boolean {
   const tools = toolsReady(paths, cfg.tools.enabled)
     ? { name: TOOLS_SERVER, server: kiroToolsServer(paths), skill: claudePath(skillPath(paths)) }
     : null;
-  return writeKiroAgent(agentkAgent(base, agentkHooks(paths), { mekoCapture: cfg.meko.captureTranscripts, tools }));
+  const hooks = agentkHooks(paths, kiroMekoServerNames(base.mcpServers));
+  return writeKiroAgent(agentkAgent(base, hooks, { mekoCapture: cfg.meko.captureTranscripts, tools }));
 }
 
 /**
@@ -83,6 +92,17 @@ export function kiroArgs(o: { conversation: string | null; trustTools: boolean; 
 /** The session's own Kiro conversation, while Kiro still has it: the id a hook gave, or `findConversation` found. */
 function kiroConversation(row: SessionRow): string | null {
   return row.agent_session_id && existsSync(kiroSessionFile(row.agent_session_id)) ? row.agent_session_id : null;
+}
+
+/** A Meko tool as Kiro names it: `@<server>/<tool>`, from a server named `meko` or starting with it. */
+const MEKO_TOOL = /^@meko[\w-]*\/[\w-]+$/i;
+
+/**
+ * The key of the Meko call a tool event is about: its tool name. Kiro gives a call no id, so two
+ * calls of one tool share it, and `MekoCalls` counts them.
+ */
+export function kiroMekoTool(p: HookPayload): string | null {
+  return typeof p.tool_name === 'string' && MEKO_TOOL.test(p.tool_name) ? p.tool_name : null;
 }
 
 /** A Kiro hook payload as AgentK's event: Kiro's id moves to `agent_session_id`, since `session_id` is Claude Code's. */
@@ -139,6 +159,7 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     deny: (reason) => reason,
     // agentSpawn's stdout goes into the model's context as it is.
     context: (text) => text,
+    mekoTool: kiroMekoTool,
     editedPaths(p) {
       if (!WRITE_TOOLS.includes(p.tool_name ?? '')) return null;
       const path = p.tool_input?.path;
@@ -150,9 +171,10 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     canResume: (row) => !!kiroConversation(row),
     activityFiles(row) {
       const conv = kiroConversation(row);
-      return conv ? [kiroSessionFile(conv), kiroSessionFile(conv).replace(/\.json$/, '.jsonl')] : [];
+      return conv ? [kiroSessionFile(conv), kiroSessionLog(conv)] : [];
     },
-    // Its finished turns (credits, tokens) and its context fill after the last one, from its session file.
+    // Its finished turns (credits, tokens) and its context fill after the last one, from its session
+    // file, and its Meko calls with their results, from its session log.
     readUsage(db, row) {
       const conv = kiroConversation(row);
       if (!conv) return { changed: false };
@@ -167,7 +189,15 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
         // The context fill from the same read still counts.
         deps.log.warn(`reading Kiro's usage for ${row.id} failed`, errMsg(e));
       }
-      return { changed, contextPercent: turns.at(-1)?.contextPercent };
+      let mekoCalls: UsageRead['mekoCalls'] = [];
+      try {
+        const meko = ingestKiroMekoCalls(db, row.id, kiroSessionLog(conv));
+        changed ||= meko.changed;
+        mekoCalls = meko.mekoCalls;
+      } catch (e) {
+        deps.log.warn(`reading Kiro's Meko calls for ${row.id} failed`, errMsg(e));
+      }
+      return { changed, contextPercent: turns.at(-1)?.contextPercent, mekoCalls };
     },
     ask: kiroAsker,
     status: cli.status,

@@ -4,6 +4,7 @@ import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
+import { agentName } from '../../shared/harnesses';
 import { cx, liveSessions } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { TopBar } from './TopBar';
@@ -16,7 +17,9 @@ export function callTime(ms: number, now = Date.now()): string {
   return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-export function callDuration(ms: number): string {
+/** How long a call took; nothing when its agent doesn't say (Kiro). */
+export function callDuration(ms: number | null): string {
+  if (ms === null) return '';
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
@@ -28,12 +31,10 @@ function shown(v: unknown): string {
 
 type Opened = { state: 'loading' } | { state: 'error'; error: string } | { state: 'done'; call: MekoCallDetail };
 
-/** Who made a call, as the page names them. */
-const BY_LABEL: Record<MekoCallBy, string> = { agentk: 'AgentK', claude: 'Claude' };
 
 /**
  * The project's Meko call logs (mekolog.ts on the server): one session's at a time, newest first,
- * AgentK's calls and Claude's, each call opening to what was sent and what came back. `sessionId`
+ * AgentK's calls and the session's agent's (Claude, Kiro or OpenCode), each call opening to what was sent and what came back. `sessionId`
  * is the session asked for in the route; without one, the session written to last.
  */
 export function MekoCallsView({
@@ -74,6 +75,9 @@ export function MekoCallsView({
   for (const s of live) if (!choices.some((c) => c.id === s.id)) choices.push({ id: s.id, name: s.name });
   if (sid && !choices.some((c) => c.id === sid)) choices.unshift({ id: sid, name: sid });
   const hasLog = !!sid && !!logs?.some((l) => l.sessionId === sid);
+  // The session's agent, which made its `claude` calls.
+  const agent = agentName({ harness: logs?.find((l) => l.sessionId === sid)?.harness ?? live.find((s) => s.id === sid)?.harness ?? 'claude' });
+  const byLabel = (by: MekoCallBy) => (by === 'claude' ? agent : 'AgentK');
 
   useEffect(() => {
     if (!sid) return;
@@ -157,7 +161,7 @@ export function MekoCallsView({
           </button>
         )}
         {!mobile && <h1>Meko calls</h1>}
-        <span className="muted small">What AgentK and Claude sent to Meko for a session, and what came back. Deleted with the session.</span>
+        <span className="muted small">What AgentK and {agent} sent to Meko for a session, and what came back. Deleted with the session.</span>
       </header>
       <div className="home-scroll">
         {!logging && (
@@ -190,9 +194,9 @@ export function MekoCallsView({
               ))}
             </select>
             <select id="mc-by" className="input mc-by" aria-label="Made by" value={by} onChange={(e) => setBy(e.target.value as MekoCallBy | '')}>
-              <option value="">AgentK and Claude</option>
+              <option value="">AgentK and {agent}</option>
               <option value="agentk">AgentK</option>
-              <option value="claude">Claude</option>
+              <option value="claude">{agent}</option>
             </select>
             <label className="check mc-failed">
               <input id="mc-failed" type="checkbox" checked={failed} onChange={(e) => setFailed(e.target.checked)} />
@@ -235,7 +239,7 @@ export function MekoCallsView({
               {tool || by || failed
                 ? 'No calls match.'
                 : logging
-                  ? "No calls yet. Recall at session start, Claude's searches and saves, design uploads and learn steps show up here as they're made."
+                  ? `No calls yet. Recall at session start, ${agent}'s searches and saves, design uploads and learn steps show up here as they're made.`
                   : 'No calls were kept for this session.'}
             </p>
           ) : (
@@ -248,7 +252,7 @@ export function MekoCallsView({
                       <time className="mc-time">{callTime(c.at)}</time>
                       <span className="mc-tool-name">
                         {c.tool}
-                        <span className={cx('mc-tag', c.by)}>{BY_LABEL[c.by]}</span>
+                        <span className={cx('mc-tag', c.by)}>{byLabel(c.by)}</span>
                         {c.subagent && <span className="mc-tag">subagent</span>}
                         {c.learn && <span className="mc-tag">learn</span>}
                       </span>

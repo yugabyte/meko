@@ -31,9 +31,10 @@ import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
-import { agentName } from '../shared/harnesses.js';
+import { agentName, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
 import { writeLauncher } from './launcher.js';
+import { MekoCalls } from './mekocalls.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
 import { DESIGN_READY } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
@@ -270,6 +271,8 @@ export class SessionManager {
   private recall = new RecallStore((id, r) => recordPreload(this.db, id, r));
   /** Each session's link to AgentK's mod in its Claude (modlink.ts): prompts go through it while it's live. */
   readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped), Date.now, () => this.core.changed());
+  /** Meko calls under way as the hooks of a CLI without the mod report them (Kiro's, OpenCode's). */
+  private hookMeko = new MekoCalls();
   /** How full each session's context window is (percent), from the mod's measurements (Kiro's: its session file). */
   private contextFill = new Map<string, number>();
   /** Each session's system-prompt lines at its last launch, for a harness that takes them from its context hook. */
@@ -323,7 +326,7 @@ export class SessionManager {
       midTurn: this.midTurn(id),
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
-      mekoCall: this.core.config.claude.mod && this.mod.callingMeko(id),
+      mekoCall: (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id),
       approvalQueued: this.core.lifecycle.approvalQueued(id),
     };
   }
@@ -1416,6 +1419,7 @@ export class SessionManager {
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
+    this.hookMeko.clear(id);
     this.core.learn.interrupted(id);
     this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
@@ -1469,6 +1473,7 @@ export class SessionManager {
     void this.captureTranscript(id);
     // No Meko call outlives its turn, the plan approval's included.
     this.mod.endMeko(id);
+    this.hookMeko.clear(id);
     // A plan waiting for approval keeps its turn going past its Stop; an interrupt ends it.
     if (how === 'interrupted') this.planPending.delete(id);
     if (this.planPending.has(id)) return;
@@ -1552,6 +1557,8 @@ export class SessionManager {
         this.setStatus(id, 'working');
         break;
       case 'PreToolUse': {
+        const meko = this.harness(row).mekoTool?.(p);
+        if (meko) this.hookMeko.start(id, meko);
         if (p.tool_name === 'ExitPlanMode') {
           const plan = typeof p.tool_input?.plan === 'string' ? p.tool_input.plan : '';
           if (plan) await this.core.lifecycle.saveDesign(id, { markdown: plan });
@@ -1562,6 +1569,8 @@ export class SessionManager {
         break;
       }
       case 'PostToolUse': {
+        const meko = this.harness(row).mekoTool?.(p);
+        if (meko) this.hookMeko.end(id, meko);
         if (p.tool_name === 'ExitPlanMode') {
           this.planPending.delete(id);
           const resp = JSON.stringify(p.tool_response ?? '').toLowerCase();
@@ -2095,7 +2104,7 @@ export class SessionManager {
       tool, at: end - ms, ms, ok: body.ok === true, error: str(body.error), args: body.args ?? null,
       text: reply.text, notice: reply.notice, subagent: body.subagent === true,
     }));
-    return this.core.mekoLog.recordClaude(scope, call);
+    return this.core.mekoLog.recordAgent(scope, call);
   }
 
   /** The project's sessions that have a Meko call log, the latest written to first. */
@@ -2104,7 +2113,7 @@ export class SessionManager {
     const out: MekoLogInfo[] = [];
     for (const r of sessionRows(this.db, projectId)) {
       const s = r.desired === 'archived' ? null : this.core.mekoLog.stat(r.id);
-      if (s) out.push({ sessionId: r.id, name: r.name, ...s });
+      if (s) out.push({ sessionId: r.id, name: r.name, harness: harnessOf(r.harness), ...s });
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
@@ -2453,6 +2462,11 @@ export class SessionManager {
       return;
     }
     let changed = read.changed;
+    // The agent's Meko calls its files showed (Kiro's, OpenCode's), into the session's call log.
+    if (read.mekoCalls?.length) {
+      const scope = { id: r.id, createdAt: r.created_at };
+      if (this.core.mekoLog.wants(scope)) for (const c of read.mekoCalls) void this.core.mekoLog.recordAgent(scope, Promise.resolve(c));
+    }
     if (typeof read.contextPercent === 'number') {
       const fill = Math.round(Math.min(100, Math.max(0, read.contextPercent)));
       if (this.contextFill.get(id) !== fill) {

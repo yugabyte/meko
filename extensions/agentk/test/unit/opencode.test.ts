@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { all, openDb, run } from '../../src/server/db.js';
-import { normalizeOpenCode, openCodeArgs, openCodeHarness } from '../../src/server/harness/opencode.js';
+import { normalizeOpenCode, openCodeArgs, openCodeHarness, openCodeMekoTool } from '../../src/server/harness/opencode.js';
 import { silentLogger } from '../../src/server/log.js';
 import {
   openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodePluginPath, openCodeStoredSession, readOpenCodeRun, writeOpenCodePlugin,
@@ -22,6 +22,8 @@ describe("OpenCode's events as AgentK's", () => {
     ['an edit the guard checks', { hook_event_name: 'tool.execute.before', tool: 'write', args: { path: 'a.ts' }, session_id: 'ses_1' },
       { hook_event_name: 'PreToolUse', tool_name: 'write', tool_input: { path: 'a.ts' }, agent_session_id: 'ses_1' }],
     ["a subagent's tool, with no session id", { hook_event_name: 'tool.execute.after', tool: 'read' }, { hook_event_name: 'PostToolUse', tool_name: 'read' }],
+    ['a Meko call starting, with its id', { hook_event_name: 'tool.execute.before', tool: 'meko_context_search', call_id: 'call_1', session_id: 'ses_1' },
+      { hook_event_name: 'PreToolUse', tool_name: 'meko_context_search', call_id: 'call_1', agent_session_id: 'ses_1' }],
     ['a permission ask', { hook_event_name: 'permission.asked', permission: 'bash', session_id: 'ses_1' }, { hook_event_name: 'PermissionRequest', tool_name: 'bash', agent_session_id: 'ses_1' }],
     ['its answer', { hook_event_name: 'permission.replied' }, { hook_event_name: 'PostToolUse' }],
     ['the end of a turn', { hook_event_name: 'session.idle', session_id: 'ses_1' }, { hook_event_name: 'Stop', agent_session_id: 'ses_1' }],
@@ -110,13 +112,63 @@ describe("an OpenCode session's usage", () => {
     const file = join(tempDir('akl-oc-usage-'), 'messages.jsonl');
     const msg = (id: string, session: string) => JSON.stringify({ id, session, model: 'claude-sonnet-4-5', at: 1, input: 10, output: 3, reasoning: 2, cacheRead: 5, cacheWrite: 1 });
     writeFileSync(file, `${msg('m1', 'ses_main')}\n${msg('m2', 'ses_child')}\n${msg('m3', 'ses_main').slice(0, 20)}`);
-    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main')).toBe(true);
+    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main').changed).toBe(true);
     const rows = () => all<{ message_id: string; agent: string | null; output: number }>(db, 'SELECT message_id, agent, output FROM usage_messages ORDER BY message_id');
     expect(rows()).toEqual([{ message_id: 'opencode:m1', agent: null, output: 5 }, { message_id: 'opencode:m2', agent: 'ses_child', output: 5 }]);
-    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main')).toBe(false);
+    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main').changed).toBe(false);
     appendFileSync(file, `${msg('m3', 'ses_main').slice(20)}\n`);
-    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main')).toBe(true);
+    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main').changed).toBe(true);
     expect(rows().map((r) => r.message_id)).toEqual(['opencode:m1', 'opencode:m2', 'opencode:m3']);
+  });
+});
+
+describe("an OpenCode session's Meko calls", () => {
+  it.each([
+    ['a Meko search', { tool_name: 'meko_context_search', call_id: 'call_1' }, 'call_1:meko_context_search'],
+    ['one on a Meko server of another name', { tool_name: 'meko-local_memory_add', call_id: 'call_2' }, 'call_2:meko-local_memory_add'],
+    ['another tool', { tool_name: 'read', call_id: 'call_3' }, null],
+    ['a Meko call with no id', { tool_name: 'meko_memory_search' }, null],
+  ])("are keyed for the dot's m: %s", (_, p, key) => {
+    expect(openCodeMekoTool(p)).toBe(key);
+  });
+
+  it("are read from the plugin's lines: counted, judged, logged once, and left out of the responses", () => {
+    const db = openDb(':memory:');
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('p', 'P', '/r', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
+    const file = join(tempDir('akl-oc-meko-'), 'messages.jsonl');
+    const meko = (id: string, o: Record<string, unknown>) => JSON.stringify({
+      type: 'meko', id, session: 'ses_main', tool: 'meko_memory_search', model: 'claude-sonnet-4-5', at: 5, ms: 1200, ok: true, error: null,
+      input: { query: 'where is X' }, text: JSON.stringify({ results: [{ id: 'm', memory: 'X is here', score: 0.9 }] }), ...o,
+    });
+    writeFileSync(file, [
+      meko('call_1:meko_memory_search#1', {}),
+      meko('call_2:meko_memory_search#1', { session: 'ses_child', input: { query: 'nothing here' }, text: JSON.stringify({ results: [] }) }),
+      meko('call_3:meko_memory_add#1', { tool: 'meko_memory_add', ok: false, error: 'Meko is down', text: 'Error: down', input: { text: 'a fact' } }),
+      meko('call_4:meko_context_search#1', { tool: 'meko_context_search', text: null, big: true }),
+      meko('call_5:other_tool#1', { tool: 'github_search' }),
+    ].join('\n') + '\n');
+    const read = ingestOpenCodeUsage(db, 's1', file, 'ses_main');
+    expect(read.changed).toBe(true);
+    expect(all(db, 'SELECT tool_use_id, agent, tool, kind, outcome, results, quality, query, model FROM meko_calls ORDER BY tool_use_id')).toEqual([
+      { tool_use_id: 'opencode:call_1:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'found', results: 1, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_2:meko_memory_search#1', agent: 'ses_child', tool: 'memory_search', kind: 'lookup', outcome: 'empty', results: 0, quality: 'empty', query: 'nothing here', model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_3:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'error', results: null, quality: null, query: null, model: 'claude-sonnet-4-5' },
+      // A reply too long to log counts as found.
+      { tool_use_id: 'opencode:call_4:meko_context_search#1', agent: null, tool: 'context_search', kind: 'lookup', outcome: 'found', results: null, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
+    ]);
+    expect(read.mekoCalls.map((c) => ({ tool: c.tool, ms: c.ms, ok: c.ok, error: c.error, subagent: c.subagent }))).toEqual([
+      { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: false },
+      { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: true },
+      { tool: 'memory_add', ms: 1200, ok: false, error: 'Meko is down', subagent: false },
+      { tool: 'context_search', ms: 1200, ok: true, error: null, subagent: false },
+    ]);
+    // None of them is a response.
+    expect(all(db, 'SELECT * FROM usage_messages')).toEqual([]);
+    // Read again from the start (the file was rewritten): nothing is recorded or logged twice.
+    run(db, 'DELETE FROM usage_files');
+    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main')).toEqual({ changed: false, mekoCalls: [] });
   });
 });
 

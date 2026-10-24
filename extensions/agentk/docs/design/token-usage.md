@@ -75,6 +75,31 @@ plugin's hooks inject no recalled memory today, so the transcript is the rest of
 Meko gave a session. The migration that added the table cleared the read offsets again, so older
 sessions got their calls and 1-hour writes.
 
+Kiro's and OpenCode's calls go into the same table, judged by the same code (`mekoCallOf`,
+`mekoResultOf` in `mekousage.ts`, written by `recordMekoCalls` in `usage.ts`), so the counts, the
+usage report and What Meko doesn't know treat every agent's calls alike:
+
+- **Kiro** (`ingestKiroMekoCalls`, from the adapter's `readUsage`): its session log
+  (`~/.kiro/sessions/cli/<conversation>.jsonl`), read from the offset kept in `usage_files` under its
+  path. Only a `ToolResults` line names a call's MCP server (`data.results[<id>].tool.kind.Mcp`:
+  `serverName`, `toolName`, `params`), so a call is taken there, from a server named `meko` or
+  starting with it, with its reply from the line's `toolResult` content (`parseKiroMekoCalls`,
+  checked against kiro-cli 2.34.0). Kiro dates only its `Prompt` lines, so a call's `at` is its
+  turn's prompt when the read saw it, else when AgentK read the call (a live read runs within about
+  10 seconds of it). `model` and `context_tokens` are NULL. The input's `__tool_use_purpose`, Kiro's
+  own, is left out. A Kiro session started before this has its calls read from the start of its log
+  the next time its usage is read.
+- **OpenCode** (`ingestOpenCodeUsage`): the plugin's `execute.after` adds a `type: "meko"` line to
+  the session's `messages.jsonl` for each call to a Meko server's tool (`meko…_<tool>`, the tool found
+  by `serverMekoTool`): its id (the call's id, its tool and a count, since a call from code mode
+  shares its `execute` call's id), the OpenCode session, the step's model, when it started and how
+  long it took, whether it completed, the input and the reply's text. A reply over 1 MB is left out
+  and counted as found, as one too large for Claude is. `context_tokens` is NULL. A subagent's call
+  has its session as the agent, like its responses.
+
+The savings estimate needs a call's context size, so it leaves out these calls: Meko's savings come
+out lower than they really are for Kiro and OpenCode sessions, never higher.
+
 **Meko in the first turn.** The same pass keeps when each session's first turn ended:
 `sessions.first_turn_end_at`, set once from the main transcript (subagents don't count). It's the
 first of: a response with `stop_reason: "end_turn"`, an API error Claude Code wrote in the model's

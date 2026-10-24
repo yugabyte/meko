@@ -281,10 +281,10 @@ your phone can connect.
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
-  step) and Claude's (its searches and saves, a reply too large for Claude's context included), with
-  what was sent and what came back, in a file in the session's folder that's deleted with the
-  session. **View calls** opens them, a session at a time, with filters for the tool, who made the
-  call (AgentK or Claude) and failed calls.
+  step) and its agent's (Claude's, Kiro's or OpenCode's searches and saves, a reply too large for
+  Claude's context included), with what was sent and what came back, in a file in the session's
+  folder that's deleted with the session. **View calls** opens them, a session at a time, with
+  filters for the tool, who made the call (AgentK or the session's agent) and failed calls.
 - **What Meko doesn't know:** the project home says how many questions Meko couldn't answer, and
   links to a list of the searches that found nothing, or only memories scoring below the bar,
   grouped by question. **Teach Meko** saves your answer to the project's datapack; **Dismiss**

@@ -28,7 +28,8 @@ interface Line {
   by?: MekoCallBy;
   subagent?: boolean;
   learn: string | null;
-  ms: number;
+  /** Null for a call whose agent doesn't say how long it took (Kiro's). */
+  ms: number | null;
   ok: boolean;
   attempts: number;
   error: string | null;
@@ -38,12 +39,17 @@ interface Line {
   result: unknown;
 }
 
-/** One of Claude's Meko calls, as AgentK's mod reports it (`/mod/meko`), its reply already read. */
-export interface ClaudeMekoCall {
+/**
+ * A Meko call of the session's agent, its reply already read: Claude's as AgentK's mod reports it
+ * (`/mod/meko`), Kiro's and OpenCode's as the usage read finds them in their files. Logged as `by:
+ * 'claude'`, which names the session's agent whichever it is.
+ */
+export interface AgentMekoCall {
   /** The Meko tool, without its MCP server's prefix (`context_search`). */
   tool: string;
   at: number;
-  ms: number;
+  /** Null when the agent doesn't say (Kiro). */
+  ms: number | null;
   ok: boolean;
   error: string | null;
   args: unknown;
@@ -77,8 +83,8 @@ export interface MekoCallLogOptions {
 }
 
 /**
- * Each session's Meko calls, AgentK's (`record`) and Claude's (`recordClaude`, as AgentK's mod
- * reports them), with what was sent and what came back, one JSON object per line of
+ * Each session's Meko calls, AgentK's (`record`) and its agent's (`recordAgent`: Claude's as AgentK's
+ * mod reports them, Kiro's and OpenCode's from their files), with what was sent and what came back, one JSON object per line of
  * `meko-calls.jsonl` in the session's folder, for debugging. Lines are in the order the server
  * heard of the calls ending: one of Claude's whose reply is still being read from the file Claude
  * Code saved it to holds back the session's later lines (`queue`). Nothing is cut and the file has no
@@ -123,12 +129,12 @@ export class MekoCallLog {
   }
 
   /**
-   * Appends one of Claude's calls in a session whose project logs them, in its place now while its
+   * Appends one of the session's agent's calls in a session whose project logs them, in its place now while its
    * reply is still being read (`call`, null when there's nothing to log). Never rejects.
    */
-  recordClaude(session: MekoScope, call: Promise<ClaudeMekoCall | null>): Promise<void> {
+  recordAgent(session: MekoScope, call: Promise<AgentMekoCall | null>): Promise<void> {
     const id = randomBytes(4).toString('hex');
-    return this.write(session, call.then((c) => c && claudeLine(id, c), () => null));
+    return this.write(session, call.then((c) => c && agentLine(id, c), () => null));
   }
 
   /** Writes a line now, unless an earlier one of the session's is still waiting: then after it. */
@@ -310,7 +316,7 @@ function summary(l: Line, offset: number): MekoCallSummary {
     by: l.by === 'claude' ? 'claude' : 'agentk',
     subagent: l.subagent === true,
     learn: l.learn ?? null,
-    ms: l.ms,
+    ms: typeof l.ms === 'number' ? l.ms : null,
     ok: l.ok,
     attempts: l.attempts,
     error: l.error ?? null,
@@ -334,7 +340,7 @@ export async function claudeReply(text: string | null, transcriptPath: string | 
 }
 
 /** One of Claude's calls as a line of the file. */
-function claudeLine(id: string, c: ClaudeMekoCall): Line {
+function agentLine(id: string, c: AgentMekoCall): Line {
   return {
     id,
     at: new Date(c.at).toISOString(),

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, toolCounts } from '../../src/server/mekousage.js';
+import { classifyResult, mekoCalls, mekoResultOf, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, serverMekoTool, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
 import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
@@ -59,6 +59,23 @@ describe('Meko calls in transcripts', () => {
     expect(mekoTool('mcp__claude_ai_MekoDev__authenticate')).toBeNull();
     expect(mekoTool('mcp__phorge__phabricator_task_search')).toBeNull();
     expect(mekoTool('Read')).toBeNull();
+  });
+
+  it("recognizes a Meko tool by its server's name and the tool, as OpenCode names them", () => {
+    expect(serverMekoTool('meko_memory_search')).toBe('memory_search');
+    expect(serverMekoTool('meko-local_context_search')).toBe('context_search');
+    // A server's name may hold "_": the split that leaves a tool Meko has wins.
+    expect(serverMekoTool('meko_local_memory_add')).toBe('memory_add');
+    expect(serverMekoTool('meko_some_new_tool')).toBe('some_new_tool');
+    expect(serverMekoTool('github_search')).toBeNull();
+    expect(serverMekoTool('meko')).toBeNull();
+  });
+
+  it("judges a reply too long to keep as found, and a failed call's as an error", () => {
+    const call = { kind: 'lookup' as const, tool: 'context_search' };
+    expect(mekoResultOf('t1', call, null, false)).toEqual({ toolUseId: 't1', outcome: 'found', results: null, resultChars: 0, topScore: null, topRaw: null, quality: null });
+    expect(mekoResultOf('t2', { kind: 'save', tool: 'memory_add' }, null, false).outcome).toBe('ok');
+    expect(mekoResultOf('t3', call, null, true).outcome).toBe('error');
   });
 
   it('reads calls from a model response, with its model and context', () => {

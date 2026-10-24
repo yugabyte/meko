@@ -149,6 +149,15 @@ async function finish() {
   await event('session.execution.succeeded', { sessionID: sessionId });
 }
 
+/** A call to Meko's memory_search that takes `ms` (its id shared by calls from one code-mode run); Meko finds one memory, or nothing when `empty`. */
+async function mekoCall(id, query, ms, empty) {
+  const c = { tool: 'meko_memory_search', sessionID: sessionId, agent: 'build', messageID: `msg_${n}`, id, input: { query, datapack_id: 'dp1' } };
+  await call('tool', 'execute.before', c);
+  await sleep(ms);
+  const text = JSON.stringify({ results: empty ? [] : [{ id: 'mem1', memory: 'What OpenCode knows.', score: 0.9, raw_similarity_score: 0.85 }] });
+  await call('tool', 'execute.after', { ...c, status: 'completed', result: { output: { result: text }, content: [{ type: 'text', text }] } });
+}
+
 async function turn(text) {
   if (pending) {
     // The permission answer: the tool runs, and the turn ends.
@@ -174,6 +183,17 @@ async function turn(text) {
       writeFileSync(isAbsolute(w[1]) ? w[1] : join(process.cwd(), w[1]), 'x');
       await call('tool', 'execute.after', { ...call0, status: 'completed', result: { content: 'ok' } });
     }
+  }
+  // "meko <ms> [empty]": a Meko search; "meko code": two from code mode, inside one execute call
+  // and sharing its id, as OpenCode 2 runs them.
+  const m = /\bmeko (\d+)(?: (empty))?/.exec(text);
+  if (m) await mekoCall(`call_m${n}`, m[0], Number(m[1]), !!m[2]);
+  if (/\bmeko code\b/.test(text)) {
+    const x = { tool: 'execute', sessionID: sessionId, agent: 'build', messageID: `msg_${n}`, id: `call_x${n}`, input: { code: 'await tools.meko.memory_search(…)' } };
+    await call('tool', 'execute.before', x);
+    await mekoCall(x.id, 'first', 10, false);
+    await mekoCall(x.id, 'second', 10, true);
+    await call('tool', 'execute.after', { ...x, status: 'completed', result: { content: 'done' } });
   }
   // "subagent": the subagent tool's session. Its prompt comes before its session.created event, so
   // the plugin asks OpenCode; its response counts, and its turn's end doesn't end the turn.

@@ -71,7 +71,7 @@ describe('Meko call log', () => {
     // A failed start's late call, under the id its Try again reused, isn't this start's.
     traced(s.id, { tool: 'conversation_create' }, rowCreatedAt(s.id) - 1);
     const logs = (await call('GET', `/api/projects/${p.id}/meko-logs`)).json() as MekoLogInfo[];
-    expect(logs).toEqual([{ sessionId: s.id, name: 'Fix it', bytes: expect.any(Number), updatedAt: expect.any(Number) }]);
+    expect(logs).toEqual([{ sessionId: s.id, name: 'Fix it', harness: 'claude', bytes: expect.any(Number), updatedAt: expect.any(Number) }]);
 
     const page = (await call('GET', `/api/sessions/${s.id}/meko-calls`)).json() as MekoCallPage;
     expect(page.more).toBe(false);

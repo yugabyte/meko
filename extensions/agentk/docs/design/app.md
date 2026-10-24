@@ -61,13 +61,18 @@ rail's dot, `blinkOffsetMs()`), so different sessions blink out of step, a sessi
 palette dots blink together, and a dot shown again picks up where its signal is. With reduced
 motion the dots are still.
 
-**Meko in the dot.** While Claude runs a Meko tool call, `Session.mekoCall` is true and a working
-session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
-`tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
-memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
-when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too, or an
-interrupted turn's `/mod/turn`) and on a reset
-(a relaunch or `SessionEnd`), in case an end never got through.
+**Meko in the dot.** While the session's agent runs a Meko tool call, `Session.mekoCall` is true
+and a working session's dot shows Meko's m. Claude's calls come from AgentK's mod (`/mod/meko`, a
+start and an end per `tool_use_id`), kept in memory by `ModLinks.mekoCall()` in `modlink.ts`, which
+pushes a change only when the first starts and when the last ends; a Claude Code session without the
+mod never shows it. Kiro's and OpenCode's come from their hooks (see
+[Harnesses](harnesses.md)): a Meko tool's `PreToolUse` opens a call and its `PostToolUse` closes it,
+matched by the key the adapter's `mekoTool()` gives, in `MekoCalls` (`mekocalls.ts`), separate from
+`ModLinks` because a mod's report marks the mod live. Kiro's calls have no id, so the key is the tool
+and a key open twice is counted. Both are forgotten at the turn's end (`Stop`, a plan approval's too,
+or an interrupted turn's `/mod/turn`) and on a reset (a relaunch or `SessionEnd`), in case an end
+never got through: Kiro runs `preToolUse` before it asks the user, so a call they refuse has no end,
+and its m stays until the turn ends.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
   above working, starting and learning, under exited and needs you, so the project's dot shows the

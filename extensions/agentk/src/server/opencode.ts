@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { writeScript } from './scriptfile.js';
+import { serverMekoTool } from './mekousage.js';
 import type { Paths } from './paths.js';
 
 /**
@@ -84,6 +85,10 @@ import { request } from 'node:http';
 import { join } from 'node:path';
 
 const EDIT_TOOLS = new Set(['edit', 'write', 'patch']);
+// Meko's tools: its server's name ('meko', or one starting with it), '_', the tool.
+const MEKO_TOOL = /^meko[\\w-]*_/i;
+// A Meko reply longer than this isn't logged, only that it came.
+const MEKO_TEXT_MAX = 1024 * 1024;
 const TURN_ENDS = new Set(['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted']);
 
 export default {
@@ -150,24 +155,61 @@ export default {
       main = e.sessionID;
       send({ hook_event_name: 'chat.message', session_id: main });
     });
+    // Each step's model, from its start, for the usage line at its end (and its Meko calls').
+    const models = new Map();
+    // Meko calls under way, by call id and tool (a call from code mode can share its execute call's
+    // id), each its start time; and how many of each the session made, for their ids in the log.
+    const mekoStarts = new Map();
+    const mekoCount = new Map();
     await ctx.tool.hook('execute.before', async (e) => {
-      if (!e || !EDIT_TOOLS.has(e.tool)) return;
+      if (!e) return;
+      if (typeof e.tool === 'string' && MEKO_TOOL.test(e.tool)) {
+        const key = e.id + ':' + e.tool;
+        mekoStarts.set(key, [...(mekoStarts.get(key) || []), Date.now()]);
+        send({ hook_event_name: 'tool.execute.before', tool: e.tool, call_id: e.id, ...ids(e.sessionID) });
+        return;
+      }
+      if (!EDIT_TOOLS.has(e.tool)) return;
       const args = e.input && typeof e.input === 'object' ? e.input : {};
       const reason = await post('guard', { hook_event_name: 'tool.execute.before', tool: e.tool, args, ...ids(e.sessionID) }, 3000);
       if (reason.trim()) throw new Error(reason.trim());
     });
     await ctx.tool.hook('execute.after', async (e) => {
       if (!e) return;
-      send({ hook_event_name: 'tool.execute.after', tool: e.tool, ...ids(e.sessionID) });
+      send({ hook_event_name: 'tool.execute.after', tool: e.tool, call_id: e.id, ...ids(e.sessionID) });
+      if (dir && typeof e.tool === 'string' && MEKO_TOOL.test(e.tool)) logMeko(e);
     });
+    // A Meko call with its reply, for AgentK's Meko counts, What Meko doesn't know and call log.
+    const logMeko = (e) => {
+      const key = e.id + ':' + e.tool;
+      const starts = mekoStarts.get(key) || [];
+      const start = starts.shift();
+      if (starts.length) mekoStarts.set(key, starts);
+      else mekoStarts.delete(key);
+      const n = (mekoCount.get(key) || 0) + 1;
+      mekoCount.set(key, n);
+      const content = e.result && Array.isArray(e.result.content) ? e.result.content : [];
+      const text = content.map((c) => (c && c.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('');
+      const ok = e.status === 'completed';
+      const m = models.get(e.messageID) || {};
+      try {
+        appendFileSync(join(dir, 'messages.jsonl'), JSON.stringify({
+          type: 'meko', id: key + '#' + n, session: e.sessionID, tool: e.tool, model: m.id,
+          at: start || Date.now(), ms: start ? Date.now() - start : null, ok,
+          error: ok ? null : String((e.error && (e.error.message || e.error)) || e.status || 'failed').slice(0, 300),
+          input: e.input && typeof e.input === 'object' ? e.input : {},
+          ...(text.length > MEKO_TEXT_MAX ? { text: null, big: true } : { text }),
+        }) + '\\n');
+      } catch {
+        // Best effort, like the usage lines.
+      }
+    };
     await ctx.session.hook('context', async (e) => {
       if (!e || !isMain(e.sessionID) || !Array.isArray(e.system)) return;
       const text = (await recall).trim();
       if (text) e.system.push({ type: 'text', text });
     });
 
-    // Each step's model, from its start, for the usage line at its end.
-    const models = new Map();
     // Events already handled, in case the stream hands one over again after it reconnects.
     const seen = new Set();
     const once = (ev) => !ev.id || (!seen.has(ev.id) && !!seen.add(ev.id));
@@ -426,10 +468,54 @@ export function parseOpenCodeMessages(text: string): OpenCodeMessage[] {
     } catch {
       continue;
     }
-    if (!isObject(m) || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.model !== 'string' || !m.model) continue;
+    if (!isObject(m) || m.type === 'meko' || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.model !== 'string' || !m.model) continue;
     out.push({
       id: m.id, session: typeof m.session === 'string' ? m.session : '', model: m.model, at: num(m.at) || Date.now(),
       input: num(m.input), output: num(m.output) + num(m.reasoning), cacheRead: num(m.cacheRead), cacheWrite: num(m.cacheWrite),
+    });
+  }
+  return out;
+}
+
+/** A Meko call of an OpenCode session with its reply, from the plugin's `meko` lines in `messages.jsonl`. */
+export interface OpenCodeMekoCall {
+  /** The call's id, its tool and how many of those the session made (a call from code mode shares its execute call's id). */
+  id: string;
+  /** Its OpenCode session: the main one, or a subagent's. */
+  session: string;
+  /** The Meko tool, without its server's name (`context_search`). */
+  tool: string;
+  model: string | null;
+  at: number;
+  ms: number | null;
+  ok: boolean;
+  error: string | null;
+  input: Record<string, unknown>;
+  /** The reply's text; null when it was too long to log (`big`). */
+  text: string | null;
+  big: boolean;
+}
+
+/** The Meko calls in a `messages.jsonl` text; a line still being written, or one that isn't one, is skipped. */
+export function parseOpenCodeMekoCalls(text: string): OpenCodeMekoCall[] {
+  const out: OpenCodeMekoCall[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.includes('"type":"meko"')) continue;
+    let m: unknown;
+    try {
+      m = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(m) || m.type !== 'meko' || typeof m.id !== 'string' || !m.id || m.id.length > 300 || typeof m.tool !== 'string') continue;
+    const tool = serverMekoTool(m.tool);
+    if (!tool) continue;
+    out.push({
+      id: m.id, session: typeof m.session === 'string' ? m.session : '', tool,
+      model: typeof m.model === 'string' && m.model ? m.model : null,
+      at: num(m.at) || Date.now(), ms: typeof m.ms === 'number' && Number.isFinite(m.ms) && m.ms >= 0 ? Math.round(m.ms) : null,
+      ok: m.ok === true, error: typeof m.error === 'string' ? m.error : null,
+      input: isObject(m.input) ? m.input : {}, text: typeof m.text === 'string' ? m.text : null, big: m.big === true,
     });
   }
   return out;
