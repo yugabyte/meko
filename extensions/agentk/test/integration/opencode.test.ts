@@ -2,11 +2,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { all } from '../../src/server/db.js';
 import { sessionAgentId } from '../../src/server/meko.js';
-import { openCodeMekoFile, openCodePluginPath } from '../../src/server/opencode.js';
-import { buildServer } from '../../src/server/server.js';
+import { openCodeMekoFile, openCodePluginPath, openCodeSessionDir } from '../../src/server/opencode.js';
 
 const lines = (file: string) => {
   const f = join(process.env.FAKE_OPENCODE_DIR!, file);
@@ -86,6 +84,15 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     const resumed = lines('argv.jsonl')[1];
     expect(resumed.args).toEqual([`--session=${row.agent_session_id}`]);
     expect(resumed.env.AK_OPENCODE_SOURCE).toBe('resume');
+
+    // Turning Meko off removes the file with its key at once, not at OpenCode's next launch.
+    env.core.updateConfig((c) => {
+      c.meko.enabled = false;
+    });
+    expect(existsSync(openCodeMekoFile(env.core.paths))).toBe(false);
+    // A closed project's sessions never run again: their OpenCode folders go with it.
+    await env.core.projects.delete(p.id);
+    expect(existsSync(openCodeSessionDir(env.core.paths, s.id))).toBe(false);
   });
 
   it("leaves the user's own Meko server in OpenCode's config alone", async () => {
@@ -104,40 +111,42 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     }
   });
 
-  it("answers Ask AgentK on OpenCode when it's the default, as a tool-less agent, and deletes the run's session", async () => {
+  it("answers Ask AgentK on OpenCode as a tool-less agent, without the user's plugins and MCP servers, and deletes the run's session even when it fails", async () => {
     env.core.updateConfig((c) => {
       c.agents.default = 'opencode';
     });
-    const answer = { reply: 'Nothing needs you.', actions: [] };
-    writeFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-reply.jsonl'), [
-      { type: 'step_start', sessionID: 'ses_ask1', part: {} },
-      { type: 'text', sessionID: 'ses_ask1', part: { text: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\`` } },
-    ].map((e) => JSON.stringify(e)).join('\n'));
-    const r = await env.core.askAgentk.ask({ text: 'what needs me?' });
-    expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], notes: [] });
-    const input = JSON.parse(readFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-input.json'), 'utf8'));
-    expect(input.args).toEqual(['run', '--format', 'json', '--agent', 'agentk-ask']);
-    expect(input.input).toContain('what needs me?');
-    // OpenCode finds the agent in the ask folder's project config; it has nothing to act with.
-    expect(input.config.agent['agentk-ask']).toMatchObject({ mode: 'primary', permission: 'deny' });
-    await env.core.stop();
-    expect(lines('deleted.jsonl')).toEqual([{ id: 'ses_ask1', cwd: input.cwd }]);
-  });
-
-  it('turns OpenCode on and off in Settings', async () => {
-    const app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
+    // The user's own config: their model is kept for the ask, their plugins and MCP servers aren't.
+    const own = join(process.env.HOME!, '.config', 'opencode');
+    mkdirSync(own, { recursive: true });
+    writeFileSync(join(own, 'opencode.json'), JSON.stringify({ model: 'anthropic/claude-sonnet-4-5', plugin: ['my-plugin'], mcp: { mine: { type: 'local', command: ['x'] } } }));
+    const reply = (events: object[]) => writeFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-reply.jsonl'), events.map((e) => JSON.stringify(e)).join('\n'));
     try {
-      const token = issueSetupToken(env.core.db);
-      const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-      const cookie = String(res.headers['set-cookie']).split(';')[0];
-      const put = (opencodeEnabled: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { opencodeEnabled } });
-      expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().opencodeEnabled).toBe(true);
-      expect((await put('no')).statusCode).toBe(400);
-      expect((await put(false)).json().opencodeEnabled).toBe(false);
-      expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[opencode\][^[]*enabled = false/);
-      expect(env.core.state().harnesses.find((h) => h.id === 'opencode')).toMatchObject({ enabled: false, available: false });
+      const answer = { reply: 'Nothing needs you.', actions: [] };
+      reply([
+        { type: 'step_start', sessionID: 'ses_ask1', part: {} },
+        { type: 'text', sessionID: 'ses_ask1', part: { text: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\`` } },
+      ]);
+      const r = await env.core.askAgentk.ask({ text: 'what needs me?' });
+      expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], notes: [] });
+      const input = JSON.parse(readFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-input.json'), 'utf8'));
+      expect(input.args).toEqual(['run', '--format', 'json', '--agent', 'agentk-ask']);
+      expect(input.input).toContain('what needs me?');
+      // OpenCode reads the ask's own global config in place of the user's, and no project config.
+      expect(input.env).toMatchObject({ OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1' });
+      expect(input.config).toEqual({
+        model: 'anthropic/claude-sonnet-4-5', agent: { 'agentk-ask': expect.objectContaining({ mode: 'primary', permission: 'deny' }) },
+      });
+
+      // A failed run (no provider signed in) is deleted too.
+      reply([{ type: 'error', sessionID: 'ses_ask2', error: { name: 'ProviderAuthError', data: { message: 'No API key for anthropic' } } }]);
+      await expect(env.core.askAgentk.ask({ text: 'again' })).rejects.toThrow(/^OpenCode can't reach a model provider/);
+      await env.core.stop();
+      expect(lines('deleted.jsonl')).toEqual([
+        { id: 'ses_ask1', cwd: input.cwd, xdg: input.env.XDG_CONFIG_HOME },
+        { id: 'ses_ask2', cwd: input.cwd, xdg: input.env.XDG_CONFIG_HOME },
+      ]);
     } finally {
-      await app.close();
+      rmSync(own, { recursive: true, force: true });
     }
   });
 });

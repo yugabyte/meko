@@ -37,7 +37,7 @@ setting (below); under them a bar lists every harness in `HARNESS_IDS` order, ea
 and name (`HarnessBar`, a tab list), off or not installed ones too, since that's where an agent is
 turned on. It starts on the default agent, and the agent picked there shows its own settings under
 it (`AgentSettings` in `SettingsDialog.tsx`): **Offer … for new sessions** with its version or why it
-isn't offered, **Check again**, **Update Claude Code** or **Update Kiro** while it's available
+isn't offered, **Check again**, **Update Claude Code**, **Update OpenCode** or **Update Kiro** while it's available
 (`POST /api/claude/update`, whose answer carries the outcome, and `POST /api/harnesses/<id>/update`,
 which runs `opencode upgrade` or `kiro-cli update`; each agent's update runs on its own, so one
 running doesn't hold up another's button), and for
@@ -113,7 +113,9 @@ and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code 
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
 progress shows in (`activityFiles`, for the hookless fallback), its usage (`readUsage`), the
 transcript AgentK sends to Meko (`captureTranscript`, Claude Code only), AgentK's mod (`modDir`,
-`offersMod`, Claude Code only), Ask AgentK (`ask`), and its version and updater. Reading a CLI's
+`offersMod`, Claude Code only), what it keeps for a session that can't run again (`forget`, called
+when its project is deleted) and drops when Meko's URL or key changes (`mekoChanged`, called by
+`Core.updateConfig`; both OpenCode only), Ask AgentK (`ask`), and its version and updater. Reading a CLI's
 version and comparing it is shared (`version.ts`), and so is the cached read of a CLI configured by
 `[<id>] command, enabled` with its updater flag (`cliState`, OpenCode's and Kiro's). What each can do is data, `HARNESS_CAPS` in
 `src/shared/harnesses.ts`, which the server and the UI both gate on, its minimum version included
@@ -195,17 +197,23 @@ on each after 3 seconds:
 | `session.idle` | `session.idle` | `Stop` |
 
 OpenCode's session id moves to `agent_session_id`. The session the plugin follows is the one the
-user last prompted (`chat.message`); a subagent's (the `task` tool's, a `session.created` with a
-`parentID`) sends no status and no id, so its idle never ends the turn. OpenCode fires nothing when
+user last prompted (`chat.message`). A subagent's (the `task` tool's, a `session.created` with a
+`parentID`) sends its events without its id, so it never becomes the session's conversation, and
+never its `session.idle`, so it never ends the turn; its tool calls still mark the session working,
+its permission asks still show **Needs you** (one waiting on the user does need them), and its edits
+still go to the guard. OpenCode fires nothing when
 it exits: reconcile finds the dead pane, as for Kiro. An interrupted turn ends with the `session.idle`
 that follows it.
 
 **Starting and resuming.** `opencode --prompt=<first prompt>` in the worktree (the `=` form, so a
 prompt starting with `-` stays the value); resume and recovery run `--session=<id>`, never
 `--continue` (OpenCode's newest in the folder, which can be an earlier session's in a pooled
-worktree). OpenCode exits 1 on a session id it no longer has, so a session can resume only while
-its usage log has a response of that id (`canResume`); one that can't starts again with its first
-prompt.
+worktree). OpenCode exits 1 on a session id it no longer has, so a session resumes only while
+OpenCode's store still has it (`canResume`, `openCodeStoredSession`: a row in the `session` table of
+`$XDG_DATA_HOME/opencode/opencode.db`, or a release channel's `opencode-<channel>.db`, opened read
+only); one OpenCode no longer has (deleted with `opencode session delete`, or its data cleared)
+starts again with its first prompt. When no store can be read (none there, or a schema AgentK
+doesn't know), the session's usage log decides: a response of that id was logged.
 
 **Recall.** AgentK's Meko recall for a new session's first turn comes from the plugin's one
 `/context` call at its start (`AK_OPENCODE_SOURCE=startup`; waiting up to 5 seconds), added to the
@@ -218,8 +226,10 @@ false`), in an owner-only `run/opencode/meko.json` passed with `OPENCODE_CONFIG`
 key never goes in the session's environment, where every command OpenCode runs would see it. When
 the user's own OpenCode config (`$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`: `opencode.json`,
 `opencode.jsonc`, `config.json`) already has a `meko` server, AgentK leaves it alone and passes no
-file. The Meko tab's OpenCode row says which (`MekoStatus.opencode`). An `OPENCODE_CONFIG` the user
-sets in their profile is replaced by AgentK's while AgentK adds its Meko.
+file. The Meko tab's OpenCode row says which (`MekoStatus.opencode`). The file is written at each
+launch, and removed as soon as Meko's URL or key changes or Meko is turned off (`mekoChanged`), so
+a key the user removed or rotated never stays on disk. An `OPENCODE_CONFIG` the user sets in their
+profile is replaced by AgentK's while AgentK adds its Meko.
 
 **A public repo's PR head.** Such a session runs with `OPENCODE_DISABLE_PROJECT_CONFIG=1`, which
 leaves out the worktree's `opencode.json(c)` and `.opencode/` folders (plugins, which would run the
@@ -235,14 +245,22 @@ the main session's and its subagents', the plugin appends a line to
 write). `readUsage` reads it from the offset in `usage_files` into `usage_messages` (`opencode:<id>`,
 a subagent's under its own session id as the agent; reasoning counted as output; no 1-hour cache
 writes), priced with the API price table like Claude Code's: an unknown model counts tokens but no
-cost. That file is also the session's activity file for the hookless fallback. A session's folder is
+cost. A model can be one the user named under a provider of their own (`HarnessCaps.userModels`), so
+the usage report sends an OpenCode model only when the price table knows it, else `other`. The log
+is read from that offset (`openSync`/`readSync`), not read again whole. That file is also the session's activity file for the hookless fallback. A session's folder is
 removed with its project; an archived session keeps it, so it can still resume.
 
 **Ask AgentK** on OpenCode is `opencode run --format json --agent agentk-ask`, the message on stdin,
-in the ask's folder, whose `opencode.json` (OpenCode reads a project's config there) defines the
-`agentk-ask` agent with AgentK's instructions and `permission: "deny"`. It runs on OpenCode's default
-model. The answer is the run's `text` events; the run's session is deleted after
-(`opencode session delete`), and stopping waits for that.
+in the ask's folder, with no tools, MCP servers or hooks of the user's: `XDG_CONFIG_HOME` points
+OpenCode's global config at the ask's own (`run/ask/opencode-config/opencode/opencode.json`,
+`openCodeAskEnv`), which defines the `agentk-ask` agent with AgentK's instructions and `permission:
+"deny"` and keeps of the user's config only their model and providers (`model`, `small_model`,
+`provider`, `enabled_providers`, `disabled_providers`), so their plugins, MCP servers and agents don't
+load; `OPENCODE_DISABLE_PROJECT_CONFIG` and `OPENCODE_DISABLE_CLAUDE_CODE` leave out project config and
+Claude Code's files. Its sign-ins and sessions are in OpenCode's data folder, which stays. The answer
+is the run's `text` events; the run's session is deleted afterwards (`opencode session delete`, with
+the same variables), whether or not the answer could be read, and stopping waits for that. Only a
+plugin in `~/.opencode/` itself, which OpenCode always reads, would still load.
 
 ## Kiro
 

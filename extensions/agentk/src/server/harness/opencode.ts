@@ -5,8 +5,8 @@ import { mekoConfigured, resolveMeko, type Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import {
-  openCodeCommand, openCodeHasOwnMeko, openCodeHasSession, openCodeMessagesFile, openCodePluginPath, openCodeSessionConfig,
-  openCodeSessionDir, removeOpenCodeMeko, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
+  openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile, openCodePluginPath, openCodeSessionConfig,
+  openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
 } from '../opencode.js';
 import { claudePath, type Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
@@ -66,10 +66,10 @@ export function patchPaths(text: string): string[] {
   return out;
 }
 
-/** The session's own OpenCode session, while it can be resumed: the id the plugin gave, with a response of it logged. */
+/** The session's own OpenCode session, while OpenCode still has it to resume: the id the plugin gave. */
 function conversation(paths: Paths, row: SessionRow): string | null {
   const id = row.agent_session_id;
-  return id && openCodeHasSession(openCodeMessagesFile(paths, row.id), id) ? id : null;
+  return id && openCodeCanResume(openCodeMessagesFile(paths, row.id), id) ? id : null;
 }
 
 /** OpenCode (`opencode`), its hooks from AgentK's plugin. */
@@ -152,6 +152,8 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
     },
     canResume: (row) => !!conversation(deps.paths, row),
     activityFiles: (row) => [openCodeMessagesFile(deps.paths, row.id)],
+    forget: (row) => removeOpenCodeSession(deps.paths, row.id),
+    mekoChanged: (paths) => removeOpenCodeMeko(paths),
     readUsage: (db, row) => ({ changed: ingestOpenCodeUsage(db, row.id, openCodeMessagesFile(deps.paths, row.id), row.agent_session_id) }),
     ask: openCodeAsker,
     status: cli.status,

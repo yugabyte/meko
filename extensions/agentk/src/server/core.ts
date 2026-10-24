@@ -283,7 +283,11 @@ export class Core extends EventEmitter {
     const next = structuredClone(this.cfg);
     fn(next);
     saveConfig(this.paths, next);
+    const was = resolveMeko(this.cfg);
+    const now = resolveMeko(next);
     this.cfg = next;
+    // A harness may have written the old Meko key somewhere of its own (OpenCode's Meko server file).
+    if (was.url !== now.url || was.apiKey !== now.apiKey) for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
     this.mekoStatus = this.mekoStatusFor(next);
     this.changed();
     // A Meko change can make Claude Code's Meko differ (or match again).

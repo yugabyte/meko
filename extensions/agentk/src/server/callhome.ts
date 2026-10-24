@@ -18,7 +18,8 @@ import {
 } from './mekousage.js';
 import { gapMarks, type GapMark } from './mekogaps.js';
 import { usageOverview } from './usage.js';
-import { HARNESS_IDS, harnessOf, type HarnessId } from '../shared/harnesses.js';
+import { HARNESS_CAPS, HARNESS_IDS, harnessOf, type HarnessId } from '../shared/harnesses.js';
+import { priceFor } from '../shared/pricing.js';
 
 // Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each install
 // sends counts to a collector run by the AgentK team: no names, paths, prompts, code or
@@ -254,12 +255,14 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     d.messages = r.messages;
   }
   const models = new Map<string, (CallHomeTokens & { model: string })[]>();
-  for (const r of all<{ day: string; model: string; input: number; output: number; cache_read: number; cache_write: number; messages: number }>(db,
-    `SELECT ${DAY_SQL} AS day, u.model, SUM(u.input) AS input, SUM(u.output) AS output, SUM(u.cache_read) AS cache_read,
+  for (const r of all<{ day: string; model: string; harness: string; input: number; output: number; cache_read: number; cache_write: number; messages: number }>(db,
+    `SELECT ${DAY_SQL} AS day, u.model, s.harness, SUM(u.input) AS input, SUM(u.output) AS output, SUM(u.cache_read) AS cache_read,
             SUM(u.cache_write) AS cache_write, COUNT(*) AS messages
-     FROM usage_messages u WHERE u.at >= ? GROUP BY day, u.model`, start)) {
+     FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE u.at >= ? GROUP BY day, u.model, s.harness`, start)) {
+    // A harness whose models can be named by the user (OpenCode's own providers) sends only known ones.
+    const model = HARNESS_CAPS[harnessOf(r.harness)].userModels && !priceFor(r.model) ? 'other' : r.model;
     models.set(r.day, [...(models.get(r.day) ?? []),
-      { model: r.model, input: n(r.input), output: n(r.output), cacheRead: n(r.cache_read), cacheWrite: n(r.cache_write), messages: n(r.messages) }]);
+      { model, input: n(r.input), output: n(r.output), cacheRead: n(r.cache_read), cacheWrite: n(r.cache_write), messages: n(r.messages) }]);
   }
   for (const [day, rows] of models) {
     const d = days.get(day);

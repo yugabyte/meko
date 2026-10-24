@@ -27,17 +27,20 @@ if (args[0] === 'upgrade') {
   process.exit(0);
 }
 if (args[0] === 'session' && args[1] === 'delete') {
-  log('deleted.jsonl', { id: args[2], cwd: process.cwd() });
+  log('deleted.jsonl', { id: args[2], cwd: process.cwd(), xdg: process.env.XDG_CONFIG_HOME ?? null });
   process.exit(0);
 }
-// Like `opencode run --format json` (Ask AgentK): records what it got, with the project config in
-// its folder, and prints `ask-reply.jsonl` from the fake's dir.
+// Like `opencode run --format json` (Ask AgentK): records what it got, with the global config it
+// would read ($XDG_CONFIG_HOME/opencode), and prints `ask-reply.jsonl` from the fake's dir; exits 1
+// after an error event, as OpenCode does.
 if (args[0] === 'run') {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
-  const cfg = join(process.cwd(), 'opencode.json');
-  writeFileSync(join(dir, 'ask-input.json'), JSON.stringify({ args, cwd: process.cwd(), input, config: existsSync(cfg) ? JSON.parse(readFileSync(cfg, 'utf8')) : null }));
-  process.stdout.write(readFileSync(join(dir, 'ask-reply.jsonl'), 'utf8'), () => process.exit(0));
+  const cfg = join(process.env.XDG_CONFIG_HOME || join(process.env.HOME, '.config'), 'opencode', 'opencode.json');
+  const env = Object.fromEntries(['XDG_CONFIG_HOME', 'OPENCODE_DISABLE_PROJECT_CONFIG', 'OPENCODE_DISABLE_CLAUDE_CODE'].map((k) => [k, process.env[k] ?? null]));
+  writeFileSync(join(dir, 'ask-input.json'), JSON.stringify({ args, cwd: process.cwd(), input, env, config: existsSync(cfg) ? JSON.parse(readFileSync(cfg, 'utf8')) : null }));
+  const out = readFileSync(join(dir, 'ask-reply.jsonl'), 'utf8');
+  process.stdout.write(out, () => process.exit(out.includes('"type":"error"') ? 1 : 0));
   await new Promise(() => undefined);
 }
 

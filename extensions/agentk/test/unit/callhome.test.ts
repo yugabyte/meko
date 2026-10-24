@@ -352,10 +352,18 @@ describe('the usage stats report', () => {
     run(db, `UPDATE sessions SET harness = 'opencode' WHERE id = 's2'`);
     run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, credits)
              VALUES ('s1', 'kiro:c:1', NULL, 'auto', ?, 0, 0, 0, 0, 0.25)`, at('2026-09-27T17:00:00Z'));
+    // OpenCode's models can be the user's own names: only ones the price table knows are sent.
+    for (const [id, model] of [['oc:1', 'acme-codegen-v3'], ['oc:2', 'claude-sonnet-4-5']]) {
+      run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write)
+               VALUES ('s2', ?, NULL, ?, ?, 1, 1, 0, 0)`, id, model, at('2026-09-25T17:00:00Z'));
+    }
     const r = report(db);
     expect(r.totals.sessions.byHarness).toEqual({ claude: 2, opencode: 1, kiro: 1 });
     expect(r.days.find((d) => d.day === '2026-09-27')!.kiro).toEqual({ sessionsCreated: 1, turns: 1, credits: 0.25 });
     expect(r.days.find((d) => d.day === '2026-09-26')!.kiro).toBeUndefined();
+    const models = r.days.find((d) => d.day === '2026-09-25')!.tokensByModel.map((m) => m.model);
+    expect(models).toEqual(expect.arrayContaining(['other', 'claude-sonnet-4-5']));
+    expect(models).not.toContain('acme-codegen-v3');
     expect(r.totals.tokens).not.toHaveProperty('credits');
   });
 

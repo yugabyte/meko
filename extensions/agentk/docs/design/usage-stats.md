@@ -39,7 +39,8 @@ reports.
   (from `project_events`, so a close a reopen undid still counts), sessions created
   by kind and archived, stage entries, PRs opened and merged with their commits and lines, direct
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
-  resumes, reused worktrees, file types, tokens by model, Meko use (left out of a day with none),
+  resumes, reused worktrees, file types, tokens by model (an OpenCode model the price table doesn't know is sent as
+  `other`: it can be a name the user gave a provider's model), Meko use (left out of a day with none),
   and [Ask AgentK](palette.md#ask-agentk) asks (`agentk_asks`: asks, the ones that failed and the actions their
   answers proposed; left out of a day with none; a cancelled ask isn't counted), and Kiro (`kiro`:
   sessions started on it, its finished turns and the credits they billed, rounded to thousandths;

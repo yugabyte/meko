@@ -193,7 +193,8 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   OpenCode session's config as a remote `meko` MCP server, from an owner-only file
 >   (`run/opencode/meko.json`, `OPENCODE_CONFIG`; the key never goes in the session's environment),
 >   unless OpenCode's own config already has a `meko` server, which it then leaves alone
->   ([Agents](harnesses.md#opencode)). OpenCode sessions get `MEKO_AGENT_ID` `opencode:<slug>-<hash>`.
+>   ([Agents](harnesses.md#opencode)). The file is removed as soon as this Meko's URL or key changes,
+>   or Meko is turned off, and written again at the next launch. OpenCode sessions get `MEKO_AGENT_ID` `opencode:<slug>-<hash>`.
 > - **Claude Code on AgentK's Meko:** Claude Code keeps its own copy of the Meko server and token
 >   in two places: its settings' `env` (`MEKO_MCP_URL`, unset meaning Meko Cloud, and
 >   `MEKO_API_KEY`), which the Meko hooks read, and the user-scope `meko` MCP server in

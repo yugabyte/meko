@@ -1,11 +1,14 @@
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { all, openDb, run } from '../../src/server/db.js';
 import { normalizeOpenCode, openCodeArgs, openCodeHarness } from '../../src/server/harness/opencode.js';
 import { silentLogger } from '../../src/server/log.js';
-import { openCodeCommand, openCodeHasOwnMeko, openCodePluginPath, readOpenCodeRun, writeOpenCodePlugin } from '../../src/server/opencode.js';
+import {
+  openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodePluginPath, openCodeStoredSession, readOpenCodeRun, writeOpenCodePlugin,
+} from '../../src/server/opencode.js';
 import { getPaths } from '../../src/server/paths.js';
 import type { SessionRow } from '../../src/server/store.js';
 import { ingestOpenCodeUsage } from '../../src/server/usage.js';
@@ -111,6 +114,26 @@ describe('OpenCode outside its sessions', () => {
     expect(openCodeHasOwnMeko(dir)).toBe(false);
     writeFileSync(join(dir, 'opencode.json'), '{ "mcp": { "meko": { "type": "remote", "url": "https://m/x//y" /* mine */ } } }');
     expect(openCodeHasOwnMeko(dir)).toBe(true);
+  });
+
+  it("resumes only a session OpenCode's store still has, and goes by the usage log when the store can't be read", () => {
+    const data = tempDir('akl-oc-data-');
+    const log = join(tempDir('akl-oc-log-'), 'messages.jsonl');
+    writeFileSync(log, `${JSON.stringify({ id: 'm1', session: 'ses_gone', model: 'm' })}\n`);
+    // No store at all: the log decides.
+    expect(openCodeStoredSession('ses_gone', data)).toBeNull();
+    expect(openCodeCanResume(log, 'ses_gone', data)).toBe(true);
+    // A store of a schema this doesn't know can't say either.
+    const other = new DatabaseSync(join(data, 'opencode.db'));
+    other.exec('CREATE TABLE elsewhere (id TEXT)');
+    other.close();
+    expect(openCodeStoredSession('ses_gone', data)).toBeNull();
+    // A release channel's store has the session; the session the user deleted is in none.
+    const store = new DatabaseSync(join(data, 'opencode-beta.db'));
+    store.exec(`CREATE TABLE session (id TEXT PRIMARY KEY); INSERT INTO session(id) VALUES ('ses_here')`);
+    store.close();
+    expect(openCodeStoredSession('ses_here', data)).toBe(true);
+    expect(openCodeCanResume(log, 'ses_gone', data)).toBe(false);
   });
 
   it("reads an Ask AgentK run's answer, session and error", () => {

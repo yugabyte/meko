@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { NO_AGENT } from '../shared/harnesses.js';
 import { parseGithubRef } from '../shared/github-refs.js';
@@ -10,7 +10,7 @@ import {
 } from '../shared/types.js';
 import type { Config } from './config.js';
 import { ASK_AGENT, askAgent, deleteKiroSession, readKiroRun, writeKiroAgent } from './kiro.js';
-import { OPENCODE_ASK_AGENT, deleteOpenCodeSession, openCodeAskConfig, openCodeCommand, readOpenCodeRun } from './opencode.js';
+import { OPENCODE_ASK_AGENT, deleteOpenCodeSession, openCodeAskEnv, openCodeAskVars, openCodeCommand, readOpenCodeRun } from './opencode.js';
 import { HttpError } from './projects.js';
 
 /** The most actions an answer offers; Claude's later ones are dropped. */
@@ -43,13 +43,15 @@ export interface AskRun {
 }
 
 /** Runs Claude Code once: the arguments as an array (never a shell), the message on stdin. */
-export type AskRunner = (cmd: string, args: string[], o: { input: string; cwd: string; timeoutMs: number; signal?: AbortSignal }) => Promise<AskRun>;
+export type AskRunner = (
+  cmd: string, args: string[], o: { input: string; cwd: string; timeoutMs: number; signal?: AbortSignal; env?: Record<string, string> },
+) => Promise<AskRun>;
 
 export const runClaudeOnce: AskRunner = (cmd, args, o) =>
   new Promise((resolve) => {
     const child = execFile(
       cmd, args,
-      { cwd: o.cwd, timeout: o.timeoutMs, signal: o.signal, maxBuffer: OUTPUT_MAX, env: { ...process.env, NO_COLOR: '1' } },
+      { cwd: o.cwd, timeout: o.timeoutMs, signal: o.signal, maxBuffer: OUTPUT_MAX, env: { ...process.env, NO_COLOR: '1', ...o.env } },
       (err, stdout, stderr) => {
         const e = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
         const aborted = !!o.signal?.aborted;
@@ -283,8 +285,8 @@ function jsonIn(text: string): Record<string, unknown> | null {
  * folder with the message on stdin, and what it printed read as an answer.
  */
 export interface Asker {
-  /** The command and its arguments for one ask. May write what the CLI reads from `cwd` first. */
-  command(cfg: Config, cwd: string): { cmd: string; args: string[] };
+  /** The command, its arguments and the variables it adds for one ask. May write what the CLI reads from `cwd` first. */
+  command(cfg: Config, cwd: string): { cmd: string; args: string[]; env?: Record<string, string> };
   /** What it printed, as an answer, or the HttpError the palette shows. */
   read(run: AskRun, cmd: string, timeoutSeconds: number, cwd: string): { reply: string; actions: unknown };
 }
@@ -306,9 +308,13 @@ export const kiroAsker: Asker = {
     return { cmd: cfg.kiro.command, args: kiroAskArgs() };
   },
   read(run, cmd, timeoutSeconds, cwd) {
-    const answer = readKiroAnswer(run, cmd, timeoutSeconds);
-    if (answer.sessionId) deleteKiroSession(cmd, answer.sessionId, cwd);
-    return answer;
+    // Its session is deleted whether or not the answer could be read.
+    const id = readKiroRun(run.stdout).sessionId;
+    try {
+      return readKiroAnswer(run, cmd, timeoutSeconds);
+    } finally {
+      if (id) deleteKiroSession(cmd, id, cwd);
+    }
   },
 };
 
@@ -318,19 +324,22 @@ export function openCodeAskArgs(): string[] {
 }
 
 /**
- * OpenCode: as the `agentk-ask` agent (every tool denied), defined in an `opencode.json` in the ask's
- * folder, where OpenCode reads a project's config, so it never shows among the user's agents. It runs
- * on OpenCode's default model. OpenCode keeps every run as a session; an ask's is deleted.
+ * OpenCode: as the `agentk-ask` agent (every tool denied), in a global config of the ask's own in
+ * place of the user's (`openCodeAskEnv`), which keeps only their model and providers, so their
+ * plugins and MCP servers don't run and the agent never shows among theirs. OpenCode keeps every run
+ * as a session; an ask's is deleted, whether or not the answer could be read.
  */
 export const openCodeAsker: Asker = {
   command(cfg, cwd) {
-    writeFileSync(join(cwd, 'opencode.json'), openCodeAskConfig(askPromptWithShape()));
-    return { cmd: openCodeCommand(cfg.opencode.command), args: openCodeAskArgs() };
+    return { cmd: openCodeCommand(cfg.opencode.command), args: openCodeAskArgs(), env: openCodeAskEnv(cwd, askPromptWithShape()) };
   },
   read(run, cmd, timeoutSeconds, cwd) {
-    const answer = readOpenCodeAnswer(run, cmd, timeoutSeconds);
-    if (answer.sessionId) deleteOpenCodeSession(cmd, answer.sessionId, cwd);
-    return answer;
+    const id = readOpenCodeRun(run.stdout).sessionId;
+    try {
+      return readOpenCodeAnswer(run, cmd, timeoutSeconds);
+    } finally {
+      if (id) deleteOpenCodeSession(cmd, id, cwd, openCodeAskVars(cwd));
+    }
   },
 };
 
@@ -423,9 +432,9 @@ export class AskAgentk {
     try {
       const timeoutSeconds = Math.min(300, Math.max(5, Math.round(cfg.askAgentk.timeoutSeconds) || 45));
       mkdirSync(this.deps.cwd, { recursive: true });
-      const { cmd, args } = asker.command(cfg, this.deps.cwd);
+      const { cmd, args, env } = asker.command(cfg, this.deps.cwd);
       const run = await this.run(cmd, args, {
-        input: askMessage(req, this.deps.projects()), cwd: this.deps.cwd, timeoutMs: timeoutSeconds * 1000, signal,
+        input: askMessage(req, this.deps.projects()), cwd: this.deps.cwd, timeoutMs: timeoutSeconds * 1000, signal, ...(env ? { env } : {}),
       });
       // The user closed the palette: nobody reads the answer, and it isn't counted.
       if (run.aborted) throw new HttpError(499, 'The ask was cancelled.');

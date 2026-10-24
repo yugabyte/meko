@@ -16,7 +16,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
   let env: TestEnv;
   let app: FastifyInstance;
   beforeEach(async () => {
-    env = await makeEnv();
+    // OpenCode offered too, as on an install that has it, so Settings can turn it off.
+    env = await makeEnv({ opencode: true });
     app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
   });
   afterEach(async () => {
@@ -169,6 +170,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
   it.each([
     ['usage stats', 'callHomeEnabled', (c: Config) => c.callHome.enabled, '[call_home]\nenabled = false', 'call_home'],
     ['resolving merge conflicts', 'resolveConflicts', (c: Config) => c.pr.resolveConflicts, '[pr]\nresolve_conflicts = false', 'resolve_conflicts'],
+    // Its section also holds the fake's command, which the test sets.
+    ['offering OpenCode', 'opencodeEnabled', (c: Config) => c.opencode.enabled, /\[opencode\][^[]*enabled = false/, /\[opencode\][^[]*enabled/],
   ] as const)('turns %s off and on from Settings', async (_name, key, live, written, tomlKey) => {
     const cookie = await setup();
     const settings = async () => (await app.inject({ url: '/api/settings', headers: { cookie } })).json()[key];
@@ -179,7 +182,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(off.statusCode).toBe(200);
     expect(off.json()[key]).toBe(false);
     expect(live(env.core.config)).toBe(false);
-    expect(readFileSync(env.core.paths.config, 'utf8')).toContain(written);
+    expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(written);
     expect(await settings()).toBe(false);
 
     const bad = await put('no');
@@ -187,7 +190,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(bad.json().error).toBe(`${key} must be true or false.`);
 
     expect((await put(true)).json()[key]).toBe(true);
-    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain(tomlKey);
+    expect(readFileSync(env.core.paths.config, 'utf8')).not.toMatch(tomlKey);
   });
 
   it("shows usage stats off while YB_DISABLE_CALLHOME turns them off", async () => {

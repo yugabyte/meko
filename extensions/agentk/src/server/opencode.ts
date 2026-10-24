@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { writeScript } from './scriptfile.js';
 import type { Paths } from './paths.js';
 
@@ -67,7 +68,9 @@ export function openCodeCommand(command: string, home = homedir(), path = proces
  * `normalizeOpenCode` maps them), asks the guard before a file edit and throws its reason, adds
  * AgentK's Meko recall to a new session's system prompt, and logs each finished response's tokens to
  * the session's `messages.jsonl`. It never holds OpenCode up for long, and without AgentK's session
- * variables it does nothing. Events of subagents' sessions (the task tool's) only add usage.
+ * variables it does nothing. A subagent's session (the task tool's) sends its events without its
+ * id, so they never become the session's conversation, and not its `session.idle`, so it never ends
+ * the turn; its tool calls and permission asks still count (one waiting on the user needs the user).
  */
 const PLUGIN = `// Written by AgentK, which rewrites it. AgentK loads it into the OpenCode sessions it starts;
 // without AgentK's session variables it does nothing.
@@ -204,14 +207,37 @@ export function openCodeSessionConfig(o: { plugin: string; instructions: string;
   });
 }
 
+/** What an Ask AgentK run keeps of the user's own OpenCode config: which model it answers on, and the providers that serve it. */
+const ASK_KEPT_KEYS = ['model', 'small_model', 'provider', 'enabled_providers', 'disabled_providers'];
+
 /**
- * The config of one Ask AgentK run: the `agentk-ask` agent, with AgentK's instructions and every tool
- * denied, so it has nothing to act with.
+ * The global config of one Ask AgentK run, which takes the place of the user's (`openCodeAskEnv`):
+ * the `agentk-ask` agent, with AgentK's instructions and every tool denied, so it has nothing to act
+ * with, and of the user's config only the model and providers (`own`), so their plugins (hooks) and
+ * MCP servers are left out.
  */
-export function openCodeAskConfig(prompt: string): string {
+export function openCodeAskConfig(prompt: string, own: Json = readOpenCodeConfig()): string {
   return JSON.stringify({
+    ...Object.fromEntries(ASK_KEPT_KEYS.filter((k) => k in own).map((k) => [k, own[k]])),
     agent: { [OPENCODE_ASK_AGENT]: { description: "AgentK's Ask AgentK: answers in JSON, with no tools.", mode: 'primary', prompt, permission: 'deny' } },
   });
+}
+
+/**
+ * Writes an Ask AgentK run's config into `cwd` and returns the variables the run (and deleting its
+ * session) takes: OpenCode's global config read from there instead of the user's, no project config,
+ * and no Claude Code files (CLAUDE.md, skills). Its sign-ins and sessions, in its data folder, stay.
+ */
+export function openCodeAskEnv(cwd: string, prompt: string): Record<string, string> {
+  const vars = openCodeAskVars(cwd);
+  mkdirSync(join(vars.XDG_CONFIG_HOME, 'opencode'), { recursive: true });
+  writeFileSync(join(vars.XDG_CONFIG_HOME, 'opencode', 'opencode.json'), openCodeAskConfig(prompt));
+  return vars;
+}
+
+/** The variables of an Ask AgentK run in `cwd` (`openCodeAskEnv`), without writing its config. */
+export function openCodeAskVars(cwd: string): Record<string, string> & { XDG_CONFIG_HOME: string } {
+  return { XDG_CONFIG_HOME: join(cwd, 'opencode-config'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1' };
 }
 
 /** Writes a session's instructions (its system-prompt lines), read by OpenCode at the start. */
@@ -259,19 +285,26 @@ export function openCodeConfigDir(env: NodeJS.ProcessEnv = process.env, home = h
   return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'opencode');
 }
 
-/** Whether the user's own OpenCode config has an MCP server named `meko`, which AgentK then leaves alone. */
-export function openCodeHasOwnMeko(dir = openCodeConfigDir()): boolean {
-  for (const name of ['opencode.json', 'opencode.jsonc', 'config.json']) {
+/** The user's own global OpenCode config: its files' top-level keys, later files over earlier ones (unreadable ones left out). */
+export function readOpenCodeConfig(dir = openCodeConfigDir()): Json {
+  let out: Json = {};
+  for (const name of ['config.json', 'opencode.json', 'opencode.jsonc']) {
     const file = join(dir, name);
     if (!existsSync(file)) continue;
     try {
       const cfg = JSON.parse(stripJsonc(readFileSync(file, 'utf8'))) as unknown;
-      if (isObject(cfg) && isObject(cfg.mcp) && 'meko' in cfg.mcp) return true;
+      if (isObject(cfg)) out = { ...out, ...cfg, ...(isObject(out.mcp) && isObject(cfg.mcp) ? { mcp: { ...out.mcp, ...cfg.mcp } } : {}) };
     } catch {
       // A file OpenCode can't read either.
     }
   }
-  return false;
+  return out;
+}
+
+/** Whether the user's own OpenCode config has an MCP server named `meko`, which AgentK then leaves alone. */
+export function openCodeHasOwnMeko(dir = openCodeConfigDir()): boolean {
+  const cfg = readOpenCodeConfig(dir);
+  return isObject(cfg.mcp) && 'meko' in cfg.mcp;
 }
 
 /**
@@ -334,14 +367,57 @@ export function parseOpenCodeMessages(text: string): OpenCodeMessage[] {
   return out;
 }
 
-/** Whether a session's usage log has a response of OpenCode session `id`: OpenCode still has it to resume. */
-export function openCodeHasSession(file: string, id: string): boolean {
+/** Whether a session's usage log has a response of OpenCode session `id`. */
+export function openCodeLoggedSession(file: string, id: string): boolean {
   if (!ID.test(id)) return false;
   try {
     return readFileSync(file, 'utf8').includes(`"session":${JSON.stringify(id)}`);
   } catch {
     return false;
   }
+}
+
+/** OpenCode's data folder (its sign-ins and session store): `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`. */
+export function openCodeDataDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+  return join(env.XDG_DATA_HOME || join(home, '.local', 'share'), 'opencode');
+}
+
+/**
+ * Whether OpenCode still has session `id`: a row in its SQLite store (`opencode.db`, or a release
+ * channel's `opencode-<channel>.db`), read only. Null when no store could be read (none there, or a
+ * schema this doesn't know), for the caller to decide.
+ */
+export function openCodeStoredSession(id: string, dir = openCodeDataDir()): boolean | null {
+  if (!ID.test(id)) return false;
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => /^opencode(?:-[\w.-]+)?\.db$/.test(f));
+  } catch {
+    return null;
+  }
+  let read = false;
+  for (const f of files) {
+    let db: DatabaseSync | null = null;
+    try {
+      db = new DatabaseSync(join(dir, f), { readOnly: true });
+      const row = db.prepare('SELECT 1 AS ok FROM session WHERE id = ?').get(id);
+      read = true;
+      if (row) return true;
+    } catch {
+      // Another schema, or a store being replaced: another file may still say.
+    } finally {
+      db?.close();
+    }
+  }
+  return read ? false : null;
+}
+
+/**
+ * Whether OpenCode can resume session `id` (`--session` exits 1 on one it doesn't have): its store
+ * has it, or, when the store can't be read, the session's usage log has a response of it.
+ */
+export function openCodeCanResume(log: string, id: string, dataDir = openCodeDataDir()): boolean {
+  return openCodeStoredSession(id, dataDir) ?? openCodeLoggedSession(log, id);
 }
 
 /**
@@ -374,11 +450,11 @@ export function readOpenCodeRun(stdout: string): { text: string; sessionId: stri
 /** The session deletes still running, for `openCodeDeletesSettled`. */
 const deleting = new Set<Promise<void>>();
 
-/** Deletes one of OpenCode's sessions (an Ask AgentK run's), in the background; never throws. */
-export function deleteOpenCodeSession(command: string, id: string, cwd: string): void {
+/** Deletes one of OpenCode's sessions (an Ask AgentK run's, with the run's variables), in the background; never throws. */
+export function deleteOpenCodeSession(command: string, id: string, cwd: string, env: Record<string, string> = {}): void {
   if (!ID.test(id)) return;
   const done = new Promise<void>((resolve) => {
-    execFile(command, ['session', 'delete', id], { cwd, timeout: 15_000 }, () => resolve()).stdin?.end();
+    execFile(command, ['session', 'delete', id], { cwd, timeout: 15_000, env: { ...process.env, ...env } }, () => resolve()).stdin?.end();
   });
   deleting.add(done);
   void done.then(() => deleting.delete(done));

@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DEFAULT_HARNESS, HARNESS_IDS, harnessOf } from '../shared/harnesses.js';
 import { costOf, priceFor } from '../shared/pricing.js';
@@ -517,27 +517,38 @@ export function recordKiroTurns(db: Db, sessionId: string, conversation: string,
  */
 export function ingestOpenCodeUsage(db: Db, sessionId: string, file: string, main: string | null): boolean {
   const prev = get<{ offset: number }>(db, 'SELECT offset FROM usage_files WHERE session_id = ? AND path = ?', sessionId, file);
-  let text: string;
+  let fd: number;
   try {
-    text = readFileSync(file, 'utf8');
+    fd = openSync(file, 'r');
   } catch {
     return false;
   }
+  let text: string;
   let offset = prev?.offset ?? 0;
-  if (Buffer.byteLength(text) < offset) offset = 0; // rewritten: start over (rows already in are skipped by id)
-  const rest = Buffer.from(text).subarray(offset).toString('utf8');
-  const end = rest.lastIndexOf('\n') + 1;
-  if (!end) return false;
+  try {
+    const size = fstatSync(fd).size;
+    if (size < offset) offset = 0; // rewritten: start over (rows already in are skipped by id)
+    if (size === offset) return false;
+    const buf = Buffer.alloc(size - offset);
+    readSync(fd, buf, 0, buf.length, offset);
+    // Up to the last whole line: one still being written is read next time.
+    const end = buf.lastIndexOf(0x0a) + 1;
+    if (!end) return false;
+    text = buf.subarray(0, end).toString('utf8');
+    offset += end;
+  } finally {
+    closeSync(fd);
+  }
   let added = 0;
   tx(db, () => {
-    for (const m of parseOpenCodeMessages(rest.slice(0, end))) {
+    for (const m of parseOpenCodeMessages(text)) {
       const r = run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, cache_write_1h)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(session_id, message_id) DO NOTHING`,
       sessionId, `opencode:${m.id}`, m.session && m.session !== main ? m.session : null, m.model, m.at, m.input, m.output, m.cacheRead, m.cacheWrite);
       added += Number(r.changes);
     }
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
-             ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, sessionId, file, offset + Buffer.byteLength(rest.slice(0, end)));
+             ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, sessionId, file, offset);
   });
   return added > 0;
 }
