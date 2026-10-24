@@ -82,4 +82,12 @@ describe('Settings › Harness', () => {
   ])("%s: the panel shows only that agent's settings", (_, id, s, st, shown, outcome) => {
     expect(controls(id, s, st, outcome)).toEqual(shown);
   });
+
+  it('starts the note with ⚠️ when the agent didn\'t answer --version', () => {
+    const html = renderToStaticMarkup(createElement(AgentSettings, {
+      id: 'opencode', s: settings, status: status('opencode', { available: false, version: null }), checking: false, updating: false,
+      onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
+    }));
+    expect(html).toContain('<span class="hint">⚠️ OpenCode didn&#x27;t answer --version here. Install it and run opencode auth login,');
+  });
 });
