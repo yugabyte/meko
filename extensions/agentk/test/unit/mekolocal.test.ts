@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { probeLocalMeko } from '../../src/server/mekolocal.js';
+import { lookForLocalMeko, probeLocalMeko } from '../../src/server/mekolocal.js';
 import { mekoDirOf } from '../../src/server/movehome.js';
 import { tempDir } from '../helpers.js';
 
@@ -46,5 +46,13 @@ describe('mekoDirOf', () => {
     ['/data/extensions/agentk-dev', null],
   ])('%s → %s', (akHome, want) => {
     expect(mekoDirOf(akHome)).toBe(want);
+  });
+});
+
+describe('lookForLocalMeko', () => {
+  it('looks every minute while there is no Meko, and with a key only until `meko` is found', () => {
+    expect(['running', 'stopped', 'none', 'failed'].map((s) => lookForLocalMeko(false, s as 'none'))).toEqual([true, true, true, true]);
+    expect(lookForLocalMeko(true, 'none')).toBe(true);
+    expect(['running', 'stopped', 'failed'].map((s) => lookForLocalMeko(true, s as 'none'))).toEqual([false, false, false]);
   });
 });

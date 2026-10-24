@@ -25,6 +25,18 @@ describe('projects without a datapack, and without Meko', () => {
     });
   };
 
+  it('says no Meko is installed here, with a key too, and pushes the change once `meko` is found', async () => {
+    // The test env has a key, and no `meko` on this computer.
+    expect(env.core.mekoStatus.configured).toBe(true);
+    expect(env.core.state().meko.local).toBe('none');
+    const onChange = vi.fn();
+    env.core.on('change', onChange);
+    env.local.state = 'stopped';
+    await env.core.refreshLocalMeko();
+    expect(env.core.state().meko.local).toBe('stopped');
+    expect(onChange).toHaveBeenCalled();
+  });
+
   it('creates a project with no datapack without asking Meko, and runs sessions in it', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Plain', datapack: { mode: 'none' } });
     expect(p.datapacks).toEqual([]);

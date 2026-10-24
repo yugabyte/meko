@@ -255,7 +255,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       false: no key, and no Meko running on this computer) means no Meko calls at all; the one
       thing done then is looking for the Meko on this computer every minute (`meko token --json`
       in `Core.refreshLocalMeko`, a local command with a 5 s timeout, one at a time, never a Meko
-      call, and only while there's no Meko). Reading the local Meko again otherwise happens only on
+      call, and only while there's no Meko, or no `meko` on this computer: `lookForLocalMeko`, so
+      the install banner goes once Meko is installed). Reading the local Meko again otherwise happens only on
       events (startup, Settings open, a failed connection to it at most every 30 s), and a change
       reconnects without forgetting the account's invites (`mekoChanged` is for switching Mekos).
       The one poll is following a knowledge-base upload's

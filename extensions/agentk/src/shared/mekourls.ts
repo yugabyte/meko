@@ -8,6 +8,12 @@ export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
 
 /**
+ * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
+ * (the README's install line). The banner shown while there's no Meko here gives it.
+ */
+export const MEKO_INSTALL_COMMAND = 'gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh';
+
+/**
  * The Meko web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else null (a local or
  * self-hosted server, whose web app can't be known). An explicit override always wins.
  */

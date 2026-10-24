@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
+import { MEKO_INSTALL_COMMAND } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
+import { copyText } from '../clipboard';
 import type { Conn } from '../hooks/useEvents';
 import { useInstall } from '../installapp';
 import { claudeUpdateText, noAgent } from '../util';
@@ -279,6 +281,26 @@ function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDe
   );
 }
 
+/**
+ * No Meko on the server's computer (`MekoStatus.local` is `none`): how to install it. It can't be
+ * dismissed, and goes once the server finds `meko` (it looks every minute while there's none).
+ */
+function MekoInstallBanner({ state }: { state: AppState }) {
+  const [copied, setCopied] = useState(false);
+  if (state.meko.local !== 'none') return null;
+  return (
+    <div className="banner warn" role="alert">
+      <span className="banner-text">
+        Meko isn’t installed on {state.serverName}. AgentK keeps each project’s memory in Meko. Install it there, with gh
+        signed in: <code className="mono">{MEKO_INSTALL_COMMAND}</code>. This goes away once AgentK finds it.
+      </span>
+      <button className="btn small" onClick={() => void copyText(MEKO_INSTALL_COMMAND).then(setCopied)}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
 export function Banners({
   state,
   conn,
@@ -394,6 +416,7 @@ export function Banners({
           </span>
         </div>
       )}
+      <MekoInstallBanner state={state} />
       <ClaudeCodeBanners state={state} onError={onError} />
       <MekoClaudeBanner state={state} onDetails={onMekoSettings} onError={onError} />
       <FailedStartBanners state={state} onRetry={onRetryStart} onError={onError} />

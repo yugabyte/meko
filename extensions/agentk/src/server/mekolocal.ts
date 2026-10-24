@@ -45,6 +45,16 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
   });
 }
 
+/**
+ * Whether the server's every-minute look for the Meko on this computer runs: while there's no Meko
+ * at all (Meko normally starts AgentK; this covers a boot where it didn't), and, with a key, while
+ * there's no `meko` here, so the banner asking to install it goes once it's installed. Once found,
+ * a key's install isn't looked at again until the next read (a restart, Settings).
+ */
+export function lookForLocalMeko(configured: boolean, local: LocalMekoState): boolean {
+  return !configured || local === 'none';
+}
+
 /** The running Meko on this computer (`probeLocalMeko`), or null. */
 export async function findLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv = process.env): Promise<LocalMeko | null> {
   return (await probeLocalMeko(mekoHome, env)).meko;
