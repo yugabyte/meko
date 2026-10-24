@@ -446,7 +446,10 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
     if (!h.checked) return <Busy label="Looking for it" />;
     return `⚠️ ${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${HARNESS_CAPS[id].login}, or set [${id}] command in config.toml, then check again.`;
   }
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
+  if (!h.available) {
+    const upgrade = HARNESS_CAPS[id].upgrade;
+    return `Version ${h.version}; AgentK needs ${h.minVersion} or later. ${upgrade ? `Run ${upgrade}` : 'Update it'}, then check again.`;
+  }
   return `Version ${h.version}.`;
 }
 

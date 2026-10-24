@@ -250,9 +250,12 @@ export const kiroAsker: Asker = {
   },
 };
 
-/** The arguments for one ask on OpenCode: a one-shot run as the `agentk-ask` agent, its events as JSON, the message on stdin. */
+/**
+ * The arguments for one ask on OpenCode: a one-shot run on a server of its own (`--standalone`, so it
+ * reads the ask's variables) as the `agentk-ask` agent, its events as JSON, the message on stdin.
+ */
 export function openCodeAskArgs(): string[] {
-  return ['run', '--format', 'json', '--agent', OPENCODE_ASK_AGENT];
+  return ['run', '--standalone', '--format', 'json', '--agent', OPENCODE_ASK_AGENT];
 }
 
 /**

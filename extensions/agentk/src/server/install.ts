@@ -356,7 +356,8 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
   });
   if (!found.length) {
     throw new InstallError(
-      `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later (https://opencode.ai) `
+      `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
+        + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
         + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
     );
   }

@@ -115,7 +115,7 @@ answers Claude Code's folder-trust question for worktrees):
   session's head has been checked, it's treated as untrusted here.
 - OpenCode starts with `OPENCODE_DISABLE_PROJECT_CONFIG=1`, which leaves out the worktree's
   `opencode.json(c)` and `.opencode/` folders: its plugins (code OpenCode would run), agents,
-  commands and MCP servers (checked against OpenCode 1.19.4's source). AgentK's own plugin and
+  commands and MCP servers (checked against OpenCode 1.19.4's and 2.1.4's source). AgentK's own plugin and
   config still load, from the session's environment.
 - Kiro has no way to leave a workspace's config out, and uses a workspace agent named `agentk`
   over AgentK's (checked with kiro-cli 2.32). An untrusted session on Kiro doesn't start while the

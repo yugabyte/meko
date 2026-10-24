@@ -169,8 +169,8 @@ Pass options through `sh -s --` (`--version 0.2.0 --non-interactive --repos-root
 Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code,
 OpenCode or Kiro CLI: any one is enough) and offers to install the missing ones, showing the
 commands and asking first. With no agent there it asks which to install, OpenCode second
-(`--agent claude|opencode|kiro` picks one without asking; OpenCode comes from its own installer at
-opencode.ai, into `~/.opencode/bin`, and Kiro CLI from its own at cli.kiro.dev), and it stops when no
+(`--agent claude|opencode|kiro` picks one without asking; OpenCode 2 comes from its own installer at
+opencode.ai/v2, into `~/.opencode/bin`, and Kiro CLI from its own at cli.kiro.dev), and it stops when no
 agent ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
 (Claude Code, Kiro; OpenCode sessions get AgentK's Meko from AgentK itself), asking first. `--install-deps` skips the questions (and installs Claude Code
 when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and

@@ -28,11 +28,12 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle' || st === 'needs_input', 10000, 'first turn to end');
 
     const [first] = lines('argv.jsonl');
-    expect(first.args).toEqual([expect.stringMatching(/^--prompt=.*write src\.ts now/s)]);
+    // A server of its own, which reads the session's variables (the fake refuses to start without it).
+    expect(first.args).toEqual(['--standalone', expect.stringMatching(/^--prompt=.*write src\.ts now/s)]);
     // No mod, so no design_questions tool: its Design prompt names only the questions file.
-    expect(first.args[0]).toContain(`write that JSON to ${env.core.sessions.questionsFile(env.core.sessions.row(s.id))}.`);
-    expect(first.args[0]).not.toContain('design_questions');
-    // AgentK's plugin and the session's instructions come in OpenCode's inline config; the design folder is writable.
+    expect(first.args[1]).toContain(`write that JSON to ${env.core.sessions.questionsFile(env.core.sessions.row(s.id))}.`);
+    expect(first.args[1]).not.toContain('design_questions');
+    // AgentK's plugin folder and the session's instructions come in OpenCode's inline config; the design folder is writable.
     expect(first.config).toMatchObject({ plugin: [openCodePluginPath(env.core.paths)], permission: { external_directory: { [join(env.core.paths.designs, s.id, '*')]: 'allow' } } });
     const row = env.core.sessions.row(s.id);
     expect(first.env).toMatchObject({ MEKO_AGENT_ID: sessionAgentId(row), AK_SESSION: s.id, AK_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: null });
@@ -82,7 +83,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     await env.core.sessions.action(s.id, 'resume');
     await waitFor(() => lines('argv.jsonl').length, (n) => n === 2, 10000, 'resume');
     const resumed = lines('argv.jsonl')[1];
-    expect(resumed.args).toEqual([`--session=${row.agent_session_id}`]);
+    expect(resumed.args).toEqual(['--standalone', `--session=${row.agent_session_id}`]);
     expect(resumed.env.AK_OPENCODE_SOURCE).toBe('resume');
 
     // Turning Meko off removes the file with its key at once, not at OpenCode's next launch.
@@ -129,7 +130,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
       const r = await env.core.askAgentk.ask({ text: 'what needs me?' });
       expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], together: false, notes: [] });
       const input = JSON.parse(readFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-input.json'), 'utf8'));
-      expect(input.args).toEqual(['run', '--format', 'json', '--agent', 'agentk-ask']);
+      expect(input.args).toEqual(['run', '--standalone', '--format', 'json', '--agent', 'agentk-ask']);
       expect(input.input).toContain('what needs me?');
       // OpenCode reads the ask's own global config in place of the user's, and no project config.
       expect(input.env).toMatchObject({ OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1' });
@@ -138,7 +139,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
       });
 
       // A failed run (no provider signed in) is deleted too.
-      reply([{ type: 'error', sessionID: 'ses_ask2', error: { name: 'ProviderAuthError', data: { message: 'No API key for anthropic' } } }]);
+      reply([{ type: 'error', sessionID: 'ses_ask2', error: { type: 'provider.auth', message: 'No API key for anthropic', status: 401 } }]);
       await expect(env.core.askAgentk.ask({ text: 'again' })).rejects.toThrow(/^OpenCode can't reach a model provider/);
       await env.core.stop();
       expect(lines('deleted.jsonl')).toEqual([
