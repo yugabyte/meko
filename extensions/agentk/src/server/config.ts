@@ -74,6 +74,12 @@ export interface Config {
    * answer may take before Claude is stopped (5 to 300).
    */
   askAgentk: { enabled: boolean; model: string; timeoutSeconds: number };
+  /**
+   * AgentK's session tools (tools.ts): enabled gives every session the `agentk_sessions` MCP server (`agentk mcp`) and its
+   * skill, which open projects, start sessions and move them between stages, from each session's next launch. Off, the
+   * tools' route refuses calls from sessions that still have them. Set in Settings → General.
+   */
+  tools: { enabled: boolean };
 }
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
@@ -93,6 +99,7 @@ export const DEFAULT_CONFIG: Config = {
   callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
+  tools: { enabled: true },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

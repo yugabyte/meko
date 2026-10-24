@@ -9,6 +9,7 @@ import type { Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
+import { toolsMcpConfigPath, toolsPluginDir } from '../tools.js';
 import type { SessionRow } from '../store.js';
 import { TRUST_PROMPT_RE, trustFolder } from '../trust.js';
 import { ingestSessionUsage, sessionTranscript } from '../usage.js';
@@ -66,7 +67,9 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     offersMod: (paths, cfg) => modReady(paths, cfg) && deps.claudeCode.status().supportsMod !== false,
     launcher: (paths, cfg, l) => claudeLauncher(paths, {
       sessionId: l.row.id, worktree: l.row.worktree_path, claudeCommand: cfg.claude.command, claudeSessionId: l.row.claude_session_id,
-      resume: l.resume, name: l.row.name, planMode: l.planMode, addDirs: l.addDirs, pluginDirs: l.modDir ? [l.modDir] : [],
+      resume: l.resume, name: l.row.name, planMode: l.planMode, addDirs: l.addDirs,
+      pluginDirs: [...(l.modDir ? [l.modDir] : []), ...(l.tools ? [toolsPluginDir(paths)] : [])],
+      mcpConfigs: l.tools ? [toolsMcpConfigPath(paths)] : [],
       appendSystemPrompt: l.systemPrompt, prompt: l.prompt, unsetEnv: l.unsetEnv, userSettingsOnly: l.untrusted,
       env: {
         ...l.env,

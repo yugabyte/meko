@@ -15,6 +15,7 @@ import {
 import type { GuardDecision, HookContext, HookPayload, ModReply } from './hooks.js';
 import { findPr, isRepoName, issueText, prInfo, repoVisibility, type PrInfo } from './github.js';
 import { HeadTrust, UNTRUSTED_TEXT, prHead, repoConfigTrusted } from './headtrust.js';
+import { toolsReady } from './tools.js';
 import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall, withoutMekoLines } from './recall.js';
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
@@ -1111,6 +1112,7 @@ export class SessionManager {
     const systemPrompt = this.systemPrompt(row, conversation);
     // A harness with no flag for it gets these lines from its context hook, at every start.
     this.systemLines.set(row.id, systemPrompt);
+    const untrusted = !repoConfigTrusted(row);
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
       row,
       resume: opts.resume,
@@ -1121,7 +1123,9 @@ export class SessionManager {
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env(row),
       unsetEnv: SESSION_ENV_UNSET,
-      untrusted: !repoConfigTrusted(row),
+      untrusted,
+      // The session tools act on other sessions: not for a PR head whose code isn't trusted (the route refuses it too).
+      tools: !untrusted && toolsReady(this.core.paths, this.core.config.tools.enabled),
     }));
     const pane = (await this.core.host.panes()).get(row.tmux_name);
     // Archived (or its project deleted) while it was starting: Claude must not start behind its back.
@@ -1245,7 +1249,7 @@ export class SessionManager {
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
    * (`/mod/meko`), for the session's dot and, with their content, its Meko call log; and a turn you interrupted (`/mod/turn`), which fires
-   * no `Stop` hook.
+   * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `agentk mcp` in a session of any harness.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -1317,6 +1321,9 @@ export class SessionManager {
             .finally(() => this.core.changed());
         }
         return { status: 204 };
+      case '/tools':
+        // AgentK's session tools, from `agentk mcp` in the session (any harness's).
+        return this.core.tools.call(row, body);
       case '/mod/learn/start':
         // /agentk_learn in the terminal: the answer is the command's output there.
         try {

@@ -12,12 +12,13 @@ import { paneName } from '../../src/server/hostclient.js';
 import { tempDir } from '../helpers.js';
 
 describe('the hooks settings file', () => {
-  it('allows editing designs, publishing Artifacts and reading pasted images, with Edit() rules only for edits', () => {
+  it('allows editing designs, publishing Artifacts, reading pasted images and listing sessions with the session tools, with Edit() rules only for edits', () => {
     const paths = getPaths(join(tempDir('akl-hooks-'), 'ak'));
     writeHookFiles(paths);
     const allow: string[] = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).permissions.allow;
     // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
-    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`]);
+    // The session tools that change something ask first.
+    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`, 'mcp__agentk_sessions__list']);
   });
 
   it('turns off the plugins it is given, and leaves plugins alone otherwise', () => {
@@ -98,12 +99,15 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
     return { args: split(out + '.args'), env: split(out + '.env') };
   }
 
-  it('passes every value through intact, plugin folders after the added ones and the prompt after "--", with the session variables set after the profile', () => {
-    const s = spec({ prompt: '---\ntitle: front matter\n---\nDo it; echo $HOME', pluginDirs: ['/ak/run/mod/agentk'] });
+  it('passes every value through intact, plugin folders and MCP configs after the added ones and the prompt after "--", with the session variables set after the profile', () => {
+    const s = spec({
+      prompt: '---\ntitle: front matter\n---\nDo it; echo $HOME', pluginDirs: ['/ak/run/mod/agentk', '/ak/run/tools/claude'], mcpConfigs: ['/ak/run/tools/mcp.json'],
+    });
     const { args, env } = run(s);
     expect(args).toEqual([
       '--settings', join(paths.run, 'hooks.json'), '--session-id', 'c0ffee', '--name', 'Fix "it" now',
-      '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--append-system-prompt', s.appendSystemPrompt, '--', s.prompt,
+      '--add-dir', s.addDirs[0], '--plugin-dir', '/ak/run/mod/agentk', '--plugin-dir', '/ak/run/tools/claude', '--mcp-config', '/ak/run/tools/mcp.json',
+      '--append-system-prompt', s.appendSystemPrompt, '--', s.prompt,
     ]);
     expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
     // ~/.local/bin is where the installer puts Claude Code and gh, even when the profile leaves it out.

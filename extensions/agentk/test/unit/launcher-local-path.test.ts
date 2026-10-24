@@ -60,7 +60,7 @@ describe('paths Claude is started with, for a home it reaches by another spellin
   it('writes the allow rules for designs and pasted images with the local spelling', () => {
     writeHookFiles(paths);
     const allow: string[] = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).permissions.allow;
-    expect(allow).toEqual([`Edit(/${join(view.to, 'ak', 'designs')}/**)`, 'Artifact', `Read(/${join(view.to, 'ak', 'pastes')}/**)`]);
+    expect(allow).toEqual([`Edit(/${join(view.to, 'ak', 'designs')}/**)`, 'Artifact', `Read(/${join(view.to, 'ak', 'pastes')}/**)`, 'mcp__agentk_sessions__list']);
   });
 
   it("finds a transcript under either spelling's folder, the local one when there is none yet", () => {

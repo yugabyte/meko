@@ -91,6 +91,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # enabled = false            # no Ask AgentK in the command palette; on by default
 # model = "sonnet"           # the model that answers asks (a Claude Code alias or a full model name; empty uses Claude Code's default)
 # timeout_seconds = 45       # an ask that takes longer is stopped (5 to 300)
+
+[tools]
+# enabled = false            # sessions get no session tools (agentk_sessions MCP server and its skill: open projects,
+#                            # start and move sessions); on by default, and also in Settings → General
 ```
 
 | Action | What the server does |

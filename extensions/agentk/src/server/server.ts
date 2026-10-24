@@ -10,10 +10,10 @@ import type {
   AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
   EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
-  AskAgentkRequest, AskAgentkResult, LinkPlan, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
+  AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
 } from '../shared/types.js';
-import { LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
+import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
 import { shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -22,6 +22,7 @@ import {
   deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
   verifyPassword,
 } from './auth.js';
+import { checkActions, runActions } from './actions.js';
 import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
 import type { Core } from './core.js';
@@ -536,6 +537,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     });
     return core.askAgentk.ask(req.body, gone.signal);
   });
+  // Ask AgentK's Do all: checked again against the state now, then run in order.
+  app.post<{ Body: RunActionsRequest }>('/api/actions/run', async (req): Promise<RunActionsResult> => {
+    const raw = req.body && typeof req.body === 'object' && Array.isArray(req.body.actions) ? req.body.actions : [];
+    if (raw.length > ACTIONS_MAX) throw new HttpError(400, `Run at most ${ACTIONS_MAX} actions at once.`);
+    const { actions, notes } = checkActions(raw.filter((a) => a?.type !== 'go'), core.actionProjects());
+    if (!actions.length) throw new HttpError(400, notes[0] ?? 'There was nothing to run.');
+    return { results: await runActions(core, actions, { session: null }), notes };
+  });
   app.get('/api/usage', async () => usageOverview(core.db));
   app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>
     searchSessions(core.db, req.query.q ?? '', req.query.project || undefined));
@@ -668,6 +677,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     callHomeEnabled: core.config.callHome.enabled,
     ...(ybCallHomeDisabled() ? { callHomeOffBy: 'YB_DISABLE_CALLHOME' as const } : {}),
     resolveConflicts: core.config.pr.resolveConflicts,
+    toolsEnabled: core.config.tools.enabled,
     defaultHarness: core.config.agents.default,
     claudeEnabled: core.config.claude.enabled,
     opencodeEnabled: core.config.opencode.enabled,
@@ -700,6 +710,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
+    if (b.toolsEnabled !== undefined && typeof b.toolsEnabled !== 'boolean') throw new HttpError(400, 'toolsEnabled must be true or false.');
     if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
@@ -719,6 +730,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
+      if (b.toolsEnabled !== undefined) c.tools.enabled = b.toolsEnabled;
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
       if (b.claudeEnabled !== undefined) c.claude.enabled = b.claudeEnabled;
       if (b.opencodeEnabled !== undefined) c.opencode.enabled = b.opencodeEnabled;

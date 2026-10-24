@@ -163,7 +163,7 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
         ];
       }
       case 'link':
-        return [{ id, label: [`Work on ${a.ref}`], hint: 'Looks up the GitHub link', action: a }];
+        return [{ id, label: [`Work on ${a.ref}`, ...(a.projectId ? [' in ', { project: projectName(a.projectId) }] : [])], hint: 'Looks up the GitHub link', action: a }];
       case 'go': {
         if (a.view === 'session') {
           const s = session(a.sessionId);
@@ -176,8 +176,23 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
         return [{ id, label: ['Move ', { session: sessionName(a.sessionId) }, ` to ${STAGE_LABELS[a.stage]}`], hint: a.instructions ? preview(a.instructions, 80) : 'Action', action: a }];
       case 'openPr':
         return [{ id, label: ['Open PR for ', { session: sessionName(a.sessionId) }], hint: a.instructions ? preview(a.instructions, 80) : 'Action', action: a }];
+      case 'openProject':
+        return [{
+          id, label: [`Open a project on ${a.repo}`, ...(a.name ? [' named ', { project: a.name }] : [])],
+          hint: a.datapack === 'none' ? 'No datapack' : a.datapack === 'new' ? 'With a new datapack' : 'With that datapack', action: a,
+        }];
     }
   });
+}
+
+/**
+ * The steps **Do all** runs (POST /api/actions/run), when AgentK's answer is the steps of one
+ * instruction (`together`) and two or more of them do something: every action but `go`, which only
+ * navigates. Empty when there's no Do all to offer.
+ */
+export function doAllActions(actions: AskAgentkAction[], together: boolean): AskAgentkAction[] {
+  const steps = actions.filter((a) => a.type !== 'go');
+  return together && steps.length > 1 ? steps : [];
 }
 
 /** What a found session's palette item does: go to it, open its PR (a closed one's), or nothing (closed, with no PR). */

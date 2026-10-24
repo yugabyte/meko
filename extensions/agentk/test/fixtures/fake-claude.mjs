@@ -75,7 +75,7 @@ appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
-const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--setting-sources']);
+const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--') {

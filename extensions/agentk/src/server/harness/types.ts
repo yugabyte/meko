@@ -29,6 +29,12 @@ export interface LaunchInput {
   unsetEnv: string[];
   /** The session works on a PR head whose code isn't trusted (headtrust.ts): leave out the repo's own config. */
   untrusted: boolean;
+  /**
+   * Launch with AgentK's session tools (tools.ts): the `agentk_sessions` MCP server and its skill, in
+   * the CLI's own terms. A harness whose agent file is shared by every session (Kiro's) has them in
+   * that file instead (`prepare`, `beforeLaunch`), and the tools' route refuses a session without them.
+   */
+  tools: boolean;
 }
 
 /** What a harness gets before each launch. */

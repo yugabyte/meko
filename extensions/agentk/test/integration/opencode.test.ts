@@ -127,7 +127,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
         { type: 'text', sessionID: 'ses_ask1', part: { text: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\`` } },
       ]);
       const r = await env.core.askAgentk.ask({ text: 'what needs me?' });
-      expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], notes: [] });
+      expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], together: false, notes: [] });
       const input = JSON.parse(readFileSync(join(process.env.FAKE_OPENCODE_DIR!, 'ask-input.json'), 'utf8'));
       expect(input.args).toEqual(['run', '--format', 'json', '--agent', 'agentk-ask']);
       expect(input.input).toContain('what needs me?');

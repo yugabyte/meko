@@ -151,8 +151,8 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     expect(modPrompts(env)).toEqual([]);
     // A new session launches without it, though this Claude Code could load it.
     await session('Mod off');
-    expect(launches(env)[0].args).toContain('--plugin-dir');
-    expect(launches(env).at(-1)!.args).not.toContain('--plugin-dir');
+    expect(launches(env)[0].args).toContain(modDirPath(env.core.paths));
+    expect(launches(env).at(-1)!.args).not.toContain(modDirPath(env.core.paths));
     expect(launches(env).at(-1)!.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBeUndefined();
   });
 
@@ -176,7 +176,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     await waitFor(() => env.core.state().claudeCode.version, (v) => v === '2.1.280', 5000, 'the version');
     expect(env.core.state().claudeCode).toMatchObject({ supportsMod: false, minModVersion: '2.1.287', modEnabled: true, updating: false });
     await session('Before');
-    expect(launches(env)[0].args).not.toContain('--plugin-dir');
+    expect(launches(env)[0].args).not.toContain(modDirPath(env.core.paths));
     expect(launches(env)[0].env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBeUndefined();
 
     // A failed update is reported.

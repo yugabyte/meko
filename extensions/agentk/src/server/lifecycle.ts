@@ -975,6 +975,8 @@ export class Lifecycle {
     this.core.learn.turnEnded(id);
     // A Discard that waited for it goes now, and nothing else for the session does.
     if (this.sessions.row(id).discarding) return this.afterLearn(id);
+    // A move the session's own agent asked for (AgentK's session tools) goes now, and gives it its next turn.
+    if (await this.core.tools.turnEnded(id, interrupted)) return;
     if (row.stage === 'code') {
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'pr') {

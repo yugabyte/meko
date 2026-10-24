@@ -24,8 +24,14 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
 
   it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits and Kiro's plan, exit and Resume", async () => {
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
-    // Built from Kiro's built-in default (exported with `agent create --from`), its upgrade bookkeeping left out.
-    expect(agent).toMatchObject({ name: 'agentk', tools: ['*'], includeMcpJson: true, resources: ['file://AGENTS.md'] });
+    // Built from Kiro's built-in default (exported with `agent create --from`), its upgrade bookkeeping left out, with AgentK's session tools.
+    expect(agent).toMatchObject({
+      name: 'agentk', tools: ['*'], includeMcpJson: true,
+      resources: ['file://AGENTS.md', `skill://${join(env.core.paths.run, 'tools', 'skills', 'agentk-sessions', 'SKILL.md')}`],
+      mcpServers: { agentk_sessions: { command: process.execPath, args: expect.arrayContaining([expect.stringMatching(/mcpmain\.ts$/)]) } },
+      // It grants nothing the base doesn't: Kiro asks before each session tool too.
+      allowedTools: [],
+    });
     expect(agent).not.toHaveProperty('kiroUpgrade');
 
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
@@ -131,7 +137,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
       { type: 'runFinished', data: { sessionId: 'ask-1', status: 'success', finalText: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\`` } },
     ].map((e) => JSON.stringify(e)).join('\n'));
     const r = await env.core.askAgentk.ask({ text: 'what needs me?' });
-    expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], notes: [] });
+    expect(r).toEqual({ reply: 'Nothing needs you.', actions: [], together: false, notes: [] });
     const input = JSON.parse(readFileSync(join(process.env.FAKE_KIRO_DIR!, 'ask-input.json'), 'utf8'));
     expect(input.args).toEqual(['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', 'agentk-ask']);
     expect(input.input).toContain('what needs me?');
