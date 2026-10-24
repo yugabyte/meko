@@ -6,6 +6,7 @@ import type { Db } from '../db.js';
 import type { GuardDecision, HookContext, HookPayload } from '../hooks.js';
 import type { LauncherSpec } from '../launcher.js';
 import type { Logger } from '../log.js';
+import type { AgentMekoCall } from '../mekolog.js';
 import type { Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
 
@@ -53,6 +54,11 @@ export interface UsageRead {
   changed: boolean;
   /** How full its context window is after its last turn (percent), when the harness's files say (Kiro's). */
   contextPercent?: number | null;
+  /**
+   * The agent's Meko calls the read found for the first time, with what was sent and what came back,
+   * for the session's Meko call log (Kiro's and OpenCode's; Claude's reach it through the mod).
+   */
+  mekoCalls?: AgentMekoCall[];
 }
 
 /**
@@ -107,6 +113,12 @@ export interface Harness {
   context(text: string): HookContext;
   /** The paths a tool call (an event from `normalize`) would write, or null when it isn't a file edit. */
   editedPaths(p: HookPayload): string[] | null;
+  /**
+   * For a CLI without AgentK's mod: the key of the Meko tool call a `PreToolUse` or `PostToolUse`
+   * event (from `normalize`) is about, the same at its start and its end, or null when it's another
+   * tool. The session's dot shows Meko's m while a call is open (`MekoCalls`).
+   */
+  mekoTool?(p: HookPayload): string | null;
   /**
    * For a CLI that picks its own conversation id (`agent_session_id`): the one a session started in
    * its worktree, for a session no hook told it to. The session manager asks only while the session

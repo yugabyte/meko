@@ -114,9 +114,10 @@ session manager, projects and Ask AgentK call a session's adapter rather than as
 runs on. The adapter says how to prepare its files and settle what a launch needs first
 (`prepare`, `beforeLaunch`: Claude Code's folder trust, Kiro's agent file), which folders to trust
 and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code only), its command line
-(`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md)), its hooks (`normalize`, `deny`, `context`, `editedPaths`), its conversation on disk
+(`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md)), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
-progress shows in (`activityFiles`, for the hookless fallback), its usage (`readUsage`), the
+progress shows in (`activityFiles`, for the hookless fallback), its usage (`readUsage`, with the
+agent's Meko calls it found for the first time, `UsageRead.mekoCalls`, for the Meko call log), the
 transcript AgentK sends to Meko (`captureTranscript`, Claude Code only), AgentK's mod (`modDir`,
 `offersMod`, Claude Code only), what it keeps for a session that can't run again (`forget`, called
 when its project is deleted) and drops when Meko's URL or key changes (`mekoChanged`, called by
@@ -153,6 +154,8 @@ agent choice and sign-in check:
 | Plan limits in the rail | 5-hour and weekly, from the status line and the mod | none (they're the provider's) | credits this period, from `/usage` hourly and, while Kiro is in use, at most every 10 min on a turn's end |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | `permission.asked` (an interrupted turn ends with its `session.execution.interrupted`) | none |
 | Usage | transcript tokens, priced | tokens from the plugin's log, priced | credits from Kiro's session file |
+| Meko calls (counts, What Meko doesn't know, call log) | from the transcript (counts) and the mod (call log) | the plugin's `meko` lines in its log | Kiro's session log (`<conversation>.jsonl`) |
+| The dot's Meko m | the mod | the plugin's `execute.before`/`after` on Meko tools | `preToolUse` on `@<Meko server>`, `postToolUse` |
 | By-model usage rows | the model id | the agent first: **OpenCode · claude-sonnet-4-5** | the agent first: **Kiro · auto** (`labelModels`) |
 | A public repo's PR head | `--setting-sources user` | `OPENCODE_DISABLE_PROJECT_CONFIG=1` | refused while the workspace has config |
 
@@ -218,7 +221,8 @@ OpenCode's order, and gives up on each after 3 seconds. It sends them under the 
 | the plugin's `setup` | `agentk.start` (`source`: `startup`, or `resume` with `AK_OPENCODE_SESSION`) | `SessionStart` |
 | the session `prompt` hook | `chat.message` | `UserPromptSubmit` |
 | the tool `execute.before` hook on `edit`, `write`, `patch` | the guard route, with the tool's input | the reason thrown (`editedPaths`: `path`, relative to the worktree or absolute, or the `*** Add/Update/Delete File:` and `*** Move to:` lines of `patchText`) |
-| the tool `execute.after` hook | `tool.execute.after` | `PostToolUse` |
+| the tool `execute.before` hook on a Meko server's tool (`meko…_<tool>`) | `tool.execute.before` with `call_id` | `PreToolUse`: a Meko call opens for the dot's m (`mekoTool()`: `<call_id>:<tool>`) |
+| the tool `execute.after` hook | `tool.execute.after` with `call_id` | `PostToolUse` (and a Meko call closes); for a Meko tool, also a `meko` line in `messages.jsonl` with the call and its reply, see [Token usage](token-usage.md#meko-calls) |
 | event `permission.asked` | `permission.asked` with its `action` | `PermissionRequest`: **Needs you**, "Permission needed for shell" |
 | event `permission.replied` | `permission.replied` | `PostToolUse` (working again) |
 | event `session.execution.succeeded`, `.failed` or `.interrupted` (OpenCode 2 doesn't send `session.idle`) | `session.idle` | `Stop` |
@@ -280,7 +284,9 @@ a subagent's under its own session id as the agent; reasoning counted as output;
 writes), priced with the API price table like Claude Code's: an unknown model counts tokens but no
 cost. A model can be one the user named under a provider of their own (`HarnessCaps.userModels`), so
 the usage report sends an OpenCode model only when the price table knows it, else `other`. The log
-is read from that offset (`openSync`/`readSync`), not read again whole. That file is also the session's activity file for the hookless fallback. A session's folder is
+is read from that offset (`openSync`/`readSync`), not read again whole. Its `meko` lines, one per
+call to a Meko server's tool with the reply, go into `meko_calls` the same way (see
+[Token usage](token-usage.md#meko-calls)). That file is also the session's activity file for the hookless fallback. A session's folder is
 removed with its project; an archived session keeps it, so it can still resume.
 
 **Ask AgentK** on OpenCode is `opencode run --standalone --format json --agent agentk-ask`, the message on stdin,
@@ -308,7 +314,12 @@ from the user's default agent (`chat.defaultAgent` in `~/.kiro/settings/cli.json
 agent create --from kiro_default` into the run folder (`run/kiro-default.json`). The base keeps its
 tools, MCP servers, resources and hooks; AgentK adds its own after them: `hook.sh` on every event it
 follows and `context.sh` on `agentSpawn`, `kiro-guard.sh` on `preToolUse` for `fs_write` (Kiro's
-`write` tool), `postToolUse` on every tool. Those exit at once without `AK_HOOK_TOKEN`, and the agent
+`write` tool), `hook.sh` on `preToolUse` for each Meko server (`@<name>`, Kiro's matcher for an MCP
+server's tools, `@meko/<tool>`; the servers named `meko` or starting with it in Kiro's MCP config and
+the base agent, `kiroMekoServerNames()`, else `@meko`: checked on kiro-cli 2.34.0 not to fire for
+other tools), and `postToolUse` on every tool. A Meko tool's `PreToolUse` and `PostToolUse` open and
+close a call for the dot's m (`mekoTool()`: the tool's name, since Kiro gives a call no id). Those
+exit at once without `AK_HOOK_TOKEN`, and the agent
 grants nothing its base doesn't, so outside AgentK it behaves as the user's own agent. `[kiro]
 trust_tools` is a flag on AgentK's launch instead, `--trust-tools=*` (every tool trusted for that run),
 so a chat someone starts as `agentk` themselves still asks; not `--trust-all-tools`, which makes Kiro

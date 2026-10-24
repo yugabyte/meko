@@ -586,7 +586,10 @@ export const MEKO_LOG_TOOLS = [
   'conversation_add_message', 'artifact_put',
 ] as const;
 
-/** Who made a call in a session's Meko call log: AgentK, or Claude through its Meko tools. */
+/**
+ * Who made a call in a session's Meko call log: AgentK, or the session's agent through its Meko
+ * tools (`claude` whichever agent it is: Claude, Kiro or OpenCode; the page names it).
+ */
 export const MEKO_CALL_BY = ['agentk', 'claude'] as const;
 export type MekoCallBy = (typeof MEKO_CALL_BY)[number];
 
@@ -594,6 +597,8 @@ export type MekoCallBy = (typeof MEKO_CALL_BY)[number];
 export interface MekoLogInfo {
   sessionId: string;
   name: string;
+  /** The session's agent, which made its `claude` calls. */
+  harness: HarnessId;
   bytes: number;
   updatedAt: number;
 }
@@ -606,11 +611,12 @@ export interface MekoCallSummary {
   at: number;
   tool: string;
   by: MekoCallBy;
-  /** Claude's call, made by one of its subagents. */
+  /** The agent's call, made by one of its subagents. */
   subagent: boolean;
   /** The learn step that made it, if any. */
   learn: string | null;
-  ms: number;
+  /** How long it took; null when the agent doesn't say (Kiro). */
+  ms: number | null;
   ok: boolean;
   attempts: number;
   error: string | null;

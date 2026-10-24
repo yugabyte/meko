@@ -252,9 +252,10 @@ search's answer; the [learn step](#the-learn-step) teaches Meko the answers a se
 the project's open questions, and dismisses those Meko already knew (*The project's open questions*). The list stays
 in AgentK's database (it isn't shared with the team on the datapack).
 
-**What's recorded.** The [transcript reader](token-usage.md) keeps, for each of Claude's searches
-(`context_search`, `memory_search`, `knowledgebase_search`, in the main transcript and
-subagents): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query_key` (the same
+**What's recorded.** The [usage readers](token-usage.md#meko-calls) keep, for each of the
+session's agent's searches (`context_search`, `memory_search`, `knowledgebase_search`: Claude's from
+its transcript, main and subagents, Kiro's from its session log, OpenCode's from AgentK's plugin's
+lines): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query_key` (the same
 lower-cased with its whitespace collapsed, which groups asks of one question), the best memory
 `score` and `raw_similarity_score` of the reply (`top_score`, `top_raw`), and `quality`
 (`searchQuality()` in `mekousage.ts`). AgentK's search at start keeps its query in
@@ -292,8 +293,8 @@ saved the reply to a file. For a search, the reader reads that file for the scor
 call log's `claudeReply()` uses). `outcome`, `results` and `result_chars` still describe the notice, which is
 what the usage counts and the savings estimate count. A file it can't read leaves no quality.
 
-**The questions** (`projectGaps()`): every poor search in the project's sessions, Claude's and
-AgentK's at start, grouped by `query_key`, latest asked first (ties by key). A question shows the
+**The questions** (`projectGaps()`): every poor search in the project's sessions, the session's
+agent's (Claude's, Kiro's or OpenCode's) and AgentK's at start, grouped by `query_key`, latest asked first (ties by key). A question shows the
 query as last asked, how the latest ask went and with which tool (or *AgentK's search at start*),
 how many times it was asked and by which sessions, and the latest ask's item count, best memory
 score and best raw similarity (which may be two different memories'). A question whose latest ask
@@ -336,7 +337,7 @@ dismissed (`learn.taught`, `learn.dismissed`), never a query.
 **Why the database.** The page groups every session's asks, applies the marks and pages in one
 query, the rows are written in the same transaction that moves a transcript's read offset (a
 transcript read again upserts rather than adding asks twice), and the list outlives archived
-sessions, whose Meko call logs are deleted. The [Meko call log](project-home.md) has Claude's calls
-with their full replies too, but only while the project has Log Meko calls on, so it isn't the
+sessions, whose Meko call logs are deleted. The [Meko call log](project-home.md) has the session's
+agent's calls with their full replies too, but only while the project has Log Meko calls on, so it isn't the
 source.
 
