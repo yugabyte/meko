@@ -9,6 +9,8 @@
 //	  logs/            meko.log, start.log, memory_engine.log, service.log (the service's stderr)
 //	  secrets/         secrets kept in files ([secrets] store = "file"); the client token stays in client.token
 //	  extensions.json  the extensions meko start and stop run
+//	  extensions/      each extension's own folder (extensions/agentk is AgentK's home); meko destroy
+//	                   keeps it unless told to remove the extensions too
 //	  update.json      what the last update check found
 //	  models/          embedding model files, downloaded on first start
 //	  memory_engine/   the memory engine's own state (mem0's config folder)
@@ -47,6 +49,8 @@ type Layout struct {
 	MemoryEngineLog  string
 	// KnowledgeFiles holds knowledge files' bytes, beside the database (milestone 4).
 	KnowledgeFiles string
+	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
+	Extensions string
 }
 
 // New returns the layout of the data folder at root (an absolute path).
@@ -75,6 +79,7 @@ func New(root string) Layout {
 		MemoryEngineLog:  filepath.Join(logs, "memory_engine.log"),
 
 		KnowledgeFiles: filepath.Join(root, "knowledgebase-files"),
+		Extensions:     filepath.Join(root, "extensions"),
 	}
 }
 
@@ -273,10 +278,18 @@ func sameDir(a, b string) bool {
 	return err == nil && ra == rb
 }
 
-// DirSize is the total size of the regular files under dir. Files it can't read are skipped.
-func DirSize(dir string) int64 {
+// DirSize is the total size of the regular files under dir, leaving out the folders in skip.
+// Files it can't read are skipped.
+func DirSize(dir string, skip ...string) int64 {
 	var n int64
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			for _, s := range skip {
+				if p == s {
+					return filepath.SkipDir
+				}
+			}
+		}
 		if err == nil && d.Type().IsRegular() {
 			if fi, ierr := d.Info(); ierr == nil {
 				n += fi.Size()

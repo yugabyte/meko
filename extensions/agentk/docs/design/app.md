@@ -259,7 +259,7 @@ the strip stays on the host until the session's pastes are removed. Held images 
 on each session's terminal, so an update's reload waits while any session holds some (see Releases
 and auto-update). The server takes
 PNG, JPEG, GIF and WebP images, checked by their bytes, and files of any type, up to 20 MB each,
-and saves them owner-only under `~/.agent-k-local/pastes/<session>/` with names it picks (a file's
+and saves them owner-only under `<home>/pastes/<session>/` with names it picks (a file's
 keeps the safe part of its own name, so Claude sees what it was); they're removed when the session
 is archived or its project closed. A paste that carries text as well as an image (a spreadsheet's cells come with a picture of
 them) pastes the text, unless the text is only the copied files' names. The page can't tell whether
@@ -277,7 +277,7 @@ another type Meko's knowledge base takes, it offers **Upload to Meko**: see
 Images can go with a session's first prompt too: paste them into the New session dialog's First
 prompt field (a review's Notes), drop them on it, or pick them with the image button under it. There's no
 session yet, so each one uploads to the project as it's added (`POST /api/projects/:id/images`,
-the same checks), is saved owner-only under `~/.agent-k-local/pastes/.new/<project>/`, and the
+the same checks), is saved owner-only under `<home>/pastes/.new/<project>/`, and the
 dialog holds the id the server gave it (the file's name), with the same strip of thumbnails.
 **Start session** waits for uploads still running, then names the images in
 `CreateSessionRequest.images`, at most 20. The server takes only ids of that project's staged

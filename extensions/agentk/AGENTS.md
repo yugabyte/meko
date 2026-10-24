@@ -25,12 +25,18 @@ working: every release also ships its tarball as `agent-k-local-<version>-…` (
 `bin/agent-k-local` is a link to `bin/agentk` (`scripts/package-release.sh`), the installer links
 both commands (and the server adds `agentk` beside an old link: `src/server/cmdlink.ts`), and a
 service keeps its old name until `agentk install` moves it (`dropOldNames` in `src/server/service.ts`).
-`agent-k-local` itself stays in the repo name, `~/.agent-k-local` (moving it is #236), the
-socket and state folders, and every id AgentK gives Meko (its agent id, conversation keys, the
+`agent-k-local` itself stays in the repo name, the socket folder, and every id AgentK gives Meko (its agent id, conversation keys, the
 `source` of its memories, its upload `client`), which name what's stored there. Strings AgentK wrote
 under the old product name and reads back still match it: project datapack descriptions (`AgentK
 Local project "…"`, `src/shared/datapacks.ts`) and the mark on the Kiro agents it writes
 (`src/server/kiro.ts`).
+
+**Home:** AgentK's state (its "home") is `<Meko's data folder>/extensions/agentk`, by Meko's own
+rule for that folder (`mekoHome()` in `src/server/paths.ts`, tested with Meko's against
+`backend/internal/paths/testdata/resolve-cases.json`); users don't pick another place. A release's
+home is the folder its release runs from, and `AK_HOME` names one only without a release (dev,
+tests). A home from before (`~/.agent-k-local`, or a custom `AK_HOME`) moves there by itself after
+an update (`src/server/movehome.ts`, [recovery.md](docs/design/recovery.md#moving-the-home-into-mekos-data-folder)).
 
 ## Commands
 

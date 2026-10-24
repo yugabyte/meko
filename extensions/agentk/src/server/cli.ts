@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -14,16 +14,17 @@ import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
 import { errMsg, fileLogger, type Logger } from './log.js';
 import { probeHost, probeLocal, serverUrl } from './health.js';
 import { MekoClient } from './meko.js';
-import { getPaths, tildify, withLocalBin, type Paths } from './paths.js';
+import { getPaths, SHARED_TMP, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { loadTls } from './tls.js';
-import { hostServices, servicesFor } from './service.js';
+import { hostServices, servicesFor, startMoveJob } from './service.js';
 import { linkCommand } from './cmdlink.js';
 import { openBrowser } from './browser.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
 import { HEALTHY_MS, uncountStart, Updater } from './updater.js';
+import { checkMove, finishMove, HomeMove, moveHome, readJournal, rememberMekoHome, stopAll, tmpHomeWarning } from './movehome.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -51,10 +52,51 @@ function adoptLoginPath(): void {
   process.env.PATH = withLocalBin(process.env.PATH ?? '', homedir());
 }
 
+/**
+ * Before `serve` opens anything: a move of the home into Meko's data folder that's under way (a
+ * journal says so) must finish first. With services, its job does that (started again here, after a
+ * reboot say) and this start stops; without them, `serve` moves the home itself, as it does at the
+ * first start without services of a release that brings the move. Returns the home to serve.
+ */
+async function moveFirst(paths: Paths): Promise<Paths> {
+  const j = readJournal(paths.home);
+  const svc = servicesFor(paths.home);
+  const say = { info: (m: string) => console.error(`agentk: ${m}`), warn: (m: string, d?: string) => console.error(`agentk: ${m}${d ? `: ${d}` : ''}`) };
+  if (svc?.installed('server')) {
+    if (j?.phase !== 'moving') return paths;
+    startMoveJob(svc.kind, { bin: join(process.env.AK_APP_DIR ?? join(paths.app, 'current'), 'bin', 'agentk'), from: j.from, to: j.to });
+    console.error(`agentk: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${join(j.to, 'logs', 'move-home.log')}`);
+    process.exit(EXIT_BUSY);
+  }
+  if (existsSync(paths.updatePending) && j?.phase !== 'moving') return paths;
+  const r = j?.phase === 'moving' ? { plan: j } : checkMove(paths, loadConfig(paths, () => undefined));
+  if (!r) return paths;
+  if ('skip' in r) {
+    say.warn(`AgentK's home stays in ${paths.home} for now`, r.skip);
+    return paths;
+  }
+  const to = await moveHome(r.plan, { log: say, stop: async () => void (await stopAll(paths, null)), services: null });
+  return getPaths(to);
+}
+
+/**
+ * Keeps systemd-tmpfiles' age cleanup off a home in /var/tmp (on systemd versions that skip folders
+ * with a lock on them): a `flock --shared` held while the server runs. It ends with the server, as
+ * its stdin closes. Without flock (macOS, where nothing cleans /var/tmp by age), nothing.
+ */
+function holdTmpLock(home: string, log: Logger): void {
+  if (process.platform !== 'linux' || !home.startsWith(SHARED_TMP + '/')) return;
+  const warning = tmpHomeWarning(home);
+  if (warning) log.warn(warning);
+  const child = spawn('flock', ['--shared', home, 'cat'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  child.on('error', (e) => log.warn(`couldn't lock ${home} against /var/tmp's cleanup`, errMsg(e)));
+  child.unref();
+}
+
 async function serve(): Promise<void> {
   scrubSessionMarkers();
   adoptLoginPath();
-  const paths = getPaths();
+  const paths = await moveFirst(getPaths());
   const cfg = loadConfig(paths);
   const v = version();
   // Before anything else touches the home: another server using it (here, or on another host
@@ -156,7 +198,16 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   }
 
   updater.start();
-  setTimeout(() => updater.markHealthy(), HEALTHY_MS).unref();
+  // The move into Meko's data folder: now when this version isn't being tried out, else once it has
+  // proved healthy. A move that finished starting the services ends here.
+  finishMove(paths.home, log);
+  holdTmpLock(paths.home, log);
+  const homeMove = new HomeMove(paths, log);
+  homeMove.check();
+  setTimeout(() => {
+    updater.markHealthy();
+    homeMove.check();
+  }, HEALTHY_MS).unref();
   // A deliberate stop isn't a failed start of a version being tried out. Counted once: a second
   // signal (Ctrl+C twice) or a stop during an update's restart mustn't take off another start.
   const stop = () => {
@@ -249,6 +300,7 @@ async function selftest(): Promise<void> {
 
 async function status(): Promise<void> {
   const paths = getPaths();
+  rememberMekoHome(paths);
   const cfg = loadConfig(paths);
   const tls = await loadTls(paths, cfg).catch(() => null);
   const url = serverUrl(cfg, !!tls);
@@ -340,52 +392,15 @@ async function host(args: string[]): Promise<void> {
   process.on('SIGINT', exit);
 }
 
-/** Whether a pid is an AgentK server: after a crash its lease can name a pid another process has now. */
-function isServer(pid: number): boolean {
-  try {
-    return /(agentk|agent-k-local|cli\.[jt]s) serve\b/.test(execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8' }));
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Stops the server, then the session host: a running server would start the host again and resume
  * every session. Their supervisors restart a killed process, so installed services stop through them.
  */
 async function stop(): Promise<void> {
   const paths = getPaths();
-  const client = new SessionHost(paths, { services: () => null });
+  rememberMekoHome(paths);
   const svc = servicesFor(paths.home);
-  const n = (await client.panes().catch(() => new Map())).size;
-  let stopped = false;
-  if (svc?.installed('server')) {
-    stopped = svc.state('server').running;
-    svc.stop('server');
-  }
-  // A server outside the service (`serve` by hand, or on another host sharing this home) holds the lease too.
-  const server = heldLease(paths.lock);
-  if (server) {
-    if (server.host !== hostname()) throw new Error(`The AgentK server for this home runs on ${server.host} (pid ${server.pid}): stop it there.`);
-    if (isServer(server.pid)) {
-      // Its SIGTERM handler shuts down cleanly and releases the lease.
-      process.kill(server.pid, 'SIGTERM');
-      for (let i = 0; i < 200 && heldLease(paths.lock); i++) await sleep(100);
-      if (heldLease(paths.lock)) throw new Error(`The server (pid ${server.pid}) didn't stop within 20 seconds. See: agentk logs`);
-      stopped = true;
-    }
-  }
-  if (svc?.installed('host')) {
-    stopped ||= svc.state('host').running;
-    svc.stop('host');
-  }
-  // A host the service didn't start (a detached one from `serve` before install) still answers on the socket.
-  try {
-    await client.stop();
-    stopped = true;
-  } catch (e) {
-    if (!(e instanceof NoHostError)) throw e;
-  }
+  const { stopped, sessions: n } = await stopAll(paths, svc);
   const resume = svc?.installed('server') ? 'agentk start' : 'agentk serve';
   if (!stopped) console.log('AgentK is not running.');
   else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
@@ -393,7 +408,9 @@ async function stop(): Promise<void> {
 
 /** Starts the services `stop` stopped. */
 async function start(): Promise<void> {
-  const svc = servicesFor(getPaths().home);
+  const paths = getPaths();
+  rememberMekoHome(paths);
+  const svc = servicesFor(paths.home);
   if (!svc?.installed('server')) throw new Error('No background services run this home: run agentk serve, or install them with agentk install.');
   for (const s of ['host', 'server'] as const) {
     if (!svc.installed(s)) continue;
@@ -414,8 +431,9 @@ Usage: agentk <command>
                 to skip asking; Meko is optional, --no-meko skips it; a Meko running on this computer is
                 offered first; --meko-url and --meko-key name one), install the background services
                 (systemd or launchd), print the setup link
-  uninstall     Stop and remove the background services (--purge also deletes ~/.agent-k-local except its
-                session worktrees and designs; add --delete-worktrees to delete those too)
+  uninstall     Stop and remove the background services (--purge also deletes AgentK's home, in Meko's
+                data folder, except its session worktrees and designs; add --delete-worktrees to delete
+                those too)
   setup-link    Print a one-time link to create (or reset) your login
   status        Show services, URL, certificate fingerprint and sessions
   ui            Open the web UI in your browser (prints its URL when there's no browser to open)
@@ -445,6 +463,8 @@ async function main(): Promise<void> {
     case 'attach': return (await import('./attachcli.js')).runAttach(getPaths(), args);
     case 'host': return host(args);
     case 'logs': return logs(args);
+    // The job that moves the home into Meko's data folder (movehome.ts); not for people to run.
+    case '_move-home': return (await import('./movehome.js')).runMoveJob(args);
     case 'version':
     case '--version':
     case '-v':

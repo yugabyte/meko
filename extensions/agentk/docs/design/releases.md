@@ -58,7 +58,10 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
   --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  0. stops, saying so, if AgentK is already installed in AK_HOME and set up: app/current,
+#  0. finds AgentK's home: <Meko's data folder>/extensions/agentk (MEKO_HOME, else ~/.meko, or
+#     $XDG_STATE_HOME/meko or /var/tmp/<user>/meko for a home folder on NFS), or ~/.agent-k-local
+#     when only that is there (until its server moves it); --print-home prints it and stops.
+#     Stops, saying so, if AgentK is already installed there and set up: app/current,
 #     config.toml, ~/.local/bin/agentk, and both services enabled (systemd) or loaded
 #     (launchd). Updates are offered in the app, and `agentk install` redoes the setup.
 #     --reinstall, --deps-only, a --version other than the installed one, or options for
@@ -74,15 +77,15 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #     while a failed Linux package manager stops it; then offers `gh auth login` and `claude auth
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
-#  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agentk install`:
+#  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
 #  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
 #     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
 #  4. Meko (optional): verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json,
 #     else offers a Meko running on this computer, else asks; Enter or --no-meko skips it;
 #     --meko-url and --meko-key name one) and offers to run Meko's setup for Claude Code if its
 #     plugin, MCP server or key is missing (declining is a warning)
-#  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
-#     sets up TLS
+#  5. writes config.toml (with Meko's data folder when MEKO_HOME names it), sets up TLS; on an
+#     older home, says it moves into Meko's data folder once the server has started
 #  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
 #  7. prints the one-time setup link (remote access), or the address (local access)
@@ -138,6 +141,12 @@ it removes. Nothing is removed while an update is being installed or switched to
 version `app/current` points at. Each version is about 180 MB, most of it the bundled Node runtime.
 The "Updated to" notice shows from the new version's first boot, without waiting for the healthy
 check.
+
+The first release that brings the move of AgentK's home into Meko's data folder (#236) moves an
+older home as soon as it has proved healthy, ending every session and resuming it in the new
+place: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
+The launcher finds the home from its own folder (`<home>/app/<version>`), so a rollback after the
+move runs the previous version from the new home.
 
 The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. Updates never need a
 maintenance window, because they never touch the session host.

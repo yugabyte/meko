@@ -84,7 +84,7 @@ a dev server or a second home never acts on another install's services.
 
 ## One server per home
 
-Two servers on one `~/.agent-k-local` break each other: each binds the hook socket over the
+Two servers on one AgentK home break each other: each binds the hook socket over the
 other's (a Unix socket bound on one host can't be reached from another, so hooks are lost and
 sessions stay on Starting), and both write the same SQLite file. This happens when the home is on
 a file system other hosts mount, like a home directory shared over NFS: every host you log in to
@@ -157,3 +157,56 @@ comes back. **Auto-continue is on by default**, with guards:
   is gone, it waits for you to resume or discard it. A session host error other than "no host
   running" skips that check rather than being read as every pane being gone, and a live pane is never
   replaced.
+
+## Moving the home into Meko's data folder
+
+Until #236 the home was `~/.agent-k-local` (or what an install named with `AK_HOME`). It now lives
+in Meko's data folder ([Where AgentK lives](projects-and-sessions.md#where-agentk-lives)), and an
+older home moves there by itself (`src/server/movehome.ts`). Moving ends every session, since each
+one's Claude runs in a worktree inside the home; recovery resumes them from the new place, and a
+session that was mid-turn gets its continue prompt as after any host restart.
+
+- **When.** Right after a release with the move has proved healthy, whatever the sessions are
+  doing: when the launcher's `update-pending.json` goes (`HomeMove`, run by the server at its start
+  and again once the release has been healthy for 5 minutes), so a bad release is rolled back first.
+  Only a release install moves (a source checkout or a test never does). A move that can't happen
+  (a target that isn't empty, too little free space for a copy, git older than 2.30, a `MEKO_HOME`
+  on a network filesystem) is logged at each start, and the install keeps running where it is.
+- **Who.** The move stops the server and the session host, so it can't run in either's unit (systemd
+  or launchd would end it with them). The server starts a one-shot job outside both: a transient
+  unit (`systemd-run --user --unit agentk-move-home`, `Restart=on-failure`) or a LaunchAgent of its
+  own (`com.yugabyte.agentk.move-home`, which removes itself at the end), running the release's
+  hidden `agentk _move-home --to <dir>`. It logs to `logs/move-home.log`. Without services, `serve`
+  does the move itself at its next start, before it opens anything.
+- **What.**
+  1. Stop the server, then the host (`stopAll`, which `agentk stop` uses too).
+  2. Put the home in place: `rename(2)` on one filesystem; on another (a home folder on NFS moving
+     to local disk), copy it to `<new>.partial` (modes, links and times kept; sockets skipped),
+     rename that into place, and move the original aside to `<old>.moved`, removed once the server
+     answers on the new home. Then `~/.agent-k-local` (the old path) becomes a link to the new
+     home, so an interrupted move, a rollback to an older version, scripts and build outputs that
+     name the old path keep working, and `git worktree prune` can't drop worktrees whose paths look
+     missing.
+  3. Rewrite, in order: a database kept outside the home joins it (checkpointed, with its
+     snapshots; `[state] db_path` cleared); the database's paths (`sessions.worktree_path`,
+     `transcript_path`, `start_images`, `worktrees.path`, `usage_files.path`, repo paths) and Claude
+     Code's transcript folders, which are named after each worktree's path: `--resume` looks there,
+     recovery resumes only when the transcript is found (else it starts the session over), and
+     usage reading keys its offsets on the transcript's path (else it would count everything again);
+     each running session gets an activity line; Claude Code's per-folder entries in
+     `~/.claude.json` (copied to the new paths; the old ones stay); Kiro's sessions' `cwd`;
+     `git worktree repair` in each worktree; the `~/.local/bin` links; TLS paths in `config.toml`.
+     Files AgentK writes at each start or launch (the hook scripts and settings, the mod, the Kiro
+     agent) need nothing.
+  4. Install the services on the new home, under their new names (`dropOldNames`: the host is
+     stopped), and start them.
+- **Going on after a stop.** `move.json` (the journal: from, to, method, the steps done) is written
+  into the home before it moves, so it goes along. Every step does nothing the second time. While
+  the journal says `moving`, a server refuses to start (exit 75) and starts the job again, as after
+  a reboot that ended it; without services, `serve` goes on with the move itself. A rerun finds
+  what's done: a copy cut off is started over, the original untouched until the copy is whole. The
+  journal is removed once the server answers on the new home (or the server removes it at its next
+  start).
+- **Meko.** Meko finds AgentK by its command, `~/.local/bin/agentk`, which the move repoints;
+  `meko destroy` leaves `extensions/` alone unless asked ([Meko's install
+  docs](../../../../backend/docs/install.md)).

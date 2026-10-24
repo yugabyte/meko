@@ -22,8 +22,8 @@ live outside the repo so they never show up in `git status`, and outlive their s
 goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse)).
 
 ```sh
-# layout on the host
-~/.agent-k-local/
+# layout on the host: AgentK's home, in Meko's data folder (see "Where AgentK lives" below)
+~/.meko/extensions/agentk/
   config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
   state.db                 # SQLite: projects, sessions, events, auth (WAL)
   hook.sock                # Claude hooks (and AgentK's mod) → server
@@ -199,16 +199,42 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
   loop. On a dev box whose disk other builds kept busy, a commit took up to 405 ms under FULL
   (0.2 ms under NORMAL), and every request waited behind it. Old `session_events` are pruned
   after 30 days, except `merged` events, which the Usage page counts.
-- **Not on NFS.** SQLite locking is unreliable on network filesystems. The installer checks the
-  filesystem type of `~/.agent-k-local`. If it's NFS, the installer puts `state.db` on local disk
-  (`$XDG_STATE_HOME`, then `/var/tmp/$USER`) and records the path in `config.toml`. The
-  `/var/tmp/$USER` folder must be a real directory owned by you that others can't write to, or the
-  installer stops rather than put the database (password hash, TOTP secret) somewhere another user
+- **Not on NFS.** SQLite locking is unreliable on network filesystems. The home is always in
+  Meko's data folder, which Meko keeps on a local disk (below), so `state.db` is in the home. An
+  install from before the move whose home was on NFS kept it on local disk instead (`[state]
+  db_path` in `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`);
+  that setting is still read until the move brings the database into the home, and nothing sets it
+  any more. A folder in `/var/tmp` must be a real directory owned by you that others can't write
+  to, or AgentK stops rather than put its data (password hash, TOTP secret) somewhere another user
   controls.
+
+### Where AgentK lives
+
+AgentK's home is `<Meko's data folder>/extensions/agentk`, and users don't pick another place.
+Meko's data folder is found by Meko's own rule (`Resolve` in `backend/internal/paths/paths.go`;
+`mekoHome()` in `src/server/paths.ts` repeats it, and `scripts/install.sh` repeats it in sh, all
+three tested against `backend/internal/paths/testdata/resolve-cases.json`): `MEKO_HOME`, refused on
+a network filesystem; else `~/.meko` on a local disk; else, for a home folder on a network
+filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
+above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
+home`, since its own services don't have it.
+
+- **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
+  `AK_HOME` says; the CLI run through `~/.local/bin/agentk` finds it that way, and so does the
+  launcher. `AK_HOME` names a home only without a release (`npm run dev`, tests).
+- **Otherwise** (`akHome()`): `<Meko's data folder>/extensions/agentk` when it's there, else
+  `~/.agent-k-local` when that's there (an install the move hasn't reached), else the new one.
+- **In `/var/tmp`**, which many Linux systems clean by age (systemd-tmpfiles' default is 30 days on
+  Fedora and RHEL), the server holds a shared `flock` on the home while it runs, which the cleanup
+  skips on systemd versions that honor it, and the installer and the server warn and suggest a
+  local `XDG_STATE_HOME`.
+
+Homes from before this (`~/.agent-k-local`, or one an install named with `AK_HOME`) move there by
+themselves: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
 
 `config.toml` holds host settings: the listen address and port, the server's name, TLS paths, repo folders, the update
 channel, the Meko URL and key (only when typed at install), transcript capture, the
-`claude` command, the database path, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
+`claude` command, Meko's data folder as Meko last named it, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
 keep an unused one, update channel, server name, resolving merge conflicts) there too. The server reads the file at
 start, so an edit made while it runs takes effect after a restart, and a save from Settings meanwhile writes over it. Per-project settings, sessions and everything else live in `state.db`. Only values that

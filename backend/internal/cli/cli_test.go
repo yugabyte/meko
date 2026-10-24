@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
@@ -870,6 +873,189 @@ func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
 	want(t, "destroy that fails partway", code, 1, errs, "removing it failed partway")
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Errorf("the link to the moved folder is still there: %v", err)
+	}
+}
+
+// withExtensionData makes dir a stopped server's data folder holding AgentK's folder (with a file in
+// it) and AgentK registered as an extension, whose program logs its arguments and MEKO_HOME to the
+// returned log; uninstall fails when failUninstall.
+func withExtensionData(t *testing.T, dir string, failUninstall bool) (log, kept string) {
+	t.Helper()
+	noRealExtensions(t)
+	l := paths.New(dir)
+	if err := os.WriteFile(l.DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(l.LogDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept = filepath.Join(extensions.Dir(dir, "agentk"), "state.db")
+	if err := os.MkdirAll(filepath.Dir(kept), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kept, []byte("sessions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ext := filepath.Join(shortDir(t), "agentk")
+	log = ext + ".log"
+	fails := ""
+	if failUninstall {
+		fails = "[ \"$1\" = uninstall ] && { echo \"can't uninstall\" >&2; exit 4; }\n"
+	}
+	script := fmt.Sprintf("#!/bin/sh\necho \"$* $MEKO_HOME\" >> %q\n%sexit 0\n", log, fails)
+	if err := os.WriteFile(ext, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	reg, _ := extensions.Load(dir)
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return log, kept
+}
+
+// With extension data in the data folder, destroy asks whether to remove it too: kept, everything
+// else of Meko's goes and the extensions' folder and registry stay; removed, each extension's own
+// uninstall runs first (with MEKO_HOME) and then the whole folder goes. --force alone keeps it,
+// --with-extensions removes it without the second question.
+func TestDestroyWithExtensionData(t *testing.T) {
+	for _, c := range []struct {
+		name, answers string
+		flags         []string
+		removed       bool
+		asked         []string
+	}{
+		{"kept when asked", "y\nn\n", nil, false, []string{"Destroy it?", "Also uninstall the extensions"}},
+		{"removed when asked", "y\ny\n", nil, true, []string{"Destroy it?", "Also uninstall the extensions"}},
+		{"--force keeps it", "", []string{"--force"}, false, nil},
+		{"--with-extensions removes it", "y\n", []string{"--with-extensions"}, true, []string{"Destroy it?"}},
+		{"both ask nothing", "", []string{"--force", "--with-extensions"}, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir, _ := setup(t)
+			log, kept := withExtensionData(t, dir, false)
+			held, err := os.OpenFile(kept, os.O_RDWR, 0) //nolint:gosec // G304: test file
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = held.Close() }()
+			withStdin(t, c.answers)
+			code, out, errs := run(append([]string{"destroy", "--data-dir", dir}, c.flags...)...)
+			want(t, "destroy", code, 0, out+errs, "It also holds extension data:\n  AgentK in "+
+				extensions.Dir(dir, "agentk")+" (")
+			for _, q := range []string{"Destroy it?", "Also uninstall the extensions"} {
+				if asked := strings.Contains(out, q); asked != slices.Contains(c.asked, q) {
+					t.Errorf("asked %q: %v, want %v:\n%s", q, asked, !asked, out)
+				}
+			}
+			if c.removed {
+				want(t, "the extension's uninstall", 0, 0, readLog(t, log),
+					"uninstall --purge --delete-worktrees --non-interactive "+dir+"\n")
+				gone(t, dir)
+				return
+			}
+			if got := readLog(t, log); got != "" {
+				t.Errorf("the extension ran %q", got)
+			}
+			want(t, "destroy that keeps them", code, 0, out, "kept the extensions' data in it")
+			if _, serr := os.Stat(paths.New(dir).DB); !os.IsNotExist(serr) {
+				t.Errorf("meko.db is still there: %v", serr)
+			}
+			if _, err = held.WriteAt([]byte("SESSIONS"), 0); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(kept) //nolint:gosec // G304: test file
+			if err != nil || string(b) != "SESSIONS" {
+				t.Errorf("the extension's file: %q, %v", b, err)
+			}
+			if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command == "" {
+				t.Errorf("the registry lost agentk: %+v", reg.Entries)
+			}
+			if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
+				t.Errorf("left behind: %v", left)
+			}
+		})
+	}
+}
+
+// A declined destroy and a failing extension uninstall remove nothing.
+func TestDestroyWithExtensionDataRemovesNothingOnNoOrFailure(t *testing.T) {
+	dir, _ := setup(t)
+	_, kept := withExtensionData(t, dir, true)
+	withStdin(t, "n\n")
+	code, _, errs := run("destroy", "--data-dir", dir)
+	want(t, "destroy declined", code, 1, errs, "Nothing was removed\n")
+	code, out, errs := run("destroy", "--data-dir", dir, "--force", "--with-extensions")
+	want(t, "destroy with a failing uninstall", code, 1, out+errs,
+		"uninstalling AgentK failed: ")
+	want(t, "destroy with a failing uninstall", code, 1, errs, "Nothing of Meko's was removed")
+	for _, p := range []string{paths.New(dir).DB, kept} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s is gone: %v", p, err)
+		}
+	}
+}
+
+// Keeping the extensions, destroy moves Meko's entries aside holding the lock throughout (run/,
+// which holds it, last), and a move that fails puts back what was moved.
+func TestDestroyKeepingExtensionsHoldsTheLockAndRollsBack(t *testing.T) {
+	dir, _ := setup(t)
+	_, kept := withExtensionData(t, dir, false)
+	l := paths.New(dir)
+	var order []string
+	old := rename
+	t.Cleanup(func() { rename = old })
+	rename = func(from, to string) error {
+		if up, _ := running(l.Lock); !up {
+			t.Errorf("moving %s with the lock free", from)
+		}
+		order = append(order, filepath.Base(from))
+		if filepath.Base(from) == "logs" && !strings.Contains(from, ".destroying-") {
+			return errors.New("injected")
+		}
+		return old(from, to)
+	}
+	code, _, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy whose move fails", code, 1, errs, "Nothing was removed")
+	for _, p := range []string{l.DB, l.LogDir, kept, extensions.File(dir)} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s isn't back: %v", p, err)
+		}
+	}
+	if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
+		t.Errorf("left behind: %v", left)
+	}
+	order = nil
+	rename = func(from, to string) error {
+		order = append(order, filepath.Base(from))
+		return old(from, to)
+	}
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy", code, 0, out+errs, "kept the extensions' data in it")
+	if len(order) == 0 || order[len(order)-1] != "run" || slices.Contains(order, "extensions") {
+		t.Errorf("moved %v: run/ must go last, extensions/ never", order)
+	}
+}
+
+// A data folder with only extension data (AgentK installed without Meko) has nothing of Meko's to
+// remove, unless --with-extensions.
+func TestDestroyOnlyExtensionData(t *testing.T) {
+	dir, _ := setup(t)
+	log, kept := withExtensionData(t, dir, false)
+	if err := os.RemoveAll(paths.New(dir).DB); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of extension data only", code, 0, out+errs, "Nothing of Meko's to remove: "+dir+
+		" holds only extension data")
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the extension's data is gone: %v", err)
+	}
+	code, out, errs = run("destroy", "--data-dir", dir, "--force", "--with-extensions")
+	want(t, "destroy --with-extensions of extension data only", code, 0, out+errs, "Removed")
+	want(t, "the extension's uninstall", 0, 0, readLog(t, log), "uninstall --purge")
+	if _, err := os.Stat(kept); !os.IsNotExist(err) {
+		t.Errorf("the extension's data is still there: %v", err)
 	}
 }
 

@@ -550,13 +550,14 @@ exit 0`);
     expect(downloads(unset.calls).length).toBeGreaterThan(0);
   });
 
-  it('installs into another AK_HOME', () => {
-    const other = join(root, 'other-home');
-    const r = runAll(['--non-interactive'], { AK_HOME: other });
+  it("installs into Meko's data folder (MEKO_HOME), whatever AK_HOME says, once nothing is in the old home", () => {
+    rmSync(akHome(), { recursive: true });
+    const meko = join(root, 'meko');
+    const r = runAll(['--non-interactive'], { MEKO_HOME: meko, AK_HOME: join(root, 'other-home') });
     expect(r.code).toBe(0);
     expect(r.calls).toContain('agentk install --non-interactive');
-    expect(current(other)).toBe('1.2.4');
-    expect(current()).toBe('1.2.3');
+    expect(current(join(meko, 'extensions', 'agentk'))).toBe('1.2.4');
+    expect(existsSync(join(root, 'other-home'))).toBe(false);
   });
 
   it('still checks the tools with --deps-only', () => {
@@ -564,5 +565,38 @@ exit 0`);
     expect(r.code).toBe(0);
     expect(r.err).toContain('Tools');
     expect(r.err).not.toContain('already installed');
+  });
+});
+
+describe('install.sh: where AgentK lives', () => {
+  /** Where Meko's data folder is: the cases Meko's paths.Resolve and AgentK's mekoHome are tested against too. */
+  const CASES = (JSON.parse(readFileSync(join(__dirname, '../../../../backend/internal/paths/testdata/resolve-cases.json'), 'utf8')) as {
+    cases: { name: string; env: Record<string, string>; networkDirs: string[]; want?: string; error?: boolean }[];
+  }).cases;
+
+  // $SHARED_TMP is /var/tmp itself here: --print-home makes nothing. Other absolute paths go under
+  // the test's folder, the network folders made, since the check looks at the nearest folder there.
+  it.each(CASES)('$name', (c) => {
+    const fill = (p: string) => {
+      const v = p.replace('$HOME', home).replace('$SHARED_TMP', '/var/tmp').replace('$USER', 'me');
+      return v.startsWith(home) || v.startsWith('/var/tmp') ? v : join(root, v);
+    };
+    const network = c.networkDirs.map(fill);
+    for (const d of network) mkdirSync(d, { recursive: true });
+    stub(bin, 'stat', `for d in ${network.map((d) => `'${d}'`).join(' ')}; do case $4 in "$d"|"$d"/*) echo nfs; exit 0 ;; esac; done; echo ext2/ext3`);
+    const env = Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, fill(v)]));
+    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C', FAKE_UID: 'me', ...env }, encoding: 'utf8' });
+    if (c.error) {
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('network filesystem');
+    } else {
+      expect(r.stdout.trim()).toBe(join(fill(c.want!), 'extensions', 'agentk'));
+    }
+  });
+
+  it("keeps an install from before the move in its old home until its server moves it", () => {
+    mkdirSync(join(home, '.agent-k-local'));
+    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C' }, encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(join(home, '.agent-k-local'));
   });
 });

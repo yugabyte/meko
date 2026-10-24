@@ -42,8 +42,9 @@ says so and changes nothing, unless given `--reinstall` or another version.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
 `meko uninstall` removes the service, `~/.local/bin/meko` and the app folder, and keeps the data;
-`--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`).
-Extensions stay installed. `meko destroy` stops the service before the server, so its manager
+`--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
+takes `--with-extensions` too). Extensions stay installed unless that destroy removed them, and it
+names the ones that stay. `meko destroy` stops the service before the server, so its manager
 doesn't start the server again mid-removal; removes the data folder and the client token (also when
 it's in the Keychain, outside the folder); and says the service is still installed. The releases
 are outside the data folder, so the service can still start Meko on a fresh one.
@@ -152,7 +153,32 @@ only see it started again), and `meko restart` restarts it. Without it, they sta
 ## Extensions
 
 `<data>/extensions.json` (0600) lists the extensions this Meko runs, with the command that controls
-each one. The contract is the extension's own CLI: `<command> start`, `stop` and `status`.
+each one. The contract is the extension's own CLI: `<command> start`, `stop` and `status`, and
+its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-worktrees
+--non-interactive`) for `meko destroy --with-extensions`. Every command Meko runs of an extension
+(those, its installer and `agentk install`) gets `MEKO_HOME` naming Meko's data folder, so the
+extension knows where its own folder is: `<data>/extensions/<name>` (`extensions.Dir`). AgentK's
+home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
+`~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
+both test suites read `internal/paths/testdata/resolve-cases.json`).
+
+- An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
+  `app/current/bin`: its folder in the data folder, then its home from before it moved there
+  (`Catalog.OldHomes`, `~/.agent-k-local`). When a registered command is gone, `meko start` and
+  `stop` look for it again this way and save what they find in the registry.
+- `meko destroy` keeps the extensions' data unless told otherwise. With some there (a registered
+  extension, or a known one's folder), it lists each one's folder and size (Meko's own size leaves
+  out `extensions/`) and asks a second question, whether to uninstall the extensions and delete
+  their data too (AgentK's sessions and worktrees, with any uncommitted work). `--force` asks
+  nothing and keeps them; `--with-extensions` removes them without the second question (with
+  `--force`, asking nothing). Removing runs each extension's uninstall first; if one fails,
+  nothing of Meko's is removed. Keeping stops Meko only, never the extensions, and moves
+  every entry but `extensions/` and `extensions.json` aside while holding the lock (below), so
+  the next `meko start` still starts them; their Meko key (the old client token) stops working, so
+  it says to run `meko install_extension agentk` after `meko start`. A data folder with extension
+  data and no `meko.db` (AgentK installed without Meko) has nothing of Meko's to remove; with
+  `--with-extensions` the extensions are uninstalled, their data removed, and the folder too if
+  that empties it.
 
 - `meko install_extension agentk` needs a running Meko. When `agentk` (or `agent-k-local`, its name
   before the rename, which an install from then may have alone: `Catalog.OldCommands`) is on PATH or

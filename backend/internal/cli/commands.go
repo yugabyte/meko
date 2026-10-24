@@ -288,7 +288,7 @@ func printSetup(l paths.Layout, stdout io.Writer) {
 		return
 	}
 	for _, n := range reg.Names() {
-		ok, line := reg.Entries[n].Status()
+		ok, line := reg.Entries[n].Status(l.Root)
 		state := "running"
 		if !ok {
 			state = "not running"
