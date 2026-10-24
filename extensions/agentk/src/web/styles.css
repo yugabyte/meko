@@ -3344,88 +3344,6 @@ div[id^='dak-mermaid-'] .label {
 .kv dd {
   margin: 0;
 }
-.totp-enroll {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.qr {
-  width: 168px;
-  height: 168px;
-  background: #fff;
-  padding: 8px;
-  border-radius: 8px;
-}
-.qr svg {
-  width: 100%;
-  height: 100%;
-}
-.secret {
-  font-size: 13px;
-  word-break: break-all;
-  background: var(--sunk);
-  padding: 6px 8px;
-  border-radius: 6px;
-}
-
-/* ---------- Auth ---------- */
-/* Scrolls itself, not the page: trackAppHeight() puts the page's scroll back at the top (for the
-   app, which is pinned to the visible viewport), which undid the browser's scroll to a focused
-   field and kept a tall card from scrolling at all. */
-.auth-page {
-  position: fixed;
-  inset: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  display: grid;
-  place-items: center;
-  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
-    calc(24px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
-}
-.auth-page .field {
-  scroll-margin: 16px;
-}
-.auth-card {
-  width: min(400px, 100%);
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 14px;
-  box-shadow: var(--shadow);
-  padding: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.auth-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-.auth-forgot {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid var(--rule);
-  padding-top: 14px;
-}
-.auth-card > .link-btn {
-  align-self: flex-start;
-}
-.auth-cmd {
-  align-self: flex-start;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  background: var(--sunk);
-  padding: 6px 8px;
-  border-radius: 6px;
-}
-.brand-name {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 18px;
-}
 
 .toast {
   position: fixed;
@@ -5660,20 +5578,6 @@ div[id^='dak-mermaid-'] .label {
   .dp-row > .mono + .tag {
     margin-left: 24px;
   }
-  /* On the visible viewport, like the app, so the fields scroll above the on-screen keyboard. */
-  .auth-page {
-    bottom: auto;
-    top: var(--app-top, 0px);
-    height: var(--app-h, 100dvh);
-  }
-  /* The keyboard covers the home indicator, so nothing needs to clear it. */
-  html.kb-open .auth-page {
-    padding-bottom: 24px;
-  }
-  .auth-card {
-    padding: 22px;
-  }
-
   /* Toasts drop in under the app bar, clear of the compose box and keyboard. */
   .toast {
     top: calc(56px + env(safe-area-inset-top, 0px));

@@ -6,6 +6,7 @@ import {
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
+import { appUrl } from '../base';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { useInstall } from '../installapp';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
@@ -558,7 +559,7 @@ export function CommandPalette({
         onKeyDown={(e) => trapTab(e.nativeEvent, paletteRef.current)}
       >
         <div className="pal-row">
-          <img src="/logo.png" alt="" width={18} height={18} />
+          <img src={appUrl('/logo.png')} alt="" width={18} height={18} />
           <input
             id="palette-input"
             ref={inputRef}

@@ -8,6 +8,12 @@ export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
 
 /**
+ * Where browsers find AgentK: the Meko on this computer serves it at this path on its web listener,
+ * with the path stripped (Meko's internal/extproxy), so AgentK's own routes stay at `/`.
+ */
+export const AGENTK_PATH = '/ext/agentk/';
+
+/**
  * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
  * (the README's install line). The banner shown while there's no Meko here gives it.
  */

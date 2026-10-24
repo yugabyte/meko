@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { STAGE_LABELS, type KiroPlan, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
+import { appUrl } from '../base';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
@@ -127,7 +128,7 @@ export function Rail({
       {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing.
           It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
       <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
-        <img src="/logo.png" alt="" width={16} height={16} />
+        <img src={appUrl('/logo.png')} alt="" width={16} height={16} />
         <span className="rail-search-text">Ask AgentK</span>
         {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
       </button>

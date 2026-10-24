@@ -92,15 +92,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 2. Security
 
-- [ ] New `/api/*` routes require login unless they're one of the three public auth routes, or the
-      request has local access (`localAccess()`: loopback bind, loopback peer, localhost `Host`,
-      no forwarding headers, not cross-site by `Sec-Fetch-Site` or `Origin`). Nothing widens local
-      access to a network bind, another `Host`, a forwarded address, or a request from another site. Access
-      checks key on the matched route, never the raw URL (the router decodes `/%61pi/`).
+- [ ] The server listens only on its unix socket and has no login of its own: Meko signs people in
+      and serves AgentK at `/ext/agentk/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
+      login, or trust in a forwarding header. Access checks key on the matched route, never the raw
+      URL (the router decodes `/%61pi/`).
 - [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
-- [ ] Writes and WebSocket upgrades still pass the origin check; cookies stay `HttpOnly`,
-      `SameSite=Strict`, and `Secure` under TLS.
+- [ ] Writes and WebSocket upgrades still pass the origin check. The page builds every URL of
+      AgentK's own under its base (`src/web/base.ts`), and calls Meko's routes (`/api/v1/auth/*`)
+      root-absolute.
 - [ ] Nothing from a session's worktree that its repo's author controls (settings, scripts, prompts,
       agent or MCP config) runs or is used unless `repoConfigTrusted(row)` says so (`headtrust.ts`):
       on a public repo's PR head, anyone can have written it. A PR found by its branch's name must

@@ -39,24 +39,6 @@ export function keyboardOpen(layoutHeight: number, visibleHeight: number, scale:
 }
 
 /**
- * Keeps the focused field inside `box`, a scroller sized to the visible viewport, in view as the box
- * resizes. The browser scrolls a field into view as it takes focus, before the on-screen keyboard
- * has come up and shrunk the box, which left the field behind the keyboard. Returns a function that
- * stops it.
- */
-export function keepFocusInView(box: HTMLElement): () => void {
-  if (typeof ResizeObserver !== 'function') return () => undefined;
-  const ro = new ResizeObserver(() => {
-    const el = document.activeElement;
-    if (!el || el === box || !box.contains(el) || !el.matches('input, textarea, select')) return;
-    // The whole field, so its label stays in view above it.
-    (el.closest('.field') ?? el).scrollIntoView({ block: 'nearest' });
-  });
-  ro.observe(box);
-  return () => ro.disconnect();
-}
-
-/**
  * Keeps the phone layout on the visible viewport, so the on-screen keyboard shrinks the app instead
  * of covering it and the terminal refits above it. `--app-h` is the visible height and `--app-top`
  * its offset: iOS doesn't resize the layout viewport for the keyboard, and when a field near the

@@ -25,10 +25,10 @@ export interface EventsHandlers {
   onState: (s: AppState) => void;
   onConn: (c: Conn) => void;
   onEvent: (ev: Extract<ServerEvent, { type: 'notify' | 'invite' | 'knowledge' }>) => void;
-  /** After a 4401 close: resolves true to keep retrying, false when the login is gone. */
-  checkLogin: () => Promise<boolean>;
-  /** Close code that means the login is gone. */
-  unauthorized: number;
+  /** After an `unauthorized` close: resolves true to keep retrying, false when the sign-in is gone. */
+  checkSignIn: () => Promise<boolean>;
+  /** Close codes that mean the socket was refused for want of a sign-in. */
+  unauthorized: readonly number[];
 }
 
 /**
@@ -198,8 +198,8 @@ export class EventsConnection {
     const later = () => {
       if (!this.stopped && !this.ws) this.retryTimer = setTimeout(() => this.connect(), delay);
     };
-    // Logged out, password changed or login expired: the 401 handler shows the login screen.
-    if (code === this.h.unauthorized) void this.h.checkLogin().then((ok) => ok && later());
+    // Signed out, or the sign-in expired: checkSignIn goes to Meko's sign-in screen.
+    if (code !== null && this.h.unauthorized.includes(code)) void this.h.checkSignIn().then((ok) => ok && later());
     else later();
   }
 }

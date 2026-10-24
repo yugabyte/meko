@@ -1,32 +1,25 @@
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import fastifyCookie from '@fastify/cookie';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
-import QRCode from 'qrcode';
 import type { WebSocket } from 'ws';
 import type {
-  AttachDatapackRequest, AuthStatus, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck, LoginRequest,
-  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, SetupRequest, StagedImage,
+  AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
+  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoGap, MekoGapMarkRequest, MekoGapPage, MekoLogInfo, MekoTeachRequest, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
 } from '../shared/types.js';
 import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
-import { shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
+import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
-import {
-  COOKIE_NAME, LoginLimiter, SESSION_MAX_AGE_S, authSessionLive, burnPasswordCheck, changePassword, consumeSetupToken, createAuthSession,
-  deleteAuthSession, getOwner, localAccess, newTotpSecret, otpauthUrl, setOwner, setupTokenOutstanding, setupTokenValid, totpAccept, validateAuthSession, validatePassword,
-  verifyPassword,
-} from './auth.js';
 import { checkActions, runActions } from './actions.js';
 import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
 import type { Core } from './core.js';
-import { audit, get, run } from './db.js';
+import { audit, get } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
@@ -36,7 +29,6 @@ import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
-import type { TlsMaterial } from './tls.js';
 import { notesRange, type Updater } from './updater.js';
 import { usageOverview } from './usage.js';
 import { taskPrs } from './taskprs.js';
@@ -50,7 +42,6 @@ const ACTIONS: SessionAction[] = [
   'approve-design', 'cancel-approval', 'open-pr', 'merge', 'cancel-queued', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
   'learn',
 ];
-const PUBLIC_API = new Set(['/api/auth/status', '/api/auth/setup', '/api/auth/login']);
 /**
  * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
  * srcdoc iframe, which takes this policy on top of its own (design-frame.ts), and Artifacts run
@@ -76,35 +67,25 @@ export function appCsp(host: string | undefined): string {
 /** How long a closing server waits for a browser's socket to answer its close before dropping it. */
 export const SHUTDOWN_CLOSE_MS = 1000;
 
+/** The page learns where Meko serves it from the `<base href>` stamped into it (stampPage). */
+const BASE_PATH = AGENTK_PATH;
+
 export interface ServerOptions {
-  tls: TlsMaterial | null;
   webDir: string | null;
   updater: Updater | null;
 }
 
 export async function buildServer(core: Core, opts: ServerOptions): Promise<FastifyInstance> {
-  const app = Fastify({
-    logger: false,
-    bodyLimit: 1024 * 1024,
-    ...(opts.tls ? { https: { cert: opts.tls.cert, key: opts.tls.key } } : {}),
-  }) as unknown as FastifyInstance;
+  const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 }) as unknown as FastifyInstance;
   const db = core.db;
-  const limiter = new LoginLimiter();
-  const secure = !!opts.tls;
 
-  await app.register(fastifyCookie);
   await app.register(fastifyWebsocket, { options: { maxPayload: 1024 * 1024 } });
   // The API only takes JSON. Without a text/plain parser, a plain HTML form (which can't send
   // JSON) can't post to it, even from our own origin.
   app.removeContentTypeParser('text/plain');
 
-  // The address the server listens on (cli.ts listens on the same config), fixed for its lifetime.
-  const bind = core.config.server.bind;
-  /** No login needed: the server listens only on this computer and the request is local. */
-  // `req.ip` is the peer's address: no trustProxy, so a forwarding header can't change it.
-  const local = (req: FastifyRequest) => localAccess(bind, req.ip, req.headers);
-  // Only the onRequest hook renews a login, since only it can re-issue the cookie with it.
-  const authed = (req: FastifyRequest) => local(req) || authSessionLive(db, req.cookies[COOKIE_NAME]);
+  // There's no login here: the server listens only on its unix socket, which only this user (and so
+  // Meko, which serves it to browsers at BASE_PATH after its own sign-in) can connect to.
   /**
    * The route a request matched (`/api/sessions/:id`), or undefined when none did. Access checks
    * key on this, never the raw URL: the router decodes `/%61pi/...` to `/api/...`, and an
@@ -113,7 +94,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   const routeOf = (req: FastifyRequest): string | undefined => req.routeOptions.url;
   const isApi = (req: FastifyRequest) => routeOf(req)?.startsWith('/api/') ?? false;
 
-  /** Same-origin check for writes and WebSocket upgrades (defense in depth on top of SameSite=Strict). */
+  /**
+   * Same-origin check for writes and WebSocket upgrades: another site's page can't act here through a
+   * browser that Meko let in. Meko passes the browser's Host and Origin on as they are.
+   */
   const sameOrigin = (req: FastifyRequest) => {
     const origin = req.headers.origin;
     if (!origin) return true;
@@ -138,11 +122,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     const route = routeOf(req);
     if (!route?.startsWith('/api/')) return;
     if (req.method !== 'GET' && !sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
-    if (PUBLIC_API.has(route) || local(req)) return;
-    const auth = validateAuthSession(db, req.cookies[COOKIE_NAME]);
-    if (!auth.valid) return reply.code(401).send({ error: 'Sign in first.' });
-    // The database slides the expiry as the app is used; keep the browser's cookie in step.
-    if (auth.renewed) setCookie(reply, req.cookies[COOKIE_NAME]!);
   });
 
   app.setErrorHandler((err: unknown, req, reply) => {
@@ -153,125 +132,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return reply.code(500).send({ error: errMsg(err) });
   });
 
-  const setCookie = (reply: FastifyReply, token: string) =>
-    reply.setCookie(COOKIE_NAME, token, { httpOnly: true, secure, sameSite: 'strict', path: '/', maxAge: SESSION_MAX_AGE_S });
-
   // ---- health ----
   app.get('/healthz', async () => ({ ok: true, version: core.version }));
-
-  // ---- auth ----
-  /** The owner, for the account routes; a local-access install may not have one yet. */
-  const ownerOr409 = () => {
-    const owner = getOwner(db);
-    if (!owner) throw new HttpError(409, 'No login is set up. Run `agentk setup-link` on the host to create one.');
-    return owner;
-  };
-
-  app.get('/api/auth/status', async (req): Promise<AuthStatus> => {
-    const owner = getOwner(db);
-    const tokenOutstanding = setupTokenOutstanding(db);
-    const isLocal = local(req);
-    const loggedIn = isLocal || authed(req);
-    const setupRequired = !isLocal && (!owner || (tokenOutstanding && !loggedIn));
-    return {
-      setupRequired,
-      reset: setupRequired && !!owner,
-      loggedIn,
-      username: owner && loggedIn ? owner.username : null,
-      totpEnabled: !!owner?.totp_secret,
-      localAccess: isLocal,
-    };
-  });
-
-  app.post<{ Body: SetupRequest }>('/api/auth/setup', async (req, reply) => {
-    const { token, username, password } = req.body ?? ({} as SetupRequest);
-    const ip = req.ip;
-    // A valid setup link gets past the limit: it's how a locked-out owner gets back in. The token
-    // is 192 random bits, so letting it through doesn't help anyone guess it.
-    if (limiter.blocked(ip) && !setupTokenValid(db, token)) return reply.code(429).send({ error: 'Too many attempts. Try again in 15 minutes.' });
-    if (typeof username !== 'string' || !/^[A-Za-z0-9._@-]{1,64}$/.test(username)) return reply.code(400).send({ error: 'Use up to 64 characters for the username: letters, digits, dots, @, dashes or underscores.' });
-    const bad = validatePassword(password ?? '');
-    if (bad) return reply.code(400).send({ error: bad });
-    if (!consumeSetupToken(db, token)) {
-      limiter.fail(ip);
-      return reply.code(403).send({ error: 'This setup link is invalid or already used. Run `agentk setup-link` on the host for a new one.' });
-    }
-    setOwner(db, username, password);
-    audit(db, 'owner_set', { username, ip });
-    closeRevokedSockets();
-    setCookie(reply, createAuthSession(db, req.headers['user-agent'], ip));
-    return reply.code(204).send();
-  });
-
-  app.post<{ Body: LoginRequest }>('/api/auth/login', async (req, reply) => {
-    const ip = req.ip;
-    if (limiter.blocked(ip)) return reply.code(429).send({ error: 'Too many failed attempts. Try again in 15 minutes.' });
-    const { username, password, totp } = req.body ?? ({} as LoginRequest);
-    const owner = getOwner(db);
-    const userOk = !!owner && owner.username === username;
-    // Check a password either way, so the time taken doesn't tell whether the username is right.
-    const passOk = userOk ? verifyPassword(password, owner.pw_scrypt) : (burnPasswordCheck(password), false);
-    if (!owner || !passOk) {
-      limiter.fail(ip);
-      audit(db, 'login_failed', { username: typeof username === 'string' ? username : null, ip });
-      return reply.code(401).send({ error: 'Wrong username or password.' });
-    }
-    if (owner.totp_secret) {
-      if (!totp) return reply.code(401).send({ error: 'Enter the code from your authenticator app.', totpRequired: true });
-      if (!totpAccept(db, owner.totp_secret, totp)) {
-        limiter.fail(ip);
-        audit(db, 'login_failed_totp', { username, ip });
-        return reply.code(401).send({ error: 'That code is wrong or expired.', totpRequired: true });
-      }
-    }
-    limiter.reset(ip);
-    audit(db, 'login', { username, ip });
-    setCookie(reply, createAuthSession(db, req.headers['user-agent'], ip));
-    return reply.code(204).send();
-  });
-
-  app.post('/api/auth/logout', async (req, reply) => {
-    deleteAuthSession(db, req.cookies[COOKIE_NAME]);
-    closeRevokedSockets();
-    reply.clearCookie(COOKIE_NAME, { path: '/' });
-    return reply.code(204).send();
-  });
-
-  app.post<{ Body: { current: string; next: string } }>('/api/auth/password', async (req, reply) => {
-    ownerOr409();
-    const err = changePassword(db, req.body?.current ?? '', req.body?.next ?? '', req.cookies[COOKIE_NAME]);
-    if (err) return reply.code(400).send({ error: err });
-    closeRevokedSockets();
-    return reply.code(204).send();
-  });
-
-  app.post('/api/auth/totp/enroll', async () => {
-    const owner = ownerOr409();
-    const secret = newTotpSecret();
-    run(db, 'UPDATE owner SET totp_pending = ? WHERE id = 1', secret);
-    const url = otpauthUrl(secret, owner.username);
-    return { secret, otpauthUrl: url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }) };
-  });
-
-  app.post<{ Body: { code: string } }>('/api/auth/totp/confirm', async (req, reply) => {
-    const owner = ownerOr409();
-    if (!owner.totp_pending || !totpAccept(db, owner.totp_pending, req.body?.code)) {
-      return reply.code(400).send({ error: 'That code doesn\'t match. Check the time on your phone and try again.' });
-    }
-    run(db, 'UPDATE owner SET totp_secret = totp_pending, totp_pending = NULL WHERE id = 1');
-    audit(db, 'totp_enabled');
-    return reply.code(204).send();
-  });
-
-  app.post<{ Body: { code: string } }>('/api/auth/totp/disable', async (req, reply) => {
-    const owner = ownerOr409();
-    if (!owner.totp_secret || !totpAccept(db, owner.totp_secret, req.body?.code)) {
-      return reply.code(400).send({ error: 'That code is wrong or expired.' });
-    }
-    run(db, 'UPDATE owner SET totp_secret = NULL WHERE id = 1');
-    audit(db, 'totp_disabled');
-    return reply.code(204).send();
-  });
 
   // ---- state, repos, datapacks ----
   app.get('/api/state', async () => core.state());
@@ -670,8 +532,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     reposDepth: core.config.repos.depth,
     cloneInto: core.config.repos.cloneInto,
     updateChannel: core.config.update.channel,
-    bind: core.config.server.bind,
-    port: core.config.server.port,
     serverName: core.config.server.name,
     hostName: core.hostName(),
     idleWorktreesPerRepo: core.worktrees.cap(),
@@ -819,12 +679,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- websockets ----
   const clients = new Set<WebSocket>();
-  /** Every open socket (events and terminals) with the login cookie it was opened with (none for local access). */
-  const sockets = new Map<WebSocket, { token: string | null; alive: boolean }>();
-  /** Closes sockets whose login is gone (logout, password change or reset, expiry). */
-  function closeRevokedSockets() {
-    for (const [ws, s] of sockets) if (s.token !== null && !authSessionLive(db, s.token)) ws.close(4401, 'unauthorized');
-  }
+  /** Every open socket (events and terminals), and whether it answered the last ping. */
+  const sockets = new Map<WebSocket, { alive: boolean }>();
   // Heartbeat: a phone that drops off the network sends no close, and its attach to the session
   // host would otherwise stay open (perhaps holding the pane at its size) until the server restarts.
   const heartbeat = setInterval(() => {
@@ -836,7 +692,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       s.alive = false;
       ws.ping();
     }
-    closeRevokedSockets();
   }, 30_000);
   heartbeat.unref();
   app.addHook('onClose', async () => clearInterval(heartbeat));
@@ -901,11 +756,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   core.on('notify', (ev: ServerEvent) => broadcast(ev));
 
   const wsGuard = (socket: WebSocket, req: FastifyRequest): boolean => {
-    if (!sameOrigin(req) || !authed(req)) {
-      socket.close(4401, 'unauthorized');
+    if (!sameOrigin(req)) {
+      socket.close(1008, 'cross-origin');
       return false;
     }
-    const entry = { token: local(req) ? null : req.cookies[COOKIE_NAME]!, alive: true };
+    const entry = { alive: true };
     sockets.set(socket, entry);
     socket.on('pong', () => (entry.alive = true));
     socket.on('close', () => sockets.delete(socket));
@@ -941,7 +796,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   if (opts.webDir) {
     // `/` is served by the not-found handler below too, so every page carries this server's version.
     await app.register(fastifyStatic, { root: opts.webDir, wildcard: false, index: false });
-    const indexHtml = stampVersion(readFileSync(join(opts.webDir, 'index.html'), 'utf8'), core.version);
+    const indexHtml = stampPage(readFileSync(join(opts.webDir, 'index.html'), 'utf8'), core.version);
     app.setNotFoundHandler((req, reply) => {
       const path = req.url.split('?')[0];
       // A missing file (say /favicon.ico) is a 404, not the app: a browser would take the HTML for the file.
@@ -957,12 +812,16 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 }
 
 /**
- * Adds the server's version to the page as `<meta name="ak-version">`: an open page that sees the
+ * Readies the built page: `<base href>` names BASE_PATH, where Meko serves AgentK, so the page's
+ * relative URLs (its assets, API calls and WebSockets: src/web/base.ts) resolve under it on every
+ * route; and `<meta name="ak-version">` carries the server's version, so an open page that sees the
  * server report another version reloads itself (src/web/reload.ts).
  */
-export function stampVersion(html: string, version: string): string {
+export function stampPage(html: string, version: string): string {
   const v = version.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`);
-  return html.replace('</head>', `  <meta name="ak-version" content="${v}" />\n  </head>`);
+  return html
+    .replace('<head>', `<head>\n    <base href="${BASE_PATH}" />`)
+    .replace('</head>', `  <meta name="ak-version" content="${v}" />\n  </head>`);
 }
 
 export function findWebDir(serverDir: string): string | null {

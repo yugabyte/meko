@@ -7,7 +7,7 @@ import {
   type CallHomeKind, type FileTypeCount, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
   type CallHomeReport, type CallHomeTokens, type YbCallHome,
 } from '../shared/types.js';
-import { isLoopback, mekoConfigured, resolveMekoApiUrl, resolveMekoWithSource, type Config } from './config.js';
+import { mekoConfigured, resolveMekoApiUrl, resolveMekoWithSource, type Config } from './config.js';
 import { openCodeCommand } from './opencode.js';
 import { all, get, kvGet, kvSet, type Db } from './db.js';
 import { readFileTypes, sumFileTypes } from './filetypes.js';
@@ -489,7 +489,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     claudeCode,
     ...(kiro ? { kiro } : {}),
     ...(opencode ? { opencode } : {}),
-    access: isLoopback(o.config.server.bind) ? 'local' : 'remote',
+    access: 'meko',
     service: serviceKind(),
     meko: {
       enabled: meko,

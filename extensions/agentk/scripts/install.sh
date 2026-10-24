@@ -23,8 +23,8 @@
 #   --reinstall         download and set up again even though AgentK is already installed
 #   --print-home        print the folder AgentK is (or would be) installed in, and stop
 #   anything else       forwarded to `agentk install`
-#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --bind, --port,
-#                       --no-service); without a Meko Cloud key, AgentK uses the Meko running on
+#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-service);
+#                       Meko must be installed first: it serves AgentK to browsers. Without a Meko Cloud key, AgentK uses the Meko running on
 #                       this computer (Enter at the key prompt)
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
@@ -257,7 +257,7 @@ if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/
     say ""
     say "  AgentK is already installed, so nothing was changed."
     row "Status" "$cmd status"
-    row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
+    row "Setup" "$cmd install   (the repos folder, Meko, or the services again)"
     row "Update" "the Update banner or button in AgentK, when there's a newer release"
     row "Reinstall" "$(alone_cmd) -s -- --reinstall"
     exit 0

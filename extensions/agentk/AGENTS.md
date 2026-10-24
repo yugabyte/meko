@@ -47,7 +47,7 @@ export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc CXX=/opt/rh/gcc-toolset-13/roo
 npm ci
 npm run typecheck && npm run lint && npm test   # run all three before every commit
 npm run build                                   # dist/server + dist/web
-npm run dev                                     # API on 127.0.0.1:7777, Vite on :5173; state in ./.dev-home (AK_DEV_HOME to change)
+npm run dev                                     # the server on ./.dev-home/web.sock, Vite on :5173 proxying to it; state in ./.dev-home (AK_DEV_HOME to change)
 ```
 
 ## Map
@@ -94,14 +94,14 @@ agents should read it before changing code there.
    pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes; after two
    auto-continues in an hour the next one is parked). Archive and project delete wait for a session
    that is still starting; `launch()` never replaces a live pane.
-3. **Everything behind login.** Every `/api/*` route except `auth/status|setup|login` requires the
-   session cookie, and every WebSocket checks the cookie and refuses a cross-origin `Origin`. The
-   one exception is local access (`localAccess()` in `auth.ts`): with the server listening only on
-   loopback, a same-site loopback request whose `Host` is localhost needs no cookie. A network bind always
-   requires the login, even from localhost. Access
-   checks key on the matched route (`req.routeOptions.url`), never the raw URL, which can be
-   percent-encoded. Hooks use the unix socket with a
-   per-session token, never the network port.
+3. **Only through Meko.** The server listens on nothing but its unix socket (`Paths.webSock`, in a
+   folder only the user can open) and has no login of its own: the Meko on this computer serves it
+   to browsers at `/ext/agentk/` after its own sign-in (local access, or the owner's login), and
+   every request on the socket is let in. Never add a TCP listener, a login, or a route that trusts
+   a header to say who sent it. Writes and WebSocket upgrades refuse an `Origin` that isn't the
+   page's own (Meko passes the browser's `Host` and `Origin` on unchanged), keyed on the matched
+   route (`req.routeOptions.url`), never the raw URL, which can be percent-encoded. Hooks use their
+   own unix socket with a per-session token.
 4. **No shell interpolation of user input.** Use `execFile`/`spawn` with argument arrays. The only
    shell text we generate is the launcher script, and every value in it goes through `shq()`.
 5. **Migrations are append-only.** Add a new entry to `MIGRATIONS` in `db.ts`; never edit a shipped one.

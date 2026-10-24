@@ -21,15 +21,16 @@ export CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
 # On macOS, skip the exports: `xcode-select --install` and `brew install gh` are enough.
 npm ci                          # also makes node-pty's macOS spawn-helper executable (scripts/postinstall.mjs)
 
-npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0.1:5173
+npm run dev                     # the server on ./.dev-home/web.sock + Vite on 127.0.0.1:5173
 ```
 
-Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
-access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
+Open http://127.0.0.1:5173. The server listens only on its unix socket, as it does behind Meko,
+and Vite proxies `/api/`, `/healthz` and `/ws/` to it (`AK_DEV_SOCK` names another socket); the
+page has no `<base>` there, so it runs at `/` rather than `/ext/agentk/`, and opens without a login.
+A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
 use another folder; `AK_HOME` names a home only without a release, as here and in tests), so it never opens an installed AgentK's database, hook socket or session
 host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
-restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
-an installed server is running there.
+restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it).
 
 Local state uses Node's built-in `node:sqlite`, which prints an experimental warning on Node 22.
 The release wrapper runs Node with `--disable-warning=ExperimentalWarning`.
@@ -185,6 +186,8 @@ The installer unpacks into `<home>/app/<version>` (AgentK's home is `extensions/
 which older services, scripts and Meko run), and runs `agentk install`, which writes `config.toml`,
 checks Meko, installs the two background services (the `agentk` and `agentk-host`
 systemd user units on Linux; the `com.yugabyte.agentk` and `com.yugabyte.agentk.host`
-LaunchAgents on macOS), and prints the address, or for remote access the one-time setup link.
+LaunchAgents on macOS), and prints the address the Meko on this computer serves it at
+(`/ext/agentk/`). It refuses to install where there's no `meko` command: browsers reach AgentK only
+through Meko.
 Services installed before the rename keep their old names (`agent-k-local…`) until `agentk
 install` moves them; see [recovery](docs/design/recovery.md).

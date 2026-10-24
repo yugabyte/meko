@@ -5,7 +5,6 @@ import { claudeConfigPath } from './trust.js';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
-import { getOwner } from './auth.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
@@ -495,8 +494,8 @@ export class Core extends EventEmitter {
       meko: { ...this.mekoStatus, kiro: this.kiroMeko(), opencode: this.openCodeMeko(), local: localMeko().state },
       update: this.updateStatus(),
       version: this.version,
-      // The login name shown in the UI; the Unix account only as a fallback.
-      username: getOwner(this.db)?.username ?? this.username,
+      // The Unix account: Meko signs people in, and its page shows the login's name.
+      username: this.username,
       ghLogin: this.ghUser,
       serverName: this.serverName(),
       serverHost: this.hostFull,

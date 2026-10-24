@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { MekoError } from '../../src/server/meko.js';
 import { run } from '../../src/server/db.js';
 import { gitRepo, makeEnv, pinFiles, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
@@ -118,18 +117,14 @@ describe('projects without a datapack, and without Meko', () => {
 
   describe('over HTTP', () => {
     let app: FastifyInstance;
-    let cookie: string;
     beforeEach(async () => {
-      app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-      const token = issueSetupToken(env.core.db);
-      const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-      cookie = String(res.headers['set-cookie']).split(';')[0];
+      app = await buildServer(env.core, { webDir: null, updater: null });
     });
     afterEach(async () => {
       await app.close();
     });
     const call = (method: 'GET' | 'POST' | 'PUT', url: string, payload?: unknown) =>
-      app.inject({ method, url, headers: { cookie }, ...(payload !== undefined ? { payload: payload as object } : {}) });
+      app.inject({ method, url, ...(payload !== undefined ? { payload: payload as object } : {}) });
 
     it("answers with an error code the dialog can act on, and empty lists while there's no Meko", async () => {
       (env.meko as { createDatapack: unknown }).createDatapack = async () => {

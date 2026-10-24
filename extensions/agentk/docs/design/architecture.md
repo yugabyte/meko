@@ -13,17 +13,19 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver (headless) or your Mac"]
-    S["AgentK server<br/>HTTPS :7777"]
+    MW["Meko web listener<br/>:7777, sign-in"]
+    S["AgentK server<br/>web.sock (unix socket)"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
     C2["claude in worktree B"]
-    ST[("~/.meko/extensions/agentk<br/>state, certs, app versions")]
+    ST[("~/.meko/extensions/agentk<br/>state, app versions")]
     U["updater"]
   end
   M["Meko MCP"]
   GH["GitHub Releases"]
-  B -- "HTTPS + WebSocket, cookie auth" --> S
+  B -- "HTTP(S) + WebSocket, /ext/agentk/" --> MW
+  MW -- "prefix stripped, Host and Origin kept" --> S
   S -- "host.sock: requests, attach streams" --> T
   T -- "pty" --> C1
   T -- "pty" --> C2

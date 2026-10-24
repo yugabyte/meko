@@ -116,6 +116,11 @@ export interface Paths {
   /** Per-session launcher scripts and the Claude hooks settings file. */
   run: string;
   hookSock: string;
+  /**
+   * The server's socket, its only listener: Meko's web listener serves it to browsers at /ext/agentk/
+   * (`agentk _handoff --json` tells Meko where it is). Only this user can connect to it.
+   */
+  webSock: string;
   /** The session host's socket (host/host.ts): every Claude runs in a pty the host holds. */
   hostSock: string;
   /** What the running session host wrote about itself: pid, version, app dir, protocol. */
@@ -144,6 +149,7 @@ export function getPaths(home: string = akHome()): Paths {
     pastes: join(home, 'pastes'),
     run: join(home, 'run'),
     hookSock: sockPath(home, 'hook'),
+    webSock: sockPath(home, 'web'),
     hostSock: sockPath(home, 'host'),
     hostState: join(home, 'run', 'host.json'),
     hostLock: join(home, 'host.lock'),
@@ -160,13 +166,13 @@ export function getPaths(home: string = akHome()): Paths {
  * fits both. When the home path is too long, use a short socket in a private
  * per-user directory under the temp dir.
  */
-function sockPath(home: string, name: 'hook' | 'host'): string {
+function sockPath(home: string, name: 'hook' | 'host' | 'web'): string {
   const preferred = join(home, `${name}.sock`);
   if (Buffer.byteLength(preferred) <= 100) return preferred;
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   const tag = createHash('sha256').update(home).digest('hex').slice(0, 12);
   // The hook socket kept its old name here, so a running Claude's hooks still find it.
-  return join(tmpdir(), `agent-k-local-${uid}`, name === 'hook' ? `${tag}.sock` : `${tag}-host.sock`);
+  return join(tmpdir(), `agent-k-local-${uid}`, name === 'hook' ? `${tag}.sock` : `${tag}-${name}.sock`);
 }
 
 export function expandHome(p: string): string {

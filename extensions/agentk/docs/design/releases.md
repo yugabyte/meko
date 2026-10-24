@@ -80,18 +80,18 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
 #  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
-#  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
-#     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
+#  3. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
+#     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
 #  4. Meko: verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json, else asks for
 #     a Meko Cloud key, and Enter uses the Meko running on this computer, which isn't stored;
 #     --meko-url and --meko-key name one; --no-meko is ignored) and offers to run Meko's setup for
 #     Claude Code if its plugin, MCP server or key is missing (declining is a warning)
 #  5. picks the database location (local disk for an older home still on NFS), writes config.toml
-#     (with the Meko data folder the home is in), sets up TLS; on an older home, says it moves into
+#     (with the Meko data folder the home is in); on an older home, says it moves into
 #     Meko's data folder once the server has started
 #  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  7. prints the one-time setup link (remote access), or the address (local access)
+#  7. prints the address Meko serves it at (meko setup_link makes the login for remote access)
 ```
 
 **Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`

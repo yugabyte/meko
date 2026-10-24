@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { Project } from '../../src/shared/types.js';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { MekoError, sessionAgentId } from '../../src/server/meko.js';
 import { get, run } from '../../src/server/db.js';
 import { makeEnv, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
@@ -120,12 +119,8 @@ describe('switching the dedicated datapack', () => {
 
   describe('over HTTP', () => {
     let app: FastifyInstance;
-    let cookie: string;
     beforeEach(async () => {
-      app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-      const token = issueSetupToken(env.core.db);
-      const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-      cookie = String(res.headers['set-cookie']).split(';')[0];
+      app = await buildServer(env.core, { webDir: null, updater: null });
     });
     afterEach(async () => {
       await app.close();
@@ -133,12 +128,12 @@ describe('switching the dedicated datapack', () => {
 
     it('switches, and the home lists both datapacks', async () => {
       const res = await app.inject({
-        method: 'POST', url: `/api/projects/${p.id}/dedicated-datapack`, headers: { cookie },
+        method: 'POST', url: `/api/projects/${p.id}/dedicated-datapack`,
         payload: { mode: 'create', name: NEW.name, replace: OLD.id },
       });
       expect(res.statusCode).toBe(200);
       expect((res.json() as Project).datapacks.map((d) => [d.id, d.role])).toEqual([[NEW.id, 'dedicated'], [OLD.id, 'shared']]);
-      const home = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/home`, headers: { cookie } })).json();
+      const home = (await app.inject({ method: 'GET', url: `/api/projects/${p.id}/home` })).json();
       expect(home.datapacks.map((d: { id: string; role: string }) => [d.id, d.role])).toEqual([[NEW.id, 'dedicated'], [OLD.id, 'shared']]);
     });
   });

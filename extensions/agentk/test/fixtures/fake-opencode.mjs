@@ -14,16 +14,17 @@ import { pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
 const dir = process.env.FAKE_OPENCODE_DIR;
-mkdirSync(dir, { recursive: true });
 const log = (file, v) => appendFileSync(join(dir, file), JSON.stringify(v) + '\n');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// The version a test put in `version`, else 2.1.4.
+// The version a test put in `version`, else 2.1.4. It writes nothing: a version read still going
+// when a test ends (Core.stop doesn't wait for one) mustn't make the folder its cleanup removes.
 if (args[0] === '--version') {
   const v = join(dir, 'version');
   process.stdout.write(existsSync(v) ? readFileSync(v, 'utf8') : '2.1.4\n');
   process.exit(0);
 }
+mkdirSync(dir, { recursive: true });
 if (args[0] === 'upgrade') {
   log('upgrade.jsonl', { args });
   process.exit(0);

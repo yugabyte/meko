@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { BASE } from './base';
 
 export type Route =
   | { view: 'root' }
@@ -22,8 +23,10 @@ function decode(segment: string): string {
   }
 }
 
-export function parseRoute(pathname: string): Route {
-  const parts = pathname.split('/').filter(Boolean).map(decode);
+/** The route a page's path names; `base` is where AgentK is served (`/ext/agentk/` behind Meko). */
+export function parseRoute(pathname: string, base = BASE): Route {
+  const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
+  const parts = rest.split('/').filter(Boolean).map(decode);
   if (parts[0] === 'usage' && parts.length === 1) return { view: 'usage' };
   if (parts[0] === 'p' && parts[1]) {
     if (parts[2] === 's' && parts[3] && parts[4] === 'design') return { view: 'design', projectId: parts[1], sessionId: parts[3] };
@@ -36,23 +39,29 @@ export function parseRoute(pathname: string): Route {
   return { view: 'root' };
 }
 
-export function routePath(r: Route): string {
+/** The path of a route's page, under `base`: an `<a href>`, and what navigate() puts in the address bar. */
+export function routePath(r: Route, base = BASE): string {
+  return base + routeRest(r);
+}
+
+/** A route's path below the base. */
+function routeRest(r: Route): string {
   const e = encodeURIComponent;
   switch (r.view) {
     case 'root':
-      return '/';
+      return '';
     case 'usage':
-      return '/usage';
+      return 'usage';
     case 'home':
-      return `/p/${e(r.projectId)}/home`;
+      return `p/${e(r.projectId)}/home`;
     case 'design':
-      return `/p/${e(r.projectId)}/s/${e(r.sessionId)}/design`;
+      return `p/${e(r.projectId)}/s/${e(r.sessionId)}/design`;
     case 'meko':
-      return r.sessionId ? `/p/${e(r.projectId)}/meko/${e(r.sessionId)}` : `/p/${e(r.projectId)}/meko`;
+      return r.sessionId ? `p/${e(r.projectId)}/meko/${e(r.sessionId)}` : `p/${e(r.projectId)}/meko`;
     case 'meko-gaps':
-      return `/p/${e(r.projectId)}/meko-gaps`;
+      return `p/${e(r.projectId)}/meko-gaps`;
     case 'project':
-      return r.sessionId ? `/p/${e(r.projectId)}/s/${e(r.sessionId)}` : `/p/${e(r.projectId)}`;
+      return r.sessionId ? `p/${e(r.projectId)}/s/${e(r.sessionId)}` : `p/${e(r.projectId)}`;
   }
 }
 

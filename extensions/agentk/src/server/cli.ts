@@ -1,22 +1,23 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { getOwner, issueSetupToken, setupTokenOutstanding } from './auth.js';
 import { findMekoCaptureScript } from './capture.js';
 import { loginShell, scrubSessionMarkers } from './launcher.js';
-import { dbPath, isLoopback, loadConfig, resolveMeko, type Config } from './config.js';
+import { dbPath, loadConfig, resolveMeko, type Config } from './config.js';
 import { Core } from './core.js';
 import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
 import { errMsg, fileLogger, type Logger } from './log.js';
-import { probeHost, probeLocal, serverUrl } from './health.js';
+import { handoff } from './handoff.js';
+import { probeLocal } from './health.js';
+import { listenPrivate } from './hooks.js';
 import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
-import { loadTls } from './tls.js';
+import { AGENTK_PATH as BASE_PATH } from '../shared/mekourls.js';
 import { hostServices, moveJobLog, servicesFor, startMoveJob } from './service.js';
 import { linkCommand } from './cmdlink.js';
 import { openBrowser } from './browser.js';
@@ -24,7 +25,10 @@ import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
 import { HEALTHY_MS, uncountStart, Updater } from './updater.js';
-import { checkMove, finishMove, HomeMove, MEKO_COMMANDS, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning } from './movehome.js';
+import { probeLocalMeko } from './mekolocal.js';
+import {
+  checkMove, finishMove, HomeMove, MEKO_COMMANDS, mekoDirOf, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning,
+} from './movehome.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -111,7 +115,7 @@ async function serve(): Promise<void> {
   // that mounts it) would lose its hook socket and share the database.
   let lock: InstanceLock;
   try {
-    lock = await InstanceLock.acquire(paths.lock, tildify(paths.home), { version: v, port: cfg.server.port });
+    lock = await InstanceLock.acquire(paths.lock, tildify(paths.home), { version: v, port: 0 });
   } catch (e) {
     if (!(e instanceof InstanceBusyError)) throw e;
     // Not in server.log: that belongs to the server holding the home.
@@ -156,6 +160,8 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     log.info('shutting down (sessions keep running in the session host)');
     try {
       await app?.close();
+      // This server holds the home's lease, so the socket is its own: Meko then says AgentK isn't running.
+      rmSync(paths.webSock, { force: true });
       await core?.stop();
       db.close();
     } catch (e) {
@@ -186,24 +192,19 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   });
   core.updateStatus = () => updater.status();
 
-  const tls = await loadTls(paths, cfg);
   await core.start();
   const webDir = findWebDir(here);
   if (!webDir) log.warn('web assets not found; run `npm run build:web` (or use the Vite dev server)');
-  app = await buildServer(core, { tls, webDir, updater: updater.enabled ? updater : null });
-  await app.listen({ host: cfg.server.bind, port: cfg.server.port });
-
-  const url = serverUrl(cfg, !!tls);
-  log.info(`AgentK ${v} listening on ${url}`);
-  if (tls) log.info(`TLS certificate SHA-256 fingerprint: ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
-  if (isLoopback(cfg.server.bind)) {
-    const owner = getOwner(db);
-    log.info(`local access: browsers on this computer need no login${owner ? ` (the login for ${owner.username} applies again once it listens on the network)` : ''}`);
-  } else if (!getOwner(db)) {
-    // Don't replace a link the installer (or `setup-link`) already printed.
-    if (setupTokenOutstanding(db)) log.info('waiting for first-time setup: open the link the installer printed, or run `agentk setup-link` for a new one');
-    else log.info(`first-time setup: ${url}/setup?token=${issueSetupToken(db)}`);
-  }
+  app = await buildServer(core, { webDir, updater: updater.enabled ? updater : null });
+  // Its only listener: Meko serves it to browsers at BASE_PATH, after its own sign-in.
+  await app.ready();
+  await listenPrivate(app.server, paths.webSock, 'the web socket');
+  log.info(`AgentK ${v} listening on ${paths.webSock}`);
+  void probeLocalMeko(mekoDirOf(paths.home) ?? (cfg.meko.home || null)).then((p) => {
+    if (p.meko?.webUrl) log.info(`browsers open it at ${p.meko.webUrl}${BASE_PATH}`);
+    else if (p.meko) log.warn('the Meko on this computer is too old to serve AgentK to browsers: update it with meko update');
+    else log.warn('no Meko is running on this computer, so no browser can reach AgentK: start it with meko start');
+  });
 
   updater.start();
   // The move into Meko's data folder: now when this version isn't being tried out, else once it has
@@ -226,31 +227,31 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   process.on('SIGINT', stop);
 }
 
-async function setupLink(): Promise<void> {
-  const paths = getPaths();
-  const cfg = loadConfig(paths);
-  const db = openDb(dbPath(paths, cfg));
-  const tls = !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind);
-  const reset = !!getOwner(db);
-  console.log(`${serverUrl(cfg, tls)}/setup?token=${issueSetupToken(db)}`);
-  console.log(reset
-    ? 'This one-time link resets the username, password and authenticator for this install. It expires in 7 days.'
-    : 'Open this one-time link to create your login. It expires in 7 days.');
-  if (isLoopback(cfg.server.bind)) console.log('No login is needed while AgentK only listens on this computer; the login applies once it listens on the network.');
-  db.close();
+/** Where browsers open AgentK: Meko's web URL with BASE_PATH, or why there's none. */
+async function webUrl(paths: Paths, cfg: Config): Promise<{ url: string | null; why: string }> {
+  const p = await probeLocalMeko(mekoDirOf(paths.home) ?? (cfg.meko.home || null));
+  if (p.meko?.webUrl) return { url: `${p.meko.webUrl}${BASE_PATH}`, why: '' };
+  if (p.meko) return { url: null, why: 'the Meko on this computer is too old to serve AgentK: update it with meko update' };
+  if (p.state === 'stopped') return { url: null, why: "Meko isn't running: start it with meko start" };
+  return { url: null, why: 'no Meko on this computer serves AgentK: install Meko, then run meko install_extension agentk' };
 }
 
-/** Opens the web UI in this computer's browser, or prints its URL when there's none to open. */
+/** Opens AgentK in this computer's browser through Meko (`meko ui`), or prints its URL. */
 async function ui(): Promise<void> {
-  const cfg = loadConfig(getPaths());
-  const url = serverUrl(cfg, !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind));
-  const probe = await probeLocal(cfg);
-  if (!probe.ok) {
-    const at = probeHost(cfg.server.bind);
-    throw new Error(`AgentK isn't answering on ${at.includes(':') ? `[${at}]` : at}:${cfg.server.port} (${probe.error}). Start it with: agentk start (or agentk serve)`);
-  }
-  if (await openBrowser(url)) console.log(`Opened ${url}`);
-  else console.log(`Couldn't open a browser here. Open ${url} in yours.`);
+  const paths = getPaths();
+  const cfg = loadConfig(paths);
+  const probe = await probeLocal(paths);
+  if (!probe.ok) throw new Error(`AgentK isn't answering (${probe.error}). Start it with: agentk start (or agentk serve)`);
+  const web = await webUrl(paths, cfg);
+  if (!web.url) throw new Error(`AgentK is running, but ${web.why}.`);
+  if (await openBrowser(web.url)) console.log(`Opened ${web.url}`);
+  else console.log(`Couldn't open a browser here. Open ${web.url} in yours.`);
+}
+
+/** `agentk _handoff --json`, which Meko runs at its start (handoff.ts): not for people to run. */
+function runHandoff(): void {
+  const paths = getPaths();
+  console.log(JSON.stringify(handoff(paths, loadConfig(paths, () => undefined))));
 }
 
 /** Prints the server log; -f keeps following it, -n sets how many lines to show first. */
@@ -310,13 +311,11 @@ async function status(): Promise<void> {
   const paths = getPaths();
   rememberMekoHome(paths);
   const cfg = loadConfig(paths);
-  const tls = await loadTls(paths, cfg).catch(() => null);
-  const url = serverUrl(cfg, !!tls);
+  const web = await webUrl(paths, cfg);
   console.log(`AgentK ${version()}`);
   console.log(`home:     ${paths.home}`);
   console.log(`database: ${dbPath(paths, cfg)}`);
-  console.log(`url:      ${url}`);
-  if (tls) console.log(`tls:      ${tls.fingerprint}${tls.selfSigned ? ' (self-signed)' : ''}`);
+  console.log(`url:      ${web.url ?? `none (${web.why})`}`);
   // Only this home's services: another install on the account has its own.
   const svc = servicesFor(paths.home);
   if (svc) {
@@ -339,7 +338,7 @@ async function status(): Promise<void> {
   } else if (up === false) {
     console.log('host:     not running');
   }
-  const probe = await probeLocal(cfg);
+  const probe = await probeLocal(paths);
   console.log(`server:   ${probe.ok ? `responding (version ${probe.version})` : `not responding (${probe.error})`}`);
   console.log(`logs:     ${join(paths.logs, 'server.log')}`);
 }
@@ -437,14 +436,13 @@ Usage: agentk <command>
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
                 to skip asking; without a Meko Cloud key, AgentK uses the Meko running on this computer;
-                --meko-url and --meko-key name one), install the background services (systemd or
-                launchd), print the setup link
+                --meko-url and --meko-key name one), and install the background services (systemd or
+                launchd). Browsers reach AgentK through the Meko on this computer, at /ext/agentk/
   uninstall     Stop and remove the background services (--purge also deletes AgentK's home, in Meko's
                 data folder, except its session worktrees and designs; add --delete-worktrees to delete
                 those too)
-  setup-link    Print a one-time link to create (or reset) your login
-  status        Show services, URL, certificate fingerprint and sessions
-  ui            Open the web UI in your browser (prints its URL when there's no browser to open)
+  status        Show services, the URL (Meko's, at /ext/agentk/) and sessions
+  ui            Open AgentK in your browser through Meko (prints its URL when there's no browser to open)
   stop          Stop the server and the session host, ending every session (they resume at start, or
                 serve without services; the services also start again at the next login)
   start         Start the background services again after stop
@@ -463,7 +461,8 @@ async function main(): Promise<void> {
     case 'serve': return serve();
     case 'install': return (await import('./install.js')).runInstall(args);
     case 'uninstall': return (await import('./install.js')).runUninstall(args);
-    case 'setup-link': return setupLink();
+    case 'setup-link':
+      throw new Error('Meko signs people in to AgentK now: run meko setup_link for a link that sets up (or resets) the login.');
     case 'selftest': return selftest();
     case 'status': return status();
     case 'ui': return ui();
@@ -476,6 +475,8 @@ async function main(): Promise<void> {
     case 'mcp': return (await import('./mcp.js')).runMcp(version());
     // The job that moves the home into Meko's data folder (movehome.ts); not for people to run.
     case '_move-home': return (await import('./movehome.js')).runMoveJob(args);
+    // Where the server listens and the web settings it had, for Meko (handoff.ts); not for people to run.
+    case '_handoff': return runHandoff();
     case 'version':
     case '--version':
     case '-v':

@@ -25,11 +25,12 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
 # layout on the host: AgentK's home, in Meko's data folder (see "Where AgentK lives" below)
 ~/.meko/extensions/agentk/
   config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
-  state.db                 # SQLite: projects, sessions, events, auth (WAL)
+  state.db                 # SQLite: projects, sessions, events (WAL); an older install's login, for Meko's handoff
   hook.sock                # Claude hooks (and AgentK's mod) → server
+  web.sock                 # the server's only listener; Meko serves it at /ext/agentk/
   run/                     # launchers, the hooks settings file and scripts, run/mod/agentk (AgentK's mod)
   server.lock              # the running server's lease on this home (one server per home)
-  certs/                   # self-signed pair, or symlinks to your own
+  certs/                   # an older install's self-signed pair, for Meko's handoff
   app/0.4.1/  app/current → 0.4.1
   worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
@@ -209,8 +210,8 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
   be on NFS: for one, `agentk install` puts the database on local disk (`[state] db_path` in
   `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`), and the move
   brings it into the new home and clears the setting. A folder in `/var/tmp` must be a real directory owned by you that others can't write
-  to, or AgentK stops rather than put its data (password hash, TOTP secret) somewhere another user
-  controls.
+  to, or AgentK stops rather than put its data (hook tokens, an older install's login) somewhere
+  another user controls.
 
 ### Where AgentK lives
 
@@ -247,14 +248,15 @@ is ignored, as the XDG spec says.
 Homes from before this (`~/.agent-k-local`, or one an install named with `AK_HOME`) move there by
 themselves: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
 
-`config.toml` holds host settings: the listen address and port, the server's name, TLS paths, repo folders, the update
+`config.toml` holds host settings: the server's name, repo folders, the update
 channel, the Meko URL and key (only when typed at install), transcript capture, the
 `claude` command, Meko's data folder as Meko last named it, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
 keep an unused one, update channel, server name, resolving merge conflicts) there too. The server reads the file at
 start, so an edit made while it runs takes effect after a restart, and a save from Settings meanwhile writes over it. Per-project settings, sessions and everything else live in `state.db`. Only values that
-differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
-`AK_PORT` override `[server]` for one run (`npm run dev`) and are never written to the file. The Meko
+differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
+install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
+([security.md](security.md)), and nothing else reads them. The Meko
 URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude
 Code's user `settings.json` (in `CLAUDE_CONFIG_DIR` if set); a later source's URL is skipped when that
 source has a key of its own, and with no URL it's Meko Cloud. With no key in any of them, AgentK uses

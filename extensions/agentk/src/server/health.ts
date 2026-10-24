@@ -1,38 +1,13 @@
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
-import { isLoopback, type Config } from './config.js';
-import { fqdn } from './tls.js';
+import { request } from 'node:http';
+import type { Paths } from './paths.js';
 
 export type Probe = { ok: true; version: string } | { ok: false; error: string };
 
-/**
- * The address to reach a server listening on `bind` from this host: loopback for the wildcard
- * addresses and localhost, else the address itself (say ::1, or one interface's IP).
- */
-export function probeHost(bind: string): string {
-  const b = bind.trim().replace(/^\[(.*)\]$/, '$1');
-  return !b || b === '0.0.0.0' || b === '::' || b === 'localhost' ? '127.0.0.1' : b;
-}
-
-/**
- * The server's URL: on the loopback address it listens on (the one `probeLocal` asks), else on
- * this host's name, which its certificate names.
- */
-export function serverUrl(cfg: Config, tls: boolean): string {
-  const host = isLoopback(cfg.server.bind) ? (cfg.server.bind === '::1' ? '[::1]' : '127.0.0.1') : fqdn();
-  return `${tls ? 'https' : 'http'}://${host}:${cfg.server.port}`;
-}
-
-/**
- * Asks the local server for /healthz. The certificate isn't verified: this only
- * talks to an address on this host, and the default cert is self-signed.
- */
-export function probeLocal(cfg: Config, timeoutMs = 3000): Promise<Probe> {
-  const tls = !!(cfg.tls.cert && cfg.tls.key) || !isLoopback(cfg.server.bind);
-  const req = tls ? httpsRequest : httpRequest;
+/** Asks the local server for /healthz on its socket (`Paths.webSock`). */
+export function probeLocal(paths: Paths, timeoutMs = 3000): Promise<Probe> {
   return new Promise((resolve) => {
-    const r = req(
-      { hostname: probeHost(cfg.server.bind), port: cfg.server.port, path: '/healthz', method: 'GET', timeout: timeoutMs, rejectUnauthorized: false },
+    const r = request(
+      { socketPath: paths.webSock, path: '/healthz', method: 'GET', timeout: timeoutMs, headers: { host: 'localhost' } },
       (res) => {
         let body = '';
         res.setEncoding('utf8');
@@ -54,11 +29,11 @@ export function probeLocal(cfg: Config, timeoutMs = 3000): Promise<Probe> {
 }
 
 /** Polls until the server answers or the deadline passes. */
-export async function waitForServer(cfg: Config, totalMs = 30000): Promise<Probe> {
+export async function waitForServer(paths: Paths, totalMs = 30000): Promise<Probe> {
   const end = Date.now() + totalMs;
   let last: Probe = { ok: false, error: 'not started' };
   while (Date.now() < end) {
-    last = await probeLocal(cfg, 2000);
+    last = await probeLocal(paths, 2000);
     if (last.ok) return last;
     await new Promise((r) => setTimeout(r, 500));
   }

@@ -24,7 +24,7 @@
         "claudeCode": { "$ref": "#/$defs/optionalVersion" },
         "kiro": { "$ref": "#/$defs/optionalVersion", "description": "Kiro CLI's version; left out while Kiro is off or unreadable." },
         "opencode": { "$ref": "#/$defs/optionalVersion", "description": "OpenCode's version; left out while OpenCode is off or unreadable." },
-        "access": { "enum": ["local", "remote"] },
+        "access": { "enum": ["local", "remote", "meko"], "description": "meko: the Meko on this computer serves AgentK to browsers, with its own access setting. local and remote are from versions that served browsers themselves; kept so their reports still validate." },
         "service": { "enum": ["systemd", "launchd", "none"] },
         "meko": {
           "type": "object",

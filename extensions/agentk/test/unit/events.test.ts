@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../src/shared/types.js';
 import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { WS_UNAUTHORIZED } from '../../src/web/signin.js';
 
 /** A socket the test drives: what the page sent, and whether it let go of it. */
 class FakeSocket {
@@ -35,7 +36,7 @@ class FakeSocket {
   }
 }
 
-function setup(o: { checkLogin?: () => Promise<boolean> } = {}) {
+function setup(o: { checkSignIn?: () => Promise<boolean> } = {}) {
   const sockets: FakeSocket[] = [];
   const states: unknown[] = [];
   const conns: Conn[] = [];
@@ -49,8 +50,8 @@ function setup(o: { checkLogin?: () => Promise<boolean> } = {}) {
     onState: (s: AppState) => states.push(s),
     onConn: (c) => conns.push(c),
     onEvent: (ev) => events.push(ev),
-    checkLogin: o.checkLogin ?? (() => Promise.resolve(true)),
-    unauthorized: 4401,
+    checkSignIn: o.checkSignIn ?? (() => Promise.resolve(true)),
+    unauthorized: WS_UNAUTHORIZED,
   });
   conn.start();
   return { conn, sockets, states, conns, events, last: () => sockets[sockets.length - 1]! };
@@ -223,10 +224,10 @@ describe('the events connection', () => {
     t.conn.stop();
   });
 
-  it('stops retrying when the login is gone', async () => {
-    const t = setup({ checkLogin: () => Promise.resolve(false) });
+  it.each(WS_UNAUTHORIZED)('stops retrying when Meko refuses it for want of a sign-in (close %i)', async (code) => {
+    const t = setup({ checkSignIn: () => Promise.resolve(false) });
     t.last().accept();
-    t.last().serverClose(4401);
+    t.last().serverClose(code);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(t.sockets).toHaveLength(1);
     t.conn.stop();
