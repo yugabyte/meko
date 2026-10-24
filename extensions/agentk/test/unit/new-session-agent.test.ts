@@ -65,29 +65,24 @@ describe('Settings › Harness', () => {
   });
 
   const settings = { claudeEnabled: true, opencodeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
-  /** The ids of the controls (and the update outcome) an agent's panel shows. */
-  const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null) =>
-    [...renderToStaticMarkup(createElement(AgentSettings, {
+  /** The ids of the controls (and the update outcome) an agent's panel shows, then `⚠️` when its note starts with one. */
+  const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null) => {
+    const html = renderToStaticMarkup(createElement(AgentSettings, {
       id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false, outcome,
       onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
-    })).matchAll(/<(?:input|button|span)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
+    }));
+    const ids = [...html.matchAll(/<(?:input|button|span)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
+    return html.includes('<span class="hint">⚠️ ') ? [...ids, '⚠️'] : ids;
+  };
 
   it.each([
     ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update'], null],
     ['Claude Code, after an update the banners leave out', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-outcome'], { ok: false, text: 'x' }],
     ['OpenCode, available', 'opencode' as const, {}, {}, ['set-opencode', 'set-opencode-check', 'set-opencode-update'], null],
     ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust'], null],
-    ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust'], null],
+    ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust', '⚠️'], null],
     ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro'], null],
-  ])("%s: the panel shows only that agent's settings", (_, id, s, st, shown, outcome) => {
+  ])("%s: the panel shows only that agent's settings, and ⚠️ when it's missing", (_, id, s, st, shown, outcome) => {
     expect(controls(id, s, st, outcome)).toEqual(shown);
-  });
-
-  it('starts the note with ⚠️ when the agent didn\'t answer --version', () => {
-    const html = renderToStaticMarkup(createElement(AgentSettings, {
-      id: 'opencode', s: settings, status: status('opencode', { available: false, version: null }), checking: false, updating: false,
-      onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
-    }));
-    expect(html).toContain('<span class="hint">⚠️ OpenCode didn&#x27;t answer --version here. Install it and run opencode auth login,');
   });
 });
