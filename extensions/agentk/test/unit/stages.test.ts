@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { HarnessId } from '../../src/shared/harnesses.js';
 import {
   defaultTarget, kindOf, moveBlockedIn, moveEffect, moveError, moveTargets, movesStep, offersPrompt, promptByDefault, skippedSteps,
+  startupSteps,
 } from '../../src/shared/stages.js';
-import type { MoveTarget, Stage } from '../../src/shared/types.js';
+import type { MoveTarget, Session, Stage, StartupState } from '../../src/shared/types.js';
 
 describe('stage moves', () => {
   it('moves a task, old type names included, to any stage but Merge & Close', () => {
@@ -83,5 +85,35 @@ describe('stage moves', () => {
     // Moved back to Explore from Design: nothing before it.
     expect(skippedSteps('task', 'explore', ['design', 'explore'])).toEqual([]);
     expect(skippedSteps('task', 'done', ['code', 'pr', 'review', 'merge', 'done'])).toEqual(['explore', 'design']);
+  });
+});
+
+describe("the Starting view's steps", () => {
+  const session = (o: { harness?: string; kind?: Session['kind']; startup?: Partial<StartupState> | null } = {}) => ({
+    harness: (o.harness ?? 'claude') as HarnessId,
+    kind: o.kind ?? 'plan',
+    startup: o.startup === null ? null : { step: 'launch' as const, stepSince: 0, startedAt: 0, resumed: false, hasPrompt: true, ...o.startup },
+  });
+
+  it.each([
+    ['claude', 'Starting Claude Code'],
+    ['opencode', 'Starting OpenCode'],
+    ['kiro', 'Starting Kiro'],
+    // An unknown agent (a newer install's) reads as Claude Code, as everywhere else.
+    ['newer-agent', 'Starting Claude Code'],
+  ])('name the agent a %s session starts', (harness, label) => {
+    expect(startupSteps(session({ harness })).find((s) => s.step === 'launch')?.label).toBe(label);
+  });
+
+  it('leave out the worktree on a resume, and the prompt when there is none', () => {
+    expect(startupSteps(session()).map((s) => s.step)).toEqual(['worktree', 'launch', 'loading', 'prompt']);
+    expect(startupSteps(session({ startup: null })).map((s) => s.step)).toEqual(['worktree', 'launch', 'loading', 'prompt']);
+    expect(startupSteps(session({ startup: { resumed: true, hasPrompt: false } })).map((s) => s.step)).toEqual(['launch', 'loading']);
+    expect(startupSteps(session({ startup: { hasPrompt: false } })).map((s) => s.step)).toEqual(['worktree', 'launch', 'loading']);
+  });
+
+  it('say a review fetches the PR in its worktree step', () => {
+    expect(startupSteps(session({ kind: 'review-pr' }))[0].label).toBe('Fetching the PR and its design, and preparing the worktree');
+    expect(startupSteps(session())[0].label).toBe('Updating the base branch and preparing the worktree');
   });
 });

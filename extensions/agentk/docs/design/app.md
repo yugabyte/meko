@@ -185,8 +185,8 @@ approved.
 
 Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session
 starts, the terminal shows its steps (updating the base branch and preparing the worktree, or for a
-Review a PR fetching the PR and preparing the worktree, starting Claude Code, loading, sending your
-task) with the current one animated and timed, plus the stage the session opens in. The session's
+Review a PR fetching the PR and preparing the worktree, starting the session's agent by name, Claude
+Code, OpenCode or Kiro, loading, sending your task; `startupSteps()` in `src/shared/stages.ts`) with the current one animated and timed, plus the stage the session opens in. The session's
 tab shows the current step in its tooltip. The view shows up as soon as the New session dialog
 closes, before the worktree is made; after 10 seconds on that step it says a big repo can take a
 few minutes and that you can switch to other sessions meanwhile.
