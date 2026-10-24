@@ -67,7 +67,7 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
   return (
     <div className="term-col">
       {session.asking && onAsk && <AskBar ask={session.asking} onOpen={onAsk} />}
-      {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key); on another screen's session it still asks for it. */}
+      {/* On touch screens a tap only focuses the terminal in typing mode (the ⌨ key); on another screen's session it still asks for it. A tap on a link only opens it (terminals.ts touchEnd), so it doesn't get here. */}
       <div
         className={away ? 'term-wrap away' : 'term-wrap'}
         onClick={() => {
