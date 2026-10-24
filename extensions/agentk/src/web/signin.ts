@@ -11,8 +11,15 @@ export interface MekoAuth {
   signedIn: boolean;
 }
 
-/** Close codes a WebSocket gets when Meko refused it (no sign-in, or one that has gone). */
+/** Close codes a WebSocket gets when it was refused (no sign-in, or another site's page): it waits for checkSignIn before retrying. */
 export const WS_UNAUTHORIZED: readonly number[] = [4401, 1008];
+
+/**
+ * The close code the browser reports when Meko refuses an upgrade (401) or closes a signed-out
+ * session's sockets, and also for a dropped network: the socket retries as usual, and checks the
+ * sign-in alongside (throttled), which goes to Meko's sign-in screen only when it's gone.
+ */
+export const WS_ABNORMAL = 1006;
 
 /** Meko's sign-in state, or null when Meko can't say (not running behind it). */
 export async function mekoAuth(): Promise<MekoAuth | null> {
@@ -54,17 +61,24 @@ export function signInUrl(page: string): string {
 }
 
 let checking: Promise<boolean> | null = null;
+let checkedAt = 0;
+/** A check that found this browser signed in stands this long, so a socket that keeps closing (a dropped network) asks at most this often. */
+export const SIGN_IN_CHECK_MS = 5000;
 
 /**
- * After AgentK's API answered 401, or a WebSocket closed with a WS_UNAUTHORIZED code: Meko refused
- * the request. Where Meko signs people in and this browser isn't signed in any more, goes to its
- * sign-in screen (back to this page after) and resolves false. Else resolves true, so the caller
- * keeps retrying.
+ * After AgentK's API answered 401, or a WebSocket closed with a WS_UNAUTHORIZED code: Meko may have
+ * refused the request. Where Meko signs people in and this browser isn't signed in any more, goes
+ * to its sign-in screen (back to this page after) and resolves false. Else resolves true, so the
+ * caller keeps retrying.
  */
-export function checkSignIn(): Promise<boolean> {
+export function checkSignIn(now: number = Date.now()): Promise<boolean> {
+  if (!checking && now - checkedAt < SIGN_IN_CHECK_MS) return Promise.resolve(true);
   checking ??= mekoAuth()
     .then((auth) => {
-      if (auth?.access !== 'remote' || auth.signedIn) return true;
+      if (auth?.access !== 'remote' || auth.signedIn) {
+        checkedAt = now;
+        return true;
+      }
       location.assign(signInUrl(location.pathname + location.search));
       return false;
     })

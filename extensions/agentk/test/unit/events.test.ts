@@ -233,6 +233,17 @@ describe('the events connection', () => {
     t.conn.stop();
   });
 
+  it('checks the sign-in after an abnormal close, and still retries on time', async () => {
+    const checkSignIn = vi.fn(() => Promise.resolve(true));
+    const t = setup({ checkSignIn });
+    t.last().accept();
+    t.last().serverClose(1006);
+    expect(checkSignIn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(t.sockets).toHaveLength(2);
+    t.conn.stop();
+  });
+
   it('opens nothing more once stopped', () => {
     const t = setup();
     t.last().accept();

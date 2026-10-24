@@ -1,4 +1,5 @@
 import type { AppState, EventsClientMessage, ServerEvent } from '../shared/types';
+import { WS_ABNORMAL } from './signin';
 
 export type Conn = 'connecting' | 'open' | 'closed';
 
@@ -200,6 +201,9 @@ export class EventsConnection {
     };
     // Signed out, or the sign-in expired: checkSignIn goes to Meko's sign-in screen.
     if (code !== null && this.h.unauthorized.includes(code)) void this.h.checkSignIn().then((ok) => ok && later());
-    else later();
+    else {
+      if (code === WS_ABNORMAL) void this.h.checkSignIn();
+      later();
+    }
   }
 }

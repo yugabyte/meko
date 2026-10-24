@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canSignOut, checkSignIn, mekoAuth } from '../../src/web/signin.js';
+import { canSignOut, checkSignIn, mekoAuth, SIGN_IN_CHECK_MS } from '../../src/web/signin.js';
+
+/** Each check a while after the last, so none is answered by an earlier one (checkSignIn's throttle). */
+let clock = 0;
+const later = () => (clock += 10 * SIGN_IN_CHECK_MS);
 
 /** Meko's answer to GET /api/v1/auth/status: its envelope, or a status with no body, or no answer at all. */
 function meko(reply: { data: Record<string, unknown> } | number | 'down') {
@@ -22,7 +26,7 @@ describe('signing in through Meko', () => {
 
   it('goes to Meko’s sign-in screen, back to this page after, once remote access has no sign-in', async () => {
     const assign = meko({ data: { access: 'remote', signed_in: false, username: null } });
-    expect(await checkSignIn()).toBe(false);
+    expect(await checkSignIn(later())).toBe(false);
     expect(assign).toHaveBeenCalledWith(`/signin?next=${encodeURIComponent('/ext/agentk/p/a b/s/1?x=1')}`);
   });
 
@@ -33,8 +37,18 @@ describe('signing in through Meko', () => {
     ['Meko down', 'down'],
   ] as const)('keeps retrying with %s', async (_, reply) => {
     const assign = meko(reply);
-    expect(await checkSignIn()).toBe(true);
+    expect(await checkSignIn(later())).toBe(true);
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('asks Meko at most every few seconds while it says this browser is signed in', async () => {
+    meko({ data: { access: 'remote', signed_in: true } });
+    const t = later();
+    expect(await checkSignIn(t)).toBe(true);
+    expect(await checkSignIn(t + SIGN_IN_CHECK_MS - 1)).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await checkSignIn(t + SIGN_IN_CHECK_MS)).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it.each([
