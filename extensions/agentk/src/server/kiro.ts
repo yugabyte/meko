@@ -359,6 +359,29 @@ export function kiroUsageArgs(): string[] {
   return ['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', USAGE_AGENT, '/usage'];
 }
 
+/**
+ * Points the sessions in Kiro's store that ran in a folder `map` moves at its new path (their
+ * `cwd`, which `findKiroSession` and `kiroSessionsIn` match on). Returns how many it changed.
+ */
+export function moveKiroSessions(map: (dir: string) => string | null, home = kiroHome()): number {
+  const dir = join(home, 'sessions', 'cli');
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const f of files) {
+    const s = readJson(join(dir, f));
+    const to = s && typeof s.cwd === 'string' ? map(s.cwd) : null;
+    if (!s || !to) continue;
+    writeAtomic(join(dir, f), JSON.stringify({ ...s, cwd: to }));
+    n++;
+  }
+  return n;
+}
+
 /** The ids of the sessions in Kiro's store that ran in one of `cwds` (any of its spellings). */
 export function kiroSessionsIn(cwds: string[], home = kiroHome()): string[] {
   const dir = join(home, 'sessions', 'cli');

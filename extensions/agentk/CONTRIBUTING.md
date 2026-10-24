@@ -26,7 +26,7 @@ npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0
 
 Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
 access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
-use another folder), so it never opens an installed AgentK's database, hook socket or session
+use another folder; `AK_HOME` names a home only without a release, as here and in tests), so it never opens an installed AgentK's database, hook socket or session
 host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
 restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
 an installed server is running there.
@@ -116,7 +116,7 @@ sorts higher.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
    a "Version X is available" banner. Its **Update to the latest version** button checks again and
    installs the newest release then (which may be newer than X), without interrupting sessions. Once a version has been healthy for 5 minutes, the
-   server deletes every installed version under `~/.agent-k-local/app/` except the running one and
+   server deletes every installed version under `app/` in AgentK's home except the running one and
    one previous version (the one it updated from) to roll back to by hand.
 
 **Usage stats.** Release builds carry the collector's report URL (the full URL, ending in
@@ -181,7 +181,7 @@ and both services enabled or loaded), it says so and stops before any of that, u
 `agentk install` (other than `--non-interactive`). Its tests
 (`test/unit/install-script.test.ts`) run the real script against stub tools.
 
-The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current` at it, links
+The installer unpacks into `<home>/app/<version>` (AgentK's home is `extensions/agentk` in Meko's data folder, `~/.meko` by default, or `~/.agent-k-local` until an older install moves; `--print-home` prints it), points `app/current` at it, links
 `~/.local/bin/agentk` (and `~/.local/bin/agent-k-local`, the command's name before the rename,
 which older services, scripts and Meko run), and runs `agentk install`, which writes `config.toml`,
 checks Meko, installs the two background services (the `agentk` and `agentk-host`

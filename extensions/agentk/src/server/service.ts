@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -422,6 +422,91 @@ export function dropOldNames(svc: ServiceManager): [string, string][] {
   return moved;
 }
 
+// ---------------------------------------------------------------------------
+// The one-shot job that moves AgentK's home into Meko's data folder (movehome.ts). It stops the
+// server and the session host, so it runs outside both services: as a transient systemd unit, or
+// a LaunchAgent of its own that removes itself. Both run it again after a failure, and each run
+// goes on from the move's journal.
+
+export const MOVE_JOB = { systemd: 'agentk-move-home.service', launchd: 'com.yugabyte.agentk.move-home' } as const;
+
+export interface MoveJob {
+  /** The release's `agentk` to run (`_move-home --to <to>`). */
+  bin: string;
+  to: string;
+  /** The home being moved, for the job's AK_HOME. */
+  from: string;
+}
+
+/**
+ * The move job's log: beside the new home (in Meko's `extensions/`, which the trigger makes first),
+ * not in either home, since a copy moves the old one aside and removes it.
+ */
+export function moveJobLog(to: string): string {
+  return join(dirname(to), 'agentk-move-home.log');
+}
+
+function moveJobPlist(home: string): string {
+  return join(home, 'Library', 'LaunchAgents', `${MOVE_JOB.launchd}.plist`);
+}
+
+/** Whether the move job is running (or waiting to run again after a failure). */
+export function moveJobRunning(kind: ServiceManager['kind'], run: Runner = runCommand, uid = process.getuid?.() ?? 0): boolean {
+  if (kind === 'systemd') {
+    const r = run('systemctl', ['--user', 'is-active', MOVE_JOB.systemd]);
+    return r.ok || /^(activating|reloading)/.test(r.out);
+  }
+  return run('launchctl', ['print', `gui/${uid}/${MOVE_JOB.launchd}`]).ok;
+}
+
+/** Starts the move job unless it's running already. */
+export function startMoveJob(kind: ServiceManager['kind'], job: MoveJob, run: Runner = runCommand, home = homedir(), uid = process.getuid?.() ?? 0): void {
+  if (moveJobRunning(kind, run, uid)) return;
+  const log = moveJobLog(job.to);
+  if (kind === 'systemd') {
+    // A unit that failed before stays loaded as failed: clear it, or systemd-run refuses the name.
+    run('systemctl', ['--user', 'reset-failed', MOVE_JOB.systemd]);
+    must(run, 'systemd-run', [
+      '--user', '--unit', MOVE_JOB.systemd, '--collect', '--quiet',
+      '-p', 'Restart=on-failure', '-p', 'RestartSec=30', '-p', `StandardOutput=append:${log}`, '-p', `StandardError=append:${log}`,
+      '--setenv', `AK_HOME=${job.from}`, '--setenv', `PATH=${process.env.PATH ?? '/usr/bin:/bin'}`,
+      job.bin, '_move-home', '--to', job.to,
+    ]);
+    return;
+  }
+  const plist = moveJobPlist(home);
+  const s = (v: string) => `<string>${xmlEscape(v)}</string>`;
+  mkdirSync(dirname(plist), { recursive: true });
+  writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>${s(MOVE_JOB.launchd)}
+  <key>ProgramArguments</key>
+  <array>${s(job.bin)}${s('_move-home')}${s('--to')}${s(job.to)}</array>
+  <key>EnvironmentVariables</key>
+  <dict><key>AK_HOME</key>${s(job.from)}<key>PATH</key>${s(process.env.PATH ?? '/usr/bin:/bin')}</dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key>${s(log)}
+  <key>StandardErrorPath</key>${s(log)}
+</dict>
+</plist>
+`);
+  must(run, 'launchctl', ['bootstrap', `gui/${uid}`, plist]);
+}
+
+/**
+ * The move job's last step on macOS: its LaunchAgent goes, so it doesn't run again at the next
+ * login. Booting it out ends this process, so it comes last. A transient systemd unit needs nothing.
+ */
+export function removeMoveJob(kind: ServiceManager['kind'], run: Runner = runCommand, home = homedir(), uid = process.getuid?.() ?? 0): void {
+  if (kind !== 'launchd') return;
+  rmSync(moveJobPlist(home), { force: true });
+  run('launchctl', ['bootout', `gui/${uid}/${MOVE_JOB.launchd}`]);
+}
+
 /** The service manager for this host, or null where we have none. */
 export function hostServices(platform: NodeJS.Platform = process.platform): ServiceManager | null {
   if (platform === 'linux') return new SystemdServices();
@@ -439,9 +524,24 @@ export function servicesFor(home: string, svc: ServiceManager | null = hostServi
   const file = svc.installed('server') ? svc.file('server') : svc.installed('host') ? svc.file('host') : null;
   if (!file) return svc;
   try {
-    return serviceHome(readFileSync(file, 'utf8'), svc.kind) === home ? svc : null;
+    const named = serviceHome(readFileSync(file, 'utf8'), svc.kind);
+    return named !== null && samePath(named, home) ? svc : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Whether two paths name the same folder: as spelled, or by their real paths. A release's home is
+ * its real path (the launcher resolves its folder with `cd -P`), while a unit names the home as it
+ * was spelled (through a symlinked /home, or the link the move leaves at the old home).
+ */
+export function samePath(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
   }
 }
 

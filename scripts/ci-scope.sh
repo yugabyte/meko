@@ -10,8 +10,9 @@
 # `backend=true|false`, ready for $GITHUB_OUTPUT. --all prints both true (pushes
 # to main check everything). A path no rule claims runs both, so a new root file
 # can't skip a component; root Markdown and .claude/ run neither. AgentK's tests
-# read root files under scripts/ and .github/, so those run AgentK
-# (extensions/agentk/test/unit/ci-scope.test.ts checks that every such read is
+# read root files under scripts/ and .github/, so those run AgentK, and Meko's
+# resolution cases (backend/internal/paths/testdata/resolve-cases.json), which run
+# both (extensions/agentk/test/unit/ci-scope.test.ts checks that every such read is
 # covered). Exits 2 on bad usage.
 set -eu
 
@@ -27,6 +28,8 @@ elif [ $# -eq 0 ]; then
       '') ;;
       # The CI workflow and this script decide what runs: check both components.
       .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true backend=true ;;
+      # Where Meko's data folder is: Meko's paths.Resolve and AgentK's mekoHome are both tested against it.
+      backend/internal/paths/testdata/resolve-cases.json) agentk=true backend=true ;;
       extensions/agentk/* | scripts/* | .github/*) agentk=true ;;
       backend/*) backend=true ;;
       .claude/*) ;;

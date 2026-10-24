@@ -13,7 +13,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       service (systemd unit or launchd job). One-shot `claude` commands that end with their request
       (`--version`, `update`, Ask AgentK's `claude -p`) are the server's own. Code that manages the
       services goes through `src/server/service.ts`.
-- [ ] Server restarts and updates leave running sessions untouched.
+- [ ] Server restarts and updates leave running sessions untouched. The one exception is the
+      one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
+      invariant 1), and nothing else may start it or end sessions the same way.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
@@ -70,7 +72,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       says what to install when there's none, rather than running `claude` regardless.
 - [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
-      updates). Nothing restarts the host by itself, and the program never waits on a viewer.
+      updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
+      never waits on a viewer.
 - [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
       wherever one is published (Claude Code's installer script from claude.ai, OpenCode's from

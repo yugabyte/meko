@@ -1,0 +1,13 @@
+{
+  "about": "Where Meko's data folder is, for paths.Resolve and for AgentK's mekoHome() (extensions/agentk/src/server/paths.ts), which puts its home in <data folder>/extensions/agentk. Both test suites read this file, so the two rules stay the same. In paths, $HOME is the home folder, $SHARED_TMP the shared local folder (/var/tmp) and $USER the user's name. networkDirs are the folders on a network filesystem: a path is on one when it is one of them or under one. want is the data folder, or error is true when Resolve refuses.",
+  "cases": [
+    { "name": "the default on a local disk", "env": {}, "networkDirs": [], "want": "$HOME/.meko" },
+    { "name": "MEKO_HOME", "env": { "MEKO_HOME": "/data/meko" }, "networkDirs": [], "want": "/data/meko" },
+    { "name": "MEKO_HOME on a network filesystem is refused", "env": { "MEKO_HOME": "/net/meko" }, "networkDirs": ["/net"], "error": true },
+    { "name": "MEKO_HOME on a local disk with a network home", "env": { "MEKO_HOME": "/data/meko" }, "networkDirs": ["$HOME"], "want": "/data/meko" },
+    { "name": "a network home with a local XDG_STATE_HOME", "env": { "XDG_STATE_HOME": "/local/state" }, "networkDirs": ["$HOME"], "want": "/local/state/meko" },
+    { "name": "a network home with XDG_STATE_HOME on the network too", "env": { "XDG_STATE_HOME": "$HOME/.local/state" }, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" },
+    { "name": "a network home without XDG_STATE_HOME", "env": {}, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" },
+    { "name": "a network home with a relative XDG_STATE_HOME, which is ignored", "env": { "XDG_STATE_HOME": "state" }, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" }
+  ]
+}

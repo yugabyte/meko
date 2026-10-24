@@ -21,8 +21,16 @@ export interface Config {
    * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
    * enabled: false turns Meko off even when a key is set (here, in the environment or in Claude
    * Code's settings); AgentK then works without datapacks.
+   * home: Meko's data folder, as Meko last told AgentK (the MEKO_HOME it sets on the commands it
+   * runs); empty means Meko's default. AgentK's home is in it (paths.ts `mekoHome`).
    */
-  meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean };
+  meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean; home: string };
+  /**
+   * dbPath: where state.db is when the home is on a network filesystem, which only a home from before
+   * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `agentk install`
+   * sets it for such a home (`localDbLocation`), and the move brings the database into the new home
+   * and clears it (movehome.ts).
+   */
   state: { dbPath: string };
   /**
    * command: how Claude Code is run. enabled: offer it for new sessions when `<command> --version`
@@ -81,7 +89,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false },
+  meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false, home: '' },
   state: { dbPath: '' },
   claude: { command: 'claude', enabled: true, mod: true },
   agents: { default: DEFAULT_HARNESS },

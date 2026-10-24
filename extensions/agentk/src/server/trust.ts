@@ -53,6 +53,31 @@ export function ensureWorkspaceTrust(dir: string, exact = false): 'already' | 'a
   return 'added';
 }
 
+/**
+ * Gives each folder `map` moves its `projects` entry in Claude Code's config (trust, and the state
+ * Claude keeps per folder) under its new path, when that has none yet. Old entries stay. Returns how
+ * many it added; 0 without a config.
+ */
+export function copyClaudeProjects(map: (dir: string) => string | null): number {
+  const file = claudeConfigPath();
+  if (!existsSync(file)) return 0;
+  // Read right before writing, as ensureWorkspaceTrust does: other Claudes rewrite this file.
+  const cfg = JSON.parse(readFileSync(file, 'utf8')) as ClaudeJson;
+  const projects = cfg.projects ?? {};
+  let added = 0;
+  for (const [dir, entry] of Object.entries(projects)) {
+    const to = map(dir);
+    if (!to || to in projects) continue;
+    projects[to] = entry;
+    added++;
+  }
+  if (!added) return 0;
+  const tmp = `${file}.agent-k-local.tmp`;
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: statSync(file).mode & 0o777 });
+  renameSync(tmp, file);
+  return added;
+}
+
 /** Text Claude Code shows in its folder-trust dialog. */
 export const TRUST_PROMPT_RE = /trust this folder|do you trust the files|Is this a project you created or one you trust/i;
 

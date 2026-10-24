@@ -84,8 +84,11 @@ their own copy.
   (0600) whatever folder it's in, and so are its `-wal` and `-shm` files, which SQLite gives the
   database's mode, and so are the snapshots the updater takes before an update
   (`state.db.bak-<version>`); ones made before this are fixed when the server opens the database.
-  A folder AgentK creates for it is 0700 (so is `$XDG_STATE_HOME/agent-k-local`); an existing one,
-  such as AgentK's home on an older install or a `[state] db_path` folder, keeps its mode.
+  A folder AgentK creates for it is 0700 (so are its home, and Meko's data folder and its
+  `extensions/` when AgentK makes them first); an existing one, such as AgentK's home on an older
+  install or a `[state] db_path` folder of one, keeps its mode. In `/var/tmp`, Meko's data folder
+  must be a real directory owned by you that others can't write to (`ensurePrivateDir`, and
+  `private_dir` in the installer), or AgentK stops.
 
 ## Code from public repos
 

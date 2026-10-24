@@ -29,7 +29,8 @@ export AK_APP_DIR AK_VERSION
 
 node="$AK_APP_DIR/node/bin/node"
 cli="$AK_APP_DIR/lib/dist/server/cli.js"
-ak_home=${AK_HOME:-$HOME/.agent-k-local}
+# The release's own home (<home>/app/<version>), whatever AK_HOME says, as paths.ts releaseHome.
+ak_home=$(cd -P "$AK_APP_DIR/../.." && pwd)
 
 if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
   # Bump the attempt counter (starts of the new version, this one included);
