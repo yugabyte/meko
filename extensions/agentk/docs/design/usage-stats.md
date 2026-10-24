@@ -22,7 +22,7 @@ reports.
 
 - *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
   hosts sharing a home count once), the version and update channel, platform, CPU, Node and
-  Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on; our version or
+  Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on, and OpenCode's, as `opencode`, while it's on; our version or
   Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
   cut to its leading numbers, else `0.0.0`), local or remote access, the service manager, whether Meko is on (and where its key comes from, and the
   sharing: `api` when AgentK can share through Meko's API, `none` when Meko is off or its API URL
@@ -39,7 +39,8 @@ reports.
   (from `project_events`, so a close a reopen undid still counts), sessions created
   by kind and archived, stage entries, PRs opened and merged with their commits and lines, direct
   pushes and commits, reviews handed to Claude, CI failures, review comment batches, recoveries,
-  resumes, reused worktrees, file types, tokens by model, Meko use (left out of a day with none),
+  resumes, reused worktrees, file types, tokens by model (an OpenCode model the price table doesn't know is sent as
+  `other`: it can be a name the user gave a provider's model), Meko use (left out of a day with none),
   and [Ask AgentK](palette.md#ask-agentk) asks (`agentk_asks`: asks, the ones that failed and the actions their
   answers proposed; left out of a day with none; a cancelled ask isn't counted), and Kiro (`kiro`:
   sessions started on it, its finished turns and the credits they billed, rounded to thousandths;

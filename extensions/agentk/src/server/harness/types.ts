@@ -118,6 +118,13 @@ export interface Harness {
    * the CLI's own Meko hooks send its turns (Kiro).
    */
   captureTranscript?(row: SessionRow): string;
+  /** Removes what AgentK keeps for a session that can never run again (its project is gone): OpenCode's session folder. */
+  forget?(row: SessionRow): void;
+  /**
+   * Meko's URL or key changed, or Meko was turned on or off: drops what was written with the old ones
+   * (OpenCode's Meko server file, which holds the key). The next launch writes it again.
+   */
+  mekoChanged?(paths: Paths): void;
   /** How it answers Ask AgentK. */
   ask: Asker;
   /** Its version and whether sessions can start on it. */

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guide for coding agents (Claude Code, Kiro, Codex, Cursor, and others) working in this repo.
+Guide for coding agents (Claude Code, OpenCode, Kiro, Codex, Cursor, and others) working in this repo.
 
 This repo is becoming **meko**: Meko, with extensions that plug into it. Today it holds
 one extension, **AgentK**, in `extensions/agentk`. Before changing anything there, read

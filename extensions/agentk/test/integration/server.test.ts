@@ -16,7 +16,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
   let env: TestEnv;
   let app: FastifyInstance;
   beforeEach(async () => {
-    env = await makeEnv();
+    // OpenCode offered too, as on an install that has it, so Settings can turn it off.
+    env = await makeEnv({ opencode: true });
     app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
   });
   afterEach(async () => {
@@ -169,6 +170,8 @@ describe('HTTP API: auth, origin checks, projects', () => {
   it.each([
     ['usage stats', 'callHomeEnabled', (c: Config) => c.callHome.enabled, '[call_home]\nenabled = false', 'call_home'],
     ['resolving merge conflicts', 'resolveConflicts', (c: Config) => c.pr.resolveConflicts, '[pr]\nresolve_conflicts = false', 'resolve_conflicts'],
+    // Its section also holds the fake's command, which the test sets.
+    ['offering OpenCode', 'opencodeEnabled', (c: Config) => c.opencode.enabled, /\[opencode\][^[]*enabled = false/, /\[opencode\][^[]*enabled/],
   ] as const)('turns %s off and on from Settings', async (_name, key, live, written, tomlKey) => {
     const cookie = await setup();
     const settings = async () => (await app.inject({ url: '/api/settings', headers: { cookie } })).json()[key];
@@ -179,7 +182,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(off.statusCode).toBe(200);
     expect(off.json()[key]).toBe(false);
     expect(live(env.core.config)).toBe(false);
-    expect(readFileSync(env.core.paths.config, 'utf8')).toContain(written);
+    expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(written);
     expect(await settings()).toBe(false);
 
     const bad = await put('no');
@@ -187,7 +190,7 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(bad.json().error).toBe(`${key} must be true or false.`);
 
     expect((await put(true)).json()[key]).toBe(true);
-    expect(readFileSync(env.core.paths.config, 'utf8')).not.toContain(tomlKey);
+    expect(readFileSync(env.core.paths.config, 'utf8')).not.toMatch(tomlKey);
   });
 
   it("shows usage stats off while YB_DISABLE_CALLHOME turns them off", async () => {
@@ -345,6 +348,13 @@ describe('HTTP API: auth, origin checks, projects', () => {
     expect(pic.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
     expect(pic.headers['x-content-type-options']).toBe('nosniff');
     expect(pic.rawPayload).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    // A commit the branch doesn't have: the same 404, with what to do, from the diff and its images.
+    const gone = await img(`path=pic.png&side=new&commit=${'0'.repeat(40)}`);
+    expect(gone.statusCode).toBe(404);
+    expect(gone.json().error).toMatch(/Pick All changes/);
+    const goneDiff = await app.inject({ url: `/api/sessions/${sid}/changes?commit=${'0'.repeat(40)}`, headers: { cookie } });
+    expect(goneDiff.statusCode).toBe(404);
+    expect(goneDiff.json().error).toMatch(/Pick All changes/);
 
     // Pasted images: behind the origin check, images only, saved for Claude to read by path.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);

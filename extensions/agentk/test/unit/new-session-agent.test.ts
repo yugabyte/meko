@@ -61,10 +61,10 @@ describe('Settings › Harness', () => {
   it('lists every agent in its bar, an agent that is off too', () => {
     const html = renderToStaticMarkup(createElement(HarnessBar, { value: 'kiro', onChange: () => undefined }));
     const tabs = [...html.matchAll(/id="set-harness-tab-(\w+)"[^>]*aria-selected="(true|false)"/g)].map(([, id, on]) => `${id}${on === 'true' ? '*' : ''}`);
-    expect(tabs).toEqual(['claude', 'kiro*']);
+    expect(tabs).toEqual(['claude', 'opencode', 'kiro*']);
   });
 
-  const settings = { claudeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
+  const settings = { claudeEnabled: true, opencodeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
   /** The ids of the controls (and the update outcome) an agent's panel shows. */
   const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null) =>
     [...renderToStaticMarkup(createElement(AgentSettings, {
@@ -75,6 +75,7 @@ describe('Settings › Harness', () => {
   it.each([
     ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update'], null],
     ['Claude Code, after an update the banners leave out', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-outcome'], { ok: false, text: 'x' }],
+    ['OpenCode, available', 'opencode' as const, {}, {}, ['set-opencode', 'set-opencode-check', 'set-opencode-update'], null],
     ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust'], null],
     ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust'], null],
     ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro'], null],

@@ -1,13 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   previewImageType,
-  type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
+  type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
   type SessionChanges,
 } from '../../shared/types';
-import { api, errorMessage } from '../api';
+import { ApiError, api, errorMessage } from '../api';
 import { anchorComment, defaultOpen, LARGE_DIFF_ROWS, parsePatch, ROW_PAGE, showsLine, sideLine, type DiffLine } from '../diff';
 import { useTouch } from '../hooks/useMedia';
-import { agentName, cx } from '../util';
+import { agentName, cx, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
 
@@ -52,6 +52,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
+  /** The one commit shown (its sha), or null for everything vs. the base. */
+  const [commit, setCommit] = useState<string | null>(null);
   /** Files the user opened or closed; the rest follow the line budget. */
   const [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
   /** Rows shown of each large diff the user asked to see (the rest show none until asked). */
@@ -76,14 +78,23 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     let cancelled = false;
     setLoading(true);
     api
-      .changes(session.id)
+      .changes(session.id, commit)
       .then((d) => !cancelled && (setData(d), setFetchedAt(Date.now()), setError(null)))
-      .catch((e) => !cancelled && setError(errorMessage(e)))
+      .catch((e) => {
+        if (cancelled) return;
+        // The commit shown was rewritten (amended, rebased): back to All changes, with a fresh commit list.
+        if (commit && e instanceof ApiError && e.status === 404) {
+          setNote('The commit you were viewing isn’t on the branch any more (it was amended or rebased), so this shows All changes.');
+          setCommit(null);
+        } else {
+          setError(errorMessage(e));
+        }
+      })
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [session.id, session.baseBranch, session.diffStat?.files, session.diffStat?.added, session.diffStat?.removed, tick]);
+  }, [session.id, session.baseBranch, session.diffStat?.files, session.diffStat?.added, session.diffStat?.removed, tick, commit]);
 
   // Comments move between draft, queued and sent on the server; the counts in state say when.
   useEffect(() => {
@@ -105,7 +116,10 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     return m;
   }, [files]);
 
-  const visible = useMemo(() => comments.filter((c) => showSent || c.state !== 'sent'), [comments, showSent]);
+  // A comment's sides are the base and the worktree, so comments belong to the full diff only:
+  // they follow the diff on screen, not the pick still loading.
+  const shownCommit = data?.commit ?? null;
+  const visible = useMemo(() => (shownCommit ? [] : comments.filter((c) => showSent || c.state !== 'sent')), [comments, showSent, shownCommit]);
   const sentCount = comments.filter((c) => c.state === 'sent').length;
   const drafts = comments.filter((c) => c.state === 'draft').length;
   const queued = comments.filter((c) => c.state === 'queued').length;
@@ -276,7 +290,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     // The state push with the new base refetches the diff.
     api.updateSession(session.id, { baseBranch: branch }).catch((e) => setNote(errorMessage(e)));
   };
-  const suggested = !fixedBase ? data?.suggestedBase : null;
+  const suggested = !fixedBase && !data?.commit ? data?.suggestedBase : null;
   /** Comment cards: `away` for comments not placed on a row, `row` for the row the others follow. */
   const thread = (cs: ReviewComment[] | undefined, opts: { away?: boolean; withPath?: boolean; row?: DiffLine } = {}) =>
     cs?.map((c) =>
@@ -299,13 +313,20 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     <SidePanel name="changes" label="Changes" className="design-panel changes-panel" onKeyDown={keys}>
       <div className="design-hd">
         <b>Changes</b>
+        {data && <CommitMenu commits={data.commits} current={data.commit} onPick={setCommit} />}
         {data && (
           <span className="muted small">
-            vs{' '}
-            {fixedBase ? (
-              <span className="mono" title={fixedBase}>{data.base}</span>
+            {data.commit ? (
+              <span className="mono" title={data.commit.subject}>{data.commit.sha.slice(0, 7)}</span>
             ) : (
-              <BaseMenu session={session} base={data.base} onPick={changeBase} />
+              <>
+                vs{' '}
+                {fixedBase ? (
+                  <span className="mono" title={fixedBase}>{data.base}</span>
+                ) : (
+                  <BaseMenu session={session} base={data.base} onPick={changeBase} />
+                )}
+              </>
             )}{' '}
             · {plural(files.length + (data.omittedFiles ?? 0), 'file')} ·{' '}
             <span className="add">+{data.added}</span> <span className="del">−{data.removed}</span>
@@ -313,7 +334,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         )}
         <span className="sp" />
         {files.length > 0 && <FilesMenu files={files} counts={countByPath} onJump={jump} />}
-        {sentCount > 0 && (
+        {sentCount > 0 && !shownCommit && (
           <button className="btn small" aria-pressed={showSent} onClick={() => setShowSent((s) => !s)}>
             {showSent ? 'Hide sent' : `Show sent (${sentCount})`}
           </button>
@@ -375,7 +396,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         ) : !data ? (
           <p className="muted"><Busy label="Loading" /></p>
         ) : files.length === 0 ? (
-          <p className="muted">No changes yet compared to {data.base}.</p>
+          <p className="muted">{data.commit ? 'This commit changes no files.' : `No changes yet compared to ${data.base}.`}</p>
         ) : (
           <>
             {data.omittedFiles > 0 && (
@@ -390,13 +411,24 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                 branch’s diff is very large. Their line counts are still shown.
               </p>
             )}
+            {data.commit && editor && (
+              // Kept on screen (not just in draftText) so it can be finished here, and so a reload waits for it.
+              <div className="cmt-gone">
+                <p className="muted small">Your comment on <span className="mono">{editor.path}</span>, in All changes</p>
+                <CommentEditor key={editor.id ?? 'new'} editor={editor} draft={draftText} onSave={save} onCancel={closeEditor} />
+              </div>
+            )}
             {placed.gone.length > 0 && (
               <div className="cmt-gone">
                 <p className="muted small">Comments on files that are no longer changed</p>
                 {thread(placed.gone, { away: true, withPath: true })}
               </div>
             )}
-            {touch ? (
+            {data.commit ? (
+              <p className="muted small chg-hint">
+                One commit’s changes. Comments go on <b>All changes</b>, where the after side is the worktree.
+              </p>
+            ) : touch ? (
               <p className="muted small chg-hint">
                 Use <b>Files</b> to move between files. Tap <b>+</b> beside a line to comment on it; before you type, tap <b>+</b> on
                 another line to cover a range.
@@ -438,13 +470,14 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                     )}
                     <FileDiff
                       file={f}
-                      imageUrl={(side, path) => api.changeImageUrl(session.id, path, side, fetchedAt)}
+                      imageUrl={(side, path) => api.changeImageUrl(session.id, path, side, fetchedAt, data.commit?.sha)}
                       lines={parsed.get(f.path) ?? null}
                       limit={rowLimit(f.path, parsed.get(f.path)?.length ?? 0)}
                       onMore={() => showMore(f.path, parsed.get(f.path)?.length ?? 0)}
                       renderAfter={(i) => {
                         const cs = placed.at.get(f.path)?.get(i);
-                        const here = editor && !editor.id && editor.path === f.path && editorAt === i;
+                        // While a commit is shown, a comment being written is at the top of the list instead.
+                        const here = !data.commit && editor && !editor.id && editor.path === f.path && editorAt === i;
                         if (!cs && !here) return null;
                         return (
                           <>
@@ -453,8 +486,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                           </>
                         );
                       }}
-                      picked={editor && !editor.id && editor.path === f.path ? editor : null}
-                      onComment={(i, shift) => startComment(f.path, i, shift)}
+                      picked={!data.commit && editor && !editor.id && editor.path === f.path ? editor : null}
+                      onComment={data.commit ? undefined : (i, shift) => startComment(f.path, i, shift)}
                     />
                   </>
                 )}
@@ -487,6 +520,38 @@ function FilesMenu({ files, counts, onJump }: { files: ChangedFile[]; counts: Ma
           <Counts file={f} comments={counts.get(f.path) ?? 0} />
         </>
       )}
+    />
+  );
+}
+
+type CommitItem = BranchCommit | 'all';
+
+/** The header's scope: everything vs. the base, or one of the branch's commits alone (newest first). */
+function CommitMenu({ commits, current, onPick }: { commits: BranchCommit[]; current: BranchCommit | null; onPick: (sha: string | null) => void }) {
+  const items: CommitItem[] = ['all', ...commits];
+  return (
+    <FilterMenu<CommitItem>
+      label={<>{current ? 'Commit' : 'All changes'} ▾</>}
+      title="Show all changes, or one commit"
+      name="Commits"
+      listName="Commits"
+      placeholder="Filter commits"
+      align="left"
+      items={items}
+      itemKey={(c) => (c === 'all' ? 'all' : c.sha)}
+      matches={(c, needle) => c === 'all' || `${c.sha} ${c.subject}`.toLowerCase().includes(needle)}
+      none={(q) => `No commit matches “${q}”.`}
+      onChoose={(c) => onPick(c === 'all' ? null : c.sha)}
+      renderItem={(c) =>
+        c === 'all' ? (
+          <span className={cx('chg-path', !current && 'cur')}>All changes, uncommitted included</span>
+        ) : (
+          <span className={cx('chg-commit', current?.sha === c.sha && 'cur')}>
+            <span className="mono">{c.sha.slice(0, 7)}</span> <span className="chg-path">{c.subject}</span>{' '}
+            <span className="muted small">{relativeTime(c.at)}</span>
+          </span>
+        )
+      }
     />
   );
 }
@@ -656,10 +721,41 @@ function KindBadge({ kind }: { kind: ChangeKind }) {
   );
 }
 
-function FilePath({ file }: { file: ChangedFile }) {
+/**
+ * A path that wraps between folders, not in a name: each folder and the name are kept whole (a
+ * name's '-' is a break point too), with a break point after each '/', and the folders muted.
+ */
+function PathText({ path }: { path: string }) {
+  const dirs = path.split('/');
+  const name = dirs.pop();
   return (
-    <span className="chg-path mono" title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
-      {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+    <>
+      {dirs.length > 0 && (
+        <span className="chg-dir">
+          {dirs.map((d, i) => (
+            <Fragment key={i}>
+              <span className="chg-seg">{d}/</span>
+              <wbr />
+            </Fragment>
+          ))}
+        </span>
+      )}
+      <span className="chg-seg chg-name">{name}</span>
+    </>
+  );
+}
+
+/** A changed file's whole path (a rename's both), wrapped rather than cut so the name always shows. */
+export function FilePath({ file }: { file: ChangedFile }) {
+  return (
+    <span className="chg-path chg-file-path mono" title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+      {file.oldPath ? (
+        <>
+          <PathText path={file.oldPath} /> → <PathText path={file.path} />
+        </>
+      ) : (
+        <PathText path={file.path} />
+      )}
     </span>
   );
 }
@@ -871,7 +967,8 @@ export function FileDiff({
   renderAfter: (i: number) => ReactNode;
   /** The range a new comment is being written for. */
   picked: { side: CommentSide; line: number; endLine: number } | null;
-  onComment: (i: number, shift: boolean) => void;
+  /** Undefined when the diff takes no comments. */
+  onComment?: (i: number, shift: boolean) => void;
 }) {
   if (file.binary) {
     return previewImageType(file.path) ? <ImageDiff file={file} imageUrl={imageUrl} /> : <p className="chg-note">Binary file, not shown.</p>;
@@ -901,7 +998,7 @@ export function FileDiff({
                 <Fragment key={i}>
                   <tr className={cx(`dl-${l.kind}`, inPick && 'picked')}>
                     <td className="cg">
-                      {n !== null && (
+                      {n !== null && onComment && (
                         <button
                           className="cmt-add"
                           tabIndex={-1}

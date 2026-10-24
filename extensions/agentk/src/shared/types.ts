@@ -361,6 +361,8 @@ export interface CallHomeInstall {
   claudeCode: string;
   /** Kiro CLI's version, or '' when it's off or can't be read. */
   kiro?: string;
+  /** OpenCode's version, left out when it's off or can't be read. */
+  opencode?: string;
   access: 'local' | 'remote';
   service: 'systemd' | 'launchd' | 'none';
   /** Sharing is 'api' when AgentK shares through Meko's API, 'none' when it can't (Meko off, or no API URL). */
@@ -939,6 +941,12 @@ export interface MekoStatus {
    * /api/settings/meko/kiro-setup).
    */
   kiro: { gaps: string[] } | null;
+  /**
+   * Which Meko OpenCode's sessions use: AgentK's (`own: false`), which AgentK adds to their config
+   * as a remote `meko` MCP server, or the `meko` server in OpenCode's own config (`own: true`), which
+   * AgentK leaves alone. Null when OpenCode isn't available or Meko is off.
+   */
+  opencode: { own: boolean } | null;
 }
 
 export interface MekoClaudeStatus {
@@ -980,10 +988,10 @@ export interface AppState {
   sessionHost: SessionHostStatus;
 }
 
-/** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[kiro]` in config.toml). */
+/** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[opencode]`, `[kiro]` in config.toml). */
 export interface HarnessStatus {
   id: HarnessId;
-  /** The CLI is turned on in the config (`[claude] enabled`, `[kiro] enabled`). */
+  /** The CLI is turned on in the config (`[claude] enabled`, `[opencode] enabled`, `[kiro] enabled`). */
   enabled: boolean;
   /** What `<command> --version` printed, or null when it can't be read (or hasn't been yet). */
   version: string | null;
@@ -1566,6 +1574,8 @@ export interface Settings {
   defaultHarness: HarnessId;
   /** `[claude] enabled`: offer Claude Code for new sessions when its CLI answers. */
   claudeEnabled: boolean;
+  /** `[opencode] enabled`: offer OpenCode for new sessions when its CLI answers. */
+  opencodeEnabled: boolean;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
@@ -1732,6 +1742,18 @@ export interface SessionChanges {
    * when there's none, and for a session that can't change its base (a review, or one with a PR).
    */
   suggestedBase: { branch: string; ahead: number } | null;
+  /** The branch's commits since it left the base, newest first, at most MAX_COMMITS. */
+  commits: BranchCommit[];
+  /** The one commit shown, when the diff is a single commit's rather than everything vs. the base. */
+  commit: BranchCommit | null;
+}
+
+/** A commit on a session's branch, as the Changes panel's commit menu lists it. */
+export interface BranchCommit {
+  sha: string;
+  subject: string;
+  /** Commit time, ms since the epoch. */
+  at: number;
 }
 
 export type CommentSide = 'old' | 'new';
@@ -2396,8 +2418,8 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
 // GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
 // DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)
-// GET    /api/sessions/:id/changes             → SessionChanges
-// GET    /api/sessions/:id/changes/image?path=&side=old|new → image bytes (previewable types only)
+// GET    /api/sessions/:id/changes?commit=     → SessionChanges   (commit: one of the branch's commits alone, by full sha)
+// GET    /api/sessions/:id/changes/image?path=&side=old|new&commit= → image bytes (previewable types only)
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
@@ -2427,17 +2449,17 @@ export type TermServerMessage =
 //                                                           resolveConflicts are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
 //                                                           Ask AgentK that name none start on the first available one);
-//                                                           claudeEnabled and kiroEnabled are booleans; the agents'
+//                                                           claudeEnabled, opencodeEnabled and kiroEnabled are booleans; the agents'
 //                                                           commands are set in config.toml)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,
 //                                                           only when the user asks; then checks Kiro's Meko again)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
-//        that's turned on again now (Kiro's isn't read while it's off); a change is pushed to every page)
+//        that's turned on again now (one that's off isn't read); a change is pushed to every page)
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`claude update`,
-//        `kiro-cli update`), then reads its version again; 409 while one runs. Settings › Harness's Update Kiro calls
-//        it; the UI updates Claude Code through POST /api/claude/update, whose answer carries the outcome)
+//        `opencode upgrade`, `kiro-cli update`), then reads its version again; 409 while one runs. Settings › Harness's
+//        Update OpenCode and Update Kiro call it; the UI updates Claude Code through POST /api/claude/update, whose answer carries the outcome)
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
 //        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs. Called
 //        by the too-old banner's Update Claude Code and by Settings › Harness's)

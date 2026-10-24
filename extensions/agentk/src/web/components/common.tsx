@@ -7,7 +7,7 @@ import { useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
-const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', kiro: '/harness-kiro.svg' };
+const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', opencode: '/harness-opencode.svg', kiro: '/harness-kiro.svg' };
 
 /**
  * A harness's logo: beside a session's name in the tabs and the rail, while open sessions run on

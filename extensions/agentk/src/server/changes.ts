@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { lstat, readFile, readlink } from 'node:fs/promises';
 import { isAbsolute, join, normalize, sep } from 'node:path';
-import { previewImageType, type ChangedFile, type ChangeKind, type ChangeSide, type DiffStat, type SessionChanges } from '../shared/types.js';
+import { previewImageType, type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type DiffStat, type SessionChanges } from '../shared/types.js';
 import { gitBuffer, gitRaw, tryGit } from './git.js';
 
 /** A single file's patch is cut here. */
@@ -10,6 +10,10 @@ export const FILE_PATCH_CAP = 256 * 1024;
 export const TOTAL_PATCH_CAP = 4 * 1024 * 1024;
 /** At most this many files are listed; the totals still count the rest (see capFiles). */
 export const MAX_FILES = 1000;
+/** The commit menu lists at most this many of the branch's commits, the newest. */
+export const MAX_COMMITS = 200;
+/** Git's empty tree: what a root commit is compared with. */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 /** Untracked files larger than this aren't read (no patch, counted as 0 lines). */
 const UNTRACKED_READ_MAX = 1024 * 1024;
 /** At most this many bytes of untracked files are read per call; the rest count as 0 lines. */
@@ -99,17 +103,48 @@ export async function suggestBase(worktree: string, base: string, branch: string
   return best;
 }
 
+/** The branch's commits after `from`, newest first, up to MAX_COMMITS. */
+export async function branchCommits(worktree: string, from: string): Promise<BranchCommit[]> {
+  const out = await gitRaw(worktree, 'log', '-z', `--max-count=${MAX_COMMITS}`, '--format=%H%x1f%ct%x1f%s', `${from}..HEAD`).catch(() => '');
+  return out.split('\0').flatMap((rec) => {
+    const [sha, ct, subject] = rec.split('\x1f');
+    return sha && ct ? [{ sha: sha.trim(), subject: subject ?? '', at: Number(ct) * 1000 }] : [];
+  });
+}
+
+/** Thrown for a commit that isn't one of the branch's listed commits. */
+export class UnknownCommitError extends Error {}
+
+/** The commit's first parent, or the empty tree for a root commit. */
+async function parentOf(worktree: string, sha: string): Promise<string> {
+  return (await tryGit(worktree, 'rev-parse', '--verify', '--quiet', `${sha}^`)) ?? EMPTY_TREE;
+}
+
+/**
+ * The branch commit named `sha` and the revisions its diff runs between. Only commits listed by
+ * branchCommits() are accepted, so `sha` never reaches git as typed.
+ */
+async function commitRange(worktree: string, commits: BranchCommit[], sha: string): Promise<{ commit: BranchCommit; from: string; to: string }> {
+  const commit = commits.find((c) => c.sha === sha);
+  if (!commit) throw new UnknownCommitError(sha);
+  return { commit, from: await parentOf(worktree, commit.sha), to: commit.sha };
+}
+
 /**
  * Every file changed in the worktree vs. its base, with a patch per file, up to MAX_FILES (the
- * files in `keep` first). Null when there's no merge base.
+ * files in `keep` first); or, given `commit`, only what that commit of the branch changed. Null
+ * when there's no merge base.
  */
-export async function changes(worktree: string, base: string, keep: ReadonlySet<string> = new Set()): Promise<SessionChanges | null> {
+export async function changes(worktree: string, base: string, keep: ReadonlySet<string> = new Set(), commit?: string): Promise<SessionChanges | null> {
   const mb = await diffBase(worktree, base);
   if (!mb) return null;
+  const commits = await branchCommits(worktree, mb.sha);
+  const one = commit ? await commitRange(worktree, commits, commit) : null;
+  const range = one ? [one.from, one.to] : [mb.sha];
   const [status, numstat, porcelain, ahead] = await Promise.all([
-    gitDiff(worktree, '--name-status', '-z', mb.sha),
-    gitDiff(worktree, '--numstat', '-z', mb.sha),
-    gitRaw(worktree, 'status', '--porcelain', '-z', '--untracked-files=no'),
+    gitDiff(worktree, '--name-status', '-z', ...range),
+    gitDiff(worktree, '--numstat', '-z', ...range),
+    one ? '' : gitRaw(worktree, 'status', '--porcelain', '-z', '--untracked-files=no'),
     tryGit(worktree, 'rev-list', '--count', `${mb.sha}..HEAD`),
   ]);
   const entries = parseNameStatus(status);
@@ -117,7 +152,7 @@ export async function changes(worktree: string, base: string, keep: ReadonlySet<
   const dirty = parsePorcelain(porcelain);
   // One diff for the whole tree, split per file and matched to the entries by header. Null when
   // git couldn't produce it (too large for the buffer).
-  const whole = await gitDiff(worktree, mb.sha).catch(() => null);
+  const whole = await gitDiff(worktree, ...range).catch(() => null);
   const patches = whole === null ? null : matchPatches(entries, splitPatch(whole));
 
   const files: ChangedFile[] = entries.map((e, i) => {
@@ -134,7 +169,7 @@ export async function changes(worktree: string, base: string, keep: ReadonlySet<
       truncated: false,
     };
   });
-  const extra = await untracked(worktree, true);
+  const extra = one ? { files: [], omitted: [] } : await untracked(worktree, true);
   files.push(...extra.files);
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const added = files.reduce((t, f) => t + f.added, 0);
@@ -152,6 +187,8 @@ export async function changes(worktree: string, base: string, keep: ReadonlySet<
     omittedPatches,
     ahead: Number(ahead) || 0,
     suggestedBase: null,
+    commits,
+    commit: one?.commit ?? null,
   };
 }
 
@@ -202,14 +239,15 @@ function safeRelative(path: string): boolean {
 
 /**
  * One side of a changed image for the Changes panel: the base version (`old`, from the merge
- * base in git) or the worktree's (`new`, uncommitted edits included). Only image types are
- * served. Null when that side doesn't exist (an added file has no old side, a deleted one no
- * new side) or is too large; throws on a path that isn't a previewable image inside the repo.
+ * base in git) or the worktree's (`new`, uncommitted edits included); given `commit`, its
+ * parent's and its own. Only image types are served. Null when that side doesn't exist (an added
+ * file has no old side, a deleted one no new side) or is too large; throws on a path that isn't a
+ * previewable image inside the repo, or an unknown commit (UnknownCommitError).
  */
-export async function changedImage(worktree: string, base: string, path: string, side: ChangeSide): Promise<{ type: string; data: Buffer } | null> {
+export async function changedImage(worktree: string, base: string, path: string, side: ChangeSide, commit?: string): Promise<{ type: string; data: Buffer } | null> {
   const type = previewImageType(path);
   if (!type || !safeRelative(path)) throw new Error('not a previewable image in this repo');
-  if (side === 'new') {
+  if (side === 'new' && !commit) {
     const full = join(worktree, path);
     let real: string;
     try {
@@ -226,7 +264,12 @@ export async function changedImage(worktree: string, base: string, path: string,
   }
   const mb = await diffBase(worktree, base);
   if (!mb) return null;
-  const spec = `${mb.sha}:${path.split(sep).join('/')}`;
+  let rev = mb.sha;
+  if (commit) {
+    const one = await commitRange(worktree, await branchCommits(worktree, mb.sha), commit);
+    rev = side === 'old' ? one.from : one.to;
+  }
+  const spec = `${rev}:${path.split(sep).join('/')}`;
   const size = Number(await tryGit(worktree, 'cat-file', '-s', spec));
   if (!size || size > IMAGE_PREVIEW_MAX) return null;
   return { type, data: await gitBuffer(worktree, 'cat-file', 'blob', spec) };

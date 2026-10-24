@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import type { Conn } from '../hooks/useEvents';
+import { useInstall } from '../installapp';
 import { claudeUpdateText, noAgent } from '../util';
 import { Busy } from './common';
 
@@ -178,6 +179,34 @@ function InviteBanners({
         );
       })}
     </>
+  );
+}
+
+/**
+ * The offer to install AgentK as an app (`installapp.ts`), until it's installed or turned down in this
+ * browser. On iOS only Not now hides it: Safari can't tell that AgentK is on the Home Screen already.
+ */
+function InstallBanner() {
+  const { offer, install, dismiss } = useInstall();
+  if (!offer) return null;
+  return (
+    <div className="banner info">
+      <span className="banner-text">
+        {offer === 'prompt'
+          ? 'Install AgentK as an app: it opens in its own window, with its own icon in your dock or on your home screen.'
+          : 'Add AgentK to your Home Screen: tap Share, then Add to Home Screen. It opens full screen there, and can show notifications.'}
+      </span>
+      <span className="banner-btns">
+        {offer === 'prompt' && (
+          <button className="btn primary small" onClick={() => void install()}>
+            Install
+          </button>
+        )}
+        <button className="btn small" onClick={dismiss}>
+          Not now
+        </button>
+      </span>
+    </div>
   );
 }
 
@@ -369,6 +398,7 @@ export function Banners({
       <MekoClaudeBanner state={state} onDetails={onMekoSettings} onError={onError} />
       <FailedStartBanners state={state} onRetry={onRetryStart} onError={onError} />
       <InviteBanners invites={state.invites ?? []} onOpen={onOpenInvite} onError={onError} />
+      <InstallBanner />
     </div>
   );
 }

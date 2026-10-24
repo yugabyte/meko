@@ -592,11 +592,12 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return reply.code(204).send();
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> => core.sessions.changes(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {
-    const { path = '', side } = req.query;
+  app.get<{ Params: { id: string }; Querystring: { commit?: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> =>
+    core.sessions.changes(req.params.id, req.query.commit || undefined));
+  app.get<{ Params: { id: string }; Querystring: { path?: string; side?: string; commit?: string } }>('/api/sessions/:id/changes/image', async (req, reply) => {
+    const { path = '', side, commit } = req.query;
     if (side !== 'old' && side !== 'new') throw new HttpError(400, "side must be 'old' or 'new'.");
-    const img = await core.sessions.changedImage(req.params.id, path, side);
+    const img = await core.sessions.changedImage(req.params.id, path, side, commit || undefined);
     // Bytes from the repo: never let the browser run or sniff them, even when opened directly.
     return reply
       .type(img.type)
@@ -669,6 +670,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     resolveConflicts: core.config.pr.resolveConflicts,
     defaultHarness: core.config.agents.default,
     claudeEnabled: core.config.claude.enabled,
+    opencodeEnabled: core.config.opencode.enabled,
     kiroEnabled: core.config.kiro.enabled,
     kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
@@ -699,7 +701,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.callHomeEnabled !== undefined && typeof b.callHomeEnabled !== 'boolean') throw new HttpError(400, 'callHomeEnabled must be true or false.');
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
-    for (const k of ['claudeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
+    for (const k of ['claudeEnabled', 'opencodeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
@@ -719,6 +721,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
       if (b.claudeEnabled !== undefined) c.claude.enabled = b.claudeEnabled;
+      if (b.opencodeEnabled !== undefined) c.opencode.enabled = b.opencodeEnabled;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);

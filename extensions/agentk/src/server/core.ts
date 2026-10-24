@@ -20,6 +20,7 @@ import { claudeUserDir, writeHookFiles } from './claude.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { kiroDeletesSettled } from './kiro.js';
+import { openCodeDeletesSettled, openCodeHasOwnMeko } from './opencode.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
@@ -70,6 +71,8 @@ export interface CoreOptions {
   callHomeFetch?: typeof fetch;
   /** Reads Kiro CLI's version (tests fake it); by default `<command> --version`. */
   kiroVersion?: (command: string) => Promise<string | null>;
+  /** Reads OpenCode's version (tests fake it); by default `<command> --version`. */
+  openCodeVersion?: (command: string) => Promise<string | null>;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -86,6 +89,8 @@ const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 const STAGED_SWEEP_MS = 60 * 60 * 1000;
 /** How long a read of Kiro's Meko setup is reused (the state is pushed often). */
 const KIRO_MEKO_TTL_MS = 10_000;
+/** How long a read of OpenCode's own config (for `MekoStatus.opencode`) is used. */
+const OPENCODE_MEKO_TTL_MS = 10_000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
@@ -144,6 +149,8 @@ export class Core extends EventEmitter {
   readonly harnesses: Harnesses;
   /** The last read of Kiro's Meko setup (kiroMeko). */
   private kiroMekoAt: { at: number; value: MekoStatus['kiro'] } | null = null;
+  /** The last read of OpenCode's own Meko server (openCodeMeko). */
+  private openCodeMekoAt: { at: number; own: boolean } | null = null;
   mekoStatus: MekoStatus;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
@@ -203,7 +210,9 @@ export class Core extends EventEmitter {
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, lastUpdatedFrom: null, releaseUrl: null,
     });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
-    this.harnesses = new Harnesses({ claudeCode: this.claudeCode, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion });
+    this.harnesses = new Harnesses({
+      claudeCode: this.claudeCode, paths: this.paths, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion, openCodeVersion: o.openCodeVersion,
+    });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
@@ -274,7 +283,11 @@ export class Core extends EventEmitter {
     const next = structuredClone(this.cfg);
     fn(next);
     saveConfig(this.paths, next);
+    const was = resolveMeko(this.cfg);
+    const now = resolveMeko(next);
     this.cfg = next;
+    // A harness may have written the old Meko key somewhere of its own (OpenCode's Meko server file).
+    if (was.url !== now.url || was.apiKey !== now.apiKey) for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
     this.mekoStatus = this.mekoStatusFor(next);
     this.changed();
     // A Meko change can make Claude Code's Meko differ (or match again).
@@ -283,7 +296,7 @@ export class Core extends EventEmitter {
   }
 
   private mekoStatusFor(cfg: Config): MekoStatus {
-    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null };
+    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null, opencode: null };
   }
 
   /**
@@ -297,6 +310,18 @@ export class Core extends EventEmitter {
       this.kiroMekoAt = { at: now, value: { gaps: kiroMekoGaps(readKiroMeko(), resolveMeko(this.cfg).url, kiroAgentLoadsMcp()) } };
     }
     return this.kiroMekoAt.value;
+  }
+
+  /**
+   * Which Meko OpenCode's sessions use (`MekoStatus.opencode`): AgentK's, which it adds to their
+   * config, or the `meko` server in OpenCode's own config, which AgentK leaves alone. Null while Meko
+   * is off or OpenCode isn't available. OpenCode's config is read again at most every OPENCODE_MEKO_TTL_MS.
+   */
+  openCodeMeko(): MekoStatus['opencode'] {
+    if (!mekoConfigured(this.cfg) || !this.harnesses.of('opencode').status(this.cfg).available) return null;
+    const now = Date.now();
+    if (!this.openCodeMekoAt || now - this.openCodeMekoAt.at > OPENCODE_MEKO_TTL_MS) this.openCodeMekoAt = { at: now, own: openCodeHasOwnMeko() };
+    return { own: this.openCodeMekoAt.own };
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */
@@ -400,7 +425,7 @@ export class Core extends EventEmitter {
         }
         return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
       })(),
-      meko: { ...this.mekoStatus, kiro: this.kiroMeko() },
+      meko: { ...this.mekoStatus, kiro: this.kiroMeko(), opencode: this.openCodeMeko() },
       update: this.updateStatus(),
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
@@ -510,11 +535,12 @@ export class Core extends EventEmitter {
     this.knowledge.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
-    // one-shot runs already going (the plan read, deleting a run's session) get as long to end; one
-    // slower than that is left to finish on its own, as nothing kills it.
+    // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long
+    // to end; one slower than that is left to finish on its own, as nothing kills it.
     await Promise.all([
       this.capture.settled(STOP_CAPTURE_MS),
       within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
+      within(openCodeDeletesSettled(), STOP_CAPTURE_MS),
     ]);
     await this.meko.close();
   }

@@ -8,12 +8,15 @@ import type { ReactNode } from 'react';
 export function TopBar({
   sub,
   title,
+  icon,
   onMenu,
   menuDot = false,
   children,
 }: {
   sub?: ReactNode;
   title?: ReactNode;
+  /** Drawn before the title, outside its ellipsis, so a status dot's halo isn't clipped. */
+  icon?: ReactNode;
   onMenu: () => void;
   /** Another session the drawer lists needs you. */
   menuDot?: boolean;
@@ -34,7 +37,10 @@ export function TopBar({
       {title && (
         <span className="topbar-title">
           {sub && <span className="topbar-sub">{sub}</span>}
-          <b>{title}</b>
+          <span className="topbar-name">
+            {icon}
+            <b>{title}</b>
+          </span>
         </span>
       )}
       {children}

@@ -172,12 +172,13 @@ holds every platform's tarball, `SHA256SUMS`, the release's `install.sh` and an
 `install-offline.sh` that runs `install.sh --tarball` on its own folder (README has the steps they
 follow). Only releases whose installer has `--tarball` can be bundled.
 
-Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code or
-Kiro CLI: either one is enough) and offers to install the missing ones, showing the commands and
-asking first. With neither agent there it asks which to install (`--agent claude|kiro` picks one
-without asking; Kiro CLI comes from its own installer at cli.kiro.dev), and it stops when no agent
-ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
-(Claude Code, Kiro), asking first. `--install-deps` skips the questions (and installs Claude Code
+Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code,
+OpenCode or Kiro CLI: any one is enough) and offers to install the missing ones, showing the
+commands and asking first. With no agent there it asks which to install, OpenCode second
+(`--agent claude|opencode|kiro` picks one without asking; OpenCode comes from its own installer at
+opencode.ai, into `~/.opencode/bin`, and Kiro CLI from its own at cli.kiro.dev), and it stops when no
+agent ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
+(Claude Code, Kiro; OpenCode sessions get AgentK's Meko from AgentK itself), asking first. `--install-deps` skips the questions (and installs Claude Code
 when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and
 `--deps-only` stops after that step. Where AgentK
 is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agentk`,

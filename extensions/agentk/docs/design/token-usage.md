@@ -24,6 +24,14 @@ A model with no known price adds tokens but no cost; the cost then reads `≥ $�
 partial**), and the tooltip says how many responses were left out. Model ids match with a date
 (`-20251001`), `[1m]` or `@…` suffix, and in Bedrock's form (`us.anthropic.claude-…-v1:0`).
 
+**OpenCode's tokens.** An [OpenCode session](harnesses.md#opencode) has no Claude transcript
+either: AgentK's plugin logs each finished response (the session's and its subagents') to
+`run/opencode/sessions/<session>/messages.jsonl`, read incrementally into `usage_messages` as
+`opencode:<message id>` (a subagent's with its session id as the agent), reasoning tokens counted as
+output and cache writes as 5-minute ones. They're priced like Claude Code's, from the model's API list
+price; a model the price table doesn't know (another provider's) adds tokens but no cost. By-model
+rows name the agent first: **OpenCode · claude-sonnet-4-5**.
+
 **Kiro's credits.** A [Kiro session](harnesses.md) has no Claude transcript: Kiro keeps each session in
 `~/.kiro/sessions/cli/<id>.json`, with every finished turn's token counts (0 under its `auto` model),
 the credits it billed (`metering_usage`) and how full the context was. After each turn (its `stop`

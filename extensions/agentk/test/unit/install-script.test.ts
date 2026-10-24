@@ -166,7 +166,7 @@ describe('install.sh: installing missing tools', () => {
     writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/kiro-cli" "$HOME/.local/bin/kiro-cli"; echo "kiro installer ran" >> "${log}"\n`);
     const plan = run(['--non-interactive']);
     expect(plan.code).toBe(1);
-    expect(plan.err).toContain('missing: Claude Code (or Kiro CLI, with --agent kiro)');
+    expect(plan.err).toContain('missing: Claude Code (or OpenCode or Kiro CLI, with --agent opencode or --agent kiro)');
     const r = run(['--non-interactive', '--install-deps', '--agent', 'kiro']);
     expect(r.code).toBe(0);
     expect(r.calls).toEqual(['curl https://cli.kiro.dev/install', 'kiro installer ran', 'kiro-cli whoami']);
@@ -323,25 +323,29 @@ describe('install.sh: installing missing tools', () => {
     expect(r.calls).toEqual(['gh auth status', 'gh auth login']);
   });
 
-  it('asks which agent to install when neither is there, and installs Kiro CLI when picked', async () => {
+  it('asks which agent to install when none is there, OpenCode second, and installs OpenCode when picked', async () => {
     have('git', 'curl', 'gh');
     rmSync(join(bin, 'claude'));
-    stub(repo, 'unzip', 'exit 0');
-    stub(repo, 'kiro-cli', `echo "kiro-cli $*" >> "${log}"; exit 0`);
-    writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/kiro-cli" "$HOME/.local/bin/kiro-cli"; echo "kiro installer ran" >> "${log}"\n`);
-    const r = await runInTerminal('2', 'Install Claude Code (1) or Kiro CLI (2)?', [['Install them now?', 'y']]);
-    expect(r.out).toContain('curl -fsSL https://cli.kiro.dev/install | bash');
+    stub(repo, 'opencode', `echo "opencode $*" >> "${log}"; [ "$1 $2" = "auth list" ] && echo "└  1 credentials"; exit 0`);
+    // OpenCode's installer puts it in ~/.opencode/bin, which isn't on the PATH.
+    writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.opencode/bin"; cp "${repo}/opencode" "$HOME/.opencode/bin/opencode"; echo "opencode installer ran" >> "${log}"\n`);
+    const r = await runInTerminal('2', 'Install Claude Code (1), OpenCode (2) or Kiro CLI (3)?', [['Install them now?', 'y']]);
+    expect(r.out).toContain('curl -fsSL https://opencode.ai/install | bash');
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(['sudo dnf install -y unzip', 'dnf install -y unzip', 'curl https://cli.kiro.dev/install', 'kiro installer ran', 'kiro-cli whoami']);
-    expect(r.out).toContain('git, curl, gh, Kiro');
+    expect(r.calls).toEqual(['curl https://opencode.ai/install', 'opencode installer ran', 'opencode auth list']);
+    expect(r.out).toContain('git, curl, gh, OpenCode');
   });
 
-  it('offers to sign Claude Code in', async () => {
+  it.each([
+    ['Claude Code', 'claude', `[ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'`, 'claude auth login', ['claude auth login']],
+    // OpenCode with no provider signed in (and none's key in the environment).
+    ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && printf '┌  Credentials\\n└  0 credentials\\n'`, 'opencode auth login', ['opencode auth list', 'opencode auth login']],
+  ])('offers to sign %s in', async (_, cmd, body, login, expected) => {
     have('git', 'curl', 'gh');
-    stub(bin, 'claude', `echo "claude $*" >> "${log}"; [ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'; exit 0`);
-    const r = await runInTerminal('y', 'Sign in now (claude auth login)?');
+    stub(bin, cmd, `echo "${cmd} $*" >> "${log}"; ${body}; exit 0`);
+    const r = await runInTerminal('y', `Sign in now (${login})?`);
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(['claude auth login']);
+    expect(r.calls).toEqual(expected);
   });
 });
 

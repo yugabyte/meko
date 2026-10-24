@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 import { BranchGoneError, addWorktree, checkBranchName, listBaseBranches, restoreWorktree } from '../../src/server/git.js';
-import { SUGGEST_MIN_AHEAD, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
+import { SUGGEST_MIN_AHEAD, UnknownCommitError, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 /** git refuses to fetch into a branch being rebased or bisected from 2.38 on. */
@@ -225,6 +225,46 @@ describe('changes vs. the base (real git)', () => {
     expect(await diffStat(wt, 'main')).toEqual({ files: c.files.length, added: c.added, removed: c.removed });
   });
 
+  it('lists the branch\'s commits and shows one commit alone', async () => {
+    writeFileSync(join(wt, 'added.txt'), 'a\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'first');
+    writeFileSync(join(wt, 'README.md'), '# test\nmore\n');
+    writeFileSync(join(wt, 'added.txt'), 'a\nb\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'second');
+    writeFileSync(join(wt, 'draft.md'), 'x\n'); // untracked: only in the full diff
+    const [second, first] = [git(wt, 'rev-parse', 'HEAD'), git(wt, 'rev-parse', 'HEAD~1')];
+
+    const all = (await changes(wt, 'main'))!;
+    expect(all.commit).toBeNull();
+    expect(all.commits.map((c) => [c.sha, c.subject])).toEqual([[second, 'second'], [first, 'first']]);
+    expect(all.files.map((f) => f.path)).toEqual(['README.md', 'added.txt', 'draft.md']);
+
+    const last = (await changes(wt, 'main', new Set(), second))!;
+    expect(last.commit).toMatchObject({ sha: second, subject: 'second' });
+    expect(last.files.map((f) => f.path)).toEqual(['README.md', 'added.txt']);
+    expect(last.files.find((f) => f.path === 'added.txt')).toMatchObject({ kind: 'modified', added: 1, removed: 0, uncommitted: false });
+    expect(last.files.find((f) => f.path === 'added.txt')!.patch).toMatch(/\n a\n\+b$/);
+    expect((await changes(wt, 'main', new Set(), first))!.files.map((f) => [f.path, f.kind])).toEqual([['added.txt', 'added']]);
+
+    // A root commit merged in from an unrelated history is compared with the empty tree.
+    git(repo, 'checkout', '-q', '--orphan', 'other-root');
+    git(repo, 'rm', '-rqf', '.');
+    writeFileSync(join(repo, 'root.txt'), 'r\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'unrelated root');
+    const root = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'checkout', '-q', '-f', 'main');
+    git(wt, 'merge', '-q', '--allow-unrelated-histories', '-m', 'merge root', 'other-root');
+    const fromRoot = (await changes(wt, 'main', new Set(), root))!;
+    expect(fromRoot.files.map((f) => [f.path, f.kind, f.added])).toEqual([['root.txt', 'added', 1]]);
+
+    // Only the branch's own commits: not a base commit, nor anything typed.
+    await expect(changes(wt, 'main', new Set(), git(wt, 'rev-parse', 'main'))).rejects.toBeInstanceOf(UnknownCommitError);
+    await expect(changes(wt, 'main', new Set(), '--output=/tmp/x')).rejects.toBeInstanceOf(UnknownCommitError);
+  });
+
   it('serves both sides of a changed image, and only images inside the repo', async () => {
     const png = (n: number) => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, n]);
     mkdirSync(join(repo, 'img'));
@@ -248,6 +288,19 @@ describe('changes vs. the base (real git)', () => {
     expect((await changedImage(wt, 'main', 'img/gone.png', 'old'))?.data).toEqual(png(2));
     const c = (await changes(wt, 'main'))!;
     expect(c.files.find((f) => f.path === 'img/logo.png')).toMatchObject({ binary: true, patch: null });
+
+    // One commit's view: its parent's version and its own, never the worktree's.
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'images changed');
+    const sha = git(wt, 'rev-parse', 'HEAD');
+    writeFileSync(join(wt, 'img', 'logo.png'), png(11));
+    expect((await changedImage(wt, 'main', 'img/logo.png', 'old', sha))?.data).toEqual(png(1));
+    expect((await changedImage(wt, 'main', 'img/logo.png', 'new', sha))?.data).toEqual(png(9));
+    expect(await changedImage(wt, 'main', 'new.png', 'old', sha)).toBeNull();
+    expect((await changedImage(wt, 'main', 'new.png', 'new', sha))?.data).toEqual(png(5));
+    expect(await changedImage(wt, 'main', 'img/gone.png', 'new', sha)).toBeNull();
+    expect((await changedImage(wt, 'main', 'img/gone.png', 'old', sha))?.data).toEqual(png(2));
+    await expect(changedImage(wt, 'main', 'img/logo.png', 'old', git(wt, 'rev-parse', 'main'))).rejects.toBeInstanceOf(UnknownCommitError);
 
     // Never a non-image, a path out of the repo, or a symlink that leads out of it.
     writeFileSync(join(home, 'secret.png'), png(7));

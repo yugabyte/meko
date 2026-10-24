@@ -116,11 +116,21 @@ Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of u
 read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";
 `GET /api/sessions/:id/changes/image` serves the base's version from git or the worktree's from
-disk, only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
+disk (in a commit's view, its parent's and its own, from git), only for those types, only inside the repo (no `..`, no symlinks out), up to 20 MB, and with
 a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
 (*4 / 12*), and `[` / `]` step to the previous or next file.
+
+The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
+branch's commits alone: the commits since the merge base, newest first (at most 200,
+`MAX_COMMITS`, `branchCommits()` in `changes.ts`), with short sha, subject and age, filtered by
+typing. A commit is compared with its first parent (git's empty tree for a root commit), without
+uncommitted or untracked files. Only a commit that menu lists is accepted (`?commit=<full sha>` on
+`/changes` and `/changes/image`), so nothing typed reaches git; one that's gone (amended or
+rebased) is a 404, and the panel goes back to All changes with a note. A commit's view takes no
+comments, since a comment's sides are the base and the worktree: its rows have no **+**, its
+comments aren't shown, and a comment being written stays open above the files, to finish or cancel.
 
 ### Changing the base
 
@@ -305,6 +315,28 @@ A project datapack shared with you also sends one notification (an `invite` even
 datapack); clicking it opens the Open project dialog for it. Tapped through the service worker, it
 opens the dialog in an open window, or opens `/`, where the share's banner is waiting.
 
+## Installing the app
+
+AgentK is a web app you can install: the manifest and the service worker above meet the browsers'
+rules (the service worker still caches nothing). The first time you open it in a browser that can
+install it, a banner offers to: **Install** opens the browser's own install dialog, and **Not now**
+hides the offer in that browser for good (`localStorage`, as the other banners do; installing is
+per browser and device, so the server doesn't keep it). The page catches the browser's
+`beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
+as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
+installed (Chrome stops making the offer in its tabs), or before sign-in. While the browser can
+still install it, **Install AgentK as an app** is in the `⌘K` palette too, even after Not now.
+Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
+next click), so one tap never brings up two prompts.
+
+An iPhone or iPad makes no offer, so there the banner says to tap Share, then Add to Home Screen;
+iOS shows notifications only for Home Screen web apps. Safari can't tell that AgentK is on the Home
+Screen already (it has no `appinstalled`, and the Home Screen app keeps its storage apart), so in a
+Safari tab only Not now hides these steps; the Home Screen app itself never shows them. Firefox and Safari on a Mac get no banner.
+Chrome offers nothing for a page whose certificate it doesn't trust, so with AgentK's self-signed
+certificate, trust its fingerprint (`agentk status`) first. Chrome may also wait until you've used
+the page a little before it offers, so the banner can appear a moment after the page loads.
+
 ## On a phone
 
 At 760 px wide or less the app switches to a phone layout. The rail becomes a drawer behind a top
@@ -341,6 +373,18 @@ coasting and slows down until it stops or a new touch lands, and the terminal on
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
 its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
 selects whole lines instead of scrolling, and lifting the finger copies them; no touch reaches Claude
-as a mouse click meanwhile. Tapping the terminal only brings up the keyboard in
-typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
+as a mouse click meanwhile. Tapping a link opens it in a new tab, the whole URL even when Claude
+Code broke it over rows itself (`linkAt()` in `src/web/termlinks.ts`). Claude wraps with wrap-ansi,
+which breaks a word only when it's longer than the text's width and carries the rest on exactly at
+the text's margin. So the next row carries a URL on only when the URL runs into the row's last cell,
+the next row starts exactly at the row above's margin (past a bullet or list marker), and its part
+reaches past the column where the URL started. A word that only follows a URL filling the row comes
+down with its space in front, one column past the margin, so it isn't joined. The tap opens the
+link straight from the touch handler and is cancelled, so it doesn't also reach Claude as a click,
+open the link a second time through the mouse path, or do what a tap on the terminal does otherwise
+(ask for a session open on another screen, or focus it in typing mode). A tap is a finger that
+moves less than 8 px and lifts within half a second without flicking; a short, quick flick still
+scrolls. A mouse click on a link goes through xterm's web-links addon, which only joins rows xterm
+wrapped itself. Tapping the
+terminal only brings up the keyboard in typing mode (the keyboard key). Phones default to an 11 px terminal font (about 48 columns),
 adjustable in the ⋯ sheet and remembered per browser.

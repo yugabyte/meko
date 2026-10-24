@@ -30,7 +30,7 @@ export interface Config {
    * prompts and reports the context fill; off, prompts are typed into the terminal.
    */
   claude: { command: string; enabled: boolean; mod: boolean };
-  /** default: the harness new sessions start on (`claude` or `kiro`) unless the New session dialog picks another. */
+  /** default: the harness new sessions start on (`claude`, `opencode` or `kiro`) unless the New session dialog picks another. */
   agents: { default: HarnessId };
   /**
    * Kiro CLI (src/server/harness/kiro.ts). command: how it's run. enabled: offer it for new sessions when
@@ -38,6 +38,11 @@ export interface Config {
    * from a session's next launch or resume), so Kiro runs any tool without asking.
    */
   kiro: { command: string; enabled: boolean; trustTools: boolean };
+  /**
+   * OpenCode (src/server/harness/opencode.ts). command: how it's run (the default, `opencode`, is also found in
+   * `~/.opencode/bin`, where OpenCode's installer puts it). enabled: offer it for new sessions when `<command> --version` answers.
+   */
+  opencode: { command: string; enabled: boolean };
   /**
    * idlePerRepo: worktrees each repo keeps for the next session, build outputs and all (0 to 20; 0 removes them).
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
@@ -75,6 +80,7 @@ export const DEFAULT_CONFIG: Config = {
   claude: { command: 'claude', enabled: true, mod: true },
   agents: { default: DEFAULT_HARNESS },
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
+  opencode: { command: 'opencode', enabled: true },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
