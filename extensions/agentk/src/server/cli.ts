@@ -24,7 +24,7 @@ import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
 import { HEALTHY_MS, uncountStart, Updater } from './updater.js';
-import { checkMove, finishMove, HomeMove, moveHome, readJournal, rememberMekoHome, stopAll, tmpHomeWarning } from './movehome.js';
+import { checkMove, finishMove, HomeMove, MEKO_COMMANDS, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning } from './movehome.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -458,6 +458,7 @@ Usage: agentk <command>
 
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
+  if (cmd && MEKO_COMMANDS.includes(cmd)) refuseOtherMeko(getPaths());
   switch (cmd) {
     case 'serve': return serve();
     case 'install': return (await import('./install.js')).runInstall(args);

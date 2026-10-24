@@ -5,6 +5,10 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
 
 - [ ] `make test` and `make lint` pass in `backend/`; new behavior has a test.
+- [ ] Tests never reach this machine's own extensions (an installed `agentk`): PATH stays
+      `/usr/bin:/bin` (`noRealExtensions`) while anything can run one, and cleanups that run Meko
+      commands leave the extensions alone (`setup`'s `stop --keep-extensions`), since cleanups run
+      last first and `t.Setenv` has restored PATH by then. A real `agentk stop` ends every session.
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
