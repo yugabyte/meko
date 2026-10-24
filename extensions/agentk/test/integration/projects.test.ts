@@ -119,7 +119,7 @@ describe('projects', () => {
   it("doesn't ask Meko for counts while it's off", async () => {
     const p = await create('Alpha');
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     const before = env.meko.calls.length;
     expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: null });

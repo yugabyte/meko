@@ -246,15 +246,21 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       idle (`session_id IS NULL`) before running git, so it can't remove one a session just claimed.
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
-      doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
-      false) means no Meko calls at all. The one poll is following a knowledge-base upload's
+      doesn't need Meko (a project with No datapack, sessions). No Meko (`MekoStatus.configured`
+      false: no key, and no Meko running on this computer) means no Meko calls at all; the one
+      thing done then is looking for the Meko on this computer every minute (`meko token --json`
+      in `Core.refreshLocalMeko`, a local command with a 5 s timeout, one at a time, never a Meko
+      call, and only while there's no Meko). Reading the local Meko again otherwise happens only on
+      events (startup, Settings open, a failed connection to it at most every 30 s), and a change
+      reconnects without forgetting the account's invites (`mekoChanged` is for switching Mekos).
+      The one poll is following a knowledge-base upload's
       indexing (`KnowledgeService` in `knowledge.ts`): only after the file was posted to Meko's
       storage under the key `upload-url` gave (never for one Meko already had), every 5 s for a
       minute then every 30 s, at most 15 minutes per upload, never
-      with Meko off, stopped at an error waiting can't fix, and dropped on a Meko settings change.
+      without a Meko, stopped at an error waiting can't fix, and dropped on a Meko settings change.
       The one check that calls Meko by itself, trying Claude
-      Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
-      session launch, after Claude Code's setup, Claude Code becoming available or not after a
+      Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, a change of the
+      Meko on this computer, Settings open, session launch, after Claude Code's setup, Claude Code becoming available or not after a
       version read), only while Claude Code is available, in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
 - [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the

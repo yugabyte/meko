@@ -129,7 +129,7 @@ describe("What Meko doesn't know", () => {
     search('s9', 't9', 'Release tag retention', 1000, 'empty', 'empty');
     expect((await teach(plain.id, 'An answer')).json()).toMatchObject({ code: 'NO_DEDICATED_DATAPACK' });
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     expect((await teach(p.id, 'An answer')).json()).toMatchObject({ code: 'MEKO_OFF' });
   });

@@ -14,7 +14,7 @@ Claude (or OpenCode, or Kiro) process held by AgentK's session host; the agent a
 (`src/server/harness/`, [docs/design/harnesses.md](docs/design/harnesses.md)). A task runs on Explore → Design → Code → PR & Review → Merge & Close,
 starting at Explore, Design or Code (the user picks), and a Review a PR session (someone else's PR,
 with AgentK assisting the reviewer) stays in one Reviewing PR stage. The user can move a task
-between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (Meko is optional). The design
+between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (a Meko Cloud key, else the Meko on this computer). The design
 is in [docs/design.md](docs/design.md): an index, with one file per area under `docs/design/`.
 
 **Naming:** the product is **AgentK** (it was AgentK Local until October 2026) in anything people
@@ -110,16 +110,18 @@ agents should read it before changing code there.
    data folder (invariant 1). Keep `src/server/host/` small; bump `PROTOCOL` in
    `host/protocol.ts` for a change an older peer can't read, and keep the server working with hosts back
    to `MIN_PROTOCOL`. The updater keeps the version directory the host runs from.
-7. **Meko is optional; a project has at most one dedicated datapack.** Without a key (or with
-   `[meko] enabled = false`) AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
+7. **Meko is a key, else the Meko on this computer; a project has at most one dedicated datapack.**
+   It can't be turned off. Without a key, AgentK uses the Meko running on this computer, read from
+   Meko (`mekolocal.ts`), kept in memory and never written to `config.toml`; its token goes only to
+   its own URL. With neither, AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
    lines in their prompt, and nothing is saved there. Each session gets its own
    `MEKO_AGENT_ID` (`sessionAgentId()`: `claude_code:<slug>-<hash>`, or `opencode:…` or `kiro:…` for an OpenCode or Kiro session, never the project id), with
    the project's dedicated datapack pinned for it when it starts; AgentK's writes for a session use
    the id it runs with (`launchedAgentId()`). Never remove a `pin-claude_code_<project id>.json`:
    it may be the user's own pin for plain Claude Code in that repo. (Claude Code's own
    Meko setup is the user's and is changed only when they ask: the installer's question or
-   **Set up Claude Code with this Meko**.) Nothing that needs Meko may stop the install, a project or a session when Meko is off or
-   down: it's skipped or offered later.
+   **Set up Claude Code with this Meko**.) Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
+   it's down: it's skipped or offered later.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
    keys in code, docs, tests or commit messages.
 

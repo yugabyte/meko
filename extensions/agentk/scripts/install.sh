@@ -28,9 +28,9 @@
 #                       without access to the repo (scripts/offline-bundle.sh)
 #   --print-home        print the folder AgentK is (or would be) installed in, and stop
 #   anything else       forwarded to `agentk install`
-#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
-#                       --port, --no-service); Meko is optional: without a key the install goes on
-#                       without it, and a Meko running on this computer is offered first
+#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --bind, --port,
+#                       --no-service); without a Meko Cloud key, AgentK uses the Meko running on
+#                       this computer (Enter at the key prompt)
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
 # (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and a
