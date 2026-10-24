@@ -970,6 +970,11 @@ export interface MekoStatus {
    * AgentK leaves alone. Null when OpenCode isn't available or Meko is off.
    */
   opencode: { own: boolean } | null;
+  /**
+   * The Meko on this computer, as last read. While it's `none` (no `meko` at all), a banner that
+   * can't be dismissed says to install Meko, with a Meko Cloud key too.
+   */
+  local: LocalMekoState;
 }
 
 export interface MekoClaudeStatus {

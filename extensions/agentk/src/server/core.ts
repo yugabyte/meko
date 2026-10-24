@@ -320,7 +320,7 @@ export class Core extends EventEmitter {
   }
 
   private mekoStatusFor(cfg: Config): MekoStatus {
-    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null, opencode: null };
+    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null, opencode: null, local: localMeko().state };
   }
 
   /**
@@ -420,6 +420,7 @@ export class Core extends EventEmitter {
    */
   async refreshLocalMeko(): Promise<void> {
     const before = resolveMeko(this.cfg);
+    const wasState = localMeko().state;
     await this.localReader.refresh();
     if (this.stopped) return;
     const local = localMeko().meko;
@@ -431,7 +432,11 @@ export class Core extends EventEmitter {
       this.log.info('config.toml held the Meko on this computer\'s URL and token; AgentK now reads them from Meko');
     }
     const after = resolveMeko(this.cfg);
-    if (before.url === after.url && before.apiKey === after.apiKey) return;
+    if (before.url === after.url && before.apiKey === after.apiKey) {
+      // Installed, or gone, without changing the Meko AgentK uses: the install banner follows it.
+      if (localMeko().state !== wasState) this.changed();
+      return;
+    }
     this.log.info(after.apiKey ? `using the Meko on this computer (${after.url})` : 'the Meko on this computer stopped; Meko is not set up');
     // As in updateConfig: a harness may have written the old token somewhere of its own.
     for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
@@ -484,7 +489,7 @@ export class Core extends EventEmitter {
         }
         return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
       })(),
-      meko: { ...this.mekoStatus, kiro: this.kiroMeko(), opencode: this.openCodeMeko() },
+      meko: { ...this.mekoStatus, kiro: this.kiroMeko(), opencode: this.openCodeMeko(), local: localMeko().state },
       update: this.updateStatus(),
       version: this.version,
       // The login name shown in the UI; the Unix account only as a fallback.
@@ -580,8 +585,9 @@ export class Core extends EventEmitter {
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
-      // Meko normally starts first (it starts AgentK); this covers a boot where it didn't.
-      this.every(LOCAL_MEKO_EVERY_MS, () => (mekoConfigured(this.cfg) ? undefined : this.refreshLocalMeko()));
+      // Meko normally starts first (it starts AgentK); this covers a boot where it didn't, and an
+      // install of Meko while the banner asks for one (with a Meko Cloud key too).
+      this.every(LOCAL_MEKO_EVERY_MS, () => (mekoConfigured(this.cfg) && localMeko().state !== 'none' ? undefined : this.refreshLocalMeko()));
       this.callHome.start((ms, fn) => this.every(ms, fn));
       this.ybCallHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.

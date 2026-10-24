@@ -120,8 +120,8 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > memory (`LocalMekoReader`) and never written to `config.toml`, so a new port or token is picked
 > up without a reinstall. It's read at server start (before sessions are recovered), when the Meko
 > tab opens (which waits up to 1.5 s for it), once more when connecting to it fails (at most every
-> 30 s), and every minute while there's no Meko at all (Meko normally starts AgentK, so it's up
-> first). A change reconnects and syncs invites again (`Core.refreshLocalMeko`), but keeps the
+> 30 s), and every minute while there's no Meko at all or no `meko` on this computer (Meko
+> normally starts AgentK, so it's up first). A change reconnects and syncs invites again (`Core.refreshLocalMeko`), but keeps the
 > invites and shares AgentK knows: it's the same Meko account, unlike a switch to another Meko
 > (`Core.mekoChanged`). The local token goes only to the local Meko: it's the fourth key source
 > (`keySource: 'local'`), after the other three, its URL comes with it, never from another
@@ -172,9 +172,14 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > - **At session start:** every session gets `MEKO_AGENT_ID`, and `MEKO_DATAPACK_ID` when the
 >   project has a dedicated datapack. A project without one starts sessions like any other; design
 >   saves, the learn step and search skip Meko for it, and while there's no Meko, for every project.
+> - **If Meko isn't installed:** while there's no `meko` on this computer (`MekoStatus.local` is
+>   `none`), a banner that can't be dismissed says so and gives the command that installs it (the
+>   latest release's installer, `MEKO_INSTALL_COMMAND` in `src/shared/mekourls.ts`), with **Copy**.
+>   It shows with a Meko Cloud key too: Meko runs on every computer AgentK does. AgentK looks for
+>   `meko` every minute meanwhile, and the banner goes once it's found, running or not.
 > - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare.
 >   The one exception is looking for the Meko on this computer every minute while there's no Meko
->   at all (`meko token --json`, a local command, never a Meko call). An
+>   at all or no `meko` (`meko token --json`, a local command, never a Meko call). An
 >   action that needs Meko (creating a datapack, sharing, answering an invite, adding a key) shows
 >   Meko's error, the project home shows no datapack counts, and background syncs log a warning and
 >   try again later. Running sessions keep going; the Meko hooks capture from the transcript on
