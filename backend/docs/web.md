@@ -77,8 +77,8 @@ hands them to Meko. At every start `serve` asks each registered extension with a
   - its owner, so the same password and authenticator sign in.
 - **It runs before the web port is taken.** An AgentK too old to answer still holds 7777, so the
   listener waits: it tries the port and the handoff again every 30 s, logging each failure once,
-  and `status` says why it isn't listening (`meko ui` stops with that rather than open whatever
-  holds the port). When a later handoff changes `[web]` or `[tls]`, the listener starts
+  and `status` says why it isn't listening (`meko ui` waits for a listener that's starting, and
+  stops with the reason rather than open whatever holds the port). When a later handoff changes `[web]` or `[tls]`, the listener starts
   again with them.
 - **An extension registered while Meko runs** (`meko install_extension`) is asked on the first
   request that needs its socket, and again at most every 10 s.
