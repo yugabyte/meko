@@ -71,17 +71,31 @@ var errNoSocket = errors.New("the extension hasn't said where it listens")
 // Path is where browsers find it: /ext/<name>/.
 func (p *Proxy) Path() string { return p.prefix + "/" }
 
-// Available reports whether its socket is there to connect to.
+// Available reports whether the extension answers on its socket: a socket file an extension left
+// when it died refuses the connection, and is forgotten as a gone one is.
 func (p *Proxy) Available() bool {
 	path := p.socket()
 	if path == "" {
 		return false
 	}
-	fi, err := os.Stat(path)
-	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+	if !Answers(path) {
 		p.gone()
 		return false
 	}
+	return true
+}
+
+// Answers reports whether something accepts connections on the unix socket at path.
+func Answers(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	c, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
 	return true
 }
 

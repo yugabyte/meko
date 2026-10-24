@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
+	"github.com/yugabyte/meko/backend/internal/extproxy"
 )
 
 // Installed names the registered extensions, for the web UI's Extensions page.
@@ -25,7 +27,8 @@ func (w *webListener) Installed() []string {
 // RunExtension runs an action of the Extensions page on a known extension (server.Web.Run): install
 // it as meko install_extension does, with no terminal, or run its own start or stop. The output and
 // the error reach a browser, so the client token the installer is given is blanked in both. After
-// an install or a start, the next request asks the extension where it listens at once.
+// an install or a start of one with a web UI, it waits for the extension to answer on its socket
+// (AgentK's start returns before its server listens), so the page's next look sees it running.
 func (w *webListener) RunExtension(ctx context.Context, name, action string, out io.Writer) error {
 	var tok string
 	if cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{}); err == nil {
@@ -40,10 +43,36 @@ func (w *webListener) RunExtension(ctx context.Context, name, action string, out
 		}
 		return err
 	}
-	if action != "stop" {
-		w.reconnect(name)
+	if action != "stop" && extensions.Known[name].WebUI {
+		return w.awaitListening(ctx, name)
 	}
 	return nil
+}
+
+// awaitListening waits up to extensions.ListenTimeout for an extension to answer on the socket its
+// handoff names, asking again each second: a look at the list while it starts forgets a socket
+// that doesn't answer yet and holds off asking for 10 s (reconnect undoes that). Once it answers,
+// the socket is known, so the next request goes straight to it.
+func (w *webListener) awaitListening(ctx context.Context, name string) error {
+	cat := extensions.Known[name]
+	deadline := time.Now().Add(extensions.ListenTimeout)
+	for {
+		w.reconnect(name)
+		if path := w.socket(name)(); path != "" && extproxy.Answers(path) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			w.reconnect(name)
+			return fmt.Errorf("%s started, but isn't answering after %s: see %s status", cat.Title,
+				extensions.ListenTimeout, cat.Command)
+		}
+		select {
+		case <-ctx.Done():
+			w.reconnect(name)
+			return errors.New("it was stopped: Meko is stopping")
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func (w *webListener) runExtension(ctx context.Context, name, action string, out io.Writer) error {

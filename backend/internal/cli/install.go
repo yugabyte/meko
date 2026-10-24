@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -389,15 +390,23 @@ func tooOld(cmd string) bool {
 }
 
 // runAttached runs a command with env and stdin (the terminal, where an installer asks its
-// questions, or nil for none), until it ends or ctx does.
+// questions, or nil for none), until it ends or ctx does. Without a terminal it runs in a process
+// group of its own, so ending ctx stops what it started too (an installer's agentk install).
 func runAttached(ctx context.Context, name string, args, env []string, stdin io.Reader,
 	stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: an extension's own command or installer
 	cmd.Stdin, cmd.Stdout, cmd.Stderr, cmd.Env = stdin, stdout, stderr, env
 	cmd.WaitDelay = extensions.PipeWait
+	if stdin == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	}
 	if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
-		if ctx.Err() != nil {
-			return fmt.Errorf("stopped: %w", ctx.Err())
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return errors.New("it took too long and was stopped")
+		case ctx.Err() != nil:
+			return errors.New("it was stopped: Meko is stopping")
 		}
 		return err
 	}

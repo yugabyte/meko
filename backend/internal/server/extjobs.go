@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"time"
 )
@@ -70,29 +71,53 @@ func (j *job) finish(err error) {
 	}
 }
 
-// extJobs are the extensions' jobs, by name.
-type extJobs struct {
-	mu   sync.Mutex
-	jobs map[string]*job
+// ExtensionJobs are the extensions' jobs, by name. The web listener's owner keeps one for all the
+// servers it builds (Web.Jobs), so a job outlives a restart of the listener; Cancel stops the
+// running ones when Meko stops.
+type ExtensionJobs struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu      sync.Mutex
+	jobs    map[string]*job
+	running int
+	ended   chan struct{} // closed, and replaced, each time a job ends
 }
 
-// start begins a job for name, unless one is running: then it returns that one and false.
-func (x *extJobs) start(name, action string) (*job, bool) {
+// NewExtensionJobs returns an empty set of jobs.
+func NewExtensionJobs() *ExtensionJobs {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &ExtensionJobs{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, ended: make(chan struct{})}
+}
+
+// start begins a job for name, unless one is running: then it returns that one and false. The
+// caller runs it with run's context and ends it with done.
+func (x *ExtensionJobs) start(name, action string) (*job, bool) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if j := x.jobs[name]; j != nil && j.snapshot().State == JobRunning {
 		return j, false
 	}
-	if x.jobs == nil {
-		x.jobs = map[string]*job{}
-	}
 	j := &job{view: ExtensionJob{Action: action, State: JobRunning, StartedAt: time.Now().UTC()}}
 	x.jobs[name] = j
+	x.running++
 	return j, true
 }
 
+// run is the context a job runs with: done once Cancel is called.
+func (x *ExtensionJobs) run() context.Context { return x.ctx }
+
+func (x *ExtensionJobs) done(j *job, err error) {
+	j.finish(err)
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.running--
+	close(x.ended)
+	x.ended = make(chan struct{})
+}
+
 // get is name's last job, or nil.
-func (x *extJobs) get(name string) *ExtensionJob {
+func (x *ExtensionJobs) get(name string) *ExtensionJob {
 	x.mu.Lock()
 	j := x.jobs[name]
 	x.mu.Unlock()
@@ -101,4 +126,37 @@ func (x *extJobs) get(name string) *ExtensionJob {
 	}
 	v := j.snapshot()
 	return &v
+}
+
+// Busy reports whether a job is running.
+func (x *ExtensionJobs) Busy() bool {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.running > 0
+}
+
+// WaitIdle waits until no job is running, or ctx ends.
+func (x *ExtensionJobs) WaitIdle(ctx context.Context) {
+	for {
+		x.mu.Lock()
+		running, ended := x.running, x.ended
+		x.mu.Unlock()
+		if running == 0 {
+			return
+		}
+		select {
+		case <-ended:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// Cancel stops the running jobs (each fails, "stopped") and any started later, and waits up to d
+// for them to end.
+func (x *ExtensionJobs) Cancel(d time.Duration) {
+	x.cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	x.WaitIdle(ctx)
 }

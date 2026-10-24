@@ -112,7 +112,6 @@ type Server struct {
 	e    *echo.Echo
 	opts Options
 	srv  *http.Server
-	jobs extJobs // the extensions' actions, on the web listener
 }
 
 // New builds the server and its routes.
@@ -163,6 +162,9 @@ func New(opts Options) *Server {
 	} else {
 		if opts.Web.Extensions == nil {
 			opts.Web.Extensions = func() []*extproxy.Proxy { return nil }
+		}
+		if opts.Web.Jobs == nil {
+			opts.Web.Jobs = NewExtensionJobs()
 		}
 		s.registerWeb(v1)
 	}

@@ -193,9 +193,56 @@ func TestExtensionActionsNeedASession(t *testing.T) {
 	}
 }
 
+// The jobs are the listener owner's: a server built after a restart of the listener sees the job
+// still running and refuses a second action on the extension.
+func TestJobsOutliveTheServer(t *testing.T) {
+	f := &fakeRun{release: make(chan struct{})}
+	jobs := NewExtensionJobs()
+	shared := func(w *Web) { w.Run, w.Jobs = f.run, jobs }
+	first, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk"), shared)
+	if code, _ := post(t, first+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+		t.Fatalf("install: %d", code)
+	}
+	second, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk"), shared)
+	if r := agentkRow(t, second); r.Job == nil || r.Job.State != JobRunning || r.Job.Action != "install" {
+		t.Errorf("the new server's job: %+v", r.Job)
+	}
+	if code, _ := post(t, second+"/api/v1/extensions/agentk/start", nil); code != 409 {
+		t.Errorf("a second action on the new server: %d", code)
+	}
+	if !jobs.Busy() {
+		t.Error("not busy while the install runs")
+	}
+	f.release <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	jobs.WaitIdle(ctx)
+	if jobs.Busy() || waitJob(t, second).Job.State != JobDone {
+		t.Error("the install didn't end")
+	}
+}
+
+// Cancel ends the context the running jobs were given, and waits for them.
+func TestCancelStopsTheJobs(t *testing.T) {
+	jobs := NewExtensionJobs()
+	run := func(ctx context.Context, _, _ string, _ io.Writer) error {
+		<-ctx.Done()
+		return errors.New("it was stopped")
+	}
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed(),
+		func(w *Web) { w.Run, w.Jobs = run, jobs })
+	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+		t.Fatalf("install: %d", code)
+	}
+	jobs.Cancel(5 * time.Second)
+	if r := agentkRow(t, base); jobs.Busy() || r.Job.State != JobFailed || r.Job.Error != "it was stopped" {
+		t.Errorf("after Cancel: busy %v, %+v", jobs.Busy(), r.Job)
+	}
+}
+
 // A job keeps the end of its output, from a line's start, while it's written and read at once.
 func TestJobOutputKeepsTheEnd(t *testing.T) {
-	var x extJobs
+	x := NewExtensionJobs()
 	j, ok := x.start("agentk", "install")
 	if !ok {
 		t.Fatal("not started")
@@ -213,7 +260,7 @@ func TestJobOutputKeepsTheEnd(t *testing.T) {
 		_ = x.get("agentk")
 	}
 	wg.Wait()
-	j.finish(nil)
+	x.done(j, nil)
 	got := x.get("agentk")
 	if len(got.Output) > JobOutputLimit || !strings.HasPrefix(got.Output, "line ") ||
 		!strings.HasSuffix(got.Output, "line 1999 of the installer's output\n") || got.State != JobDone {

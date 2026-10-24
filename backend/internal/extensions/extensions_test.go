@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistry(t *testing.T) {
@@ -127,5 +128,26 @@ func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
 	put(moved)
 	if got := ak.Find("agentk", home, root); got != moved {
 		t.Fatalf("found %q, want the data folder's %q", got, moved)
+	}
+}
+
+// A command that leaves a process running, holding its output pipe, still returns once it exits:
+// its output is read for PipeWait more, then the pipe is closed and the clean exit stands.
+func TestRunReturnsWhenAChildHoldsTheOutput(t *testing.T) {
+	cmd := filepath.Join(t.TempDir(), "ext")
+	script := "#!/bin/sh\necho started\nsleep 5 &\nexit 0\n"
+	if err := os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	old := PipeWait
+	PipeWait = 200 * time.Millisecond
+	t.Cleanup(func() { PipeWait = old })
+	var out bytes.Buffer
+	begun := time.Now()
+	if err := (Entry{Command: cmd}).Run(t.TempDir(), "start", &out, &out); err != nil || out.String() != "started\n" {
+		t.Fatalf("start: %v %q", err, out.String())
+	}
+	if took := time.Since(begun); took > 3*time.Second {
+		t.Errorf("took %s: the child's pipe held it", took)
 	}
 }

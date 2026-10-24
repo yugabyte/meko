@@ -33,9 +33,11 @@ type Web struct {
 	// the ones in Extensions.
 	Installed func() []string
 	// Run, if set, runs an action on a known extension for the Extensions page (install, start or
-	// stop), writing its output to out, and returns when it's done. ctx bounds nothing: each action
-	// has its own timeout.
+	// stop), writing its output to out, and returns when it's done or ctx is (Jobs.Cancel).
 	Run func(ctx context.Context, name, action string, out io.Writer) error
+	// Jobs are the actions Run runs, kept across the servers the listener's owner builds; nil gives
+	// this server its own.
+	Jobs *ExtensionJobs
 }
 
 // The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action).
@@ -344,7 +346,7 @@ func (s *Server) installed() map[string]bool {
 func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
 	cat := extensions.Known[name]
 	row := ExtensionInfo{Name: name, Title: cat.Title, Description: cat.Description, Installed: installed,
-		WebUI: cat.WebUI, Job: s.jobs.get(name)}
+		WebUI: cat.WebUI, Job: s.opts.Web.Jobs.get(name)}
 	if p := s.proxy(name); p != nil {
 		row.Path, row.Available = p.Path(), p.Available()
 	}
@@ -377,16 +379,17 @@ func (s *Server) extensionAction(c echo.Context) error {
 	if action != "install" && !installed {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT", cat.Title+" isn't installed.")
 	}
-	j, ok := s.jobs.start(name, action)
+	jobs := s.opts.Web.Jobs
+	j, ok := jobs.start(name, action)
 	if !ok {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT",
 			fmt.Sprintf("%s is busy: its %s hasn't finished.", cat.Title, j.snapshot().Action))
 	}
 	s.opts.Logger.Info("extension action", "extension", name, "action", action)
 	go func() {
-		// Not the request's context: the job outlives the request that started it.
-		err := s.opts.Web.Run(context.Background(), name, action, j)
-		j.finish(err)
+		// Not the request's context: the job outlives the request that started it, and this server.
+		err := s.opts.Web.Run(jobs.run(), name, action, j)
+		jobs.done(j, err)
 		if err != nil {
 			s.opts.Logger.Warn("extension action failed", "extension", name, "action", action, "error", err)
 		} else {

@@ -135,6 +135,9 @@ var (
 	// web UI's) is a pipe, which a process the command left running (a server it started without a
 	// service) would hold open, so Wait would never return.
 	PipeWait = 5 * time.Second
+	// ListenTimeout is how long an install or start from the web UI waits for an extension with a
+	// web UI to answer on its socket.
+	ListenTimeout = 30 * time.Second
 )
 
 // Env is the environment an extension's command runs with: Meko's own, with MEKO_HOME naming
