@@ -170,7 +170,8 @@ export function Dialog({
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   // Focus the first control once on open; Escape closes; Tab stays inside. On touch, focusing a
-  // field would bring up the keyboard before you've tapped it, so only the main button takes focus.
+  // field would bring up the keyboard before you've tapped it, so only an enabled main button takes
+  // focus. With none, the dialog itself does, so focus never stays behind it (on the terminal).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -182,7 +183,10 @@ export function Dialog({
     window.addEventListener('keydown', onKey, true);
     const root = ref.current;
     if (root && !root.contains(document.activeElement)) {
-      root.querySelector<HTMLElement>(matches(TOUCH_QUERY) ? 'button.primary' : 'input:not([disabled]), textarea, select, button.primary')?.focus();
+      const first = root.querySelector<HTMLElement>(
+        matches(TOUCH_QUERY) ? 'button.primary:not([disabled])' : 'input:not([disabled]), textarea, select, button.primary:not([disabled])',
+      );
+      (first ?? root).focus();
     }
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
@@ -192,6 +196,7 @@ export function Dialog({
         className={cx('dialog', wide && 'wide', className)}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         ref={ref}
         onKeyDown={(e) => {
           // Ctrl+Enter presses the main button, as a click would (nothing while it's disabled). Bubbling

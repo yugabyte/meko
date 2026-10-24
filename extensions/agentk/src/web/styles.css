@@ -2351,6 +2351,10 @@ div[id^='dak-mermaid-'] .label {
 .dialog.wide {
   width: min(780px, 100%);
 }
+/* Focused itself only to keep focus off what's behind it (Dialog), so no ring. */
+.dialog:focus-visible {
+  outline: none;
+}
 .dialog-hd {
   display: flex;
   align-items: center;

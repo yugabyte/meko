@@ -58,9 +58,11 @@ with a finger. Before you finish a UI change:
   `text-size-adjust: 100%`, so iOS never enlarges small text on its own (it did to a diff's rows as
   files scrolled back into view); text is the size the CSS gives it.
 - **The keyboard comes up only when a field is tapped.** On touch (`useTouch()`), opening a dialog,
-  menu or picker doesn't focus a text field: write `autoFocus={!touch}`, and `Dialog` focuses only
-  its `button.primary` there. The command palette and the sign-in screens, where typing is the only
-  thing to do, still focus their field.
+  menu or picker doesn't focus a text field: write `autoFocus={!touch}`. `Dialog` focuses only an
+  enabled `button.primary` there, or else the dialog itself, so focus never stays on the terminal
+  behind it. The exception is a view opened in order to type, which still focuses its field: the
+  command palette, the sign-in screens, the Changes panel's comment editor, and the Other / custom
+  answer boxes in `AskSheet.tsx` and `DesignQuestions.tsx`.
 - **Heights follow the keyboard.** Size full-height views with `var(--app-h, 100dvh)` in the phone
   section, never a bare `100vh`, so the on-screen keyboard shrinks the view instead of covering it.
   A fixed layer over the whole screen takes `top: var(--app-top, 0px)` and `height: var(--app-h, 100dvh)`

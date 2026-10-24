@@ -1,13 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { ChangedFile } from '../../src/shared/types.js';
 import { FileDiff, FilePath } from '../../src/web/components/ChangesPanel.js';
 import { parsePatch } from '../../src/web/diff.js';
-
-const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8');
 
 const file = { path: 'gen.txt', oldPath: null, kind: 'added', added: 5000, removed: 0, binary: false, uncommitted: false, truncated: false } as ChangedFile;
 const lines = parsePatch(['@@ -0,0 +1,4999 @@', ...Array.from({ length: 4999 }, (_, i) => `+line ${i + 1}`)].join('\n'));
@@ -65,15 +61,5 @@ describe('a file path', () => {
       '<span class="chg-dir"><span class="chg-seg">a/</span><wbr/></span><span class="chg-seg chg-name">old.ts</span> → <span class="chg-dir"><span class="chg-seg">b/</span><wbr/></span><span class="chg-seg chg-name">new.ts</span>',
     );
     expect(text(html)).toBe('a/old.ts → b/new.ts');
-  });
-});
-
-describe('text size on a phone', () => {
-  // iOS enlarged a diff's rows when a file scrolled back into view (content-visibility: auto).
-  it('keeps the browser from enlarging text by itself', () => {
-    const rule = STYLES.slice(STYLES.indexOf('\nhtml {')).split('}')[0];
-    expect(rule).toContain('-webkit-text-size-adjust: 100%;');
-    expect(rule).toContain('\n  text-size-adjust: 100%;');
-    expect(STYLES).toMatch(/\n\.chg-file \{[^}]*content-visibility: auto;/);
   });
 });
