@@ -1,21 +1,38 @@
 # Meko backend: MCP and REST
 
-Agents (Claude Code, AgentK, and the CLI's tool commands) reach Meko over MCP at `/mcp`, and the web
-UI ([web-ui.md](web-ui.md)) over `/api/v1`, with Meko Cloud's tool names, arguments, paths and
+Agents (Claude Code, AgentK, and the CLI's tool commands) reach Meko over MCP at `/mcp` on the API
+listener, and the web UI ([web-ui.md](web-ui.md)) over `/api/v1` on the web listener ([web.md](web.md)), with Meko Cloud's tool names, arguments, paths and
 reply shapes, written here from scratch. Both call the service layer in `internal/memory`
 ([memory-engine.md](memory-engine.md)); the knowledge-file tools and routes are designed in
 [knowledge.md](knowledge.md) and listed here beside the others.
 
 ## Auth
 
+On the API listener (`127.0.0.1:7778`):
+
 | Route | Admin token | Client token | No credential |
 |---|---|---|---|
 | `/healthz` | yes | yes | yes |
-| `/api/v1/status`, `/api/v1/version`, `/api/v1/ui-code` | yes | 403 | 401 |
+| `/api/v1/status`, `/api/v1/version`, `/api/v1/auth/setup-link` (`meko setup_link`) | yes | 403 | 401 |
 | `/api/v1/server` (the web UI's status page: `/api/v1/status`'s reply) | yes | yes | 401, or yes with `auth = "none"` |
 | Every other route (`/mcp`, the data routes) | yes | yes | 401, or yes with `auth = "none"` |
 | The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` | yes | yes | yes: the ticket is the credential |
-| The web UI's files, `/` and every GET no other route takes, and `/api/v1/ui-code/redeem` ([web-ui.md](web-ui.md)) | yes | yes | yes: the files are static, and the one-time code is the redeem's credential |
+
+The web listener ([web.md](web.md)) serves the same `/mcp`, data routes, `/api/v1/server` and
+knowledge-file links to a browser with local access or the owner's session, never with a token, and
+has no admin-only routes. Its own routes:
+
+| Route | Credential | What |
+|---|---|---|
+| `GET /api/v1/auth/status` | none | `{access, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `setup_required` while remote access has no login (or a setup link waits and this browser isn't signed in), `reset` when that link replaces a login |
+| `POST /api/v1/auth/setup` `{token, username, password}` | none: the setup link's token | Sets the login, signs every browser out, and signs this one in (the cookie). 400 `VALIDATION_ERROR`, 403 `FORBIDDEN` (a link that's wrong or used), 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/login` `{username, password, totp?}` | none | Signs in (the cookie). 401 `BAD_LOGIN`, 401 `TOTP_REQUIRED` (no code, or a wrong one: the message says which), 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/logout` | none | Ends this browser's session and the WebSockets it opened |
+| `POST /api/v1/auth/password` `{current, next}` | session or local | Signs every other browser out. 400 `VALIDATION_ERROR`, 409 `CONFLICT` (no login yet) |
+| `POST /api/v1/auth/totp/enroll`, `confirm {code}`, `disable {code}` | session or local | Enroll gives `{secret, otpauth_url}`; confirm turns two-step sign-in on with a code from it; disable turns it off with a current code |
+| `GET /api/v1/extensions` | session or local | `[{name, title, path, available}]` |
+| `/ext/<name>/*` | session or local | The extension's web UI ([web.md](web.md)); a page without a session goes to `/signin?next=` |
+| The web UI's files: `/` and every GET no other route takes | none | Static |
 
 - **The admin token** is the CLI's ([design.md](design.md#auth)): new at each start, in `run/admin.token`.
 - **The client token** is what MCP and REST clients send as `Authorization: Bearer <token>`:
@@ -31,11 +48,13 @@ reply shapes, written here from scratch. Both call the service layer in `interna
 - **`[server] auth = "none"`** (or `MEKO_AUTH=none`) lets `/mcp` and the data routes take requests
   with no credential; any `Authorization` header is then ignored unless it's the client or admin
   token. The default is `"token"`. An unknown value is refused at start, so a typo never turns auth
-  off. Everything else stays: status and version still need the admin token, the server still
-  listens on 127.0.0.1 only, and the Host and Origin checks still apply. Each start logs a warning,
+  off. Everything else stays: status and version still need the admin token, the API listener still
+  listens on 127.0.0.1 only, and the Host and Origin checks still apply. It doesn't touch the web
+  listener, which never takes a token. Each start logs a warning,
   and `meko status` shows `Auth: none` with what it means.
-- The credential a request got in with (`admin`, `client` or `none`) is recorded with each call,
-  never the token. Every 401 says `WWW-Authenticate: Bearer`.
+- The credential a request got in with (`admin`, `client` or `none`, and on the web listener
+  `session` or `local`) is recorded with each call, never the token. `knowledgebase_upload_file`,
+  which reads a path as Meko's user, takes only `admin` or `client`. Every 401 says `WWW-Authenticate: Bearer`.
 - Per-client API keys aren't built yet: every client shares the client token.
 - **The knowledge-file links** take no token, as S3's presigned URLs need none: a
   browser form post, a new download tab and an agent posting to an upload link can't send one.
@@ -185,11 +204,12 @@ datapack: Meko makes the default only on first start, and once it's gone `search
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
 <key>`. `meko list mcp-tools` prints each tool with its description's first sentence (`--json` adds titles),
-from the same definitions `/mcp` serves, so it needs no server. `meko ui` opens the web UI ([web-ui.md](web-ui.md)) with the client token in the link's
-fragment (a one-time code, not the token: the link passes through the browser's command line), and `--no-open`
-only prints the link. `meko token
+from the same definitions `/mcp` serves, so it needs no server. `meko ui [path]` opens the web listener's URL ([web.md](web.md)), at a path when given
+(`/ext/agentk/` for AgentK); the link carries no credential, and `--no-open` only prints it. With remote
+access and no login yet, it prints a setup link instead; `meko setup_link` prints one any time. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
-Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the token
+Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the web
+listener's (`web_url`, where AgentK finds its own address), the token
 and whether a server runs, for installers (AgentK's reads it). `meko logs` and the commands that
 install and run Meko are in [install.md](install.md).
 

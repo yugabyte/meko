@@ -1,15 +1,18 @@
 // Meko's API from the browser: /api/v1 routes in the {data, error} envelope, and MCP tools at
-// /mcp for what has no REST route (search). Both send the client token from lib/token.
+// /mcp for what has no REST route (search). The credential is the session cookie (or, with local
+// access, none), which the browser sends itself; a 401 UNAUTHORIZED tells the app through
+// onUnauthorized.
 
-import { getToken } from "./token";
 import type {
   Artifact,
   ArtifactList,
+  AuthStatus,
   ContextSearch,
   ConversationDetail,
   Conversation,
   Datapack,
   DocumentList,
+  Extension,
   Health,
   KnowledgeActivity,
   MemoryChange,
@@ -18,6 +21,7 @@ import type {
   PromotedMemory,
   ProvisionStatus,
   ServerStatus,
+  TotpEnroll,
   UploadOffer,
   Usage,
   UsageStats,
@@ -38,24 +42,35 @@ export class ApiError extends Error {
   }
 }
 
-function headers(json: boolean): HeadersInit {
-  const h: Record<string, string> = {};
-  const token = getToken();
-  if (token) h.Authorization = `Bearer ${token}`;
-  if (json) h["Content-Type"] = "application/json";
-  return h;
+// The app's handler for a request Meko refused for want of a credential (a session that ended, or a
+// request that didn't reach Meko as a local one).
+let unauthorized: () => void = () => {};
+
+export function onUnauthorized(handler: () => void): void {
+  unauthorized = handler;
+}
+
+// A failed reply's error, from Meko's envelope when it has one.
+async function failure(res: Response, fallback: string): Promise<ApiError> {
+  const env = (await res.json().catch(() => null)) as { error?: { code: string; message: string } } | null;
+  const err = new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? fallback);
+  // A 401 without an envelope comes from no other route either (as /mcp's might).
+  if (err.code === "UNAUTHORIZED" || (res.status === 401 && !env?.error)) unauthorized();
+  return err;
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     method,
-    headers: headers(body !== undefined),
+    credentials: "same-origin",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (!res.ok) throw await failure(res, "HTTP_ERROR");
   const env = (await res.json().catch(() => null)) as
     | { data: T; error: { code: string; message: string } | null }
     | null;
-  if (!res.ok || !env || env.error) {
+  if (!env || env.error) {
     throw new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? "HTTP_ERROR");
   }
   return env.data;
@@ -64,10 +79,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 async function callTool<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const res = await fetch("/mcp", {
     method: "POST",
-    headers: { ...headers(true), Accept: "application/json, text/event-stream" },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
   });
-  if (!res.ok) throw new ApiError(res.statusText, res.status, "HTTP_ERROR");
+  if (!res.ok) throw await failure(res, "HTTP_ERROR");
   const rpc = await res.json();
   if (rpc.error) throw new ApiError(rpc.error.message, 500, "MCP_ERROR");
   const text: string = rpc.result?.content?.[0]?.text ?? "{}";
@@ -102,17 +118,27 @@ export const api = {
   artifact: (id: string, hash: string) => request<Artifact>("GET", `/datapacks/${id}/artifacts/${hash}`),
   // The datapack as one JSON file, and the name the server suggests for it.
   exportDatapack: async (id: string): Promise<{ filename: string; blob: Blob }> => {
-    const res = await fetch(`/api/v1/datapacks/${id}/export`, { headers: headers(false) });
-    if (!res.ok) {
-      const env = await res.json().catch(() => null);
-      throw new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? "EXPORT_FAILED");
-    }
+    const res = await fetch(`/api/v1/datapacks/${id}/export`, { credentials: "same-origin" });
+    if (!res.ok) throw await failure(res, "EXPORT_FAILED");
     const m = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
     return { filename: m?.[1] ?? "meko-export.json", blob: await res.blob() };
   },
   usage: (id: string, days: number) => request<Usage>("GET", `/datapacks/${id}/usage?days=${days}`),
   server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
+
+  // Sign-in (backend/docs/web-ui.md): the status needs no credential, nor do setup and login.
+  authStatus: () => request<AuthStatus>("GET", "/auth/status"),
+  setup: (token: string, username: string, password: string) =>
+    request<unknown>("POST", "/auth/setup", { token, username, password }),
+  login: (username: string, password: string, totp?: string) =>
+    request<unknown>("POST", "/auth/login", { username, password, totp }),
+  logout: () => request<unknown>("POST", "/auth/logout", {}),
+  changePassword: (current: string, next: string) => request<unknown>("POST", "/auth/password", { current, next }),
+  totpEnroll: () => request<TotpEnroll>("POST", "/auth/totp/enroll", {}),
+  totpConfirm: (code: string) => request<unknown>("POST", "/auth/totp/confirm", { code }),
+  totpDisable: (code: string) => request<unknown>("POST", "/auth/totp/disable", { code }),
+  extensions: () => request<Extension[]>("GET", "/extensions"),
 
   usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
   setUsageStats: (enabled: boolean) => request<UsageStats>("PATCH", "/settings/usage-stats", { enabled }),
@@ -177,11 +203,8 @@ export const api = {
     const form = new FormData();
     for (const [k, v] of Object.entries(offer.fields ?? {})) form.append(k, v);
     form.append("file", file);
-    const res = await fetch(new URL(offer.url).pathname, { method: "POST", body: form });
-    if (!res.ok) {
-      const env = await res.json().catch(() => null);
-      throw new ApiError(env?.error?.message ?? res.statusText, res.status, env?.error?.code ?? "UPLOAD_FAILED");
-    }
+    const res = await fetch(new URL(offer.url).pathname, { method: "POST", credentials: "same-origin", body: form });
+    if (!res.ok) throw await failure(res, "UPLOAD_FAILED");
     return offer;
   },
 

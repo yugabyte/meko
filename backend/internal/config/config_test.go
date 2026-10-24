@@ -65,6 +65,10 @@ func TestLoadErrors(t *testing.T) {
 		{name: "bad level", file: "[log]\nlevel = \"loud\"\n", want: []string{`"loud"`}},
 		{name: "unknown auth mode", file: "[server]\nauth = \"nnone\"\n", want: []string{`server.auth "nnone"`}},
 		{name: "unknown auth mode in env", env: map[string]string{"MEKO_AUTH": "off"}, want: []string{`"off"`}},
+		{name: "unknown web access", file: "[web]\naccess = \"public\"\n", want: []string{`web.access "public"`}},
+		{name: "web port out of range", env: map[string]string{"MEKO_WEB_PORT": "0"}, want: []string{"web.port 0"}},
+		{name: "both listeners on one port", file: "[web]\nport = 7778\n", want: []string{"both 7778"}},
+		{name: "a cert without its key", file: "[tls]\ncert = \"/c.pem\"\n", want: []string{"tls.cert and tls.key"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,5 +236,60 @@ func TestCallHomeSettings(t *testing.T) {
 		if _, err := Load(none, func(k string) string { return bad[k] }, Overrides{}); err == nil {
 			t.Errorf("%v was taken", bad)
 		}
+	}
+}
+
+func TestWebSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Web != (Web{Port: 7777, Access: AccessLocal}) {
+		t.Fatalf("defaults: %+v %v", c.Web, err)
+	}
+	file := "[web]\nport = 8443\naccess = \"remote\"\nname = \"dev.example.com\"\n"
+	if err = os.WriteFile(path, []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Web != (Web{Port: 8443, Access: AccessRemote, Name: "dev.example.com"}) {
+		t.Fatalf("from the file: %+v %v", c.Web, err)
+	}
+	env := map[string]string{"MEKO_WEB_PORT": "9443", "MEKO_WEB_ACCESS": "local"}
+	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
+	if err != nil || c.Web.Port != 9443 || c.Web.Access != AccessLocal {
+		t.Fatalf("env over the file: %+v %v", c.Web, err)
+	}
+}
+
+func TestAddWeb(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("# mine\n[log]\nlevel = \"debug\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrote, err := AddWeb(path, Web{Port: 7777, Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
+	if err != nil || !wrote {
+		t.Fatalf("first add: %v %v", wrote, err)
+	}
+	c, err := Load(path, func(string) string { return "" }, Overrides{})
+	if err != nil || c.Web.Access != AccessRemote || c.TLS.Cert != "/a/c.pem" || c.Log.Level != "debug" {
+		t.Fatalf("after the add: %+v %+v %v", c.Web, c.TLS, err)
+	}
+	b, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(b), "# mine\n") {
+		t.Errorf("the user's lines changed: %q", b)
+	}
+	// A [web] table that's there is the user's: nothing is added again.
+	if wrote, err = AddWeb(path, Web{Access: AccessLocal}, TLS{}); err != nil || wrote {
+		t.Fatalf("second add: %v %v", wrote, err)
+	}
+	if fi, serr := os.Stat(path); serr != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode: %v %v", fi.Mode(), serr)
+	}
+	// A missing file is made.
+	fresh := filepath.Join(t.TempDir(), "config.toml")
+	if wrote, err = AddWeb(fresh, Web{Access: AccessLocal}, TLS{}); err != nil || !wrote {
+		t.Fatalf("fresh: %v %v", wrote, err)
+	}
+	if c, err = Load(fresh, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal {
+		t.Fatalf("fresh load: %+v %v", c.Web, err)
 	}
 }

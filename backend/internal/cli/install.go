@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -27,9 +28,12 @@ var newReleaseClient = update.NewClient
 var runningRelease = update.Running
 
 // runInstall sets this meko up: as a release install, app/current and the meko command point at
-// it; then the client token, and the login service, which it starts. It installs Meko alone:
-// extensions are meko install_extension's.
-func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
+// it; then the client token, the web listener's access, and the login service, which it starts. It
+// installs Meko alone: extensions are meko install_extension's.
+func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io.Writer) int {
+	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
+		return fail(stderr, fmt.Errorf("--access takes local or remote, not %q", access))
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fail(stderr, err)
@@ -77,6 +81,9 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "  Data:    %s\n  Secrets: %s\n", l.Root, map[string]string{
 		"keychain": "in your login Keychain", "file": "in the data folder, readable only by you"}[ct.Store.Kind()])
+	if err = setWebAccess(l, cfg, access, home, stdout); err != nil {
+		return fail(stderr, err)
+	}
 	if noService {
 		fmt.Fprintln(stdout, "No service was set up (--no-service): start Meko with meko start")
 		return nextSteps(stdout)
@@ -116,7 +123,45 @@ func runInstall(l paths.Layout, noService bool, stdout, stderr io.Writer) int {
 			serviceStartTimeout, m.StatusHint()))
 	}
 	fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d)\n", st.Port, st.PID)
+	if st.Web != nil {
+		fmt.Fprintf(stdout, "  Web UI:  %s\n", st.Web.URL)
+	}
 	return nextSteps(stdout)
+}
+
+// setWebAccess adds a [web] table to config.toml when it has none: with access, or, unless an
+// AgentK is on this computer (whose own access Meko takes over when it hands over its port), with
+// the default AgentK had: remote over SSH or on Linux with no display, local otherwise.
+func setWebAccess(l paths.Layout, cfg config.Config, access, home string, stdout io.Writer) error {
+	if access == "" {
+		if cat := extensions.Known["agentk"]; cat.Find("agentk", home, l.Root) != "" {
+			return nil
+		}
+		access = config.AccessLocal
+		if headless() {
+			access = config.AccessRemote
+		}
+	}
+	added, err := config.AddWeb(l.Config, config.Web{Access: access}, config.TLS{})
+	if err != nil || !added {
+		return err
+	}
+	cfg.Web.Access = access
+	note := "browsers on this computer open it with no login"
+	if access == config.AccessRemote {
+		note = "every address, over HTTPS; meko setup_link makes the login"
+	}
+	fmt.Fprintf(stdout, "  Web UI:  %s access (%s), set in %s\n", access, note, l.Config)
+	return nil
+}
+
+// headless reports whether this looks like a machine reached from elsewhere: an SSH session, or Linux
+// with no display.
+func headless() bool {
+	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+		return true
+	}
+	return runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == ""
 }
 
 func nextSteps(stdout io.Writer) int {

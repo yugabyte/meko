@@ -46,10 +46,17 @@ func (c *client) get(ctx context.Context, path string, data any) error {
 	return c.do(ctx, http.MethodGet, path, data)
 }
 
-// uiCode is a one-time code for opening the web UI.
-func (c *client) uiCode(ctx context.Context) (server.UICodeReply, error) {
-	var out server.UICodeReply
-	err := c.do(ctx, http.MethodPost, "/api/v1/ui-code", &out)
+// setupLinkReply is POST /api/v1/auth/setup-link.
+type setupLinkReply struct {
+	Token     string `json:"token"`
+	URL       string `json:"url"`
+	ExpiresIn int    `json:"expires_in"` // seconds
+}
+
+// setupLink makes a one-time link that sets up (or replaces) the web listener's login.
+func (c *client) setupLink(ctx context.Context) (setupLinkReply, error) {
+	var out setupLinkReply
+	err := c.do(ctx, http.MethodPost, "/api/v1/auth/setup-link", &out)
 	return out, err
 }
 

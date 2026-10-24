@@ -46,8 +46,17 @@ func TestMain(m *testing.M) {
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	// Only in the tests' own process: a test sets them for the serve it starts.
-	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME"} {
+	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME",
+		"MEKO_WEB_ACCESS"} {
 		_ = os.Unsetenv(k)
+	}
+	// Never the web listener's real port (AgentK's, 7777): setup gives each test a free one, and this
+	// covers the tests that don't call it.
+	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
+		if a, ok := ln.Addr().(*net.TCPAddr); ok {
+			_ = os.Setenv("MEKO_WEB_PORT", strconv.Itoa(a.Port))
+		}
+		_ = ln.Close()
 	}
 	os.Exit(m.Run())
 }
@@ -160,6 +169,7 @@ func setup(t *testing.T) (dir, port string) {
 	t.Setenv("HOME", t.TempDir())
 	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
+	t.Setenv("MEKO_WEB_PORT", strconv.Itoa(freePort(t)))
 	t.Cleanup(func() { run("stop", "--data-dir", dir, "--keep-extensions") })
 	return dir, port
 }
@@ -213,8 +223,8 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	code, mcpOut, _ := run("token", "--data-dir", dir, "--mcp")
 	want(t, "token --mcp with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
-	want(t, "token --json with no server", code, 0, js,
-		`{"running":false,"token":"`+strings.TrimSpace(tok)+`","url":"http://127.0.0.1:7778/mcp"}`)
+	want(t, "token --json with no server", code, 0, js, `{"running":false,"token":"`+strings.TrimSpace(tok)+
+		`","url":"http://127.0.0.1:7778/mcp","web_url":"http://127.0.0.1:`+os.Getenv("MEKO_WEB_PORT")+`"}`)
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")
@@ -1068,28 +1078,30 @@ func TestUI(t *testing.T) {
 
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	prefix := "http://127.0.0.1:" + port + "/#code="
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
 
 	var opened []string
 	open := openBrowser
 	openBrowser = func(u string) error { opened = append(opened, u); return nil }
 	t.Cleanup(func() { openBrowser = open })
 
-	code, out, errs = run("ui", "--data-dir", dir, "--no-open")
-	first := strings.TrimSpace(out)
-	if code != 0 || !strings.HasPrefix(first, prefix) || len(first) != len(prefix)+64 || len(opened) != 0 {
+	// With local access the link is the web listener's own address: it carries no credential.
+	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
+	if code != 0 || strings.TrimSpace(out) != web+"/" || len(opened) != 0 {
 		t.Errorf("ui --no-open: %d %q, opened %v", code, out, opened)
 	}
-	want(t, "ui --no-open says the link is short-lived", code, 0, errs, "works once")
-	_, tok, _ := run("token", "--data-dir", dir)
-	if strings.Contains(out, strings.TrimSpace(tok)) {
-		t.Errorf("the link carries the client token: %q", out)
+	code, out, _ = run("ui", "/ext/agentk/", "--data-dir", dir)
+	if link := strings.TrimSpace(out); code != 0 || link != web+"/ext/agentk/" || len(opened) != 1 || opened[0] != link {
+		t.Errorf("ui /ext/agentk/: %d %q, opened %v", code, out, opened)
 	}
-	code, out, _ = run("ui", "--data-dir", dir)
-	if link := strings.TrimSpace(out); code != 0 || !strings.HasPrefix(link, prefix) || link == first ||
-		len(opened) != 1 || opened[0] != link {
-		t.Errorf("ui: %d %q, opened %v", code, out, opened)
-	}
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status's web line", code, 0, out, "Web:           "+web+", local (no login from this computer)")
+
+	code, out, errs = run("setup_link", "--data-dir", dir)
+	want(t, "setup_link", code, 0, out, web+"/setup?token=")
+	want(t, "setup_link says local access needs no login", code, 0, errs, "Access is local")
+	code, out, _ = run("token", "--data-dir", dir, "--json")
+	want(t, "token --json's web URL", code, 0, out, `"web_url":"`+web+`"`)
 }
 
 // list mcp-tools needs no server: it reads the tool definitions.

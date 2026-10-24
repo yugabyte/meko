@@ -1,6 +1,8 @@
-// Package server is Meko's HTTP server on 127.0.0.1: the Host, Origin and token checks, and
-// the foundation's routes (replies use internal/envelope). /mcp (Options.MCP), the rest of
-// /api/v1 (Options.REST) and the web UI at / (Options.UI) are mounted on it.
+// Package server is Meko's HTTP servers: the API listener on 127.0.0.1, which agents and the CLI
+// call with a Bearer token, and the web listener (Options.Web), which browsers use, for the web UI
+// at / (Options.UI) and the extensions' at /ext/<name>/, with local access or the owner's login.
+// Both have the Host and Origin checks, the credential check, /mcp (Options.MCP) and the rest of
+// /api/v1 (Options.REST); replies use internal/envelope.
 package server
 
 import (
@@ -23,6 +25,8 @@ import (
 	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/extproxy"
+	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
@@ -66,15 +70,34 @@ type Options struct {
 	// DownloadTicketPath, then the ticket). They take no token: the ticket is the credential, as a
 	// presigned URL's signature is. Uploads have UploadBodyLimit.
 	Upload, Download echo.HandlerFunc
-	// UI, if set, serves the web UI (internal/webui) on every GET no other route takes. Its files
-	// need no token: the page sends the client token it was opened with on its API calls.
+	// UI, if set, serves the web UI (internal/webui) on every GET no other route takes, on the web
+	// listener. Its files need no credential.
 	UI http.Handler
+	// Web, if set, makes this the web listener instead of the API listener.
+	Web *Web
+	// Login is the owner's sign-in: the web listener's, and the API listener's setup link route.
+	Login *login.Service
+	// WebURL, if set, is the web listener's URL, for the links meko setup_link prints.
+	WebURL func() string
+	// WebStatus, if set, is the web listener's state, for status.
+	WebStatus func() *WebStatus
+}
+
+// WebStatus is what status says about the web listener.
+type WebStatus struct {
+	URL         string `json:"url"`
+	Access      string `json:"access"` // local or remote
+	Listening   bool   `json:"listening"`
+	Error       string `json:"error,omitempty"`       // why it isn't listening
+	Fingerprint string `json:"fingerprint,omitempty"` // its certificate's SHA-256, with remote access
+	SelfSigned  bool   `json:"self_signed,omitempty"`
+	Login       bool   `json:"login"` // the owner's login is set up
 }
 
 // UploadBodyLimit caps an upload link's body: a 50 MiB file and its multipart framing.
 const UploadBodyLimit = "51MiB"
 
-// Ticket routes, which requireToken lets in without a credential, as it does the UI's.
+// Ticket routes, which the credential checks let in without a credential, as they do the UI's.
 var (
 	uiRoute       = "/*"
 	uploadRoute   = memory.UploadTicketPath + ":ticket"
@@ -86,10 +109,9 @@ const MCPBodyLimit = "8M"
 
 // Server is the HTTP server.
 type Server struct {
-	e     *echo.Echo
-	opts  Options
-	srv   *http.Server
-	codes *uiCodes
+	e    *echo.Echo
+	opts Options
+	srv  *http.Server
 }
 
 // New builds the server and its routes.
@@ -109,7 +131,7 @@ func New(opts Options) *Server {
 	e.HideBanner, e.HidePort = true, true
 	e.Logger.SetOutput(io.Discard)
 	e.HTTPErrorHandler = envelope.ErrorHandler(opts.Logger)
-	s := &Server{e: e, opts: opts, codes: &uiCodes{codes: map[string]time.Time{}}}
+	s := &Server{e: e, opts: opts}
 
 	e.Use(middleware.RequestID())
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
@@ -120,17 +142,37 @@ func New(opts Options) *Server {
 	}))
 	e.Use(s.accessLog)
 	e.Use(s.guard)
-	e.Use(s.requireToken)
+	if opts.Web != nil {
+		e.Use(s.requireBrowser)
+	} else {
+		e.Use(s.requireToken)
+	}
 
 	e.GET("/healthz", s.healthz)
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
-	v1.GET("/status", s.status)
-	// The same reply for the web UI's status page, with the client token: what it says (versions,
-	// the memory engine's state, the data folder) is the local user's own.
+	// The same reply as status for the web UI's status page: what it says (versions, the memory
+	// engine's state, the data folder) is the local user's own.
 	v1.GET("/server", s.status)
-	v1.GET("/version", s.version)
-	v1.POST("/ui-code", s.issueUICode)
-	v1.POST("/ui-code/redeem", s.redeemUICode)
+	if opts.Web == nil {
+		v1.GET("/status", s.status)
+		v1.GET("/version", s.version)
+		if opts.Login != nil {
+			v1.POST("/auth/setup-link", s.issueSetupLink)
+		}
+	} else {
+		if opts.Web.Extensions == nil {
+			opts.Web.Extensions = func() []*extproxy.Proxy { return nil }
+		}
+		if opts.Login != nil {
+			// A sign-out, a password change or a new login closes the WebSockets its sessions opened.
+			opts.Login.OnRevoke(func() {
+				for _, p := range opts.Web.Extensions() {
+					p.Revoke(func(hash string) bool { return opts.Login.Live(context.Background(), hash) })
+				}
+			})
+		}
+		s.registerWeb(v1)
+	}
 	if opts.REST != nil {
 		opts.REST(v1)
 	}
@@ -149,7 +191,7 @@ func New(opts Options) *Server {
 			return nil
 		}, middleware.BodyLimit(MCPBodyLimit))
 	}
-	if opts.UI != nil {
+	if opts.UI != nil && opts.Web != nil {
 		// The UI takes every GET no other route does. These keep the API's unknown paths behind
 		// the token and answering 404 in the envelope, so uiRoute matches only the UI's.
 		notFound := func(echo.Context) error { return echo.ErrNotFound }
@@ -204,18 +246,28 @@ func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
 // guard refuses requests that don't name this server in Host (DNS rebinding) and any request
 // from another site's page (an Origin header that isn't this server's own): only the web UI
 // Meko serves may call it from a browser. There are no CORS headers, so no other page can read a
-// reply either.
+// reply either. The web listener with remote access has no Host list, as AgentK had none: it's
+// HTTPS, so a rebound page can't pass TLS for another name, and the session cookie is host-only.
+// Its Origin must still be its own, https://<Host>.
 func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	port := strconv.Itoa(s.opts.Port)
 	allowed := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true}
+	remote := s.opts.Web != nil && s.opts.Web.Access == config.AccessRemote
+	if s.opts.Web != nil {
+		allowed["[::1]:"+port] = true
+	}
 	return func(c echo.Context) error {
 		r := c.Request()
-		if !allowed[r.Host] {
+		if !remote && !allowed[r.Host] {
 			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 				"Requests must be addressed to 127.0.0.1:"+port+" or localhost:"+port+".")
 		}
-		if o := r.Header.Get(echo.HeaderOrigin); o != "" && (!strings.HasPrefix(o, "http://") ||
-			!allowed[strings.TrimPrefix(o, "http://")]) {
+		o := r.Header.Get(echo.HeaderOrigin)
+		ownOrigin := strings.HasPrefix(o, "http://") && allowed[strings.TrimPrefix(o, "http://")]
+		if remote {
+			ownOrigin = strings.EqualFold(o, "https://"+r.Host)
+		}
+		if o != "" && !ownOrigin {
 			return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 				"Only Meko's own web UI may call it from a browser.")
 		}
@@ -235,6 +287,9 @@ const (
 	CredentialClient = "client" // the client token: MCP and REST clients
 	CredentialNone   = "none"   // nothing, with [server] auth = "none"
 	CredentialTicket = "ticket" // a knowledge-file link's ticket, on its route only
+	// The web listener's: the owner's session cookie, or a request from this computer with local access.
+	CredentialSession = "session"
+	CredentialLocal   = "local"
 )
 
 const credentialKey = "meko.credential" //nolint:gosec // G101: a context key, not a secret
@@ -254,13 +309,13 @@ func Credential(c echo.Context) string {
 }
 
 // adminOnly are the routes only the CLI's admin token opens, whatever the auth setting: they
-// describe the server itself.
-var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, uiCodeRoute: true}
+// describe the server itself, or make a setup link. Only the API listener has them.
+var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, setupLinkRoute: true}
 
-// requireToken lets a request in by its credential: /healthz needs none, nor do the knowledge-file
-// links (their ticket is the credential), the web UI's files, or the UI code's redeem (its code
-// is); the admin-only routes need the admin token; every other route takes the admin or the client
-// token, or nothing when auth is "none". It keys on the matched route, never the raw URL.
+// requireToken is the API listener's credential check: /healthz needs none, nor do the
+// knowledge-file links (their ticket is the credential); the admin-only routes need the admin
+// token; every other route takes the admin or the client token, or nothing when auth is "none". It
+// keys on the matched route, never the raw URL.
 func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		switch c.Path() {
@@ -268,8 +323,6 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		case uploadRoute, downloadRoute:
 			c.Set(credentialKey, CredentialTicket)
-			return next(c)
-		case uiRoute, uiRedeemRoute: // static files, and the one-time code that is its own credential
 			return next(c)
 		}
 		h := c.Request().Header.Get(echo.HeaderAuthorization)
@@ -313,6 +366,7 @@ type StatusReply struct {
 	MemoryEngine  memory.EngineStatus `json:"memory_engine"`
 	Auth          string              `json:"auth"` // token, or none
 	UsageStats    *callhome.State     `json:"usage_stats,omitempty"`
+	Web           *WebStatus          `json:"web,omitempty"`
 }
 
 func (s *Server) status(c echo.Context) error {
@@ -325,6 +379,9 @@ func (s *Server) status(c echo.Context) error {
 		Version: i.Version, PID: i.PID, Port: s.opts.Port, DataDir: i.DataDir, StartedAt: i.StartedAt,
 		UptimeSeconds: int64(time.Since(i.StartedAt).Seconds()), Children: children,
 		MemoryEngine: s.opts.MemoryEngine(c.Request().Context()), Auth: s.opts.Auth,
+	}
+	if s.opts.WebStatus != nil {
+		reply.Web = s.opts.WebStatus()
 	}
 	if s.opts.UsageStats != nil {
 		if st, err := s.opts.UsageStats(c.Request().Context()); err == nil {

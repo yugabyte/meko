@@ -22,6 +22,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/logging"
+	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
@@ -66,7 +67,9 @@ func SignalContext() context.Context {
 }
 
 // Serve runs the server until ctx ends: it locks the data folder, opens and migrates the
-// database, listens on 127.0.0.1, writes the admin token, pid and port files, and serves. On
+// database, listens on 127.0.0.1 (the API listener), writes the admin token, pid and port files,
+// and serves; and it runs the web listener beside it (webListener), which hands over from the
+// extensions first. On
 // the way out it drains requests, stops children, checkpoints the WAL, closes the database and
 // removes the run files.
 func Serve(ctx context.Context, o ServeOptions) (err error) {
@@ -287,22 +290,43 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		ui = webui.Missing(err)
 		log.Info("no web UI", "reason", err.Error())
 	}
+	info := server.Info{
+		Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
+		Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
+	}
+	mcpHandler := mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
+		Credential: server.CredentialOf})
+	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
+	logins := login.New(st)
+	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
+	web := newWebListener(l, st, logins, log)
+	web.newOpts = func(wcfg config.Config) server.Options {
+		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
+			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
+			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins,
+			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies}}
+	}
 	srv := server.New(server.Options{
-		Info: server.Info{
-			Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
-			Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
+		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
+		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
+		REST: registerREST, Upload: upload, Download: download, Login: logins,
+		WebURL: func() string {
+			if u := web.Status(context.Background()).URL; u != "" {
+				return u
+			}
+			return webURL(cfg.Web)
 		},
-		Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State,
-		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
-			Credential: server.CredentialOf}),
-		REST: func(g *echo.Group) {
-			rest.Register(g, restOpts)
-		},
-		Upload: upload, Download: download, UI: ui,
+		WebStatus: func() *server.WebStatus { return web.Status(context.Background()) },
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
+	webCtx, stopWeb := context.WithCancel(context.Background())
+	defer stopWeb()
+	webDone := make(chan struct{})
+	go func() {
+		defer close(webDone)
+		web.Run(webCtx)
+	}()
 	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		"pid", pid, "data_dir", l.Root, "version", version.Version, "auth", cfg.Server.Auth)
 	if cfg.Server.Auth == config.AuthNone {
@@ -334,6 +358,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
+	stopWeb()
+	if err := web.Shutdown(drain); err != nil {
+		log.Warn("the web listener's requests didn't finish in time", "error", err)
+	}
+	<-webDone
 	if err := srv.Shutdown(drain); err != nil {
 		log.Warn("requests didn't finish in time", "error", err)
 	}
