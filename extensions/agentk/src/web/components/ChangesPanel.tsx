@@ -1,12 +1,12 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import {
   previewImageType,
   type BranchCommit, type ChangedFile, type ChangeKind, type ChangeSide, type CommentSide, type CommentState, type ReviewComment, type Session,
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
-import { anchorComment, defaultOpen, LARGE_DIFF_ROWS, parsePatch, ROW_PAGE, showsLine, sideLine, type DiffLine } from '../diff';
-import { useTouch } from '../hooks/useMedia';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, PHONE_BUDGET, reparse, showsLine, sideLine, type DiffLine } from '../diff';
+import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { agentName, cx, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
@@ -42,10 +42,27 @@ interface Placed {
   gone: ReviewComment[];
 }
 
+/**
+ * What a file's section can do. The panel makes one object that never changes, calling its latest
+ * handlers through a ref, so a section is drawn again only when its own file's data changes.
+ */
+interface SectionActions {
+  toggle: (path: string) => void;
+  more: (path: string, rows: number) => void;
+  comment: (path: string, i: number, shift: boolean) => void;
+  edit: (c: ReviewComment) => void;
+  remove: (c: ReviewComment) => Promise<void>;
+  save: (text: string) => Promise<void>;
+  cancel: () => void;
+  section: (path: string, el: HTMLElement | null) => void;
+}
+
 const isTyping = (t: EventTarget) => t instanceof HTMLElement && !!t.closest('input, textarea, select, [contenteditable="true"]');
 
 export function ChangesPanel({ session, onClose }: { session: Session; onClose: () => void }) {
   const touch = useTouch();
+  // A phone lays rows out several times slower, so it draws fewer at a time.
+  const budget = useIsMobile() ? PHONE_BUDGET : DESKTOP_BUDGET;
   const [data, setData] = useState<SessionChanges | null>(null);
   /** When the diff was last fetched; image previews reload with it. */
   const [fetchedAt, setFetchedAt] = useState(0);
@@ -110,9 +127,15 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
 
   const files = useMemo(() => data?.files ?? [], [data]);
 
+  /** Parsed rows by patch text, kept across refetches so a file whose patch didn't change keeps its rows. */
+  const byPatch = useRef(new Map<string, DiffLine[]>());
   const parsed = useMemo(() => {
+    byPatch.current = reparse(byPatch.current, files);
     const m = new Map<string, DiffLine[]>();
-    for (const f of files) if (f.patch !== null) m.set(f.path, parsePatch(f.patch));
+    for (const f of files) {
+      const lines = f.patch === null ? undefined : byPatch.current.get(f.patch);
+      if (lines) m.set(f.path, lines);
+    }
     return m;
   }, [files]);
 
@@ -159,15 +182,15 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   }, [comments]);
 
   const openByDefault = useMemo(
-    () => defaultOpen(files, (path) => parsed.get(path)?.length ?? 0, (path) => placed.at.has(path) || placed.outdated.has(path)),
-    [files, parsed, placed],
+    () => defaultOpen(files, (path) => parsed.get(path)?.length ?? 0, (path) => placed.at.has(path) || placed.outdated.has(path), budget),
+    [files, parsed, placed, budget],
   );
 
   const isOpen = (path: string) => toggled.get(path) ?? openByDefault.has(path);
   const setOpen = (path: string, open: boolean) => setToggled((t) => new Map(t).set(path, open));
   /** How many of a file's rows to render: all of a small diff, and of a large one what the user asked for. */
-  const rowLimit = (path: string, rows: number) => (rows <= LARGE_DIFF_ROWS ? rows : Math.min(rows, rowsShown.get(path) ?? 0));
-  const showMore = (path: string, rows: number) => setRowsShown((m) => new Map(m).set(path, Math.min(rows, (m.get(path) ?? 0) + ROW_PAGE)));
+  const rowLimit = (path: string, rows: number) => (rows <= budget.large ? rows : Math.min(rows, rowsShown.get(path) ?? 0));
+  const showMore = (path: string, rows: number) => setRowsShown((m) => new Map(m).set(path, Math.min(rows, (m.get(path) ?? 0) + budget.page)));
 
   const jump = (path: string) => {
     lastJump.current = files.findIndex((f) => f.path === path);
@@ -291,23 +314,38 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     api.updateSession(session.id, { baseBranch: branch }).catch((e) => setNote(errorMessage(e)));
   };
   const suggested = !fixedBase && !data?.commit ? data?.suggestedBase : null;
-  /** Comment cards: `away` for comments not placed on a row, `row` for the row the others follow. */
-  const thread = (cs: ReviewComment[] | undefined, opts: { away?: boolean; withPath?: boolean; row?: DiffLine } = {}) =>
-    cs?.map((c) =>
-      editor?.id === c.id ? (
-        <CommentEditor key={c.id} editor={editor} draft={draftText} onSave={save} onCancel={closeEditor} />
-      ) : (
-        <CommentCard
-          key={c.id}
-          c={c}
-          away={opts.away ? (placed.changed.has(c.id) ? 'changed' : 'hidden') : undefined}
-          shownAt={opts.row ? sideLine(opts.row, c.side) : null}
-          withPath={opts.withPath}
-          onEdit={() => edit(c)}
-          onDelete={() => remove(c)}
-        />
-      ),
-    );
+  const handlers = useRef<SectionActions | null>(null);
+  handlers.current = {
+    toggle: (path) => setOpen(path, !isOpen(path)),
+    more: showMore,
+    comment: startComment,
+    edit,
+    remove,
+    save,
+    cancel: closeEditor,
+    section: (path, el) => {
+      if (el) sections.current.set(path, el);
+      else sections.current.delete(path);
+    },
+  };
+  const actions = useMemo((): SectionActions => {
+    const h = () => handlers.current as SectionActions;
+    return {
+      toggle: (path) => h().toggle(path),
+      more: (path, rows) => h().more(path, rows),
+      comment: (path, i, shift) => h().comment(path, i, shift),
+      edit: (c) => h().edit(c),
+      remove: (c) => h().remove(c),
+      save: (text) => h().save(text),
+      cancel: () => h().cancel(),
+      section: (path, el) => h().section(path, el),
+    };
+  }, []);
+  const commitSha = data?.commit?.sha;
+  const imageUrl = useCallback(
+    (side: ChangeSide, path: string) => api.changeImageUrl(session.id, path, side, fetchedAt, commitSha),
+    [session.id, fetchedAt, commitSha],
+  );
 
   return (
     <SidePanel name="changes" label="Changes" className="design-panel changes-panel" onKeyDown={keys}>
@@ -421,7 +459,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
             {placed.gone.length > 0 && (
               <div className="cmt-gone">
                 <p className="muted small">Comments on files that are no longer changed</p>
-                {thread(placed.gone, { away: true, withPath: true })}
+                <Thread comments={placed.gone} editor={editor} draft={draftText} changed={placed.changed} actions={actions} away withPath />
               </div>
             )}
             {data.commit ? (
@@ -439,60 +477,34 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                 comment on it; shift-click another line to cover a range.
               </p>
             )}
-            {files.map((f, n) => (
-              <section
-                key={f.path}
-                className="chg-file"
-                ref={(el) => {
-                  if (el) sections.current.set(f.path, el);
-                  else sections.current.delete(f.path);
-                }}
-              >
-                <button
-                  className="chg-file-hd"
-                  aria-expanded={isOpen(f.path)}
-                  onClick={() => setOpen(f.path, !isOpen(f.path))}
-                >
-                  <span className="chg-caret" aria-hidden="true">
-                    {isOpen(f.path) ? '▾' : '▸'}
-                  </span>
-                  <KindBadge kind={f.kind} />
-                  <FilePath file={f} />
-                  <span className="chg-pos mono" aria-label={`file ${n + 1} of ${files.length}`}>
-                    {n + 1} / {files.length}
-                  </span>
-                  <Counts file={f} comments={countByPath.get(f.path) ?? 0} />
-                </button>
-                {isOpen(f.path) && (
-                  <>
-                    {placed.outdated.has(f.path) && (
-                      <div className="cmt-outdated">{thread(placed.outdated.get(f.path), { away: true })}</div>
-                    )}
-                    <FileDiff
-                      file={f}
-                      imageUrl={(side, path) => api.changeImageUrl(session.id, path, side, fetchedAt, data.commit?.sha)}
-                      lines={parsed.get(f.path) ?? null}
-                      limit={rowLimit(f.path, parsed.get(f.path)?.length ?? 0)}
-                      onMore={() => showMore(f.path, parsed.get(f.path)?.length ?? 0)}
-                      renderAfter={(i) => {
-                        const cs = placed.at.get(f.path)?.get(i);
-                        // While a commit is shown, a comment being written is at the top of the list instead.
-                        const here = !data.commit && editor && !editor.id && editor.path === f.path && editorAt === i;
-                        if (!cs && !here) return null;
-                        return (
-                          <>
-                            {thread(cs, { row: parsed.get(f.path)?.[i] })}
-                            {here && <CommentEditor key="new" editor={editor} draft={draftText} onSave={save} onCancel={closeEditor} />}
-                          </>
-                        );
-                      }}
-                      picked={!data.commit && editor && !editor.id && editor.path === f.path ? editor : null}
-                      onComment={data.commit ? undefined : (i, shift) => startComment(f.path, i, shift)}
-                    />
-                  </>
-                )}
-              </section>
-            ))}
+            {files.map((f, n) => {
+              const lines = parsed.get(f.path) ?? null;
+              // A comment's editor is passed only to its own file, and only in All changes (a commit's shows above).
+              const ed = !data.commit && editor?.path === f.path ? editor : null;
+              const outdated = placed.outdated.get(f.path);
+              return (
+                <FileSection
+                  key={f.path}
+                  file={f}
+                  n={n}
+                  total={files.length}
+                  open={isOpen(f.path)}
+                  lines={lines}
+                  limit={rowLimit(f.path, lines?.length ?? 0)}
+                  page={budget.page}
+                  comments={countByPath.get(f.path) ?? 0}
+                  threads={placed.at.get(f.path)}
+                  outdated={outdated}
+                  changed={outdated ? placed.changed : undefined}
+                  editor={ed}
+                  editorAt={ed && !ed.id ? editorAt : null}
+                  readOnly={!!data.commit}
+                  imageUrl={imageUrl}
+                  draft={draftText}
+                  actions={actions}
+                />
+              );
+            })}
           </>
         )}
       </div>
@@ -841,6 +853,44 @@ function CommentCard({
   );
 }
 
+/** Comment cards, the one being edited as its editor: `away` for comments not placed on a row, `row` for the row the others follow. */
+function Thread({
+  comments,
+  editor,
+  draft,
+  changed,
+  actions,
+  away,
+  withPath,
+  row,
+}: {
+  comments: ReviewComment[];
+  editor: Editor | null;
+  draft: RefObject<string>;
+  /** Comments whose lines the diff still shows, with other text (for `away` cards). */
+  changed?: Set<string>;
+  actions: SectionActions;
+  away?: boolean;
+  withPath?: boolean;
+  row?: DiffLine;
+}) {
+  return comments.map((c) =>
+    editor?.id === c.id ? (
+      <CommentEditor key={c.id} editor={editor} draft={draft} onSave={actions.save} onCancel={actions.cancel} />
+    ) : (
+      <CommentCard
+        key={c.id}
+        c={c}
+        away={away ? (changed?.has(c.id) ? 'changed' : 'hidden') : undefined}
+        shownAt={row ? sideLine(row, c.side) : null}
+        withPath={withPath}
+        onEdit={() => actions.edit(c)}
+        onDelete={() => actions.remove(c)}
+      />
+    ),
+  );
+}
+
 function CommentEditor({
   editor,
   draft,
@@ -848,7 +898,7 @@ function CommentEditor({
   onCancel,
 }: {
   editor: Editor;
-  draft: { current: string };
+  draft: RefObject<string>;
   onSave: (text: string) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -946,11 +996,110 @@ function ImageSide({ label, src }: { label: string; src: string }) {
   );
 }
 
+/**
+ * One changed file: its header, outdated comments and diff. Memoized, and given only its own
+ * file's data, so a state push or a refetch that leaves the file alone doesn't draw its rows again.
+ */
+const FileSection = memo(function FileSection({
+  file,
+  n,
+  total,
+  open,
+  lines,
+  limit,
+  page,
+  comments,
+  threads,
+  outdated,
+  changed,
+  editor,
+  editorAt,
+  readOnly,
+  imageUrl,
+  draft,
+  actions,
+}: {
+  file: ChangedFile;
+  /** Its place in the list, from 0, and the number of files. */
+  n: number;
+  total: number;
+  open: boolean;
+  lines: DiffLine[] | null;
+  limit: number;
+  page: number;
+  /** Its comments not sent yet. */
+  comments: number;
+  /** Comments placed after its rows, by row. */
+  threads: Map<number, ReviewComment[]> | undefined;
+  /** Its comments whose lines aren't in the diff now. */
+  outdated: ReviewComment[] | undefined;
+  changed: Set<string> | undefined;
+  /** The comment editor, when it's on this file. */
+  editor: Editor | null;
+  /** The row a new comment's editor sits under. */
+  editorAt: number | null;
+  /** A commit is shown: no comments. */
+  readOnly: boolean;
+  imageUrl: (side: ChangeSide, path: string) => string;
+  draft: RefObject<string>;
+  actions: SectionActions;
+}) {
+  const path = file.path;
+  // Rows it draws, for the height the browser assumes before drawing it (styles.css .chg-file).
+  const rows = !open ? 0 : file.binary ? 12 : !lines ? 2 : limit + (limit < lines.length ? 2 : 0);
+  return (
+    <section className="chg-file" style={{ '--chg-rows': rows } as CSSProperties} ref={(el) => actions.section(path, el)}>
+      <button className="chg-file-hd" aria-expanded={open} onClick={() => actions.toggle(path)}>
+        <span className="chg-caret" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+        <KindBadge kind={file.kind} />
+        <FilePath file={file} />
+        <span className="chg-pos mono" aria-label={`file ${n + 1} of ${total}`}>
+          {n + 1} / {total}
+        </span>
+        <Counts file={file} comments={comments} />
+      </button>
+      {open && (
+        <>
+          {outdated && (
+            <div className="cmt-outdated">
+              <Thread comments={outdated} editor={editor} draft={draft} changed={changed} actions={actions} away />
+            </div>
+          )}
+          <FileDiff
+            file={file}
+            imageUrl={imageUrl}
+            lines={lines}
+            limit={limit}
+            page={page}
+            onMore={() => actions.more(path, lines?.length ?? 0)}
+            renderAfter={(i) => {
+              const cs = threads?.get(i);
+              const here = editor !== null && !editor.id && editorAt === i;
+              if (!cs && !here) return null;
+              return (
+                <>
+                  {cs && <Thread comments={cs} editor={editor} draft={draft} actions={actions} row={lines?.[i]} />}
+                  {here && <CommentEditor key="new" editor={editor} draft={draft} onSave={actions.save} onCancel={actions.cancel} />}
+                </>
+              );
+            }}
+            picked={editor && !editor.id ? editor : null}
+            onComment={readOnly ? undefined : (i, shift) => actions.comment(path, i, shift)}
+          />
+        </>
+      )}
+    </section>
+  );
+});
+
 export function FileDiff({
   file,
   imageUrl,
   lines,
   limit,
+  page,
   onMore,
   renderAfter,
   picked,
@@ -961,7 +1110,9 @@ export function FileDiff({
   lines: DiffLine[] | null;
   /** How many of the rows to render; a large diff renders none until Show diff. */
   limit: number;
-  /** Shows the next ROW_PAGE rows. */
+  /** Rows Show diff and Show more add. */
+  page: number;
+  /** Shows the next `page` rows. */
   onMore: () => void;
   /** Comment threads (or the editor) shown under row i, or null. */
   renderAfter: (i: number) => ReactNode;
@@ -1037,8 +1188,8 @@ export function FileDiff({
             </>
           ) : (
             <button className="btn small" onClick={onMore}>
-              {left > ROW_PAGE
-                ? `Show ${fileLines(limit, limit + ROW_PAGE).toLocaleString()} more lines (${fileLines(limit).toLocaleString()} left)`
+              {left > page
+                ? `Show ${fileLines(limit, limit + page).toLocaleString()} more lines (${fileLines(limit).toLocaleString()} left)`
                 : `Show the last ${plural(fileLines(limit), 'line')}`}
             </button>
           )}

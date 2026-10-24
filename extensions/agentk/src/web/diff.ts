@@ -47,31 +47,53 @@ export function parsePatch(patch: string): DiffLine[] {
   return out;
 }
 
-/** Diffs open by default until this many rows are shown, so big branches open fast. */
-export const OPEN_LINE_BUDGET = 2000;
-/** A file's diff with more rows than this shows only when asked for. */
-export const LARGE_DIFF_ROWS = 1000;
-/** Rows a large diff shows per click of Show diff or Show more. */
-export const ROW_PAGE = 2000;
+/** How many diff rows the Changes panel draws at a time. */
+export interface RowBudget {
+  /** Diffs open by default until this many rows are shown, so big branches open fast. */
+  open: number;
+  /** A file's diff with more rows than this shows only when asked for. */
+  large: number;
+  /** Rows a large diff shows per click of Show diff or Show more. */
+  page: number;
+}
+
+export const DESKTOP_BUDGET: RowBudget = { open: 2000, large: 1000, page: 2000 };
+/** A phone lays rows out several times slower than a desktop, so it draws fewer at a time. */
+export const PHONE_BUDGET: RowBudget = { open: 1000, large: 500, page: 500 };
 
 /**
- * The files whose diffs open by default: in order, each that fits what's left of
- * OPEN_LINE_BUDGET (a large one never does), and every file with comments, so none are hidden
- * (a large one opens to its Show diff button).
+ * The files whose diffs open by default: in order, each that fits what's left of the budget's
+ * `open` rows (a large one never does), and every file with comments, so none are hidden (a large
+ * one opens to its Show diff button).
  */
-export function defaultOpen(files: { path: string }[], rowsOf: (path: string) => number, hasComments: (path: string) => boolean): Set<string> {
+export function defaultOpen(
+  files: { path: string }[],
+  rowsOf: (path: string) => number,
+  hasComments: (path: string) => boolean,
+  budget: RowBudget,
+): Set<string> {
   const open = new Set<string>();
   let shown = 0;
   for (const { path } of files) {
     const n = rowsOf(path);
-    const large = n > LARGE_DIFF_ROWS;
+    const large = n > budget.large;
     // A file with no rows (binary, an image) still takes a slot, so a branch of images doesn't load them all.
-    if (hasComments(path) || (!large && shown + Math.max(n, 1) <= OPEN_LINE_BUDGET)) {
+    if (hasComments(path) || (!large && shown + Math.max(n, 1) <= budget.open)) {
       open.add(path);
       if (!large) shown += Math.max(n, 1);
     }
   }
   return open;
+}
+
+/**
+ * The rows of each patch in `files`, by patch text: `prev`'s rows for a patch it already has, so a
+ * file whose patch didn't change keeps the same rows across a refetch (and isn't drawn again).
+ */
+export function reparse(prev: ReadonlyMap<string, DiffLine[]>, files: { patch: string | null }[]): Map<string, DiffLine[]> {
+  const next = new Map<string, DiffLine[]>();
+  for (const { patch } of files) if (patch !== null && !next.has(patch)) next.set(patch, prev.get(patch) ?? parsePatch(patch));
+  return next;
 }
 
 /** The line's number on a comment side: `new` for added and unchanged lines, `old` for removed ones. */
