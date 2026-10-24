@@ -7,6 +7,7 @@
     { "name": "MEKO_HOME on a local disk with a network home", "env": { "MEKO_HOME": "/data/meko" }, "networkDirs": ["$HOME"], "want": "/data/meko" },
     { "name": "a network home with a local XDG_STATE_HOME", "env": { "XDG_STATE_HOME": "/local/state" }, "networkDirs": ["$HOME"], "want": "/local/state/meko" },
     { "name": "a network home with XDG_STATE_HOME on the network too", "env": { "XDG_STATE_HOME": "$HOME/.local/state" }, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" },
-    { "name": "a network home without XDG_STATE_HOME", "env": {}, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" }
+    { "name": "a network home without XDG_STATE_HOME", "env": {}, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" },
+    { "name": "a network home with a relative XDG_STATE_HOME, which is ignored", "env": { "XDG_STATE_HOME": "state" }, "networkDirs": ["$HOME"], "want": "$SHARED_TMP/$USER/meko" }
   ]
 }

@@ -122,7 +122,7 @@ The database must sit on a local disk, not a network filesystem: SQLite's WAL lo
 there, and neither does `flock` across hosts. When the default folder is on a network filesystem
 (NFS, SMB, sshfs and the others in AgentK's `install.ts` list), the default moves to local disk
 instead, as AgentK's installer does for `state.db` (`extensions/agentk/src/server/install.ts`):
-`$XDG_STATE_HOME/meko` if that's local, else `/var/tmp/<user>/meko`, named by the user lookup; a
+`$XDG_STATE_HOME/meko` if that's an absolute path on a local disk (a relative one is ignored, as the XDG spec says), else `/var/tmp/<user>/meko`, named by the user lookup; a
 failed lookup is an error. An explicit `--data-dir` on a network filesystem is refused with a
 message saying why.
 

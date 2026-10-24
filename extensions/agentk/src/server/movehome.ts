@@ -7,12 +7,12 @@
 // stored outside it that named it, and starts the services on the new home, whose recovery resumes
 // the sessions. Without services, `serve` does it at its next start. A journal (move.json, carried
 // with the folder) records the steps done, so a move that stops halfway goes on where it stopped.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statfsSync, statSync,
   symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { claudeUserDir } from './claude.js';
@@ -25,7 +25,7 @@ import { NoHostError, SessionHost } from './hostclient.js';
 import { heldLease } from './instance.js';
 import { moveKiroSessions } from './kiro.js';
 import { errMsg } from './log.js';
-import { claudePath, expandHome, getPaths, homeIn, MekoHomeError, mekoHome, releaseHome, SHARED_TMP, type MekoHomeOptions, type Paths } from './paths.js';
+import { claudePath, expandHome, getPaths, homeIn, MekoHomeError, mekoHome, releaseHome, SHARED_TMP, withLocalBin, type MekoHomeOptions, type Paths } from './paths.js';
 import { dropOldNames, hostServices, removeMoveJob, renderServiceFiles, servicesFor, startMoveJob, type ServiceManager } from './service.js';
 import { copyClaudeProjects } from './trust.js';
 
@@ -130,6 +130,23 @@ export interface CheckDeps {
   appDir?: string | undefined;
   /** How Meko's data folder is found (tests). */
   meko?: MekoHomeOptions;
+  /** What `meko destroy -h` prints, or null with no Meko installed (`mekoDestroyHelp`). */
+  mekoHelp?: () => string | null;
+}
+
+/** The Meko data folder a home is in (`<data folder>/extensions/agentk`), or null for any other home. */
+export function mekoDirOf(home: string): string | null {
+  return basename(home) === 'agentk' && basename(dirname(home)) === 'extensions' ? dirname(dirname(home)) : null;
+}
+
+/**
+ * What the Meko installed here prints for `meko destroy -h` (its flags, and nothing done), or null
+ * when there's no `meko` on PATH or in ~/.local/bin, where Meko's installer links it.
+ */
+export function mekoDestroyHelp(env: NodeJS.ProcessEnv = process.env): string | null {
+  const r = spawnSync('meko', ['destroy', '-h'], { env: { ...env, PATH: withLocalBin(env.PATH ?? '', env.HOME || homedir()) }, encoding: 'utf8', timeout: 5000 });
+  if (r.error) return null;
+  return `${r.stdout ?? ''}${r.stderr ?? ''}`;
 }
 
 /**
@@ -138,7 +155,9 @@ export interface CheckDeps {
  */
 export function checkMove(paths: Paths, cfg: Config, d: CheckDeps = {}): MoveCheck {
   const appDir = 'appDir' in d ? d.appDir : process.env.AK_APP_DIR;
-  if (!releaseHome(appDir)) return null;
+  // A home in a Meko data folder already stays: the installer put it where Meko's rule said in
+  // its shell, which a service may not see the same way (MEKO_HOME, XDG_STATE_HOME).
+  if (!releaseHome(appDir) || mekoDirOf(paths.home)) return null;
   let to: string;
   try {
     to = homeIn(mekoHome({ configured: cfg.meko.home, ...d.meko }));
@@ -158,6 +177,11 @@ export function checkMove(paths: Paths, cfg: Config, d: CheckDeps = {}): MoveChe
     }
   }))();
   if (!gitAtLeast230(git)) return { skip: `moving the home needs git 2.30 or later (for git worktree repair), and this is ${git?.trim() || 'no git'}` };
+  // A Meko from before `destroy` kept extension data would delete the moved home with its own.
+  const help = (d.mekoHelp ?? mekoDestroyHelp)();
+  if (help !== null && !help.includes('with-extensions')) {
+    return { skip: "the Meko installed here is older than one whose `meko destroy` keeps AgentK's data: update it (meko update), and AgentK moves at its next start" };
+  }
   const device = d.device ?? ((p: string) => statSync(p).dev);
   const method = device(real) === device(existingAncestor(to)) ? 'rename' : 'copy';
   if (method === 'copy') {
@@ -264,16 +288,25 @@ export function homeMapper(j: Pick<Journal, 'from' | 'real' | 'to'>): (p: string
 /** Claude Code's folder for a cwd's transcripts and memory (as `transcriptPathFor`). */
 const projectKey = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-');
 
-/** Moves `from`'s entries into `to`, keeping what `to` has already; `from` goes once it's empty. */
+/**
+ * Moves `from`'s entries into `to`, folders merged the same way; an entry `to` already has is left
+ * in `from`, which goes only once it's empty.
+ */
 function mergeDir(from: string, to: string): void {
   if (!existsSync(to)) {
     renameSync(from, to);
     return;
   }
   for (const name of readdirSync(from)) {
-    if (!existsSync(join(to, name))) renameSync(join(from, name), join(to, name));
+    const [f, t] = [join(from, name), join(to, name)];
+    if (!existsSync(t)) renameSync(f, t);
+    else if (isRealDir(f) && isRealDir(t)) mergeDir(f, t);
   }
-  rmSync(from, { recursive: true, force: true });
+  try {
+    rmdirSync(from);
+  } catch {
+    // something in it was in `to` already: kept
+  }
 }
 
 /** Renames `from` to `to`, or copies it and removes the original across filesystems. */
@@ -446,7 +479,8 @@ function rewriteDb(paths: Paths, j: Journal, d: MoveDeps): void {
         if (JSON.stringify(moved) !== r.v) run(db, 'UPDATE sessions SET start_images = ? WHERE id = ?', JSON.stringify(moved), r.id);
       }
       const now = Date.now();
-      for (const r of all<{ id: string; project_id: string }>(db, "SELECT id, project_id FROM sessions WHERE desired = 'running'")) {
+      // Once per session, should this step run again.
+      for (const r of all<{ id: string; project_id: string }>(db, "SELECT id, project_id FROM sessions WHERE desired = 'running' AND NOT EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = sessions.id AND e.kind = 'home-moved')")) {
         run(db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, NULL, ?)',
           r.id, r.project_id, 'home-moved', `AgentK moved its home to ${j.to}; the session resumed there`, now);
       }
@@ -602,8 +636,10 @@ export class HomeMove {
     }
     this.started = true;
     const bin = join(process.env.AK_APP_DIR ?? join(this.paths.app, 'current'), 'bin', 'agentk');
+    // The job logs beside the new home (service.ts moveJobLog), so its folder is made first.
     this.log.info(`moving AgentK's home to ${r.plan.to} (${r.plan.method}): every session ends and resumes there`);
     try {
+      if (!this.o.start) makeHomeParent(r.plan.to);
       (this.o.start ?? startMoveJob)(svc.kind, { bin, from: this.paths.home, to: r.plan.to });
     } catch (e) {
       this.started = false;

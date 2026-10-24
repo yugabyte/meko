@@ -579,7 +579,7 @@ describe('install.sh: where AgentK lives', () => {
   it.each(CASES)('$name', (c) => {
     const fill = (p: string) => {
       const v = p.replace('$HOME', home).replace('$SHARED_TMP', '/var/tmp').replace('$USER', 'me');
-      return v.startsWith(home) || v.startsWith('/var/tmp') ? v : join(root, v);
+      return v.startsWith(home) || v.startsWith('/var/tmp') || !v.startsWith('/') ? v : join(root, v);
     };
     const network = c.networkDirs.map(fill);
     for (const d of network) mkdirSync(d, { recursive: true });
@@ -592,6 +592,15 @@ describe('install.sh: where AgentK lives', () => {
     } else {
       expect(r.stdout.trim()).toBe(join(fill(c.want!), 'extensions', 'agentk'));
     }
+  });
+
+  it("finds an install made with a custom AK_HOME by the command link it made, so a rerun updates it there", () => {
+    const custom = join(root, 'custom-home');
+    mkdirSync(join(custom, 'app'), { recursive: true });
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    symlinkSync(join(custom, 'app', 'current', 'bin', 'agentk'), join(home, '.local', 'bin', 'agentk'));
+    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C' }, encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(custom);
   });
 
   it("keeps an install from before the move in its old home until its server moves it", () => {

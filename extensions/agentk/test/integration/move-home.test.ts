@@ -81,8 +81,18 @@ describe("moving AgentK's home into Meko's data folder (real session host + git,
   it.each<MovePlan['method']>(['rename', 'copy'])('moves everything that named the old home (%s), and the sessions resume there', async (method) => {
     const s = await setUp();
     const moved = join(to, s.worktree.slice(from.length));
+    // Claude Code's folder for the new path has something already (its memory, say): merged, and
+    // an old file of the same name is kept where it was rather than lost.
+    const projects = join(process.env.CLAUDE_CONFIG_DIR!, 'projects');
+    for (const [dir, file] of [[key(moved), 'mine.md'], [key(s.worktree), 'old.md'], [key(s.worktree), 'mine.md']]) {
+      mkdirSync(join(projects, dir, 'memory'), { recursive: true });
+      writeFileSync(join(projects, dir, 'memory', file), dir);
+    }
 
     expect(await moveHome({ from, to, method }, deps())).toBe(to);
+    expect(readdirSync(join(projects, key(moved), 'memory')).sort()).toEqual(['mine.md', 'old.md']);
+    expect(readFileSync(join(projects, key(moved), 'memory', 'mine.md'), 'utf8')).toBe(key(moved));
+    expect(readFileSync(join(projects, key(s.worktree), 'memory', 'mine.md'), 'utf8')).toBe(key(s.worktree));
 
     expect(lstatSync(from).isSymbolicLink() && readlinkSync(from)).toBe(to);
     expect(existsSync(join(to, JOURNAL)) || existsSync(`${from}.moved`)).toBe(false);
@@ -116,6 +126,8 @@ describe("moving AgentK's home into Meko's data folder (real session host + git,
     await expect(moveHome({ from, to, method: 'rename' }, deps())).rejects.toThrow();
     expect(JSON.parse(readFileSync(join(to, JOURNAL), 'utf8'))).toMatchObject({ phase: 'moving', done: ['db', 'paths', 'claude', 'kiro', 'git'] });
     chmodSync(join(env.home, '.local', 'bin'), 0o755);
+    // A link step cut off between its temp link and the rename leaves the temp link behind.
+    symlinkSync('nowhere', join(env.home, '.local', 'bin', 'agentk.moving'));
 
     expect(await moveHome({ from, to, method: 'rename' }, deps())).toBe(to);
     expect(existsSync(join(to, JOURNAL))).toBe(false);

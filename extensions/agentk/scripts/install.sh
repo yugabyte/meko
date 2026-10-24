@@ -135,8 +135,21 @@ meko_home() {
     printf '%s\n' "/var/tmp/$(id -un)/meko"
   fi
 }
+# An install already here is found by the command link this installer made (it may be in a home
+# from before the move: ~/.agent-k-local, or one named by AK_HOME back then), so it's updated in
+# place and moves by itself; else the home in Meko's data folder, or ~/.agent-k-local when only that
+# is there.
+installed_home() {
+  for c in agentk agent-k-local; do
+    l=$(readlink "$HOME/.local/bin/$c" 2>/dev/null) || continue
+    case $l in */app/current/bin/*) h=${l%/app/current/bin/*}; [ -d "$h/app" ] && { printf '%s\n' "$h"; return 0; } ;; esac
+  done
+  return 1
+}
 meko_dir=$(meko_home) || exit 1
-if [ -d "$meko_dir/extensions/agentk" ] || [ ! -d "$HOME/.agent-k-local" ]; then
+if ak_home=$(installed_home); then
+  :
+elif [ -d "$meko_dir/extensions/agentk" ] || [ ! -d "$HOME/.agent-k-local" ]; then
   ak_home=$meko_dir/extensions/agentk
 else
   ak_home=$HOME/.agent-k-local

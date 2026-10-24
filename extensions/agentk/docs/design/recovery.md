@@ -169,15 +169,23 @@ session that was mid-turn gets its continue prompt as after any host restart.
 - **When.** Right after a release with the move has proved healthy, whatever the sessions are
   doing: when the launcher's `update-pending.json` goes (`HomeMove`, run by the server at its start
   and again once the release has been healthy for 5 minutes), so a bad release is rolled back first.
-  Only a release install moves (a source checkout or a test never does). A move that can't happen
-  (a target that isn't empty, too little free space for a copy, git older than 2.30, a `MEKO_HOME`
-  on a network filesystem) is logged at each start, and the install keeps running where it is.
+  Only a release install whose home isn't in a Meko data folder yet moves (a source checkout or a
+  test never does, nor a home the installer already put in one). A move that can't happen is logged
+  at each start, and the install keeps running where it is: a target that isn't empty, too little
+  free space for a copy, git older than 2.30, a `MEKO_HOME` on a network filesystem, another server
+  holding the home's lease, or a Meko installed here whose `meko destroy -h` doesn't offer
+  `--with-extensions` (it's older than the Meko that keeps extension data, so its `destroy` would
+  delete the moved home; `meko update` first). Taking the target from the login shell's `MEKO_HOME`
+  and `XDG_STATE_HOME` and from `[meko] home` keeps a server under its service from choosing another
+  folder than the installer did.
 - **Who.** The move stops the server and the session host, so it can't run in either's unit (systemd
   or launchd would end it with them). The server starts a one-shot job outside both: a transient
   unit (`systemd-run --user --unit agentk-move-home`, `Restart=on-failure`) or a LaunchAgent of its
   own (`com.yugabyte.agentk.move-home`, which removes itself at the end), running the release's
-  hidden `agentk _move-home --to <dir>`. It logs to `logs/move-home.log`. Without services, `serve`
-  does the move itself at its next start, before it opens anything.
+  hidden `agentk _move-home --to <dir>`. It logs to `agentk-move-home.log` beside the new home (in
+  Meko's `extensions/`), which survives a copy's removal of the old home. Without services, `serve`
+  does the move itself at its next start, before it opens anything, unless another server holds the
+  home's lease (then the start is refused as ever).
 - **What.**
   1. Stop the server, then the host (`stopAll`, which `agentk stop` uses too).
   2. Put the home in place: `rename(2)` on one filesystem; on another (a home folder on NFS moving
@@ -206,7 +214,12 @@ session that was mid-turn gets its continue prompt as after any host restart.
   a reboot that ended it; without services, `serve` goes on with the move itself. A rerun finds
   what's done: a copy cut off is started over, the original untouched until the copy is whole. The
   journal is removed once the server answers on the new home (or the server removes it at its next
-  start).
+  start). The activity line is added once per session, and Claude Code's transcript folders are
+  merged without losing a file: one the new folder has already stays in the old one.
+- **Services found by real path.** A release's home is its real path (the launcher resolves its
+  folder with `cd -P`), while a unit names the home as spelled, maybe through a symlinked `/home` or
+  the link the move leaves; `servicesFor` compares real paths, so `stop`, `start`, `status`, the
+  trigger and a start mid-move all find the services.
 - **Meko.** Meko finds AgentK by its command, `~/.local/bin/agentk`, which the move repoints;
   `meko destroy` leaves `extensions/` alone unless asked ([Meko's install
   docs](../../../../backend/docs/install.md)).

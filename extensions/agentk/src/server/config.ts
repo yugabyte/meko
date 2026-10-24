@@ -26,9 +26,10 @@ export interface Config {
    */
   meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean; home: string };
   /**
-   * dbPath: where an install from before the move into Meko's data folder kept state.db when its
-   * home was on a network filesystem. Read until that install moves (movehome.ts brings the
-   * database into the home and clears it); nothing sets it any more.
+   * dbPath: where state.db is when the home is on a network filesystem, which only a home from before
+   * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `agentk install`
+   * sets it for such a home (`localDbLocation`), and the move brings the database into the new home
+   * and clears it (movehome.ts).
    */
   state: { dbPath: string };
   /**

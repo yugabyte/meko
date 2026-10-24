@@ -57,7 +57,7 @@ func TestResolveCases(t *testing.T) {
 			t.Cleanup(func() { SharedTmp = oldTmp })
 			expand := func(p string) string {
 				p = strings.NewReplacer("$HOME", home, "$SHARED_TMP", tmp, "$USER", u.Username).Replace(p)
-				if !strings.HasPrefix(p, home) && !strings.HasPrefix(p, tmp) {
+				if filepath.IsAbs(p) && !strings.HasPrefix(p, home) && !strings.HasPrefix(p, tmp) {
 					p = filepath.Join(root, p)
 				}
 				return p

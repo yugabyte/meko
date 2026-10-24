@@ -58,9 +58,11 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
   --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  0. finds AgentK's home: <Meko's data folder>/extensions/agentk (MEKO_HOME, else ~/.meko, or
-#     $XDG_STATE_HOME/meko or /var/tmp/<user>/meko for a home folder on NFS), or ~/.agent-k-local
-#     when only that is there (until its server moves it); --print-home prints it and stops.
+#  0. finds AgentK's home: the one an install here already has (from the ~/.local/bin/agentk link
+#     it made, even in ~/.agent-k-local or a custom AK_HOME from before), else
+#     <Meko's data folder>/extensions/agentk (MEKO_HOME, else ~/.meko, or $XDG_STATE_HOME/meko or
+#     /var/tmp/<user>/meko for a home folder on NFS), or ~/.agent-k-local when only that is there
+#     (until its server moves it); --print-home prints it and stops.
 #     Stops, saying so, if AgentK is already installed there and set up: app/current,
 #     config.toml, ~/.local/bin/agentk, and both services enabled (systemd) or loaded
 #     (launchd). Updates are offered in the app, and `agentk install` redoes the setup.
@@ -84,8 +86,9 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #     else offers a Meko running on this computer, else asks; Enter or --no-meko skips it;
 #     --meko-url and --meko-key name one) and offers to run Meko's setup for Claude Code if its
 #     plugin, MCP server or key is missing (declining is a warning)
-#  5. writes config.toml (with Meko's data folder when MEKO_HOME names it), sets up TLS; on an
-#     older home, says it moves into Meko's data folder once the server has started
+#  5. picks the database location (local disk for an older home still on NFS), writes config.toml
+#     (with the Meko data folder the home is in), sets up TLS; on an older home, says it moves into
+#     Meko's data folder once the server has started
 #  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
 #  7. prints the one-time setup link (remote access), or the address (local access)

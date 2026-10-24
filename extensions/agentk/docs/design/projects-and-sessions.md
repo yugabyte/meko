@@ -58,6 +58,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
 # web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
+# home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
 [claude]
@@ -199,12 +200,11 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
   loop. On a dev box whose disk other builds kept busy, a commit took up to 405 ms under FULL
   (0.2 ms under NORMAL), and every request waited behind it. Old `session_events` are pruned
   after 30 days, except `merged` events, which the Usage page counts.
-- **Not on NFS.** SQLite locking is unreliable on network filesystems. The home is always in
-  Meko's data folder, which Meko keeps on a local disk (below), so `state.db` is in the home. An
-  install from before the move whose home was on NFS kept it on local disk instead (`[state]
-  db_path` in `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`);
-  that setting is still read until the move brings the database into the home, and nothing sets it
-  any more. A folder in `/var/tmp` must be a real directory owned by you that others can't write
+- **Not on NFS.** SQLite locking is unreliable on network filesystems. A home in Meko's data
+  folder is on a local disk (below), so `state.db` is in it. Only a home from before the move can
+  be on NFS: for one, `agentk install` puts the database on local disk (`[state] db_path` in
+  `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`), and the move
+  brings it into the new home and clears the setting. A folder in `/var/tmp` must be a real directory owned by you that others can't write
   to, or AgentK stops rather than put its data (password hash, TOTP secret) somewhere another user
   controls.
 
@@ -217,7 +217,10 @@ three tested against `backend/internal/paths/testdata/resolve-cases.json`): `MEK
 a network filesystem; else `~/.meko` on a local disk; else, for a home folder on a network
 filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
 above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
-home`, since its own services don't have it.
+home`, since its own services don't have it. `agentk install` keeps the Meko data folder its home is
+in as `[meko] home` too, and the server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
+(as it does `PATH`), so the server finds the same folder the installer did. A relative
+`XDG_STATE_HOME` is ignored, as the XDG spec says.
 
 - **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
   `AK_HOME` says; the CLI run through `~/.local/bin/agentk` finds it that way, and so does the

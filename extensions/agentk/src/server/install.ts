@@ -22,7 +22,7 @@ import {
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
-import { dropOldNames, hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
+import { dropOldNames, hostServices, renderServiceFiles, samePath, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
@@ -30,7 +30,7 @@ import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
 import { removeKiroAgent } from './kiro.js';
 import { ensurePrivateDir, fsType, isNetworkFs, PrivateDirError } from './fstype.js';
-import { checkMove, makeHomeParent, tmpHomeWarning } from './movehome.js';
+import { checkMove, makeHomeParent, mekoDirOf, tmpHomeWarning } from './movehome.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 
 class InstallError extends Error {}
@@ -376,8 +376,12 @@ export async function runInstall(args: string[]): Promise<void> {
     }
     const fresh = !existsSync(paths.config);
     const cfg: Config = loadConfig(paths);
-    // Meko's `install_extension` names its data folder: the move into it goes there.
-    if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
+    // The Meko data folder this install is in, as the installer found it (from MEKO_HOME or
+    // XDG_STATE_HOME in this shell, which the services don't have), or the one Meko's
+    // `install_extension` names: the server and a move go by it, never resolving it again.
+    const inMeko = mekoDirOf(paths.home);
+    if (inMeko) cfg.meko.home = inMeko;
+    else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
     // 1. Basics
     if (!process.env.AK_INSTALLER) ui.title('AgentK setup');
@@ -603,7 +607,7 @@ export function purgeHome(paths: Paths, all: boolean): string[] {
 /** Removes `~/.agent-k-local` when it's the link to `home` that the move left. */
 export function removeOldHomeLink(home: string, old: string = oldHome()): void {
   try {
-    if (lstatSync(old).isSymbolicLink() && readlinkSync(old) === home) unlinkSync(old);
+    if (lstatSync(old).isSymbolicLink() && samePath(readlinkSync(old), home)) unlinkSync(old);
   } catch {
     // not there
   }

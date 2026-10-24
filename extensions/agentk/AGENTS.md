@@ -83,7 +83,11 @@ agents should read it before changing code there.
    Claude as children of the server's service or process group (one-shot `claude` commands that end with
    their request, such as `--version`, `update` and Ask AgentK's `claude -p`, are the server's own). Server restarts and updates must never stop a
    session. Manage the services only through `service.ts`. When the host service is installed, the server
-   never starts a host itself; it reports the service as down.
+   never starts a host itself; it reports the service as down. **The one exception** is the move of an
+   older home into Meko's data folder (`src/server/movehome.ts`, decided by the project owner for
+   #236): once, right after the release that brings it proves healthy, its job (outside both services)
+   stops the server and the host, ending every session whatever it's doing, and recovery resumes them
+   in the new home.
 2. **Recovery is idempotent.** `recover()` and `reconcile()` may run at any time. A session with a live
    pane is left alone, and so is one still being created or launched (it has no pane yet); a missing
    pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes; after two
@@ -101,7 +105,8 @@ agents should read it before changing code there.
    shell text we generate is the launcher script, and every value in it goes through `shq()`.
 5. **Migrations are append-only.** Add a new entry to `MIGRATIONS` in `db.ts`; never edit a shipped one.
 6. **The session host outlives updates.** A running host keeps the code it started with, and restarting
-   it ends every Claude: nothing restarts it by itself. Keep `src/server/host/` small; bump `PROTOCOL` in
+   it ends every Claude: nothing restarts it by itself, except the one-time move of the home into Meko's
+   data folder (invariant 1). Keep `src/server/host/` small; bump `PROTOCOL` in
    `host/protocol.ts` for a change an older peer can't read, and keep the server working with hosts back
    to `MIN_PROTOCOL`. The updater keeps the version directory the host runs from.
 7. **Meko is optional; a project has at most one dedicated datapack.** Without a key (or with

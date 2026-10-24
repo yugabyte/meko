@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -434,8 +434,16 @@ export interface MoveJob {
   /** The release's `agentk` to run (`_move-home --to <to>`). */
   bin: string;
   to: string;
-  /** The home being moved, for the job's AK_HOME and its log. */
+  /** The home being moved, for the job's AK_HOME. */
   from: string;
+}
+
+/**
+ * The move job's log: beside the new home (in Meko's `extensions/`, which the trigger makes first),
+ * not in either home, since a copy moves the old one aside and removes it.
+ */
+export function moveJobLog(to: string): string {
+  return join(dirname(to), 'agentk-move-home.log');
 }
 
 function moveJobPlist(home: string): string {
@@ -454,7 +462,7 @@ export function moveJobRunning(kind: ServiceManager['kind'], run: Runner = runCo
 /** Starts the move job unless it's running already. */
 export function startMoveJob(kind: ServiceManager['kind'], job: MoveJob, run: Runner = runCommand, home = homedir(), uid = process.getuid?.() ?? 0): void {
   if (moveJobRunning(kind, run, uid)) return;
-  const log = join(job.from, 'logs', 'move-home.log');
+  const log = moveJobLog(job.to);
   if (kind === 'systemd') {
     // A unit that failed before stays loaded as failed: clear it, or systemd-run refuses the name.
     run('systemctl', ['--user', 'reset-failed', MOVE_JOB.systemd]);
@@ -516,9 +524,24 @@ export function servicesFor(home: string, svc: ServiceManager | null = hostServi
   const file = svc.installed('server') ? svc.file('server') : svc.installed('host') ? svc.file('host') : null;
   if (!file) return svc;
   try {
-    return serviceHome(readFileSync(file, 'utf8'), svc.kind) === home ? svc : null;
+    const named = serviceHome(readFileSync(file, 'utf8'), svc.kind);
+    return named !== null && samePath(named, home) ? svc : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Whether two paths name the same folder: as spelled, or by their real paths. A release's home is
+ * its real path (the launcher resolves its folder with `cd -P`), while a unit names the home as it
+ * was spelled (through a symlinked /home, or the link the move leaves at the old home).
+ */
+export function samePath(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
   }
 }
 

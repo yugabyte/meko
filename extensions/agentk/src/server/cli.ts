@@ -17,7 +17,7 @@ import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { loadTls } from './tls.js';
-import { hostServices, servicesFor, startMoveJob } from './service.js';
+import { hostServices, moveJobLog, servicesFor, startMoveJob } from './service.js';
 import { linkCommand } from './cmdlink.js';
 import { openBrowser } from './browser.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
@@ -40,12 +40,17 @@ function version(): string {
 /**
  * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
  * so git, gh and claude resolve the way they do in a terminal. ~/.local/bin is added
- * when it's missing: the installer puts `agentk` (and gh, when it installs it) there.
+ * when it's missing: the installer puts `agentk` (and gh, when it installs it) there. MEKO_HOME
+ * and XDG_STATE_HOME come from there too when unset, since they decide where Meko's data folder
+ * is (paths.ts `mekoHome`), as they did for the installer.
  */
 function adoptLoginPath(): void {
   try {
-    const p = execFileSync(loginShell(), ['-l', '-c', 'printf %s "$PATH"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
-    if (p.trim()) process.env.PATH = p.trim();
+    const out = execFileSync(loginShell(), ['-l', '-c', 'printf "%s\\0%s\\0%s" "$PATH" "${MEKO_HOME-}" "${XDG_STATE_HOME-}"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const [p, meko, state] = out.split('\0');
+    if (p?.trim()) process.env.PATH = p.trim();
+    if (meko && !process.env.MEKO_HOME) process.env.MEKO_HOME = meko;
+    if (state && !process.env.XDG_STATE_HOME) process.env.XDG_STATE_HOME = state;
   } catch {
     /* keep the inherited PATH */
   }
@@ -65,10 +70,13 @@ async function moveFirst(paths: Paths): Promise<Paths> {
   if (svc?.installed('server')) {
     if (j?.phase !== 'moving') return paths;
     startMoveJob(svc.kind, { bin: join(process.env.AK_APP_DIR ?? join(paths.app, 'current'), 'bin', 'agentk'), from: j.from, to: j.to });
-    console.error(`agentk: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${join(j.to, 'logs', 'move-home.log')}`);
+    console.error(`agentk: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${moveJobLog(j.to)}`);
     process.exit(EXIT_BUSY);
   }
   if (existsSync(paths.updatePending) && j?.phase !== 'moving') return paths;
+  // Another server holds the home (here or on another host): this start is refused by the lease
+  // below, as ever, and touches nothing first.
+  if (heldLease(paths.lock)) return paths;
   const r = j?.phase === 'moving' ? { plan: j } : checkMove(paths, loadConfig(paths, () => undefined));
   if (!r) return paths;
   if ('skip' in r) {

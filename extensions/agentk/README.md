@@ -81,7 +81,8 @@ clean `/var/tmp` by age, so set `XDG_STATE_HOME` to a local folder there (AgentK
 
 An install from before this kept its data in `~/.agent-k-local`. It moves into Meko's data folder by
 itself right after updating to a release that brings the move: every session ends and resumes there,
-and `~/.agent-k-local` becomes a link to the new place.
+and `~/.agent-k-local` becomes a link to the new place. If the Meko installed here is older than
+the one whose `meko destroy` keeps AgentK's data, the move waits until you update it (`meko update`).
 
 If your home is under `/net` (the automounter's `/net/<host>/...`), Claude Code 2.1.292 and later
 asks before every file it reads or edits there, even in auto mode. When the home is this host's

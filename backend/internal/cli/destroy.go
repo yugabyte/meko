@@ -112,7 +112,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 		if err = uninstallExtensions(l, exts, stdout, stderr); err != nil {
 			return fail(stderr, err), false
 		}
-		nothing = "Nothing of Meko's was removed"
+		nothing = "The extensions were uninstalled and their data deleted already, but nothing of Meko's was removed"
 	}
 	// Under its service, a server that only gets a signal is started again: stop the service first.
 	m := serviceOf(l)

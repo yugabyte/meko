@@ -110,8 +110,8 @@ func (l Layout) Ensure() error {
 const HomeEnv = "MEKO_HOME"
 
 // networkFS are filesystems SQLite's locking and flock can't be trusted on. The names are the
-// ones AgentK's installer checks (extensions/agentk/src/server/install.ts): Linux mount types and macOS
-// statfs names.
+// ones AgentK checks (extensions/agentk/src/server/fstype.ts, and its scripts/install.sh): Linux
+// mount types and macOS statfs names.
 var networkFS = map[string]bool{
 	"nfs": true, "nfs4": true, "cifs": true, "smb2": true, "smbfs": true, "fuse.sshfs": true,
 	"afs": true, "lustre": true, "gpfs": true, "afpfs": true, "webdav": true, "macfuse": true,
@@ -173,9 +173,10 @@ var SharedTmp = "/var/tmp"
 
 // localFallback is a local-disk data folder for a home folder on a network filesystem:
 // $XDG_STATE_HOME/meko if that's local, else /var/tmp/<user>/meko (as AgentK does
-// for its state.db).
+// for its state.db). A relative XDG_STATE_HOME is ignored, as the XDG spec says (and as
+// AgentK's mekoHome and install.sh do).
 func localFallback() (string, error) {
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" && filepath.IsAbs(xdg) {
 		dir := filepath.Join(xdg, "meko")
 		if networkType(dir) == "" {
 			return dir, nil

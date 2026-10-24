@@ -30,7 +30,7 @@ function setUp(c: (typeof CASES)[number]) {
   const sharedTmp = join(root, 'var-tmp');
   const fill = (p: string) => {
     const s = p.replace('$HOME', home).replace('$SHARED_TMP', sharedTmp).replace('$USER', 'me');
-    return s.startsWith(root) ? s : join(root, s);
+    return s.startsWith(root) || !s.startsWith('/') ? s : join(root, s);
   };
   const network = c.networkDirs.map(fill);
   for (const d of [home, sharedTmp, ...network]) mkdirSync(d, { recursive: true });
@@ -96,7 +96,7 @@ describe('whether the home moves', () => {
   }
 
   const check = (paths: ReturnType<typeof getPaths>, o: Parameters<typeof checkMove>[2] = {}) =>
-    checkMove(paths, structuredClone(DEFAULT_CONFIG), { appDir: app(paths.home), gitVersion: () => 'git version 2.43.7', meko: { ...local, home: root }, ...o });
+    checkMove(paths, structuredClone(DEFAULT_CONFIG), { appDir: app(paths.home), gitVersion: () => 'git version 2.43.7', meko: { ...local, home: root }, mekoHelp: () => null, ...o });
 
   it('moves a release install into Meko\'s data folder: renamed on one filesystem, copied onto another when there\'s room', () => {
     const paths = release(oldHome(root));
@@ -117,6 +117,8 @@ describe('whether the home moves', () => {
       return {};
     }, /isn't empty/],
     ['git older than 2.30', () => ({ gitVersion: () => 'git version 2.27.0' }), /needs git 2\.30 or later/],
+    ['a Meko whose destroy would delete the moved home with its own', () => ({ mekoHelp: () => 'Usage of meko destroy:\n  -force' }), /older than one whose `meko destroy` keeps AgentK's data/],
+    ['a Meko whose destroy keeps it', () => ({ mekoHelp: () => '  -force\n  -with-extensions' }), { plan: expect.objectContaining({ method: 'rename' }) }],
     ['MEKO_HOME on a network filesystem', () => ({ meko: { home: root, env: { MEKO_HOME: join(root, 'net') }, type: () => 'nfs' } }), /network filesystem/],
   ])('%s', (_what, setup, want) => {
     const paths = release(oldHome(root));

@@ -36,7 +36,7 @@ export interface MekoHomeOptions {
  * tested against backend/internal/paths/testdata/resolve-cases.json): MEKO_HOME (or the folder
  * Meko last told AgentK), refused on a network filesystem; else ~/.meko on a local disk; else, for
  * a home folder on a network filesystem, $XDG_STATE_HOME/meko when that's local, else
- * /var/tmp/<user>/meko. Makes nothing: `ensureMekoDir` does that.
+ * /var/tmp/<user>/meko. Makes nothing: `makeHomeParent` in movehome.ts does that.
  */
 export function mekoHome(o: MekoHomeOptions = {}): string {
   const env = o.env ?? process.env;
