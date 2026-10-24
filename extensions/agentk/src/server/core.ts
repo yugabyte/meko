@@ -32,7 +32,7 @@ import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
 import { MekoCallLog } from './mekolog.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
-import { LocalMekoReader, isLocalMeko, localMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
+import { LocalMekoReader, isLocalMeko, localMeko, lookForLocalMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
 import { mekoDirOf } from './movehome.js';
 import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
@@ -97,7 +97,7 @@ const STAGED_SWEEP_MS = 60 * 60 * 1000;
 const KIRO_MEKO_TTL_MS = 10_000;
 /** How long a read of OpenCode's own config (for `MekoStatus.opencode`) is used. */
 const OPENCODE_MEKO_TTL_MS = 10_000;
-/** How often the Meko on this computer is looked for while there's no Meko to use. */
+/** How often the Meko on this computer is looked for while there's no Meko, or no `meko` on this computer (`lookForLocalMeko`). */
 const LOCAL_MEKO_EVERY_MS = 60_000;
 /** After a failed connection to the local Meko, how long until another failure reads it again. */
 const LOCAL_MEKO_RECHECK_MS = 30_000;
@@ -163,7 +163,8 @@ export class Core extends EventEmitter {
   private kiroMekoAt: { at: number; value: MekoStatus['kiro'] } | null = null;
   /** The last read of OpenCode's own Meko server (openCodeMeko). */
   private openCodeMekoAt: { at: number; own: boolean } | null = null;
-  mekoStatus: MekoStatus;
+  /** Meko's status as last worked out; `state()` adds the parts read live (`local`, Kiro, OpenCode). */
+  mekoStatus: Omit<MekoStatus, 'local'>;
   /** The Meko on this computer, read when needed (mekolocal.ts); used when no key is set. */
   private localReader: LocalMekoReader;
   /** When a failed connection last read the local Meko again. */
@@ -319,8 +320,8 @@ export class Core extends EventEmitter {
     return next;
   }
 
-  private mekoStatusFor(cfg: Config): MekoStatus {
-    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null, opencode: null, local: localMeko().state };
+  private mekoStatusFor(cfg: Config): Omit<MekoStatus, 'local'> {
+    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null, opencode: null };
   }
 
   /**
@@ -434,6 +435,8 @@ export class Core extends EventEmitter {
     const after = resolveMeko(this.cfg);
     if (before.url === after.url && before.apiKey === after.apiKey) {
       // Installed, or gone, without changing the Meko AgentK uses: the install banner follows it.
+      // With a key, `meko` removed after it was found is seen only at the next read (a restart or
+      // Settings), since the minute look stops once it's found (`lookForLocalMeko`).
       if (localMeko().state !== wasState) this.changed();
       return;
     }
@@ -587,7 +590,7 @@ export class Core extends EventEmitter {
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
       // Meko normally starts first (it starts AgentK); this covers a boot where it didn't, and an
       // install of Meko while the banner asks for one (with a Meko Cloud key too).
-      this.every(LOCAL_MEKO_EVERY_MS, () => (mekoConfigured(this.cfg) && localMeko().state !== 'none' ? undefined : this.refreshLocalMeko()));
+      this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(this.cfg), localMeko().state) ? this.refreshLocalMeko() : undefined));
       this.callHome.start((ms, fn) => this.every(ms, fn));
       this.ybCallHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.

@@ -176,7 +176,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   `none`), a banner that can't be dismissed says so and gives the command that installs it (the
 >   latest release's installer, `MEKO_INSTALL_COMMAND` in `src/shared/mekourls.ts`), with **Copy**.
 >   It shows with a Meko Cloud key too: Meko runs on every computer AgentK does. AgentK looks for
->   `meko` every minute meanwhile, and the banner goes once it's found, running or not.
+>   `meko` every minute meanwhile, and the banner goes once it's found, running or not. With a key,
+>   AgentK then stops looking, so `meko` removed later brings the banner back only at the next read
+>   (a restart, or the Meko tab opening).
 > - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare.
 >   The one exception is looking for the Meko on this computer every minute while there's no Meko
 >   at all or no `meko` (`meko token --json`, a local command, never a Meko call). An
