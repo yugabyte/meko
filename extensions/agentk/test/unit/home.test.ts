@@ -2,7 +2,7 @@ import { lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync 
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
-import { checkMove, HomeMove, rememberMekoHome, type MoveCheck } from '../../src/server/movehome.js';
+import { checkMove, HomeMove, refuseOtherMeko, rememberMekoHome, type MoveCheck } from '../../src/server/movehome.js';
 import { loadConfig } from '../../src/server/config.js';
 import { removeOldHomeLink } from '../../src/server/install.js';
 import { akHome, getPaths, homeIn, mekoHome, MekoHomeError, oldHome } from '../../src/server/paths.js';
@@ -221,6 +221,21 @@ describe('what Meko tells AgentK', () => {
     writeFileSync(paths.config, '');
     rememberMekoHome(paths, { MEKO_HOME: join(root, 'meko') });
     expect(loadConfig(paths).meko.home).toBe(join(root, 'meko'));
+  });
+
+  // A release's home stays where it's installed, so a Meko for another folder must not stop it.
+  it.each([
+    ['no MEKO_HOME', 'meko/extensions/agentk', undefined, true],
+    ["the home's own Meko", 'meko/extensions/agentk', 'meko', true],
+    ["a link to the home's Meko", 'meko/extensions/agentk', 'link', true],
+    ['another Meko', 'meko/extensions/agentk', 'other', false],
+    ["a home that isn't in a Meko folder yet", 'h', 'other', true],
+  ])('refuses a command Meko runs only for another Meko: %s', (_what, home, mekoHome, allowed) => {
+    mkdirSync(join(root, 'meko'));
+    symlinkSync(join(root, 'meko'), join(root, 'link'));
+    const run = () => refuseOtherMeko(getPaths(join(root, home)), { MEKO_HOME: mekoHome && join(root, mekoHome) });
+    if (allowed) expect(run).not.toThrow();
+    else expect(run).toThrow(`This AgentK belongs to the Meko in ${join(root, 'meko')}, and MEKO_HOME names ${join(root, 'other')}: nothing was done`);
   });
 });
 

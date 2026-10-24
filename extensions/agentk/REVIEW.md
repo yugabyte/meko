@@ -16,6 +16,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Server restarts and updates leave running sessions untouched. The one exception is the
       one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
       invariant 1), and nothing else may start it or end sessions the same way.
+- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop` and `status` refuse a
+      `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in `main()`), so a Meko
+      for another folder can't stop or uninstall it. A home that hasn't moved there yet isn't
+      covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as

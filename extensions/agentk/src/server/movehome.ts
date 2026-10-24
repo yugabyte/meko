@@ -26,7 +26,7 @@ import { heldLease } from './instance.js';
 import { moveKiroSessions } from './kiro.js';
 import { errMsg } from './log.js';
 import { claudePath, expandHome, getPaths, homeIn, MekoHomeError, mekoHome, releaseHome, SHARED_TMP, withLocalBin, type MekoHomeOptions, type Paths } from './paths.js';
-import { dropOldNames, hostServices, removeMoveJob, renderServiceFiles, servicesFor, startMoveJob, type ServiceManager } from './service.js';
+import { dropOldNames, hostServices, removeMoveJob, renderServiceFiles, samePath, servicesFor, startMoveJob, type ServiceManager } from './service.js';
 import { copyClaudeProjects } from './trust.js';
 
 /** The move's journal, in the home being moved (so it moves with it). */
@@ -193,6 +193,26 @@ export function checkMove(paths: Paths, cfg: Config, d: CheckDeps = {}): MoveChe
     if (free < need) return { skip: `moving the home to ${to} needs ${Math.ceil(need / 2 ** 20)} MB there, and ${Math.floor(free / 2 ** 20)} MB is free` };
   }
   return { plan: { from, to, method } };
+}
+
+/**
+ * The commands Meko runs for an extension that `refuseOtherMeko` checks: start, stop, status and
+ * `destroy`'s uninstall. Not `install`: the installer updates the existing home in place whatever
+ * MEKO_HOME says, and has switched `app/current` before it runs `agentk install`, which then keeps
+ * the Meko folder the home is in over MEKO_HOME (`runInstall`).
+ */
+export const MEKO_COMMANDS = ['uninstall', 'start', 'stop', 'status'];
+
+/**
+ * Refuses a command Meko runs for another data folder than the one this home is in. A release's
+ * home is the folder it's installed in, whatever MEKO_HOME says, so without this a Meko that found
+ * this AgentK for another folder (its tests, a second Meko) would stop or uninstall this one and
+ * repoint its `[meko] home`. A home that isn't in a Meko data folder yet takes Meko's from MEKO_HOME.
+ */
+export function refuseOtherMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): void {
+  const own = mekoDirOf(paths.home);
+  if (!env.MEKO_HOME || !own || samePath(resolve(env.MEKO_HOME), own)) return;
+  throw new Error(`This AgentK belongs to the Meko in ${own}, and MEKO_HOME names ${resolve(env.MEKO_HOME)}: nothing was done. Run it with MEKO_HOME=${own}, or without MEKO_HOME.`);
 }
 
 /**

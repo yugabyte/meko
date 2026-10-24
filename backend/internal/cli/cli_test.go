@@ -152,13 +152,15 @@ func shortDir(t *testing.T) string {
 	return dir
 }
 
-// setup gives a test its own home and data folder, and a free port.
+// setup gives a test its own home and data folder, and a free port. Its cleanup stops only the
+// server: cleanups run last first, so by then a test's fake extension is gone and PATH is restored
+// (noRealExtensions), and stopping the extensions would find and stop this machine's real AgentK.
 func setup(t *testing.T) (dir, port string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
-	t.Cleanup(func() { run("stop", "--data-dir", dir) })
+	t.Cleanup(func() { run("stop", "--data-dir", dir, "--keep-extensions") })
 	return dir, port
 }
 

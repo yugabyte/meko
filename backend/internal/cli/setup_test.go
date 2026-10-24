@@ -117,7 +117,8 @@ func configurePort(t *testing.T, dir, port string) {
 	}
 }
 
-// noRealExtensions keeps this machine's own extensions (an installed agent-k-local) out of reach.
+// noRealExtensions keeps this machine's own extensions (an installed agentk) out of reach while the
+// test runs; t.Setenv restores PATH before setup's cleanup, which is why that one keeps the extensions.
 func noRealExtensions(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", "/usr/bin:/bin")
