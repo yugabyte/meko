@@ -104,4 +104,6 @@ iTerm (`Ctrl+\` detaches).
 2. **Automatic gates.** Should a project be allowed to make **Merge** automatic once AgentK has no
    open findings and CI is green?
 3. **Stacked PRs.** Should a session be able to produce a stack with `gh stack` instead of a single
-   PR?
+   PR? Today the sessions skill lets an agent keep a stack in one session, but AgentK tracks only
+   the PR of the session's own branch (its `prNumber`); the rest of the stack isn't followed
+   through review or merge.
