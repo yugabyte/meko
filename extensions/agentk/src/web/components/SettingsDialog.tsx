@@ -656,9 +656,11 @@ export function AgentSettings({
             <span>Turn off OpenCode's tracking</span>
           </label>
           <span className="hint">
-            {s.opencodeDisableTracking
-              ? "The OpenCode AgentK runs (sessions and Ask AgentK) doesn't send telemetry, check for updates or offer OpenCode's free models, whose providers may train on your prompts. Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio."
-              : "On, the OpenCode AgentK runs (sessions and Ask AgentK) doesn't send telemetry, check for updates or offer OpenCode's free models, whose providers may train on your prompts."}{' '}
+            {s.opencodeDisableTracking ? 'OpenCode sessions and Ask AgentK' : 'When on, OpenCode sessions and Ask AgentK'} send no telemetry, skip
+            OpenCode's update check and hide OpenCode Zen's free models, whose providers may train on your prompts. Commands the agent runs in a
+            session don't export OpenTelemetry either.{' '}
+            {s.opencodeDisableTracking &&
+              'Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio. '}
             Takes effect when a session next starts or resumes.
           </span>
         </div>
