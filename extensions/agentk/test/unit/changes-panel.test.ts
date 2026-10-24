@@ -9,20 +9,21 @@ const file = { path: 'gen.txt', oldPath: null, kind: 'added', added: 5000, remov
 const lines = parsePatch(['@@ -0,0 +1,4999 @@', ...Array.from({ length: 4999 }, (_, i) => `+line ${i + 1}`)].join('\n'));
 
 /** The rendered diff, with a comment after row 4500. */
-const render = (limit: number) =>
+const render = (limit: number, page = 2000) =>
   renderToStaticMarkup(createElement(FileDiff, {
-    file, lines, limit, onMore: () => {}, picked: null, onComment: () => {},
+    file, lines, limit, page, onMore: () => {}, picked: null, onComment: () => {},
     imageUrl: () => '',
     renderAfter: (i: number) => (i === 4500 ? createElement('p', null, 'a comment') : null),
   }));
 
 describe('a large diff', () => {
-  it.each<[number, number, string]>([
-    [0, 0, '<span>Large diff: 4,999 lines.</span><button class="btn small">Show diff</button>'],
-    [2000, 2000, '<button class="btn small">Show 2,000 more lines (3,000 left)</button>'],
-    [4000, 4000, '<button class="btn small">Show the last 1,000 lines</button>'],
-  ])('shows %i rows, then a button for the rest, with comments on the hidden rows under it', (limit, rows, button) => {
-    const html = render(limit);
+  it.each<[number, number, number, string]>([
+    [0, 2000, 0, '<span>Large diff: 4,999 lines.</span><button class="btn small">Show diff</button>'],
+    [2000, 2000, 2000, '<button class="btn small">Show 2,000 more lines (3,000 left)</button>'],
+    [4000, 2000, 4000, '<button class="btn small">Show the last 1,000 lines</button>'],
+    [500, 500, 500, '<button class="btn small">Show 500 more lines (4,500 left)</button>'],
+  ])('shows %i rows (%i a click), then a button for the rest, with comments on the hidden rows under it', (limit, page, rows, button) => {
+    const html = render(limit, page);
     expect(html.match(/<tr /g)?.length ?? 0).toBe(rows);
     expect(html).toContain(`<div class="chg-more">${button}</div><div class="cmt-thread chg-later"><p>a comment</p></div>`);
   });

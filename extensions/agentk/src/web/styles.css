@@ -3564,10 +3564,20 @@ div[id^='dak-mermaid-'] .label {
   color: var(--warn);
   font-size: 10px;
 }
+/*
+ * The browser lays out and paints a file only once it comes near the screen, so a long branch opens
+ * fast; every file stays in the DOM, so jumps, find in page and comments work. Until then it
+ * assumes the header plus the rows the file will draw (--chg-rows, set by FileSection), and once
+ * drawn it remembers the real height (auto).
+ */
 .chg-file {
+  --chg-head: 32px;
+  --chg-row: 17.4px;
   border: 1px solid var(--rule);
   border-radius: 8px;
   margin-bottom: 12px;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto calc(var(--chg-head) + var(--chg-rows, 0) * var(--chg-row));
 }
 .chg-note {
   margin: 0;
@@ -3811,9 +3821,10 @@ div[id^='dak-mermaid-'] .label {
   padding: 0 0 0 4px;
   user-select: none;
 }
+/* An inline-block, not a grid: there's one on every row, and a grid each costs layout on long diffs. */
 .cmt-add {
-  display: inline-grid;
-  place-items: center;
+  display: inline-block;
+  vertical-align: top;
   width: 16px;
   height: 16px;
   padding: 0;
@@ -3821,7 +3832,8 @@ div[id^='dak-mermaid-'] .label {
   border-radius: 4px;
   background: var(--accent);
   color: var(--accent-ink);
-  font: 600 12px/1 var(--body);
+  font: 600 12px/16px var(--body);
+  text-align: center;
   cursor: pointer;
   opacity: 0;
 }
@@ -5231,14 +5243,21 @@ div[id^='dak-mermaid-'] .label {
     display: none;
   }
   /* Always shown on touch, so kept small and quiet: a faint 16px + that fills in on the picked
-     lines. The button stays 22px (the padding isn't painted), so rows keep their height for taps. */
+     lines. The button is 22px tall (the padding isn't painted), so rows keep their height for taps,
+     and 40px wide over the gutter and line numbers (its side margins give that width back), only as
+     tall as the row, so rows don't steal each other's taps. Positioned, so it's above the numbers. */
+  .chg-file {
+    --chg-row: 22px;
+  }
   .cmt-add {
     position: relative;
     opacity: 1;
-    width: 22px;
+    width: 40px;
     height: 22px;
-    padding: 3px;
-    border-radius: 7px;
+    margin: 0 -14px 0 -4px;
+    padding: 3px 17px 3px 7px;
+    /* The painted square's corners stay 4px round: each radius is 4px plus the padding beside it. */
+    border-radius: 11px 21px 21px 11px / 7px;
     background: var(--accent-soft);
     background-clip: content-box;
     color: var(--accent);
@@ -5246,12 +5265,6 @@ div[id^='dak-mermaid-'] .label {
   .diff tr.picked .cmt-add {
     background-color: var(--accent);
     color: var(--accent-ink);
-  }
-  /* A 40px-wide tap area over the gutter and line numbers; only as tall as the row, so rows don't steal each other's taps. */
-  .cmt-add::before {
-    content: '';
-    position: absolute;
-    inset: 0 -14px 0 -4px;
   }
 }
 
@@ -5446,6 +5459,9 @@ div[id^='dak-mermaid-'] .label {
   .chg-file-hd {
     grid-template-columns: 12px auto minmax(0, 1fr) auto;
     row-gap: 4px;
+  }
+  .chg-file {
+    --chg-head: 64px;
   }
   .chg-file-hd .chg-file-path {
     grid-column: 3 / -1;
