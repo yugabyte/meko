@@ -4430,16 +4430,21 @@ div[id^='dak-mermaid-'] .label {
   flex-direction: column;
   line-height: 1.25;
 }
+/* The session's dot sits beside the name, not in it: the name's overflow: hidden would clip the
+   dot's halo and the needs-you diamond's corners, which paint outside its box. */
+.topbar-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
 .topbar-title b {
+  min-width: 0;
   font-size: 15px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.topbar-title b .dot {
-  margin-right: 7px;
-  vertical-align: 1px;
 }
 .topbar-sub {
   font-size: 12px;
