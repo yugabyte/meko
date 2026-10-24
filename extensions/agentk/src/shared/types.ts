@@ -1589,8 +1589,11 @@ export interface Settings {
  */
 export type MekoKeySource = 'config' | 'env' | 'claude' | 'local';
 
-/** The Meko on this computer, as `meko token --json` last said: running, installed but stopped, or none found. */
-export type LocalMekoState = 'running' | 'stopped' | 'none';
+/**
+ * The Meko on this computer, as `meko token --json` last said: running, installed but stopped, none
+ * found, or `meko` there but failing (an error, too slow, or an answer AgentK can't read).
+ */
+export type LocalMekoState = 'running' | 'stopped' | 'none' | 'failed';
 
 /** The Meko part of Settings. The key itself never leaves the server. */
 export interface MekoSettings {

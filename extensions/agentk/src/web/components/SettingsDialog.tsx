@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import type {
   AuthStatus,
   HarnessStatus,
+  LocalMekoState,
   MekoKeySource,
   MekoSettingsUpdate,
   MekoStatus,
@@ -640,6 +641,14 @@ export function AgentSettings({
   );
 }
 
+/** Why the Meko on this computer can't be used, ending where the tab's "or add a Meko Cloud key" goes on. */
+const LOCAL_STATE_TEXT: Record<LocalMekoState, string> = {
+  stopped: 'Meko is installed on this computer but not running: start it with meko start, ',
+  failed: 'Meko on this computer didn’t answer meko token --json (see what it says when you run it), ',
+  none: 'No Meko was found on this computer: install and start Meko, ',
+  running: '',
+};
+
 const KEY_SOURCE: Record<MekoKeySource, string> = {
   config: 'from config.toml',
   env: 'from the MEKO_API_KEY environment variable',
@@ -764,7 +773,11 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
           </span>
         ) : m.keySource ? (
           <>
-            <span className="muted">Meko gives projects datapacks: shared memory, and what a project is shared through.</span>
+            <span className="muted">
+              Meko gives projects datapacks: shared memory, and what a project is shared through.
+              {(m.keySource === 'env' || m.keySource === 'claude') && m.local === 'running' &&
+                ` To use the Meko on this computer instead, remove the key ${KEY_SOURCE[m.keySource]}: AgentK can’t change it there.`}
+            </span>
             {m.keySource === 'config' && m.local === 'running' && (
               <ConfirmButton
                 className="btn small"
@@ -780,7 +793,7 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
           <span>
             <b>Meko isn’t set up.</b>{' '}
             <span className="muted">
-              {m.local === 'stopped' ? 'Meko is installed on this computer but not running: start it with meko start, ' : 'No Meko was found on this computer: install and start Meko, '}
+              {LOCAL_STATE_TEXT[m.local]}
               or add a Meko Cloud key below. Projects work without datapacks meanwhile.
             </span>
           </span>

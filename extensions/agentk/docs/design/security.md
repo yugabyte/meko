@@ -70,7 +70,8 @@ their own copy.
   again, before anything is sent, so someone with a stolen login can't point AgentK at their own
   server and read the key off it. The Meko on this computer's client token, which AgentK uses when
   no key is set, is read from Meko (`meko token --json`), held in memory, never written to
-  `config.toml`, and sent only to that Meko's own URL: no configured URL takes it. Hooks use the local unix socket with a per-session
+  `config.toml`, and sent only to that Meko: no configured MCP URL takes it, and a web app or API URL
+  from config or the environment is used with it only on that Meko's own origin. Hooks use the local unix socket with a per-session
   token, never the network port. The Design-stage edit guard asks the server over the same socket;
   if it gets no answer it lets the edit go ahead, so Claude is never stuck.
 - **The page's policy.** Every app page carries a Content-Security-Policy (`appCsp()` in

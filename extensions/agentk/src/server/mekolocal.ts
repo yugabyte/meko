@@ -23,21 +23,23 @@ const TIMEOUT_MS = 5000;
  * AgentK's home is in (`mekoDirOf` in movehome.ts), else `[meko] home`. With neither (a dev or
  * test home), `meko` finds its own folder. Meko keeps its
  * token in the Keychain on macOS and knows whether its server runs, so AgentK asks it rather than
- * reading its files. `none`: no `meko`, or an answer that isn't what Meko prints.
+ * reading its files. `none`: no `meko` at all. `failed`: `meko` is there but failed, took too long,
+ * or answered with something that isn't what Meko prints.
  */
 export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv = process.env): Promise<LocalMekoProbe> {
   const none: LocalMekoProbe = { state: 'none', meko: null };
+  const failed: LocalMekoProbe = { state: 'failed', meko: null };
   return new Promise((resolve) => {
     const PATH = withLocalBin(env.PATH ?? '', env.HOME || homedir());
     const run = { ...env, PATH, ...(mekoHome ? { MEKO_HOME: mekoHome } : {}) };
     execFile('meko', ['token', '--json'], { env: run, timeout: TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
-      if (err) return resolve(none);
+      if (err) return resolve((err as NodeJS.ErrnoException).code === 'ENOENT' ? none : failed);
       try {
         const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown };
-        if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(none);
+        if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(failed);
         resolve(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token } } : { state: 'stopped', meko: null });
       } catch {
-        resolve(none);
+        resolve(failed);
       }
     });
   });
@@ -48,9 +50,24 @@ export async function findLocalMeko(mekoHome: string | null, env: NodeJS.Process
   return (await probeLocalMeko(mekoHome, env)).meko;
 }
 
-/** The URL and token are the local Meko's (a stored copy of them, or what an installer passed). */
+/** A URL's origin (scheme, host and port), or null when it isn't one. */
+export function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A key and URL are a copy of the local Meko's: its token, or a key for its URL's origin. Meko's
+ * setup for Claude Code writes the token into Claude Code's settings, older installs stored it in
+ * config.toml, and `meko install_extension` passes both. A copy goes stale when Meko moves to
+ * another port or gets a new token, so AgentK uses the live pair instead (`resolveMekoWithSource`).
+ */
 export function isLocalMeko(local: LocalMeko | null, url: string, key: string): boolean {
-  return !!local && !!key && key === local.token && url.replace(/\/+$/, '') === local.url.replace(/\/+$/, '');
+  if (!local || !key) return false;
+  return key === local.token || (originOf(url) !== null && originOf(url) === originOf(local.url));
 }
 
 let last: LocalMekoProbe = { state: 'none', meko: null };

@@ -119,12 +119,19 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > is in the Keychain, and whether Meko runs is a lock only `meko` checks. The answer is kept in
 > memory (`LocalMekoReader`) and never written to `config.toml`, so a new port or token is picked
 > up without a reinstall. It's read at server start (before sessions are recovered), when the Meko
-> tab opens, once more when connecting to it fails (at most every 30 s), and every minute while
-> there's no Meko at all (Meko normally starts AgentK, so it's up first). A change reconnects
-> (`Core.refreshLocalMeko`). The local token goes only to the local URL: it's the fourth key source
-> (`keySource: 'local'`), after the other three, and its URL comes with it, never from another
-> source. A copy of the local URL and token in `config.toml` (older installs, and
-> `meko install_extension agentk`, stored one) is dropped at start and by the installer. Claude Code's own Meko setup, in its settings,
+> tab opens (which waits up to 1.5 s for it), once more when connecting to it fails (at most every
+> 30 s), and every minute while there's no Meko at all (Meko normally starts AgentK, so it's up
+> first). A change reconnects and syncs invites again (`Core.refreshLocalMeko`), but keeps the
+> invites and shares AgentK knows: it's the same Meko account, unlike a switch to another Meko
+> (`Core.mekoChanged`). The local token goes only to the local Meko: it's the fourth key source
+> (`keySource: 'local'`), after the other three, its URL comes with it, never from another
+> source, and a web app or API URL from config or the environment is used with it only on its
+> own origin (`resolveMekoWebUrl`, `resolveMekoApiUrl`). A key in one of the other three sources
+> that's a copy of it (its token, or any key for its URL's origin: Meko's setup for Claude Code
+> writes one into Claude Code's settings, older installs and `meko install_extension agentk`
+> stored one in `config.toml`) is the local Meko too, with the live URL and token, so a copy never
+> goes stale (`isLocalMeko`). The copy in `config.toml` is dropped at start and by the installer;
+> the one in Claude Code's settings is left for Claude Code. Claude Code's own Meko setup, in its settings,
 > is the user's and is changed only when they ask (see *Claude Code on AgentK's Meko* below).
 >
 > - **At install:** the installer reuses `MEKO_API_KEY` from `~/.claude/settings.json` if one is
@@ -135,9 +142,13 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   passes the local one's, which aren't stored either. A local Meko serves no web app yet, so
 >   datapack links and sharing stay off, and the server log says why. With no key and no Meko here
 >   (Enter skips), it goes on with a warning, non-interactively too, and the server uses the local
->   Meko once it runs. `--no-meko` is accepted and ignored, with a warning. A key it's given must
->   work: without anyone to ask it stops; interactively it offers the Meko on this computer
->   instead, then whether to go on without Meko (the key that failed isn't kept). It never falls
+>   Meko once it runs. `--no-meko` no longer turns Meko off (it warns so): it only keeps a failed
+>   check from stopping the install and skips Meko's setup for the agents, as it always did. A key
+>   it's given must work: without anyone to ask it stops; interactively it offers the Meko on this
+>   computer instead, then whether to go on without Meko (a key in `config.toml` that failed isn't
+>   kept). For a failing key from `MEKO_API_KEY` or Claude Code's settings, which would still be the
+>   server's key whatever the installer did, it doesn't offer the Meko on this computer, and says
+>   to fix or remove the key there. It never falls
 >   back to the local Meko by itself: a key that's set is the user's choice of Meko. With a Meko, it checks that Meko is set up for Claude Code:
 >   the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY` in Claude Code's
 >   settings (sessions don't inherit the installer's environment), and the `meko` MCP server
@@ -161,18 +172,20 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > - **At session start:** every session gets `MEKO_AGENT_ID`, and `MEKO_DATAPACK_ID` when the
 >   project has a dedicated datapack. A project without one starts sessions like any other; design
 >   saves, the learn step and search skip Meko for it, and while there's no Meko, for every project.
-> - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare. An
+> - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare.
+>   The one exception is looking for the Meko on this computer every minute while there's no Meko
+>   at all (`meko token --json`, a local command, never a Meko call). An
 >   action that needs Meko (creating a datapack, sharing, answering an invite, adding a key) shows
 >   Meko's error, the project home shows no datapack counts, and background syncs log a warning and
 >   try again later. Running sessions keep going; the Meko hooks capture from the transcript on
 >   disk, so they catch up once it's back (when transcript capture is on). A project can still be
 >   created with **No datapack** and get one later.
 > - **In Settings:** the **Meko** tab says which Meko AgentK uses: the Meko on this computer, or a
->   key; with neither, whether Meko is installed here but stopped (`meko start`) or not found
->   (`MekoSettings.local`). With a key in `config.toml` and a Meko running here, **Use the Meko on
->   this computer** (`MekoSettingsUpdate.useLocal`) clears that key and URL, checked with the local
->   Meko first; a key from the environment or Claude Code's settings can't be cleared there, and it
->   says so. It sets the MCP server URL (empty means Meko Cloud, unless the
+>   key; with neither, whether Meko is installed here but stopped (`meko start`), not found, or
+>   there but failing `meko token --json` (`MekoSettings.local`). With a key in `config.toml` and a
+>   Meko running here, **Use the Meko on this computer** (`MekoSettingsUpdate.useLocal`) clears that
+>   key and URL, checked with the local Meko first. A key from the environment or Claude Code's
+>   settings can't be cleared there: the tab says to remove it there, and the route refuses. It sets the MCP server URL (empty means Meko Cloud, unless the
 >   environment or Claude Code's settings name one), the API key, and the web app and API URLs
 >   (worked out for Meko Cloud; for any other Meko, datapack links and sharing stay off until the
 >   web app URL is set, and the tab and the server log say so). The

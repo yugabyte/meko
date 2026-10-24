@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { issueSetupToken } from '../../src/server/auth.js';
@@ -187,10 +187,12 @@ describe('projects without a datapack, and without Meko', () => {
       expect(resets()).toBe(r0);
       expect(env.core.mekoStatus.configured).toBe(true);
 
-      // Restarted on another port: reconnects there.
+      // Restarted on another port: reconnects there, keeping the invites and shares it knows (the same account).
+      const forget = vi.spyOn(env.core.invites, 'forgetAccount');
       env.local.meko = { ...local, url: 'http://127.0.0.1:7790/mcp' };
       expect((await call('GET', '/api/settings')).json().meko.effectiveUrl).toBe('http://127.0.0.1:7790/mcp');
       expect(resets()).toBe(r0 + 1);
+      expect(forget).not.toHaveBeenCalled();
 
       // Stopped: no Meko, and sessions still start.
       Object.assign(env.local, { state: 'stopped', meko: null });

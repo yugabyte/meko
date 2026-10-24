@@ -30,10 +30,10 @@ describe('probeLocalMeko', () => {
   it.each([
     ['no meko at all', null, 'none'],
     ['no server running', `echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":false}'`, 'stopped'],
-    ['a failure', 'exit 3', 'none'],
-    ['an answer that is not JSON', 'echo nope', 'none'],
-    ['no token', `echo '{"url":"http://127.0.0.1:7778/mcp","token":"","running":true}'`, 'none'],
-  ])('finds none with %s', async (_name, script, state) => {
+    ['a failure (meko there, but refusing)', 'exit 3', 'failed'],
+    ['an answer that is not JSON', 'echo nope', 'failed'],
+    ['no token', `echo '{"url":"http://127.0.0.1:7778/mcp","token":"","running":true}'`, 'failed'],
+  ])('finds no running Meko with %s', async (_name, script, state) => {
     if (script) meko(script);
     expect(await probe()).toEqual({ state, meko: null });
   });

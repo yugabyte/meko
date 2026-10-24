@@ -107,13 +107,17 @@ describe('installer: a Meko Cloud key, or the Meko on this computer', () => {
     expect(stored.meko).toMatchObject({ url: '', apiKey: '' });
   });
 
-  it('ignores --no-meko, with a warning', async () => {
+  it("no longer turns Meko off with --no-meko, but doesn't stop on a failed check or set up the agents", async () => {
     const c = cfg();
     c.meko.apiKey = 'mko_tkn_x';
-    const { d, said, calls } = deps({ canAsk: false });
-    expect(await installMeko(c, { noMeko: true }, d)).toBe(true);
-    expect(said[0]).toMatch(/^warn --no-meko ignored/);
-    expect(calls).toContain('check');
+    const ok = deps({ canAsk: false });
+    expect(await installMeko(c, { noMeko: true }, ok.d)).toBe(true);
+    expect(ok.said[0]).toMatch(/^warn --no-meko Meko can't be turned off any more/);
+    expect(ok.calls).toEqual(['local', 'check']);
+
+    const failed = deps({ canAsk: false, checkError: 'unreachable' });
+    expect(await installMeko(c, { noMeko: true }, failed.d)).toBe(false);
+    expect(failed.calls).toEqual(['local', 'check']);
   });
 
   it('uses the URL and key it is given', async () => {
@@ -159,6 +163,18 @@ describe('installer: a Meko Cloud key, or the Meko on this computer', () => {
 
     const no = deps({ answers: ['n'], checkError: 'invalid token' });
     await expect(installMeko(cfg(), { keyArg: 'bad', noMeko: false }, no.d)).rejects.toThrow(/Run the installer again/);
+  });
+
+  it("doesn't offer the Meko on this computer for a failing key the installer can't clear", async () => {
+    process.env.MEKO_API_KEY = 'mko_tkn_env_bad';
+    try {
+      const { d, said, calls } = deps({ answers: ['y'], checkError: 'invalid token', local: true });
+      expect(await installMeko(cfg(), { noMeko: false }, d)).toBe(false);
+      expect(calls).toEqual(['local', 'check', 'ask Continue without Meko? (y/N)']);
+      expect(said.join('\n')).toMatch(/the key in MEKO_API_KEY is still AgentK's key/);
+    } finally {
+      delete process.env.MEKO_API_KEY;
+    }
   });
 
   it('offers the Meko on this computer when a key fails and someone is there', async () => {

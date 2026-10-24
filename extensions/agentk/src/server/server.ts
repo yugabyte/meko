@@ -43,6 +43,8 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 
 /** A browser with this much unsent data skips state snapshots until it catches up. */
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
+/** How long opening Settings waits for a read of the Meko on this computer (`meko` itself may take 5 s). */
+const LOCAL_MEKO_WAIT_MS = 1500;
 const ACTIONS: SessionAction[] = [
   'approve-design', 'cancel-approval', 'open-pr', 'merge', 'cancel-queued', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
   'learn',
@@ -676,9 +678,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => {
-    // Opening Settings reads the Meko on this computer again (it may have started, stopped or moved)
-    // and checks Claude Code's Meko again (in the background, reusing recent results).
-    await core.refreshLocalMeko();
+    // Opening Settings reads the Meko on this computer again (it may have started, stopped or moved),
+    // waiting a moment for it (a `meko` that's slow finishes in the background and pushes the
+    // change), and checks Claude Code's Meko again (in the background, reusing recent results).
+    const read = core.refreshLocalMeko().catch((e: unknown) => core.log.warn('reading the Meko on this computer failed', errMsg(e)));
+    await Promise.race([read, new Promise((r) => setTimeout(r, LOCAL_MEKO_WAIT_MS).unref())]);
     void core.claudeMeko.refresh();
     return settings();
   });

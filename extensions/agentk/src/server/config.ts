@@ -5,7 +5,7 @@ import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
-import { localMeko } from './mekolocal.js';
+import { isLocalMeko, localMeko, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -206,7 +206,8 @@ export function isLoopback(bind: string): boolean {
  * The key comes from the first of those that has one. The URL comes from the first that has one,
  * except that a later source's URL is skipped when that source has a key of its own: it belongs
  * to that other key. With no URL, Meko Cloud. With no key in any of them, the Meko running on this
- * computer, whose token goes only to its own URL.
+ * computer, whose token goes only to its own URL; a key that's a copy of its token or for its URL
+ * (Meko's setup for Claude Code writes one) is the live local Meko too, so a copy never goes stale.
  */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
   const { url, apiKey } = resolveMekoWithSource(cfg);
@@ -232,18 +233,27 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
     return { url: typeof s.url === 'string' ? s.url.trim() : '', apiKey: typeof s.apiKey === 'string' ? s.apiKey : '' };
   });
   const keyAt = sources.findIndex((s) => s.apiKey);
+  const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
+  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url || DEFAULT_MEKO_URL;
   // The local Meko's URL and token are a pair: no other source's URL ever takes its token.
   const local = localMeko().meko;
-  if (keyAt < 0 && local) return { url: local.url, apiKey: local.token, keySource: 'local' };
-  const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
-  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url;
+  if (local && (keyAt < 0 || isLocalMeko(local, url, apiKey))) return { url: local.url, apiKey: local.token, keySource: 'local' };
   const keySource = keyAt < 0 ? null : (['config', 'env', 'claude'] as const)[keyAt];
-  return { url: url || DEFAULT_MEKO_URL, apiKey, keySource };
+  return { url, apiKey, keySource };
+}
+
+/**
+ * With the Meko on this computer, a web app or API URL from config or the environment is used only
+ * on that Meko's own origin: the local token goes to no other server.
+ */
+function forKey(override: string, eff: { url: string; keySource: MekoKeySource | null }): string {
+  return eff.keySource !== 'local' || originOf(override) === originOf(eff.url) ? override : '';
 }
 
 /** Meko web app URL: config first, then the environment, then derived from the MCP URL. */
 export function resolveMekoWebUrl(cfg: Config): string | null {
-  return mekoWebUrl(resolveMeko(cfg).url, cfg.meko.webUrl || envMekoWebUrl());
+  const eff = resolveMekoWithSource(cfg);
+  return mekoWebUrl(eff.url, forKey(cfg.meko.webUrl || envMekoWebUrl(), eff));
 }
 
 /** The web app URL MEKO_WEB_URL or Claude Code's settings give, used when config has none; '' when unset. */
@@ -272,7 +282,7 @@ export function mekoHost(cfg: Config): string {
  * plus /api/v1 (the Meko web app serves its API on the same origin). Null when neither is known.
  */
 export function resolveMekoApiUrl(cfg: Config): string | null {
-  const override = cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '';
+  const override = forKey(cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '', resolveMekoWithSource(cfg));
   if (override) return override.replace(/\/+$/, '');
   const web = resolveMekoWebUrl(cfg);
   return web ? `${web}/api/v1` : null;

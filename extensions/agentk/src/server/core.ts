@@ -403,9 +403,10 @@ export class Core extends EventEmitter {
   }
 
   /**
-   * Reads the Meko on this computer again. When that changes the Meko AgentK uses (no key is set,
-   * and it started, stopped, or has a new port or token), reconnects and shows it. A copy of its
-   * URL and token in config.toml (older installs stored one) is dropped, so the live ones are used.
+   * Reads the Meko on this computer again. When that changes the Meko AgentK uses (it started,
+   * stopped, or has a new port or token), reconnects and shows it. It's the same Meko account
+   * throughout, so unlike `mekoChanged` this keeps the invites and shares AgentK knows. A copy of
+   * its URL and token in config.toml (older installs stored one, current or stale) is dropped.
    */
   async refreshLocalMeko(): Promise<void> {
     const before = resolveMeko(this.cfg);
@@ -427,7 +428,8 @@ export class Core extends EventEmitter {
     this.mekoStatus = this.mekoStatusFor(this.cfg);
     this.changed();
     void this.claudeMeko.refresh();
-    await this.mekoChanged();
+    await this.meko.reset();
+    void this.syncInvites();
   }
 
   /**

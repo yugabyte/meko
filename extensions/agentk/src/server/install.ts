@@ -210,14 +210,16 @@ export interface InstallMekoDeps {
  * from Meko. With no key, it asks for one and Enter takes the Meko on this computer; with no one to
  * ask, that Meko is taken. `--meko-url` and `--meko-key` name a Meko (`meko install_extension
  * agentk` passes the local one's, which isn't stored either). A key that's given must work, unless
- * someone there switches to the Meko on this computer or goes on without Meko. With neither a key
- * nor a Meko here, the install goes on and the server uses Meko once it runs. `--no-meko` is
- * ignored. Declining Meko's setup for Claude Code or Kiro (each offered only where it's
+ * someone there switches to the Meko on this computer (offered only for a key the installer can
+ * clear, from config.toml or typed) or goes on without Meko. With neither a key nor a Meko here,
+ * the install goes on and the server uses Meko once it runs. `--no-meko` no longer turns Meko off:
+ * it only keeps a failed check from stopping the install and skips Meko's setup for the agents, as
+ * it used to. Declining Meko's setup for Claude Code or Kiro (each offered only where it's
  * installed) is a warning, not a stop. Updates `cfg.meko`; returns whether there's a Meko to use.
  */
 export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: string; noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
   const later = 'AgentK uses the Meko on this computer once it runs (meko start), or add a Meko Cloud key on the Meko tab in Settings.';
-  if (o.noMeko) d.ui.warn('--no-meko', 'ignored: Meko can no longer be turned off. Without a key, AgentK uses the Meko on this computer.');
+  if (o.noMeko) d.ui.warn('--no-meko', "Meko can't be turned off any more: AgentK uses a Meko Cloud key, else the Meko on this computer. A failed Meko check won't stop the install, and Meko isn't set up for the agents.");
   const local = d.localMeko ? await d.localMeko() : null;
   const hostOf = (url: string) => {
     try {
@@ -255,13 +257,21 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
       return false;
     }
   }
-  // The local Meko's own URL and token (what `meko install_extension` passes) aren't stored.
+  // A copy of the local Meko's URL and token (what `meko install_extension` passes, or what Meko's
+  // setup wrote into Claude Code's settings) isn't stored: the live pair is used.
   let onLocal = isLocalMeko(local, meko.url, meko.apiKey);
-  if (onLocal) storeKey = false;
+  if (onLocal && local) {
+    meko = { url: local.url, apiKey: local.token };
+    storeKey = false;
+  }
+  // Where a key that fails comes from: one in the environment or Claude Code's settings would still
+  // be the server's key whatever the installer did, so the local Meko isn't offered in its place.
+  const elsewhere = storeKey ? null : resolveMekoWithSource(cfg).keySource;
+  const kept = elsewhere === 'env' ? 'MEKO_API_KEY' : elsewhere === 'claude' ? "Claude Code's settings" : null;
 
   d.ui.section('Checks');
   let check = await d.check(meko.url, meko.apiKey);
-  if (!check.ok && local && !onLocal && d.canAsk) {
+  if (!check.ok && local && !onLocal && !kept && d.canAsk) {
     d.ui.warn('Meko', `Meko check failed (${meko.url}): ${check.error}`);
     if (!/^n/i.test(await d.ask(`Use the Meko on this computer (${hostOf(local.url)}) instead? (Y/n)`, 'y'))) {
       // Not stored, so the key that failed isn't used (unless the environment or Claude Code's settings have it).
@@ -277,26 +287,30 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   }
   if (!check.ok) {
     const why = `Meko check failed (${meko.url}): ${check.error}`;
-    if (!d.canAsk) throw new InstallError(`${why}. Fix the key, or run the installer without one to use the Meko on this computer.`);
+    const fix = kept ? `remove the key from ${kept} to use the Meko on this computer` : 'run the installer without one to use the Meko on this computer';
+    if (!d.canAsk && !o.noMeko) throw new InstallError(`${why}. Fix the key, or ${fix}.`);
     d.ui.warn('Meko', why);
-    if (!/^y/i.test(await d.ask('Continue without Meko? (y/N)', 'n'))) {
-      throw new InstallError(`${why}. Run the installer again with the right key, or without one to use the Meko on this computer.`);
+    if (!o.noMeko && !/^y/i.test(await d.ask('Continue without Meko? (y/N)', 'n'))) {
+      throw new InstallError(`${why}. Run the installer again with the right key, or ${fix}.`);
     }
     if (cfg.meko.apiKey === meko.apiKey) {
       cfg.meko.url = '';
       cfg.meko.apiKey = '';
     }
-    d.ui.warn('Meko', `not set up: the key wasn't kept. ${later}`);
+    d.ui.warn('Meko', kept ? `not working: the key in ${kept} is still AgentK's key until it's fixed or removed there.` : `not set up: the key wasn't kept. ${later}`);
     return false;
   }
   d.ui.ok('Meko', onLocal ? `on this computer (${hostOf(meko.url)})` : meko.url.replace(/^https?:\/\//, ''));
 
-  let inClaude = !!d.ensureInClaude;
-  if (d.ensureInClaude) {
+  // --no-meko never set Meko up for the agents, and still doesn't.
+  const ensureInClaude = o.noMeko ? undefined : d.ensureInClaude;
+  const ensureInKiro = o.noMeko ? undefined : d.ensureInKiro;
+  let inClaude = !!ensureInClaude;
+  if (ensureInClaude) {
     try {
       // Not typed, and not from config.toml or Claude Code's settings: only this process has it.
       const keyFromEnv = !storeKey && resolveMekoWithSource(cfg).keySource === 'env' && meko.apiKey === process.env.MEKO_API_KEY;
-      await d.ensureInClaude(meko.url, meko.apiKey, keyFromEnv);
+      await ensureInClaude(meko.url, meko.apiKey, keyFromEnv);
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
       inClaude = false;
@@ -316,9 +330,9 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
     cfg.meko.url = keep.url;
   }
   if (inClaude) d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
-  if (d.ensureInKiro) {
+  if (ensureInKiro) {
     try {
-      await d.ensureInKiro(meko.url, meko.apiKey);
+      await ensureInKiro(meko.url, meko.apiKey);
       d.ui.ok('Meko in Kiro', 'MCP server and agent in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;

@@ -1004,6 +1004,23 @@ describe('Meko credentials', () => {
       // Any key wins over it.
       process.env.MEKO_API_KEY = 'env-key';
       expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key', keySource: 'env' });
+      clearEnv();
+      // Except a copy of it, which Meko's setup for Claude Code writes, or an older install stored:
+      // its token on another port, or another token on its URL. The live pair is used.
+      const local = { url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' };
+      claudeSettings({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7700/mcp', MEKO_API_KEY: 'local-token' } });
+      expect(resolveMekoWithSource(cfg)).toEqual(local);
+      claudeSettings({});
+      cfg.meko.url = 'http://127.0.0.1:7778/mcp';
+      cfg.meko.apiKey = 'older-local-token';
+      expect(resolveMekoWithSource(cfg)).toEqual(local);
+      // Its token goes to no web app or API URL but its own.
+      cfg.meko.webUrl = 'https://meko.example.com';
+      cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual([null, null]);
+      cfg.meko.webUrl = 'http://127.0.0.1:7778';
+      cfg.meko.apiUrl = '';
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['http://127.0.0.1:7778', 'http://127.0.0.1:7778/api/v1']);
     } finally {
       reader.clear();
     }

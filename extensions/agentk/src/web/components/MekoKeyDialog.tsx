@@ -47,8 +47,12 @@ export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string
         </p>
         {meko && meko.local !== 'running' && (
           <p className="muted small">
-            {meko.local === 'stopped' ? 'Meko is installed on this computer but not running.' : 'No Meko was found on this computer.'} AgentK
-            uses the Meko on this computer without a key while it runs (meko start).
+            {meko.local === 'stopped'
+              ? 'Meko is installed on this computer but not running.'
+              : meko.local === 'failed'
+                ? 'Meko on this computer didn’t answer meko token --json.'
+                : 'No Meko was found on this computer.'}{' '}
+            AgentK uses the Meko on this computer without a key while it runs (meko start).
           </p>
         )}
         <MekoGetKey
