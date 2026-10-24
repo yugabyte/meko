@@ -3,7 +3,7 @@ import { STAGE_LABELS, type KiroPlan, type LimitWindow, type PlanLimits, type Pr
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
-import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, Ring, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
@@ -395,12 +395,7 @@ function KiroLimit({ plan, now }: { plan: KiroPlan; now: number }) {
   // Past the plan, Kiro stops unless overage is on; with it on, Kiro bills the rest and goes on, so amber.
   const level = over && plan.overage?.enabled ? 'warn' : limitLevel(pct);
   const resets = plan.resetsOn ? dayLabel(plan.resetsOn) : null;
-  const extra = [
-    plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
-    plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
-  ].filter(Boolean);
-  // Kiro's own words for the bonus and overage, shown as it printed them, since how they're read is a guess.
-  const said = [plan.bonus?.line, plan.overage?.line].filter((l): l is string => !!l);
+  const { extra, said } = kiroPlanLines(plan);
   return (
     <>
       <div className="lim-row">

@@ -412,8 +412,10 @@ const DAY = /\b(\d{4}-\d{2}-\d{2})\b/;
  *     Estimated Usage | resets on 2026-11-01 | KIRO FREE
  *     Credits (36.02 of 50 covered in plan), 72.0%
  *
- * Null without the credits line. Paid plans' bonus and overage lines haven't been seen, so they're
- * matched loosely (a `bonus` line with two numbers, an `overage` line), each left null when absent.
+ * Null without the credits line. The overage line's only seen form is `Overages: Disabled`
+ * (kiro-cli 2.34.0, Power plan); its credit-bearing form and the bonus line haven't been seen, so
+ * all three are matched loosely (a `bonus` line with two numbers, an `overage` line), each left
+ * null when absent.
  */
 export function parseKiroPlan(text: string, now: number): KiroPlan | null {
   // eslint-disable-next-line no-control-regex

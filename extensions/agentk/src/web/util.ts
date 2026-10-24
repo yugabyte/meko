@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -377,6 +377,29 @@ function roundCredits(n: number): number {
 /** A plan bar's level in the rail (Claude's windows, Kiro's credits): amber from 80%, red from 95%. */
 export function limitLevel(percent: number): 'warn' | 'bad' | null {
   return percent >= 95 ? 'bad' : percent >= 80 ? 'warn' : null;
+}
+
+/**
+ * The extra lines under Kiro's credit ring (`KiroLimit` in Rail.tsx): `extra` is AgentK's own
+ * reading of the bonus and overage lines, and `said` is Kiro's verbatim line quoted under them,
+ * kept unless the `extra` line already states everything AgentK read from the line, so a fact
+ * isn't shown twice and nothing AgentK read but doesn't show is hidden. The overage quote is
+ * dropped only for the one form that's been seen, `Overages: Disabled` (its on/off read, no
+ * credits), which `extra` fully states as `Overage off`; a line that also carries credits keeps
+ * its quote, since `extra` shows only the credits (not the on/off) and the credits amount itself
+ * is still a guess (`firstAmount` in kiro.ts could misread a cap or a date as the amount). The
+ * bonus quote always stays while its format is unseen.
+ */
+export function kiroPlanLines(plan: Pick<KiroPlan, 'bonus' | 'overage'>): { extra: string[]; said: string[] } {
+  const extra = [
+    plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
+    plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
+  ].filter((l): l is string => !!l);
+  // Kiro's own words, quoted unless `extra` says everything AgentK read: dropped only for the seen
+  // `Overages: Disabled` shape (on/off, no credits), which `Overage off`/`Overage on` fully states.
+  const overageShown = !!plan.overage && plan.overage.enabled !== null && plan.overage.credits === null;
+  const said = [plan.bonus?.line, overageShown ? null : plan.overage?.line].filter((l): l is string => !!l);
+  return { extra, said };
 }
 
 /** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */

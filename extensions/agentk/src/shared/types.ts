@@ -1114,7 +1114,7 @@ export interface KiroPlan {
   resetsOn: string | null;
   /** Bonus credits (paid plans; the format is a best guess); null when Kiro printed no bonus line. */
   bonus: { used: number; total: number; expires: string | null; line: string } | null;
-  /** Overage (paid plans; a best guess too): credits billed past the plan, and whether it's turned on. Null without an overage line. */
+  /** Overage (paid plans): credits billed past the plan, and whether it's turned on. Only the `Overages: Disabled` form is confirmed; the credit-bearing form is a guess. Null without an overage line. */
   overage: { credits: number | null; enabled: boolean | null; line: string } | null;
   /** When it was read, in ms since the epoch. */
   updatedAt: number;
