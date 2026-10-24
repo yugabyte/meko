@@ -16,28 +16,32 @@ const run = (...paths: string[]) => {
   expect(r.status, r.stderr).toBe(0);
   return r.stdout;
 };
-const out = (agentk: boolean, backend: boolean) => `agentk=${agentk}\nbackend=${backend}\n`;
+const out = (agentk: boolean, backend: boolean, presenter = false) => `agentk=${agentk}\nbackend=${backend}\npresenter=${presenter}\n`;
 
 describe('ci-scope.sh', () => {
   it.each([
-    ['extensions/agentk/src/server/core.ts', true, false],
-    ['scripts/check-title.sh', true, false],
-    ['.github/workflows/pr-title.yml', true, false],
-    ['backend/cmd/meko-local/main.go', false, true],
-    ['backend/AGENTS.md', false, true],
-    ['.github/workflows/ci.yml', true, true],
-    ['scripts/ci-scope.sh', true, true],
-    ['AGENTS.md', false, false],
-    ['.claude/skills/commit/SKILL.md', false, false],
-    ['.gitignore', true, true],
-    ['docs/new.md', true, true],
-  ])('%s runs agentk=%s backend=%s', (path, agentk, backend) => {
-    expect(run(path)).toBe(out(agentk, backend));
+    ['extensions/agentk/src/server/core.ts', true, false, false],
+    ['scripts/check-title.sh', true, false, false],
+    ['.github/workflows/pr-title.yml', true, false, false],
+    ['backend/cmd/meko-local/main.go', false, true, false],
+    ['backend/AGENTS.md', false, true, false],
+    ['extensions/presenter/src/server/cli.ts', false, false, true],
+    ['extensions/presenter/AGENTS.md', false, false, true],
+    ['backend/internal/paths/testdata/resolve-cases.json', true, true, true],
+    ['.github/workflows/ci.yml', true, true, true],
+    ['scripts/ci-scope.sh', true, true, true],
+    ['AGENTS.md', false, false, false],
+    ['.claude/skills/commit/SKILL.md', false, false, false],
+    ['.gitignore', true, true, true],
+    ['docs/new.md', true, true, true],
+  ])('%s runs agentk=%s backend=%s presenter=%s', (path, agentk, backend, presenter) => {
+    expect(run(path)).toBe(out(agentk, backend, presenter));
   });
 
   it('runs each component any path needs', () => {
     expect(run('AGENTS.md', 'backend/go.mod')).toBe(out(false, true));
     expect(run('backend/go.mod', 'extensions/agentk/src/a.ts')).toBe(out(true, true));
+    expect(run('extensions/presenter/src/a.ts', 'backend/go.mod')).toBe(out(false, true, true));
     expect(run('README.md', '.claude/x', 'extensions/agentk/README.md')).toBe(out(true, false));
   });
 
@@ -47,7 +51,7 @@ describe('ci-scope.sh', () => {
   });
 
   it('runs everything with --all', () => {
-    expect(scope('', '--all').stdout).toBe(out(true, true));
+    expect(scope('', '--all').stdout).toBe(out(true, true, true));
   });
 
   it('exits 2 on bad usage', () => {

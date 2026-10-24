@@ -121,8 +121,8 @@ instead, as AgentK's installer does (`extensions/agentk/src/server/install.ts`):
 XDG spec says), else `/var/tmp/<user>/meko`, named by the user lookup; a failed lookup is an error.
 `/var/tmp/<user>` must be a real folder (not a symlink) owned by the user and not writable by
 others, or by a group other than the user's own. An
-explicit `--data-dir` on a network filesystem is refused with a message saying why. Both products
-check their rule against the cases in `internal/paths/testdata/resolve-cases.json`.
+explicit `--data-dir` on a network filesystem is refused with a message saying why. Meko, AgentK
+and Presenter check their rule against the cases in `internal/paths/testdata/resolve-cases.json`.
 
 Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown key in
 `config.toml` is an error naming it.

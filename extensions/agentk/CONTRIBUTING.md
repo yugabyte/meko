@@ -60,7 +60,8 @@ Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, 
   with no behavior change), `chore`.
 
 The component names the part of the repo: `agentk` for AgentK, `meko` for Meko
-(`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
+(`backend/`), `presenter` for Presenter (`extensions/presenter`, whose subjects release nothing yet),
+`repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
 slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
 (`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type

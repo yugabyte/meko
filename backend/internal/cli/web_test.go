@@ -145,3 +145,69 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}
 	t.Fatalf("%s didn't come up in time", what)
 }
+
+// Presenter is served like AgentK: registered, it names its socket at Meko's start, and the web
+// listener serves it at /ext/presenter/ and lists it for the sidebar.
+func TestPresenterBesideMeko(t *testing.T) {
+	dir, port := setup(t)
+	webPort := os.Getenv("MEKO_WEB_PORT")
+	home := shortDir(t)
+	sock := filepath.Join(home, "web.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	echo := func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "presenter %s", r.URL.Path) //nolint:gosec // G705: a test server's plain-text reply
+	}
+	ext := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(echo)}
+	go func() { _ = ext.Serve(ln) }()
+	t.Cleanup(func() { _ = ext.Close() })
+	cmd := filepath.Join(home, "presenter")
+	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '{\"socket\":\"%s\",\"legacy\":null}'; exit 0; }\nexit 0\n", sock)
+	if err = os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	reg, _ := extensions.Load(dir)
+	reg.Entries["presenter"] = extensions.Entry{Command: cmd, InstalledByMeko: true}
+	if err = reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	base := "http://127.0.0.1:" + webPort
+	client := &http.Client{Timeout: 5 * time.Second}
+	get := func(path string) (int, string) {
+		resp, err := client.Get(base + path) //nolint:gosec // G704: the test's own server
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	waitFor(t, "the web listener", func() bool { c, _ := get("/healthz"); return c == 200 })
+	if c, b := get("/ext/presenter/decks/x/map"); c != 200 || b != "presenter /decks/x/map" {
+		t.Fatalf("Presenter through Meko: %d %q", c, b)
+	}
+	c, b := get("/api/v1/extensions")
+	var list struct {
+		Data []struct {
+			Name, Title, Path    string
+			Installed, Available bool
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(b), &list); c != 200 || err != nil {
+		t.Fatalf("extensions: %d %s %v", c, b, err)
+	}
+	found := false
+	for _, e := range list.Data {
+		if e.Name == "presenter" {
+			found = e.Title == "Presenter" && e.Path == "/ext/presenter/" && e.Installed && e.Available
+		}
+	}
+	if !found {
+		t.Fatalf("extensions: no running Presenter in %s", b)
+	}
+}

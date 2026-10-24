@@ -6,36 +6,40 @@
 #   scripts/ci-scope.sh --all
 #
 # Not through a pipe: without pipefail a failed diff would read as no changes.
-# Reads changed paths, one per line, and prints `agentk=true|false` and
-# `backend=true|false`, ready for $GITHUB_OUTPUT. --all prints both true (pushes
-# to main check everything). A path no rule claims runs both, so a new root file
-# can't skip a component; root Markdown and .claude/ run neither. AgentK's tests
-# read root files under scripts/ and .github/, so those run AgentK, and Meko's
-# resolution cases (backend/internal/paths/testdata/resolve-cases.json), which run
-# both (extensions/agentk/test/unit/ci-scope.test.ts checks that every such read is
+# Reads changed paths, one per line, and prints `agentk=true|false`,
+# `backend=true|false` and `presenter=true|false`, ready for $GITHUB_OUTPUT. --all
+# prints all true (pushes to main check everything). A path no rule claims runs
+# them all, so a new root file can't skip a component; root Markdown and .claude/
+# run none. AgentK's tests read root files under scripts/ and .github/, so those run
+# AgentK, and Meko's resolution cases (backend/internal/paths/testdata/resolve-cases.json),
+# which AgentK's and Presenter's tests read too, run all three
+# (extensions/agentk/test/unit/ci-scope.test.ts checks that every such read is
 # covered). Exits 2 on bad usage.
 set -eu
 
 agentk=false
 backend=false
+presenter=false
 
 if [ "${1:-}" = "--all" ] && [ $# -eq 1 ]; then
   agentk=true
   backend=true
+  presenter=true
 elif [ $# -eq 0 ]; then
   while IFS= read -r path || [ -n "$path" ]; do
     case $path in
       '') ;;
-      # The CI workflow and this script decide what runs: check both components.
-      .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true backend=true ;;
-      # Where Meko's data folder is: Meko's paths.Resolve and AgentK's mekoHome are both tested against it.
-      backend/internal/paths/testdata/resolve-cases.json) agentk=true backend=true ;;
+      # The CI workflow and this script decide what runs: check every component.
+      .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true backend=true presenter=true ;;
+      # Where Meko's data folder is: Meko's paths.Resolve, and AgentK's and Presenter's mekoHome, are tested against it.
+      backend/internal/paths/testdata/resolve-cases.json) agentk=true backend=true presenter=true ;;
+      extensions/presenter/*) presenter=true ;;
       extensions/agentk/* | scripts/* | .github/*) agentk=true ;;
       backend/*) backend=true ;;
       .claude/*) ;;
-      */*) agentk=true backend=true ;;
+      */*) agentk=true backend=true presenter=true ;;
       *.md) ;;
-      *) agentk=true backend=true ;;
+      *) agentk=true backend=true presenter=true ;;
     esac
   done
 else
@@ -43,4 +47,4 @@ else
   exit 2
 fi
 
-printf 'agentk=%s\nbackend=%s\n' "$agentk" "$backend"
+printf 'agentk=%s\nbackend=%s\npresenter=%s\n' "$agentk" "$backend" "$presenter"

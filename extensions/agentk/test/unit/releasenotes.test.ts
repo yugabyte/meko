@@ -42,9 +42,11 @@ describe('releaseNotes', () => {
     'nit!: rename a thing\n\nBREAKING CHANGE: not from a type that releases',
     'Merge branch main',
     'feature: not a type',
-    // Meko's subjects release Meko, not AgentK.
+    // Meko's subjects release Meko, not AgentK, and Presenter's release nothing yet.
     'feat(meko/cli): add a command',
     'fix(meko)!: change the store\n\nBREAKING CHANGE: a new format',
+    'feat(presenter/web): a Presenter page',
+    'fix(presenter)!: change the deck format\n\nBREAKING CHANGE: decks move',
   ])('leaves out %j', (message) => {
     expect(releaseNotes([commit(message)], 'o/r')).toEqual([]);
   });

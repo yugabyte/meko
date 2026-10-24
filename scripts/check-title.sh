@@ -16,10 +16,10 @@ set -eu
 # test/unit/check-title.test.ts). Only a releasing type can be marked breaking with `!`.
 TYPES='feat|fix|perf|deps|ci|test|docs|nit|chore'
 RELEASE='feat|fix|perf|deps'
-# The components a title names: agentk (extensions/agentk), meko (Meko, in backend/) and
-# repo (the shared root), with an optional area after a slash. Each but repo is a component of
+# The components a title names: agentk (extensions/agentk), meko (Meko, in backend/), presenter
+# (extensions/presenter) and repo (the shared root), with an optional area after a slash. Each but repo is a component of
 # scripts/ci-scope.sh too (test/unit/check-title.test.ts checks; meko is backend there).
-COMPONENTS='agentk|meko|repo'
+COMPONENTS='agentk|meko|presenter|repo'
 MAX=72
 
 length=true

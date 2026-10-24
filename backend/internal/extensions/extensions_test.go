@@ -151,3 +151,23 @@ func TestRunReturnsWhenAChildHoldsTheOutput(t *testing.T) {
 		t.Errorf("took %s: the child's pipe held it", took)
 	}
 }
+
+// A command npm installed is a `#!/usr/bin/env node` script beside the Node that installed it,
+// which the login service's PATH lacks: Meko runs it with that folder first on PATH.
+func TestCommandsFindTheNodeTheyWereInstalledWith(t *testing.T) {
+	bin := t.TempDir()
+	node := "#!/bin/sh\n# A stand-in for Node: answers the handoff the script asks for.\n" +
+		"[ \"$2\" = _handoff ] && echo '{\"socket\":\"/run/ext.sock\",\"legacy\":null}'\n"
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte(node), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	cmd := filepath.Join(bin, "ext")
+	if err := os.WriteFile(cmd, []byte("#!/usr/bin/env node\n"), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir()) // no node anywhere on it
+	h, err := Entry{Command: cmd}.Handoff(t.TempDir())
+	if err != nil || h.Socket != "/run/ext.sock" {
+		t.Fatalf("handoff %+v, %v", h, err)
+	}
+}

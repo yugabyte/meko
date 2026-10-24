@@ -14,8 +14,9 @@
 #   scope         an extended regex for the `(<component>[/<area>])` of the subjects that may
 #                 release the product, and
 #   exclude       one for those that don't, even though scope matches them. Meko takes only
-#                 meko subjects. AgentK takes every other one: agentk, repo, and old subjects
-#                 with no component or with the free-form one subjects had before 2026-10-20
+#                 meko subjects. AgentK takes every other one but presenter's (Presenter has no
+#                 release train yet): agentk, repo, and old subjects with no component or with
+#                 the free-form one subjects had before 2026-10-20
 #
 # and newest_tag, which prints the product's newest tag (by version, across its prefixes).
 
@@ -36,7 +37,7 @@ case $product in
     tag_prefix=agentk-v
     tag_prefixes='agentk-v v'
     scope='(\([^)]*\))?'
-    exclude='\(meko(/[^)]*)?\)'
+    exclude='\((meko|presenter)(/[^)]*)?\)'
     ;;
   meko)
     tag_prefix=meko-v
