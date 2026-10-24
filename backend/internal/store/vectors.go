@@ -42,17 +42,17 @@ type vecTable struct {
 	name, owner, metadata string
 }
 
-// vecTables are made together at the first hello. A later milestone adding one here gets it made
-// at the next start (CREATE ... IF NOT EXISTS).
+// vecTables are made together at the first hello. A table added here later gets made at the next
+// start (CREATE ... IF NOT EXISTS).
 var vecTables = []vecTable{
 	{"memories_vec", "memories", "user_id TEXT, agent_id TEXT, conversation_id TEXT"},
 	{"entities_vec", "entities", "user_id TEXT, agent_id TEXT, conversation_id TEXT"},
 	{"message_chunks_vec", "message_chunks", "conversation_id TEXT"},
-	{"kb_chunks_vec", "kb_chunks", "source TEXT"}, // milestone 4: on an older database, Migrate makes it
+	{"kb_chunks_vec", "kb_chunks", "source TEXT"}, // on a database from before 0006, Migrate makes it
 }
 
 // ensureRecordedVectors makes the vector tables that are missing once the embedding model is
-// recorded: a table a newer migration added (kb_chunks_vec on a database from before milestone 4),
+// recorded: a table a newer migration added (kb_chunks_vec on a database from before 0006_knowledge.sql),
 // which would otherwise appear only at the memory engine's next hello, while vectorDims (which
 // checks vecTables[0]) already says vectors work. Nothing to do before the first hello, or on a
 // database without the settings table (a test's own migrations).

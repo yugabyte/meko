@@ -2,7 +2,7 @@
 
 Meko's Go backend: one binary, `meko`, that is both the CLI and the server, the way
 yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/design.md](docs/design.md)
-(the foundation), [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
+(the process model, data folder, store, HTTP server and supervisor), [docs/memory-engine.md](docs/memory-engine.md) (the memory engine and
 conversations), [docs/api.md](docs/api.md) (MCP and REST), [docs/knowledge.md](docs/knowledge.md)
 (knowledge files), [docs/install.md](docs/install.md) (release builds, releases, the installer,
 the service, extensions, updates and secrets), [docs/web-ui.md](docs/web-ui.md) (the web UI) and
@@ -19,7 +19,7 @@ the service, extensions, updates and secrets), [docs/web-ui.md](docs/web-ui.md) 
 | `internal/store/` | The only door to SQLite: one writer and a read pool, embedded append-only migrations, typed queries. |
 | `internal/server/` | The HTTP server on 127.0.0.1: the Host and Origin checks, the per-route credential check (admin token, client token, or none with `[server] auth = "none"`; the knowledge-file links' ticket), the Origin check that lets in only the web UI's own pages, the web UI's route, `/healthz` and `/api/v1` (status includes the memory engine's state, the auth mode and the usage stats' state). |
 | `internal/mcp/` | MCP at `/mcp`: Meko Cloud's tools on the official MCP Go SDK (stateless, JSON replies, raw arguments read loosely), recording each call. |
-| `internal/rest/` | The `/api/v1` routes meko_ui calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads, knowledge files, the upload and download links, and the usage stats setting (`/settings/usage-stats`). |
+| `internal/rest/` | The `/api/v1` routes (Meko Cloud's paths and shapes, and a few of Meko's own) the web UI calls: the local user, datapacks and metrics, artifacts, memories and learnings, conversations and their threads, knowledge files, the upload and download links, and the usage stats setting (`/settings/usage-stats`). |
 | `internal/knowledge/` | Knowledge files before the database: the types Meko takes and the check of a file's first bytes, text extraction (PDF, HTML, Markdown, CSV, text), chunking, and the `knowledgebase-files/` folder their bytes live in. No queries, no memory engine. |
 | `internal/webui/` | Finding the built web UI and serving it: its files, `index.html` for the app's own routes, and the headers that keep other sites from framing it. |
 | `internal/wire/` | Meko Cloud's reply shapes, which MCP and REST both build their replies with. |
@@ -41,6 +41,7 @@ the service, extensions, updates and secrets), [docs/web-ui.md](docs/web-ui.md) 
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
 | `scripts/` | `install.sh` (Meko's installer, published with each release), `package-release.sh` and `smoke-release.sh` (the release build and its check), and their tests. |
+| `docs/` | The design docs, and `docs_test.go`, which checks they carry no status lines, milestones or PR numbers. |
 | `memory_engine/scripts/fetch-model.mjs` | Downloads the pinned models (the embedder and the reranker) for a release to bundle, and checks they run offline. |
 
 ## Commands
@@ -59,7 +60,7 @@ go test ./scripts/                                  # the installer, against a f
 ```
 
 It needs Go 1.26 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum,
-and a dependency bump can raise it, as golang.org/x/sys 0.49 did in #212)
+and a dependency bump can raise it, as golang.org/x/sys 0.49 did)
 and a C compiler, because cgo is on; the Makefile sets it and the build tags. The memory engine needs
 Node 22.13+ and npm. The first memory engine test run downloads the embedding and reranking models (23 MB
 each) into
@@ -76,14 +77,19 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   own train (`.github/workflows/meko-release.yml`, tags `meko-v<version>`): a `feat`, `fix`,
   `perf` or `deps` commit with component `meko` on `main` cuts a Meko release, and never an AgentK
   one. Use `chore` for what doesn't change what ships ([install.md](docs/install.md)).
-- Keep `docs/design.md` and this file current in the same commit as the code, and the repo
+- Keep the docs in `docs/` and this file current in the same commit as the code, and the repo
   root's `README.md` too when the commands, their flags or the build requirements change. Check
   the change against [REVIEW.md](REVIEW.md).
+- The docs describe Meko as it is now, with the reasons for its design: no status lines, no
+  milestones, PR or issue numbers, delivery plans or history of how it got here (that's the git
+  log's). Work not built yet is described as such, without a tracking number. Nothing in them
+  describes Meko Cloud's internals (its private code, services, hosts, data stores or tooling):
+  state only the behavior Meko matches. `docs/docs_test.go` checks the first part.
 - Every database call goes through `internal/store`, the only package that imports the SQLite
   driver. The memory engine has no database: it stores through the store API. Migrations are append-only: never
   edit one that has shipped.
 - Memory engine and web UI dependencies are pinned exactly in their `package.json`; `memory_engine/.npmrc` keeps npm from
-  installing mem0ai's peers. Prod Meko's code is private: copy none of it and cite none of its
+  installing mem0ai's peers. Meko Cloud's code is private: copy none of it and cite none of its
   paths (state the behavior instead).
 - Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`deps(meko): ...`)
   and the memory engine's npm packages (`deps(meko/memory-engine): ...`, or
@@ -106,7 +112,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   `yugabyte/go-sqlite3` fork (its `README.yugabyte.md` says how to sync sqlite-vec from
   `yugabyte/sqlite-vec` or rebase on mattn). To upgrade, cut a new `-yb.<n>` tag there (never move
   one), bump the `replace` in `go.mod`, and update the versions `TestLibVersions` expects.
-- Lint is `.golangci.yml`: prod Meko's config with the changes listed at its top. Fix findings
+- Lint is `.golangci.yml`: Meko Cloud's config with the changes listed at its top. Fix findings
   rather than adding to its exclusions; a `nolint` names the rule and says why.
 - The lines the CLI and `scripts/install.sh` print end without a period, like Go's error strings,
   so a version, path or command at the end isn't read with one (`Installing meko 0.20261022.1`).

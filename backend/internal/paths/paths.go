@@ -47,7 +47,7 @@ type Layout struct {
 	ModelsDir        string
 	MemoryEngineDir  string
 	MemoryEngineLog  string
-	// KnowledgeFiles holds knowledge files' bytes, beside the database (milestone 4).
+	// KnowledgeFiles holds knowledge files' bytes, beside the database.
 	KnowledgeFiles string
 	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
 	Extensions string
