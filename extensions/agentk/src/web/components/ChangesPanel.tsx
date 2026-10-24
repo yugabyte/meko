@@ -721,10 +721,41 @@ function KindBadge({ kind }: { kind: ChangeKind }) {
   );
 }
 
-function FilePath({ file }: { file: ChangedFile }) {
+/**
+ * A path that wraps between folders, not in a name: each folder and the name are kept whole (a
+ * name's '-' is a break point too), with a break point after each '/', and the folders muted.
+ */
+function PathText({ path }: { path: string }) {
+  const dirs = path.split('/');
+  const name = dirs.pop();
   return (
-    <span className="chg-path mono" title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
-      {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+    <>
+      {dirs.length > 0 && (
+        <span className="chg-dir">
+          {dirs.map((d, i) => (
+            <Fragment key={i}>
+              <span className="chg-seg">{d}/</span>
+              <wbr />
+            </Fragment>
+          ))}
+        </span>
+      )}
+      <span className="chg-seg chg-name">{name}</span>
+    </>
+  );
+}
+
+/** A changed file's whole path (a rename's both), wrapped rather than cut so the name always shows. */
+export function FilePath({ file }: { file: ChangedFile }) {
+  return (
+    <span className="chg-path chg-file-path mono" title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
+      {file.oldPath ? (
+        <>
+          <PathText path={file.oldPath} /> → <PathText path={file.path} />
+        </>
+      ) : (
+        <PathText path={file.path} />
+      )}
     </span>
   );
 }
