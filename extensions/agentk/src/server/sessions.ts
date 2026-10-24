@@ -1579,8 +1579,10 @@ export class SessionManager {
         // During Design any publish is the design; later only a republish of the design's own Artifact.
         if (p.tool_name === 'Artifact' && !row.plan_mode && row.kind !== 'review-pr') await this.core.lifecycle.captureArtifact(id, p, row.stage !== 'design');
         if (row.status !== 'working') this.setStatus(id, 'working');
-        // Keep usage live during long turns without reading the transcript on every tool call.
-        if (Date.now() - (this.usageReadAt.get(id) ?? 0) > 10_000) this.ingestUsage(id);
+        // Keep usage live during long turns without reading the transcript on every tool call. A Meko
+        // call's end is read at once, so its record (Kiro's log, OpenCode's plugin line) is in, and a
+        // Kiro call, which its log doesn't date, is dated close to when it ran.
+        if (meko || Date.now() - (this.usageReadAt.get(id) ?? 0) > 10_000) this.ingestUsage(id);
         break;
       }
       case 'PermissionRequest': {

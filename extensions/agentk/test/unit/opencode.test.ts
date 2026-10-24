@@ -147,6 +147,8 @@ describe("an OpenCode session's Meko calls", () => {
       meko('call_2:meko_memory_search#1', { session: 'ses_child', input: { query: 'nothing here' }, text: JSON.stringify({ results: [] }) }),
       meko('call_3:meko_memory_add#1', { tool: 'meko_memory_add', ok: false, error: 'Meko is down', text: 'Error: down', input: { text: 'a fact' } }),
       meko('call_4:meko_context_search#1', { tool: 'meko_context_search', text: null, big: true }),
+      meko('call_6:meko_memory_add#1', { tool: 'meko_memory_add', text: null, big: true, input: { text: 'a long fact' } }),
+      meko('call_7:meko_memory_search#1', { ok: false, error: 'timed out', text: null, big: true }),
       meko('call_5:other_tool#1', { tool: 'github_search' }),
     ].join('\n') + '\n');
     const read = ingestOpenCodeUsage(db, 's1', file, 'ses_main');
@@ -157,12 +159,17 @@ describe("an OpenCode session's Meko calls", () => {
       { tool_use_id: 'opencode:call_3:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'error', results: null, quality: null, query: null, model: 'claude-sonnet-4-5' },
       // A reply too long to log counts as found.
       { tool_use_id: 'opencode:call_4:meko_context_search#1', agent: null, tool: 'context_search', kind: 'lookup', outcome: 'found', results: null, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
+      // A save's long reply is just ok; a failed call stays an error whatever its size.
+      { tool_use_id: 'opencode:call_6:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'ok', results: null, quality: null, query: null, model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_7:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'error', results: null, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
     ]);
     expect(read.mekoCalls.map((c) => ({ tool: c.tool, ms: c.ms, ok: c.ok, error: c.error, subagent: c.subagent }))).toEqual([
       { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: false },
       { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: true },
       { tool: 'memory_add', ms: 1200, ok: false, error: 'Meko is down', subagent: false },
       { tool: 'context_search', ms: 1200, ok: true, error: null, subagent: false },
+      { tool: 'memory_add', ms: 1200, ok: true, error: null, subagent: false },
+      { tool: 'memory_search', ms: 1200, ok: false, error: 'timed out', subagent: false },
     ]);
     // None of them is a response.
     expect(all(db, 'SELECT * FROM usage_messages')).toEqual([]);

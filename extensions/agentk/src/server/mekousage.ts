@@ -332,13 +332,14 @@ const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
  * Every Meko call, for one project or all of them, plus a `seed` row for each session that AgentK's
  * search at start passed something to. A seed is credited like a search made by the session's first
  * response: its context (less the seed itself, which a search's context doesn't hold yet), model, and
- * the responses after it. A seed waits for that first response.
+ * the responses after it. A seed waits for that first response. A found search with no context
+ * (Kiro's and OpenCode's: their agents don't say it) gets no `later`, so the savings leave it out.
  */
 export function mekoCalls(db: Db, projectId?: string): CallRow[] {
   const where = projectId ? ' WHERE s.project_id = ?' : '';
   return all<CallRow>(db,
     `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.input_chars, c.model, c.context_tokens, c.at, c.quality,
-       CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) THEN
+       CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) AND c.context_tokens IS NOT NULL THEN
          (SELECT COUNT(*) FROM (SELECT 1 FROM usage_messages u
           WHERE u.session_id = c.session_id AND u.agent IS c.agent AND u.at > c.at LIMIT ?))
        END AS later
@@ -395,7 +396,7 @@ export function summarizeMeko(rows: CallRow[]): MekoUsage {
     if (r.outcome !== 'found') continue;
     u.found++;
     u.foundTokens += tokensOf(r.result_chars);
-    if (r.later === null) continue; // not a search
+    if (r.later === null) continue; // not a search, or one with no context to credit
     u.savings.searches++;
     credit(r);
   }

@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { classifyResult, mekoCalls, mekoResultOf, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, serverMekoTool, toolCounts } from '../../src/server/mekousage.js';
+import { classifyResult, mekoCallOf, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, serverMekoTool, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
-import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
+import { ingestSessionUsage, parseTurnMark, projectUsage, recordMekoCalls, usageOverview } from '../../src/server/usage.js';
 
 const usage = { input_tokens: 2, output_tokens: 100, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 998 };
 
@@ -69,13 +69,6 @@ describe('Meko calls in transcripts', () => {
     expect(serverMekoTool('meko_some_new_tool')).toBe('some_new_tool');
     expect(serverMekoTool('github_search')).toBeNull();
     expect(serverMekoTool('meko')).toBeNull();
-  });
-
-  it("judges a reply too long to keep as found, and a failed call's as an error", () => {
-    const call = { kind: 'lookup' as const, tool: 'context_search' };
-    expect(mekoResultOf('t1', call, null, false)).toEqual({ toolUseId: 't1', outcome: 'found', results: null, resultChars: 0, topScore: null, topRaw: null, quality: null });
-    expect(mekoResultOf('t2', { kind: 'save', tool: 'memory_add' }, null, false).outcome).toBe('ok');
-    expect(mekoResultOf('t3', call, null, true).outcome).toBe('error');
   });
 
   it('reads calls from a model response, with its model and context', () => {
@@ -285,6 +278,18 @@ describe('what Meko saved', () => {
     expect(o.meko.savings).toEqual(pu.meko.savings);
     expect(o.byProject[0]).toMatchObject({ meko: pu.meko, cost: pu.cost });
     expect(o.cost).toEqual(pu.cost);
+  });
+
+  it("leaves a search with no context (Kiro's, OpenCode's) out of the savings, but counts it as found", () => {
+    const { db } = setup();
+    run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, credits)
+             VALUES ('s1', 'kiro:c:t1', NULL, 'auto', 20, 0, 0, 0, 0, 0.5)`);
+    recordMekoCalls(db, 's1', null,
+      [mekoCallOf({ toolUseId: 't1', tool: 'memory_search', at: 10, input: { query: 'q' }, model: null, contextTokens: null })],
+      [{ toolUseId: 't1', outcome: 'found', results: 1, resultChars: 400, topScore: null, topRaw: null, quality: null }]);
+    const m = projectUsage(db, 'p').meko;
+    expect(m).toMatchObject({ lookups: 1, found: 1 });
+    expect(m.savings).toEqual({ searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 });
   });
 
   it('keeps searches on unpriced models in the tokens, and says the dollars leave them out', () => {

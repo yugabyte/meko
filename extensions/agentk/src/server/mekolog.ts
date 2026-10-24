@@ -339,7 +339,7 @@ export async function claudeReply(text: string | null, transcriptPath: string | 
   }
 }
 
-/** One of Claude's calls as a line of the file. */
+/** One of the session's agent's calls (Claude's, Kiro's or OpenCode's) as a line of the file. */
 function agentLine(id: string, c: AgentMekoCall): Line {
   return {
     id,

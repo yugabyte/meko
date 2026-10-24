@@ -85,8 +85,10 @@ usage report and What Meko doesn't know treat every agent's calls alike:
   `serverName`, `toolName`, `params`), so a call is taken there, from a server named `meko` or
   starting with it, with its reply from the line's `toolResult` content (`parseKiroMekoCalls`,
   checked against kiro-cli 2.34.0). Kiro dates only its `Prompt` lines, so a call's `at` is its
-  turn's prompt when the read saw it, else when AgentK read the call (a live read runs within about
-  10 seconds of it). `model` and `context_tokens` are NULL. The input's `__tool_use_purpose`, Kiro's
+  turn's prompt when the read saw it, else when AgentK read the call. A Meko call's `postToolUse`
+  starts a read at once, so that's usually seconds after the call ran. If Kiro hasn't written the
+  result by then, it's the next read: a later tool call more than 10 seconds after the last read, or
+  the turn's end, which can be minutes later. `model` and `context_tokens` are NULL. The input's `__tool_use_purpose`, Kiro's
   own, is left out. A call the user refused has Kiro's own message as its result (a `text` part,
   status `error`) and counts as failed, as Claude's refused calls do. A Kiro session started before
   this has its calls read from the start of its log the next time its usage is read.
@@ -98,8 +100,11 @@ usage report and What Meko doesn't know treat every agent's calls alike:
   and counted as found, as one too large for Claude is. `context_tokens` is NULL. A subagent's call
   has its session as the agent, like its responses.
 
-The savings estimate needs a call's context size, so it leaves out these calls: Meko's savings come
-out lower than they really are for Kiro and OpenCode sessions, never higher.
+The savings estimate credits a search with the context it saved, which these calls don't have
+(`context_tokens` is NULL), so `mekoCalls()` gives them no `later` and `summarizeMeko` leaves them
+out of `savings` (neither searches nor unpriced searches). They still count as lookups, found or
+empty. Meko's savings come out lower than they really are for Kiro and OpenCode sessions, never
+higher. A Claude call whose response had no usage (no context either) is left out the same way.
 
 **Meko in the first turn.** The same pass keeps when each session's first turn ended:
 `sessions.first_turn_end_at`, set once from the main transcript (subagents don't count). It's the

@@ -46,7 +46,7 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
   status idle; without the mod it's a working turn), never over needs you, exited or starting
   (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
-- **Calling Meko:** Claude is running a Meko tool call. The working dot gets Meko's m, in white,
+- **Calling Meko:** the session's agent (Claude, Kiro or OpenCode) is running a Meko tool call. The working dot gets Meko's m, in white,
   and its halo blinks on (*Meko in the dot*, below).
 - **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
   review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,

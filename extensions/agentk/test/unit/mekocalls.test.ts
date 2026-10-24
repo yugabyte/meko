@@ -2,16 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MekoCalls } from '../../src/server/mekocalls.js';
 
 describe('Meko calls under way, as hooks report them', () => {
-  it('opens a call at its start and closes it at its end, per session', () => {
-    const calls = new MekoCalls();
-    calls.start('s1', '@meko/context_search');
-    expect(calls.active('s1')).toBe(true);
-    expect(calls.active('s2')).toBe(false);
-    calls.end('s1', '@meko/context_search');
-    expect(calls.active('s1')).toBe(false);
-  });
-
-  it('counts a key started twice (two Kiro calls of one tool), and ignores an end that never started', () => {
+  it('opens a call at its start and closes it at its end, counting a key started twice (two Kiro calls of one tool), and ignores an end that never started', () => {
     const calls = new MekoCalls();
     calls.end('s1', 'k');
     expect(calls.active('s1')).toBe(false);
