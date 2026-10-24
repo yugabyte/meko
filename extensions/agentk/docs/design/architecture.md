@@ -3,7 +3,8 @@
 Part of the [AgentK design](../design.md).
 
 There are three long-lived pieces on the host: the web server, the session host that owns every
-Claude process, and the state directory at `~/.agent-k-local`. The server is stateless enough to
+Claude process, and AgentK's home, the state directory in Meko's data folder
+(`~/.meko/extensions/agentk` by default; [where it lives](projects-and-sessions.md#where-agentk-lives)). The server is stateless enough to
 be killed at any time. The session host and the on-disk state are what carry your work.
 
 ```mermaid
@@ -17,7 +18,7 @@ flowchart LR
     T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
     C2["claude in worktree B"]
-    ST[("~/.agent-k-local<br/>state, certs, app versions")]
+    ST[("~/.meko/extensions/agentk<br/>state, certs, app versions")]
     U["updater"]
   end
   M["Meko MCP"]

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EXIT_BUSY } from '../../src/server/instance.js';
@@ -104,6 +104,15 @@ describe('servicesFor', () => {
     // A home whose path starts another's is still another home.
     expect(servicesFor('/home/me/.agent-k', svc)).toBeNull();
     expect(servicesFor('/x', null)).toBeNull();
+  });
+
+  it("matches a unit that names the home through a link (a release's home is its real path)", () => {
+    const real = join(dir, 'meko', 'extensions', 'agentk');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, join(dir, 'old-home'));
+    const svc = new SystemdServices(() => ok, { XDG_CONFIG_HOME: join(dir, 'config') }, dir);
+    svc.install({ server: `Environment=AK_HOME=${join(dir, 'old-home')}\n`, host: 'host\n' });
+    expect(servicesFor(real, svc)).toBe(svc);
   });
 
   it("reads a unit's or a property list's AK_HOME exactly", () => {

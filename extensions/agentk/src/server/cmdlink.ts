@@ -2,7 +2,7 @@
 // links both names since. An update doesn't run the installer, so an install from before the
 // rename gets `agentk` from the server when it next starts (`linkCommand`). The old name stays,
 // for the scripts, services and Meko registries that run it.
-import { existsSync, lstatSync, readlinkSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readlinkSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Paths } from './paths.js';
@@ -36,4 +36,28 @@ export function linkCommand(paths: Paths, home: string = homedir()): boolean {
   }
   symlinkSync(join(bin, COMMAND), link);
   return true;
+}
+
+/**
+ * Points the command's links into a moved home at their place in its new one (movehome.ts).
+ * Links that point elsewhere, or aren't there, are left alone. Returns the links it changed.
+ */
+export function repointLinks(map: (p: string) => string | null, home: string = homedir()): string[] {
+  const moved: string[] = [];
+  for (const link of commandLinks(home)) {
+    let target: string;
+    try {
+      target = readlinkSync(link);
+    } catch {
+      continue;
+    }
+    const to = map(target);
+    if (!to) continue;
+    // A new link under a temp name, renamed over the old one: the command is never missing.
+    rmSync(`${link}.moving`, { force: true }); // left by a run cut off here
+    symlinkSync(to, `${link}.moving`);
+    renameSync(`${link}.moving`, link);
+    moved.push(link);
+  }
+  return moved;
 }

@@ -3,8 +3,10 @@
 // its own updates; Meko installs it (meko install_extension), starts it with meko start and stops
 // it with meko stop, and never restarts it when Meko itself restarts or updates.
 //
-// The contract is the extension's CLI: `<command> start`, `<command> stop` and `<command> status`.
-// AgentK's agentk is the first.
+// The contract is the extension's CLI: `<command> start`, `<command> stop` and `<command> status`,
+// and its uninstall (Catalog.UninstallArgs) for meko destroy --with-extensions. Every command Meko
+// runs of an extension gets MEKO_HOME set to Meko's data folder, so the extension knows where its
+// own folder in it is (Dir). AgentK's agentk is the first.
 package extensions
 
 import (
@@ -19,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/paths"
@@ -34,6 +37,9 @@ var Known = map[string]Catalog{
 		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
 		TagPrefixes: []string{"agentk-v", "v"},
 		Installer:   "install.sh",
+		// Its home before it moved into Meko's data folder, where an install that hasn't moved yet runs.
+		OldHomes:      []string{".agent-k-local"},
+		UninstallArgs: []string{"uninstall", "--purge", "--delete-worktrees", "--non-interactive"},
 	},
 }
 
@@ -44,7 +50,17 @@ type Catalog struct {
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
 	Installer   string   // the release asset that installs it
+	// OldHomes are folders under the home folder a release install of it lived in before its home
+	// moved into Meko's data folder (Dir); Find looks for the command in their app/current/bin.
+	OldHomes []string
+	// UninstallArgs uninstall it and delete all its data without asking: what meko destroy runs
+	// when it removes the extensions too.
+	UninstallArgs []string
 }
+
+// Dir is the folder an extension keeps its data in, in Meko's data folder at root. AgentK's home
+// is there (Meko's rule decides where root is, and AgentK follows it).
+func Dir(root, name string) string { return filepath.Join(root, "extensions", name) }
 
 // Entry is one installed extension.
 type Entry struct {
@@ -100,50 +116,80 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-// Timeouts for an extension's commands. Stopping AgentK waits for its server and its sessions.
+// Timeouts for an extension's commands. Stopping AgentK waits for its server and its sessions;
+// uninstalling it also deletes its worktrees.
 var (
-	StartTimeout = 2 * time.Minute
-	StopTimeout  = 2 * time.Minute
+	StartTimeout     = 2 * time.Minute
+	StopTimeout      = 2 * time.Minute
+	UninstallTimeout = 5 * time.Minute
 )
 
-// Run runs `<command> <action>` for one extension, with its output passed through.
-func (e Entry) Run(action string, stdout, stderr io.Writer) error {
+// Env is the environment an extension's command runs with: Meko's own, with MEKO_HOME naming
+// Meko's data folder at root (the last value of a key is the one a program sees).
+func Env(root string) []string { return append(os.Environ(), paths.HomeEnv+"="+root) }
+
+// Run runs `<command> <action>` for one extension, with its output passed through, for the data
+// folder at root.
+func (e Entry) Run(root, action string, stdout, stderr io.Writer) error {
 	d := StartTimeout
 	if action == "stop" {
 		d = StopTimeout
 	}
+	return e.run(root, []string{action}, d, stdout, stderr)
+}
+
+// Uninstall runs `<command> <args>` (the catalog's UninstallArgs), with its output passed through.
+func (e Entry) Uninstall(root string, args []string, stdout, stderr io.Writer) error {
+	return e.run(root, args, UninstallTimeout, stdout, stderr)
+}
+
+func (e Entry) run(root string, args []string, d time.Duration, stdout, stderr io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	// G204: the extension's own command, from the registry.
-	cmd := exec.CommandContext(ctx, e.Command, action) //nolint:gosec
-	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd := exec.CommandContext(ctx, e.Command, args...) //nolint:gosec
+	cmd.Stdout, cmd.Stderr, cmd.Env = stdout, stderr, Env(root)
 	if err := cmd.Run(); err != nil {
+		what := e.Command + " " + strings.Join(args, " ")
 		if ctx.Err() != nil {
-			return fmt.Errorf("%s %s took longer than %s", e.Command, action, d)
+			return fmt.Errorf("%s took longer than %s", what, d)
 		}
-		return fmt.Errorf("%s %s: %w", e.Command, action, err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	return nil
 }
 
 // Status runs `<command> status` quietly and reports whether it succeeded, with its first line.
-func (e Entry) Status() (bool, string) {
+func (e Entry) Status(root string) (bool, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, e.Command, "status") //nolint:gosec // G204: see Run
-	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd := exec.CommandContext(ctx, e.Command, "status") //nolint:gosec // G204: see run
+	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, Env(root)
 	err := cmd.Run()
 	first, _, _ := bytes.Cut(bytes.TrimSpace(out.Bytes()), []byte("\n"))
 	return err == nil, string(first)
 }
 
-// Find looks for the extension's program by its name, then by its old ones (FindCommand). It
-// returns the absolute path, or "".
-func (c Catalog) Find(home string) string {
-	for _, name := range append([]string{c.Command}, c.OldCommands...) {
-		if p := FindCommand(name, home); p != "" {
+// Find looks for the extension's program by its name, then by its old ones (FindCommand), then
+// in the app/current/bin of its release install: its folder in Meko's data folder at root (Dir),
+// then its old homes. It returns the absolute path, or "".
+func (c Catalog) Find(name, home, root string) string {
+	names := append([]string{c.Command}, c.OldCommands...)
+	for _, n := range names {
+		if p := FindCommand(n, home); p != "" {
 			return p
+		}
+	}
+	homes := []string{Dir(root, name)}
+	for _, h := range c.OldHomes {
+		homes = append(homes, filepath.Join(home, h))
+	}
+	for _, h := range homes {
+		for _, n := range names {
+			if p := filepath.Join(h, "app", "current", "bin", n); executable(p) {
+				return p
+			}
 		}
 	}
 	return ""
@@ -157,9 +203,13 @@ func FindCommand(name, home string) string {
 			return abs
 		}
 	}
-	p := filepath.Join(home, ".local", "bin", name)
-	if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+	if p := filepath.Join(home, ".local", "bin", name); executable(p) {
 		return p
 	}
 	return ""
+}
+
+func executable(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
 }

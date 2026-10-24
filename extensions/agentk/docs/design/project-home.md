@@ -43,7 +43,7 @@ session's stays on the old datapack and the next one to start pins the new one.
 **Log Meko calls** (Project settings, off by default; shown while Meko is on, or while it's on for
 the project so it can be turned off) keeps, for each of the project's sessions, every Meko call
 AgentK makes for it and every one Claude makes in it, with what was sent and what came back, in
-`~/.agent-k-local/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
+`<home>/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
 (the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
 conversation (created and renamed), design uploads, and the learn step's searches and writes:
 the call sites wrap their work in `withMekoScope(session)`, an AsyncLocalStorage that

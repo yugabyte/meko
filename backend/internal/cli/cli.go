@@ -46,13 +46,16 @@ Usage:
   meko ui        open the web UI in the browser, signed in with the client token;
                  --no-open only prints its link
   meko destroy   stop the server and remove the data folder, everything in it, for good;
-                 it asks first, unless --force
+                 it asks first, unless --force. The extensions' data in it (AgentK's home)
+                 goes only when you say so when asked, or with --with-extensions, which
+                 uninstalls the extensions first; --force alone keeps it
 
   meko install   set this meko up: the meko command and a login service (launchd or systemd)
                  that starts it at login and restarts it on failure; --no-service skips the
                  service
   meko uninstall remove the service and the installed releases, keeping your data;
-                 --purge also destroys the data and its secrets (it asks first, unless --force)
+                 --purge also destroys the data and its secrets as destroy does (it asks first,
+                 unless --force; --with-extensions removes the extensions too)
   meko update    install the newest release now (it updates itself under the service);
                  --check only looks
   meko install_extension agentk
@@ -93,9 +96,9 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, purge, check, follow, force, noOpen bool
-	lines                                                          int
-	server, memoryEngine, service                                  bool
+	keepExtensions, noService, purge, check, follow, force, noOpen, withExtensions bool
+	lines                                                                          int
+	server, memoryEngine, service                                                  bool
 }
 
 // Run runs the command in args (without the program name) and returns the exit code.
@@ -126,9 +129,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.noService, "no-service", false, "don't set up the login service")
 	case "uninstall":
 		fs.BoolVar(&c.purge, "purge", false, "also destroy the data folder and its secrets")
-		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking")
+		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking (keeping the extensions' data)")
+		fs.BoolVar(&c.withExtensions, "with-extensions", false,
+			"with --purge, uninstall the extensions and remove their data too")
 	case "destroy":
-		fs.BoolVar(&c.force, "force", false, "destroy without asking")
+		fs.BoolVar(&c.force, "force", false, "destroy without asking (keeping the extensions' data)")
+		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
 	case "update":
 		fs.BoolVar(&c.check, "check", false, "only look for an update")
 	}
@@ -230,11 +236,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "ui":
 		return runUI(l, !c.noOpen, stdout, stderr)
 	case "destroy":
-		return runDestroy(l, c.force, stdin, stdout, stderr)
+		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
 		return runInstall(l, c.noService, stdout, stderr)
 	case "uninstall":
-		return runUninstall(l, c.purge, c.force, stdout, stderr)
+		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
 	case "install_extension":
 		return runInstallExtension(l, t.text, stdout, stderr)
 	case "uninstall_extension":

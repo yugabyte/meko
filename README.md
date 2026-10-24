@@ -72,11 +72,11 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko list mcp-tools [--json]` | The MCP tools Meko serves, each with a line on what it does; needs no running server |
 | `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL and token |
 | `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
-| `meko uninstall [--purge [--force]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data, asking first |
+| `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
 | `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
 | `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
-| `meko destroy [--force]` | Stop Meko and remove its data folder, everything in it, for good. It asks first; `--force` doesn't |
+| `meko destroy [--force] [--with-extensions]` | Stop Meko and remove its data folder for good. It asks first; `--force` doesn't. The extensions' data in it (AgentK's home) stays unless you say so when asked, or pass `--with-extensions`, which uninstalls them first |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
 | `meko datapacks` | List the datapacks |

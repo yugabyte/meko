@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { accessBind, accessDefault, ensurePrivateDir, isHeadless, parseDfMountPoint, parseMountType, purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { accessBind, accessDefault, isHeadless, purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { ensurePrivateDir, parseDfMountPoint, parseMountType } from '../../src/server/fstype.js';
 import { pad } from '../../src/server/tty.js';
 import { getPaths } from '../../src/server/paths.js';
 import { LaunchdServices, SystemdServices } from '../../src/server/service.js';

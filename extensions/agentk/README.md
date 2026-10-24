@@ -72,9 +72,17 @@ also make it install again, so they're never dropped.
 Forgot your password? Run `agentk setup-link` on the host and open the link it prints to
 choose a new username and password (the sign-in screen's **Forgot password?** says the same).
 
-If your home directory is shared with other hosts (over NFS, say), AgentK runs only on the
-host you installed it on: logging in to another host doesn't start a second server on the same
-`~/.agent-k-local`. To run it on another host too, give that host its own home with `AK_HOME`.
+AgentK keeps its data in Meko's data folder, under `extensions/agentk`: `~/.meko/extensions/agentk`,
+or under `MEKO_HOME` when you set that for Meko. You don't pick another place. If your home directory
+is on a network filesystem (NFS, say), Meko's data folder, and AgentK's with it, is on a local disk
+instead: `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<you>/meko`. Many Linux systems
+clean `/var/tmp` by age, so set `XDG_STATE_HOME` to a local folder there (AgentK warns when it's in
+`/var/tmp`). AgentK runs only on the host you installed it on.
+
+An install from before this kept its data in `~/.agent-k-local`. It moves into Meko's data folder by
+itself right after updating to a release that brings the move: every session ends and resumes there,
+and `~/.agent-k-local` becomes a link to the new place. If the Meko installed here is older than
+the one whose `meko destroy` keeps AgentK's data, the move waits until you update it (`meko update`).
 
 If your home is under `/net` (the automounter's `/net/<host>/...`), Claude Code 2.1.292 and later
 asks before every file it reads or edits there, even in auto mode. When the home is this host's
@@ -84,7 +92,7 @@ match), so sessions don't stop for that. In plain Claude Code, open your repos b
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
 Code keeps its login in your Keychain, so AgentK runs while you're logged in. For a Mac mini
 that stays on, turn on automatic login and stop it sleeping (System Settings > Energy). With the
-macOS firewall on, allow incoming connections for `~/.agent-k-local/app/current/node/bin/node` so
+macOS firewall on, allow incoming connections for `~/.meko/extensions/agentk/app/current/node/bin/node` so
 your phone can connect.
 
 ## Features
@@ -290,9 +298,9 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 | `agentk ui` | Open the web UI in your browser (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
 | `agentk status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
 | `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
-| `agentk logs -f` | Follow the server log (`~/.agent-k-local/logs/server.log`) |
+| `agentk logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |
 | `agentk setup-link` | A new one-time login link; also resets a lost password |
-| `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes `~/.agent-k-local` except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
+| `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes AgentK's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
 | `agentk attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
 | `agentk host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
 

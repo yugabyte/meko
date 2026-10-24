@@ -30,23 +30,30 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
-func TestRunPassesTheActionAndReportsFailure(t *testing.T) {
+// Every command Meko runs of an extension gets the action and MEKO_HOME naming the data folder.
+func TestRunPassesTheActionAndTheDataFolderAndReportsFailure(t *testing.T) {
 	dir := t.TempDir()
 	cmd := filepath.Join(dir, "ext")
-	script := "#!/bin/sh\necho \"ext $1\"\n[ \"$1\" = stop ] && exit 3\nexit 0\n"
+	script := "#!/bin/sh\necho \"ext $* $MEKO_HOME\"\n[ \"$1\" = stop ] && exit 3\nexit 0\n"
 	if err := os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
 		t.Fatal(err)
 	}
+	t.Setenv("MEKO_HOME", "/elsewhere")
 	e := Entry{Command: cmd}
 	var out bytes.Buffer
-	if err := e.Run("start", &out, &out); err != nil || out.String() != "ext start\n" {
+	if err := e.Run("/data/meko", "start", &out, &out); err != nil || out.String() != "ext start /data/meko\n" {
 		t.Fatalf("start: %v %q", err, out.String())
 	}
-	if err := e.Run("stop", &out, &out); err == nil {
+	if err := e.Run("/data/meko", "stop", &out, &out); err == nil {
 		t.Fatal("a failed stop wasn't reported")
 	}
-	if ok, line := e.Status(); !ok || line != "ext status" {
+	if ok, line := e.Status("/data/meko"); !ok || line != "ext status /data/meko" {
 		t.Errorf("status %v %q", ok, line)
+	}
+	out.Reset()
+	if err := e.Uninstall("/data/meko", Known["agentk"].UninstallArgs, &out, &out); err != nil ||
+		out.String() != "ext uninstall --purge --delete-worktrees --non-interactive /data/meko\n" {
+		t.Errorf("uninstall: %v %q", err, out.String())
 	}
 }
 
@@ -85,11 +92,40 @@ func TestCatalogFindsTheCommandByAnOldName(t *testing.T) {
 	ak := Known["agentk"]
 	// An AgentK from before the rename has only agent-k-local; a newer one has agentk too.
 	put("agent-k-local")
-	if got := ak.Find(home); got != filepath.Join(bin, "agent-k-local") {
+	if got := ak.Find("agentk", home, t.TempDir()); got != filepath.Join(bin, "agent-k-local") {
 		t.Fatalf("found %q", got)
 	}
 	put("agentk")
-	if got := ak.Find(home); got != filepath.Join(bin, "agentk") {
+	if got := ak.Find("agentk", home, t.TempDir()); got != filepath.Join(bin, "agentk") {
 		t.Fatalf("found %q", got)
+	}
+}
+
+// Without the command on PATH or in ~/.local/bin, Find looks in its release install: its folder in
+// the data folder, then its home from before the move there (with the command's old name too).
+func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	ak := Known["agentk"]
+	put := func(p string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: test
+			t.Fatal(err)
+		}
+	}
+	if got := ak.Find("agentk", home, root); got != "" {
+		t.Fatalf("found %q in empty folders", got)
+	}
+	old := filepath.Join(home, ".agent-k-local", "app", "current", "bin", "agent-k-local")
+	put(old)
+	if got := ak.Find("agentk", home, root); got != old {
+		t.Fatalf("found %q, want the old home's %q", got, old)
+	}
+	moved := filepath.Join(Dir(root, "agentk"), "app", "current", "bin", "agentk")
+	put(moved)
+	if got := ak.Find("agentk", home, root); got != moved {
+		t.Fatalf("found %q, want the data folder's %q", got, moved)
 	}
 }

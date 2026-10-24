@@ -21,6 +21,7 @@
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK is already installed
+#   --print-home        print the folder AgentK is (or would be) installed in, and stop
 #   anything else       forwarded to `agentk install`
 #                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
 #                       --port, --no-service); Meko is optional: without a key the install goes on
@@ -42,17 +43,23 @@
 # before the rename to AgentK (no ~/.local/bin/agentk) is installed again, which moves it to the new
 # names.
 #
-# Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
-# GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
+# AgentK's home is in Meko's data folder, <data folder>/extensions/agentk, and nothing picks
+# another: MEKO_HOME when it's set (Meko's `meko install_extension` sets it), else ~/.meko, or for a
+# home folder on a network filesystem $XDG_STATE_HOME/meko when that's local, else
+# /var/tmp/<user>/meko. An install from before the move keeps ~/.agent-k-local until its server
+# moves it (src/server/movehome.ts).
+#
+# Environment: MEKO_HOME, AK_REPO (default yugabyte/agent-k-local), GITHUB_TOKEN (used by the
+# curl fallback when `gh` is unavailable).
 set -eu
 
 repo=${AK_REPO:-yugabyte/agent-k-local}
-ak_home=${AK_HOME:-$HOME/.agent-k-local}
 version=""
 agent=""
 install_deps=ask
 deps_only=false
 reinstall=false
+print_home=false
 setup_flags=false
 interactive=true
 
@@ -83,6 +90,7 @@ while [ $# -gt 0 ]; do
     --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
     --reinstall) reinstall=true; shift ;;
+    --print-home) print_home=true; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
     *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
@@ -91,6 +99,79 @@ case $agent in ''|claude|opencode|kiro) ;; *) die "--agent takes claude, opencod
 # A version, or its tag (agentk-v<version>, or v<version> from before).
 version=${version#agentk-v}
 version=${version#v}
+
+# ---- where AgentK lives ----
+# Meko's data folder by Meko's own rule (Resolve in backend/internal/paths/paths.go, and mekoHome in
+# src/server/paths.ts; all three are tested against backend/internal/paths/testdata/resolve-cases.json).
+fs_type() {
+  if [ "$(uname -s)" = Darwin ]; then
+    # BSD stat has no -c: find the mount with df, then read its type from mount.
+    mp=$(df -P "$1" 2>/dev/null | tail -n 1 | sed -n 's/.*[0-9]%[[:space:]]*//p')
+    [ -n "$mp" ] && mount 2>/dev/null | sed -n "s|.* on $mp (\([^,)]*\).*|\1|p" | head -n 1
+  else
+    stat -f -c %T "$1" 2>/dev/null
+  fi
+}
+on_network() {
+  dir=$1
+  while [ ! -e "$dir" ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
+  case $(fs_type "$dir" || true) in
+    nfs|nfs4|cifs|smb2|smbfs|fuse.sshfs|afs|lustre|gpfs|afpfs|webdav|macfuse|osxfuse) return 0 ;;
+  esac
+  return 1
+}
+meko_home() {
+  if [ -n "${MEKO_HOME:-}" ]; then
+    case $MEKO_HOME in /*) m=$MEKO_HOME ;; *) m=$(pwd)/$MEKO_HOME ;; esac
+    if on_network "$m"; then
+      die "Meko's data folder $m (MEKO_HOME) is on a network filesystem, which Meko refuses. Choose a folder on a local disk with MEKO_HOME."
+    fi
+    printf '%s\n' "$m"
+  elif ! on_network "$HOME/.meko"; then
+    printf '%s\n' "$HOME/.meko"
+  elif [ -n "${XDG_STATE_HOME:-}" ] && case $XDG_STATE_HOME in /*) true ;; *) false ;; esac && ! on_network "$XDG_STATE_HOME/meko"; then
+    printf '%s\n' "$XDG_STATE_HOME/meko"
+  else
+    printf '%s\n' "/var/tmp/$(id -un)/meko"
+  fi
+}
+# An install already here is found by the command link this installer made (it may be in a home
+# from before the move: ~/.agent-k-local, or one named by AK_HOME back then), so it's updated in
+# place and moves by itself; else the home in Meko's data folder, or ~/.agent-k-local when only that
+# is there.
+installed_home() {
+  for c in agentk agent-k-local; do
+    l=$(readlink "$HOME/.local/bin/$c" 2>/dev/null) || continue
+    case $l in */app/current/bin/*) h=${l%/app/current/bin/*}; [ -d "$h/app" ] && { printf '%s\n' "$h"; return 0; } ;; esac
+  done
+  return 1
+}
+meko_dir=$(meko_home) || exit 1
+if ak_home=$(installed_home); then
+  :
+elif [ -d "$meko_dir/extensions/agentk" ] || [ ! -d "$HOME/.agent-k-local" ]; then
+  ak_home=$meko_dir/extensions/agentk
+else
+  ak_home=$HOME/.agent-k-local
+fi
+if $print_home; then
+  printf '%s\n' "$ak_home"
+  exit 0
+fi
+
+# A folder of our own in a shared place like /var/tmp, where another user could have made it first:
+# refused unless it and its parent are real folders of ours and others can't write in the parent.
+private_dir() {
+  mkdir -p "$1" || die "can't create $1"
+  for dir in "$(dirname "$1")" "$1"; do
+    [ -L "$dir" ] && die "$dir is a symlink. Remove it, or set MEKO_HOME to a local folder only you can write to."
+    [ -n "$(find "$dir" -prune -user "$(id -u)")" ] || die "$dir is owned by another user. Remove it, or set MEKO_HOME to a local folder only you can write to."
+  done
+  if [ -n "$(find "$(dirname "$1")" -prune -perm -0002)" ]; then
+    die "$(dirname "$1") can be written to by other users. Remove it, or set MEKO_HOME to a local folder only you can write to."
+  fi
+  chmod 700 "$1"
+}
 
 # ---- platform ----
 case $(uname -s) in
@@ -549,7 +630,9 @@ rm -f "$tmp/.err"
 ok "Release" "$version ($platform-$arch), checksum verified"
 
 # ---- unpack into app/<version> ----
-mkdir -p "$ak_home/app"
+case $ak_home in "/var/tmp/$(id -un)/meko/"*) private_dir "/var/tmp/$(id -un)/meko" ;; esac
+# Owner-only, like Meko's own data folder (which may not be there yet).
+(umask 077 && mkdir -p "$ak_home/app")
 staging="$ak_home/app/.staging.$$"
 rm -rf "$staging"
 mkdir -p "$staging"
@@ -591,6 +674,7 @@ if grep -q 'install-deps' "$dest/lib/dist/server/install.js" 2>/dev/null; then
   esac
 fi
 
+# A release finds its home from its own folder; one from before the move into Meko's data folder needs it named.
 export AK_HOME="$ak_home"
 # Tells `agentk install` the heading is already printed.
 export AK_INSTALLER=1
